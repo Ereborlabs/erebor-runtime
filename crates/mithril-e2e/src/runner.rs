@@ -21,7 +21,6 @@ use crate::{
     ClosureLedgerV1, CompileRecordV1, DigestV1, FixtureBaselineRecordV1, OpenBenchmarkRecordV1,
     PhysicalFileOpenProbeV1, PlatformProbeV1, Result,
 };
-use erebor_interceptor::{KernelHostConfig, KernelHostOwner, KernelObjectManifestV1};
 use erebor_interceptor_abi::{CapabilityRecordV1, CapabilityStateV1};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -117,23 +116,6 @@ pub struct OpenBenchmarkBundleV1 {
 }
 
 pub struct KernelQualificationRunner {
-    repo_root: PathBuf,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct HostLifecycleBundleV1 {
-    pub schema_version: u32,
-    pub compile: CompileRecordV1,
-    pub first_start: KernelObjectManifestV1,
-    pub second_owner_rejected: bool,
-    pub pins_removed_after_shutdown: bool,
-    pub restart: KernelObjectManifestV1,
-    pub pins_removed_after_restart: bool,
-    pub unchanged_worker_digest_before: String,
-    pub unchanged_worker_digest_after: String,
-}
-
-pub struct HostLifecycleRunner {
     repo_root: PathBuf,
 }
 
@@ -704,126 +686,6 @@ fn recorded_benchmark(mode: &str, record: &OpenBenchmarkRecordV1) -> RecordedBen
     }
 }
 
-impl HostLifecycleRunner {
-    #[must_use]
-    pub fn new(repo_root: impl Into<PathBuf>) -> Self {
-        Self {
-            repo_root: repo_root.into(),
-        }
-    }
-
-    pub fn host_lifecycle(
-        &self,
-        output_directory: &Path,
-        pin_root: &Path,
-        lease_path: &Path,
-    ) -> Result<HostLifecycleBundleV1> {
-        ensure!(
-            !pin_root.exists(),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the dedicated lifecycle pin root must not already exist",
-            }
-        );
-        let worker = HuggingFaceFixture::new(
-            self.repo_root
-                .join("crates/mithril-e2e/fixtures/hugging-face"),
-        );
-        let unchanged_worker_digest_before = worker.verify()?.protected_deployment_digest;
-        let compile = BpfPrototypeCompiler::new(&self.repo_root).compile(output_directory)?;
-        let config = KernelHostConfig::qualification(
-            &compile.object_path,
-            &compile.object_sha256,
-            "/sys/kernel/btf/vmlinux",
-            lease_path,
-            Some(pin_root.to_path_buf()),
-            boot_id()?,
-            1,
-        );
-        let first = KernelHostOwner::new(config.clone())
-            .start()
-            .context(crate::error::InterceptorSnafu)?;
-        let first_start = first.manifest().clone();
-        ensure!(
-            first_start.ready
-                && first_start.maps.iter().all(|map| map.pin_path.is_some())
-                && first_start.links.iter().all(|link| link.pin_path.is_some()),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the first owner did not read back every pinned map and link",
-            }
-        );
-        let second_owner_rejected = match KernelHostOwner::new(config.clone()).start() {
-            Err(erebor_interceptor::Error::LeaseOwned { .. }) => true,
-            Err(source) => return Err(crate::Error::from_interceptor(source)),
-            Ok(second) => {
-                second.shutdown().context(crate::error::InterceptorSnafu)?;
-                false
-            }
-        };
-        ensure!(
-            second_owner_rejected,
-            InvalidInputSnafu {
-                path: lease_path,
-                reason: "a concurrent Interceptor owner acquired the shared lease",
-            }
-        );
-        first.shutdown().context(crate::error::InterceptorSnafu)?;
-        let pins_removed_after_shutdown = !pin_root.exists();
-        ensure!(
-            pins_removed_after_shutdown,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "clean shutdown left pinned Interceptor state",
-            }
-        );
-
-        let restarted = KernelHostOwner::new(config)
-            .start()
-            .context(crate::error::InterceptorSnafu)?;
-        let restart = restarted.manifest().clone();
-        restarted
-            .shutdown()
-            .context(crate::error::InterceptorSnafu)?;
-        let pins_removed_after_restart = !pin_root.exists();
-        ensure!(
-            restart.ready && pins_removed_after_restart,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the Interceptor did not restart and cleanly release its pin root",
-            }
-        );
-        let unchanged_worker_digest_after = worker.verify()?.protected_deployment_digest;
-        ensure!(
-            unchanged_worker_digest_before == unchanged_worker_digest_after,
-            InvalidInputSnafu {
-                path: self
-                    .repo_root
-                    .join("crates/mithril-e2e/fixtures/hugging-face"),
-                reason: "the host lifecycle changed the worker fixture",
-            }
-        );
-        Ok(HostLifecycleBundleV1 {
-            schema_version: 1,
-            compile,
-            first_start,
-            second_owner_rejected,
-            pins_removed_after_shutdown,
-            restart,
-            pins_removed_after_restart,
-            unchanged_worker_digest_before,
-            unchanged_worker_digest_after,
-        })
-    }
-
-    pub fn write_json<T>(&self, output: &Path, value: &T) -> Result<()>
-    where
-        T: Serialize,
-    {
-        write_json(output, value)
-    }
-}
-
 fn write_json<T>(output: &Path, value: &T) -> Result<()>
 where
     T: Serialize,
@@ -839,12 +701,6 @@ where
     fs::write(output, bytes).context(IoSnafu {
         path: output.to_path_buf(),
     })
-}
-
-fn boot_id() -> Result<String> {
-    let path = Path::new("/proc/sys/kernel/random/boot_id");
-    let value = fs::read_to_string(path).context(IoSnafu { path })?;
-    Ok(value.trim().replace('-', ""))
 }
 
 fn is_sha256_hex(value: &str) -> bool {

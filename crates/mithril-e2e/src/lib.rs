@@ -45,7 +45,6 @@ pub use identity::{
 pub use loader::{BpfLinkRecordV1, BpfMapLayoutV1, BpfObjectLayoutV1, PhysicalFileOpenProbeV1};
 pub use mithril_node::NativeTaskSnapshotV1;
 pub use runner::{
-    BenchmarkModeV1, CapabilityProbeBundleV1, HostLifecycleBundleV1, HostLifecycleRunner,
-    KernelQualificationBundleV1, KernelQualificationRunner, OpenBenchmarkBundleV1,
-    PhysicalCapabilityProbeBundleV1,
+    BenchmarkModeV1, CapabilityProbeBundleV1, KernelQualificationBundleV1,
+    KernelQualificationRunner, OpenBenchmarkBundleV1, PhysicalCapabilityProbeBundleV1,
 };

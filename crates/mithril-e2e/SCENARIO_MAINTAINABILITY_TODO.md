@@ -1821,7 +1821,7 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `KernelQualificationRunner::physical_file_open_probe`: own the lease
   and output paths with existing cleanup owners. Keep
   `BpfQualificationLoader` attachment and shutdown explicit.
-- [ ] `HostLifecycleRunner::host_lifecycle`: own the pin root and lease, use
+- [x] `HostLifecycleRunner::host_lifecycle`: own the pin root and lease, use
   readiness diagnostics, and keep both `KernelHostOwner` starts and the
   concurrent-owner rejection explicit.
   - [x] Replace the runner with `clean_host_restarts`, one standard Host test

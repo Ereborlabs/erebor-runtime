@@ -569,10 +569,15 @@ does not start Control, Node, or an actor. It does not qualify container policy
 behavior. The 71-line test passed in the retained privileged VM in 26.50
 seconds. Cleanup and final repository Rust CI passed. This review compares
 the replacement with the host-lifecycle runner in `95775f48`. No production
-or Platform code changes are required. The old runner remains until its
-separate retirement commit.
+or Platform code changes are required. The legacy lifecycle runner, result
+bundle, CLI, and Cargo registration are removed after this qualification.
 The unchanged retained-map recovery test also passed in 49.56 seconds with
 its resource cleanup checks.
+The separate retirement removes 187 Rust lines net and four Cargo lines.
+The last two callers of the deleted error wrapper use existing Snafu context.
+VM harness checks and final repository Rust CI pass after that edit. The
+verified 71-line scenario body is unchanged from `3f71d642`. The other large
+legacy runners remain incomplete.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path

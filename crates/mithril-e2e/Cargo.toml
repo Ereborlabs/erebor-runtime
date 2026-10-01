@@ -67,10 +67,6 @@ name = "mithril-kernel-qualification"
 path = "src/bin/mithril_kernel_qualification.rs"
 
 [[bin]]
-name = "mithril-host-lifecycle-test"
-path = "src/bin/mithril_host_lifecycle_test.rs"
-
-[[bin]]
 name = "mithril-identity-test"
 path = "src/bin/mithril_identity_test.rs"
 

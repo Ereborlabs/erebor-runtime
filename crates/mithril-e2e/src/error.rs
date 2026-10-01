@@ -70,15 +70,6 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl Error {
-    pub(crate) fn from_interceptor(source: erebor_interceptor::Error) -> Self {
-        Self::Interceptor {
-            source,
-            location: snafu::Location::default(),
-        }
-    }
-}
-
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {

@@ -1,6 +1,6 @@
 # How To Manually Accept Phase 1
 
-Status: Implemented companion checks; the privileged host lifecycle command must be run on each physically supported platform.
+Status: Implemented companion checks; run the privileged Host lifecycle test on each supported physical host.
 
 Phase: [One-Binary Node Chassis](../phase-1-one-binary-node-chassis.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -17,17 +17,31 @@ an effect-prevention claim.
 cargo test -p erebor-interceptor -p erebor-runtime-ipc \
   -p erebor-runtime-client -p mithril-control -p mithril-node -p mithril-e2e \
   --all-targets --all-features
-cargo build -p mithril-e2e --bin mithril-host-lifecycle-test
-sudo target/debug/mithril-host-lifecycle-test --repo-root . \
-  --output-directory /tmp/mithril-host-lifecycle-final \
-  --pin-root /sys/fs/bpf/erebor-mithril-host-lifecycle-final \
-  --lease-path /tmp/mithril-host-lifecycle-final/owner.lock
+cargo test -p mithril-e2e --lib --no-run
 ```
 
-The lifecycle runner uses the production `KernelHostOwner`. It refuses an
-existing pin root, pins and reopens every map/link, rejects a concurrent owner,
-shuts down, restarts once, shuts down again, and verifies the unchanged worker
-fixture digest. It removes only the dedicated pin root it created.
+Copy the test executable from the build output to the prepared VM. Set
+`MITHRIL_TEST_BIN` in `/var/tmp/mithril-manual.env` to that executable.
+Install `clang` and libbpf development headers in the VM. In a root shell,
+run:
+
+```bash
+. /var/tmp/mithril-manual.env
+env MITHRIL_TEST_OUTPUT=/var/tmp/mithril-clean-host \
+  MITHRIL_TEST_PIN=/sys/fs/bpf/mithril-clean-host \
+  MITHRIL_TEST_LEASE=/var/tmp/mithril-clean-host/owner.lock \
+  MITHRIL_TEST_CGROUP=/sys/fs/cgroup/mithril-clean-host \
+  "$MITHRIL_TEST_BIN" \
+  identity::scenarios::clean_host::clean_host_restarts::identity_physical_host \
+  --exact --ignored --nocapture --test-threads=1
+```
+
+The [standard Host test](../../../../crates/mithril-e2e/src/identity/scenarios/clean_host.rs)
+uses the production `KernelHostOwner` and the original qualification object.
+It requires an absent pin root, pinned maps and links, live manifest readback,
+same-root rejection, exact lease rejection, and pin removal after each of two
+shutdowns. It also verifies the unchanged worker fixture digest. It removes
+only its temporary paths. This kernel-only test does not start Node or Control.
 
 ## Procedure
 

@@ -88,7 +88,7 @@ impl RetainedHost {
             Err(InterceptorError::LeaseOwned { .. }) => true,
             Err(source) => {
                 Self::clean_paths(&pin, &lease)?;
-                return Err(crate::Error::from_interceptor(source));
+                return Err(source).context(InterceptorSnafu);
             }
             Ok(host) => {
                 host.shutdown().context(InterceptorSnafu)?;
@@ -122,7 +122,7 @@ impl RetainedHost {
             Err(InterceptorError::RetainedLsmLink { .. }) => true,
             Err(source) => {
                 Self::clean_paths(&pin, &lease)?;
-                return Err(crate::Error::from_interceptor(source));
+                return Err(source).context(InterceptorSnafu);
             }
             Ok(host) => {
                 host.shutdown().context(InterceptorSnafu)?;
