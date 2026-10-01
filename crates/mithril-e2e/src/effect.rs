@@ -30,6 +30,8 @@ mod exec_fd_deny;
 #[cfg(test)]
 mod exec_memfd;
 #[cfg(test)]
+mod exec_observe;
+#[cfg(test)]
 mod exec_path_deny;
 #[cfg(test)]
 mod exec_thread;

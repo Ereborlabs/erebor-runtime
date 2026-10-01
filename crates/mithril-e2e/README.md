@@ -528,6 +528,44 @@ This review covers the replacement based on `099875a2` and
 the shared actor commit `9f0fca50`. No Platform or production code changes
 are required.
 
+### Observe-mode descriptor execution
+
+Intended result: the signed executable Deny records `WOULD_DENY` in Observe
+mode. The policy decision has kernel result zero and configured `EACCES`.
+This result does not bypass entry admission or guarantee that a later loader
+or executable succeeds.
+
+[forked_fd_exec_is_observed](src/effect/exec_observe.rs) starts Control and holds the workload and external actor before Node starts.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) opens the executable descriptor before recovery.
+  -> [Platform::recovered](src/platform.rs) confirms production recovery under the [signed Observe policy](fixtures/process/exec_observe_policy.json).
+  -> [forked_fd_exec_is_observed](src/effect/exec_observe.rs) requires the external role and zero admission rule, forks the child, and checks its distinct cookie, creator, and inherited role.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) attempts real descriptor exec after the test writes the release file.
+  -> [EffectCheck](src/effect/check.rs) reads the production observation snapshot and requires fresh child-attributed `WOULD_DENY` Exec/Execute evidence.
+  -> [forked_fd_exec_is_observed](src/effect/exec_observe.rs) checks kernel result zero, configured `EACCES`, nonzero composite atom, and zero exact-object and inode fields.
+  -> [ProcessFixture](src/process.rs) observes parent and child exit and performs normal cleanup.
+
+Before: `EffectTestRunner::physical_probe` prepares unrelated operations,
+selects `HardClosedOperation::Exec`, and uses a path-result helper.
+After: the 76-line standard test uses the existing actor and Platform APIs.
+The signed policy, descriptor action, child identity, and result assertions
+remain visible. The test keeps the baseline rule-zero recovered actor.
+It adds child attribution and both result fields. No fixture or production
+API changes are required.
+
+Build with `cargo test -p mithril-e2e --lib --no-run`. Use the current test
+binary and the launcher-prepared VM environment. Run this exact name with
+`--exact --ignored --nocapture --test-threads=1`:
+
+```text
+effect::exec_observe::forked_fd_exec_is_observed::exec_observe_recovery_host
+```
+
+Host passed in 29.00 seconds. Its pin, lease, cgroup, and output paths are
+absent after cleanup. The unchanged Protect companion passed in 28.12 seconds.
+Strict E2E Clippy, formatting, and local VM harness checks passed. Source
+review: the replacement working tree based on inventory commit `fd0da52`.
+Direct `runc`, Kubernetes, legacy retirement, and final Rust CI remain pending.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and

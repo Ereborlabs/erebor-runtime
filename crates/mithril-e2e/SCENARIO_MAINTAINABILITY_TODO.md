@@ -3462,6 +3462,18 @@ test does not close a row when its physical condition or an assertion changed.
       keep descriptor transfer, positive controls, and executable mappings.
     - Compare with `95775f48`. Run focused actor regressions, local harness
       checks, and final Rust CI. Do not rerun an unrelated physical matrix.
+    - [x] Host passed in 29.00 seconds. The 76-line test preserves the
+      rule-zero recovered actor, fork, real descriptor exec, and all four
+      baseline path-object fields. It adds child attribution, creator and
+      role assertions, kernel result zero, and configured `EACCES`.
+      The unchanged Protect companion passed in 28.12 seconds. Pin, lease,
+      cgroup, and output cleanup passed. Strict E2E Clippy, formatting, and
+      VM harness checks passed. No actor, Platform, or production source
+      changed. The old Observe branch remains until all platforms pass.
+    - [ ] Pass direct `runc` with the same test body.
+    - [ ] Pass Kubernetes with the same test body after lightweight.
+    - [ ] Remove the matched legacy branch and unused observer helper after
+      qualification. Keep descriptor transfer, controls, and mappings.
   - [x] Replace `MemfdMprotectExec` with `memfd_mprotect_is_denied`.
     Reuse the exec actor, executable memfd preparation, signed exec policy,
     process owner, and evidence owner. Use the same Linux `MFD_EXEC` flag
