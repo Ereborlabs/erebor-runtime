@@ -2979,6 +2979,26 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace `DeletedExec` with `deleted_exec_is_denied`. Reuse
+    `exec_on_release.py`, `exec_deny_policy.json`, and the common process and
+    evidence owners. Before Node starts, copy the runtime's ELF executable,
+    open it, and unlink its path. Check the retained deleted descriptor,
+    executable mode, ELF header, and absent pathname in the shared Rust test.
+    After production recovery, fork a child and check its distinct cookie,
+    parent creator, inherited role, and zero entry rule before release.
+    Require real descriptor-exec `EACCES` and fresh child-attributed
+    `UNSUPPORTED_OBJECT` Exec/Execute evidence. Keep both legacy zero-object
+    fields and require zero inode fields. Keep the single-test file below
+    100 lines. Use a fresh `deleted_recovery` lifecycle.
+    - [x] Host passed in 28.78 seconds with the deleted executable descriptor,
+      ELF and mode checks, actual `EACCES`, child attribution, and fresh
+      zero-object evidence. Pin, lease, and cgroup cleanup passed. The final
+      repository Rust CI passed. The test file has 95 lines.
+    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
+      platform only after its focused case passes. Add no Platform API.
+    - [ ] Remove only the matched legacy exec action and result after all
+      three platforms pass. Retain the deleted mapping, pathname setup, and
+      shared descriptor resources until their separate memory tests pass.
   - [x] Replace the denied `ScriptExec` action with `forked_script_is_denied`.
     Reuse `exec_on_release.py` with its existing path and forked-path modes.
     Add one executable Python shebang target and one distinct signed policy

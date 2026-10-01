@@ -17,10 +17,17 @@ if mode == "fork-at":
                        ctypes.POINTER(ctypes.c_char_p),
                        ctypes.POINTER(ctypes.c_char_p), ctypes.c_int]
 image = open(target, "rb") if mode in {"fd", "fork-fd"} else None
+if mode == "fork-deleted":
+    import shutil
+
+    path = os.path.join(work, "exec-image")
+    shutil.copy2(target, path)
+    image = open(path, "rb")
+    os.unlink(path)
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != "exec\n":
     raise RuntimeError("expected exec")
-if mode in {"fork-fd", "fork-path", "fork-at"}:
+if mode in {"fork-fd", "fork-path", "fork-at", "fork-deleted"}:
     pid = os.fork()
     if pid != 0:
         _, status = os.waitpid(pid, 0)

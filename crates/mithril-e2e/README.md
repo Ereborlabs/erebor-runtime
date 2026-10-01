@@ -330,6 +330,33 @@ This review covers the replacement based on `5d2f8fe0`. No Platform or
 production code changes are required. The remaining legacy runners are not
 complete.
 
+### Deleted executable denial
+
+The [deleted-exec test](src/effect/exec_deleted.rs) replaces the baseline
+`DeletedExec` action. The old runner prepares, unlinks, and executes the image
+inside its large physical probe. The replacement keeps that condition visible
+in one 95-line platform test. It reuses the exec actor and signed exec policy.
+
+Intended end state: a retained descriptor cannot execute an unlinked image
+under protection. Read this flow:
+
+[exec_on_release.py](fixtures/process/exec_on_release.py) copies the runtime ELF image, opens it, and unlinks it before Node starts.
+  -> [deleted_exec_is_denied](src/effect/exec_deleted.rs) verifies the deleted descriptor, ELF header, executable mode, and absent path.
+  -> [Platform recovery](src/platform/shared.rs) recovers the held actor under the [signed exec policy](fixtures/process/exec_deny_policy.json).
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) forks a child and waits before descriptor exec.
+  -> [deleted_exec_is_denied](src/effect/exec_deleted.rs) checks the distinct cookie, creator, inherited role, and zero entry rule.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) calls real descriptor exec and reports `EACCES`.
+  -> [EffectCheck](src/effect/check.rs) requires fresh child-attributed `UNSUPPORTED_OBJECT` Exec/Execute evidence.
+  -> [deleted_exec_is_denied](src/effect/exec_deleted.rs) requires zero composite, exact-object, and inode fields.
+  -> [ProcessFixture::stop](src/process.rs) completes cleanup after the parent reaps its child.
+
+Run `effect::exec_deleted::deleted_exec_is_denied::deleted_recovery_host`
+with the exact-test flags below. Host passed in 28.78 seconds with pin, lease,
+and cgroup cleanup. The final repository Rust CI passed. Direct `runc` and
+Kubernetes are not yet qualified. The legacy exec action and independent
+deleted-file memory checks remain. This review covers the replacement based
+on `b3194333`. No Platform or production code changes are required.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and

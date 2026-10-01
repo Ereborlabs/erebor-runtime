@@ -22,6 +22,8 @@ mod exec_allow;
 #[cfg(test)]
 mod exec_at_deny;
 #[cfg(test)]
+mod exec_deleted;
+#[cfg(test)]
 mod exec_fd_allow;
 #[cfg(test)]
 mod exec_fd_deny;
