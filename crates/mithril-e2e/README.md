@@ -281,9 +281,11 @@ production API. Run
 with the exact-test flags below. Host passed in 27.41 seconds with pin, lease,
 and cgroup cleanup. Direct `runc` passed in 28.54 seconds with the same actor,
 policy, assertions, and cleanup. Use the `exec_at_recovery_runc` suffix.
-Kubernetes remains pending. Keep the old action until all three platforms pass.
-This review covers the replacement
-based on `87511d7f`. Production kernel and result schemas do not change.
+Kubernetes passed in 69.33 seconds with the same checks and namespace, pin,
+and lease cleanup. Use the `exec_at_recovery_kubernetes` suffix. Keep the old
+action until its matched retirement is verified. This review covers the
+replacement based on `87511d7f`. Production kernel and result schemas do not
+change.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
