@@ -24,10 +24,17 @@ if mode == "fork-deleted":
     shutil.copy2(target, path)
     image = open(path, "rb")
     os.unlink(path)
+elif mode == "fork-memfd":
+    MFD_EXEC = 0x0010
+    image = os.fdopen(os.memfd_create("mithril-exec-fixture", MFD_EXEC), "w+b")
+    with open(target, "rb") as source:
+        image.write(source.read())
+    image.flush()
+    image.seek(0)
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != "exec\n":
     raise RuntimeError("expected exec")
-if mode in {"fork-fd", "fork-path", "fork-at", "fork-deleted"}:
+if mode in {"fork-fd", "fork-path", "fork-at", "fork-deleted", "fork-memfd"}:
     pid = os.fork()
     if pid != 0:
         _, status = os.waitpid(pid, 0)

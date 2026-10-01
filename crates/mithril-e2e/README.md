@@ -364,6 +364,31 @@ final repository Rust CI pass after retirement. This review covers the
 replacement based on `b3194333`. No Platform or production code changes are
 required. The remaining legacy runners are not complete.
 
+### Memfd execution denial
+
+The [memfd test](src/effect/exec_memfd.rs) replaces the baseline `MemfdExec`
+action with one 91-line test. It reuses the exec actor and signed policy.
+Intended end state: an executable memfd cannot run under protection. Read
+this flow:
+
+[exec_on_release.py](fixtures/process/exec_on_release.py) creates a memfd with `MFD_EXEC`, copies the ELF bytes, and holds its descriptor before Node starts.
+  -> [memfd_exec_is_denied](src/effect/exec_memfd.rs) verifies the memfd link, ELF header, and executable mode.
+  -> [Platform::recovered](src/platform.rs) confirms production recovery under the [signed exec policy](fixtures/process/exec_deny_policy.json).
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) forks a child and holds descriptor exec.
+  -> [memfd_exec_is_denied](src/effect/exec_memfd.rs) checks the child's distinct cookie, creator, inherited role, and zero entry rule.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) attempts descriptor exec and reports `EACCES`.
+  -> [EffectCheck](src/effect/check.rs) requires fresh child-attributed `UNSUPPORTED_OBJECT` Exec/Execute evidence.
+  -> [memfd_exec_is_denied](src/effect/exec_memfd.rs) requires zero composite, exact-object, and inode fields.
+  -> [ProcessFixture::stop](src/process.rs) completes cleanup after the parent reaps its child.
+
+The actor uses the same Linux `MFD_EXEC` flag as the old `memfd_copy` helper.
+Run `effect::exec_memfd::memfd_exec_is_denied::memfd_recovery_host` with the
+exact-test flags below. Host passed in 29.18 seconds with pin, lease, and
+cgroup cleanup. The final repository Rust CI passed. Direct `runc` and
+Kubernetes are not yet qualified. The legacy exec action and separate memfd
+memory checks remain. This review covers the replacement based on `5b07f137`.
+No Platform or production code changes are required.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and

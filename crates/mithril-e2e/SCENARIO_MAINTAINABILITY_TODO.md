@@ -2979,6 +2979,25 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace `MemfdExec` with `memfd_exec_is_denied`. Reuse the shared
+    exec actor, signed exec policy, process owner, and evidence owner. Before
+    Node starts, create a memfd with Linux `MFD_EXEC`, copy the executable
+    bytes, and hold its descriptor. Check the memfd link, ELF header, and
+    executable mode in the Rust test. After production recovery, check the
+    forked child's cookie, creator, inherited role, and zero entry rule.
+    Require descriptor-exec `EACCES`, fresh child-attributed
+    `UNSUPPORTED_OBJECT` Exec/Execute evidence, both legacy zero-object
+    fields, and zero inode fields. Keep the file below 100 lines and use a
+    fresh `memfd_recovery` lifecycle. Add no Platform API or duplicate policy.
+    - [x] Host passed in 29.18 seconds. The actual executable memfd, ELF
+      bytes, mode, child identity, `EACCES`, and fresh zero-object evidence
+      passed. Pin, lease, and cgroup cleanup passed. The final repository
+      Rust CI passed. The single-test file has 91 lines.
+    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
+      platform only after its focused case passes.
+    - [ ] Remove the matched legacy exec action and result only after all
+      three platforms pass. Keep the memfd mapping, descriptor, preparation
+      helper, and mprotect assertions for their separate memory migration.
   - [x] Replace `DeletedExec` with `deleted_exec_is_denied`. Reuse
     `exec_on_release.py`, `exec_deny_policy.json`, and the common process and
     evidence owners. Before Node starts, copy the runtime's ELF executable,
