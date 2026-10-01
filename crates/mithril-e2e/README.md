@@ -739,9 +739,11 @@ Run
 with the exact-test flags and Host environment above. Host passed in 35.91
 seconds. Direct `runc` passed in 43.01 seconds with the same body and assertions.
 Its output, pin, lease, and cgroup cleanup passed. Use the
-`mount_replace_observe_runc` generated suffix. Kubernetes is not qualified yet.
+`mount_replace_observe_runc` generated suffix. Kubernetes passed in 79.70
+seconds. Namespace, output, pin, lease, and socket cleanup passed. Use the
+`mount_replace_observe_kubernetes` generated suffix.
 Host cleanup, VM harness checks, and the final repository Rust CI gate passed.
-Source review: `02c64bd9` plus the Observe direct-`runc` registration.
+Source review: `6f823306` plus the Observe Kubernetes registration.
 The baseline comparison uses `95775f48`. Keep the legacy overmount and
 restoration pair until both modes pass on all three platforms. Keep the
 separate first-read, cache-snapshot, and propagation blocks after that removal.
