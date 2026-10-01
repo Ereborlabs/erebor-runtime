@@ -468,7 +468,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub executable_mmap_denied: bool,
     pub file_mprotect_exec_denied: bool,
     pub benign_read_allowed: bool,
-    pub deleted_exec_denied: bool,
     pub non_leader_exec_denied: bool,
     pub memfd_exec_failed_closed: bool,
     pub unix_stream_relationship_allowed: bool,
@@ -1668,22 +1667,6 @@ impl EffectTestRunner {
                 "EXACT_POLICY_DENY",
                 KernelEffectOperationV1::Execute,
             )?;
-            let deleted_exec_marker = require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::DeletedExec,
-                "UNSUPPORTED_OBJECT",
-                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                "deleted image",
-            )?;
-            wait_for_unsupported_effect(
-                &reader,
-                &observations,
-                deleted_exec_marker,
-                "UNSUPPORTED_OBJECT",
-                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-            )?;
         } else {
             let exec_marker = observations.cursor();
             // The signed image decision must be observe-only. A later dynamic
@@ -2710,7 +2693,6 @@ impl EffectTestRunner {
             executable_mmap_denied: protect,
             file_mprotect_exec_denied: protect,
             benign_read_allowed: true,
-            deleted_exec_denied: protect,
             non_leader_exec_denied: protect,
             memfd_exec_failed_closed: protect,
             unix_stream_relationship_allowed: protect,

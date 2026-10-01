@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace `DeletedExec` with `deleted_exec_is_denied`. Reuse
+  - [x] Replace `DeletedExec` with `deleted_exec_is_denied`. Reuse
     `exec_on_release.py`, `exec_deny_policy.json`, and the common process and
     evidence owners. Before Node starts, copy the runtime's ELF executable,
     open it, and unlink its path. Check the retained deleted descriptor,
@@ -3001,9 +3001,14 @@ test does not close a row when its physical condition or an assertion changed.
       descriptor checks, and denial assertions. Namespace, pin, and lease
       cleanup passed. The final repository Rust CI passed. No Platform or
       production code changed. The retained cluster remains available.
-    - [ ] Remove only the matched legacy exec action and result after all
+    - [x] Remove only the matched legacy exec action and result after all
       three platforms pass. Retain the deleted mapping, pathname setup, and
       shared descriptor resources until their separate memory tests pass.
+      The retirement removes 22 Rust lines net. The descriptor remains owned
+      by `_deleted_file` for the unchanged mapping controls. All nine child
+      regressions and the final repository Rust CI pass. No Platform or
+      production code changed. `effect.rs` has 2,971 lines and
+      `effect/child.rs` has 2,844 lines. Both legacy runners remain incomplete.
   - [x] Replace the denied `ScriptExec` action with `forked_script_is_denied`.
     Reuse `exec_on_release.py` with its existing path and forked-path modes.
     Add one executable Python shebang target and one distinct signed policy

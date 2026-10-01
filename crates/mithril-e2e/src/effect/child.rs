@@ -136,7 +136,6 @@ enum ChildRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) enum PreparedOperation {
     Exec,
-    DeletedExec,
     MemfdExec,
     NonLeaderExec,
     SecretMmapExec,
@@ -1549,7 +1548,8 @@ fn propagation_peer_loop(
 
 struct PreparedOperations {
     exec_file: fs::File,
-    deleted_exec_file: fs::File,
+    // Retain the descriptor for the deleted-file mapping controls.
+    _deleted_file: fs::File,
     memfd_exec_file: fs::File,
     secret_file: fs::File,
     benign_file: fs::File,
@@ -1673,7 +1673,7 @@ impl PreparedOperations {
         let unix_stream_signal = SharedMailbox::create(&unix_stream_signal_path)?;
         Ok(Self {
             exec_file,
-            deleted_exec_file,
+            _deleted_file: deleted_exec_file,
             memfd_exec_file,
             secret_file,
             benign_file,
@@ -1744,10 +1744,6 @@ impl PreparedOperations {
             PreparedOperation::Exec => {
                 io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), false))
             }
-            PreparedOperation::DeletedExec => io_outcome(fixture_syscalls::exec_fd(
-                self.deleted_exec_file.as_raw_fd(),
-                false,
-            )),
             PreparedOperation::MemfdExec => io_outcome(fixture_syscalls::exec_fd(
                 self.memfd_exec_file.as_raw_fd(),
                 false,

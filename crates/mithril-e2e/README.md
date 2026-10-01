@@ -342,7 +342,7 @@ under protection. Read this flow:
 
 [exec_on_release.py](fixtures/process/exec_on_release.py) copies the runtime ELF image, opens it, and unlinks it before Node starts.
   -> [deleted_exec_is_denied](src/effect/exec_deleted.rs) verifies the deleted descriptor, ELF header, executable mode, and absent path.
-  -> [Platform recovery](src/platform/shared.rs) recovers the held actor under the [signed exec policy](fixtures/process/exec_deny_policy.json).
+  -> [Platform::recovered](src/platform.rs) confirms production recovery of the held actor under the [signed exec policy](fixtures/process/exec_deny_policy.json).
   -> [exec_on_release.py](fixtures/process/exec_on_release.py) forks a child and waits before descriptor exec.
   -> [deleted_exec_is_denied](src/effect/exec_deleted.rs) checks the distinct cookie, creator, inherited role, and zero entry rule.
   -> [exec_on_release.py](fixtures/process/exec_on_release.py) calls real descriptor exec and reports `EACCES`.
@@ -356,9 +356,13 @@ and cgroup cleanup. Direct `runc` passed in 28.58 seconds with the same checks
 and cleanup. Use the `deleted_recovery_runc` suffix. The final repository Rust
 CI passed. Kubernetes passed in 68.54 seconds with the same checks and
 namespace, pin, and lease cleanup. Use the `deleted_recovery_kubernetes`
-suffix. The legacy exec action and independent deleted-file memory checks
-remain. This review covers the replacement based
-on `b3194333`. No Platform or production code changes are required.
+suffix. The matched legacy exec action, enum arm, and result flag are removed
+after all three platforms pass. The retirement removes 22 Rust lines net.
+The deleted-file mapping, its preparation path, and its retained descriptor
+remain for the independent memory checks. All nine child regressions and the
+final repository Rust CI pass after retirement. This review covers the
+replacement based on `b3194333`. No Platform or production code changes are
+required. The remaining legacy runners are not complete.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
