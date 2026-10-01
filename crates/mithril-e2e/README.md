@@ -426,7 +426,9 @@ seconds. The script positive control and denial passed in 29.13 seconds.
 Known-TID reuse passed in 34.12 seconds. The final repository Rust CI passed.
 Direct `runc` passed in 28.87 seconds with the same checks and cleanup. Use
 the `thread_deny_recovery_runc` suffix. The final repository Rust CI passed.
-Kubernetes and legacy retirement remain pending.
+Kubernetes passed in 70.30 seconds with the same checks and namespace, pin,
+and lease cleanup. Use the `thread_deny_recovery_kubernetes` suffix. The final
+repository Rust CI passed. Legacy retirement remains pending.
 This review covers the replacement based on `e0c7d334`. No Platform or
 production code changes are required.
 

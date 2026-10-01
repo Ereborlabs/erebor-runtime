@@ -7,7 +7,7 @@ use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = thread_deny_recovery]
 fn thread_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exec-thread")?;

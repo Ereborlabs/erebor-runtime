@@ -3010,8 +3010,10 @@ test does not close a row when its physical condition or an assertion changed.
       creator, process-state, syscall, and fresh evidence assertions.
       Pin, lease, and cgroup cleanup passed. The final repository Rust CI
       passed. No Platform or production code changed.
-    - [ ] Pass and commit Kubernetes. Register the platform only after its
-      focused case passes.
+    - [x] Kubernetes passed in 70.30 seconds with the same fork, thread,
+      creator, process-state, syscall, and fresh evidence assertions.
+      Namespace, pin, and lease cleanup passed. The final repository Rust
+      CI passed. No Platform or production code changed.
     - [ ] Remove only the matched legacy action, result, and unused pthread
       helper after all three platforms pass. Keep ordinary descriptor exec
       and all unrelated identity and memory assertions.
