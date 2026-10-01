@@ -34,6 +34,40 @@ The harness owns VM and cluster cleanup. A shared test owns its scenario
 resources and checks its production evidence. Automated tests must not read
 or execute files from `examples/`. Manual operator examples remain separate.
 
+## Protocol Transfer Fixture
+
+`GrpcTransfer` supplies the raw mutual-TLS transfer baseline for the evidence
+budget. Its intended result is a complete byte count and a synchronized file
+before a durable receipt. It does not send Mithril evidence or acknowledge
+the Node WAL. The backlog test retains those production operations.
+
+[GrpcTransfer::measure](src/control_tls/transfer.rs) binds one listener before it starts the server.
+  -> [GrpcTransfer::measure](src/control_tls/transfer.rs) connects with the existing fixture certificates and streams bounded chunks.
+  -> [GrpcTransfer::upload](src/control_tls/transfer.rs) counts every byte and synchronizes the optional file before returning its receipt.
+  -> [GrpcTransfer::measure](src/control_tls/transfer.rs) requires the complete count, requests shutdown, and waits for the server.
+
+[GrpcTransfer::measure](src/control_tls/transfer.rs) handles a transfer failure.
+  -> [GrpcTransfer::measure](src/control_tls/transfer.rs) requests shutdown and retains the transfer and cleanup errors.
+  -> [GrpcTransfer::measure](src/control_tls/transfer.rs) aborts and joins the server only if normal shutdown exceeds its deadline.
+
+The fixture owns the bound listener, transfer futures, and server task. A
+30-second deadline covers connection and transfer. Normal shutdown has a
+five-second deadline. There is no readiness sleep or detached upload task.
+Tonic and Prost use the existing throughput service and messages. There is
+no BPF, kernel ABI, production protocol, or Platform API change.
+
+Run the focused fixture check:
+
+```sh
+cargo test -p mithril-e2e --lib \
+  control_tls::transfer_tests::transfer_keeps_complete_file -- --exact
+```
+
+The check verifies multiple chunks, a partial final chunk, complete durable
+file bytes, and a receiver failure. It supplements the release backlog test;
+it does not prove the 107.1 MiB/s budget. This guide covers the transfer
+fixture change after `942c7ece`. The legacy backlog scenario remains.
+
 ## Destination Rewrite Fixture
 
 The shared nftables fixture installs two destination rewrite rules in one

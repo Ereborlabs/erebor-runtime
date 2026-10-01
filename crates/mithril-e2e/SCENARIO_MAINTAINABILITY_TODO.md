@@ -1505,10 +1505,18 @@ acknowledgement, or decommission operations directly.
     the fixture on the original target filesystem. Keep 4,096 records per
     batch, more than 512 MiB of acknowledged protobuf payload, the production
     batch and group limits, and the 107.1 MiB/s release threshold.
-  - [ ] Give the existing raw gRPC transfer fixture one lifecycle owner.
+  - [x] Give the existing raw gRPC transfer fixture one lifecycle owner.
     Bind the listener before server startup. Replace the fixed readiness
     sleep with the bound listener. Keep complete transfer, durable sync,
     captured errors, bounded operations, and explicit shutdown.
+    `GrpcTransfer` now owns that operation in `control_tls/transfer.rs`.
+    The legacy budget uses the owner without changing its workload or
+    assertions. Its 32-line focused fixture check passed in 0.27 seconds.
+    The Control/TLS family passed 19 tests in 29.42 seconds, with the two
+    existing performance budgets ignored. Local VM harness checks passed.
+    The final repository Rust CI procedure exited with status 0 on
+    2026-10-01. These checks do not qualify the release throughput budget.
+    No production, Platform, Cargo, or protobuf schema changed.
   - [ ] Keep raw, durable raw, direct intake, preparation, enqueue, and
     acknowledgement measurements. Keep the direct-source cursor, exactly
     one cumulative acknowledgement per group, complete source identity,

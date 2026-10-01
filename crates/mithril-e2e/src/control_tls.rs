@@ -30,27 +30,13 @@ use mithril_node::{
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::sync::{mpsc, oneshot, watch};
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{
-    Certificate as TonicCertificate, ClientTlsConfig, Endpoint, Identity, Server, ServerTlsConfig,
-};
-use tonic::{Request as TonicRequest, Response as TonicResponse, Status as TonicStatus};
+use tokio::sync::{oneshot, watch};
 use tower::service_fn;
 use zerocopy::IntoBytes as _;
 
-mod grpc_throughput_protocol {
-    tonic::include_proto!("erebor.mithril.e2e.v1");
-}
-
-use grpc_throughput_protocol::grpc_throughput_client::GrpcThroughputClient;
-use grpc_throughput_protocol::grpc_throughput_server::{GrpcThroughput, GrpcThroughputServer};
-use grpc_throughput_protocol::{FileChunk, FileReceipt};
-
-use crate::control_fixture::{
-    free_address, CertificateFiles, Certificates, ControlServerFixture, MtlsFixture,
-};
+use crate::control_fixture::{Certificates, ControlServerFixture, MtlsFixture};
 use crate::physical::wait_for_async;
+use transfer::GrpcTransfer;
 
 mod administrative;
 mod admission;
@@ -64,6 +50,8 @@ mod replay;
 mod retained;
 mod retention;
 mod storage;
+mod transfer;
+mod transfer_tests;
 
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
 const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
@@ -71,9 +59,6 @@ const OUTAGE_CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const OUTAGE_NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const OUTAGE_POLICY_UID: &str = "30000000-0000-4000-8000-000000000001";
 const OUTAGE_NOW: i64 = 1_800_000_000_000_000_000;
-const GRPC_THROUGHPUT_CHUNK_BYTES: usize = 3 * 1_024 * 1_024;
-const GRPC_THROUGHPUT_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
-const GRPC_THROUGHPUT_WINDOW_BYTES: u32 = 16 * 1_024 * 1_024;
 
 #[tokio::test]
 async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog(
@@ -1038,14 +1023,13 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     let accepted_bytes = encoded_batch_bytes * batch_count;
     let maximum_group_batches =
         (mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / encoded_batch_bytes).max(1);
-    let (grpc_elapsed, grpc_mib_per_second) =
-        measure_grpc_file_transfer(&files, accepted_bytes, None).await?;
-    let (durable_grpc_elapsed, durable_grpc_mib_per_second) = measure_grpc_file_transfer(
-        &files,
-        accepted_bytes,
-        Some(directory.path().join("grpc-received.bin")),
-    )
-    .await?;
+    let (grpc_elapsed, grpc_mib_per_second) = GrpcTransfer::new(None)
+        .measure(&files, accepted_bytes)
+        .await?;
+    let (durable_grpc_elapsed, durable_grpc_mib_per_second) =
+        GrpcTransfer::new(Some(directory.path().join("grpc-received.bin")))
+            .measure(&files, accepted_bytes)
+            .await?;
     eprintln!(
         "raw mTLS gRPC transferred {accepted_bytes} bytes in {grpc_elapsed:?}: {grpc_mib_per_second:.1} MiB/s; durable receiver completed in {durable_grpc_elapsed:?}: {durable_grpc_mib_per_second:.1} MiB/s"
     );
@@ -1222,128 +1206,6 @@ fn control_store_lease_ready<T>(result: mithril_control::Result<T>) -> crate::Re
             location: snafu::Location::default(),
         }),
     }
-}
-
-#[derive(Clone)]
-struct GrpcThroughputReceiver {
-    durable_path: Option<PathBuf>,
-}
-
-#[tonic::async_trait]
-impl GrpcThroughput for GrpcThroughputReceiver {
-    async fn upload(
-        &self,
-        request: TonicRequest<tonic::Streaming<FileChunk>>,
-    ) -> Result<TonicResponse<FileReceipt>, TonicStatus> {
-        let mut input = request.into_inner();
-        let mut file = match &self.durable_path {
-            Some(path) => Some(tokio::fs::File::create(path).await.map_err(|error| {
-                TonicStatus::internal(format!(
-                    "throughput receiver could not create its file: {error}"
-                ))
-            })?),
-            None => None,
-        };
-        let mut received_bytes = 0_u64;
-        while let Some(chunk) = input.message().await? {
-            received_bytes = received_bytes
-                .checked_add(chunk.payload.len() as u64)
-                .ok_or_else(|| TonicStatus::out_of_range("throughput byte count is exhausted"))?;
-            if let Some(file) = &mut file {
-                file.write_all(&chunk.payload).await.map_err(|error| {
-                    TonicStatus::internal(format!("throughput receiver write failed: {error}"))
-                })?;
-            }
-        }
-        if let Some(file) = file {
-            file.sync_data().await.map_err(|error| {
-                TonicStatus::internal(format!("throughput receiver sync failed: {error}"))
-            })?;
-        }
-        Ok(TonicResponse::new(FileReceipt { received_bytes }))
-    }
-}
-
-async fn measure_grpc_file_transfer(
-    files: &CertificateFiles,
-    total_bytes: u64,
-    durable_path: Option<PathBuf>,
-) -> Result<(Duration, f64), Box<dyn StdError>> {
-    let address = free_address()?;
-    let tls = ServerTlsConfig::new()
-        .identity(Identity::from_pem(
-            fs::read(&files.server_certificate)?,
-            fs::read(&files.server_key)?,
-        ))
-        .client_ca_root(TonicCertificate::from_pem(fs::read(&files.ca)?));
-    let receiver = GrpcThroughputReceiver { durable_path };
-    let (shutdown, shutdown_input) = oneshot::channel();
-    let server = tokio::spawn(async move {
-        Server::builder()
-            .initial_stream_window_size(GRPC_THROUGHPUT_WINDOW_BYTES)
-            .initial_connection_window_size(GRPC_THROUGHPUT_WINDOW_BYTES)
-            .tls_config(tls)?
-            .add_service(
-                GrpcThroughputServer::new(receiver)
-                    .max_decoding_message_size(GRPC_THROUGHPUT_MESSAGE_BYTES)
-                    .max_encoding_message_size(GRPC_THROUGHPUT_MESSAGE_BYTES),
-            )
-            .serve_with_shutdown(address, async move {
-                let _result = shutdown_input.await;
-            })
-            .await
-    });
-    tokio::time::sleep(Duration::from_millis(20)).await;
-
-    let client_tls = ClientTlsConfig::new()
-        .ca_certificate(TonicCertificate::from_pem(fs::read(&files.ca)?))
-        .identity(Identity::from_pem(
-            fs::read(&files.node_certificate)?,
-            fs::read(&files.node_key)?,
-        ))
-        .domain_name("localhost");
-    let channel = Endpoint::from_shared(format!("https://{address}"))?
-        .tls_config(client_tls)?
-        .initial_stream_window_size(GRPC_THROUGHPUT_WINDOW_BYTES)
-        .initial_connection_window_size(GRPC_THROUGHPUT_WINDOW_BYTES)
-        .connect()
-        .await?;
-    let mut client = GrpcThroughputClient::new(channel)
-        .max_decoding_message_size(GRPC_THROUGHPUT_MESSAGE_BYTES)
-        .max_encoding_message_size(GRPC_THROUGHPUT_MESSAGE_BYTES);
-    let (output, input) = mpsc::channel(8);
-    let source = prost::bytes::Bytes::from(vec![0xa5; GRPC_THROUGHPUT_CHUNK_BYTES]);
-    let started = Instant::now();
-    let upload = tokio::spawn(async move {
-        client
-            .upload(TonicRequest::new(ReceiverStream::new(input)))
-            .await
-    });
-    let mut remaining = total_bytes;
-    while remaining > 0 {
-        let chunk_bytes = remaining.min(GRPC_THROUGHPUT_CHUNK_BYTES as u64) as usize;
-        output
-            .send(FileChunk {
-                payload: source.slice(..chunk_bytes),
-            })
-            .await
-            .map_err(|_closed| "throughput receiver closed before the file completed")?;
-        remaining -= chunk_bytes as u64;
-    }
-    drop(output);
-    let receipt = upload.await??.into_inner();
-    let elapsed = started.elapsed();
-    if receipt.received_bytes != total_bytes {
-        return Err(format!(
-            "throughput receiver accepted {} of {total_bytes} bytes",
-            receipt.received_bytes
-        )
-        .into());
-    }
-    let _result = shutdown.send(());
-    server.await??;
-    let mib_per_second = total_bytes as f64 / 1_048_576.0 / elapsed.as_secs_f64();
-    Ok((elapsed, mib_per_second))
 }
 
 struct TcpBlackholeOwner {
