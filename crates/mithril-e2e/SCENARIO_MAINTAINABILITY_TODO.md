@@ -3555,12 +3555,13 @@ test does not close a row when its physical condition or an assertion changed.
     Give the client and server distinct policy roles. Keep the real abstract
     stream connect, request byte `1`, response byte `2`, complete readback,
     and absence of a file-create event. Require fresh attributed IPC policy
-    Allow evidence. Keep the standard test below 100 lines.
-    - [ ] Use one Python actor file for both roles and all platforms. Create
+    Allow evidence for Connect, Send, and Receive. Keep the standard test
+    below 100 lines.
+    - [x] Use one Python actor file for both roles and all platforms. Create
       the listener after actor startup. Use bounded socket operations and
       the existing process readiness and cleanup. Do not add a Platform API
       or reproduce Node admission or binding publication.
-    - [ ] Pass and commit Host, then direct runc, then Kubernetes. Keep both
+    - [x] Pass and commit Host, then direct runc, then Kubernetes. Keep both
       binding identities, distinct cgroups and roles, and equal installed
       profile generation explicit. The policy must express the original
       client-to-peer relationship through public production inputs.
@@ -3587,7 +3588,19 @@ test does not close a row when its physical condition or an assertion changed.
         code changed. See `/tmp/mithril-unix-runc-20261001.log`.
         The final repository Rust CI procedure passed after the platform
         attribute edit. See `/tmp/mithril-unix-runc-final-ci-20261001.log`.
-      - [ ] Pass and commit the unchanged real Kubernetes body.
+      - [x] Kubernetes passed the 98-line body in 72.76 seconds. The baseline
+        audit then added the exact Connect, Send, and Receive Allow set to
+        this two-binding round trip. The final 99-line body passed on Host
+        in 29.12 seconds, direct runc in 29.89 seconds, and real Kubernetes
+        in 64.72 seconds. Every event must match the client task, role, entry
+        rule, and live generation with kernel result zero. Both exchanged
+        bytes and the no-file-create assertion remain. All resource cleanup
+        checks, 25 non-privileged effect tests, and local harness checks
+        passed. The final repository Rust CI procedure passed after the
+        last Rust edit. See `/tmp/mithril-unix-ops-current-ci-20261001.log`.
+        No Platform or production code changed. The earlier socket-pass
+        replacement also keeps its three-operation coverage; it does not
+        replace this distinct-role, two-binding round trip.
     - [ ] Keep the Observe round trip and its `WOULD_DENY` result open until
       its own verified replacement exists. Keep SCM_RIGHTS transfers and
       their retained descriptors. Their old round-trip setup establishes
