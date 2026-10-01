@@ -5364,6 +5364,22 @@ setup, production actions, assertions, and focused test.
       were denied; that behavior remains for its own migration.
 - [ ] Stale cache repair and unreachable-row retirement: keep the production
   node reconciliation calls and exact map absence checks visible.
+  - [ ] Replace old-row collection with `obsolete_cache_is_collected`.
+    Reuse the signed mount policy, read actor, `MountCache`, and `mount_late`
+    lifecycle. Keep both denied reads and fresh attributed evidence. Require
+    real obsolete object and state rows after the stale-count rebuild. Let
+    the running production Node collect them. Require zero obsolete rows,
+    retained current rows, and unchanged READY keys, generation, epoch,
+    namespace, and mountinfo. Do not call an internal collector or force a
+    policy change. Keep the test below 100 lines.
+    - [ ] Extend the existing map fixture with checked typed keys and row
+      counts. Verify the tooling through the existing rebuild test on Host,
+      direct `runc`, and Kubernetes before the dependent migration.
+    - [ ] Pass and commit Host, then direct `runc`, then Kubernetes. A missing
+      Node collection trigger is a production approval boundary, not grounds
+      to weaken the test or add an unrelated runtime event.
+    - [ ] Remove only the matched old Rust collector check, result field,
+      shell row counters, and launcher predicates after all three pass.
   - [x] Replace only stale-cache rebuild with a small standard platform test.
     Reuse `read_path.py` and `mount_alias_policy.json`. Start Control and Node,
     install the signed policy, and admit the actor normally. Require a denied
