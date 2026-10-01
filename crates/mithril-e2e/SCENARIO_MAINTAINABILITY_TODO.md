@@ -1200,6 +1200,23 @@ acknowledgement, or decommission operations directly.
   No physical platform matrix was rerun for this protocol-only change.
 - [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
 - [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
+- [ ] Replace `control_evidence_queue_reclaims_only_durably_consumed_segments`
+  with `consumption_reclaims_segments` in `control_tls/retention.rs`.
+  - Use one standard Rust test below 100 lines. Reuse the existing WAL fixture
+    and production batch conversion. Remove manual protobuf length and CRC
+    framing. Keep production intake and consumption calls in the test.
+  - Keep the two-record Block limit and one retained segment. Reject cursor 3
+    before consumption and after consumption at cursor 1. Keep the segment
+    until cursor 2 is consumed. Then require reclamation, acceptance of cursor
+    3, one retained record, and one new segment.
+  - Keep the bounded store-lease readiness fix. Reopen the same store and
+    require durable consumption at 2, intake at 3, and exactly one retained
+    record. Add complete retained-record equality before and after reopen.
+  - Compare with `95775f48`. Pass the replacement before removing the old
+    function. Run the related Control/TLS tests, harness checks, and final
+    Rust CI. Commit the verified replacement and retirement separately.
+    This case tests public WAL, intake, retention, and store APIs. It does not
+    claim physical syscall, mTLS authentication, or Kubernetes qualification.
 - [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`: use `MtlsFixture` for certificate, Control, server, and connector setup. Keep the signed artifact, Node acceptance, quarantine, completion, and ready-session checks in the test. The test is 96 lines. Its focused run and the full Rust CI procedure passed.
 - [x] Replace `mtls_rejects_wrong_node_binding_and_expired_client_identity`
   with `mtls_rejects_wrong_node`, `mtls_rejects_expired_cert`, and
