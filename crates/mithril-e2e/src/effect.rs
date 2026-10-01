@@ -129,6 +129,8 @@ mod tcp_nodelay;
 mod tun;
 #[cfg(test)]
 mod udp;
+#[cfg(test)]
+mod unix_stream;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

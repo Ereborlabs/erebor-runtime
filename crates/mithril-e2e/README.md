@@ -1605,6 +1605,37 @@ The socket-stale actor scenario and all its security assertions remain.
 The 99-line reproduction passed in the retained VM in 43.33 seconds.
 Its output, pin root, lease, and cgroup were removed after the run.
 
+## Abstract Unix-Stream Round Trip
+
+Intended end state: Two distinct protected roles exchange request byte `1`
+and response byte `2` through a real abstract Unix stream. No file is created.
+
+[unix_stream_is_allowed](src/effect/unix_stream.rs) starts Control and Node, installs its signed policy, and starts two application actors with the existing actor-group operation.
+  -> [UnixPeer::prepare](fixtures/process/unix_stream.py) creates both sockets and binds the server to an abstract address after actor readiness.
+  -> [Platform::process](src/platform.rs) reads each live process generation; the test checks equal generations, distinct roles and bindings, and the same network namespace.
+  -> [UnixPeer::exchange](fixtures/process/unix_stream.py) connects, sends byte `1`, and checks response byte `2`; the server checks the request and sends the response.
+  -> [ipc_unix_stream_connect_effect](../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h) validates the live endpoints and applies the signed role relationship.
+  -> [unix_stream_is_allowed](src/effect/unix_stream.rs) requires fresh attributed IPC Allow evidence and no new file-create event, then stops both actors.
+
+Before: The legacy child owner retains shared mailboxes, a forked server,
+and raw socket setup inside a large effect probe. After: One 98-line standard
+test uses one Python actor file and existing platform readiness and cleanup.
+The public policy is [unix_stream_policy.json](fixtures/process/unix_stream_policy.json).
+The old connection setup remains because later descriptor-transfer checks
+still use it. Observe-mode coverage also remains.
+
+Run `effect::unix_stream::unix_stream_is_allowed::identity_host` by its exact
+name in the retained VM with the Host environment above and
+`--exact --ignored --nocapture --test-threads=1`. Host passed in 35.36 seconds
+on 2026-10-01. Cleanup passed. Direct runc and Kubernetes are not yet qualified.
+This source review covers the working tree based on `f4366866`. No Platform
+or production source changed. The test reads the current generation through
+the existing process-state API. The task snapshot generation is the immutable
+birth generation and can differ between actors that start at different times.
+All 25 non-privileged effect tests and local harness checks passed. The final
+repository Rust CI procedure passed after the last Rust edit. It includes 91
+in-process E2E tests; ignored physical tests are not new qualification evidence.
+
 ## Required Order And Result Contract
 
 Run the lightweight case before its physical Kubernetes case. Both cases must

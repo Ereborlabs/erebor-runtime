@@ -3564,6 +3564,24 @@ test does not close a row when its physical condition or an assertion changed.
       binding identities, distinct cgroups and roles, and equal installed
       profile generation explicit. The policy must express the original
       client-to-peer relationship through public production inputs.
+      - [x] Host passed in 35.36 seconds on 2026-10-01. The 98-line test uses
+        one shared Python actor and the public signed Unix-stream policy.
+        It checks distinct task cookies, roles, bindings, and cgroups, the
+        same network namespace, equal live process generations, both
+        exchanged bytes, fresh client-attributed IPC Allow evidence, and
+        no file-create event. Output, pin, lease, and both actor cgroups
+        were removed. The old round-trip and descriptor checks remain.
+        Two earlier drafts compared birth generations and failed before
+        connect. `NativeTaskSnapshotV1::profile_generation_ref_id` reads
+        the task label's birth generation. The corrected test uses the
+        existing `Platform::process` readback for the live generation.
+        No Platform, Node, Control, or BPF code changed.
+        All 25 non-privileged effect tests and local harness checks passed.
+        The final repository Rust CI procedure passed after the last Rust
+        edit, including all 91 in-process E2E tests. See
+        `/tmp/mithril-unix-host-current-ci-20261001.log`.
+      - [ ] Pass and commit the unchanged direct-runc body.
+      - [ ] Pass and commit the unchanged real Kubernetes body.
     - [ ] Keep the Observe round trip and its `WOULD_DENY` result open until
       its own verified replacement exists. Keep SCM_RIGHTS transfers and
       their retained descriptors. Their old round-trip setup establishes
