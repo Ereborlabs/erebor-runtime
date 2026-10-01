@@ -2993,8 +2993,11 @@ test does not close a row when its physical condition or an assertion changed.
       syscall, fresh child evidence, legacy object fields, and absent marker
       passed. Pin, lease, and cgroup cleanup passed. The final repository
       Rust CI passed. The test file has 99 lines. No Platform API changed.
-    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
-      platform only after its exact case passes.
+    - [x] Direct `runc` passed in 28.88 seconds with the same actor, policy,
+      and assertions. Pin, lease, and cgroup cleanup passed. The final
+      repository Rust CI passed. No runtime fixture changed.
+    - [ ] Pass and commit Kubernetes. Register the platform only after its
+      exact case passes.
     - [ ] Remove the matching legacy script action, enum arm, result field,
       embedded shell source, stored path, and unused path-exec helper only
       after all three platforms pass. Keep descriptor exec, executable mmap,

@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use super::check::EffectCheck;
 use crate::platform::{actor_script, platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = script_recovery]
 fn forked_script_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("script-deny")?;
