@@ -1217,6 +1217,10 @@ acknowledgement, or decommission operations directly.
     Rust CI. Commit the verified replacement and retirement separately.
     This case tests public WAL, intake, retention, and store APIs. It does not
     claim physical syscall, mTLS authentication, or Kubernetes qualification.
+  - The 98-line replacement passed in 0.17 seconds while the old test remained.
+    The Control/TLS family passed 20 tests in 25.20 seconds; two existing
+    release-budget tests remain ignored. Harness checks, formatting, and
+    strict E2E Clippy passed. Retirement and final Rust CI remain pending.
 - [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`: use `MtlsFixture` for certificate, Control, server, and connector setup. Keep the signed artifact, Node acceptance, quarantine, completion, and ready-session checks in the test. The test is 96 lines. Its focused run and the full Rust CI procedure passed.
 - [x] Replace `mtls_rejects_wrong_node_binding_and_expired_client_identity`
   with `mtls_rejects_wrong_node`, `mtls_rejects_expired_cert`, and

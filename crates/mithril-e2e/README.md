@@ -888,6 +888,43 @@ This source review covers the registration replacement based on `8915332c`.
 The two ignored throughput and release-startup budgets remain separate checks.
 No Host, direct-`runc`, or Kubernetes fixture changes are included.
 
+### Consumption reclaims complete evidence segments
+
+Intended result: A two-record Block limit rejects a third record until both
+records in the retained segment have durable consumption acknowledgements.
+Consumption at cursor 1 must not remove the segment. Consumption at cursor 2
+must remove it and let intake accept cursor 3. A store reopen must keep both
+the consumption watermark and the new retained record.
+
+[consumption_reclaims_segments](src/control_tls/retention.rs) uses the existing
+[MtlsFixture WAL setup](src/control_fixture.rs). Three denied ABI samples
+enter the production observation store. Its one-record batches supply the
+production framing; the test does not encode lengths or checksums.
+[EvidenceIntakeOwner::receive](../mithril-control/src/evidence.rs) accepts the
+first two batches and rejects the third at capacity. The test calls
+[EvidenceRetentionOwner::acknowledge](../mithril-control/src/evidence.rs) at
+cursors 1 and 2 and checks the segment count after each call. It then requires
+cursor 3, exactly one retained record, and complete record equality. A local
+block releases all store owners before the existing bounded lease wait
+reopens the same path. The durable watermark, cursor, count, and complete
+record equality are checked again. The fixture removes its temporary files.
+
+At baseline `95775f48`, the test seeds records through a test-only writer and
+builds the third protobuf frame by hand. The 98-line replacement sends all
+three records through public WAL and intake APIs. It keeps each capacity,
+segment, and durable-state assertion. It adds intake acknowledgement checks
+and complete retained-record equality. The later lease-readiness fix remains.
+
+```bash
+cargo test -p mithril-e2e --lib \
+  control_tls::retention::consumption_reclaims_segments -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+```
+
+This source review uses the inventory at `a61d2ab`. This is a storage API test,
+not an mTLS authentication, physical syscall, or Kubernetes test. No server,
+Platform, production API, or kernel ABI change is included.
+
 ### Evidence replay after disconnect
 
 Intended result: Control receives each record once when Node disconnects

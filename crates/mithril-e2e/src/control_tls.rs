@@ -62,6 +62,7 @@ mod registration;
 mod rejection;
 mod replay;
 mod retained;
+mod retention;
 mod storage;
 
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
