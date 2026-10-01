@@ -666,8 +666,8 @@ bash .github/scripts/verify-rust-ci.sh
 
 ## Exact-File Replacement And Restoration
 
-Intended result: replace the legacy Protect-mode overmount and restoration
-checks with one shared test. Keep the separate Observe and cache checks open.
+Intended result: replace the legacy overmount and restoration checks with
+small shared Protect and Observe tests. Keep the separate cache checks open.
 
 [mount_replacement_stays_closed](src/effect/file_replacement.rs) starts Control and the actor before Node.
   -> [Platform recovery](src/platform/shared.rs) waits for the recovered application root and the signed exact-file policy.
@@ -721,9 +721,28 @@ Kubernetes passed in 79.16 seconds. Its existing bind-alias case passed in
 Use the `mount_replace_kubernetes` generated suffix. The same test body,
 actor, policy, and assertions run on all three platforms.
 The VM harness checks and the final repository Rust CI procedure passed.
-Source review: `da615921` plus the Kubernetes registration.
-The baseline comparison uses `95775f48`. The old shared block remains until
-the Observe contrast and cache-snapshot replacements also pass.
+The [Observe replacement](src/effect/file_replacement_observe.rs) has 90 lines.
+It uses the same actor commands, recovery order, map reader, and evidence owner.
+The existing `file_observe.json` supplies the Observe policy without a copy.
+
+[observe_replacement_stays_closed](src/effect/file_replacement_observe.rs) performs the same recovery and policy installation.
+  -> [exception.py](fixtures/process/exception.py) reports a successful original read.
+  -> [EffectCheck](src/effect/check.rs) records the original exact key, composite, and task from fresh `WOULD_DENY` evidence.
+  -> [exception.py](fixtures/process/exception.py) reports successful overmount without file I/O.
+  -> [Platform::state](src/platform.rs) requires the replaced mount view to be Dirty before the replaced read.
+  -> [observe_replacement_stays_closed](src/effect/file_replacement_observe.rs) requires actual `EACCES` and fresh actor-attributed `UNRESOLVED_OBJECT` for the replaced read.
+  -> [exception.py](fixtures/process/exception.py) removes the overmount and reports a successful restored read.
+  -> [EffectCheck](src/effect/check.rs) requires fresh `WOULD_DENY` with the original exact key, composite, and task.
+
+Run
+`effect::file_replacement_observe::observe_replacement_stays_closed::mount_replace_observe_host`
+with the exact-test flags and Host environment above. Host passed in 35.91
+seconds. Direct `runc` and Kubernetes are not qualified for this contrast yet.
+Host cleanup, VM harness checks, and the final repository Rust CI gate passed.
+Source review: `7012e178` plus the Observe Host test.
+The baseline comparison uses `95775f48`. Keep the legacy overmount and
+restoration pair until both modes pass on all three platforms. Keep the
+separate first-read, cache-snapshot, and propagation blocks after that removal.
 
 ## In-Process Control And TLS Scenarios
 

@@ -2423,15 +2423,20 @@ test does not close a row when its physical condition or an assertion changed.
       `observe_replacement_stays_closed`. Keep one shared test below 100 lines.
       Reuse `exception.py`, `file_observe.json`, `EffectCheck`, and existing map
       readers. Do not copy a policy or add a Platform API or scenario fixture.
-      - [ ] Start the actor before Node. Keep production recovery and policy
+      - [x] Start the actor before Node. Keep production recovery and policy
         installation visible. Require initial read success and fresh
         actor-attributed `WOULD_DENY` with nonzero object key and composite.
-      - [ ] Require successful benign-file overmount, the original namespace's
+      - [x] Require successful benign-file overmount, the original namespace's
         Dirty view, physical `EACCES`, and fresh `UNRESOLVED_OBJECT` evidence.
-      - [ ] Remove the overmount. Require read success and fresh `WOULD_DENY`
+      - [x] Remove the overmount. Require read success and fresh `WOULD_DENY`
         with the original exact key, composite, and task cookie.
       - [ ] Pass and commit Host, direct `runc`, then Kubernetes separately.
         Run harness checks and final Rust CI after each final Rust edit.
+        - [x] Host: the 90-line exact case passed in 35.91 seconds with the
+          unchanged actor and policy. Output, pin, lease, and cgroup cleanup
+          passed. VM harness checks and final repository Rust CI passed.
+        - [ ] Direct `runc`.
+        - [ ] Kubernetes.
       - [ ] Remove only the shared legacy overmount/restoration pair after
         both policy modes pass on all three platforms. Keep cache snapshots,
         first-read decisions, and propagation actions and assertions intact.
