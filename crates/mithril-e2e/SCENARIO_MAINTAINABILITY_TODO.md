@@ -2979,6 +2979,35 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace `DeletedMprotectExec` with `deleted_mprotect_is_denied`.
+    Reuse the exec actor, deleted-image preparation, signed exec policy,
+    process owner, and evidence owner. Map the complete executable read-only
+    with `MAP_PRIVATE` before Node starts. Keep the mapping and descriptor
+    live after the path is unlinked. Check the ELF bytes, absent path, and
+    actual read-only deleted mapping through Linux proc files. After production
+    recovery, call real `mprotect(PROT_READ | PROT_EXEC)`. Require actor
+    `EACCES`, fresh attributed `UNSUPPORTED_OBJECT` Exec/Mprotect evidence,
+    and all legacy zero-object fields. Check unmapping, actor exit, and
+    normal cleanup. Keep the single-test file below 100 lines. Add no Platform
+    or production API. Use a pristine `deleted_map_recovery` lifecycle.
+    - [x] Add the one memory operation to the shared exec actor. Reuse its
+      copied image, descriptor, release wait, errno report, and cleanup.
+      Keep mapping before unlink and before readiness. The real Host case
+      passed in 28.44 seconds. The unchanged descriptor-exec mode passed in
+      33.73 seconds. Pin, lease, and cgroup cleanup passed. The final
+      repository Rust CI passed. No production or Platform code changed.
+    - [ ] Pass and commit Host, then direct `runc`, then Kubernetes. Add each
+      platform registration only after its focused case passes. Check an
+      existing descriptor-exec mode after the shared actor change.
+    - [ ] Remove only the matched legacy action and deleted mapping resources
+      after all three platforms pass. Keep memfd and exact-file mappings.
+  - [ ] Preserve the remaining exact-file executable mmap and read/write
+    mprotect cases until public policy inputs can express their exact object
+    selector. `ExecutionRuleV1` has no `exact` field, and Kubernetes lowering
+    calls `path_selector_id` with `exact=false` for execution rules. A path
+    composite is not the baseline `manual-secret` exact-object result. Do not
+    weaken the assertion, add a test-only policy path, or change production
+    policy types in this migration.
   - [x] Replace `NonLeaderExec` with `thread_exec_is_denied`. Keep the
     baseline fork-then-pthread condition and real descriptor exec. Reuse
     the signed exec policy, exec actor, process owner, and evidence owner.
