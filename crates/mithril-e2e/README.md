@@ -282,10 +282,15 @@ with the exact-test flags below. Host passed in 27.41 seconds with pin, lease,
 and cgroup cleanup. Direct `runc` passed in 28.54 seconds with the same actor,
 policy, assertions, and cleanup. Use the `exec_at_recovery_runc` suffix.
 Kubernetes passed in 69.33 seconds with the same checks and namespace, pin,
-and lease cleanup. Use the `exec_at_recovery_kubernetes` suffix. Keep the old
-action until its matched retirement is verified. This review covers the
-replacement based on `87511d7f`. Production kernel and result schemas do not
-change.
+and lease cleanup. Use the `exec_at_recovery_kubernetes` suffix. The matched
+legacy action and result flag are removed. The remaining syscall helper now
+has one path-exec operation and no mode switch. Its constructor keeps the
+path needed for descriptors and mappings, but not an unused stored copy.
+The retirement removes 16 Rust lines net. The existing native control now
+checks real path exec and descriptor exec. All nine child regressions and the
+final repository Rust CI passed after the last Rust edit. Script exec and
+non-leader exec remain. This review covers the replacement based on `87511d7f`.
+Production kernel and result schemas do not change.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It

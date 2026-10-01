@@ -198,7 +198,7 @@ struct MountAttr {
     userns_fd: u64,
 }
 
-pub(super) fn exec_path(path: &Path, use_execveat: bool) -> io::Result<()> {
+pub(super) fn exec_path(path: &Path) -> io::Result<()> {
     let path = path_c_string(path)?;
     let arguments = [
         c"sh".as_ptr(),
@@ -209,23 +209,9 @@ pub(super) fn exec_path(path: &Path, use_execveat: bool) -> io::Result<()> {
     let environment = [std::ptr::null::<libc::c_char>()];
 
     fork_and_wait(|| {
-        if use_execveat {
-            // SAFETY: every pointer references a retained NUL-terminated value.
-            unsafe {
-                libc::syscall(
-                    libc::SYS_execveat,
-                    libc::AT_FDCWD,
-                    path.as_ptr(),
-                    arguments.as_ptr(),
-                    environment.as_ptr(),
-                    0,
-                );
-            }
-        } else {
-            // SAFETY: every pointer references a retained NUL-terminated value.
-            unsafe {
-                libc::execve(path.as_ptr(), arguments.as_ptr(), environment.as_ptr());
-            }
+        // SAFETY: The path and argument pointers remain valid for this call.
+        unsafe {
+            libc::execve(path.as_ptr(), arguments.as_ptr(), environment.as_ptr());
         }
         last_errno()
     })

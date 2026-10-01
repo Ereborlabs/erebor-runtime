@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the denied `Execveat` action with `forked_at_exec_is_denied`.
+  - [x] Replace the denied `Execveat` action with `forked_at_exec_is_denied`.
     Reuse `exec_on_release.py`, `exec_deny_policy.json`, `ProcessFixture`, and
     `EffectCheck`. Add a real libc `execveat` mode with `AT_FDCWD`, an absolute
     executable path, and flags zero. Keep the baseline fork-before-exec order.
@@ -2998,10 +2998,19 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Kubernetes passed in 69.33 seconds with the same actor, policy, and
       assertions. Namespace, pin, and lease cleanup passed. The final
       repository Rust CI passed. No Platform or production API changed.
-    - [ ] Remove only the legacy `Execveat` action, enum arm, and result field
+    - [x] Remove only the legacy `Execveat` action, enum arm, and result field
       after all three platforms pass. Keep script exec and its shared path
       fixture. Remove the syscall helper's unused `execveat` branch only after
       the replacement passes; retain real path exec for script exec.
+      The retirement removes 16 Rust lines net. It deletes the unused stored
+      executable path, not the constructor input needed for descriptors and
+      mappings. The first retirement CI failed on that unused field; the
+      corrected source passes all nine child regressions and the final Rust
+      CI. The existing native control now checks path exec as well as its
+      original descriptor transfer and exec. Its shorter name is
+      `exec_and_transfer_work`.
+      `effect.rs` remains at 3,004 lines and `effect/child.rs` at 2,875 lines.
+      Neither remaining legacy runner is done.
     - Use a fresh `exec_at_recovery` lifecycle. An actor-before-Node case
       cannot inherit the installed runtime gate from another scenario.
   - [x] Replace the denied `Execve` action with `forked_path_exec_is_denied`.
@@ -3028,7 +3037,7 @@ test does not close a row when its physical condition or an assertion changed.
       shared path fixture and syscall helper.
       The retirement deletes seven Rust lines. Nine child regressions and the
       final repository Rust CI passed after the last Rust edit. `effect.rs`
-      remains at 3,005 lines and `effect/child.rs` at 2,874 lines. Neither
+      had 3,005 lines at this retirement; `effect/child.rs` had 2,874 lines. Neither
       remaining legacy runner is done.
     - Use a fresh `exec_path_recovery` lifecycle. Actor-before-Node cases
       cannot inherit a previous installed admission policy while Node is down.

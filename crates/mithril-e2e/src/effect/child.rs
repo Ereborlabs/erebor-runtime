@@ -137,7 +137,6 @@ enum ChildRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) enum PreparedOperation {
     Exec,
-    Execveat,
     ScriptExec,
     DeletedExec,
     MemfdExec,
@@ -1563,7 +1562,6 @@ fn propagation_peer_loop(
 }
 
 struct PreparedOperations {
-    exec_path: PathBuf,
     script_path: PathBuf,
     exec_file: fs::File,
     deleted_exec_file: fs::File,
@@ -1690,7 +1688,6 @@ impl PreparedOperations {
             .join(".mithril-unix-stream-state");
         let unix_stream_signal = SharedMailbox::create(&unix_stream_signal_path)?;
         Ok(Self {
-            exec_path: exec_path.to_path_buf(),
             script_path: script_path.to_path_buf(),
             exec_file,
             deleted_exec_file,
@@ -1764,11 +1761,8 @@ impl PreparedOperations {
             PreparedOperation::Exec => {
                 io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), false))
             }
-            PreparedOperation::Execveat => {
-                io_outcome(fixture_syscalls::exec_path(&self.exec_path, true))
-            }
             PreparedOperation::ScriptExec => {
-                io_outcome(fixture_syscalls::exec_path(&self.script_path, false))
+                io_outcome(fixture_syscalls::exec_path(&self.script_path))
             }
             PreparedOperation::DeletedExec => io_outcome(fixture_syscalls::exec_fd(
                 self.deleted_exec_file.as_raw_fd(),
@@ -2836,7 +2830,7 @@ mod tests {
     }
 
     #[test]
-    fn native_exec_and_descriptor_transfer_controls_work_without_policy() -> crate::Result<()> {
+    fn exec_and_transfer_work() -> crate::Result<()> {
         let mut received =
             fixture_syscalls::receive_file_from_actor(std::path::Path::new("/bin/busybox"))
                 .map_err(|source| crate::Error::Io {
@@ -2848,6 +2842,13 @@ mod tests {
         fixture_syscalls::exec_fd(received.as_raw_fd(), false).map_err(|source| {
             crate::Error::Io {
                 path: "fexecve control fixture".into(),
+                source,
+                location: snafu::location!(),
+            }
+        })?;
+        fixture_syscalls::exec_path(std::path::Path::new("/bin/busybox")).map_err(|source| {
+            crate::Error::Io {
+                path: "execve control fixture".into(),
                 source,
                 location: snafu::location!(),
             }
