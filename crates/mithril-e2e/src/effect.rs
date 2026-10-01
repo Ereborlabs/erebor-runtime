@@ -154,11 +154,10 @@ use zerocopy::{IntoBytes as _, TryFromBytes as _};
 use self::child::{EffectProcessFixture, HardClosedOperation};
 use self::support::{
     effect_binding, effect_node_config, effect_peer_binding, effect_propagation_binding,
-    global_mount_activity_sequence, global_mount_mutation_epoch, global_mount_view_is_dirty,
-    health_delta, inode_generation, mount_view_is_dirty, ready_canonical_mount_snapshots,
-    sample_observation_health, wait_for_effect, wait_for_exact_effect,
-    wait_for_exact_io_uring_effect, wait_for_path_exec_effect, wait_for_reason,
-    ExternalMountNamespace,
+    global_mount_mutation_epoch, health_delta, inode_generation, mount_view_is_dirty,
+    ready_canonical_mount_snapshots, sample_observation_health, wait_for_effect,
+    wait_for_exact_effect, wait_for_exact_io_uring_effect, wait_for_path_exec_effect,
+    wait_for_reason, ExternalMountNamespace,
 };
 use crate::capability::{BpfPrototypeCompiler, CompileRecordV1};
 use crate::error::{
@@ -169,7 +168,7 @@ use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::LatencyDistributionV1;
 use crate::Result;
 
-pub use child::{run_effect_child, run_mount_reconfigure_child, run_mount_setattr_child};
+pub use child::{run_effect_child, run_mount_setattr_child};
 pub use network::{
     NetworkFixtureResultV1, NetworkPeerServerResultV1, NetworkPeerTargetV1,
     NetworkPhysicalProbeBundleV2, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
@@ -502,7 +501,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_worker_request_attributed: bool,
     pub io_uring_lifecycle_released: bool,
     pub path_tree_outside_control_allowed: bool,
-    pub fsconfig_reconfigure_global_invalidation: bool,
     pub mount_snapshot_rebuilt_after_mutation: bool,
     pub mount_propagation_reached_peer: bool,
     pub mount_propagation_all_views_rebuilt: bool,
@@ -2274,37 +2272,6 @@ impl EffectTestRunner {
             }
         );
 
-        let reconfigure_target = fixture_root.join("fsconfig-reconfigure-target");
-        fs::create_dir(&reconfigure_target).context(IoSnafu {
-            path: &reconfigure_target,
-        })?;
-        external_mount_namespace.mount_tmpfs(&reconfigure_target)?;
-        reconcile_policy_lifecycle(&policy, &mut host)?;
-        let reconfigure_epoch = global_mount_mutation_epoch(&host)?;
-        let reconfigure_activity = global_mount_activity_sequence(&host)?;
-        external_mount_namespace.reconfigure_mount(&reconfigure_target)?;
-        let fsconfig_reconfigure_global_invalidation = global_mount_mutation_epoch(&host)?
-            > reconfigure_epoch
-            && global_mount_activity_sequence(&host)? > reconfigure_activity
-            && global_mount_view_is_dirty(&host)?;
-        ensure!(
-            fsconfig_reconfigure_global_invalidation,
-            InvalidInputSnafu {
-                path: &reconfigure_target,
-                reason: "FSCONFIG_CMD_RECONFIGURE did not dirty the represented security view",
-            }
-        );
-        reconcile_policy_lifecycle(&policy, &mut host)?;
-        ensure!(
-            fixture.open(&paths.benign)?.allowed,
-            InvalidInputSnafu {
-                path: &paths.benign,
-                reason: "the benign control failed after filesystem reconfiguration",
-            }
-        );
-        external_mount_namespace.unmount(&reconfigure_target)?;
-        reconcile_policy_lifecycle(&policy, &mut host)?;
-
         policy = policy
             .reload_and_install_for_test_objects(
                 &next_node_config,
@@ -2602,7 +2569,6 @@ impl EffectTestRunner {
             io_uring_worker_request_attributed: true,
             io_uring_lifecycle_released,
             path_tree_outside_control_allowed: protect,
-            fsconfig_reconfigure_global_invalidation,
             mount_snapshot_rebuilt_after_mutation: true,
             mount_propagation_reached_peer: true,
             mount_propagation_all_views_rebuilt: true,

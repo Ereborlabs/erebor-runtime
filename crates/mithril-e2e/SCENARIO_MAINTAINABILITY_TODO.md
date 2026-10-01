@@ -2647,7 +2647,7 @@ test does not close a row when its physical condition or an assertion changed.
       and its syscall helper after all three cases pass. Keep the detached
       `open_tree` check and its mount source. The 92 non-privileged Mithril
       library tests pass after removal.
-  - [ ] Replace filesystem reconfiguration with `reconfigure_dirties_mounts`.
+  - [x] Replace filesystem reconfiguration with `reconfigure_dirties_mounts`.
     - [x] Reuse `mount_alias.py`. Mount tmpfs, call `fspick`, set `size` to
       `4194304`, and call `FSCONFIG_CMD_RECONFIGURE`. Do not substitute a
       remount or a read-only attribute change.
@@ -2671,9 +2671,17 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass and commit real Kubernetes. The unchanged shared test passed
       both modes in 81.13 seconds. Namespace, output, pin, lease, and socket
       cleanup passed. Host and direct-`runc` qualification ran first.
-    - [ ] Remove the matching legacy action, result field, child command, and
+    - [x] Remove the matching legacy action, result field, child command, and
       unused syscall helper only after all three platform cases pass. Compare
       with baseline `95775f48`. Keep propagation, cache, and attribute checks.
+      The retirement removes 141 net Rust lines. Eight child regressions and
+      the VM launcher checks pass. The shared scenario remains 95 lines.
+      The shared actor's preexisting-bind and mount-setattr Host regressions
+      pass in 27.94 and 33.57 seconds. No Platform, production API, Node,
+      Control, BPF, or public production result schema changes.
+      The final repository Rust CI procedure passes after the last Rust edit.
+      This focused three-platform proof does not close the full physical
+      matrix delivery gate.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full

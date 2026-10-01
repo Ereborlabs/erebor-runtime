@@ -1144,19 +1144,6 @@ pub fn run_mount_setattr_child(namespace: &Path, path: &Path, read_only: bool) -
     .context(IoSnafu { path })
 }
 
-pub fn run_mount_reconfigure_child(namespace: &Path, path: &Path) -> Result<()> {
-    let namespace = fs::File::open(namespace).context(IoSnafu { path: namespace })?;
-    rustix::thread::move_into_link_name_space(
-        namespace.as_fd(),
-        Some(rustix::thread::LinkNameSpaceType::Mount),
-    )
-    .map_err(io::Error::from)
-    .context(IoSnafu {
-        path: Path::new("mount namespace"),
-    })?;
-    fixture_syscalls::reconfigure_mount(path).context(IoSnafu { path })
-}
-
 #[allow(deprecated)]
 fn enter_private_mount_namespace() -> Result<()> {
     rustix::thread::unshare(rustix::thread::UnshareFlags::NEWNS)

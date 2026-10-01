@@ -827,9 +827,23 @@ The 95-line Host test passed both modes in 40.59 seconds. Direct `runc` passed
 both modes in 47.57 seconds with the same body. Normal output, pin, lease,
 and cgroup cleanup passed on both platforms. Kubernetes passed both modes in
 81.13 seconds. Namespace, output, pin, lease, and socket cleanup passed.
-The legacy reconfiguration block remains until its retirement commit.
-Source review: `ed47714a` plus the reconfiguration working-tree changes.
+The matching legacy reconfiguration block, result field, child command, and
+unused helper chain are removed. The retirement removes 141 net Rust lines.
+The separate propagation, cache, and mount-attribute checks remain. Eight
+child regressions and the local VM launcher checks pass after removal.
+The shared actor's preexisting-bind and mount-setattr Host regressions passed
+in 27.94 and 33.57 seconds. No platform or production code changes.
+Source review: `2082c24d` plus the legacy retirement working-tree changes.
 The baseline comparison uses `95775f48`.
+The final repository Rust CI procedure passes after the last Rust edit:
+
+```bash
+env CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=4 \
+  RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+```
+
+Formatting, workspace check, strict Clippy, and workspace tests pass. This
+result does not replace the complete physical matrix delivery gate.
 
 ## In-Process Control And TLS Scenarios
 

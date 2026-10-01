@@ -714,45 +714,6 @@ impl ExternalMountNamespace {
         Ok(())
     }
 
-    pub(super) fn reconfigure_mount(&self, target: &Path) -> Result<()> {
-        let executable = std::env::current_exe().context(IoSnafu {
-            path: Path::new("current executable"),
-        })?;
-        let flags = rustix::io::fcntl_getfd(&self.namespace)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu {
-                path: Path::new("held mount namespace"),
-            })?;
-        rustix::io::fcntl_setfd(&self.namespace, flags - rustix::io::FdFlags::CLOEXEC)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu {
-                path: Path::new("held mount namespace"),
-            })?;
-        let output = Command::new(executable)
-            .arg("mount-reconfigure")
-            .arg("--namespace")
-            .arg(format!("/proc/self/fd/{}", self.namespace.as_raw_fd()))
-            .arg("--path")
-            .arg(target)
-            .output();
-        rustix::io::fcntl_setfd(&self.namespace, flags)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu {
-                path: Path::new("held mount namespace"),
-            })?;
-        let output = output.context(IoSnafu {
-            path: Path::new("fsconfig reconfigure helper"),
-        })?;
-        ensure!(
-            output.status.success(),
-            CommandSnafu {
-                program: "mithril-effect-test mount-reconfigure",
-                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            }
-        );
-        Ok(())
-    }
-
     fn run<const A: usize, const P: usize>(
         &self,
         command: [&str; A],
