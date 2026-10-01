@@ -1301,7 +1301,7 @@ acknowledgement, or decommission operations directly.
 - [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
 - [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
-- [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
+- [x] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
   - [x] Add one ready HTTPS constructor on the existing
     `ControlServerFixture`. Accept the complete Kubernetes client, Control,
     policy, and Node-readiness owners. Keep the current TLS files, request
