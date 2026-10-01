@@ -3001,8 +3001,13 @@ test does not close a row when its physical condition or an assertion changed.
       Exec/Mprotect evidence, every legacy zero-object field, unmapping,
       descriptor close, actor exit, and cleanup. The final repository Rust
       CI passed. The single-test file has 89 lines.
-    - [ ] Pass and commit direct `runc`, then Kubernetes. Add each platform
-      registration only after its focused case passes.
+    - [x] Direct `runc` passed in 28.11 seconds with the same retained image,
+      read-only deleted mapping, real mprotect denial, fresh evidence, and
+      mapping and descriptor cleanup. Pin, lease, and cgroup cleanup passed.
+      The final repository Rust CI passed. No Platform or production code
+      changed.
+    - [ ] Pass and commit Kubernetes. Add its platform registration only
+      after the focused case passes.
     - [ ] Remove only the matched legacy action and deleted mapping resources
       after all three platforms pass. Keep memfd and exact-file mappings.
   - [ ] Preserve the remaining exact-file executable mmap and read/write

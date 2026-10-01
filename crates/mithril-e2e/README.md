@@ -457,8 +457,9 @@ cannot gain execute permission through its retained mapping. Read this flow:
 Run `effect::mprotect_deleted::deleted_mprotect_is_denied::deleted_map_recovery_host`
 with the exact-test flags below. Host passed in 28.44 seconds with pin, lease,
 and cgroup cleanup. The existing descriptor-exec mode passed in 33.73 seconds
-after the shared actor change. The final repository Rust CI passed. Direct
-`runc`, Kubernetes, and legacy retirement remain pending. This review covers
+after the shared actor change. Direct `runc` passed in 28.11 seconds with the
+same checks and cleanup. Use the `deleted_map_recovery_runc` suffix. The final
+repository Rust CI passed. Kubernetes and legacy retirement remain pending. This review covers
 the replacement based on `75bc112d`. No Platform or production code changes
 are required. The exact-file and memfd mapping actions remain in the old runner.
 
