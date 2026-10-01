@@ -179,9 +179,7 @@ impl Host {
             }
             return Err(source.into());
         }
-        if protected {
-            self.running(pid)?;
-        }
+        self.running(pid)?;
         Ok(actor)
     }
 

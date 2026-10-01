@@ -177,9 +177,7 @@ impl Runc {
             self.netns = Some(File::open(format!("/proc/{pid}/ns/net"))?);
         }
         actor.set_group(self.shared.cgroup());
-        if self.shared.has_policy() {
-            self.shared.running(pid)?;
-        }
+        self.shared.running(pid)?;
         Ok(actor)
     }
 

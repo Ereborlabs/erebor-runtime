@@ -66,6 +66,8 @@ mod admission;
 struct ActorFiles {
     work: ProbeDirectory,
     cgroup: ProbeCgroup,
+    kind: ControlContainerKind,
+    pid: Option<u32>,
     pod_uid: String,
     container_id: String,
     execution_set_id: String,
@@ -255,6 +257,8 @@ impl SharedState {
                 ActorFiles {
                     work,
                     cgroup,
+                    kind,
+                    pid: None,
                     container_id: format!("{:064x}", uuid::Uuid::new_v4().as_u128()),
                     execution_set_id: if name == "worker" {
                         pod_uid.clone()
@@ -580,9 +584,7 @@ impl Shared {
             None => Ok(()),
         }
     }
-}
 
-impl Shared {
     pub(super) fn source(&self) -> &Path {
         &self.root
     }
@@ -929,39 +931,7 @@ impl Shared {
             });
         self.prepare_member(&labels, &actor, kind)?;
         let result = if self.node_task.is_some() {
-            let members = self
-                .targets
-                .keys()
-                .filter(|key| key.1 == labels)
-                .cloned()
-                .collect::<Vec<_>>();
-            if members.is_empty() {
-                self.sync_policy()
-            } else {
-                for (index, key) in members
-                    .iter()
-                    .chain(members.iter().take(members.len() - 1))
-                    .enumerate()
-                {
-                    let kind = *self
-                        .policies
-                        .get(&labels)
-                        .ok_or("the policy is not installed")?
-                        .0
-                        .spec
-                        .containers
-                        .iter()
-                        .find(|item| item.names.contains(&key.2))
-                        .ok_or("the policy has no actor container")?
-                        .kinds
-                        .first()
-                        .ok_or("the actor container has no kind")?;
-                    self.pod_uid = key.0.clone();
-                    self.prepare_member(&labels, &key.2, ControlContainerKind::from(kind))?;
-                    self.sync_target(index < members.len() - 1)?;
-                }
-                Ok(())
-            }
+            self.sync_policy()
         } else {
             let (resource, path) = self
                 .policies
@@ -1043,7 +1013,46 @@ impl Shared {
     }
 
     pub(super) fn sync_policy(&mut self) -> TestResult<()> {
-        self.sync_target(false)
+        let (previous, kind) = (self.key(), self.actor_kind);
+        let members = self
+            .actors
+            .iter()
+            .filter(|(key, files)| {
+                key.1 == self.labels
+                    && (*key == &previous || files.pid.is_some() || self.targets.contains_key(*key))
+            })
+            .map(|(key, files)| (key.clone(), files.kind))
+            .collect::<Vec<_>>();
+        if members.is_empty() {
+            return self.sync_target(false);
+        }
+        let result = (|| {
+            // Refresh every old target before waiting for the aggregate policy.
+            for (index, (key, kind)) in members
+                .iter()
+                .chain(members.iter().take(members.len() - 1))
+                .enumerate()
+            {
+                (self.pod_uid, self.labels, self.actor) = key.clone();
+                self.actor_kind = *kind;
+                self.sync_target(index < members.len() - 1)?;
+                let files = self.actors.get(key).ok_or("missing actor")?;
+                if let Some(pid) = files.pid {
+                    if !self
+                        .cri
+                        .as_ref()
+                        .ok_or("CRI is not running")?
+                        .contains(&files.container_id)?
+                    {
+                        self.running(pid)?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        (self.pod_uid, self.labels, self.actor) = previous;
+        self.actor_kind = kind;
+        result
     }
 
     fn sync_target(&mut self, defer: bool) -> TestResult<()> {
@@ -1456,6 +1465,11 @@ impl Shared {
     }
 
     pub(super) fn running(&mut self, pid: u32) -> TestResult<()> {
+        let key = self.key();
+        self.actors.get_mut(&key).ok_or("missing actor")?.pid = Some(pid);
+        if !self.protected() {
+            return Ok(());
+        }
         let revision = self.observe_state(pid, ContainerState::ContainerRunning)?;
         self.cri
             .as_ref()

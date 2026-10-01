@@ -116,6 +116,15 @@ impl CriFixture {
         Ok(revision)
     }
 
+    pub(crate) fn contains(&self, id: &str) -> TestResult<bool> {
+        Ok(self
+            .service
+            .value
+            .read()
+            .map_err(|_error| "CRI fixture state is poisoned")?
+            .contains_key(id))
+    }
+
     fn notify(&self, id: &str, removed: bool) -> TestResult<()> {
         let Some(mut client) = self.events.clone() else {
             return Ok(());
@@ -478,6 +487,7 @@ mod tests {
             .enable_all()
             .build()?;
         let mut revisions = Vec::new();
+        assert!(!fixture.contains("first")?);
         for id in ["first", "second"] {
             revisions.push(fixture.set(CriRuntimeContainerObservationV1 {
                 listed: cri::Container {
@@ -492,6 +502,7 @@ mod tests {
                     ..Default::default()
                 },
             })?);
+            assert!(fixture.contains(id)?);
         }
         let service = &fixture.service;
         let inventory = runtime
@@ -526,6 +537,8 @@ mod tests {
             }
         }
         fixture.clear()?;
+        assert!(!fixture.contains("first")?);
+        assert!(!fixture.contains("second")?);
         assert!(runtime
             .block_on(service.list_containers(Request::new(Default::default())))?
             .into_inner()

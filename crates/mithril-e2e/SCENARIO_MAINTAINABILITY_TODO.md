@@ -3732,7 +3732,7 @@ test does not close a row when its physical condition or an assertion changed.
             Keep each actual initial PID and rule attribution explicit. Use
             existing operations and a pristine `group_recovery` lifecycle.
             Keep the file below 100 lines. Run Host before changing tooling.
-          - [ ] Make the existing lightweight runtime-input owner retain all
+          - [x] Make the existing lightweight runtime-input owner retain all
             ready group members. Supply each member once after its signed
             target is ready. Do not change runtime identity on policy updates.
             Keep Node-first admission and existing single-actor recovery tests.
@@ -3742,6 +3742,45 @@ test does not close a row when its physical condition or an assertion changed.
             Check Node-first groups, policy replacement, single-actor recovery,
             readiness diagnostics, cleanup, and the complete physical matrix
             after a shared Platform change. Record exact logs and commands.
+          The unchanged 98-line body passes on Host in 28.17 seconds, direct
+          runc in 29.05 seconds, and real Kubernetes in 74.58 seconds. Before
+          the fixture correction, Host activates one target and times out at
+          worker recovery with no identity in 58.82 seconds. See
+          `/tmp/mithril-group-recovery-before-20261001.log` and the paired
+          `/tmp/mithril-group-recovery-{host,runc,kube}-20261001.log` files.
+          All four runs remove owned actor resources. Kubernetes leaves only
+          the three K3s system Pods. The CRI unit check, strict E2E Clippy,
+          VM harness checks, and final repository Rust CI pass. Commit the
+          shared tooling after all lightweight cases pass. Keep all three
+          qualified recovery platforms enabled. The complete Kubernetes
+          matrix remains an open delivery gate.
+          The matrix passes all 66 Host identity cases. The next case passes
+          its assertions but fails Node shutdown. A focused repeat confirms
+          the failure. Restore the previous snapshot request runtime: the
+          same case passes in 34.98 seconds and removes its resources. Keep
+          the 30-second shutdown limit. The shared runtime left a gRPC
+          transport task pending during shutdown. See
+          `/tmp/mithril-snapshot-{before,after}-20261001.log`. Continue the
+          matrix from its completed cases; do not repeat the passing group.
+          The next lifecycle passes four cases but `clean_host_restarts`
+          finds the retained Node pin root. This kernel-owner test requires
+          an empty root and does not start Node. Give it `kernel_start`;
+          keep the other four tests on their shared lifecycle. Its unchanged
+          body passes in 26.47 seconds with pin, lease, and cgroup cleanup.
+          See `/tmp/mithril-kernel-start-host-20261001.log`.
+          All 152 registered Host cases now pass across the continued run
+          and the two focused corrections. All 143 direct-runc cases pass.
+          Kubernetes is running. The continuation logs are
+          `/tmp/mithril-group-recovery-matrix-{final,remaining}-20261001.log`.
+          It contains 152 Host, 143 runc, and 143 Kubernetes cases. Only the
+          unrelated uncommitted `file_gate` draft is excluded. No committed
+          scenario is excluded. See
+          `/tmp/mithril-group-recovery-matrix-20261001.log`. No Node, Control,
+          BPF, public Platform API, actor, or policy source changes are made.
+          The independent unmatched Observe replacement remains pending.
+          Its new 98-line draft starts the client before Node, outside runtime
+          admission. It uses the shared actor and `ipc_observe` lifecycle.
+          Keep the legacy assertions until this draft passes all platforms.
   - [x] Replace the remaining Observe-mode descriptor exec with
     `forked_fd_exec_is_observed`. Reuse `exec_on_release.py`, the process
     owner, and `EffectCheck`. Use a distinct signed Observe policy for the
