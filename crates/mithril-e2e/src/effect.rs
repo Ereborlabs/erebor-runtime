@@ -152,7 +152,7 @@ use self::support::{
     health_delta, inode_generation, mount_view_is_dirty, ready_canonical_mount_snapshots,
     sample_observation_health, wait_for_effect, wait_for_exact_effect,
     wait_for_exact_io_uring_effect, wait_for_path_exec_effect, wait_for_reason,
-    wait_for_unsupported_effect, ExternalMountNamespace,
+    ExternalMountNamespace,
 };
 use crate::capability::{BpfPrototypeCompiler, CompileRecordV1};
 use crate::error::{
@@ -1704,28 +1704,6 @@ impl EffectTestRunner {
                     None,
                 )?;
             }
-            let marker = require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::MemfdMprotectExec,
-                "UNSUPPORTED_OBJECT",
-                (
-                    KernelEffectFamilyV1::Exec,
-                    KernelEffectOperationV1::Mprotect,
-                ),
-                "memfd mprotect",
-            )?;
-            wait_for_unsupported_effect(
-                &reader,
-                &observations,
-                marker,
-                "UNSUPPORTED_OBJECT",
-                (
-                    KernelEffectFamilyV1::Exec,
-                    KernelEffectOperationV1::Mprotect,
-                ),
-            )?;
         }
         let unix_stream_marker = observations.cursor();
         let unix_stream_outcome = fixture.run_prepared(HardClosedOperation::UnixStream)?;

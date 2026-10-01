@@ -2,7 +2,7 @@
 
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{self, Seek as _, SeekFrom};
+use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::fd::{AsRawFd as _, FromRawFd as _, RawFd};
 use std::os::unix::ffi::OsStrExt as _;
@@ -214,20 +214,6 @@ pub(super) fn exec_fd(fd: RawFd) -> io::Result<()> {
         }
         last_errno()
     })
-}
-
-pub(super) fn memfd_copy(source: &Path) -> io::Result<File> {
-    // SAFETY: name is a valid NUL-terminated string.
-    let fd = unsafe { libc::memfd_create(c"mithril-exec-fixture".as_ptr(), libc::MFD_EXEC) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: fd is newly owned by this process.
-    let mut target = unsafe { File::from_raw_fd(fd) };
-    let mut input = File::open(source)?;
-    io::copy(&mut input, &mut target)?;
-    target.seek(SeekFrom::Start(0))?;
-    Ok(target)
 }
 
 pub(super) fn make_mapping_exec(mapping: &memmap2::Mmap) -> io::Result<()> {

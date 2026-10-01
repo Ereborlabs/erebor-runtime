@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace `MemfdMprotectExec` with `memfd_mprotect_is_denied`.
+  - [x] Replace `MemfdMprotectExec` with `memfd_mprotect_is_denied`.
     Reuse the exec actor, executable memfd preparation, signed exec policy,
     process owner, and evidence owner. Use the same Linux `MFD_EXEC` flag
     as the old fixture. Copy the full ELF image and map it read-only with
@@ -3013,9 +3013,21 @@ test does not close a row when its physical condition or an assertion changed.
       and descriptor cleanup. Namespace, pin, and lease cleanup passed.
       The final repository Rust CI passed. No Platform or production code
       changed. The test has 93 lines.
-    - [ ] Remove only the matched legacy action, memfd mapping resources,
+    - [x] Remove only the matched legacy action, memfd mapping resources,
       and unused memfd copy helper after all three platforms pass. Keep
       exact-file mappings and their positive controls.
+      Remove the unsupported-object observation helper only after its last
+      caller is replaced. Remove only its assertions from the combined
+      matcher unit test. Keep the exact-object and operation-argument checks.
+      The retirement removes 103 Rust lines net. The action, retained memfd,
+      mapping, copy helper, and unused observation helper are removed. All
+      25 non-privileged effect regressions, the focused exact matcher, and
+      the final repository Rust CI pass. Unsupported-object fields stay
+      explicit in the new physical tests. Exact-object and io_uring checks
+      remain in the old support owner. No physical matrix rerun is required
+      for this matched deletion. `effect.rs` has 2,907 lines,
+      `effect/child.rs` has 2,715 lines, and `effect/fixture_syscalls.rs` has
+      740 lines. The large runners remain incomplete.
   - [x] Replace `DeletedMprotectExec` with `deleted_mprotect_is_denied`.
     Reuse the exec actor, deleted-image preparation, signed exec policy,
     process owner, and evidence owner. Map the complete executable read-only

@@ -451,26 +451,6 @@ pub(super) fn wait_for_exact_effect(
     )
 }
 
-pub(super) fn wait_for_unsupported_effect(
-    reader: &EffectObservationReader,
-    store: &EffectObservationStore,
-    marker: u64,
-    expected_reason: &str,
-    expected_effect: (KernelEffectFamilyV1, KernelEffectOperationV1),
-) -> Result<()> {
-    wait_for_observation(
-        reader,
-        store,
-        marker,
-        expected_reason,
-        Some((
-            u32::from(expected_effect.0 as u16),
-            u32::from(expected_effect.1 as u16),
-        )),
-        Some(ObjectExpectation::Unsupported),
-    )
-}
-
 pub(super) fn wait_for_exact_io_uring_effect(
     reader: &EffectObservationReader,
     store: &EffectObservationStore,
@@ -502,7 +482,6 @@ enum ObjectExpectation {
     IoUringRead {
         exact_object_key_id: u64,
     },
-    Unsupported,
 }
 
 fn wait_for_observation(
@@ -596,9 +575,6 @@ fn object_matches(
                 && event.io_uring_request_flags & 16 != 0
                 && event.io_uring_rw_flags == 0
                 && event.io_uring_opcode == 22
-        }
-        Some(ObjectExpectation::Unsupported) => {
-            event.exact_object_key_id == 0 && event.composite_atom_id == 0
         }
     }
 }
@@ -872,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn object_match_requires_the_selected_exact_or_unsupported_identity() {
+    fn exact_match_checks_argument() {
         let exact = Some(ObjectExpectation::Exact {
             exact_object_key_id: 13,
             operation_argument: Some(2_147_767_344),
@@ -889,20 +865,6 @@ mod tests {
         event.exact_object_key_id = 13;
         event.operation_argument = 0;
         assert!(!object_matches(&event, exact));
-        event.exact_object_key_id = 0;
-        event.composite_atom_id = 0;
-        assert!(object_matches(&event, Some(ObjectExpectation::Unsupported)));
-        event.composite_atom_id = 1;
-        assert!(!object_matches(
-            &event,
-            Some(ObjectExpectation::Unsupported)
-        ));
-        event.composite_atom_id = 0;
-        event.exact_object_key_id = 1;
-        assert!(!object_matches(
-            &event,
-            Some(ObjectExpectation::Unsupported)
-        ));
     }
 
     #[test]

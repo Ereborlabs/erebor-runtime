@@ -390,7 +390,8 @@ CI passed. Kubernetes passed in 71.16 seconds with the same checks and
 namespace, pin, and lease cleanup. Use the `memfd_recovery_kubernetes` suffix.
 The matched legacy exec action, enum arm, and result flag are removed after
 all three platforms pass. The retirement removes 23 Rust lines net. The
-memfd descriptor, preparation helper, mapping, and mprotect checks remain.
+memfd descriptor, preparation helper, mapping, and mprotect checks remained
+until the memfd image protection test below passed on all three platforms.
 All nine child regressions, `bash harness/vm/test.sh` from this crate, and
 the final repository Rust CI pass after retirement. This review covers the
 replacement based on `5b07f137`. No Platform or production code changes are
@@ -481,7 +482,8 @@ all three platforms pass. The actor-only deleted mapping test is also
 removed. The replacement checks the real ELF descriptor, read-only mapping,
 and absent path. This retirement removes 102 Rust lines net. All eight
 remaining child regressions and the final repository Rust CI pass. The old
-runner keeps its independent exact-file and memfd mappings. The large runners
+runner keeps its independent exact-file mappings. The memfd mapping test
+below also replaces the old memfd action. The large runners
 remain incomplete.
 
 ### Memfd image protection denial
@@ -514,8 +516,14 @@ assertions and complete pin, lease, and cgroup cleanup. Use the
 `memfd_map_recovery_runc` suffix. The final repository Rust CI passed.
 Kubernetes passed in 72.54 seconds with the same assertions and complete
 namespace, pin, and lease cleanup. Use the `memfd_map_recovery_kubernetes`
-suffix. The final repository Rust CI passed. Legacy retirement remains
-pending.
+suffix. The final repository Rust CI passed. The matched legacy action,
+retained memfd, mapping, copy helper, and unused unsupported-object observer
+are removed after all three platforms pass. The retirement removes 103 Rust
+lines net. All 25 non-privileged effect regressions, the focused exact matcher,
+and the final repository Rust CI pass. Exact-object and operation-argument
+checks remain in the combined matcher test. Unsupported-object fields stay
+explicit in the new physical tests. The old runner keeps its independent
+exact-file mappings. The large runners remain incomplete.
 This review covers the replacement based on `099875a2` and
 the shared actor commit `9f0fca50`. No Platform or production code changes
 are required.

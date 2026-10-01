@@ -138,7 +138,6 @@ pub(super) enum PreparedOperation {
     SecretMmapExec,
     SecretMprotectReadExec,
     SecretMprotectWriteExec,
-    MemfdMprotectExec,
     PassedSecretRead,
     PassedBenignRead,
     IoUringSecretRead,
@@ -1528,13 +1527,10 @@ fn propagation_peer_loop(
 
 struct PreparedOperations {
     exec_file: fs::File,
-    // Retain the descriptor for the separate memfd mapping control.
-    _memfd_file: fs::File,
     secret_file: fs::File,
     benign_file: fs::File,
     secret_read_mapping: Option<memmap2::Mmap>,
     secret_write_mapping: Option<memmap2::MmapMut>,
-    memfd_read_mapping: Option<memmap2::Mmap>,
     passed_secret_file: fs::File,
     passed_benign_file: fs::File,
     mount_tree: fs::File,
@@ -1569,12 +1565,6 @@ impl PreparedOperations {
             path: Path::new("/dev/zero"),
         })?;
         let exec_file = fs::File::open(exec_path).context(IoSnafu { path: exec_path })?;
-        let memfd_exec_file =
-            fixture_syscalls::memfd_copy(exec_path).map_err(|source| crate::Error::Io {
-                path: "memfd executable fixture".into(),
-                source,
-                location: snafu::location!(),
-            })?;
         let secret_file = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -1597,15 +1587,6 @@ impl PreparedOperations {
                 source,
                 location: snafu::location!(),
             })?;
-        // SAFETY: memfd_exec_file remains open for the mapping lifetime.
-        let memfd_read_mapping =
-            unsafe { memmap2::MmapOptions::new().map_copy_read_only(&memfd_exec_file) }.map_err(
-                |source| crate::Error::Io {
-                    path: "memfd executable mapping fixture".into(),
-                    source,
-                    location: snafu::location!(),
-                },
-            )?;
         let passed_secret_file =
             fixture_syscalls::receive_file_from_actor(secret_path).map_err(|source| {
                 crate::Error::Io {
@@ -1637,12 +1618,10 @@ impl PreparedOperations {
         let unix_stream_signal = SharedMailbox::create(&unix_stream_signal_path)?;
         Ok(Self {
             exec_file,
-            _memfd_file: memfd_exec_file,
             secret_file,
             benign_file,
             secret_read_mapping: Some(secret_read_mapping),
             secret_write_mapping: Some(secret_write_mapping),
-            memfd_read_mapping: Some(memfd_read_mapping),
             passed_secret_file,
             passed_benign_file,
             mount_tree,
@@ -1724,14 +1703,6 @@ impl PreparedOperations {
                         .make_exec()
                         .map_or_else(error_outcome, |_| allowed_outcome())
                 }),
-            PreparedOperation::MemfdMprotectExec => {
-                self.memfd_read_mapping
-                    .take()
-                    .map_or_else(missing_prepared_file, |mapping| {
-                        fixture_syscalls::make_mapping_exec(&mapping)
-                            .map_or_else(error_outcome, |_| allowed_outcome())
-                    })
-            }
             PreparedOperation::PassedSecretRead => read_outcome(&mut self.passed_secret_file),
             PreparedOperation::PassedBenignRead => read_outcome(&mut self.passed_benign_file),
             PreparedOperation::IoUringSecretRead => io_outcome(
