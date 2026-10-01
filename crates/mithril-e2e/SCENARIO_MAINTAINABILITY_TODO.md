@@ -2979,6 +2979,33 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace `NonLeaderExec` with `thread_exec_is_denied`. Keep the
+    baseline fork-then-pthread condition and real descriptor exec. Reuse
+    the signed exec policy, exec actor, process owner, and evidence owner.
+    Hold the executable before Node starts. After production recovery, fork
+    the child and create one worker thread. Use the existing child, namespace
+    TID, host TID, and thread-coordinate waits. Check both creator edges,
+    distinct task cookies, the worker's TGID, and its shared process state.
+    Require worker-thread `EACCES` and fresh worker-attributed
+    `EXACT_POLICY_DENY` Exec/Execute evidence with the inherited role,
+    generation, zero entry rule, and every legacy path-object field.
+    Keep the single-test file below 100 lines and use a fresh
+    `thread_deny_recovery` lifecycle. Add no Platform or production API.
+    - [x] Extend the existing `ProcessFixture::wait_thread` to accept an
+      absent namespace TID. Select the first non-leader task from Linux
+      `/proc/<pid>/task`, then read its namespace TID from Linux status.
+      Keep all known-TID callers unchanged. Do not require a restricted
+      worker to create or write a report file. Host traces show `EACCES` for
+      both report operations. Check the known-TID wait with `tid_reuse`.
+      The new worker discovery passed the real Host exec case. The unchanged
+      known-TID reuse case passed in 34.12 seconds. Pin, lease, and cgroup
+      cleanup passed. The final repository Rust CI passed.
+    - [ ] Pass and commit Host, then direct `runc`, then Kubernetes. Register
+      each platform only after its focused case passes. Check the existing
+      leader descriptor-exec and script control paths after actor reuse.
+    - [ ] Remove only the matched legacy action, result, and unused pthread
+      helper after all three platforms pass. Keep ordinary descriptor exec
+      and all unrelated identity and memory assertions.
   - [x] Replace `MemfdExec` with `memfd_exec_is_denied`. Reuse the shared
     exec actor, signed exec policy, process owner, and evidence owner. Before
     Node starts, create a memfd with Linux `MFD_EXEC`, copy the executable

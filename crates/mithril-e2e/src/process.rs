@@ -882,7 +882,12 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
-    pub(crate) fn wait_thread(&mut self, ns_tid: u32, operation: &str) -> Result<u32> {
+    pub(crate) fn wait_thread(
+        &mut self,
+        ns_tid: impl Into<Option<u32>>,
+        operation: &str,
+    ) -> Result<u32> {
+        let ns_tid = ns_tid.into();
         let pid = self.actor_pid;
         let path = PathBuf::from(format!("/proc/{pid}/task"));
         let last = RefCell::new(String::from("<absent>"));
@@ -907,14 +912,20 @@ impl ProcessFixture {
                         continue;
                     };
                     tids.push(tid);
-                    if tid != pid && Self::namespace_pid(tid)? == ns_tid {
+                    if tid != pid && (ns_tid.is_none() || Some(Self::namespace_pid(tid)?) == ns_tid)
+                    {
                         return Ok(Some(tid));
                     }
                 }
                 *last.borrow_mut() = format!("{tids:?}");
                 Ok(None)
             },
-            || format!("namespace TID {ns_tid}; last host TIDs: {}", last.borrow()),
+            || {
+                format!(
+                    "namespace TID {ns_tid:?}; last host TIDs: {}",
+                    last.borrow()
+                )
+            },
         )
     }
 
