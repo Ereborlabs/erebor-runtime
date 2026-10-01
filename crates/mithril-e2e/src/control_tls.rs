@@ -953,47 +953,21 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
 
     let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
     fs::create_dir_all(&target)?;
-    let directory = tempfile::tempdir_in(target)?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
+    let tls = MtlsFixture::in_directory(tempfile::tempdir_in(target)?, false)?;
     let store = ControlStore::open_with_evidence_limits(
-        directory.path().join("control-evidence"),
+        tls.path().join("control-evidence"),
         EvidenceStoreLimitsV1 {
             capacity_policy: EvidenceStoreCapacityPolicyV1::Retain,
             ..EvidenceStoreLimitsV1::default()
         },
     )?;
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store.clone(),
-    )?;
-    let server = ControlServerFixture::start(&files, control).await?;
+    let server = tls.start(tls.control_with_store(store.clone(), 1)?).await?;
 
-    let observations = EffectObservationStore::durable(
-        4,
-        directory.path().join("node-wal"),
-        EvidenceWalLimits {
-            maximum_retained_records: BATCH_RECORDS,
-            maximum_batch_records: BATCH_RECORDS,
-            ..EvidenceWalLimits::default()
-        },
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
+    let observations = tls.wal(EvidenceWalLimits {
+        maximum_retained_records: BATCH_RECORDS,
+        maximum_batch_records: BATCH_RECORDS,
+        ..EvidenceWalLimits::default()
+    })?;
     for source_sequence in 1..=BATCH_RECORDS as u64 {
         observations.record_bytes(
             erebor_interceptor_abi::EffectObservationV1 {
@@ -1024,22 +998,18 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     let maximum_group_batches =
         (mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / encoded_batch_bytes).max(1);
     let (grpc_elapsed, grpc_mib_per_second) = GrpcTransfer::new(None)
-        .measure(&files, accepted_bytes)
+        .measure(&tls.files, accepted_bytes)
         .await?;
     let (durable_grpc_elapsed, durable_grpc_mib_per_second) =
-        GrpcTransfer::new(Some(directory.path().join("grpc-received.bin")))
-            .measure(&files, accepted_bytes)
+        GrpcTransfer::new(Some(tls.path().join("grpc-received.bin")))
+            .measure(&tls.files, accepted_bytes)
             .await?;
     eprintln!(
         "raw mTLS gRPC transferred {accepted_bytes} bytes in {grpc_elapsed:?}: {grpc_mib_per_second:.1} MiB/s; durable receiver completed in {durable_grpc_elapsed:?}: {durable_grpc_mib_per_second:.1} MiB/s"
     );
 
-    let connector = NodeControlConnector::new(
-        files.node_config(server.address()),
-        "node-a".to_owned(),
-        [7; 16],
-    );
-    let mut trust = TrustCache::load(&directory.path().join("trust"))?;
+    let connector = tls.connector(&server, "node-a", [7; 16]);
+    let mut trust = TrustCache::load(&tls.path().join("trust"))?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
     let intake = EvidenceIntakeOwner::from_store(store.clone());
     let direct_authenticated = AuthenticatedEvidenceNodeV1 {

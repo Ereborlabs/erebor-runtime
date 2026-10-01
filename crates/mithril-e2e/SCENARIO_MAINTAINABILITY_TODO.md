@@ -1501,17 +1501,25 @@ acknowledgement, or decommission operations directly.
     `control_tls.rs` decreases from 2,075 to 1,986 lines. Its other legacy
     scenarios remain open. No fixture, Platform, or production source changed.
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
-  - [ ] Let `MtlsFixture` own a supplied temporary directory. Reuse its
+  - [x] Let `MtlsFixture` own a supplied temporary directory. Reuse its
     existing certificate, Control, WAL, and connector operations in the
     unchanged budget. Keep the original target filesystem and all workload,
     timing, cursor, acknowledgement, and throughput assertions. Verify the
     release budget and related TLS cases before committing this tooling.
     This step removes repeated setup. It does not complete the scenario
     migration or permit a test above the 100-line limit.
-  - [ ] Reuse `MtlsFixture` for TLS, Control, connector, and WAL setup. Keep
+  - [x] Reuse `MtlsFixture` for TLS, Control, connector, and WAL setup. Keep
     the fixture on the original target filesystem. Keep 4,096 records per
     batch, more than 512 MiB of acknowledged protobuf payload, the production
     batch and group limits, and the 107.1 MiB/s release threshold.
+    Qualification: the unchanged release budget passed on 2026-10-01 in
+    14.66 seconds. It durably acknowledged 536,989,928 bytes through five
+    cumulative receipts at 143.4 MiB/s. The related Control/TLS run passed
+    19 tests in 29.75 seconds, with two existing ignored budgets. Harness
+    checks and the final repository Rust CI procedure exited with status 0.
+    The setup change removes 24 Rust lines net. `control_tls.rs` now has
+    1,265 lines. The original budget still exceeds 100 lines; its scenario
+    migration remains open. No Platform or production source changed.
   - [x] Give the existing raw gRPC transfer fixture one lifecycle owner.
     Bind the listener before server startup. Replace the fixed readiness
     sleep with the bound listener. Keep complete transfer, durable sync,

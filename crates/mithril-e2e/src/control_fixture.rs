@@ -36,7 +36,13 @@ pub(crate) struct MtlsFixture {
 
 impl MtlsFixture {
     pub(crate) fn new(expired_node: bool) -> Result<Self, Box<dyn StdError>> {
-        let directory = tempfile::tempdir()?;
+        Self::in_directory(tempfile::tempdir()?, expired_node)
+    }
+
+    pub(crate) fn in_directory(
+        directory: tempfile::TempDir,
+        expired_node: bool,
+    ) -> Result<Self, Box<dyn StdError>> {
         let certificates = Certificates::issue(expired_node)?;
         let files = certificates.write(directory.path())?;
         Ok(Self {

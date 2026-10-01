@@ -68,6 +68,42 @@ file bytes, and a receiver failure. It supplements the release backlog test;
 it does not prove the 107.1 MiB/s budget. This guide covers the transfer
 fixture change after `942c7ece`. The legacy backlog scenario remains.
 
+### Backlog resource setup
+
+Intended end state: The existing TLS fixture owns the budget's temporary
+directory on the original target filesystem. The test keeps every production
+upload, acknowledgement, timing measurement, and throughput assertion.
+
+[MtlsFixture::in_directory](src/control_fixture.rs) receives the owned temporary directory and issues the existing certificates.
+  -> [MtlsFixture::control_with_store](src/control_fixture.rs) returns Control with the same permitted Node, tenant, trust generation, and Retain store.
+  -> [MtlsFixture::wal](src/control_fixture.rs) creates the existing durable Node log with the same canonicalizer and batch limits.
+  -> [mtls_evidence_backlog_exceeds_the_previous_baseline](src/control_tls.rs) builds the original records, measures both raw transfers and direct intake, then sends and checks every production evidence group.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) joins normal server shutdown after the connection closes.
+
+Before: The budget repeats certificate, permitted-Node, trust, WAL, and
+connector setup. After: The existing fixture owns that setup. The test keeps
+the 4,096-record batches, more than 512 MiB of payload, production group
+limits, six measurements, source identity, exact acknowledgement count, zero
+pending records, and 107.1 MiB/s threshold. The change removes 24 Rust lines
+net. It does not move the scenario or hide upload sequencing.
+
+```sh
+cargo test -p mithril-e2e --release --lib \
+  control_tls::mtls_evidence_backlog_exceeds_the_previous_baseline \
+  -- --exact --ignored --nocapture --test-threads=1
+```
+
+The release test passed in 14.66 seconds on 2026-10-01. It acknowledged
+536,989,928 bytes through five cumulative receipts at 143.4 MiB/s. The source
+review covers the working tree after `e70c2dee`. Existing `MtlsFixture::new`
+callers retain the same directory allocation and certificate behavior.
+The related Control/TLS run passed 19 tests in 29.75 seconds, with two
+existing ignored budgets. Harness checks and the final repository Rust CI
+procedure exited with status 0 after the last Rust edit.
+No Platform or production source changed. The legacy budget is still above
+100 lines. Its scenario migration remains open; this fixture step is not
+a size-rule exception or physical Kubernetes qualification.
+
 ## Destination Rewrite Fixture
 
 The shared nftables fixture installs two destination rewrite rules in one
