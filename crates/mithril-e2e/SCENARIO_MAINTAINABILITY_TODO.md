@@ -3073,6 +3073,7 @@ test does not close a row when its physical condition or an assertion changed.
       now uses fallible `try_exists`; permission errors are not absence.
       The final repository Rust CI passed. No Platform or production code
       changed. The unchanged Kubernetes rerun then passed.
+      The user accepted this lightweight reproduction on 2026-10-01.
     - [x] Remove only the matched legacy action and deleted mapping resources
       after all three platforms pass. Keep memfd and exact-file mappings.
       Remove the deleted-image actor-only fixture test after the replacement
