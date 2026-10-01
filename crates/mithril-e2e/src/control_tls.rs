@@ -416,46 +416,6 @@ async fn mtls_connection_renews_the_ready_session_while_its_owner_is_idle(
 }
 
 #[tokio::test]
-async fn mtls_connection_reports_local_readiness_transitions_without_reconnect(
-) -> Result<(), Box<dyn StdError>> {
-    let fixture = MtlsFixture::new(false)?;
-    let control = fixture.control(4)?;
-    let server = fixture.start(control.clone()).await?;
-
-    let connector = fixture.connector(&server, "node-a", [7; 16]);
-    let mut trust = TrustCache::load(fixture.path())?;
-    let mut node = registration();
-    node.kubernetes_node_name = "worker-a.example".to_owned();
-    let connection = connector.connect(node, true, &mut trust).await?;
-    control
-        .bind_kubernetes_node_session("worker-a.example", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?;
-    assert_eq!(control.registered_nonce_count(), 1);
-    assert_eq!(
-        control
-            .ready_kubernetes_node_sessions(Duration::from_secs(2))
-            .len(),
-        1
-    );
-
-    connection.report_readiness(true, false).await?;
-    assert!(control
-        .ready_kubernetes_node_sessions(Duration::from_secs(2))
-        .is_empty());
-    connection.report_readiness(true, true).await?;
-    assert_eq!(
-        control
-            .ready_kubernetes_node_sessions(Duration::from_secs(2))
-            .len(),
-        1
-    );
-    assert_eq!(control.registered_nonce_count(), 1);
-
-    drop(connection);
-    server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes(
 ) -> Result<(), Box<dyn StdError>> {
     let fixture = MtlsFixture::new(false)?;

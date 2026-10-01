@@ -1199,7 +1199,7 @@ acknowledgement, or decommission operations directly.
   from 2,416 to 2,366 lines. No fixture, Platform, or production code changed.
   No physical platform matrix was rerun for this protocol-only change.
 - [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
-- [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
+- [x] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
   - Replace the repeated readiness assertions with `readiness_keeps_session`
     in `control_tls/readiness.rs`. Use one standard test below 100 lines.
     Reuse `MtlsFixture`, the production connector, and the trust cache. Keep
@@ -1219,7 +1219,12 @@ acknowledgement, or decommission operations directly.
     and local VM harness checks passed. The test checks complete restored
     session equality and nonce equality in addition to every baseline
     condition. No fixture, Platform, or production source changed.
-    The old function remains until this replacement is committed.
+    Replacement commit `9bae626` precedes legacy removal. The old function
+    and its repeated assertions are removed. Final repository Rust CI passes
+    after the last Rust edit, including all 91 non-privileged E2E tests.
+    The parent file decreases from 1,497 to 1,458 lines. The standalone
+    replacement has 43 lines and adds explicit session and nonce checks.
+    The remaining outage, throughput, and custom runner inventory stays open.
 - [x] Replace `control_evidence_queue_reclaims_only_durably_consumed_segments`
   with `consumption_reclaims_segments` in `control_tls/retention.rs`.
   - Use one standard Rust test below 100 lines. Reuse the existing WAL fixture

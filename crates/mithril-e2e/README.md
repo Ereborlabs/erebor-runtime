@@ -960,9 +960,10 @@ control_tls::readiness::readiness_keeps_session -- --exact`, then
 `cargo test -p mithril-e2e --lib control_tls:: -- --test-threads=1`.
 The exact case passed in 0.04 seconds. The related family passed 20 tests in
 25.35 seconds. Formatting, strict E2E Clippy, and local harness checks passed.
-Source review: the replacement working tree based on inventory `56712bb`.
-The legacy function and final Rust CI remain pending. This is a real mTLS
-protocol check, not kernel, runtime, or Kubernetes qualification.
+Source review: replacement commit `9bae626`, based on inventory `56712bb`.
+The legacy function is removed after that commit. Final Rust CI passed
+after the last Rust edit, including all 91 non-privileged E2E tests. This is
+a real mTLS protocol check, not kernel, runtime, or Kubernetes qualification.
 
 ### Consumption reclaims complete evidence segments
 
