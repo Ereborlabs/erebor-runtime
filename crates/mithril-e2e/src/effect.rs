@@ -84,6 +84,7 @@ mod network_fixture;
 mod network_peer;
 #[cfg(test)]
 mod network_read;
+mod network_rewrite;
 #[cfg(test)]
 mod network_unsupported;
 #[cfg(test)]

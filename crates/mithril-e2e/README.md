@@ -34,6 +34,25 @@ The harness owns VM and cluster cleanup. A shared test owns its scenario
 resources and checks its production evidence. Automated tests must not read
 or execute files from `examples/`. Manual operator examples remain separate.
 
+## Destination Rewrite Fixture
+
+The shared nftables fixture installs two destination rewrite rules in one
+explicit network namespace. Its intended result is reliable rule removal,
+including cleanup after the actor exits. It does not own Mithril decisions.
+
+[NetworkRewriteOwner::install](src/effect/network_rewrite.rs) opens and retains the target network namespace.
+  -> [NetworkRewriteOwner::configure](src/effect/network_rewrite.rs) installs both DNAT rules in that namespace.
+  -> [NetworkRewriteOwner::run](src/effect/network_rewrite.rs) captures a failed command's exit status, namespace path, arguments, and stderr.
+  -> [NetworkRewriteOwner::cleanup](src/effect/network_rewrite.rs) removes the table and closes the namespace descriptor.
+  -> [NetworkRewriteOwner::drop](src/effect/network_rewrite.rs) retries removal only if explicit cleanup did not complete.
+
+Run `effect::network_rewrite::tests::rewrite_cleanup_is_idempotent` by its
+exact name with `--ignored --nocapture --test-threads=1` in the retained VM.
+The check needs Linux `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `nsenter`, and `nft`.
+It proves rule installation, table removal, and repeated cleanup. It does
+not prove Mithril packet attribution or durable evidence intake. The legacy
+rewritten-flow actions remain until their shared replacement passes.
+
 ## Add And Run A Shared Scenario
 
 Add one actor program under `fixtures/process/`. Reuse an existing signed

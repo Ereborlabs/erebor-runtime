@@ -4367,7 +4367,15 @@ test does not close a row when its physical condition or an assertion changed.
     one shared standard test below 100 lines. Reuse the TCP Python actor and
     nftables owner. Hold the actor's network namespace for rule cleanup. Keep
     the complete owner in one small file and capture command errors.
-    - [ ] Verify and commit the namespace-scoped fixture before the scenario.
+    - [x] Verify and commit the namespace-scoped fixture before the scenario.
+      The Linux fixture test passed in 0.05 seconds in the retained VM. Rule
+      installation, table removal, and repeated cleanup passed. The three
+      existing network fixture checks and strict Clippy passed. The fixture
+      retains the network namespace and reports explicit cleanup errors.
+      The same check passed in a private network namespace in 0.04 seconds.
+      The final repository Rust CI passed. Its 91 in-process E2E cases passed;
+      443 ignored tests are not physical qualification evidence.
+      This fixture proof does not qualify the failed Mithril scenario.
     - [ ] Keep two real DNAT rules, from `198.18.0.1` and `198.18.0.2` to
       the same listener at `127.0.0.4`. Permit both requested addresses at
       Connect. The first destination record excludes the final address; the
@@ -4382,6 +4390,16 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching legacy actions, listener, server thread,
       result fields, and fixture row after all three replacements pass.
       Keep the whole-socket fence, provider write, and other pending cases.
+    - The 87-line Host draft failed on 2026-10-01. Both DNAT rules were
+      installed. The actor's first connection failed and the listener accepted
+      no connection. BPF emitted `EXACT_POLICY_DENY` Network/Send records
+      with task cookie, role, and entry rule zero. The new attributed-evidence
+      wait timed out. Node rejected the durable evidence subject and marked
+      `WAL_FAILURE`. The baseline matches reason and operation only; it does
+      not prove packet-subject attribution or durable intake. Keep the old
+      actions and the new assertion. Do not run Kubernetes or change BPF
+      without approval. Table, pin, lease, and cgroup cleanup passed after
+      failure. The failed draft is not a qualified scenario.
   - [ ] Remove the remaining local server threads and launcher-owned peer
     process when their scenarios move to shared platform tests.
   - [ ] Do not repair the legacy child by adding another process launcher. The

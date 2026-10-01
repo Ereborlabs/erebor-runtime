@@ -2,9 +2,8 @@ use std::fs;
 use std::io::{self, Read as _, Write as _};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
@@ -25,6 +24,7 @@ use zerocopy::{FromBytes as _, IntoBytes as _};
 
 use super::child::EffectProcessFixture;
 use super::network_fixture::NetworkProbeFixture;
+use super::network_rewrite::NetworkRewriteOwner;
 use super::support::{
     effect_binding_with_identity, effect_node_config, inode_generation, wait_for_effect,
 };
@@ -762,7 +762,7 @@ impl NetworkTestRunner {
         let provider_write_observed = provider_connect
             && provider_send
             && join_server(provider_server, "provider-result server")?;
-        let rewrite = NetworkRewriteOwner::install(rewrite_address.port())?;
+        let rewrite = NetworkRewriteOwner::install(std::process::id(), rewrite_address.port())?;
         let rewritten_marker = observations.cursor();
         let rewritten_denied =
             fixture.network_connect(SocketAddr::from(([198, 18, 0, 1], rewrite_address.port())))?;
@@ -1278,100 +1278,6 @@ fn read_is_absent(stream: &mut TcpStream) -> io::Result<bool> {
         }
         Err(error) => Err(error),
     }
-}
-
-struct NetworkRewriteOwner {
-    table: String,
-    active: bool,
-}
-
-impl NetworkRewriteOwner {
-    fn install(port: u16) -> Result<Self> {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| invalid_probe(format!("the system clock is invalid: {error}")))?
-            .as_nanos();
-        let mut owner = Self {
-            table: format!("mithril_net_{}_{}", std::process::id(), timestamp),
-            active: false,
-        };
-        run_nft(&["add", "table", "ip", &owner.table])?;
-        owner.active = true;
-        let result = owner.configure(port);
-        if let Err(error) = result {
-            let _cleanup = owner.cleanup_inner();
-            return Err(error);
-        }
-        Ok(owner)
-    }
-
-    fn configure(&self, port: u16) -> Result<()> {
-        run_nft(&[
-            "add",
-            "chain",
-            "ip",
-            &self.table,
-            "output",
-            "{ type nat hook output priority dstnat; policy accept; }",
-        ])?;
-        let port = port.to_string();
-        let target = format!("127.0.0.4:{port}");
-        for source in ["198.18.0.1", "198.18.0.2"] {
-            run_nft(&[
-                "add",
-                "rule",
-                "ip",
-                &self.table,
-                "output",
-                "ip",
-                "daddr",
-                source,
-                "tcp",
-                "dport",
-                &port,
-                "dnat",
-                "to",
-                &target,
-            ])?;
-        }
-        Ok(())
-    }
-
-    fn cleanup(mut self) -> Result<()> {
-        let result = self.cleanup_inner();
-        self.active = false;
-        result
-    }
-
-    fn cleanup_inner(&self) -> Result<()> {
-        if self.active {
-            run_nft(&["delete", "table", "ip", &self.table])?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for NetworkRewriteOwner {
-    fn drop(&mut self) {
-        let _result = self.cleanup_inner();
-    }
-}
-
-fn run_nft(arguments: &[&str]) -> Result<()> {
-    let status = Command::new("nft")
-        .args(arguments)
-        .status()
-        .context(IoSnafu {
-            path: Path::new("nft"),
-        })?;
-    ensure!(
-        status.success(),
-        InvalidInputSnafu {
-            path: Path::new("nft"),
-            reason: format!("nft exited with {status}"),
-        }
-    );
-    Ok(())
 }
 
 impl NetworkFixtureProof {
