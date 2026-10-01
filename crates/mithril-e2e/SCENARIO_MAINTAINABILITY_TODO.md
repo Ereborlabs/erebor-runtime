@@ -4363,43 +4363,14 @@ test does not close a row when its physical condition or an assertion changed.
     privileged run removed these resources on 2026-09-23.
   - [x] Keep nftables state in `NetworkRewriteOwner` with explicit cleanup and
     a `Drop` fallback.
-  - [ ] Replace destination rewriting with `rewritten_flow_keeps_destination`,
-    one shared standard test below 100 lines. Reuse the TCP Python actor and
-    nftables owner. Hold the actor's network namespace for rule cleanup. Keep
-    the complete owner in one small file and capture command errors.
-    - [x] Verify and commit the namespace-scoped fixture before the scenario.
-      The Linux fixture test passed in 0.05 seconds in the retained VM. Rule
-      installation, table removal, and repeated cleanup passed. The three
-      existing network fixture checks and strict Clippy passed. The fixture
-      retains the network namespace and reports explicit cleanup errors.
-      The same check passed in a private network namespace in 0.04 seconds.
-      The final repository Rust CI passed. Its 91 in-process E2E cases passed;
-      443 ignored tests are not physical qualification evidence.
-      This fixture proof does not qualify the failed Mithril scenario.
-    - [ ] Keep two real DNAT rules, from `198.18.0.1` and `198.18.0.2` to
-      the same listener at `127.0.0.4`. Permit both requested addresses at
-      Connect. The first destination record excludes the final address; the
-      second includes it. Do not replace packet denial with Connect denial.
-    - [ ] Require a failed first connection, no accepted forbidden connection,
-      and fresh attributed `EXACT_POLICY_DENY` Network/Send evidence. Require
-      the second connection and the exact `rewrite` payload at the listener.
-      Keep destination handles and actor identity explicit.
-    - [ ] Pass and commit Host, then direct `runc`, then Kubernetes. Use the
-      same actor, signed policy, action, and assertions on all three platforms.
-      Add no Platform API and change no production behavior.
-    - [ ] Remove only the matching legacy actions, listener, server thread,
-      result fields, and fixture row after all three replacements pass.
-      Keep the whole-socket fence, provider write, and other pending cases.
-    - The 87-line Host draft failed on 2026-10-01. Both DNAT rules were
-      installed. The actor's first connection failed and the listener accepted
-      no connection. BPF emitted `EXACT_POLICY_DENY` Network/Send records
-      with task cookie, role, and entry rule zero. The new attributed-evidence
-      wait timed out. Node rejected the durable evidence subject and marked
-      `WAL_FAILURE`. The baseline matches reason and operation only; it does
-      not prove packet-subject attribution or durable intake. Keep the old
-      actions and the new assertion. Do not run Kubernetes or change BPF
-      without approval. Table, pin, lease, and cgroup cleanup passed after
-      failure. The failed draft is not a qualified scenario.
+  - [x] Hold the target network namespace in `NetworkRewriteOwner`. Keep the
+    complete owner in one small file. Capture command exit status and stderr.
+    Report cleanup errors and keep `Drop` as an idempotent fallback.
+    The fixture test passed in the retained VM in 0.05 seconds and in a private
+    network namespace in 0.04 seconds. The three existing network checks,
+    strict Clippy, and final Rust CI passed. This tooling is committed as
+    `72416c67`. It does not qualify rewritten-flow evidence. Keep the scenario
+    and its pending attribution decision in the local-socket inventory below.
   - [ ] Remove the remaining local server threads and launcher-owned peer
     process when their scenarios move to shared platform tests.
   - [ ] Do not repair the legacy child by adding another process launcher. The
@@ -4767,6 +4738,14 @@ test does not close a row when its physical condition or an assertion changed.
       exact-policy result to make this test pass. The durable evidence model
       needs a separate approved attribution decision before this action can
       replace the legacy raw-event check.
+    - The 2026-10-01 Host draft repeated this known condition. Both real DNAT
+      rules were installed. The failed connection and absent listener
+      connection passed. Node rejected the taskless packet record with
+      `WAL_FAILURE`; a task-attributed wait cannot match that record. The
+      draft, its policy, and its actor commands were removed. No production
+      change is approved or implemented. The proposed task-cookie BPF fix
+      is withdrawn. Table, pin, lease, and cgroup cleanup passed. Keep the
+      baseline Connect allowance, packet denial, and allowed payload checks.
   - [x] Replace delegated egress. Keep the request ID, requested and final
     destinations, forbidden request absence, and allowed request receipt.
     - [x] Keep distinct governed requester and delegate tasks, both request
