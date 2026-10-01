@@ -3642,6 +3642,32 @@ test does not close a row when its physical condition or an assertion changed.
         API. Pass and commit Host, direct runc, then Kubernetes before
         removing only the legacy Observe result wait. Keep the old stream
         action, descriptor setup, and combined no-file-create assertion.
+        The rejected 2026-10-01 Host draft used two admitted initial roots.
+        Two Observe-first starts timed out during admission before the socket
+        action. A Protect-start draft activated Observe before socket creation,
+        but Connect returned `EACCES`. The later evidence wait found no three
+        matching `WOULD_DENY` results; its last server results were
+        `APPLICATION_DEFAULT_ALLOW`. The cause of the Connect denial is not
+        proven. See `/tmp/mithril-unix-observe-evidence-20261001.log`.
+        The source comparison also found a setup mismatch. The old client
+        binding does not arm an initial root and has no runtime admission.
+        The existing admitted-entry IPC path can select application defaults
+        before the unmatched relationship. Preserve the unadmitted client
+        condition, not only Observe mode. The draft and policy are removed
+        from the crate; copies remain under `/tmp/mithril-unix-observe-rejected*`.
+        No Platform, Node, Control, or BPF change remains. No Kubernetes run
+        occurred. The old byte exchange, Observe evidence, and no-file-create
+        assertions remain. Do not claim qualification or extend a deadline.
+        All four failed Host runs removed their pin root, lease, cgroup,
+        and actor directory. The final repository Rust CI procedure exited
+        with status 0 after removal of the draft. The passing in-process
+        checks do not qualify this physical Observe case.
+        - [ ] Qualify actor-first group setup before the next Observe draft.
+          Keep one runtime fact and signed target for each group member,
+          including its actual initial PID. Use the existing group, policy,
+          and start operations. Do not add a Platform API or reproduce Node
+          recovery. The lightweight fixture must supply every member to the
+          production owners, as real CRI does. Keep Node-first setup unchanged.
   - [x] Replace the remaining Observe-mode descriptor exec with
     `forked_fd_exec_is_observed`. Reuse `exec_on_release.py`, the process
     owner, and `EffectCheck`. Use a distinct signed Observe policy for the
