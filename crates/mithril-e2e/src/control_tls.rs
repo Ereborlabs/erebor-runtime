@@ -57,6 +57,7 @@ use crate::control_fixture::{
 };
 use crate::physical::{wait_for, wait_for_async};
 
+mod coverage;
 mod gap;
 mod registration;
 mod rejection;
@@ -1517,94 +1518,6 @@ fn batch_source_id(batch: &mithril_node::EvidenceBatchV1) -> Result<[u8; 16], Bo
         .as_slice()
         .try_into()
         .map_err(|_error| "evidence batch source identity is not Id128".into())
-}
-
-#[tokio::test]
-async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box<dyn StdError>> {
-    let fixture = MtlsFixture::new(false)?;
-    let intake_path = fixture.path().join("control-evidence");
-    let store = ControlStore::open(&intake_path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
-    let server = fixture.start(control).await?;
-    let observations = EffectObservationStore::durable(
-        4,
-        fixture.path().join("node-wal"),
-        EvidenceWalLimits::default(),
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
-    observations.record_bytes(
-        erebor_interceptor_abi::EffectObservationV1 {
-            observed_boottime_ns: 2,
-            source_sequence: 2,
-            source_cpu_id: 0,
-            task_cookie: 7,
-            reason: 9,
-            physical_result: 1,
-            effect_family: 1,
-            operation: 1,
-            ..erebor_interceptor_abi::EffectObservationV1::default()
-        }
-        .as_bytes(),
-    );
-    observations.record_bytes(
-        erebor_interceptor_abi::EffectObservationV1 {
-            observed_boottime_ns: 3,
-            source_sequence: 3,
-            source_cpu_id: 1,
-            task_cookie: 8,
-            reason: 9,
-            physical_result: 1,
-            effect_family: 1,
-            operation: 1,
-            ..erebor_interceptor_abi::EffectObservationV1::default()
-        }
-        .as_bytes(),
-    );
-    let connector = fixture.connector(&server, "node-a", [7; 16]);
-    let mut trust = TrustCache::load(fixture.path())?;
-    let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    let snapshot = observations
-        .coverage_snapshot()
-        .ok_or("missing coverage snapshot")?;
-    let source_epoch = snapshot.source_epoch;
-    let current = snapshot.current_intervals();
-    let mut expected = Vec::new();
-    for interval in &current {
-        expected.push(connection.send_coverage_report(&snapshot, interval).await?);
-    }
-    assert_eq!(expected.len(), 2);
-    for expected_ack in expected {
-        let NodeControlMessage::CoverageAck(actual) = connection.next_message().await? else {
-            return Err("Control did not acknowledge coverage".into());
-        };
-        assert_eq!(actual, expected_ack);
-    }
-    for interval in current {
-        let coverage_identity = EvidenceIntakeIdentityV1 {
-            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-            node_id: "node-a".to_owned(),
-            node_boot_id: [7; 16],
-            label_epoch: 1,
-            source_id: interval.source_id.to_be_bytes(),
-            source_epoch,
-        };
-        let persisted = intake
-            .latest_coverage_report(&coverage_identity)?
-            .ok_or("Control did not persist coverage")?;
-        assert_eq!(persisted.intervals.len(), 1);
-        assert!(persisted.intervals[0].current);
-        assert_ne!(persisted.intervals[0].state, "HEALTHY");
-    }
-
-    drop(connection);
-    server.shutdown().await?;
-    Ok(())
 }
 
 #[tokio::test]

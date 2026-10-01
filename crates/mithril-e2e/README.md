@@ -879,6 +879,60 @@ restart, not a Node daemon restart or physical syscall generation. Kubernetes
 outage cases remain separate. No fixture, Platform, or production source
 changes are included.
 
+### Coverage truth across upload
+
+Intended result: Control stores both initial CPU coverage intervals without
+promoting Unknown coverage to Healthy. Neither source supports a negative
+claim before a kernel health sample establishes complete coverage.
+
+[coverage_upload_keeps_truth](src/control_tls/coverage.rs) records the baseline CPU 0 and CPU 1 Application Binary Interface (ABI) events through the public WAL input.
+  -> [CoverageHealthOwner](../mithril-node/src/observation/coverage.rs) creates two current Unknown intervals with distinct source identities and no gap reason.
+  -> [ControlConnection::send_coverage_report](../mithril-node/src/control.rs) uploads one source report through the authenticated unary gRPC operation.
+  -> [ControlPlane::report](../mithril-control/src/service.rs) validates the Node session and sends the report to the durable intake owner.
+  -> [EvidenceIntakeOwner::receive_coverage](../mithril-control/src/evidence.rs) validates and persists the complete report before returning success.
+  -> [ControlConnection::send_coverage_report](../mithril-node/src/control.rs) queues the report epoch and revision only after the gRPC operation succeeds.
+  -> [coverage_upload_keeps_truth](src/control_tls/coverage.rs) checks that confirmation and every persisted report field before repeating the operation for the second source.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) stops and joins Control after the connection closes.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust test
+    participant N as Node coverage client
+    participant C as Control
+    T->>N: Upload source coverage report
+    N->>C: Authenticated report request
+    C->>C: Validate and persist complete report
+    C-->>N: Empty gRPC acknowledgement
+    N-->>T: Queued epoch and revision confirmation
+    T->>C: Read persisted report through intake owner
+    C-->>T: Complete Unknown interval
+```
+
+The gRPC acknowledgement has no fields. The Node client supplies its local
+epoch and revision confirmation after success. Complete durable readback
+proves that Control retains the source, CPU, epoch, revision, interval ID,
+state, sequence bounds, counters, and empty gap reasons. The test does not
+claim that an absent health sample proves a detected sequence gap.
+
+At baseline `95775f48`, the 107-line function constructs transport and WAL
+configuration, repeats event literals, and uses three source passes with a
+parallel acknowledgement vector. The 99-line replacement uses `MtlsFixture`,
+one event loop, and one upload-confirm-readback loop. Both response waits are
+bounded and identify their operation, CPU, and store path. The original
+one-current-interval and not-Healthy assertions remain explicit.
+
+```bash
+cargo test -p mithril-e2e --lib \
+  control_tls::coverage::coverage_upload_keeps_truth -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+```
+
+This source review covers the replacement based on `001a4c7f`. The test uses
+production ABI decoding, coverage, WAL, TLS, and durable Control-store APIs.
+It does not claim kernel health sampling, physical syscall generation, or
+Kubernetes qualification. No fixture, Platform, or production source changes
+are included.
+
 ## Quiet Runtime Event Reproduction
 
 The lightweight CRI fixture can forward containerd events through a private

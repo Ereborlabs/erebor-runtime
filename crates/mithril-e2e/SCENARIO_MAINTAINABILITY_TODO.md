@@ -621,7 +621,7 @@ need replacement:
 | `identity.rs` | 4,845 | Size and runner retirement |
 | `effect.rs` | 2,907 | Size and runner retirement |
 | `effect/child.rs` | 2,715 | Size and runner retirement |
-| `control_tls.rs` | 1,986 | Runner retirement; size limit met |
+| `control_tls.rs` | 1,899 | Runner retirement; size limit met |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
 
 The behavior sections below are the runner-retirement inventory. This size
@@ -1335,29 +1335,43 @@ acknowledgement, or decommission operations directly.
     `control_tls.rs` decreases from 2,075 to 1,986 lines. Its other legacy
     scenarios remain open. No fixture, Platform, or production source changed.
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
-- [ ] `mtls_coverage_upload_preserves_gap_truth_at_control`
-  - [ ] Replace the old function with `coverage_upload_keeps_truth` in
+- [x] `mtls_coverage_upload_preserves_gap_truth_at_control`
+  - [x] Replace the old function with `coverage_upload_keeps_truth` in
     `control_tls/coverage.rs`, one standard Rust test below 100 lines. Reuse
     `MtlsFixture::wal` and public coverage upload and intake operations.
     Remove duplicate ABI event literals, manual canonicalizer setup, and the
     parallel acknowledgement vector. Keep upload, acknowledgement, durable
     readback, and normal server shutdown visible in one source loop.
-  - [ ] Keep CPU 0 at sequence 2 with task cookie 7 and CPU 1 at sequence 3
+  - [x] Keep CPU 0 at sequence 2 with task cookie 7 and CPU 1 at sequence 3
     with task cookie 8. Keep two current source intervals and two matching
     acknowledgements. These initial sources have Unknown coverage because
     no kernel health sample establishes complete coverage. Do not invent a
     sequence-gap reason or promote either source to Healthy.
-  - [ ] Require distinct source identities and no negative-claim eligibility.
+  - [x] Require distinct source identities and no negative-claim eligibility.
     Compare each complete persisted report: source, CPU, epoch, revision,
     interval identity, state, sequence bounds, opening counters, absent
     closing counters, and empty gap reasons. Keep the original one-current-
     interval and not-Healthy assertions. Bound both response waits and report
     the operation, CPU, and resource path on timeout.
-  - [ ] Compare with `95775f48`. Pass the exact replacement before deleting
+  - [x] Compare with `95775f48`. Pass the exact replacement before deleting
     the old function. Pass the Control/TLS family, harness checks, and final
     Rust CI. Commit this protocol-only replacement separately. No physical
     platform matrix is needed; the case does not depend on kernel hooks,
     OCI runtime behavior, or Kubernetes. Do not change production or fixtures.
+    Qualification: the 99-line replacement passed its final exact check in
+    0.19 seconds before the old function was removed. The Control/TLS family
+    passed 19 tests in 25.46 seconds, with two existing ignored budgets.
+    VM harness checks passed. The final Rust CI gate exited with status 0;
+    its E2E run passed 91 tests in 28.52 seconds, with 429 existing ignored
+    tests. The ignored tests are not physical qualification evidence.
+    The replacement removes the manual canonicalizer, duplicate event
+    literals, and parallel acknowledgement vector. One explicit source loop
+    performs upload, confirmation, and complete durable readback. All original
+    current-interval and not-Healthy checks remain. Exact Unknown state,
+    complete report equality, distinct sources, and negative-claim checks
+    are added. `control_tls.rs` decreases from 1,986 to 1,899 lines. Its
+    remaining legacy scenarios stay open. No fixture, Platform, or production
+    source changed.
 - [ ] `mtls_administrative_services_route_matching_results_and_cancel_waiters`
 
 The following Control tests are already small owner-local checks. Keep them as
