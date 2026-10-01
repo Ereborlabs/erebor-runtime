@@ -2998,7 +2998,11 @@ test does not close a row when its physical condition or an assertion changed.
       28.28 seconds. The unchanged deleted mapping and memfd exec cases
       passed in 34.26 and 34.48 seconds. All cleanup checks and the final
       repository Rust CI passed. No Platform or production code changed.
-    - [ ] Pass and commit Host.
+    - [x] Host passed in 28.28 seconds with the retained executable memfd,
+      actual read-only mapping, real mprotect denial, fresh evidence,
+      every legacy zero-object field, unmapping, descriptor close, actor
+      exit, and cleanup. The final repository Rust CI passed. The single-test
+      file has 93 lines. No Platform or production code changed.
     - [ ] Pass and commit direct `runc`.
     - [ ] Pass and commit Kubernetes.
     - [ ] Remove only the matched legacy action, memfd mapping resources,

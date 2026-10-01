@@ -484,6 +484,36 @@ remaining child regressions and the final repository Rust CI pass. The old
 runner keeps its independent exact-file and memfd mappings. The large runners
 remain incomplete.
 
+### Memfd image protection denial
+
+The [memfd mapping test](src/effect/mprotect_memfd.rs) replaces the baseline
+`MemfdMprotectExec` action with one 93-line test. It reuses the image actor
+and signed exec policy. Intended end state: an unclassified executable
+memfd cannot gain execute permission through its retained mapping.
+
+[exec_on_release.py](fixtures/process/exec_on_release.py) creates the same `MFD_EXEC` memfd as the old fixture, copies the full ELF image, and maps it read-only with `MAP_PRIVATE` before Node starts.
+  -> [memfd_mprotect_is_denied](src/effect/mprotect_memfd.rs) checks the memfd link, ELF header, executable mode, and actual `r--p` mapping.
+  -> [memfd_mprotect_is_denied](src/effect/mprotect_memfd.rs) retains a read-only proc maps descriptor before recovery.
+  -> [Platform::recovered](src/platform.rs) confirms production recovery under the [signed exec policy](fixtures/process/exec_deny_policy.json).
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) calls real `mprotect(PROT_READ | PROT_EXEC)`, unmaps the region, closes the descriptor, and reports `EACCES` through its task name.
+  -> [EffectCheck](src/effect/check.rs) requires fresh actor-attributed `UNSUPPORTED_OBJECT` Exec/Mprotect evidence.
+  -> [memfd_mprotect_is_denied](src/effect/mprotect_memfd.rs) checks every legacy zero-object field, current mapping absence, descriptor close, and actor exit.
+  -> [ProcessFixture::stop](src/process.rs) completes normal cleanup.
+
+Before: the old runner prepares several unrelated memory and descriptor
+operations through `PreparedOperations` and selects `MemfdMprotectExec`.
+After: the standard test names one actor mode, sends `protect`, and checks
+the physical result and fresh production evidence in the same function.
+
+Run `effect::mprotect_memfd::memfd_mprotect_is_denied::memfd_map_recovery_host`
+with the exact-test flags below. Host passed in 28.28 seconds with pin, lease,
+and cgroup cleanup. The unchanged deleted mapping and memfd exec modes
+passed in 34.26 and 34.48 seconds after the shared actor change. The final
+repository Rust CI passed. Direct `runc`, Kubernetes, and legacy retirement
+remain pending. This review covers the replacement based on `099875a2` and
+the shared actor commit `9f0fca50`. No Platform or production code changes
+are required.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and

@@ -65,6 +65,8 @@ mod mailbox;
 mod memory_observe;
 #[cfg(test)]
 mod mprotect_deleted;
+#[cfg(test)]
+mod mprotect_memfd;
 mod network;
 #[cfg(test)]
 mod network_connect;
