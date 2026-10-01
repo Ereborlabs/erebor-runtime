@@ -2993,8 +2993,11 @@ test does not close a row when its physical condition or an assertion changed.
       bytes, mode, child identity, `EACCES`, and fresh zero-object evidence
       passed. Pin, lease, and cgroup cleanup passed. The final repository
       Rust CI passed. The single-test file has 91 lines.
-    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
-      platform only after its focused case passes.
+    - [x] Direct `runc` passed in 28.81 seconds with the same memfd, ELF,
+      mode, child identity, syscall, and evidence checks. Pin, lease, and
+      cgroup cleanup passed. The final repository Rust CI passed.
+    - [ ] Pass and commit Kubernetes. Register the platform only after its
+      focused case passes.
     - [ ] Remove the matched legacy exec action and result only after all
       three platforms pass. Keep the memfd mapping, descriptor, preparation
       helper, and mprotect assertions for their separate memory migration.

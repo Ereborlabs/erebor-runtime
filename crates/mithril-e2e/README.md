@@ -384,8 +384,9 @@ this flow:
 The actor uses the same Linux `MFD_EXEC` flag as the old `memfd_copy` helper.
 Run `effect::exec_memfd::memfd_exec_is_denied::memfd_recovery_host` with the
 exact-test flags below. Host passed in 29.18 seconds with pin, lease, and
-cgroup cleanup. The final repository Rust CI passed. Direct `runc` and
-Kubernetes are not yet qualified. The legacy exec action and separate memfd
+cgroup cleanup. Direct `runc` passed in 28.81 seconds with the same checks
+and cleanup. Use the `memfd_recovery_runc` suffix. The final repository Rust
+CI passed. Kubernetes is not yet qualified. The legacy exec action and separate memfd
 memory checks remain. This review covers the replacement based on `5b07f137`.
 No Platform or production code changes are required.
 
