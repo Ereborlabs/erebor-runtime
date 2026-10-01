@@ -543,6 +543,37 @@ The duplicate rebuild comparison, result flag, and VM result predicate are
 removed after all three platforms passed. The collector still owns its old
 corruption/read setup and its real Kubernetes rebuild readiness wait.
 
+The [clean-host test](src/identity/scenarios/clean_host.rs) qualifies the kernel
+owner lifecycle without a container. Its intended result is two clean starts
+and shutdowns, exclusive ownership, and an unchanged worker fixture.
+It uses the original qualification object, not retained identity-map recovery.
+Read this flow:
+
+[clean_host_restarts](src/identity/scenarios/clean_host.rs) verifies the worker and the absent pin root.
+  -> [BpfPrototypeCompiler::compile](src/capability.rs) compiles the qualification object.
+  -> [KernelHostOwner::start](../erebor-interceptor/src/host.rs) loads and pins the maps and links.
+  -> [clean_host_restarts](src/identity/scenarios/clean_host.rs) checks readiness and live manifest readback.
+  -> [KernelHostOwner::start](../erebor-interceptor/src/host.rs) rejects the same populated root with `StalePinRoot` before lease acquisition.
+  -> [KernelHostLease](../erebor-interceptor/src/lease.rs) rejects an unpinned contender with `LeaseOwned`.
+  -> [KernelHost::shutdown](../erebor-interceptor/src/host.rs) removes the first owner's pins and releases its lease.
+  -> [clean_host_restarts](src/identity/scenarios/clean_host.rs) restarts the same configuration, checks readback, shuts down, and verifies the unchanged worker.
+
+The first owner owns the loaded object, links, pins, and lease. The test keeps
+that owner alive during both rejected starts. The test then checks pin absence
+after each fallible shutdown. `ProbeFile` removes the instance lease file;
+the platform removes its temporary paths and cgroups. `Drop` is a fallback.
+The qualification compiler requires `clang` and libbpf development headers.
+Run `identity::scenarios::clean_host::clean_host_restarts::identity_physical_host`
+with the Host environment and exact-test flags below. This kernel-only test
+does not start Control, Node, or an actor. It does not qualify container policy
+behavior. The 71-line test passed in the retained privileged VM in 26.50
+seconds. Cleanup and final repository Rust CI passed. This review compares
+the replacement with the host-lifecycle runner in `95775f48`. No production
+or Platform code changes are required. The old runner remains until its
+separate retirement commit.
+The unchanged retained-map recovery test also passed in 49.56 seconds with
+its resource cleanup checks.
+
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
 result flags for a shell gate. The 41-line

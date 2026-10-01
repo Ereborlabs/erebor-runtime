@@ -9,6 +9,8 @@ mod cgroup_reuse;
 #[cfg(test)]
 mod child_exec;
 #[cfg(test)]
+mod clean_host;
+#[cfg(test)]
 mod clone_exec;
 #[cfg(test)]
 mod container_kinds;

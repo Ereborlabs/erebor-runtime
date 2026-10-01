@@ -1824,6 +1824,31 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `HostLifecycleRunner::host_lifecycle`: own the pin root and lease, use
   readiness diagnostics, and keep both `KernelHostOwner` starts and the
   concurrent-owner rejection explicit.
+  - [x] Replace the runner with `clean_host_restarts`, one standard Host test
+    below 100 lines. Reuse the compiler, worker fixture, platform paths, and
+    cleanup owners. Keep the qualification object and public kernel owner.
+    Require an initially absent pin root, ready manifests, every pinned map
+    and link, exact `LeaseOwned` rejection, pin absence after each shutdown,
+    successful restart, and the unchanged worker digest. Do not substitute
+    retained identity-map recovery for clean qualification-object restart.
+    Qualification startup checks a populated pin root before the lease.
+    Require `StalePinRoot` for the same live root. Use an unpinned contender
+    with the same lease for the independent exact `LeaseOwned` assertion.
+    Verify the first live manifest after both rejected starts.
+  - [x] Pass the exact privileged Host test and final repository Rust CI.
+    The 71-line test passed in 26.50 seconds on 2026-10-01. All original
+    ready, pin, clean shutdown, restart, lease, and worker digest assertions
+    remain explicit. The same-root attempt returns `StalePinRoot` before
+    lease acquisition. The independent unpinned attempt returns `LeaseOwned`.
+    Both rejected starts preserve the first live manifest. Pin, lease, and
+    cgroup cleanup and the final repository Rust CI pass. No production or
+    Platform code changed. This kernel-only test applies to Host; do not add
+    container platform cases that do not test a container operation.
+    The unchanged retained-map recovery test passed in 49.56 seconds with
+    its own pin, lease, and cgroup cleanup.
+  - [ ] Remove only the verified legacy lifecycle runner, result bundle,
+    binary, and Cargo registration. Replace its manual command with the exact
+    standard Rust test. Keep the other kernel qualification operations.
 
 ### Effect enforcement
 
