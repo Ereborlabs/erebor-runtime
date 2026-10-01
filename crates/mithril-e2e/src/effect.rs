@@ -63,6 +63,8 @@ mod independent_mmap;
 mod mailbox;
 #[cfg(test)]
 mod memory_observe;
+#[cfg(test)]
+mod mprotect_deleted;
 mod network;
 #[cfg(test)]
 mod network_connect;

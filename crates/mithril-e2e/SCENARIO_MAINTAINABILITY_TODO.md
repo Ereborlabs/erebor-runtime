@@ -2996,9 +2996,13 @@ test does not close a row when its physical condition or an assertion changed.
       passed in 28.44 seconds. The unchanged descriptor-exec mode passed in
       33.73 seconds. Pin, lease, and cgroup cleanup passed. The final
       repository Rust CI passed. No production or Platform code changed.
-    - [ ] Pass and commit Host, then direct `runc`, then Kubernetes. Add each
-      platform registration only after its focused case passes. Check an
-      existing descriptor-exec mode after the shared actor change.
+    - [x] Host passed in 28.44 seconds with the retained ELF descriptor,
+      absent path, actual read-only deleted mapping, `EACCES`, fresh
+      Exec/Mprotect evidence, every legacy zero-object field, unmapping,
+      descriptor close, actor exit, and cleanup. The final repository Rust
+      CI passed. The single-test file has 89 lines.
+    - [ ] Pass and commit direct `runc`, then Kubernetes. Add each platform
+      registration only after its focused case passes.
     - [ ] Remove only the matched legacy action and deleted mapping resources
       after all three platforms pass. Keep memfd and exact-file mappings.
   - [ ] Preserve the remaining exact-file executable mmap and read/write
