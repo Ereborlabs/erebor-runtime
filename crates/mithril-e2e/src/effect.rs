@@ -20,6 +20,8 @@ mod exception_once;
 #[cfg(test)]
 mod exec_allow;
 #[cfg(test)]
+mod exec_at_deny;
+#[cfg(test)]
 mod exec_fd_allow;
 #[cfg(test)]
 mod exec_fd_deny;

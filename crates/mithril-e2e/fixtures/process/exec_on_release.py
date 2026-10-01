@@ -7,14 +7,20 @@ import time
 target = sys.argv[1]
 mode = sys.argv[2] if len(sys.argv) > 2 else "path"
 work = sys.argv[3] if len(sys.argv) > 3 else None
+AT_FDCWD = -100
 libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong,
                        ctypes.c_ulong, ctypes.c_ulong]
+if mode == "fork-at":
+    call_at = libc.execveat
+    call_at.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                       ctypes.POINTER(ctypes.c_char_p),
+                       ctypes.POINTER(ctypes.c_char_p), ctypes.c_int]
 image = open(target, "rb") if mode in {"fd", "fork-fd"} else None
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != "exec\n":
     raise RuntimeError("expected exec")
-if mode in {"fork-fd", "fork-path"}:
+if mode in {"fork-fd", "fork-path", "fork-at"}:
     pid = os.fork()
     if pid != 0:
         _, status = os.waitpid(pid, 0)
@@ -26,6 +32,11 @@ try:
         os.execve(image.fileno(), [target], os.environ)
     elif mode in {"path", "fork-path"}:
         os.execv(target, [target])
+    elif mode == "fork-at":
+        args = (ctypes.c_char_p * 2)(os.fsencode(target), None)
+        empty = (ctypes.c_char_p * 1)()
+        if call_at(AT_FDCWD, os.fsencode(target), args, empty, 0) != 0:
+            raise OSError(ctypes.get_errno(), "execveat")
     else:
         raise ValueError(f"unknown exec mode: {mode}")
 except OSError as error:

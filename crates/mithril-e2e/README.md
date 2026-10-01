@@ -261,6 +261,28 @@ retirement. `Execveat`, script exec, and their shared path fixture remain.
 This review covers the path-exec replacement based on `8373b68b`. Production
 kernel and result schemas do not change.
 
+### Execveat denial
+
+Intended end state: replace the legacy forked `Execveat` dispatch. Preserve
+the actual syscall denial and every path-object evidence check.
+
+[forked_at_exec_is_denied](src/effect/exec_at_deny.rs) uses the same production recovery order and policy as the path-exec test.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) forks the child and holds it before exec.
+  -> [forked_at_exec_is_denied](src/effect/exec_at_deny.rs) checks the distinct cookie, parent creator, inherited role, and zero entry rule.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) calls libc `execveat` with `AT_FDCWD`, an absolute path, and flags zero.
+  -> [EffectCheck](src/effect/check.rs) requires the real `EACCES` and fresh child-attributed Exec/Execute exact-policy denial with every path-object field.
+  -> [ProcessFixture](src/process.rs) confirms parent and child exit before normal platform cleanup.
+
+The actor uses the Linux `AT_FDCWD` constant and the libc function signature.
+It does not select a syscall number from the CPU architecture. Existing actor
+modes do not load the new symbol. The test has 80 lines and adds no Platform or
+production API. Run
+`effect::exec_at_deny::forked_at_exec_is_denied::exec_at_recovery_host`
+with the exact-test flags below. Host passed in 27.41 seconds with pin, lease,
+and cgroup cleanup. Direct `runc` and Kubernetes remain pending. Keep the old
+action until all three platforms pass. This review covers the replacement
+based on `87511d7f`. Production kernel and result schemas do not change.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and

@@ -2979,6 +2979,27 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the denied `Execveat` action with `forked_at_exec_is_denied`.
+    Reuse `exec_on_release.py`, `exec_deny_policy.json`, `ProcessFixture`, and
+    `EffectCheck`. Add a real libc `execveat` mode with `AT_FDCWD`, an absolute
+    executable path, and flags zero. Keep the baseline fork-before-exec order.
+    Start the actor before Node, then use production recovery. Require a
+    distinct child cookie, correct creator, inherited role, and zero entry
+    rule. Require actual `EACCES`, fresh child-attributed `EXACT_POLICY_DENY`
+    Exec/Execute evidence, a nonzero composite atom, and zero exact-object
+    key, inode, and inode generation. Keep the Rust file below 100 lines.
+    - [x] Host passed in 27.41 seconds with actual `execveat` errno, fresh
+      child-attributed denial, creator and role checks, and every legacy
+      path-object field assertion. Pin, lease, and cgroup cleanup passed.
+      The final repository Rust CI passed.
+    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
+      platform only after its exact case passes. Add no Platform API.
+    - [ ] Remove only the legacy `Execveat` action, enum arm, and result field
+      after all three platforms pass. Keep script exec and its shared path
+      fixture. Remove the syscall helper's unused `execveat` branch only after
+      the replacement passes; retain real path exec for script exec.
+    - Use a fresh `exec_at_recovery` lifecycle. An actor-before-Node case
+      cannot inherit the installed runtime gate from another scenario.
   - [x] Replace the denied `Execve` action with `forked_path_exec_is_denied`.
     Reuse `exec_on_release.py`, `exec_deny_policy.json`, and the existing
     process and evidence owners. Add a forked path mode to the actor. Start
