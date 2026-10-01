@@ -2402,7 +2402,11 @@ test does not close a row when its physical condition or an assertion changed.
         lease, and cgroup cleanup passed. The VM harness checks passed.
         The final repository Rust CI procedure passed. The local library
         suite passed 91 tests; 430 physical cases remain ignored locally.
-      - [ ] Pass direct `runc` and commit its registration.
+      - [x] Pass direct `runc` and commit its registration. The same 91-line
+        test passed in 42.73 seconds. The existing first-bind and bind-alias
+        cases passed in 43.55 and 43.65 seconds. Output, pin, lease, and cgroup
+        cleanup passed. The final repository Rust CI procedure passed after
+        the registration edit.
       - [ ] Pass Kubernetes and commit its registration. Keep the retained
         VM, K3s, and images. Do not weaken any assertion or change production.
       - [ ] Keep the old block until the separate Observe contrast and mount

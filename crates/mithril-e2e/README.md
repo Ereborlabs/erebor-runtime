@@ -713,9 +713,12 @@ with the exact-test flags and Host environment above. Confirm that the current
 test binary lists that name; an older binary can report zero selected tests.
 Host passed in 35.70 seconds. The existing first-bind and bind-alias Host
 cases passed in 34.72 and 40.82 seconds. Output, pin, lease, and cgroup cleanup
-passed. Direct `runc` and Kubernetes are not qualified yet.
+passed. Direct `runc` passed in 42.73 seconds. Its existing first-bind and
+bind-alias cases passed in 43.55 and 43.65 seconds. Their output, pin, lease,
+and cgroup cleanup passed. Use the `mount_replace_runc` generated suffix.
+Kubernetes is not qualified yet.
 The VM harness checks and the final repository Rust CI procedure passed.
-Source review: `ecf64d4b` plus the test and actor changes in this deliverable.
+Source review: `a5ee471d` plus the direct-`runc` registration.
 The baseline comparison uses `95775f48`. The old shared block remains until
 the Observe contrast and cache-snapshot replacements also pass.
 
