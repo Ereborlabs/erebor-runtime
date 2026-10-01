@@ -27,14 +27,14 @@ if mode in {"fork-deleted", "mprotect-deleted"}:
     image = open(path, "rb")
     if mode == "fork-deleted":
         os.unlink(path)
-elif mode == "fork-memfd":
+elif mode in {"fork-memfd", "mprotect-memfd"}:
     MFD_EXEC = 0x0010
     image = os.fdopen(os.memfd_create("mithril-exec-fixture", MFD_EXEC), "w+b")
     with open(target, "rb") as source:
         image.write(source.read())
     image.flush()
     image.seek(0)
-request = "protect" if mode == "mprotect-deleted" else "exec"
+request = "protect" if mode in {"mprotect-deleted", "mprotect-memfd"} else "exec"
 if request == "protect":
     import mmap
 
@@ -48,7 +48,8 @@ if request == "protect":
                         image.fileno(), 0)
     if address == ctypes.c_void_p(-1).value:
         raise OSError(ctypes.get_errno(), "read-only image mmap")
-    os.unlink(path)
+    if mode == "mprotect-deleted":
+        os.unlink(path)
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != f"{request}\n":
     raise RuntimeError(f"expected {request}")

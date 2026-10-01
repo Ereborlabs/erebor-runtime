@@ -2979,6 +2979,31 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace `MemfdMprotectExec` with `memfd_mprotect_is_denied`.
+    Reuse the exec actor, executable memfd preparation, signed exec policy,
+    process owner, and evidence owner. Use the same Linux `MFD_EXEC` flag
+    as the old fixture. Copy the full ELF image and map it read-only with
+    `MAP_PRIVATE` before Node starts. Retain the descriptor and mapping.
+    Check the memfd link, ELF header, executable mode, and actual `r--p`
+    mapping. Retain the read-only proc maps descriptor before recovery.
+    After production recovery, call real `mprotect(PROT_READ | PROT_EXEC)`.
+    Require actor `EACCES`, fresh attributed `UNSUPPORTED_OBJECT`
+    Exec/Mprotect evidence, and every legacy zero-object field. Check
+    unmapping, descriptor close, actor exit, and normal cleanup. Keep the
+    single-test file below 100 lines. Add no Platform or production API.
+    Use a pristine `memfd_map_recovery` lifecycle.
+    - [x] Add the memory mode to the shared exec actor and verify its callers.
+      Reuse memfd creation, byte copy, mapping, mprotect, unmapping, descriptor
+      close, errno report, and release wait. Host passed the new case in
+      28.28 seconds. The unchanged deleted mapping and memfd exec cases
+      passed in 34.26 and 34.48 seconds. All cleanup checks and the final
+      repository Rust CI passed. No Platform or production code changed.
+    - [ ] Pass and commit Host.
+    - [ ] Pass and commit direct `runc`.
+    - [ ] Pass and commit Kubernetes.
+    - [ ] Remove only the matched legacy action, memfd mapping resources,
+      and unused memfd copy helper after all three platforms pass. Keep
+      exact-file mappings and their positive controls.
   - [x] Replace `DeletedMprotectExec` with `deleted_mprotect_is_denied`.
     Reuse the exec actor, deleted-image preparation, signed exec policy,
     process owner, and evidence owner. Map the complete executable read-only
