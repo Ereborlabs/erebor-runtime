@@ -1353,6 +1353,23 @@ acknowledgement, or decommission operations directly.
     No fixture, Platform, or production source changed.
 - [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
+  - Replace the 196-line legacy function with one standard protocol test.
+    Reuse the TLS, policy, TCP blackhole, WAL, and trust owners. Keep the
+    first Active policy, Node-to-Control packet loss, replacement policy,
+    forced disconnect, reconnect, retained evidence acknowledgement, and
+    current coverage interval explicit.
+  - Preserve the real store-priority wait. Release the last priority
+    operation and require coverage completion within the existing 500 ms.
+    Keep the diagnostic rescue operation and require that rescue was not
+    needed. Keep exact coverage acknowledgement, replacement candidate,
+    and normal proxy and Control shutdown checks.
+  - A temporary source prototype has 138 lines after formatting. It reuses
+    the WAL fixture and keeps all production calls and security assertions
+    in the test. No scenario helper hides the sequence. The prototype has
+    not been compiled or executed. It is not in the crate. A one-time size
+    exception is required before implementation. Do not delete the old test
+    or mark this row complete. This is a real mTLS protocol test; physical
+    container and Kubernetes platform cases are not applicable.
 - [x] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
   - [x] Replace the old function with `admission_keeps_retained_evidence` in
     `control_tls/admission.rs`, one standard Rust test below 100 lines. Reuse
