@@ -25,6 +25,13 @@ async fn readiness_keeps_session() -> TestResult<()> {
     assert_eq!(initial[0].kubernetes_node_name, "worker-a.example");
     assert_eq!(control.registered_nonce_count(), 1);
 
+    // The initial report is older than this lease. Only renewal keeps it ready.
+    tokio::time::sleep(Duration::from_millis(2_300)).await;
+    let renewed = control.ready_kubernetes_node_sessions(Duration::from_millis(1_500));
+    assert_eq!(renewed, initial);
+    assert_eq!(control.registered_nonce_count(), 1);
+    assert_eq!(trust.installed().control_connection_nonce, nonce);
+
     for ready in [false, true] {
         connection.report_readiness(true, ready).await?;
         let sessions = control.ready_kubernetes_node_sessions(age);

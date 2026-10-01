@@ -965,12 +965,14 @@ Intended result: readiness changes without a reconnect or a new session.
 [readiness_keeps_session](src/control_tls/readiness.rs) starts the existing TLS fixture and connects one Node.
   -> [ControlPlane::bind_kubernetes_node_session](../mithril-control/src/service.rs) binds the original Node name and UID.
   -> [readiness_keeps_session](src/control_tls/readiness.rs) requires one initial Ready session and one registered nonce.
+  -> [renew_readiness](../mithril-node/src/control.rs) renews the unchanged readiness report while the test leaves the connection idle.
+  -> [readiness_keeps_session](src/control_tls/readiness.rs) waits 2.3 seconds and requires the same session with a 1.5-second freshness limit.
   -> [ControlConnection::report_readiness](../mithril-node/src/control.rs) reports NotReady and then Ready through the same connection and awaits each production acknowledgement.
   -> [readiness_keeps_session](src/control_tls/readiness.rs) checks the ready set, complete restored session identity, unchanged trust nonce, and one registration at each stage.
   -> [ControlServerFixture::shutdown](src/control_fixture.rs) stops and joins Control after the connection closes.
 
 Before: the legacy function repeats ready-set and registration checks.
-After: one 43-line test shows both transitions and checks their common
+The initial replacement has 43 lines. It shows both transitions and checks their common
 invariants in one loop. It adds complete session equality and nonce equality.
 Production requests and assertions remain in the test. No helper owns them.
 
@@ -983,6 +985,14 @@ Source review: replacement commit `9bae626`, based on inventory `56712bb`.
 The legacy function is removed after that commit. Final Rust CI passed
 after the last Rust edit, including all 91 non-privileged E2E tests. This is
 a real mTLS protocol check, not kernel, runtime, or Kubernetes qualification.
+
+The idle-renewal extension uses the same connection before these transitions.
+The test does not send a readiness report during the idle interval. It requires
+the same complete session, one registered nonce, and the same trust nonce.
+The current file has 50 lines. Its exact check passed in 2.34 seconds. The
+related family passed 19 tests in 11.36 seconds. Formatting, strict Clippy,
+and local harness checks passed. Inventory `51533fa7` owns this extension.
+The duplicate legacy idle test remains until the qualified extension is committed.
 
 ### Consumption reclaims complete evidence segments
 

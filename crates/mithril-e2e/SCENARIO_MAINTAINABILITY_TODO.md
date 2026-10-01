@@ -1214,6 +1214,11 @@ acknowledgement, or decommission operations directly.
     the Control/TLS family, harness checks, and final Rust CI. This is real
     mTLS protocol coverage, not physical kernel or Kubernetes qualification.
     Do not change production or Platform code or rerun a physical matrix.
+  - The 50-line readiness file passed its strengthened exact test in 2.34
+    seconds before retirement. The related Control/TLS family passed 19
+    tests in 11.36 seconds; two release-budget checks remain ignored.
+    Formatting, strict E2E Clippy, and local VM harness checks passed.
+    The old idle function remains until this extension is committed.
 - [x] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
   - Replace the repeated readiness assertions with `readiness_keeps_session`
     in `control_tls/readiness.rs`. Use one standard test below 100 lines.
