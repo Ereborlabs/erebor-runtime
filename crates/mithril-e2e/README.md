@@ -1627,7 +1627,9 @@ still use it. Observe-mode coverage also remains.
 Run `effect::unix_stream::unix_stream_is_allowed::identity_host` by its exact
 name in the retained VM with the Host environment above and
 `--exact --ignored --nocapture --test-threads=1`. Host passed in 35.36 seconds
-on 2026-10-01. Cleanup passed. Direct runc and Kubernetes are not yet qualified.
+on 2026-10-01. Direct runc passed the same body in 35.42 seconds. Use the leaf
+name `identity_runc` and the direct-runc environment above. Cleanup passed
+for both platforms. Kubernetes is not yet qualified.
 This source review covers the working tree based on `f4366866`. No Platform
 or production source changed. The test reads the current generation through
 the existing process-state API. The task snapshot generation is the immutable

@@ -6,7 +6,7 @@ use mithril_control::ContainerKindV1 as Kind;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn unix_stream_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("unix-stream")?;

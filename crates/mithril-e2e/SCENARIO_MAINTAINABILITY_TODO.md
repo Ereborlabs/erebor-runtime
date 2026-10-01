@@ -3580,7 +3580,13 @@ test does not close a row when its physical condition or an assertion changed.
         The final repository Rust CI procedure passed after the last Rust
         edit, including all 91 in-process E2E tests. See
         `/tmp/mithril-unix-host-current-ci-20261001.log`.
-      - [ ] Pass and commit the unchanged direct-runc body.
+      - [x] Direct runc passed in 35.42 seconds on 2026-10-01. The 98-line
+        body, actor, policy, and assertions are unchanged. Both roots use
+        real runc containers in one network namespace. Output, containers,
+        pin, lease, and actor cgroups were removed. No Platform or production
+        code changed. See `/tmp/mithril-unix-runc-20261001.log`.
+        The final repository Rust CI procedure passed after the platform
+        attribute edit. See `/tmp/mithril-unix-runc-final-ci-20261001.log`.
       - [ ] Pass and commit the unchanged real Kubernetes body.
     - [ ] Keep the Observe round trip and its `WOULD_DENY` result open until
       its own verified replacement exists. Keep SCM_RIGHTS transfers and
