@@ -1416,6 +1416,12 @@ acknowledgement, or decommission operations directly.
     formatting, and VM harness checks pass. No fixture, platform, or production
     source changes. These are mTLS protocol cases, not container scenarios.
     Run `cargo test -p mithril-e2e --lib control_tls::partition::`.
+  - [x] Commit the replacements before removing the old function. The final
+    focused run passes in 25.71 seconds. Retirement removes 199 Rust lines net
+    from `control_tls.rs`; unrelated scenarios remain. All 92 local E2E tests
+    and the final repository Rust CI gate pass after removal. An unchanged
+    Control logging test failed once, then passed alone and with all 116
+    Control tests. No production change or full physical matrix was required.
   - Previous one-test design: replace the 196-line legacy function with one
     standard protocol test.
     Reuse the TLS, policy, TCP blackhole, WAL, and trust owners. Keep the
