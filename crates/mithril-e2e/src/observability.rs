@@ -697,10 +697,14 @@ impl ObservabilityQualification {
                 ("cancel", TraceTerminalReasonV1::Cancelled, 10),
                 ("partition-expiry", TraceTerminalReasonV1::Deadline, 11),
                 ("store-failure", TraceTerminalReasonV1::Deadline, 12),
+                ("store-before-append", TraceTerminalReasonV1::Deadline, 13),
             ] {
-                let local_expiry = matches!(name, "partition-expiry" | "store-failure");
+                let before_append = name == "store-before-append";
+                let local_expiry = matches!(name, "partition-expiry" | "store-failure" | "store-before-append");
                 let mut fault_codes = Vec::new();
                 let mut failed = None;
+                let mut recovered_prefix = Vec::new();
+                let mut recovered_receipt = None;
                 let root = tls.path().join(name);
                 fs::create_dir(&root)?;
                 let target_path = root.join("target");
@@ -805,7 +809,7 @@ impl ObservabilityQualification {
                     for id in reply.cancel {
                         node.cancel(id);
                     }
-                } else if name == "store-failure" {
+                } else if matches!(name, "store-failure" | "store-before-append") {
                     let batch = node.next_batch(id, 0)?.ok_or("missing active Node output")?;
                     if batch.frames.len() != 2 || batch.terminal.is_some() {
                         return Err("Node output was not active before the storage fault".into());
@@ -817,27 +821,47 @@ impl ObservabilityQualification {
                             original_node_boot_id: [7; 16], batch: batch.clone(),
                         }),
                     };
-                    data.set_commit_hook(araphor_data::AnalysisCommitStage::AfterSync, || {
+                    let stage = if before_append {
+                        araphor_data::AnalysisCommitStage::BeforeAppend
+                    } else {
+                        araphor_data::AnalysisCommitStage::AfterSync
+                    };
+                    data.set_commit_hook(stage, move || {
                         Err(araphor_data::Error::Io {
-                            path: "active Node AfterSync fixture".into(),
+                            path: if before_append {
+                                "active Node BeforeAppend fixture"
+                            } else {
+                                "active Node AfterSync fixture"
+                            }.into(),
                             source: std::io::Error::from(std::io::ErrorKind::StorageFull),
                             location: snafu::Location::default(),
                         })
                     })?;
-                    for expected in [tonic::Code::Unavailable, tonic::Code::DataLoss] {
+                    let codes: &[tonic::Code] = if before_append {
+                        &[tonic::Code::Unavailable]
+                    } else {
+                        &[tonic::Code::Unavailable, tonic::Code::DataLoss]
+                    };
+                    for &expected in codes {
                         match connection.as_mut().ok_or("Control connection is absent")?
                             .exchange_diagnostics(&exchange).await
                         {
                             Err(mithril_node::Error::ControlRpc { source, .. })
-                                if source.code() == expected => fault_codes.push(format!("{:?}", source.code())),
+                                if source.code() == expected
+                                    && (!before_append || source.message().contains("active Node BeforeAppend fixture")) =>
+                                    fault_codes.push(format!("{:?}", source.code())),
                             other => return Err(format!("active Node upload returned an ACK or wrong error: {other:?}").into()),
                         }
                     }
                     node.reap()?;
-                    if data.storage_health()?.write_ready || node.terminal(id)?.is_some()
+                    if data.storage_health()?.write_ready != before_append || node.terminal(id)?.is_some()
                         || node.next_batch(id, 0)?.as_ref() != Some(&batch)
                     {
-                        return Err("failed upload changed active Node output or left the writer ready".into());
+                        return Err("failed upload changed active Node output or writer readiness".into());
+                    }
+                    if before_append {
+                        drop(connection.take());
+                        server.take().ok_or("Control is absent")?.shutdown().await?;
                     }
                     failed = Some(batch);
                 }
@@ -890,18 +914,39 @@ impl ObservabilityQualification {
                     valid_until_unix_ns: grant.valid_until_unix_ns, revoked: false,
                 };
                 if let Some(failed) = &failed {
-                    server.take().ok_or("Control is absent")?.shutdown().await?;
+                    if let Some(server) = server.take() {
+                        server.shutdown().await?;
+                    }
                     drop(owner);
                     drop(data);
                     drop(control);
                     drop(reopen_control_store(&tls.path().join("control-store")).await?);
                     control = Self::trace_control(&tls, key)?;
+                    control.replace_kubernetes_workload_inventory(
+                        request.targets.iter().map(|target| target.fact.clone()).collect(),
+                    )?;
                     data = control.analysis_store().ok_or("missing recovered Node data")?;
                     owner = TraceOwner::new(data.clone());
                     let prefix = owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?;
-                    if prefix != vec![failed.clone()] || !data.storage_health()?.write_ready {
+                    let (_, intent) = data.trace_intent(request.tenant_id, request.request_id)?
+                        .ok_or("missing recovered diagnostic intent")?;
+                    let binding = intent.bindings.iter().find(|binding| binding.identity.execution_id == id)
+                        .ok_or("missing recovered diagnostic binding")?;
+                    recovered_receipt = data.trace_receipt(&binding.identity)?;
+                    if before_append {
+                        if !prefix.is_empty() || recovered_receipt.as_ref().is_none_or(|receipt| {
+                            receipt.last_sequence != 0 || receipt.output_bytes != 0
+                                || receipt.commit_revision != 0 || receipt.terminal.is_some()
+                        }) {
+                            return Err(format!("data reopen retained output before the raw append: {prefix:?}; {recovered_receipt:?}").into());
+                        }
+                    } else if prefix != vec![failed.clone()] {
                         return Err("data reopen lost or changed the synced Node prefix".into());
                     }
+                    if !data.storage_health()?.write_ready {
+                        return Err("data reopen left the writer unready".into());
+                    }
+                    recovered_prefix = prefix;
                 }
                 if server.is_none() {
                     server = Some(tls.start(control.clone()).await?);
@@ -941,18 +986,30 @@ impl ObservabilityQualification {
                     "name": name, "accepted": dispatch.accepted, "target": target,
                     "process_id": pid, "launch_count": launches.load(Ordering::Acquire),
                     "process_reaped": true, "terminal_reopen": true,
-                    "control_stopped": name == "partition-expiry",
+                    "control_stopped": name == "partition-expiry" || before_append,
                     "partition_before_admission": name == "partition-expiry",
                     "supplied_now": supplied_now,
                     "signed_deadline": dispatch.accepted.deadline_unix_ns,
                     "collection_seconds": request.collection_seconds,
                     "expired_dispatch_rejected": local_expiry,
-                    "storage_fault": failed.as_ref().map(|batch| serde_json::json!({
+                    "storage_fault": failed.as_ref().map(|batch| if before_append {
+                        serde_json::json!({
+                            "stage": "BeforeAppend", "error_codes": fault_codes,
+                            "fault_input": "injected StorageFull error before the raw append",
+                            "writer_unready": false, "active_output_retained": true,
+                            "upload_acknowledged": false, "control_stopped_after_failure": true,
+                            "recovered_prefix": recovered_prefix,
+                            "recovered_receipt": recovered_receipt.as_ref().map(|receipt| serde_json::json!({
+                                "last_sequence": receipt.last_sequence, "output_bytes": receipt.output_bytes,
+                                "commit_revision": receipt.commit_revision, "terminal": receipt.terminal,
+                            })), "data_reopened": true,
+                        })
+                    } else { serde_json::json!({
                         "stage": "AfterSync", "error_codes": fault_codes,
                         "fault_input": "injected StorageFull error after syncing active Node output",
                         "writer_unready": true, "active_output_retained": true,
                         "recovered_prefix": batch, "data_reopened": true,
-                    })),
+                    }) }),
                     "acknowledgement": ack, "replay_ack": replay.acknowledgement,
                     "retained": retained, "receipt": {
                         "identity": receipt.identity, "last_sequence": receipt.last_sequence,
@@ -968,7 +1025,7 @@ impl ObservabilityQualification {
             }
             Ok::<_, Box<dyn std::error::Error>>(serde_json::json!({
                 "scope": "node-owner-chain", "result": "PASS", "cases": records,
-                "proof_boundary": "Production Control, Node spool and Interceptor supervision with external process, binding-state and admission-clock inputs. Partition and store-failure cases use five seconds left on the signed lease and a 30-second backend collection limit. The storage fault is injected after a real segment sync. Attach notifications are simulated. Node reopen follows a retained terminal, not a process crash. No NodeChassis retry scheduling, physical disk-full, BPF cleanup, enforcement, or performance proof.",
+                "proof_boundary": "Production Control, Node spool and Interceptor supervision use external process, binding-state and admission-clock inputs. Partition and storage cases use five seconds left on the signed lease and a 30-second backend collection limit. BeforeAppend injects StorageFull before the raw write and leaves the writer ready. Reopen finds no prefix and a zero-progress terminal reservation. AfterSync injects StorageFull after a real segment sync and leaves the writer unready. Reopen recovers the synced prefix. Attach notifications are simulated. Node reopen follows a retained terminal, not a process crash. NodeChassis retry scheduling, physical disk-full, BPF cleanup, enforcement, and performance are not tested. Physical limits remain unknown.",
                 "discovery_index_present": false, "physical": false, "performance_claim": false,
             }))
         }).await;
@@ -1594,12 +1651,14 @@ mod tests {
         assert_eq!(node["performance_claim"], false);
         assert_eq!(node["discovery_index_present"], false);
         let cases = node["cases"].as_array().ok_or("missing Node cases")?;
-        assert_eq!(cases.len(), 4);
-        for (case, reason) in
-            cases
-                .iter()
-                .zip(["TargetChanged", "Cancelled", "Deadline", "Deadline"])
-        {
+        assert_eq!(cases.len(), 5);
+        for (case, reason) in cases.iter().zip([
+            "TargetChanged",
+            "Cancelled",
+            "Deadline",
+            "Deadline",
+            "Deadline",
+        ]) {
             assert_eq!(case["launch_count"], 1);
             assert_eq!(case["process_reaped"], true);
             assert_eq!(case["terminal_reopen"], true);
@@ -1643,6 +1702,23 @@ mod tests {
             cases[3]["retained"][0]["frames"]
         );
         assert_eq!(cases[3]["storage"]["write_ready"], true);
+        let fault = &cases[4]["storage_fault"];
+        assert_eq!(cases[4]["name"], "store-before-append");
+        assert_eq!(cases[4]["control_stopped"], true);
+        assert_eq!(fault["stage"], "BeforeAppend");
+        assert_eq!(fault["error_codes"], serde_json::json!(["Unavailable"]));
+        assert_eq!(fault["writer_unready"], false);
+        assert_eq!(fault["active_output_retained"], true);
+        assert_eq!(fault["upload_acknowledged"], false);
+        assert_eq!(fault["control_stopped_after_failure"], true);
+        assert_eq!(fault["recovered_prefix"], serde_json::json!([]));
+        assert_eq!(fault["recovered_receipt"]["last_sequence"], 0);
+        assert_eq!(fault["recovered_receipt"]["output_bytes"], 0);
+        assert_eq!(fault["recovered_receipt"]["commit_revision"], 0);
+        assert!(fault["recovered_receipt"]["terminal"].is_null());
+        assert_eq!(fault["data_reopened"], true);
+        assert_eq!(cases[4]["storage"]["write_ready"], true);
+        assert_eq!(cases[4]["retained"].as_array().map(Vec::len), Some(1));
         assert!(owner.owned_capture().is_err());
         assert_eq!(fs::read(path)?, bytes);
         Ok(())

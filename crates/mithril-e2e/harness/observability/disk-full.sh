@@ -1,10 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
-if (($# != 2)); then
-  echo "usage: $0 NODE_TEST_BINARY OUTPUT_LOG" >&2
+if (($# != 4)); then
+  echo "usage: $0 TEST_BINARY FIXTURE_ARCHIVE OUTPUT_DIRECTORY QUALIFIED_CONFIG" >&2
   exit 2
 fi
-[[ $(id -u) == 0 && -x $1 && $2 == /* && ! -e $2 ]] || exit 2
+test_binary=$1
+fixtures=$2
+output=$3
+config=$4
+[[ $(id -u) == 0 && -x $test_binary && -r $fixtures && -r $config ]] || exit 2
+[[ $output == /* && ! -e $output ]] || exit 2
+mkdir -- "$output"
+mkdir -- "$output/source"
+tar -xzf "$fixtures" -C "$output/source"
+export MITHRIL_TEST_ROOT="$output/source"
+export MITHRIL_TEST_OUTPUT="$output/lifecycle"
+export MITHRIL_TEST_PIN="/sys/fs/bpf/araphor-observability-disk-$$"
+export MITHRIL_TEST_LEASE="$output/lease"
+export MITHRIL_TEST_CGROUP="/sys/fs/cgroup/araphor-observability-disk-$$"
+export MITHRIL_TRACE_CONFIG=$config
+export MITHRIL_TRACE_PROOF="$output/storage.json"
+"$test_binary" observability::tests::observability_owned_upload \
+  --exact --nocapture >"$output/lightweight.log" 2>&1
 disk=$(mktemp -d /tmp/araphor-observability-disk-XXXXXXXX)
 mounted=false
 cleanup() {
@@ -12,8 +29,9 @@ cleanup() {
   rmdir -- "$disk"
 }
 trap cleanup EXIT
-mount -t tmpfs -o size=384m,nosuid,nodev tmpfs "$disk"
+mount -t tmpfs -o size=1g,nosuid,nodev tmpfs "$disk"
 mounted=true
 MITHRIL_TEST_TRACE_DISK=$disk "$1" \
-  observability::tests::observability_recovery_disk_full_retains_unacknowledged_terminal \
-  --ignored --exact --nocapture >"$2" 2>&1
+  platform::host::observability_owned_storage \
+  --ignored --exact --nocapture >"$output/test.log" 2>&1
+[[ -s $MITHRIL_TRACE_PROOF ]]

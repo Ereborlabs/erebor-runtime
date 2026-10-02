@@ -5,7 +5,7 @@ use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -114,11 +114,13 @@ pub(super) struct SharedState {
     node_stop: Option<watch::Sender<bool>>,
     node_task: Option<thread::JoinHandle<mithril_node::Result<()>>>,
     ready: Option<watch::Receiver<NodeReadinessV1>>,
+    registration: Option<mithril_control::NodeRegistration>,
     inspector: NativeIdentityInspector,
     reader: KernelStateReader,
     runtime: tokio::runtime::Runtime,
     hook_path: PathBuf,
     diagnostics: Option<mithril_node::NodeTraceConfigV1>,
+    diagnostic_data: Option<PathBuf>,
     diagnostic_proxy: Option<(
         tokio::runtime::Runtime,
         crate::control_tls::TcpBlackholeOwner,
@@ -517,6 +519,7 @@ impl SharedState {
             .into());
         }
         self.ready.take();
+        self.registration.take();
         Ok(())
     }
 
@@ -677,11 +680,13 @@ impl Shared {
             node_stop: None,
             node_task: None,
             ready: None,
+            registration: None,
             inspector,
             reader,
             runtime,
             hook_path: env::current_exe()?,
             diagnostics: None,
+            diagnostic_data: None,
             diagnostic_proxy: None,
         });
         Ok(Self {
@@ -721,14 +726,29 @@ impl Shared {
             }],
         }
         .with_computed_bundle_digest();
-        let mut control = ControlPlane::with_control_store(
+        let intake = match &self.diagnostic_data {
+            Some(path) => mithril_control::EvidenceIntakeOwner::new(
+                store,
+                Arc::new(araphor_data::AnalysisStore::open_with_limits(
+                    path,
+                    Default::default(),
+                    araphor_data::StorageLimitsV1 {
+                        disk_max_bytes: 1024 * 1024 * 1024,
+                        ..Default::default()
+                    },
+                )?),
+                Arc::new(mithril_control::SystemIntakeClock),
+            )?,
+            None => mithril_control::EvidenceIntakeOwner::try_from(store)?,
+        };
+        let mut control = ControlPlane::from_intake(
             vec![AllowedNodeIdentity {
                 node_id: NODE_ID.to_owned(),
                 certificate_sha256: self.tls.node_digest(),
                 tenant_id: TENANT_ID.to_owned(),
             }],
             trust,
-            store,
+            intake,
         )?
         .with_policy_desired_state(policy.clone());
         if self.diagnostics.is_some() {
@@ -757,6 +777,12 @@ impl Shared {
             self.cri = Some(CriFixture::start(&self.cri_path)?);
         }
         let config = self.node_config()?;
+        let barrier = self.diagnostic_data.as_ref().map(|_| {
+            (
+                self.out.join("trace-store.ready"),
+                self.out.join("trace-store.release"),
+            )
+        });
         let (stop, receiver) = watch::channel(false);
         let (started, ready) = mpsc::sync_channel(1);
         let started_at = Instant::now();
@@ -771,8 +797,18 @@ impl Shared {
                 })?;
             runtime.block_on(async move {
                 match NodeChassis::start(config).await {
-                    Ok(node) => {
-                        let _result = started.send(Ok(node.readiness()));
+                    Ok(mut node) => {
+                        if let Some((marker, release)) = barrier {
+                            node.set_trace_hook(move || {
+                                if fs::write(marker, b"ready").is_ok() {
+                                    let deadline = Instant::now() + READY_LIMIT;
+                                    while !release.exists() && Instant::now() < deadline {
+                                        thread::sleep(Duration::from_millis(20));
+                                    }
+                                }
+                            })?;
+                        }
+                        let _result = started.send(Ok((node.readiness(), node.registration())));
                         node.run(receiver).await
                     }
                     Err(source) => {
@@ -785,8 +821,9 @@ impl Shared {
         self.node_stop = Some(stop);
         self.node_task = Some(task);
         match ready.recv_timeout(NODE_START_LIMIT) {
-            Ok(Ok(receiver)) => {
+            Ok(Ok((receiver, registration))) => {
                 self.ready = Some(receiver);
+                self.registration = Some(registration);
                 Ok(())
             }
             outcome => {
@@ -796,7 +833,7 @@ impl Shared {
                         "Node start did not report readiness after {} ms: {source}",
                         started_at.elapsed().as_millis()
                     ),
-                    Ok(Ok(_receiver)) => unreachable!("the ready result was handled"),
+                    Ok(Ok(_ready)) => unreachable!("the ready result was handled"),
                 };
                 match self.stop_node() {
                     Ok(()) => Err(reason.into()),
@@ -1649,6 +1686,94 @@ impl Shared {
             return Err("configure diagnostics before Node and Control start".into());
         }
         self.diagnostics = Some(config);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn configure_diagnostic_store(&mut self, path: &Path) -> TestResult<()> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if self.control.is_some() || self.node_task.is_some() {
+            return Err("configure the diagnostic store before Node and Control start".into());
+        }
+        let parent = path.parent().ok_or("the diagnostic store has no parent")?;
+        if !path.is_absolute() || fs::canonicalize(parent)? != parent {
+            return Err("the diagnostic store requires a canonical absolute parent".into());
+        }
+        let device = fs::metadata(parent)?.dev();
+        if device == fs::metadata(&self.state_path)?.dev()
+            || device == fs::metadata(self.tls.path())?.dev()
+        {
+            return Err("the fault store shares the Node or Control authority filesystem".into());
+        }
+        self.diagnostic_data = Some(path.to_owned());
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn diagnostic_connector(
+        &self,
+        snapshot: &MithrilObservationSnapshot,
+    ) -> TestResult<(
+        mithril_node::NodeControlConnector,
+        mithril_control::NodeRegistration,
+    )> {
+        let boot: [u8; 16] = hex::decode(&snapshot.node_boot_id)?
+            .try_into()
+            .map_err(|_| "the Node boot identity is invalid")?;
+        let mut registration = self
+            .registration
+            .clone()
+            .ok_or("the Node registration is absent")?;
+        if registration.program_digest != snapshot.program_digest {
+            return Err("the Node registration differs from the running program".into());
+        }
+        registration.label_epoch = snapshot.label_epoch;
+        registration.kernel_ready = snapshot.kernel_ready;
+        registration.effect_prevention_claims_enabled = self
+            .ready
+            .as_ref()
+            .ok_or("Node readiness is absent")?
+            .borrow()
+            .effect_prevention_claims_enabled;
+        registration.policy_authority_absent = false;
+        registration.exception_authority_absent = false;
+        registration.startup_absence_proof_digest = mithril_control::startup_absence_proof_digest(
+            NODE_ID,
+            &boot,
+            snapshot.label_epoch,
+            false,
+            false,
+        );
+        registration.capabilities = snapshot
+            .capabilities
+            .iter()
+            .map(|item| mithril_control::CapabilityRecord {
+                capability_id: item.capability_id.clone(),
+                state: item.state.clone(),
+                reason_code: item.reason_code.clone(),
+            })
+            .collect();
+        Ok((
+            self.tls.connector(
+                self.control.as_ref().ok_or("Control is not running")?,
+                NODE_ID,
+                boot,
+            ),
+            registration,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn stop_control(&mut self) -> TestResult<()> {
+        if let Some((runtime, proxy)) = self.diagnostic_proxy.take() {
+            runtime.block_on(proxy.stop())?;
+        }
+        if let Some(control) = self.control.take() {
+            self.runtime.block_on(control.shutdown())?;
+        }
+        self.plane.take();
+        self.policy.take();
         Ok(())
     }
 

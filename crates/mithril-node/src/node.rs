@@ -356,6 +356,12 @@ impl NodeChassis {
         self.readiness.subscribe()
     }
 
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn registration(&self) -> NodeRegistration {
+        self.registration.clone()
+    }
+
     /// Reconciles installed binding identity through the production owner sequence.
     pub fn reconcile_binding_identity(
         config: &NodeConfig,

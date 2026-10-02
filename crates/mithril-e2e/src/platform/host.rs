@@ -25,6 +25,440 @@ pub(crate) struct Host {
 
 impl Host {
     #[cfg(test)]
+    fn qualify_storage() -> TestResult<()> {
+        use araphor_data::AnalysisCommitStage;
+        use mithril_control::{
+            TraceBatchV1, TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1,
+            TraceOwner, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1, TraceTerminalReasonV1,
+            TraceTerminalV1, TraceUploadV1,
+        };
+        use std::io::{Read as _, Write as _};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let disk = PathBuf::from(std::env::var("MITHRIL_TEST_TRACE_DISK")?);
+        assert_eq!(disk.parent(), Some(Path::new("/tmp")));
+        assert!(disk
+            .file_name()
+            .ok_or("the fault filesystem has no name")?
+            .to_string_lossy()
+            .starts_with("araphor-observability-disk-"));
+        assert_eq!(fs::canonicalize(&disk)?, disk);
+        assert!(!fs::symlink_metadata(&disk)?.file_type().is_symlink());
+        assert_eq!(rustix::fs::statfs(&disk)?.f_type, libc::TMPFS_MAGIC);
+        let volume = rustix::fs::statvfs(&disk)?;
+        assert_eq!(volume.f_blocks * volume.f_frsize, GIB);
+        assert_eq!(fs::read_dir(&disk)?.count(), 0);
+        let owned = ProbeDirectory::create(&disk.join("capture"))?;
+        let path = owned.path().join("analysis");
+        let config: mithril_node::NodeTraceConfigV1 =
+            serde_json::from_slice(&fs::read(std::env::var("MITHRIL_TRACE_CONFIG")?)?)?;
+        config.validate()?;
+        let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
+        if proof.exists() {
+            return Err("the storage proof already exists".into());
+        }
+        let mut env = Self::setup("observability-storage")?;
+        env.shared.configure_diagnostics(config)?;
+        env.shared.configure_diagnostic_store(&path)?;
+        env.start_control()?;
+        env.shared.enable_diagnostic_partition()?;
+        let policy = serde_json::from_slice(&fs::read(super::policy_path(
+            env.source(),
+            "python_policy.json",
+        )?)?)?;
+        let labels = super::policy_labels(&policy)?;
+        let mut init = env.start_actor("ready.py", &[], &labels)?;
+        env.place(init.id())?;
+        fs::create_dir(env.work().join("second"))?;
+        fs::create_dir(env.work().join("third"))?;
+        let mut first = env.add_actor("python", &["/fixtures/proc_read.py", "/work"])?;
+        first.ready()?;
+        env.place(first.id())?;
+        let mut second = env.add_actor("python", &["/fixtures/proc_read.py", "/work/second"])?;
+        second.ready()?;
+        env.place(second.id())?;
+        let mut third = env.add_actor("python", &["/fixtures/proc_read.py", "/work/third"])?;
+        third.ready()?;
+        env.place(third.id())?;
+        env.install_policy("python_policy.json")?;
+        env.start_node()?;
+        env.sync_policy()?;
+        env.node_ready()?;
+        env.running(init.id())?;
+        env.recovered(init.id(), "diagnostic storage workload")?;
+        fs::write(env.work().join("act"), b"act")?;
+        first.wait_name(
+            first.id(),
+            &format!("proc-read-{}", libc::EACCES),
+            "denial before the storage fault",
+            Duration::from_secs(5),
+        )?;
+        let initial = env.snapshot()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let now = || -> TestResult<u64> {
+            Ok(u64::try_from(
+                SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
+            )?)
+        };
+        let (control, fact) = env.shared.diagnostic_context()?;
+        let grant = mithril_control::TraceExecutionGrantV1 {
+            tenant_id: *uuid::Uuid::parse_str(super::shared::TENANT_ID)?.as_bytes(),
+            grant_id: [7; 16],
+            principal: "qualification".into(),
+            namespace_uids: [fact.namespace_uid.clone()].into(),
+            node_ids: [fact.node_id.clone()].into(),
+            recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
+            host_diagnostic: false,
+            valid_until_unix_ns: now()? + 600_000_000_000,
+        };
+        let access = TraceReadAccessV1 {
+            tenant_id: grant.tenant_id,
+            namespace_uids: grant.namespace_uids.clone(),
+            node_ids: grant.node_ids.clone(),
+            host_sensitive: false,
+            valid_until_unix_ns: grant.valid_until_unix_ns,
+            revoked: false,
+        };
+        let targets = runtime.block_on(control.resolve_trace_targets(vec![fact], &grant))?;
+        let target = targets
+            .first()
+            .and_then(|item| item.target.clone())
+            .ok_or("the diagnostic storage target is unavailable")?;
+        let request = TraceRequestV1 {
+            tenant_id: grant.tenant_id,
+            request_id: *uuid::Uuid::new_v4().as_bytes(),
+            source: TraceRecipeV1::FailedOpens.manifest()?.source,
+            targets: vec![target],
+            unresolved: Vec::new(),
+            collection_seconds: 30,
+        };
+        env.shared.partition_diagnostics(true)?;
+        control.accept_trace(request.clone(), grant, None)?;
+        let data = control.analysis_store().ok_or("missing analysis store")?;
+        let owner = TraceOwner::new(data.clone());
+        let (_, accepted) = owner.read(request.tenant_id, request.request_id, &access, now()?)?;
+        let id = accepted.execution_id(0)?;
+        let (_, intent) = data
+            .trace_intent(request.tenant_id, request.request_id)?
+            .ok_or("the diagnostic intent is absent")?;
+        let identity = intent
+            .bindings
+            .first()
+            .ok_or("the diagnostic binding is absent")?
+            .identity
+            .clone();
+        assert_eq!(identity.execution_id, id);
+        let before = data.trace_receipt(&identity)?;
+        assert!(before.as_ref().is_none_or(|receipt| {
+            receipt.last_sequence == 0
+                && receipt.output_bytes == 0
+                && receipt.commit_revision == 0
+                && receipt.terminal.is_none()
+        }));
+        let spool = env.shared.diagnostic_spool(id);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        env.shared.partition_diagnostics(false)?;
+        let marker = env.shared.output().join("trace-store.ready");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !marker.exists() {
+            if Instant::now() >= deadline {
+                return Err("the durable diagnostic intent marker is absent".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let live = env.snapshot()?;
+        let (connector, registration) = env.shared.diagnostic_connector(&live)?;
+        env.shared.partition_diagnostics(true)?;
+        fs::write(env.shared.output().join("trace-store.release"), b"release")?;
+        let retained = || -> TestResult<Vec<TraceFrameV1>> {
+            let mut bytes = Vec::new();
+            File::open(spool.join("output.jsonl"))?
+                .take(5 * 1024 * 1024)
+                .read_to_end(&mut bytes)?;
+            assert!(
+                bytes.contains(&0),
+                "the fixture output exceeds its read bound"
+            );
+            bytes
+                .split_inclusive(|byte| *byte == b'\n')
+                .take_while(|line| line.first() != Some(&0) && line.last() == Some(&b'\n'))
+                .map(|line| Ok(serde_json::from_slice::<TraceFrameV1>(line)?))
+                .collect()
+        };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let frames = loop {
+            let frames = retained()?;
+            if frames.iter().any(|frame| {
+                frame.kind == TraceFrameKindV1::Diagnostic
+                    && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
+            }) {
+                break frames;
+            }
+            if Instant::now() >= deadline || spool.join("terminal.json").exists() {
+                return Err("capture did not attach before the storage fault".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let attached = now()?;
+        assert!(attached < accepted.deadline_unix_ns);
+        assert!(accepted.deadline_unix_ns < attached + 30_000_000_000);
+        assert!(!spool.join("terminal.json").exists());
+        assert_eq!(data.trace_receipt(&identity)?, before);
+        let frame = frames.first().ok_or("the Node output is empty")?.clone();
+        frame.validate()?;
+        assert_eq!(frame.execution_id, id);
+        assert_eq!(frame.sequence, 1);
+        let exchange = TraceExchangeV1 {
+            retained: vec![id],
+            resolved: None,
+            output: Some(TraceUploadV1 {
+                request_id: request.request_id,
+                target_index: 0,
+                original_node_boot_id: identity.node_boot_id,
+                batch: TraceBatchV1 {
+                    execution_id: id,
+                    frames: vec![frame],
+                    terminal: None,
+                },
+            }),
+        };
+        let mut trust = mithril_node::TrustCache::load(&env.shared.output().join("node"))?;
+        let mut connection = runtime.block_on(connector.connect(registration, true, &mut trust))?;
+        let filler = tempfile::NamedTempFile::new_in(&disk)?;
+        let mut file = filler.as_file().try_clone()?;
+        let fill_path = filler.path().to_owned();
+        let filled = Arc::new(AtomicBool::new(false));
+        let synced = Arc::new(AtomicBool::new(false));
+        let did_fill = filled.clone();
+        let did_sync = synced.clone();
+        let hooked = data.clone();
+        data.set_commit_hook(AnalysisCommitStage::BeforeAppend, move || {
+            let mut full = false;
+            let block = vec![0_u8; 64 * 1024];
+            for _ in 0..=GIB / (64 * 1024) {
+                match file.write_all(&block) {
+                    Ok(()) => {}
+                    Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
+                        full = true;
+                        break;
+                    }
+                    Err(source) => {
+                        return Err(araphor_data::Error::Io {
+                            path: fill_path.clone(),
+                            source,
+                            location: snafu::Location::default(),
+                        });
+                    }
+                }
+            }
+            assert!(full, "the bounded filler did not reach ENOSPC");
+            file.sync_all().map_err(|source| araphor_data::Error::Io {
+                path: fill_path,
+                source,
+                location: snafu::Location::default(),
+            })?;
+            did_fill.store(true, Ordering::Release);
+            hooked.set_commit_hook(AnalysisCommitStage::AfterSync, move || {
+                did_sync.store(true, Ordering::Release);
+                Ok(())
+            })?;
+            Ok(())
+        })?;
+        let failure = match runtime.block_on(connection.exchange_diagnostics(&exchange)) {
+            Err(mithril_node::Error::ControlRpc { source, .. })
+                if source.code() == tonic::Code::Unavailable
+                    && source.message().contains("No space left on device")
+                    && source.message().contains("os error 28")
+                    && source.message().contains("/analysis/segments/") =>
+            {
+                source.message().to_owned()
+            }
+            other => {
+                return Err(format!("the real append did not fail without ACK: {other:?}").into())
+            }
+        };
+        assert!(filled.load(Ordering::Acquire));
+        assert!(!synced.load(Ordering::Acquire));
+        assert_eq!(rustix::fs::statvfs(&disk)?.f_bavail, 0);
+        assert!(!data.storage_health()?.write_ready);
+        assert!(!spool.join("terminal.json").exists());
+        fs::write(env.work().join("second/act"), b"act")?;
+        second.wait_name(
+            second.id(),
+            &format!("proc-read-{}", libc::EACCES),
+            "denial while the store is full",
+            Duration::from_secs(5),
+        )?;
+        assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let terminal: TraceTerminalV1 = loop {
+            match fs::read(spool.join("terminal.json")) {
+                Ok(bytes) => {
+                    if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+                        break serde_json::from_slice(&bytes[..end])?;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            if Instant::now() >= deadline {
+                return Err("the full store did not preserve bounded local expiry".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(terminal.reason, TraceTerminalReasonV1::Deadline);
+        assert_eq!(terminal.cleanup, TraceCleanupV1::Verified);
+        assert_eq!(terminal.execution_id, id);
+        assert!(terminal.output_incomplete && terminal.kernel_lost_events.is_none());
+        let frames = retained()?;
+        for (index, frame) in frames.iter().enumerate() {
+            frame.validate()?;
+            assert_eq!(frame.execution_id, id);
+            assert_eq!(frame.sequence, index as u64 + 1);
+        }
+        assert_eq!(terminal.last_sequence, frames.len() as u64);
+        assert!(terminal.output_bytes <= mithril_control::MAX_TRACE_OUTPUT_BYTES);
+        assert!(frames.len() <= 4096);
+        assert_eq!(
+            fs::metadata(spool.join("output.jsonl"))?.len(),
+            68 * 1024 * 1024
+        );
+        assert!(!spool.join("ack.json").exists());
+        drop(connection);
+        env.shared.stop_node()?;
+        drop(owner);
+        drop(data);
+        drop(control);
+        env.shared.stop_control()?;
+        filler.close()?;
+        env.start_control()?;
+        let (control, _) = env.shared.diagnostic_context()?;
+        let data = control
+            .analysis_store()
+            .ok_or("missing recovered analysis store")?;
+        let recovered_receipt = data
+            .trace_receipt(&identity)?
+            .ok_or("the recovered terminal reservation is absent")?;
+        assert_eq!(recovered_receipt.last_sequence, 0);
+        assert_eq!(recovered_receipt.output_bytes, 0);
+        assert_eq!(recovered_receipt.commit_revision, 0);
+        assert!(recovered_receipt.terminal.is_none());
+        let owner = TraceOwner::new(data.clone());
+        assert_eq!(
+            owner
+                .read(request.tenant_id, request.request_id, &access, now()?)?
+                .1,
+            accepted
+        );
+        env.start_node()?;
+        env.node_ready()?;
+        let deadline = Instant::now() + Duration::from_secs(50);
+        while !spool.join("ack.json").exists() {
+            if Instant::now() >= deadline {
+                return Err("recovered output was not acknowledged through current mTLS".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let ack: TraceTerminalV1 = serde_json::from_slice(&fs::read(spool.join("ack.json"))?)?;
+        assert_eq!(ack, terminal);
+        assert_eq!(fs::metadata(spool.join("output.jsonl"))?.len(), 0);
+        let mut output = Vec::new();
+        let mut saved = None;
+        loop {
+            let after = output
+                .last()
+                .map_or(0, |frame: &TraceFrameV1| frame.sequence);
+            let batches = owner.output(
+                request.tenant_id,
+                request.request_id,
+                0,
+                &access,
+                now()?,
+                after,
+            )?;
+            if batches.is_empty() {
+                break;
+            }
+            for batch in batches {
+                output.extend(batch.frames);
+                saved = batch.terminal.or(saved);
+            }
+            if saved.is_some() {
+                break;
+            }
+        }
+        assert_eq!(output, frames);
+        assert_eq!(saved.as_ref(), Some(&terminal));
+        assert_eq!(
+            output
+                .iter()
+                .filter(|frame| frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n")
+                .count(),
+            1
+        );
+        let current = env.snapshot()?;
+        let (connector, registration) = env.shared.diagnostic_connector(&current)?;
+        let mut trust = mithril_node::TrustCache::load(&env.shared.output().join("node"))?;
+        let mut connection = runtime.block_on(connector.connect(registration, true, &mut trust))?;
+        let reply = runtime.block_on(connection.exchange_diagnostics(&exchange))?;
+        assert_eq!(
+            runtime.block_on(connection.exchange_diagnostics(&exchange))?,
+            reply
+        );
+        let acknowledgement = reply.acknowledgement.ok_or("the exact replay has no ACK")?;
+        assert_eq!(acknowledgement.execution_id, id);
+        assert_eq!(acknowledgement.last_sequence, terminal.last_sequence);
+        assert_eq!(acknowledgement.terminal.as_ref(), Some(&terminal));
+        fs::write(env.work().join("third/act"), b"act")?;
+        third.wait_name(
+            third.id(),
+            &format!("proc-read-{}", libc::EACCES),
+            "denial after storage recovery",
+            Duration::from_secs(5),
+        )?;
+        assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
+        fs::write(
+            &proof,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "case": "data-store-full", "accepted": accepted,
+                "append_error": failure, "before_append_ran": true, "after_sync_ran": false,
+                "raw_receipt_before": before.as_ref().map(|receipt| receipt.last_sequence),
+                "raw_receipt_before_replay": recovered_receipt.last_sequence,
+                "frames": output, "terminal": terminal, "acknowledgement": acknowledgement,
+                "attached_unix_ns": attached, "dispatch_delay_seconds": 20,
+                "frame_upload_ack_on_failure": false, "physical_denials": 3,
+                "spool_max_bytes": 68 * 1024 * 1024, "discovery_enabled": false
+            }))?,
+        )?;
+        drop(connection);
+        for name in ["release", "second/release", "third/release"] {
+            fs::write(env.work().join(name), b"release")?;
+        }
+        first.stop()?;
+        second.stop()?;
+        third.stop()?;
+        init.stop()?;
+        env.shared.stop_node()?;
+        drop(owner);
+        drop(data);
+        drop(control);
+        env.shared.stop_control()?;
+        env.stop()?;
+        owned.cleanup()?;
+        Ok(())
+    }
+
+    #[cfg(test)]
     fn qualify_restart() -> TestResult<()> {
         use crate::observability::ResourceSnapshot;
         use mithril_control::{
@@ -70,7 +504,12 @@ impl Host {
         env.running(init.id())?;
         env.recovered(init.id(), "diagnostic restart workload")?;
         fs::write(env.work().join("act"), b"act")?;
-        first.wait_command(first.id(), &format!("proc-read-{}", libc::EACCES))?;
+        first.wait_name(
+            first.id(),
+            &format!("proc-read-{}", libc::EACCES),
+            "denial before Node restart",
+            Duration::from_secs(5),
+        )?;
         let initial = env.snapshot()?;
         let (control, fact) = env.shared.diagnostic_context()?;
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -253,7 +692,12 @@ impl Host {
             usize::from(mode == "after")
         );
         fs::write(env.work().join("second/act"), b"act")?;
-        second.wait_command(second.id(), &format!("proc-read-{}", libc::EACCES))?;
+        second.wait_name(
+            second.id(),
+            &format!("proc-read-{}", libc::EACCES),
+            "denial after Node restart",
+            Duration::from_secs(5),
+        )?;
         assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
         fs::write(
             &proof,
@@ -283,8 +727,8 @@ impl Host {
     fn qualify_diagnostic_failures() -> TestResult<()> {
         use mithril_control::{
             DiscoveryDigestV1, TraceApprovalV1, TraceCleanupV1, TraceExecutionGrantV1,
-            TraceReadAccessV1, TraceRecipeV1, TraceRequestV1, TraceSourceV1, TraceTerminalReasonV1,
-            TraceTerminalV1,
+            TraceFrameKindV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1, TraceSourceV1,
+            TraceTerminalReasonV1, TraceTerminalV1,
         };
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
         let config: mithril_node::NodeTraceConfigV1 =
@@ -305,9 +749,6 @@ impl Host {
         let labels = super::policy_labels(&policy)?;
         let mut init = env.start_actor("ready.py", &[], &labels)?;
         env.place(init.id())?;
-        let mut probe = env.add_actor("python", &["/fixtures/proc_read.py", "/work"])?;
-        probe.ready()?;
-        env.place(probe.id())?;
         env.install_policy("python_policy.json")?;
         env.start_node()?;
         env.sync_policy()?;
@@ -360,6 +801,12 @@ impl Host {
             "retirement",
         ] {
             env.node_ready()?;
+            let mut work = env.work().join(case);
+            fs::create_dir(&work)?;
+            let command = format!("/work/{case}");
+            let mut probe = env.add_actor("python", &["/fixtures/proc_read.py", &command])?;
+            probe.ready()?;
+            env.place(probe.id())?;
             let request_id = *uuid::Uuid::new_v4().as_bytes();
             let mut request = TraceRequestV1 {
                 tenant_id: tenant,
@@ -367,7 +814,7 @@ impl Host {
                 source: TraceRecipeV1::FailedOpens.manifest()?.source,
                 targets: vec![target.clone()],
                 unresolved: Vec::new(),
-                collection_seconds: if case == "partition" { 3 } else { 30 },
+                collection_seconds: 30,
             };
             let mut execution_grant = grant.clone();
             let approval = if matches!(case, "map-exhaustion" | "output-limit") {
@@ -387,10 +834,30 @@ impl Host {
             } else {
                 None
             };
+            if case == "partition" {
+                env.shared.partition_diagnostics(true)?;
+            }
             control.accept_trace(request, execution_grant, approval)?;
             let (_, accepted) = owner.read(tenant, request_id, &access, now()?)?;
             let id = accepted.execution_id(0)?;
             let spool = env.shared.diagnostic_spool(id);
+            let mut release_at = None;
+            if case == "partition" {
+                let deadline = Instant::now() + Duration::from_secs(25);
+                while Instant::now() < deadline {
+                    assert!(
+                        !spool.exists(),
+                        "partition dispatched before transport repair"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                assert!(
+                    !spool.exists(),
+                    "partition dispatched during the initial hold"
+                );
+                release_at = Some((Instant::now(), now()?));
+                env.shared.partition_diagnostics(false)?;
+            }
             let mut frames = Vec::new();
             let mut after = 0;
             let deadline = Instant::now() + Duration::from_secs(15);
@@ -402,7 +869,8 @@ impl Host {
                     }
                 }
                 if frames.iter().any(|frame: &mithril_control::TraceFrameV1| {
-                    frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
+                    frame.kind == TraceFrameKindV1::Diagnostic
+                        && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
                 }) {
                     break;
                 }
@@ -411,6 +879,7 @@ impl Host {
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
+            let original_pid = probe.id();
             match case {
                 "partition" => env.shared.partition_diagnostics(true)?,
                 "revocation" => {
@@ -420,14 +889,23 @@ impl Host {
                         .is_err());
                 }
                 "retirement" => {
-                    fs::write(env.work().join("release"), b"release")?;
+                    fs::write(work.join("act"), b"act")?;
+                    probe.wait_name(
+                        probe.id(),
+                        &format!("proc-read-{}", libc::EACCES),
+                        "diagnostic retirement denial",
+                        Duration::from_secs(5),
+                    )?;
+                    fs::write(work.join("release"), b"release")?;
                     probe.stop()?;
                     init.stop()?;
                     env.shared.retire_diagnostic_runtime()?;
                 }
                 _ => {}
             }
-            let deadline = Instant::now() + Duration::from_secs(12);
+            let deadline = Instant::now()
+                + Duration::from_nanos(accepted.deadline_unix_ns.saturating_sub(now()?))
+                + Duration::from_secs(7);
             let terminal: TraceTerminalV1 = loop {
                 match fs::read(spool.join("terminal.json")) {
                     Ok(bytes) => {
@@ -461,7 +939,54 @@ impl Host {
             assert_eq!(terminal.cleanup, TraceCleanupV1::Verified);
             assert_eq!(terminal.execution_id, id);
             assert!(terminal.kernel_lost_events.is_none());
+            let terminal_at = now()?;
+            let pending = if let Some((released, stamp)) = release_at {
+                assert!(stamp > accepted.accepted_unix_ns + 15_000_000_000);
+                assert!(terminal_at >= accepted.deadline_unix_ns);
+                assert!(
+                    Instant::now()
+                        < released
+                            + Duration::from_secs(accepted.request.collection_seconds.into()),
+                    "partition reached the backend collection timeout"
+                );
+                assert!(terminal.output_incomplete);
+                assert!(!spool.join("ack.json").exists());
+                assert!(owner
+                    .output(tenant, request_id, 0, &access, now()?, after)?
+                    .is_empty());
+                let pending = fs::read_to_string(spool.join("output.jsonl"))?
+                    .lines()
+                    .map(serde_json::from_str::<mithril_control::TraceFrameV1>)
+                    .collect::<Result<Vec<_>, _>>()?;
+                assert!(pending.starts_with(&frames));
+                assert_eq!(pending.len() as u64, terminal.last_sequence);
+                Some(pending)
+            } else {
+                None
+            };
+            if case == "retirement" {
+                init = env.start_actor("ready.py", &[], &labels)?;
+                env.place(init.id())?;
+                work = env.work().join(case);
+                fs::create_dir(&work)?;
+                probe = env.add_actor("python", &["/fixtures/proc_read.py", &command])?;
+                probe.ready()?;
+                env.place(probe.id())?;
+            }
+            fs::write(work.join("act"), b"act")?;
+            probe.wait_name(
+                probe.id(),
+                &format!("proc-read-{}", libc::EACCES),
+                "diagnostic failure denial",
+                Duration::from_secs(5),
+            )?;
+            let (_, protected) = env.shared.diagnostic_context()?;
+            if case == "retirement" {
+                assert_ne!(protected.pod_uid, target.fact.pod_uid);
+                assert_ne!(protected.container_id, target.fact.container_id);
+            }
             if case == "partition" {
+                assert!(!spool.join("ack.json").exists());
                 env.shared.partition_diagnostics(false)?;
             }
             let deadline = Instant::now() + Duration::from_secs(50);
@@ -471,10 +996,44 @@ impl Host {
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
+            let ack: TraceTerminalV1 = serde_json::from_slice(&fs::read(spool.join("ack.json"))?)?;
+            assert_eq!(ack, terminal);
             if case != "revocation" {
-                for batch in owner.output(tenant, request_id, 0, &access, now()?, after)? {
-                    frames.extend(batch.frames);
+                let mut replay = Vec::new();
+                let mut cursor = 0;
+                let mut retained = None;
+                while retained.is_none() {
+                    let batches = owner.output(tenant, request_id, 0, &access, now()?, cursor)?;
+                    assert!(!batches.is_empty(), "the retained terminal is absent");
+                    for batch in batches {
+                        for frame in batch.frames {
+                            assert_eq!(frame.execution_id, id);
+                            assert_eq!(frame.sequence, cursor + 1);
+                            cursor = frame.sequence;
+                            replay.push(frame);
+                        }
+                        retained = batch.terminal.or(retained);
+                    }
                 }
+                assert_eq!(retained, Some(terminal.clone()));
+                assert!(replay.starts_with(&frames));
+                assert_eq!(cursor, terminal.last_sequence);
+                if let Some(pending) = pending {
+                    assert_eq!(replay, pending);
+                }
+                assert_eq!(
+                    replay
+                        .iter()
+                        .filter(|frame| {
+                            frame.kind == TraceFrameKindV1::Diagnostic
+                                && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
+                        })
+                        .count(),
+                    1
+                );
+                let (_, retained) = owner.read(tenant, request_id, &access, now()?)?;
+                assert_eq!(retained, accepted);
+                frames = replay;
             }
             if case == "map-exhaustion" {
                 let size = frames
@@ -488,23 +1047,26 @@ impl Host {
                 assert!(accepted.recipe.is_none());
             }
             assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
-            records.push(serde_json::json!({"case":case,"accepted":accepted,"frames":frames,"terminal":terminal}));
+            records.push(serde_json::json!({
+                "case": case, "accepted": accepted, "frames": frames, "terminal": terminal,
+                "acknowledgement": ack,
+                "transport_released_unix_ns": release_at.map(|(_, stamp)| stamp),
+                "terminal_observed_unix_ns": terminal_at,
+                "backend_collection_floor_unix_ns": release_at.map(|(_, stamp)| {
+                    stamp + u64::from(accepted.request.collection_seconds) * 1_000_000_000
+                }),
+                "terminal_ack_absent_before_repair": case == "partition",
+                "exact_spool_replay": case == "partition",
+                "physical_denials": 1 + usize::from(case == "retirement"),
+                "retired_denial_pid": (case == "retirement").then_some(original_pid),
+                "physical_denial_target": protected,
+                "physical_denial_pid": probe.id(), "physical_denial_errno": libc::EACCES,
+            }));
             fs::write(&proof, serde_json::to_vec_pretty(&records)?)?;
-            if case == "output-limit" {
-                fs::write(env.work().join("act"), b"act")?;
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while fs::read_to_string(format!("/proc/{}/comm", probe.id()))?.trim()
-                    != format!("proc-read-{}", libc::EACCES)
-                {
-                    if Instant::now() >= deadline {
-                        return Err("failures changed the physical denial".into());
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
+            fs::write(work.join("release"), b"release")?;
+            probe.stop()?;
         }
         fs::write(env.work().join("release"), b"release")?;
-        probe.stop()?;
         init.stop()?;
         env.stop()
     }
@@ -935,6 +1497,12 @@ fn observability_owned_capture_five_pairs() -> TestResult<()> {
 #[ignore = "requires the owned Linux VM and a passing diagnostic qualification record"]
 fn observability_owned_capture_failures() -> TestResult<()> {
     super::test_lifecycle::<Host, _>("observability-failures", Host::qualify_diagnostic_failures)
+}
+
+#[test]
+#[ignore = "requires the owned Linux VM, qualified diagnostics, and the task-owned tmpfs"]
+fn observability_owned_storage() -> TestResult<()> {
+    super::test_lifecycle::<Host, _>("observability-storage", Host::qualify_storage)
 }
 
 #[test]
