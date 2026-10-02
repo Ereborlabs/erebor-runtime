@@ -3657,6 +3657,9 @@ test does not close a row when its physical condition or an assertion changed.
     The admitted application draft did not preserve that condition and was
     rejected. Both modes require the denial and retained real pin. Resource
     cleanup, 25 related checks, formatting, and strict Clippy pass.
+    Direct runc passes both modes in 49.52 seconds with the same actor,
+    policies, and 86-line test. Pin, output, lease, and cgroup cleanup pass.
+    Strict Clippy passes after platform registration.
   - [x] Replace the two pre-protection passed-descriptor reads with
     `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
     exact-file policy. A child passes each descriptor through `SCM_RIGHTS`
