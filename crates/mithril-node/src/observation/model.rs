@@ -96,7 +96,7 @@ impl ObservationCanonicalizer {
                 state_id: event.process_state_vector_id,
                 entry_rule_id: event.admitted_entry_rule_id,
                 exact_file_object: (event.exact_object_key_id != 0)
-                    .then(|| event.file_object.into()),
+                    .then(|| mithril_control::EvidenceFileObjectV1::from(event.file_object).into()),
                 exact_object_key_id: event.exact_object_key_id,
                 composite_atom_id: event.composite_atom_id,
                 catalog_json: Vec::new(),
@@ -120,7 +120,7 @@ impl ObservationCanonicalizer {
 fn kernel_effect(event: &EffectObservationV1) -> KernelEffectEvidenceV1 {
     let exact_object_id = if event.exact_object_key_id > 0 {
         Some(
-            mithril_control::EvidenceExactFileObject::from(event.file_object)
+            mithril_control::EvidenceFileObjectV1::from(event.file_object)
                 .observation_id(event.exact_object_key_id),
         )
     } else {
@@ -247,7 +247,10 @@ mod tests {
             (context.role_id, context.state_id, context.entry_rule_id),
             (7, 8, 9)
         );
-        assert_eq!(context.exact_file_object, Some(event.file_object.into()));
+        assert_eq!(
+            context.exact_file_object,
+            Some(mithril_control::EvidenceFileObjectV1::from(event.file_object).into())
+        );
         assert_eq!(context.exact_object_key_id, 20);
         assert_eq!(context.composite_atom_id, 21);
         assert_eq!(context.profile_generation_ref_id, 13);

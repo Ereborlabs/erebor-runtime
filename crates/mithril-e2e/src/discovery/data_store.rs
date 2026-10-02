@@ -1352,7 +1352,8 @@ mod tests {
                 .decision_context
                 .as_mut()
                 .ok_or("decision context absent")?;
-            let expected = context.catalog()?.ok_or("verified catalog absent")?;
+            let expected = mithril_control::EvidenceDecisionCatalogV1::from_context(context)?
+                .ok_or("verified catalog absent")?;
             let padding = MAX_EVIDENCE_DECISION_CONTEXT_BYTES
                 .checked_sub(context.encoded_len())
                 .ok_or("catalog exceeds context limit")?;
@@ -1361,7 +1362,10 @@ mod tests {
                 .catalog_json
                 .resize(context.catalog_json.len() + padding, b' ');
             assert_eq!(context.encoded_len(), MAX_EVIDENCE_DECISION_CONTEXT_BYTES);
-            assert_eq!(context.catalog()?, Some(expected));
+            assert_eq!(
+                mithril_control::EvidenceDecisionCatalogV1::from_context(context)?,
+                Some(expected)
+            );
             assert_eq!(wal.append(&observation)?, cursor);
             last = Some(observation);
         }

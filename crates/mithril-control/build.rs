@@ -3,31 +3,39 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), io::Error> {
     let proto = PathBuf::from("proto/erebor/mithril/control/v1/control.proto");
+    let shared = PathBuf::from("../araphor-data/proto");
     println!("cargo:rerun-if-changed={}", proto.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        shared
+            .join("erebor/mithril/control/v1/evidence.proto")
+            .display()
+    );
     let descriptor_path = PathBuf::from(
         std::env::var_os("OUT_DIR")
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Cargo did not set OUT_DIR"))?,
     )
     .join("erebor.mithril.control.v1.bin");
-    tonic_build::configure()
+    let mut builder = tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .type_attribute(
-            ".erebor.mithril.control.v1.EvidenceDecisionContext",
-            "#[derive(serde::Serialize, serde::Deserialize, Eq)] #[serde(deny_unknown_fields)]",
-        )
-        .type_attribute(
-            ".erebor.mithril.control.v1.EvidenceExactFileObject",
-            "#[derive(serde::Serialize, serde::Deserialize, Eq)] #[serde(deny_unknown_fields)]",
-        )
-        .bytes([
-            ".erebor.mithril.control.v1.EvidenceBatch.framed_records",
-            ".erebor.mithril.control.v1.EvidenceRecord.coverage_interval_id",
-            ".erebor.mithril.control.v1.EvidenceRecord.process_lineage_id",
-            ".erebor.mithril.control.v1.EvidenceRecord.authority_domain_id",
-            ".erebor.mithril.control.v1.EvidenceRecord.execution_set_id",
-            ".erebor.mithril.control.v1.EvidenceRecord.exact_object_id",
-        ])
+        .bytes([".erebor.mithril.control.v1.EvidenceBatch.framed_records"]);
+    for name in [
+        "EvidenceRecord",
+        "EvidenceDecisionContext",
+        "EvidenceExactFileObject",
+        "EvidenceRecords",
+        "EvidenceTemporalCoverage",
+        "CoverageCounters",
+        "CoverageInterval",
+        "CoverageReport",
+    ] {
+        builder = builder.extern_path(
+            format!(".erebor.mithril.control.v1.{name}"),
+            format!("::araphor_data::{name}"),
+        );
+    }
+    builder
         .file_descriptor_set_path(descriptor_path)
-        .compile_protos(&[proto], &[PathBuf::from("proto")])
+        .compile_protos(&[proto], &[PathBuf::from("proto"), shared])
 }

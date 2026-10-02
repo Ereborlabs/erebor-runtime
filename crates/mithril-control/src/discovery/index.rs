@@ -542,7 +542,11 @@ pub(super) mod tests {
                 mount_namespace_inode: 4,
                 filesystem_device: 5,
             };
-            wire.exact_object_id = object.observation_id(1).to_be_bytes().to_vec().into();
+            wire.exact_object_id = crate::EvidenceFileObjectV1::from(&object)
+                .observation_id(1)
+                .to_be_bytes()
+                .to_vec()
+                .into();
             wire.decision_context = Some(crate::EvidenceDecisionContext {
                 schema_version: 1,
                 original_kernel_sequence: 101 + ordinal as u64,

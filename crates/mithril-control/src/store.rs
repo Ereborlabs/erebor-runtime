@@ -4334,7 +4334,8 @@ mod tests {
             mount_namespace_inode: 24,
             filesystem_device: 25,
         };
-        observation.effect.exact_object_id = Some(object.observation_id(26));
+        observation.effect.exact_object_id =
+            Some(crate::EvidenceFileObjectV1::from(&object).observation_id(26));
         let catalog = crate::EvidenceDecisionCatalogV1 {
             node_boot_id: observation.node_boot_id,
             profile_id: artifact.header.profile_id.clone(),

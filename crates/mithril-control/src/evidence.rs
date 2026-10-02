@@ -19,12 +19,11 @@ pub(crate) use admission::{EvidenceAdmission, EvidencePermit};
 pub(crate) use araphor_data::EvidenceStoreOutcomeV1;
 pub use araphor_data::{
     EvidenceIntakeIdentityV1, MAX_EVIDENCE_BATCH_RECORDS, MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES,
-    MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
+    MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_EVIDENCE_RECORD_BYTES,
 };
 pub use model::*;
 
 pub const DEFAULT_EVIDENCE_BATCH_RECORDS: usize = MAX_EVIDENCE_BATCH_RECORDS;
-pub const MAX_EVIDENCE_RECORD_BYTES: usize = 128 * 1_024;
 pub const MAX_EVIDENCE_BATCH_PAYLOAD_BYTES: usize = 3 * 1_024 * 1_024;
 pub use araphor_data::MAX_EVIDENCE_SEGMENT_BYTES;
 const MAX_COVERAGE_INTERVALS: usize = 8_192;
@@ -439,48 +438,10 @@ impl EvidenceIntakeOwner {
         let mut frame_ends = Vec::new();
         let mut offset = 0_usize;
         while offset < batch.framed_records.len() {
-            let length_end = offset.checked_add(4).ok_or_else(|| {
-                Status::invalid_argument("evidence record frame length is exhausted")
-            })?;
-            if length_end > batch.framed_records.len() {
-                return Err(Status::invalid_argument(
-                    "evidence record frame length is incomplete",
-                ));
-            }
-            let payload_bytes = u32::from_be_bytes(
-                batch.framed_records[offset..length_end]
-                    .try_into()
-                    .unwrap_or_default(),
-            ) as usize;
-            if payload_bytes == 0 || payload_bytes > MAX_EVIDENCE_RECORD_BYTES {
-                return Err(Status::invalid_argument(
-                    "evidence record frame is outside its size bound",
-                ));
-            }
-            let payload_end = length_end
-                .checked_add(payload_bytes)
-                .ok_or_else(|| Status::invalid_argument("evidence record frame is exhausted"))?;
-            let frame_end = payload_end
-                .checked_add(4)
-                .ok_or_else(|| Status::invalid_argument("evidence record frame is exhausted"))?;
-            if frame_end > batch.framed_records.len() {
-                return Err(Status::invalid_argument(
-                    "evidence record frame payload is incomplete",
-                ));
-            }
-            let expected = u32::from_be_bytes(
-                batch.framed_records[payload_end..frame_end]
-                    .try_into()
-                    .unwrap_or_default(),
-            );
-            if crc32c::crc32c(&batch.framed_records[offset..payload_end]) != expected {
-                return Err(Status::invalid_argument(
-                    "evidence record frame checksum is invalid",
-                ));
-            }
-            let record =
-                EvidenceRecord::decode(batch.framed_records.slice(length_end..payload_end))
-                    .map_err(|_| Status::invalid_argument("evidence record protobuf is invalid"))?;
+            let (record, frame_bytes) =
+                EvidenceRecord::decode_prefix(batch.framed_records.slice(offset..))
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            let frame_end = offset + frame_bytes;
             let index = frame_ends.len();
             let cursor = batch
                 .first_cursor
@@ -553,7 +514,7 @@ impl EvidenceIntakeOwner {
             .as_slice()
             .try_into()
             .map_err(|_| Status::invalid_argument("coverage source identity is not Id128"))?;
-        report.validate()?;
+        Self::validate_coverage(report)?;
         let identity = EvidenceIntakeIdentityV1 {
             tenant_id: authenticated.tenant_id,
             node_id: authenticated.node_id.clone(),
@@ -629,15 +590,15 @@ impl AuthenticatedEvidenceNodeV1 {
     }
 }
 
-impl CoverageReport {
+impl EvidenceIntakeOwner {
     #[allow(clippy::result_large_err)]
-    fn validate(&self) -> std::result::Result<(), Status> {
-        if self.source_epoch == 0
-            || self.source_id.len() != 16
-            || self.source_id.iter().all(|byte| *byte == 0)
-            || self.revision == 0
-            || self.intervals.is_empty()
-            || self.intervals.len() > MAX_COVERAGE_INTERVALS
+    fn validate_coverage(report: &CoverageReport) -> std::result::Result<(), Status> {
+        if report.source_epoch == 0
+            || report.source_id.len() != 16
+            || report.source_id.iter().all(|byte| *byte == 0)
+            || report.revision == 0
+            || report.intervals.is_empty()
+            || report.intervals.len() > MAX_COVERAGE_INTERVALS
         {
             return Err(Status::invalid_argument(
                 "coverage report epoch, revision, or interval bounds are invalid",
@@ -645,7 +606,7 @@ impl CoverageReport {
         }
         let mut interval_ids = std::collections::BTreeSet::new();
         let mut current_count = 0_usize;
-        for interval in &self.intervals {
+        for interval in &report.intervals {
             let ids_valid = interval.interval_id.len() == 16
                 && interval.interval_id.iter().any(|byte| *byte != 0)
                 && interval_ids.insert(interval.interval_id.as_slice());
@@ -680,8 +641,8 @@ impl CoverageReport {
                 || !reasons_valid
                 || !state_reasons_valid
                 || interval.source_epoch == 0
-                || (interval.current && interval.source_epoch != self.source_epoch)
-                || (!interval.current && interval.source_epoch > self.source_epoch)
+                || (interval.current && interval.source_epoch != report.source_epoch)
+                || (!interval.current && interval.source_epoch > report.source_epoch)
                 || interval.revision == 0
                 || interval.first_sequence == 0
                 || interval
@@ -888,7 +849,8 @@ mod tests {
             mount_namespace_inode: 24,
             filesystem_device: 25,
         };
-        original.effect.exact_object_id = Some(object.observation_id(26));
+        original.effect.exact_object_id =
+            Some(crate::EvidenceFileObjectV1::from(&object).observation_id(26));
         original.decision_context = Some(crate::EvidenceDecisionContext {
             schema_version: 1,
             original_kernel_sequence: 101,

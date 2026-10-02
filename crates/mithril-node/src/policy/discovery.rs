@@ -1,8 +1,8 @@
 use std::collections::btree_map::Entry;
 
 use mithril_control::{
-    DiscoveryDigestV1, EvidenceDecisionCatalogV1, EvidenceExactFileObject, ObservationEnvelopeV1,
-    MAX_EVIDENCE_DECISION_CONTEXT_BYTES,
+    DiscoveryDigestV1, EvidenceDecisionCatalogV1, EvidenceExactFileObject, EvidenceFileObjectV1,
+    ObservationEnvelopeV1, MAX_EVIDENCE_DECISION_CONTEXT_BYTES,
 };
 use prost::Message as _;
 
@@ -92,11 +92,9 @@ mod tests {
         catalog.attach(&mut observation);
         observation.validate()?;
         assert_eq!(
-            observation
-                .decision_context
-                .as_ref()
-                .ok_or("context")?
-                .catalog()?,
+            EvidenceDecisionCatalogV1::from_context(
+                observation.decision_context.as_ref().ok_or("context")?,
+            )?,
             Some(sealed.clone())
         );
         let record = observation.to_wire_record()?;
@@ -382,7 +380,8 @@ impl NodeDiscoveryContextCatalog {
                     entry_rule,
                     family: KernelEffectFamilyV1::from(cell.key.effect_family) as u16,
                     operation: operation.kernel_id as u16,
-                    object: exact.observation_id(object.exact_object_key_id),
+                    object: EvidenceFileObjectV1::from(&exact)
+                        .observation_id(object.exact_object_key_id),
                     composite_atom: composite,
                 };
                 let bytes = EvidenceDecisionCatalogV1 {

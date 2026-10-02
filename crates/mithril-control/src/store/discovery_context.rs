@@ -88,13 +88,14 @@ impl ControlStore {
             }
             .fail();
         }
-        let Some(catalog) = context.catalog().map_err(|error| {
-            DiscoverySnafu {
-                code: "CONTEXT_CATALOG",
-                reason: error.to_string(),
-            }
-            .build()
-        })?
+        let Some(catalog) =
+            crate::EvidenceDecisionCatalogV1::from_context(context).map_err(|error| {
+                DiscoverySnafu {
+                    code: "CONTEXT_CATALOG",
+                    reason: error.to_string(),
+                }
+                .build()
+            })?
         else {
             return Ok(unresolved(Missing::MissingDecisionCatalog));
         };

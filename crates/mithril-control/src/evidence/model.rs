@@ -248,19 +248,17 @@ impl EvidenceDecisionCatalogV1 {
             .build()
         })
     }
-}
 
-impl EvidenceDecisionContext {
-    pub fn catalog(&self) -> EvidenceModelResult<Option<EvidenceDecisionCatalogV1>> {
-        if self.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES {
+    pub fn from_context(context: &EvidenceDecisionContext) -> EvidenceModelResult<Option<Self>> {
+        if context.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES {
             return InvalidSnafu {
                 reason: "decision context exceeds its size limit",
             }
             .fail();
         }
-        if self.catalog_json.is_empty() {
+        if context.catalog_json.is_empty() {
             if !matches!(
-                self.catalog_state.as_str(),
+                context.catalog_state.as_str(),
                 "" | "MISSING_CATALOG"
                     | "NO_EXACT_MATCH"
                     | "AMBIGUOUS"
@@ -274,13 +272,13 @@ impl EvidenceDecisionContext {
             }
             return Ok(None);
         }
-        if self.catalog_state != "AVAILABLE" {
+        if context.catalog_state != "AVAILABLE" {
             return InvalidSnafu {
                 reason: "present decision catalog has an invalid state",
             }
             .fail();
         }
-        let catalog: EvidenceDecisionCatalogV1 = serde_json::from_slice(&self.catalog_json)
+        let catalog: EvidenceDecisionCatalogV1 = serde_json::from_slice(&context.catalog_json)
             .map_err(|_| {
                 InvalidSnafu {
                     reason: "decision catalog encoding is invalid",
@@ -301,16 +299,17 @@ impl EvidenceDecisionContext {
                 .policy_document_digest
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            || catalog.profile_generation_ref_id != self.profile_generation_ref_id
-            || catalog.exact_file_object.profile_generation_ref_id != self.profile_generation_ref_id
+            || catalog.profile_generation_ref_id != context.profile_generation_ref_id
+            || catalog.exact_file_object.profile_generation_ref_id
+                != context.profile_generation_ref_id
             || catalog.binding_id.is_zero()
-            || catalog.binding_id.to_be_bytes().as_slice() != self.binding_id
-            || catalog.role_id != self.role_id
-            || catalog.state_id != self.state_id
-            || catalog.entry_rule_id != self.entry_rule_id
-            || self.exact_file_object.as_ref() != Some(&catalog.exact_file_object)
-            || catalog.exact_object_key_id != self.exact_object_key_id
-            || catalog.composite_atom_id != self.composite_atom_id
+            || catalog.binding_id.to_be_bytes().as_slice() != context.binding_id
+            || catalog.role_id != context.role_id
+            || catalog.state_id != context.state_id
+            || catalog.entry_rule_id != context.entry_rule_id
+            || context.exact_file_object.as_ref() != Some(&catalog.exact_file_object)
+            || catalog.exact_object_key_id != context.exact_object_key_id
+            || catalog.composite_atom_id != context.composite_atom_id
         {
             return InvalidSnafu {
                 reason: "decision catalog digest or coordinates differ",
@@ -319,14 +318,19 @@ impl EvidenceDecisionContext {
         }
         Ok(Some(catalog))
     }
+}
 
-    fn validate_for(&self, observation: &ObservationEnvelopeV1) -> EvidenceModelResult<()> {
-        if self.schema_version != 1
-            || self.original_kernel_sequence == 0
-            || self.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES
-            || self.profile_generation_ref_id
-                != observation.profile_generation_ref_id.unwrap_or_default()
-            || self.composite_atom_id != observation.effect.policy_rule_id.unwrap_or_default()
+impl ObservationEnvelopeV1 {
+    fn validate_context(&self) -> EvidenceModelResult<()> {
+        let Some(context) = &self.decision_context else {
+            return Ok(());
+        };
+        if context.schema_version != 1
+            || context.original_kernel_sequence == 0
+            || context.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES
+            || context.profile_generation_ref_id
+                != self.profile_generation_ref_id.unwrap_or_default()
+            || context.composite_atom_id != self.effect.policy_rule_id.unwrap_or_default()
         {
             return InvalidSnafu {
                 reason: "decision context version, size, sequence, or base coordinates differ",
@@ -334,22 +338,24 @@ impl EvidenceDecisionContext {
             .fail();
         }
         for (bytes, name) in [
-            (&self.process_instance_id, "process instance"),
-            (&self.entry_instance_id, "entry instance"),
-            (&self.binding_id, "binding"),
+            (&context.process_instance_id, "process instance"),
+            (&context.entry_instance_id, "entry instance"),
+            (&context.binding_id, "binding"),
         ] {
             optional_id(bytes, name)?;
         }
-        match (&self.exact_file_object, observation.effect.exact_object_id) {
-            (Some(object), Some(expected)) if self.exact_object_key_id != 0 => {
-                if object.observation_id(self.exact_object_key_id) != expected {
+        match (&context.exact_file_object, self.effect.exact_object_id) {
+            (Some(object), Some(expected)) if context.exact_object_key_id != 0 => {
+                if EvidenceFileObjectV1::from(object).observation_id(context.exact_object_key_id)
+                    != expected
+                {
                     return InvalidSnafu {
                         reason: "decision context exact object differs from the base observation",
                     }
                     .fail();
                 }
             }
-            (None, None) if self.exact_object_key_id == 0 => {}
+            (None, None) if context.exact_object_key_id == 0 => {}
             _ => {
                 return InvalidSnafu {
                     reason: "decision context exact object or handle is absent",
@@ -357,7 +363,7 @@ impl EvidenceDecisionContext {
                 .fail();
             }
         }
-        if let Some(catalog) = self.catalog()? {
+        if let Some(catalog) = EvidenceDecisionCatalogV1::from_context(context)? {
             let operation =
                 crate::CompiledOperationV1::try_from(catalog.static_key.operation_id.as_str())
                     .map_err(|_| {
@@ -366,13 +372,12 @@ impl EvidenceDecisionContext {
                         }
                         .build()
                     })?;
-            if catalog.node_boot_id != observation.node_boot_id
+            if catalog.node_boot_id != self.node_boot_id
                 || KernelEffectFamilyV1::from(catalog.static_key.effect_family) as u16
-                    != observation.effect.effect_family
-                || operation.kernel_id as u16 != observation.effect.operation
+                    != self.effect.effect_family
+                || operation.kernel_id as u16 != self.effect.operation
                 || (!operation.argument_wildcard
-                    && operation.argument
-                        != observation.effect.operation_argument.unwrap_or_default())
+                    && operation.argument != self.effect.operation_argument.unwrap_or_default())
             {
                 return InvalidSnafu {
                     reason: "decision catalog effect differs from the base observation",
@@ -384,8 +389,30 @@ impl EvidenceDecisionContext {
     }
 }
 
-impl From<erebor_interceptor_abi::ExactFileObjectKeyV1> for EvidenceExactFileObject {
+pub struct EvidenceFileObjectV1(erebor_interceptor_abi::ExactFileObjectKeyV1);
+
+impl From<erebor_interceptor_abi::ExactFileObjectKeyV1> for EvidenceFileObjectV1 {
     fn from(raw: erebor_interceptor_abi::ExactFileObjectKeyV1) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<&EvidenceExactFileObject> for EvidenceFileObjectV1 {
+    fn from(object: &EvidenceExactFileObject) -> Self {
+        Self(erebor_interceptor_abi::ExactFileObjectKeyV1 {
+            profile_generation_ref_id: object.profile_generation_ref_id,
+            mount_id_unique: object.mount_id_unique,
+            inode: object.inode,
+            inode_generation: object.inode_generation,
+            mount_namespace_inode: object.mount_namespace_inode,
+            filesystem_device: object.filesystem_device,
+        })
+    }
+}
+
+impl From<EvidenceFileObjectV1> for EvidenceExactFileObject {
+    fn from(object: EvidenceFileObjectV1) -> Self {
+        let raw = object.0;
         Self {
             profile_generation_ref_id: raw.profile_generation_ref_id,
             mount_id_unique: raw.mount_id_unique,
@@ -397,20 +424,12 @@ impl From<erebor_interceptor_abi::ExactFileObjectKeyV1> for EvidenceExactFileObj
     }
 }
 
-impl EvidenceExactFileObject {
+impl EvidenceFileObjectV1 {
     pub fn observation_id(&self, handle: u64) -> EvidenceIdV1 {
         use zerocopy::IntoBytes as _;
-        let raw = erebor_interceptor_abi::ExactFileObjectKeyV1 {
-            profile_generation_ref_id: self.profile_generation_ref_id,
-            mount_id_unique: self.mount_id_unique,
-            inode: self.inode,
-            inode_generation: self.inode_generation,
-            mount_namespace_inode: self.mount_namespace_inode,
-            filesystem_device: self.filesystem_device,
-        };
         let mut digest = Sha256::new();
         digest.update(b"MITHRIL-EXACT-OBJECT-V1\0");
-        digest.update(raw.as_bytes());
+        digest.update(self.0.as_bytes());
         digest.update(handle.to_be_bytes());
         EvidenceDigestV1::from(digest.finalize()).into()
     }
@@ -485,9 +504,7 @@ impl ObservationEnvelopeV1 {
             }
             .fail();
         }
-        if let Some(context) = &self.decision_context {
-            context.validate_for(self)?;
-        }
+        self.validate_context()?;
         Ok(())
     }
 

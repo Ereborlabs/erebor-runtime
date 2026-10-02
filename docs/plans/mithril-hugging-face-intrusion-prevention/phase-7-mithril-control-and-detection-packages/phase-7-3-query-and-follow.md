@@ -221,5 +221,26 @@ remains required after the last implementation edit.
 CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 cargo test -p araphor-data analysis_extract_ -- --nocapture
 ```
 
-Next: shared evidence definitions and bounded decoding. Position reads,
-QueryOwner, follow, replay floors, windows, and `query-follow` remain Not done.
+Shared evidence definitions and bounded decoding are **Done**. `araphor-data`
+generates the shared protobuf types. Control, Node and qualification callers
+use those types. Control retains authentication and semantic validation.
+The decoder checks frame length, CRC32C and protobuf bounds. Exact-frame
+conversion rejects trailing bytes. Unknown protobuf values remain unchanged.
+
+The focused data command below passed 7 tests. Four tests check decoding,
+size boundaries, invalid frames and shared byte ownership. Three tests check
+the position-reader work that follows this deliverable. The contract command
+passed 3 tests, including exact protobuf fields and shared Rust type identity.
+The contract build compiled the production Control, Node and e2e callers.
+Caller library-test filters remain pending; their native dependency build is
+in progress. No performance case ran.
+
+Use the six environment settings from the locking command for these commands:
+
+```sh
+cargo test -p araphor-data query_input_ -- --nocapture
+cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --test contract
+```
+
+Next: commit the verified position reader, then complete QueryOwner, follow,
+replay floors, windows, and `query-follow`. Overall status remains **Not done**.

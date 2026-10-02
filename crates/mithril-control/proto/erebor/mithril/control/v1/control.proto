@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package erebor.mithril.control.v1;
 
+import "erebor/mithril/control/v1/evidence.proto";
+
 service NodeRegistry {
   rpc Register(NodeRegistrationRequest) returns (RegistrationAccepted);
   rpc ReportReadiness(NodeReadinessRequest) returns (RegistrationAccepted);
@@ -206,68 +208,6 @@ message NodeReadinessReport {
   bool admission_ready = 3;
 }
 
-message EvidenceRecord {
-  uint64 observed_boottime_ns = 1;
-  sint64 ingested_utc_ns = 2;
-  bytes coverage_interval_id = 3;
-  optional uint64 profile_generation_ref_id = 4;
-  uint64 task_cookie = 5;
-  bytes process_lineage_id = 6;
-  bytes authority_domain_id = 7;
-  bytes execution_set_id = 8;
-  bytes exact_object_id = 9;
-  uint64 destination_id = 10;
-  uint64 policy_rule_id = 11;
-  uint32 reason = 12;
-  uint32 decision = 13;
-  uint32 effect_family = 14;
-  uint32 operation = 15;
-  sint32 configured_errno = 16;
-  sint32 kernel_result = 17;
-  EvidenceTemporalCoverage temporal_coverage = 18;
-  optional uint64 target_task_cookie = 19;
-  optional uint32 operation_argument = 20;
-  optional EvidenceDecisionContext decision_context = 21;
-}
-
-// Records kernel coordinates. These fields do not grant policy authority.
-message EvidenceDecisionContext {
-  uint32 schema_version = 1;
-  uint64 original_kernel_sequence = 2;
-  bytes process_instance_id = 3;
-  bytes entry_instance_id = 4;
-  bytes binding_id = 5;
-  uint64 profile_generation_ref_id = 6;
-  uint32 role_id = 7;
-  uint32 state_id = 8;
-  uint32 entry_rule_id = 9;
-  optional EvidenceExactFileObject exact_file_object = 10;
-  uint64 exact_object_key_id = 11;
-  uint64 composite_atom_id = 12;
-  bytes catalog_json = 13;
-  string catalog_state = 14;
-}
-
-message EvidenceExactFileObject {
-  uint64 profile_generation_ref_id = 1;
-  uint64 mount_id_unique = 2;
-  uint64 inode = 3;
-  uint64 inode_generation = 4;
-  uint32 mount_namespace_inode = 5;
-  uint32 filesystem_device = 6;
-}
-
-enum EvidenceTemporalCoverage {
-  EVIDENCE_TEMPORAL_COVERAGE_UNKNOWN = 0;
-  EVIDENCE_TEMPORAL_COVERAGE_COMPLETE = 1;
-  EVIDENCE_TEMPORAL_COVERAGE_GAPPED = 2;
-}
-
-// Stores only record bytes. Its segment reference owns stream identity and cursor bounds.
-message EvidenceRecords {
-  repeated EvidenceRecord records = 1;
-}
-
 message EvidenceBatch {
   bytes node_boot_id = 1;
   bytes source_id = 2;
@@ -281,38 +221,6 @@ message EvidenceBatch {
 // Advances the Node truncation marker through one durable contiguous range.
 message EvidenceAck {
   uint64 contiguous_cursor = 1;
-}
-
-message CoverageCounters {
-  uint64 attempted = 1;
-  uint64 suppressed = 2;
-  uint64 requested = 3;
-  uint64 emitted = 4;
-  uint64 lost = 5;
-  uint64 classifier_miss_count = 6;
-  uint64 unresolved = 7;
-  uint64 next_sequence = 8;
-}
-
-message CoverageInterval {
-  bytes interval_id = 1;
-  uint64 source_epoch = 2;
-  uint64 revision = 3;
-  string state = 4;
-  uint64 first_sequence = 5;
-  optional uint64 last_sequence = 6;
-  CoverageCounters opening_counters = 7;
-  optional CoverageCounters closing_counters = 8;
-  repeated string gap_reasons = 9;
-  bool current = 10;
-}
-
-message CoverageReport {
-  bytes source_id = 1;
-  uint32 cpu_id = 2;
-  uint64 source_epoch = 3;
-  uint64 revision = 4;
-  repeated CoverageInterval intervals = 5;
 }
 
 message CoverageAck {}

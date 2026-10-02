@@ -129,6 +129,7 @@ dependencies = [
  "crc32c",
  "duckdb",
  "prost",
+ "prost-build",
  "rustix 1.1.4",
  "serde",
  "serde_json",

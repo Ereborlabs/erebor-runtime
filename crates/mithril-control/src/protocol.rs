@@ -1,5 +1,10 @@
 tonic::include_proto!("erebor.mithril.control.v1");
 
+pub use araphor_data::{
+    CoverageCounters, CoverageInterval, CoverageReport, EvidenceDecisionContext,
+    EvidenceExactFileObject, EvidenceRecord, EvidenceRecords, EvidenceTemporalCoverage,
+};
+
 pub const FILE_DESCRIPTOR_SET: &[u8] =
     tonic::include_file_descriptor_set!("erebor.mithril.control.v1");
 
