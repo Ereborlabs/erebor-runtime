@@ -138,6 +138,8 @@ mod tun;
 #[cfg(test)]
 mod udp;
 #[cfg(test)]
+mod unix_observe;
+#[cfg(test)]
 mod unix_stream;
 
 use std::collections::{BTreeMap, BTreeSet};
