@@ -79,7 +79,7 @@ impl FixtureBindMounts {
         Ok(())
     }
 
-    fn target(&self, target: &Path) -> Result<OwnedFd> {
+    pub(crate) fn target(&self, target: &Path) -> Result<OwnedFd> {
         let (_, root) = self.namespace.as_ref().ok_or_else(|| {
             InvalidInputSnafu {
                 path: target,

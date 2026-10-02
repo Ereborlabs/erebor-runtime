@@ -3660,6 +3660,12 @@ test does not close a row when its physical condition or an assertion changed.
     Direct runc passes both modes in 49.52 seconds with the same actor,
     policies, and 86-line test. Pin, output, lease, and cgroup cleanup pass.
     Strict Clippy passes after platform registration.
+    Kubernetes exposed late namespace and root access from outside Node's
+    controller cgroup. Lightweight outside-Node observers reproduce both
+    `EACCES` results. Hold both handles before Node starts and use the held
+    root for inode checks. The unchanged security assertions pass on Host in
+    49.07 seconds and runc in 55.81 seconds. The test has 89 lines. Privileged
+    mount cleanup and strict Clippy pass. Kubernetes remains open.
   - [x] Replace the two pre-protection passed-descriptor reads with
     `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
     exact-file policy. A child passes each descriptor through `SCM_RIGHTS`
