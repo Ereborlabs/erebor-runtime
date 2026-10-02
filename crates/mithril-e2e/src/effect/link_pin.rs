@@ -13,40 +13,46 @@ fn link_pin_removal_is_denied<P: Platform>() -> TestResult<()> {
     let source: Policy =
         serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
     let labels = source.spec.pod_selector.match_labels;
-    for policy in ["python_policy.json", "exec_observe_policy.json"] {
-        let mut env = P::setup("link-pin")?;
-        env.start_control()?;
-        env.stop_node()?;
-        fs::create_dir(env.work().join("protected"))?;
-        let mut init = env.start_actor("ready.py", &[], &labels)?;
-        env.place(init.id())?;
-        let mut actor = env.add_actor(
-            "python",
-            &[
-                "/fixtures/file_mutation.py",
-                "/work",
-                "unlink",
-                "/work/protected/erebor_identity_file_open",
-            ],
-        )?;
+    let mut env = P::setup("link-pin")?;
+    env.start_control()?;
+    env.start_node()?;
+    fs::create_dir(env.work().join("protected"))?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
+    env.place(init.id())?;
+    let args = [
+        "/fixtures/file_mutation.py",
+        "/work",
+        "unlink",
+        "/work/protected/erebor_identity_file_open",
+    ];
+    let mut actors = Vec::new();
+    for _ in 0..2 {
+        let mut actor = env.add_actor("python", &args)?;
         actor.ready()?;
-        let pid = actor.id();
-        env.place(pid)?;
+        env.place(actor.id())?;
+        actors.push(actor);
+    }
+    let mut mounts = FixtureBindMounts::in_actor(init.id())?;
+    let links = env.maps().0.join("links");
+    let pin = links.join("erebor_identity_file_open");
+    let original = fs::metadata(&pin)?;
+    mounts.bind(&links, Path::new("/work/protected"))?;
+    let target = Path::new("/work/protected/erebor_identity_file_open");
+    let mounted = fs::File::from(mounts.target(target)?).metadata()?;
+    assert_eq!(mounted.dev(), original.dev());
+    assert_eq!(mounted.ino(), original.ino());
+    env.install_policy("python_policy.json")?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(init.id())?;
+    env.recovered(init.id(), "link removal workload")?;
+    for (mut actor, policy) in actors
+        .into_iter()
+        .zip(["python_policy.json", "exec_observe_policy.json"])
+    {
         env.install_policy(policy)?;
-        env.start_node()?;
-        env.sync_policy()?;
         env.node_ready()?;
-        env.running(init.id())?;
-        env.recovered(init.id(), "link removal workload")?;
-        let links = env.maps().0.join("links");
-        let pin = links.join("erebor_identity_file_open");
-        let original = fs::metadata(&pin)?;
-        let mut mounts = FixtureBindMounts::in_actor(pid)?;
-        mounts.bind(&links, Path::new("/work/protected"))?;
-        let target = format!("/proc/{pid}/root/work/protected/erebor_identity_file_open");
-        let mounted = fs::metadata(&target)?;
-        assert_eq!(mounted.dev(), original.dev());
-        assert_eq!(mounted.ino(), original.ino());
+        let pid = actor.id();
         let task = env.task(pid, "link removal actor")?;
         assert_eq!(
             task.snapshot.root_class.as_deref(),
@@ -73,14 +79,15 @@ fn link_pin_removal_is_denied<P: Platform>() -> TestResult<()> {
         assert_eq!(denied.exact_object_key_id, 0);
         assert_eq!(denied.composite_atom_id, 0);
         assert_eq!(fs::metadata(&pin)?.ino(), original.ino());
-        assert_eq!(fs::metadata(&target)?.ino(), original.ino());
-
-        mounts.cleanup()?;
+        assert_eq!(
+            fs::File::from(mounts.target(target)?).metadata()?.ino(),
+            original.ino()
+        );
         actor.send(b"release\n")?;
         actor.wait_gone(pid, "link removal actor exit")?;
         actor.stop()?;
-        init.stop()?;
-        env.stop()?;
     }
-    Ok(())
+    mounts.cleanup()?;
+    init.stop()?;
+    env.stop()
 }
