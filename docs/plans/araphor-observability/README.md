@@ -396,10 +396,11 @@ or streaming contracts. Each phase records its test results and an explicit comp
 result in that phase.
 No separate gap-review document is required.
 
-Phase 1 is **Not done** after review of two physical pass conditions at source
-`74c81c39`. Read its [result](phase-1-contracts-and-backend.md#implementation-result)
-for the partial-attach and unsupported-hook gaps. Phase 2 starts after their
-correction and physical proof. Shared storage and production enablement remain open.
+Phase 1 is **Done** at source `8e752bdb`. Read its
+[corrected result](phase-1-contracts-and-backend.md#corrected-backend-proof)
+for direct partial-attach and missing-hook proof, paired lightweight and
+physical runs, and full workspace checks. Phase 2 can start. Shared storage
+and production enablement remain open.
 
 The initial recipe set is syscall errors and failed file opens. Connection
 outcomes and latency follow only with explicit asynchronous/entry-return

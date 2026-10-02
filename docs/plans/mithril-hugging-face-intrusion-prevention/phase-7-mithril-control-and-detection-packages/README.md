@@ -156,10 +156,10 @@ passed. Read its [final result](phase-7-3-query-and-follow.md#additional-correct
 for commands, counts, and proof limits. Public SQL and process isolation still
 belong to Observability 3. This closure does not start another phase.
 
-Observability 1 is **Not done** after review of two physical pass conditions
-at source `74c81c39`. Its [result](../../araphor-observability/phase-1-contracts-and-backend.md#implementation-result)
-records the partial-attach and unsupported-hook gaps. Correct and qualify
-these checks before Observability 2. No later phase has started.
+Observability 1 is **Done** at source `8e752bdb`. Its
+[corrected result](../../araphor-observability/phase-1-contracts-and-backend.md#corrected-backend-proof)
+records direct partial-attach and missing-hook proof, paired lightweight and
+physical runs, and full workspace checks. Observability 2 can start.
 Production enablement still requires capture integration and interference proof.
 
 Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 →

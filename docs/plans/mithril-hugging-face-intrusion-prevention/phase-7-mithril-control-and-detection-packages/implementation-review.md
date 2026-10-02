@@ -1816,6 +1816,14 @@ reviewed recipes require observed capacity at or below 4,096 keys. Global
 snapshots record link IDs even when the backend uses perf-event attachment
 and creates no BPF link. An empty link set is not evidence of no attachment.
 
+The partial-attach verifier requires a child-owned perf-event program named
+`10` with a positive execution count. The pinned fixture attaches that interval
+before the failing kprobe. The counter proves execution before cleanup;
+the pinned attachment order proves attachment before failure. Loaded IDs alone
+fail `observability_backend_partial_proof`. The unsupported-hook fixture uses
+a missing raw tracepoint and requires its exact missing-probe error.
+`observability_backend_hook_rejection` rejects permission and read-only errors.
+
 `parent_fixture` publishes its readiness record only after the exact marker.
 `parent_death` requires that record and a live diagnostic program before it
 kills the parent. It checks program/map/link removal and the unchanged
@@ -1828,14 +1836,13 @@ notices and referenced common licenses. A missing dependency notice stops
 qualification. `provenance-id.sha256` identifies this recorded dependency set;
 it is not a container-image digest.
 
-At source `74c81c39`, focused checks, the final lightweight command and paired
-physical commands exited successfully. The final workspace procedure also
-exited 0. Later review found two insufficient physical pass conditions:
-partial-attach counts loaded programs, and unsupported-hook accepts a generic
-error caused by a read-only filesystem. Backend qualification is **Not done**
-until both conditions have direct proof. Read the
-[backend result](../../araphor-observability/phase-1-contracts-and-backend.md#implementation-result)
-for current commands, receipts and proof limits.
+Source `8e752bdb` corrects two insufficient pass conditions in `74c81c39`.
+Both regression cases failed before the fix and passed afterward. The corrected
+lightweight run, sixteen physical cases, missing-BTF preflight, parent death,
+and full workspace procedure passed. Backend qualification is **Done**.
+Read the [corrected result](../../araphor-observability/phase-1-contracts-and-backend.md#corrected-backend-proof)
+for commands, exact receipts and proof limits. This result does not qualify
+owned capture or production enablement.
 
 ### Owned capture
 
@@ -2299,9 +2306,9 @@ Its shared-host interference run
 measured intake p95 +16.9% and rollout p95 +7.7%. The owner remains disabled by
 default. The result is not a no-interference guarantee.
 
-The [backend result](../../araphor-observability/phase-1-contracts-and-backend.md#final-backend-proof)
+The [backend result](../../araphor-observability/phase-1-contracts-and-backend.md#corrected-backend-proof)
 records the current 16 physical cases, missing-BTF host preflight, and
-parent-death cleanup at source `74c81c39`. The earlier owned-capture measurements
+parent-death cleanup at source `8e752bdb`. The earlier owned-capture measurements
 do not qualify the shared storage contract. The
 [owned-capture plan](../../araphor-observability/phase-2-owned-capture.md)
 keeps that integration and its physical proof open. Zero measured loss deltas

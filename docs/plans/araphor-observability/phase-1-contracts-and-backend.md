@@ -30,10 +30,12 @@ Caller submits source for a read-only check
   -> check does not invoke bpftrace --dry-run or claim an attachment proof
 ```
 
-Status: **Not done**. The partial-attach and unsupported-hook checks need
-stronger proof. Do not start owned capture until both checks pass on the
-implementing revision. Production enablement also requires the later
-lifecycle, interference, and shared-recovery gates.
+Status: **Done** for backend qualification at source `8e752bdb`.
+The corrected partial-attach and unsupported-hook checks have direct physical
+proof, and the full workspace procedure passed after the final code edit.
+Read [Corrected backend proof](#corrected-backend-proof).
+Production enablement also requires the later lifecycle, interference, and
+shared-recovery gates.
 
 ### Current implementation work
 
@@ -132,12 +134,12 @@ A successful compiler run or process spawn does not prove attachment coverage.
 
 ## Implementation result
 
-Status: **Not done** after review of source `74c81c39`. The commands below
+Review of source `74c81c39` reopened this result. The commands below
 exited successfully, but two physical pass conditions were insufficient.
 The partial-attach check counted loaded programs without proving attachment.
 The unsupported-hook receipt also contains a read-only-filesystem error.
 These receipts prove resource cleanup, not the two required failure cases.
-No later phase has started.
+The corrected proof follows the earlier record below.
 
 - `0706cffb` adds the feature-gated process-double entry and capture-mode
   component proof. Real execution retains digest checks, checked-inode exec,
@@ -154,9 +156,9 @@ No later phase has started.
   misses those IDs. Its focused regression passed. Duplicate verifier checks
   were removed after Ponytail review.
 - `74c81c39` retains dependency versions, notices, common-license texts and
-  hashed provenance. The first physical run passed all sixteen backend cases,
-  missing-BTF host preflight, and parent-death cleanup. The final run repeats
-  that proof with the stricter compiler-only verifier.
+  hashed provenance. Both physical runners exited 0. Review later rejected
+  their partial-attach and unsupported-hook pass conditions. The receipts
+  retain valid cleanup and compiler-only evidence.
 
 The initial lightweight histogram fixture emitted invalid JSON because of
 shell quoting. The fixture now uses a raw Rust string. One build attempt ran
@@ -187,15 +189,16 @@ Ignored tests are not passes. The backend subprocess helpers run through their
 parent tests. The separate physical command below supplies backend kernel
 proof; the workspace procedure alone does not supply that proof.
 
-### Final backend proof
+### Earlier backend receipts
 
 The final binary passed `backend-lifecycle` before the physical run. Its receipt
 is `lightweight-final/result.json`: twelve scenarios and a separate parent-death
 check. The receipt states `physical: false`. It uses the production supervisor
 but cannot prove BPF attachment or kernel cleanup.
 
-The paired physical run passed all sixteen cases, missing-BTF host preflight,
-and parent-death cleanup. Its receipts are under `physical-final/`; the command
+The paired physical runner exited 0, including missing-BTF host preflight
+and parent-death cleanup. This exit does not close the two rejected pass
+conditions. Its receipts are under `physical-final/`; the command
 log is `physical-final.log`. The owned guest is
 `mithril-runtime-qualification-202610012201`, UUID
 `140989e4-293d-41c7-9f69-8e68bdfef868`. The qualified platform is Ubuntu x86_64,
@@ -242,11 +245,79 @@ binding, Node boot, CRI container identity and cgroup lifetime. Missing or
 unbound target identity remains Unsupported. No PID-only target or fabricated
 policy was added.
 
-This result does not close backend qualification until the two checks above
-have direct physical proof on the corrected source.
+The earlier receipts do not close the two rejected pass conditions.
 It does not qualify diagnostic/enforcement interference, acceptable production
 overhead, Pod replacement, shared trace storage, public APIs, or a script
 sandbox. RSS, map memory and kernel runtime counters are recorded observations,
 not a performance guarantee. No new performance experiment ran. Diagnostics
 remain disabled by default; production enablement retains the later lifecycle,
 interference and shared-recovery gates.
+
+### Corrected backend proof
+
+Source `8e752bdb` corrects both pass conditions. The partial-attach verifier
+requires a child-owned `BPF_PROG_TYPE_PERF_EVENT` program named `10` with a
+positive execution count. The pinned bpftrace fixture attaches this interval
+before it attempts the failing kprobe. Loaded IDs alone do not pass.
+The execution count proves that the interval ran before cleanup; attachment
+order proves that its attachment preceded the later failure.
+
+The unsupported-hook fixture uses a missing raw tracepoint. Its verifier
+requires the exact `Probe does not exist` error. Permission and read-only
+filesystem errors fail this check. The partial-attach case can use a read-only
+failure for its second attachment; that case does not claim missing-hook proof.
+
+`observability_backend_partial_proof` and
+`observability_backend_hook_rejection` rejected the old false-positive
+outcomes. Both tests failed before the fix. After the fix, the focused suite
+passed ten end-to-end/verifier tests and two Control tests. One subprocess
+helper remains ignored as a top-level test.
+
+Logs and receipts use `/tmp/araphor-capture-qualification.E0VU3eEo/`:
+
+- `regression-red.log` records the two expected regression failures.
+- `regression-green-2.log` records the focused pass.
+- `lightweight/result.json` records twelve lifecycle cases and parent death.
+  This run passed before the physical run and states `physical: false`.
+- `physical/cases/` records sixteen physical cases, missing-BTF preflight and
+  parent death. All sixteen cases verified cleanup and unchanged enforcement
+  resources. In `partial-attach.json`, child-owned program 133 has type 7,
+  name `10`, and 17 executions. `unsupported-hook.json` contains the exact
+  missing-raw-tracepoint error without a permission or filesystem error.
+- `workspace.log` records the full workspace procedure, which exited 0 after
+  the final code edit. Formatting, workspace check, Clippy with warnings denied,
+  and workspace tests passed. Related library counts are: data 141 passed and
+  5 ignored; Interceptor 39 passed and 1 ignored; Control 176 passed and
+  2 ignored; end-to-end 132 passed and 407 ignored; Node 266 passed and
+  1 ignored. No test failed. Ignored tests are not passes.
+
+The new owned guest is `mithril-runtime-qualification-20261002163710`, UUID
+`fb6a3ee1-b6b0-4f57-82e6-834bf8629d1c`. It uses Ubuntu 24.04.5 x86_64, kernel
+`6.8.0-142-generic`, and bpftrace package `0.20.2-1ubuntu4.3`.
+The earlier guest was in use by another task and was not changed.
+
+The qualification binary SHA-256 is
+`a7ff912a194d364cd887502b7c9c7a260288af62929d639c61e2c6ad2ff0f470`.
+The bpftrace and BTF hashes match the table above. The new provenance manifest
+SHA-256 is `b2c3fd68915b358b55e196ba7219807315c653c87284877151491bf7ee09999c`.
+`sha256sum --check provenance.sha256` passed for every copied input.
+
+Use the same six build settings listed above. The corrected commands were:
+
+```sh
+cargo test --locked -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib observability_backend_ -- --nocapture
+cargo build --locked -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --bin mithril-observability-test
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/mithril-observability-test --case backend-lifecycle --output-directory /tmp/araphor-capture-qualification.E0VU3eEo/lightweight
+bash .github/scripts/verify-rust-ci.sh
+```
+
+The physical command ran through SSH in the new owned guest:
+
+```sh
+sudo -n bash /mnt/mithril-source/worktrees/mithril-ui/crates/mithril-e2e/harness/observability/guest.sh /mnt/mithril-source/target/debug/mithril-observability-test /tmp/araphor-observability-gate-20261002
+```
+
+No supervisor isolation or enforcement resource rule changed. Missing
+readiness and unsampled resource values remain Unknown. These results do not
+qualify shared trace storage, physical target replacement, interference or
+production enablement. No performance experiment ran.
