@@ -176,10 +176,10 @@ use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
 use self::child::{EffectProcessFixture, HardClosedOperation};
 use self::support::{
-    effect_binding, effect_node_config, effect_peer_binding, effect_propagation_binding,
-    global_mount_mutation_epoch, health_delta, inode_generation, mount_view_is_dirty,
-    ready_canonical_mount_snapshots, sample_observation_health, wait_for_effect,
-    wait_for_exact_effect, wait_for_exact_io_uring_effect, wait_for_reason, ExternalMountNamespace,
+    effect_binding, effect_node_config, effect_peer_binding, global_mount_mutation_epoch,
+    health_delta, inode_generation, mount_view_is_dirty, ready_canonical_mount_snapshots,
+    sample_observation_health, wait_for_effect, wait_for_exact_effect,
+    wait_for_exact_io_uring_effect, wait_for_reason, ExternalMountNamespace,
 };
 use crate::capability::{BpfPrototypeCompiler, CompileRecordV1};
 use crate::error::{
@@ -520,9 +520,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_lifecycle_released: bool,
     pub path_tree_outside_control_allowed: bool,
     pub mount_snapshot_rebuilt_after_mutation: bool,
-    pub mount_propagation_reached_peer: bool,
-    pub mount_propagation_all_views_rebuilt: bool,
-    pub mount_propagation_unmount_rebuilt: bool,
     pub external_mount_replacement_failed_closed: bool,
     pub exact_object_restored_after_mount_removal: bool,
     pub active_generation_published: bool,
@@ -1087,26 +1084,10 @@ impl EffectTestRunner {
             name.push("-peer");
             name
         });
-        let propagation_cgroup_path = cgroup_path.with_file_name({
-            let mut name = cgroup_path
-                .file_name()
-                .ok_or_else(|| {
-                    InvalidInputSnafu {
-                        path: cgroup_path,
-                        reason: "effect-test cgroup path has no final component",
-                    }
-                    .build()
-                })?
-                .to_os_string();
-            name.push("-propagation");
-            name
-        });
         let cgroup_cleanup = ProbeCgroup::create(cgroup_path)?;
         let cgroup_path = cgroup_cleanup.path().to_path_buf();
         let peer_cgroup_cleanup = ProbeCgroup::create(&peer_cgroup_path)?;
         let peer_cgroup_path = peer_cgroup_cleanup.path().to_path_buf();
-        let propagation_cgroup_cleanup = ProbeCgroup::create(&propagation_cgroup_path)?;
-        let propagation_cgroup_path = propagation_cgroup_cleanup.path().to_path_buf();
 
         let repo_root = fs::canonicalize(&self.repo_root).context(IoSnafu {
             path: &self.repo_root,
@@ -1174,12 +1155,7 @@ impl EffectTestRunner {
             .context(InterceptorSnafu)?;
         let binding = effect_binding(&cgroup_path);
         let peer_binding = effect_peer_binding(&peer_cgroup_path);
-        let propagation_binding = effect_propagation_binding(&propagation_cgroup_path);
-        let binding_set = [
-            binding.clone(),
-            peer_binding.clone(),
-            propagation_binding.clone(),
-        ];
+        let binding_set = [binding.clone(), peer_binding.clone()];
         let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         bindings
             .publish_all(&host, &binding_set)
@@ -1221,7 +1197,6 @@ impl EffectTestRunner {
         fs::write(&path_tree_preexisting, b"restricted before activation\n").context(IoSnafu {
             path: &path_tree_preexisting,
         })?;
-        let propagation_peer_pid = fixture.prepare_propagation_peer(&paths)?;
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
         fixture.prepare_operations(&paths)?;
@@ -1244,13 +1219,6 @@ impl EffectTestRunner {
         )
         .context(IoSnafu {
             path: peer_cgroup_path.join("cgroup.procs"),
-        })?;
-        fs::write(
-            propagation_cgroup_path.join("cgroup.procs"),
-            propagation_peer_pid.to_string(),
-        )
-        .context(IoSnafu {
-            path: propagation_cgroup_path.join("cgroup.procs"),
         })?;
         let baseline_samples = fixture.open_samples(&paths.secret, measured_opens)?;
         let baseline = baseline_samples.batch;
@@ -1299,44 +1267,7 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
-        let propagation_benign_object = ExactFileObjectResolver::resolve(
-            propagation_peer_pid,
-            &paths.benign,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-benign"),
-            "MANUAL_BENIGN".to_owned(),
-            inode_generation(propagation_peer_pid, &paths.benign)?,
-            None,
-        )
-        .context(NodeSnafu)?;
-        let propagation_secret_object = ExactFileObjectResolver::resolve(
-            propagation_peer_pid,
-            &paths.secret,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-secret"),
-            "MANUAL_SECRET".to_owned(),
-            inode_generation(propagation_peer_pid, &paths.secret)?,
-            None,
-        )
-        .context(NodeSnafu)?;
-        let propagation_allowed_bind_object = ExactFileObjectResolver::resolve(
-            propagation_peer_pid,
-            &allowed_bind_source_file,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
-            "MANUAL_BENIGN".to_owned(),
-            inode_generation(propagation_peer_pid, &allowed_bind_source_file)?,
-            None,
-        )
-        .context(NodeSnafu)?;
-        let mut exact_objects = vec![
-            exact_object.clone(),
-            benign_object,
-            allowed_bind_object,
-            propagation_secret_object,
-            propagation_benign_object,
-            propagation_allowed_bind_object,
-        ];
+        let mut exact_objects = vec![exact_object.clone(), benign_object, allowed_bind_object];
         if protect {
             exact_objects.push(
                 ExactFileObjectResolver::resolve(
@@ -1362,37 +1293,9 @@ impl EffectTestRunner {
                 )
                 .context(NodeSnafu)?,
             );
-            exact_objects.push(
-                ExactFileObjectResolver::resolve(
-                    propagation_peer_pid,
-                    Path::new("/dev/pts/ptmx"),
-                    PROFILE_GENERATION_REF_ID,
-                    PathSelectorV1::kernel_handle_for_id("manual-device-ptmx"),
-                    "MANUAL_DEVICE_ALLOWED".to_owned(),
-                    0,
-                    Some("PTMX_DEVICE".to_owned()),
-                )
-                .context(NodeSnafu)?,
-            );
-            exact_objects.push(
-                ExactFileObjectResolver::resolve(
-                    propagation_peer_pid,
-                    Path::new("/dev/zero"),
-                    PROFILE_GENERATION_REF_ID,
-                    PathSelectorV1::kernel_handle_for_id("manual-device-zero"),
-                    "MANUAL_DEVICE_DENIED".to_owned(),
-                    0,
-                    Some("ZERO_DEVICE".to_owned()),
-                )
-                .context(NodeSnafu)?,
-            );
         }
         let mut test_exact_objects = Vec::with_capacity(exact_objects.len() * 2);
         for object in &exact_objects {
-            if object.mount_view_root_pid == propagation_peer_pid {
-                test_exact_objects.push((propagation_binding.binding_id.clone(), object.clone()));
-                continue;
-            }
             /* The application and peer bindings use the same live mount
              * namespace, so both consume the same measured object view. */
             test_exact_objects.push((binding.binding_id.clone(), object.clone()));
@@ -2086,64 +1989,6 @@ impl EffectTestRunner {
         external_mount_namespace.unmount(&path_tree_preexisting_bind_target)?;
         reconcile_policy_lifecycle(&policy, &mut host)?;
 
-        ensure!(
-            fixture.propagation_peer_open()?.allowed,
-            InvalidInputSnafu {
-                path: &paths.benign,
-                reason: "the propagation-peer benign control was denied before mutation",
-            }
-        );
-        let propagation_epoch = global_mount_mutation_epoch(&host)?;
-        let propagation_snapshots = ready_canonical_mount_snapshots(&host)?;
-        external_mount_namespace
-            .bind_mount(&paths.propagation_source, &paths.propagation_target)?;
-        ensure!(
-            fixture.propagation_peer_has_marker()?,
-            InvalidInputSnafu {
-                path: &paths.propagation_marker,
-                reason: "the shared mount did not propagate into the peer namespace",
-            }
-        );
-        ensure!(
-            global_mount_mutation_epoch(&host)? > propagation_epoch
-                && fixture.open(&paths.benign)?.allowed
-                && fixture.propagation_peer_open()?.allowed,
-            InvalidInputSnafu {
-                path: &paths.benign,
-                reason: "one represented namespace did not rebuild and allow the benign object after propagation",
-            }
-        );
-        ensure!(
-            ready_canonical_mount_snapshots(&host)?
-                .difference(&propagation_snapshots)
-                .count()
-                >= 2,
-            InvalidInputSnafu {
-                path: Path::new("canonical_mount_cache_states"),
-                reason: "propagation did not produce new BPF mount snapshots for both namespaces",
-            }
-        );
-        let propagated_snapshots = ready_canonical_mount_snapshots(&host)?;
-        external_mount_namespace.unmount(&paths.propagation_target)?;
-        ensure!(
-            !fixture.propagation_peer_has_marker()? && fixture.propagation_peer_open()?.allowed,
-            InvalidInputSnafu {
-                path: &paths.propagation_marker,
-                reason:
-                    "the peer did not rebuild and allow the benign object after propagated unmount",
-            }
-        );
-        ensure!(
-            ready_canonical_mount_snapshots(&host)?
-                .difference(&propagated_snapshots)
-                .next()
-                .is_some(),
-            InvalidInputSnafu {
-                path: Path::new("canonical_mount_cache_states"),
-                reason: "the peer reused an old BPF mount snapshot after propagated unmount",
-            }
-        );
-
         policy = policy
             .reload_and_install_for_test_objects(
                 &next_node_config,
@@ -2394,7 +2239,6 @@ impl EffectTestRunner {
         pin_cleanup.cleanup()?;
         lease_cleanup.cleanup()?;
         peer_cgroup_cleanup.cleanup()?;
-        propagation_cgroup_cleanup.cleanup()?;
         cgroup_cleanup.cleanup()?;
         fixture_cleanup.cleanup()?;
         ensure!(
@@ -2402,7 +2246,6 @@ impl EffectTestRunner {
                 && !lease_path.exists()
                 && !cgroup_path.exists()
                 && !peer_cgroup_path.exists()
-                && !propagation_cgroup_path.exists()
                 && !fixture_root.exists(),
             InvalidInputSnafu {
                 path: output_directory,
@@ -2438,9 +2281,6 @@ impl EffectTestRunner {
             io_uring_lifecycle_released,
             path_tree_outside_control_allowed: protect,
             mount_snapshot_rebuilt_after_mutation: true,
-            mount_propagation_reached_peer: true,
-            mount_propagation_all_views_rebuilt: true,
-            mount_propagation_unmount_rebuilt: true,
             external_mount_replacement_failed_closed: true,
             exact_object_restored_after_mount_removal: true,
             active_generation_published,

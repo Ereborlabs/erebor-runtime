@@ -3011,7 +3011,7 @@ test does not close a row when its physical condition or an assertion changed.
       [the cache reader](src/physical/mount_cache.rs). The actor owns its child
       pipes and normal child exit. `ProcessFixture` owns bounded readiness and
       fallback cleanup. The test keeps policy delivery and assertions visible.
-  - [ ] Replace successful mount propagation with
+  - [x] Replace successful mount propagation with
     `propagation_rebuilds_namespaces`. Compare with baseline `95775f48`.
     - [x] Extend the shared mount actor's existing child and pipe protocol.
       Mark the bind mount `MS_SHARED`, then fork and unshare the child's mount
@@ -3042,9 +3042,25 @@ test does not close a row when its physical condition or an assertion changed.
       in 120.19 seconds. Both modes used one real Control, Node, and runtime
       integration in retained K3s. Namespace, output, pin, lease, and cgroup
       cleanup passed. No platform, timeout, or production change was needed.
-    - [ ] Remove the old action, result fields, mailbox peer, and unused
+    - [x] Remove the old action, result fields, mailbox peer, and unused
       dedicated cgroup, binding, and object setup only after all three pass.
       Keep the separate mount-change exact-object checks.
+      Retirement removes 416 net Rust lines. The old fixture installed peer
+      secret and device objects during setup, but the peer performed no secret or ioctl
+      action. Main and Unix-peer exact objects and assertions stay. All 92
+      non-privileged library tests and the VM launcher checks pass.
+      The final repository Rust CI procedure passes after the last Rust edit.
+      This focused three-platform proof does not close the full physical
+      matrix gate. No Node, Control, BPF, or public production schema changed.
+    - Review [the shared test](src/effect/mount_propagation.rs).
+      -> [The actor](fixtures/process/mount_alias.py) marks the mount shared,
+      forks the namespace peer, and performs the external bind and unmount.
+      -> [The cache reader](src/physical/mount_cache.rs) checks the kernel
+      epoch and READY rows. [EffectCheck](src/effect/check.rs) checks fresh
+      production evidence for each reader.
+      -> [ProcessFixture](src/process.rs) stops both tracked tasks and the
+      helper. The actor checks normal child exit. The shared lifecycle retains
+      Control and Node between cases and removes their pins at command exit.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full

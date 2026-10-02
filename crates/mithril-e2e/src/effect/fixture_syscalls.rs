@@ -28,32 +28,6 @@ const IORING_OFF_SQ_RING: libc::off_t = 0;
 const IORING_OFF_CQ_RING: libc::off_t = 0x0800_0000;
 const IORING_OFF_SQES: libc::off_t = 0x1000_0000;
 
-pub(super) enum ForkResult {
-    Parent(libc::pid_t),
-    Child,
-}
-
-pub(super) fn fork_process() -> io::Result<ForkResult> {
-    // SAFETY: the caller uses the child only for a bounded fixture command loop.
-    let process = unsafe { libc::fork() };
-    if process < 0 {
-        Err(io::Error::last_os_error())
-    } else if process == 0 {
-        Ok(ForkResult::Child)
-    } else {
-        Ok(ForkResult::Parent(process))
-    }
-}
-
-pub(super) fn exit_process(code: libc::c_int) -> ! {
-    // SAFETY: this is called only in the isolated fork child.
-    unsafe { libc::_exit(code) }
-}
-
-pub(super) fn wait_process(process: libc::pid_t) -> io::Result<()> {
-    wait_child(process)
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct IoSqringOffsets {

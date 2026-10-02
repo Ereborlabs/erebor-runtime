@@ -96,16 +96,6 @@ pub(super) fn effect_peer_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
     )
 }
 
-pub(super) fn effect_propagation_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
-    effect_binding_with_identity(
-        cgroup_path,
-        "99999999-9999-4999-8999-999999999997",
-        'e',
-        "propagation-peer",
-        false,
-    )
-}
-
 pub(super) fn effect_binding_with_identity(
     cgroup_path: &Path,
     binding_id: &str,
