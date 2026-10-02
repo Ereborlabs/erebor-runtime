@@ -80,8 +80,8 @@ Control or Node restarts after dispatch
 8. Wire shared data recovery in `config.rs`, `main.rs` and `service.rs`.
    Trace admission uses AnalysisStore readiness, not `ControlConfig.discovery`
    or `discovery_recovered`. Prove capture with discovery disabled.
-   An isolated query-worker failure leaves upload available. Data-store failure
-   returns no upload ACK; Node expiry and spool limits remain effective.
+   Data-store failure returns no upload ACK; Node expiry and spool limits
+   remain effective.
 9. Define scoped trace relation schemas and bounded owner reads.
    Observability 3 registers them with the qualified QueryOwner and reuses its
    append reader for the output API. No trace-specific subscription queue or
@@ -128,10 +128,9 @@ in the existing test output. Do not create a separate review-report family.
    acknowledgement through the current mTLS session. Check BPF cleanup and
    enforcement recovery separately.
 3. Disable discovery analysis. Run trace admission, upload and restart through
-   production owners. Terminate the query worker and prove upload continues.
-   Separately make AnalysisStore unavailable: require no ACK, bounded Node
-   spooling, local expiry and explicit loss/uncertainty. Restore the store and
-   verify duplicate replay creates no second output or execution.
+   production owners. Make AnalysisStore unavailable. Require no ACK, bounded
+   Node spooling, local expiry and explicit loss/uncertainty. Restore the store
+   and verify duplicate replay creates no second output or execution.
 
 ### End-to-end deliverable
 

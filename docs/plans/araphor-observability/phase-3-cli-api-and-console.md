@@ -29,6 +29,7 @@ trusted internal engine from 7.3. Do not enable public SQL before both pass.
    enters the worker. Enforce OS memory/CPU limits, a deadline, bounded IPC,
    cancellation and child reaping. Disable external access and extension
    loading. Do not fall back to in-process evaluation for client SQL.
+   An isolated SQL-worker failure must leave trace output upload available.
 3. Add authenticated query receipts and resume tokens. Recheck current grants
    before every frame and after waits; authorization loss stops disclosure.
    Bind the exact query, parameters, scope, schema and store identity. Map
@@ -176,6 +177,9 @@ and shadowed names, nulls, timestamp offsets/precision and bound endpoints.
 Reject unsupported moving predicates. Check hidden-column predicates and
 foreign-row counts. Reject nested forbidden functions and file/network/extension
 access. Kill, hang and cancel workers; prove cleanup and continued intake.
+With discovery analysis disabled, terminate the isolated SQL worker during a
+trace. Prove that output upload continues through production owners. Run this
+lightweight case before its paired physical Kubernetes case.
 Test configured N/N+1 input, output and concurrency bounds with small fixtures.
 These are correctness checks, not authorization for new performance workloads.
 
