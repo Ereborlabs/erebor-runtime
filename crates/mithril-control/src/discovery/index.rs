@@ -26,7 +26,7 @@ mod feed;
 mod recovery;
 pub use feed::*;
 
-const INDEX_SCHEMA_VERSION: i64 = 5;
+const INDEX_SCHEMA_VERSION: i64 = 6;
 
 #[cfg(test)]
 pub(super) mod tests {
@@ -503,6 +503,93 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn observability_index_fresh_tables() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        for _ in 0..2 {
+            let index = DiscoveryIndex::open(store.clone())?;
+            let writer = index.writer.lock().map_err(|_| "writer poisoned")?;
+            assert_eq!(
+                writer.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?,
+                INDEX_SCHEMA_VERSION
+            );
+            assert_eq!(
+                writer.query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type='table'
+                     AND name IN ('traces', 'trace_output', 'trace_measurements')",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )?,
+                0
+            );
+        }
+        assert_eq!(store.commit_index(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn observability_index_rejects_old() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for version in 0..INDEX_SCHEMA_VERSION {
+            let directory = tempfile::tempdir()?;
+            let store = ControlStore::open(directory.path())?;
+            let index = DiscoveryIndex::open(store.clone())?;
+            {
+                let writer = index.writer.lock().map_err(|_| "writer poisoned")?;
+                writer.execute_batch(
+                    "CREATE TABLE traces(marker TEXT NOT NULL);
+                     INSERT INTO traces VALUES ('retained');",
+                )?;
+                writer.pragma_update(None, "user_version", version)?;
+            }
+            drop(index);
+            let path = directory.path().join("discovery-index.sqlite");
+            let saved = fs::read(&path)?;
+            assert!(matches!(
+                DiscoveryIndex::open(store.clone()),
+                Err(crate::Error::Discovery {
+                    code: "INDEX_SCHEMA",
+                    ..
+                })
+            ));
+            assert!(matches!(
+                DiscoveryOwner::open(store.clone()),
+                Err(crate::Error::Discovery {
+                    code: "INDEX_SCHEMA",
+                    ..
+                })
+            ));
+            assert!(matches!(
+                DiscoveryOwner::rebuild_index(store.clone()),
+                Err(crate::Error::Discovery {
+                    code: "INDEX_SCHEMA",
+                    ..
+                })
+            ));
+            assert!(
+                fs::read(&path)? == saved,
+                "index bytes changed after rejecting schema {version}"
+            );
+            let reader =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            assert_eq!(
+                reader.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?,
+                version
+            );
+            assert_eq!(
+                reader.query_row("SELECT marker FROM traces", [], |row| row
+                    .get::<_, String>(0))?,
+                "retained"
+            );
+            assert!(!directory
+                .path()
+                .join("discovery-index.rebuild.sqlite")
+                .exists());
+            assert_eq!(store.commit_index(), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn discovery_index_rejects_future_schema_and_corrupt_files_without_changing_control(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
@@ -525,8 +612,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn discovery_index_seals_complete_and_partial_revisions_after_schema_upgrade(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn discovery_index_sealing_reopen() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = ControlStore::open(directory.path())?;
         let index = DiscoveryIndex::open(store.clone())?;
@@ -590,11 +676,6 @@ pub(super) mod tests {
         let artifact = store.put_discovery_artifact(&page.artifact()?)?;
         let first = store.commit_discovery_head(key.clone(), None, artifact)?;
         let progress = index.apply_export(&first)?;
-        index
-            .writer
-            .lock()
-            .map_err(|_| "writer poisoned")?
-            .execute_batch("DROP TABLE profile_index; PRAGMA user_version=1;")?;
         drop(index);
         let index = DiscoveryIndex::open(store.clone())?;
         assert_eq!(index.progress(key.tenant_id, &key.id)?, Some(progress));
@@ -1207,16 +1288,13 @@ impl DiscoveryIndex {
             metadata.is_file() && metadata.permissions().mode() & 0o077 == 0,
             "INDEX_FILE_PERMISSIONS",
         )?;
-        let writer = Self::connection(&path, false)?;
-        let version: i64 = writer
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .context(DiscoveryDatabaseSnafu {
+        let supported = Self::supports_schema(&Self::connection(&path, true)?).context(
+            DiscoveryDatabaseSnafu {
                 operation: "read schema",
-            })?;
-        DiscoveryInputManifestV1::require(
-            (0..=INDEX_SCHEMA_VERSION).contains(&version),
-            "INDEX_SCHEMA",
+            },
         )?;
+        DiscoveryInputManifestV1::require(supported, "INDEX_SCHEMA")?;
+        let writer = Self::connection(&path, false)?;
         writer.execute_batch("BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS source_progress(
                 tenant BLOB NOT NULL CHECK(length(tenant)=16), build BLOB NOT NULL CHECK(length(build)=32),
@@ -1264,7 +1342,7 @@ impl DiscoveryIndex {
             DROP INDEX IF EXISTS revision_position;
             CREATE TABLE IF NOT EXISTS revision_prefix(id INTEGER PRIMARY KEY CHECK(id=1), commit_index BLOB NOT NULL CHECK(length(commit_index)=8));
             INSERT OR IGNORE INTO revision_prefix VALUES(1,x'0000000000000000');
-            PRAGMA user_version=5; COMMIT;")
+            PRAGMA user_version=6; COMMIT;")
             .context(DiscoveryDatabaseSnafu { operation: "initialize schema" })?;
         let first = Self::connection(&path, true)?;
         let second = Self::connection(&path, true)?;
@@ -1278,6 +1356,18 @@ impl DiscoveryIndex {
         };
         index.check_disk(0)?;
         Ok(index)
+    }
+
+    fn supports_schema(db: &Connection) -> rusqlite::Result<bool> {
+        match db.pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))? {
+            INDEX_SCHEMA_VERSION => Ok(true),
+            0 => db.query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM sqlite_schema)",
+                [],
+                |row| row.get(0),
+            ),
+            _ => Ok(false),
+        }
     }
 
     fn connection(path: &Path, read_only: bool) -> Result<Connection> {

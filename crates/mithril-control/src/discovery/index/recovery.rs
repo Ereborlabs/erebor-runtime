@@ -63,14 +63,24 @@ impl DiscoveryIndex {
         let candidate = root.join("discovery-index.rebuild.sqlite");
         let current = root.join("discovery-index.sqlite");
         let previous = root.join("discovery-index.previous.sqlite");
-        if candidate
+        let pending = candidate
             .try_exists()
-            .context(IoSnafu { path: &candidate })?
-        {
-            DiscoveryInputManifestV1::require(
-                Self::file_digest(&candidate)?.as_slice() == expected,
-                "INDEX_INSTALL_DIGEST",
-            )?;
+            .context(IoSnafu { path: &candidate })?;
+        let replacement = if pending { &candidate } else { &current };
+        DiscoveryInputManifestV1::require(
+            Self::file_digest(replacement)?.as_slice() == expected,
+            "INDEX_INSTALL_DIGEST",
+        )?;
+        let supported = Connection::open_with_flags(
+            replacement,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .and_then(|db| Self::supports_schema(&db))
+        .context(DiscoveryDatabaseSnafu {
+            operation: "read install schema",
+        })?;
+        DiscoveryInputManifestV1::require(supported, "INDEX_SCHEMA")?;
+        if pending {
             for suffix in ["", "-wal", "-shm"] {
                 let from = Self::sidecar(&current, suffix);
                 let to = Self::sidecar(&previous, suffix);
@@ -140,18 +150,15 @@ impl DiscoveryOwner {
         DiscoveryIndex::finish_install(&root)?;
         let current = root.join("discovery-index.sqlite");
         if current.try_exists().context(IoSnafu { path: &current })? {
-            // A newer index is not corruption. Do not replace it with an older schema.
+            // An unsupported schema is not corruption. Keep the existing index.
             let result = Connection::open_with_flags(
                 &current,
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
                     | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
             )
-            .and_then(|db| db.pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0)));
+            .and_then(|db| DiscoveryIndex::supports_schema(&db));
             match result {
-                Ok(version) => DiscoveryInputManifestV1::require(
-                    version <= INDEX_SCHEMA_VERSION,
-                    "INDEX_SCHEMA",
-                )?,
+                Ok(supported) => DiscoveryInputManifestV1::require(supported, "INDEX_SCHEMA")?,
                 Err(rusqlite::Error::SqliteFailure(error, _))
                     if matches!(
                         error.code,
@@ -255,6 +262,77 @@ fn install_boundary(_boundary: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observability_index_install_preserves() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        for (version, installed) in [(0, false), (0, true), (5, false), (5, true)] {
+            let directory = tempfile::tempdir()?;
+            let store = ControlStore::open(directory.path())?;
+            let index = DiscoveryIndex::open(store.clone())?;
+            index.validate_and_checkpoint()?;
+            drop(index);
+            let current = directory.path().join("discovery-index.sqlite");
+            let candidate = directory.path().join("discovery-index.rebuild.sqlite");
+            let previous = directory.path().join("discovery-index.previous.sqlite");
+            let marker = directory.path().join("discovery-index.install");
+            let prior = DiscoveryIndex::file_digest(&current)?;
+            fs::copy(&current, &candidate)?;
+            let writer = Connection::open(&candidate)?;
+            writer.execute_batch(
+                "CREATE TABLE traces(marker TEXT NOT NULL);
+                 INSERT INTO traces VALUES ('retained');",
+            )?;
+            writer.pragma_update(None, "user_version", version)?;
+            assert_eq!(
+                writer.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                    row.get::<_, u64>(0)
+                })?,
+                0
+            );
+            drop(writer);
+            let digest = DiscoveryIndex::file_digest(&candidate)?;
+            fs::write(&marker, digest)?;
+            let files = if installed {
+                fs::rename(&current, &previous)?;
+                fs::rename(&candidate, &current)?;
+                [(current.clone(), digest), (previous.clone(), prior)]
+            } else {
+                [(candidate.clone(), digest), (current.clone(), prior)]
+            };
+            let result = DiscoveryIndex::open(store.clone());
+            assert!(
+                matches!(
+                    &result,
+                    Err(crate::Error::Discovery {
+                        code: "INDEX_SCHEMA",
+                        ..
+                    })
+                ),
+                "schema={version}, installed={installed}, open error: {:?}",
+                result.as_ref().err()
+            );
+            let result = DiscoveryOwner::rebuild_index(store);
+            assert!(
+                matches!(
+                    &result,
+                    Err(crate::Error::Discovery {
+                        code: "INDEX_SCHEMA",
+                        ..
+                    })
+                ),
+                "schema={version}, installed={installed}, rebuild error: {:?}",
+                result.as_ref().err()
+            );
+            assert_eq!(fs::read(&marker)?, digest);
+            for (path, expected) in files {
+                assert_eq!(DiscoveryIndex::file_digest(&path)?, expected);
+            }
+            assert_eq!(candidate.exists(), !installed);
+            assert_eq!(previous.exists(), installed);
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "subprocess worker for the replacement crash test"]
