@@ -1,0 +1,41 @@
+{
+  "ociVersion": "1.0.2",
+  "process": {
+    "terminal": false,
+    "user": { "uid": 0, "gid": 0 },
+    "args": ["/pause"],
+    "env": ["PATH=/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE=1"],
+    "cwd": "/",
+    "capabilities": {
+      "bounding": ["CAP_CHOWN", "CAP_NET_RAW"],
+      "effective": ["CAP_CHOWN", "CAP_NET_RAW"],
+      "permitted": ["CAP_CHOWN", "CAP_NET_RAW"]
+    },
+    "noNewPrivileges": true
+  },
+  "root": { "path": "rootfs", "readonly": true },
+  "mounts": [
+    { "destination": "/proc", "type": "proc", "source": "proc" },
+    { "destination": "/dev", "type": "tmpfs", "source": "tmpfs" },
+    { "destination": "/usr", "type": "bind", "source": "/usr", "options": ["rbind", "ro"] },
+    { "destination": "/lib", "type": "bind", "source": "/lib", "options": ["rbind", "ro"] },
+    { "destination": "/lib64", "type": "bind", "source": "/lib64", "options": ["rbind", "ro"] },
+    { "destination": "/fixtures", "type": "bind", "source": "MITHRIL_FIXTURES", "options": ["rbind", "ro"] },
+    { "destination": "/pause", "type": "bind", "source": "MITHRIL_FIXTURES/runtime_pause.py", "options": ["bind", "ro"] }
+  ],
+  "linux": {
+    "cgroupsPath": "MITHRIL_CGROUP",
+    "namespaces": [
+      { "type": "pid", "path": "/proc/1/ns/pid" },
+      { "type": "network" },
+      { "type": "ipc" },
+      { "type": "uts" },
+      { "type": "mount" }
+    ]
+  },
+  "annotations": {
+    "io.kubernetes.cri.container-type": "sandbox",
+    "io.kubernetes.cri.podsandbox.image-name": "registry.k8s.io/pause:3.10",
+    "io.kubernetes.cri.sandbox-id": "MITHRIL_ID"
+  }
+}

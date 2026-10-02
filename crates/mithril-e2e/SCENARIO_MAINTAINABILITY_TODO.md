@@ -5655,11 +5655,17 @@ test does not close a row when its physical condition or an assertion changed.
     owns no process or admission state. The existing environment removes its
     temporary files. VM harness checks and final Rust CI passed. See
     `/tmp/mithril-oci-bundle-ci-20261002.log`.
-  - [ ] Replace the inert CRI sandbox case with a small direct-runc test.
+  - [x] Replace the inert CRI sandbox case with a small direct-runc test.
     Keep `/pause`, the read-only root and binds, `noNewPrivileges`, the
     non-administrative capabilities, sandbox annotations, the unavailable
     Node endpoint, actor output, and `ALLOW_CRI_SANDBOX` log assertion.
     Use a checked Python actor. Keep the old case until the replacement passes.
+    The 70-line [inert_sandbox_can_start](src/identity/scenarios/runtime_sandbox.rs)
+    passed in 7.77 seconds. Stock runc executed the actor and returned its
+    exact output. A separate public-hook call with the same OCI config keeps
+    the original `ALLOW_CRI_SANDBOX` log proof. Runtime state and cgroup
+    cleanup passed. All eight retained-gate owner tests, VM harness checks,
+    and final Rust CI passed. See `/tmp/mithril-runtime-sandbox-ci-20261002.log`.
   - [ ] Replace the forged sandbox command in a separate small direct-runc
     test. Keep the sandbox annotations but run a different actor command with
     its writable result mount. Require failed start, `DENY_NODE_UNAVAILABLE`,
