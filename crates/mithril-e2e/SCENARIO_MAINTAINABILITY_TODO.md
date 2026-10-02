@@ -6043,7 +6043,11 @@ setup, production actions, assertions, and focused test.
       `retained_wal_survives_restart` acknowledgement deadline. Its unchanged
       focused check passed in 3.63 seconds. The timeout cause is not proved.
       Run the final Rust gate again after registration and legacy retirement.
-    - [ ] Pass and commit runc, then Kubernetes.
+    - [x] Pass direct runc. The unchanged body passed in 63.67 seconds
+      through stock runc and the production OCI hook. All 2,053 reads,
+      captured fields, window changes, health counters, and normal cleanup
+      checks passed. Only platform registration changed.
+    - [ ] Pass and commit Kubernetes.
     - [ ] Remove only the old five-denial count and its string matchers after
       all three pass. Keep the separate full-interval overlap capture and
       obsolete-row collection checks. This test does not replace those checks.
