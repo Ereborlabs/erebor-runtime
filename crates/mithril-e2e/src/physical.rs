@@ -1,5 +1,7 @@
 use std::fs;
+use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -8,7 +10,7 @@ use erebor_interceptor_abi::Id128V1;
 use snafu::OptionExt as _;
 use snafu::{ensure, ResultExt as _};
 
-use crate::error::{InvalidInputSnafu, IoSnafu, TimeoutSnafu};
+use crate::error::{CommandSnafu, InvalidInputSnafu, IoSnafu, TimeoutSnafu};
 use crate::Result;
 
 #[cfg(test)]
@@ -17,6 +19,107 @@ pub(crate) mod mount_cache;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(test)]
 const STABLE_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+pub(crate) struct FixtureBindMounts {
+    targets: Vec<PathBuf>,
+    namespace: Option<(fs::File, fs::File)>,
+}
+
+impl FixtureBindMounts {
+    #[cfg(test)]
+    pub(crate) fn in_actor(pid: u32) -> Result<Self> {
+        let namespace = PathBuf::from(format!("/proc/{pid}/ns/mnt"));
+        let root = PathBuf::from(format!("/proc/{pid}/root"));
+        Ok(Self {
+            targets: Vec::new(),
+            namespace: Some((
+                fs::File::open(&namespace).context(IoSnafu { path: &namespace })?,
+                fs::File::open(&root).context(IoSnafu { path: &root })?,
+            )),
+        })
+    }
+
+    pub(crate) fn bind(&mut self, source: &Path, target: &Path) -> Result<()> {
+        if self.namespace.is_some() {
+            self.run(&["mount", "--bind", "."], target, Some(source))?;
+        } else {
+            fs::create_dir_all(target).context(IoSnafu { path: target })?;
+            rustix::mount::mount_bind(source, target)
+                .map_err(std::io::Error::from)
+                .context(IoSnafu { path: target })?;
+        }
+        self.targets.push(target.to_owned());
+        Ok(())
+    }
+
+    pub(crate) fn cleanup(&mut self) -> Result<()> {
+        while let Some(target) = self.targets.last() {
+            if self.namespace.is_some() {
+                self.run(&["umount", "--"], target, None)?;
+            } else {
+                rustix::mount::unmount(target, rustix::mount::UnmountFlags::empty())
+                    .map_err(std::io::Error::from)
+                    .context(IoSnafu { path: target })?;
+            }
+            self.targets.pop();
+        }
+        Ok(())
+    }
+
+    fn run(&self, args: &[&str], target: &Path, source: Option<&Path>) -> Result<()> {
+        let (namespace, root) = self.namespace.as_ref().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: target,
+                reason: "the actor mount namespace is not held",
+            }
+            .build()
+        })?;
+        let owner = std::process::id();
+        let mut command = Command::new("nsenter");
+        command
+            .arg(format!(
+                "--mount=/proc/{owner}/fd/{}",
+                namespace.as_raw_fd()
+            ))
+            .arg(format!("--root=/proc/{owner}/fd/{}", root.as_raw_fd()));
+        if let Some(source) = source {
+            // Open the source directory before entry into the actor root.
+            command.arg(format!("--wd={}", source.display()));
+        }
+        let output = command
+            .args(["--"])
+            .args(args)
+            .arg(target)
+            .output()
+            .context(IoSnafu { path: target })?;
+        ensure!(
+            output.status.success(),
+            CommandSnafu {
+                program: "nsenter",
+                reason: format!(
+                    "{args:?} {}: {}; stderr: {}",
+                    target.display(),
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            }
+        );
+        Ok(())
+    }
+}
+
+impl Drop for FixtureBindMounts {
+    fn drop(&mut self) {
+        while let Some(target) = self.targets.pop() {
+            if self.namespace.is_some() {
+                let _result = self.run(&["umount", "-l", "--"], &target, None);
+            } else {
+                let _result = rustix::mount::unmount(&target, rustix::mount::UnmountFlags::DETACH);
+            }
+        }
+    }
+}
 
 pub(crate) struct ProbeDirectory {
     path: PathBuf,
@@ -313,8 +416,42 @@ mod tests {
     use erebor_runtime_error::{ErrorExt as _, StatusCode};
     use snafu::ResultExt as _;
 
-    use super::{wait_for, wait_for_async, ProbeDirectory};
+    use super::{wait_for, wait_for_async, FixtureBindMounts, ProbeDirectory};
     use crate::error::{InvalidInputSnafu, IoSnafu};
+
+    #[test]
+    #[ignore = "requires Linux mount privileges"]
+    fn mounts_keep_failed_cleanup() -> crate::Result<()> {
+        let parent = tempfile::tempdir().context(IoSnafu {
+            path: Path::new("bind mount fixture"),
+        })?;
+        let source = parent.path().join("source");
+        let target = parent.path().join("target");
+        std::fs::create_dir_all(&source).context(IoSnafu { path: &source })?;
+        std::fs::create_dir_all(&target).context(IoSnafu { path: &target })?;
+        let file = source.join("file");
+        std::fs::write(&file, b"mounted").context(IoSnafu { path: &file })?;
+        for actor in [false, true] {
+            let mut mounts = if actor {
+                FixtureBindMounts::in_actor(std::process::id())?
+            } else {
+                FixtureBindMounts::default()
+            };
+            mounts.bind(&source, &target)?;
+            let held = std::fs::File::open(&target).context(IoSnafu { path: &target })?;
+            assert!(target.join("file").exists());
+            assert!(mounts.cleanup().is_err());
+            assert_eq!(mounts.targets, [target.clone()]);
+            drop(held);
+            mounts.cleanup()?;
+            mounts.cleanup()?;
+            assert!(!target.join("file").exists());
+            mounts.bind(&source, &target)?;
+            drop(mounts);
+            assert!(!target.join("file").exists());
+        }
+        Ok(())
+    }
 
     #[test]
     fn readiness_reports_cleanup() -> crate::Result<()> {

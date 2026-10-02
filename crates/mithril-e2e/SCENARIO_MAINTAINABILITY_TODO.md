@@ -3633,6 +3633,20 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace BPF-link pin removal with `link_pin_removal_is_denied`.
+    Reuse the bind-mount owner from the old runc runner, the file-mutation
+    actor, and existing policy fixtures. Mount the real links directory in
+    the actor namespace. Check its device and inode before the action.
+    Require `EACCES`, attributed `UNRESOLVED_OBJECT` File/Unlink evidence,
+    and the retained real pin in both Protect and Observe modes. Keep the
+    standard test below 100 lines. Add no Platform or production API.
+    Commit the shared mount owner first. Pass and commit Host, runc, then
+    Kubernetes before removing the old self-protection action.
+    The shared owner now holds the actor root and mount namespace. Normal
+    cleanup keeps a failed target for later cleanup; Drop is a detach fallback.
+    Its privileged VM check passes for both mount paths, including failed,
+    repeated, and fallback cleanup. Local physical checks and strict Clippy
+    pass. The old runc runner uses this owner and loses 34 lines.
   - [x] Replace the two pre-protection passed-descriptor reads with
     `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
     exact-file policy. A child passes each descriptor through `SCM_RIGHTS`

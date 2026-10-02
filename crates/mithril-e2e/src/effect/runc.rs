@@ -58,7 +58,7 @@ use super::{
 use crate::error::{
     CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
 };
-use crate::physical::{boot_identity, wait_for, ProbeDirectory, ProbeFile};
+use crate::physical::{boot_identity, wait_for, FixtureBindMounts, ProbeDirectory, ProbeFile};
 use crate::process::ProcessFixture;
 use crate::runtime_input::runtime_observation;
 use crate::{DigestV1, Result};
@@ -1777,39 +1777,6 @@ impl RuncContainer {
 impl Drop for RuncContainer {
     fn drop(&mut self) {
         let _result = self.cleanup();
-    }
-}
-
-#[derive(Default)]
-struct FixtureBindMounts {
-    targets: Vec<PathBuf>,
-}
-
-impl FixtureBindMounts {
-    fn bind(&mut self, source: &Path, target: &Path) -> Result<()> {
-        fs::create_dir_all(target).context(IoSnafu { path: target })?;
-        rustix::mount::mount_bind(source, target)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu { path: target })?;
-        self.targets.push(target.to_owned());
-        Ok(())
-    }
-
-    fn cleanup(&mut self) -> Result<()> {
-        while let Some(target) = self.targets.pop() {
-            rustix::mount::unmount(&target, rustix::mount::UnmountFlags::empty())
-                .map_err(std::io::Error::from)
-                .context(IoSnafu { path: &target })?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for FixtureBindMounts {
-    fn drop(&mut self) {
-        while let Some(target) = self.targets.pop() {
-            let _result = rustix::mount::unmount(&target, rustix::mount::UnmountFlags::DETACH);
-        }
     }
 }
 
