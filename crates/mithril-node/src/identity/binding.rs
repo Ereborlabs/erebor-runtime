@@ -62,6 +62,8 @@ pub struct TraceTargetLeaseV1 {
     target: mithril_control::TraceTargetV1,
     root_path: PathBuf,
     root_handle: File,
+    #[cfg(feature = "test-support")]
+    readback: Option<Box<dyn Fn() -> Result<Option<ExecutionSetBindingStateV1>> + Send + Sync>>,
 }
 
 impl TraceTargetLeaseV1 {
@@ -69,8 +71,31 @@ impl TraceTargetLeaseV1 {
         &self.target
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn fixture(
+        target: mithril_control::TraceTargetV1,
+        root_path: PathBuf,
+        readback: impl Fn() -> Result<Option<ExecutionSetBindingStateV1>> + Send + Sync + 'static,
+    ) -> Result<Self> {
+        let root_handle = File::open(&root_path).context(IoSnafu { path: &root_path })?;
+        let lease = Self {
+            target,
+            root_path,
+            root_handle,
+            readback: Some(Box::new(readback)),
+        };
+        lease.validate_path()?;
+        Ok(lease)
+    }
+
     pub fn validate(&self, reader: &erebor_interceptor::KernelStateReader) -> Result<()> {
         self.validate_path()?;
+        #[cfg(feature = "test-support")]
+        if let Some(readback) = &self.readback {
+            return self.validate_state(&readback()?.context(IdentityStateSnafu {
+                reason: "trace binding disappeared",
+            })?);
+        }
         let bytes = reader
             .lookup(
                 "execution_set_bindings",
@@ -787,6 +812,8 @@ impl WorkloadBindingOwner {
             root_handle: binding.root_handle.try_clone().context(IoSnafu {
                 path: &binding.root_cgroup_path,
             })?,
+            #[cfg(feature = "test-support")]
+            readback: None,
         })
     }
 
@@ -3080,9 +3107,42 @@ mod tests {
         replacement = state;
         replacement.label_epoch += 1;
         assert!(lease.validate_state(&replacement).is_err());
+        #[cfg(feature = "test-support")]
+        let fixture = {
+            use super::{ExecutionSetBindingStateV1, TraceTargetLeaseV1};
+            use std::sync::{
+                atomic::{AtomicU64, Ordering},
+                Arc,
+            };
+            let generation = Arc::new(AtomicU64::new(state.container_generation));
+            let current = generation.clone();
+            let fixture =
+                TraceTargetLeaseV1::fixture(lease.target().clone(), root.clone(), move || {
+                    let generation = current.load(Ordering::Acquire);
+                    Ok((generation != 0).then_some(ExecutionSetBindingStateV1 {
+                        container_generation: generation,
+                        ..state
+                    }))
+                })?;
+            let reader = erebor_interceptor::KernelStateReader::new(temporary.path());
+            fixture.validate(&reader)?;
+            generation.store(state.container_generation + 1, Ordering::Release);
+            assert!(fixture.validate(&reader).is_err());
+            generation.store(0, Ordering::Release);
+            assert!(fixture.validate(&reader).is_err());
+            generation.store(state.container_generation, Ordering::Release);
+            fixture.validate(&reader)?;
+            fixture
+        };
         fs::rename(&root, temporary.path().join("retired"))?;
         fs::create_dir(&root)?;
         assert!(lease.validate_path().is_err());
+        #[cfg(feature = "test-support")]
+        assert!(fixture
+            .validate(&erebor_interceptor::KernelStateReader::new(
+                temporary.path()
+            ))
+            .is_err());
         Ok(())
     }
 

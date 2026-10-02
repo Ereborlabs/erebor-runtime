@@ -13,7 +13,7 @@ use std::{
 };
 
 use erebor_interceptor::{
-    diagnostic::{DiagnosticBackend, DiagnosticMode, DiagnosticStop},
+    diagnostic::{DiagnosticBackend, DiagnosticCapture, DiagnosticMode, DiagnosticStop},
     KernelStateReader,
 };
 use mithril_control::{
@@ -92,13 +92,40 @@ struct ActiveTrace {
     worker: JoinHandle<Result<()>>,
 }
 
+#[derive(Clone)]
+enum TraceBackend {
+    Pinned(Arc<DiagnosticBackend>),
+    #[cfg(feature = "test-support")]
+    Fixture(Arc<dyn Fn() -> std::process::Command + Send + Sync>),
+}
+
+impl TraceBackend {
+    fn start(
+        &self,
+        source: &[u8],
+        cgroup: u64,
+        duration: Duration,
+    ) -> erebor_interceptor::Result<DiagnosticCapture> {
+        match self {
+            Self::Pinned(backend) => {
+                backend.start(source, cgroup, DiagnosticMode::Capture, duration)
+            }
+            #[cfg(feature = "test-support")]
+            Self::Fixture(command) => {
+                DiagnosticBackend::start_fixture(command(), DiagnosticMode::Capture, duration)
+            }
+        }
+    }
+}
+
 pub struct NodeTraceOwner {
     root: PathBuf,
     tenant_id: [u8; 16],
     node_id: String,
     node_boot_id: [u8; 16],
     _lease: File,
-    config: NodeTraceConfigV1,
+    storage_reserve_bytes: u64,
+    backend: TraceBackend,
     reader: KernelStateReader,
     active: BTreeMap<[u8; 16], ActiveTrace>,
     #[cfg(any(test, feature = "test-support"))]
@@ -136,14 +163,53 @@ impl NodeTraceOwner {
                     "diagnostic qualification does not match the current kernel or CPU allocation"
             }
         );
+        let backend = DiagnosticBackend::new(config.executable, config.executable_sha256)
+            .context(InterceptorSnafu)?;
+        Self::open_state(
+            state_directory,
+            tenant_id,
+            node_id,
+            node_boot_id,
+            config.storage_reserve_bytes,
+            TraceBackend::Pinned(Arc::new(backend)),
+            reader,
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn open_fixture(
+        state_directory: &Path,
+        tenant_id: [u8; 16],
+        node_id: String,
+        node_boot_id: [u8; 16],
+        command: impl Fn() -> std::process::Command + Send + Sync + 'static,
+    ) -> Result<Self> {
+        Self::open_state(
+            state_directory,
+            tenant_id,
+            node_id,
+            node_boot_id,
+            256 * 1024 * 1024,
+            TraceBackend::Fixture(Arc::new(command)),
+            KernelStateReader::new(state_directory),
+        )
+    }
+
+    fn open_state(
+        state_directory: &Path,
+        tenant_id: [u8; 16],
+        node_id: String,
+        node_boot_id: [u8; 16],
+        storage_reserve_bytes: u64,
+        backend: TraceBackend,
+        reader: KernelStateReader,
+    ) -> Result<Self> {
         ensure!(
             state_directory.is_absolute()
                 && tenant_id != [0; 16]
                 && !node_id.is_empty()
                 && node_boot_id != [0; 16]
-                && config.executable.is_absolute()
-                && config.executable_sha256 != [0; 32]
-                && config.storage_reserve_bytes >= 256 * 1024 * 1024,
+                && storage_reserve_bytes >= 256 * 1024 * 1024,
             crate::error::InvalidConfigurationSnafu {
                 reason: "diagnostics require pinned execution and at least 256 MiB storage reserve"
             }
@@ -170,7 +236,8 @@ impl NodeTraceOwner {
             node_id,
             node_boot_id,
             _lease: lease,
-            config,
+            storage_reserve_bytes,
+            backend,
             reader,
             active: BTreeMap::new(),
             #[cfg(any(test, feature = "test-support"))]
@@ -367,7 +434,6 @@ impl NodeTraceOwner {
         ensure!(
             available
                 >= self
-                    .config
                     .storage_reserve_bytes
                     .saturating_add(SPOOL_BYTES + TERMINAL_BYTES + 5 * 1024 * 1024),
             IdentityStateSnafu {
@@ -403,11 +469,7 @@ impl NodeTraceOwner {
             })?;
             return Ok(id);
         };
-        let backend = DiagnosticBackend::new(
-            self.config.executable.clone(),
-            self.config.executable_sha256,
-        )
-        .context(InterceptorSnafu)?;
+        let backend = self.backend.clone();
         let reader = self.reader.clone();
         let committed = spool.committed.clone();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -611,7 +673,7 @@ impl NodeTraceOwner {
 
     fn capture(
         mut spool: TraceSpool,
-        backend: DiagnosticBackend,
+        backend: TraceBackend,
         dispatch: TraceDispatchV1,
         target: TraceTargetLeaseV1,
         reader: KernelStateReader,
@@ -635,7 +697,6 @@ impl NodeTraceOwner {
                 .start(
                     &dispatch.accepted.request.source.bytes,
                     target.target().cgroup_id,
-                    DiagnosticMode::Capture,
                     Duration::from_secs(dispatch.accepted.request.collection_seconds.into()),
                 )
                 .context(InterceptorSnafu)?;

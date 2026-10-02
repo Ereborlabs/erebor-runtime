@@ -23,7 +23,12 @@ impl ObservabilityQualification {
         ];
         let mut results = Vec::new();
         for (name, mode, script, expected) in cases {
-            let capture = Self::fixture_capture(script, mode, Duration::from_millis(500))?;
+            let collection = if matches!(name, "oversize-output" | "slow-consumer") {
+                Duration::from_secs(10)
+            } else {
+                Duration::from_millis(500)
+            };
+            let capture = Self::fixture_capture(script, mode, collection)?;
             let mut frames = Vec::new();
             let mut stopped = false;
             let deadline = Instant::now() + Duration::from_secs(20);

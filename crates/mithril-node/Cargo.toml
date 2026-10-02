@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-test-support = []
+test-support = ["erebor-interceptor/test-fixtures"]
 
 [dependencies]
 clap.workspace = true

@@ -225,14 +225,14 @@ impl CaseResult {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct ResourceSnapshot {
-    programs: BTreeSet<u64>,
-    maps: BTreeSet<u64>,
-    links: BTreeSet<u64>,
+pub(crate) struct ResourceSnapshot {
+    pub(crate) programs: BTreeSet<u64>,
+    pub(crate) maps: BTreeSet<u64>,
+    pub(crate) links: BTreeSet<u64>,
 }
 
 impl ResourceSnapshot {
-    fn read() -> ProofResult<Self> {
+    pub(crate) fn read() -> ProofResult<Self> {
         if !rustix::process::geteuid().is_root() {
             return Err("BPF inventory requires root".into());
         }
@@ -441,7 +441,7 @@ impl ObservabilityQualification {
                     "case": "owned-capture",
                     "scope": "owner-upload",
                     "result": "PASS",
-                    "proof_boundary": "Production Control and Node transport with external target and output fixtures. No backend execution, Node spool, process crash, BPF cleanup, enforcement, or performance proof.",
+                    "proof_boundary": "Owner-upload leg: production Control and Node transport with external target and output fixtures. The node_capture leg records Node spool and process supervision separately. Neither leg proves a Node process crash, BPF cleanup, enforcement, or performance.",
                     "physical": false,
                     "performance_claim": false,
                     "discovery_index_present": false,
@@ -461,7 +461,8 @@ impl ObservabilityQualification {
             drop(owner);
             drop(control);
             drop(crate::control_fixture::reopen_control_store(&tls.path().join("control-store")).await?);
-            record["storage_recovery"] = self.owned_storage(&tls, &key, request, grant).await?;
+            record["storage_recovery"] = self.owned_storage(&tls, &key, request.clone(), grant.clone()).await?;
+            record["node_capture"] = self.owned_node(&key, request, grant).await?;
             self.write("result.json", &record)
         })
     }
@@ -648,6 +649,334 @@ impl ObservabilityQualification {
         })
         .await;
         let shutdown = server.shutdown().await;
+        let record = result??;
+        shutdown?;
+        Ok(record)
+    }
+
+    async fn owned_node(
+        &self,
+        key: &ed25519_dalek::SigningKey,
+        mut request: mithril_control::TraceRequestV1,
+        mut grant: mithril_control::TraceExecutionGrantV1,
+    ) -> ProofResult<serde_json::Value> {
+        use crate::control_fixture::{reopen_control_store, MtlsFixture, OutagePolicyFixture};
+        use erebor_interceptor_abi::{BindingLifecycleStateV1, ExecutionSetBindingStateV1};
+        use mithril_control::{
+            TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1, TraceOwner, TraceReadAccessV1,
+            TraceTerminalReasonV1, TraceUploadV1,
+        };
+        use mithril_node::{NodeTraceOwner, TraceTargetLeaseV1, TrustCache};
+        use std::os::unix::fs::MetadataExt as _;
+        use std::sync::{
+            atomic::{AtomicU64, AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let tls = MtlsFixture::new(false)?;
+        let mut control = Self::trace_control(&tls, key)?;
+        let mut data = control
+            .analysis_store()
+            .ok_or("missing Node capture data")?;
+        let mut owner = TraceOwner::new(data.clone());
+        control.replace_kubernetes_workload_inventory(
+            request
+                .targets
+                .iter()
+                .map(|target| target.fact.clone())
+                .collect(),
+        )?;
+        let mut server = Some(tls.start(control.clone()).await?);
+        let mut registration = OutagePolicyFixture::registration([7; 16], false);
+        registration.effect_prevention_claims_enabled = false;
+        let mut cache = TrustCache::load(&tls.path().join("node-trust"))?;
+        let result = tokio::time::timeout(Duration::from_secs(30), async {
+            let mut records = Vec::new();
+            for (name, expected, request_id) in [
+                ("target-replacement", TraceTerminalReasonV1::TargetChanged, 9),
+                ("cancel", TraceTerminalReasonV1::Cancelled, 10),
+                ("partition-expiry", TraceTerminalReasonV1::Deadline, 11),
+                ("store-failure", TraceTerminalReasonV1::Deadline, 12),
+            ] {
+                let local_expiry = matches!(name, "partition-expiry" | "store-failure");
+                let mut fault_codes = Vec::new();
+                let mut failed = None;
+                let root = tls.path().join(name);
+                fs::create_dir(&root)?;
+                let target_path = root.join("target");
+                fs::create_dir(&target_path)?;
+                request.request_id = [request_id; 16];
+                request.collection_seconds = 30;
+                request.targets[0].cgroup_id = fs::metadata(&target_path)?.ino();
+                let target = request.targets[0].clone();
+                let state = ExecutionSetBindingStateV1 {
+                    node_boot_id: target.node_boot_id.into(),
+                    binding_id: target.binding_id.into(),
+                    binding_nonce: target.binding_nonce.into(),
+                    root_cgroup_live_interval_id: target.root_cgroup_live_interval_id.into(),
+                    root_cgroup_id: target.cgroup_id,
+                    label_epoch: target.label_epoch,
+                    container_generation: target.container_generation,
+                    lifecycle_state: BindingLifecycleStateV1::Active,
+                    ..Default::default()
+                };
+                let generation = Arc::new(AtomicU64::new(state.container_generation));
+                let readback = generation.clone();
+                let lease = TraceTargetLeaseV1::fixture(target.clone(), target_path, move || {
+                    Ok(Some(ExecutionSetBindingStateV1 {
+                        container_generation: readback.load(Ordering::Acquire),
+                        ..state
+                    }))
+                })?;
+                let launches = Arc::new(AtomicUsize::new(0));
+                let starts = launches.clone();
+                let pid_path = root.join("child.pid");
+                let child_path = pid_path.clone();
+                let command = move || {
+                    starts.fetch_add(1, Ordering::AcqRel);
+                    let mut command = Command::new("/bin/sh");
+                    command.args([
+                        "-c",
+                        "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; exec sleep 60",
+                        "trace-fixture",
+                    ]).arg(&child_path);
+                    command
+                };
+                let mut node = NodeTraceOwner::open_fixture(
+                    &root, request.tenant_id, "node-a".into(), [7; 16], command.clone(),
+                )?;
+                let connector = tls.connector(server.as_ref().ok_or("Control is absent")?, "node-a", [7; 16]);
+                let mut connection = connector.connect(registration.clone(), true, &mut cache).await?;
+                connection.report_readiness(true, true).await?;
+                let now = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())?;
+                grant.valid_until_unix_ns = now + 120_000_000_000;
+                control.accept_trace(request.clone(), grant.clone(), None)?;
+                let dispatch = connection.exchange_diagnostics(&TraceExchangeV1::default()).await?
+                    .dispatch.ok_or("missing Node capture dispatch")?;
+                if dispatch.accepted.request != request {
+                    return Err("Node capture dispatch changed the accepted request".into());
+                }
+                let dispatch_key = cache.policy_signing_key(&dispatch.signing_key_id, dispatch.issuer_epoch)?;
+                let mut connection = Some(connection);
+                if name == "partition-expiry" {
+                    drop(connection.take());
+                    server.take().ok_or("Control is absent")?.shutdown().await?;
+                }
+                let supplied_now = if local_expiry {
+                    dispatch.accepted.deadline_unix_ns - 5_000_000_000
+                } else {
+                    u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())?
+                };
+                let id = node.admit(dispatch.clone(), Some(lease), &dispatch_key, supplied_now)?;
+                if node.admit(dispatch.clone(), None, &dispatch_key, supplied_now)? != id {
+                    return Err("duplicate dispatch changed execution identity".into());
+                }
+                let ready_limit = Instant::now() + Duration::from_secs(3);
+                loop {
+                    let frames = node.frames(id, 0)?;
+                    if frames.iter().any(|frame| frame.kind == TraceFrameKindV1::Diagnostic
+                        && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n")
+                        && frames.iter().any(|frame| frame.kind == TraceFrameKindV1::Data
+                            && frame.bytes == b"node-owned output\n")
+                    {
+                        break;
+                    }
+                    if Instant::now() >= ready_limit {
+                        return Err("Node capture did not spool the process output".into());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                node.reap()?;
+                if launches.load(Ordering::Acquire) != 1 || node.terminal(id)?.is_some() {
+                    return Err("Node capture respawned or stopped before the case input".into());
+                }
+                let pid: u32 = fs::read_to_string(&pid_path)?.parse()?;
+                if name == "target-replacement" {
+                    generation.fetch_add(1, Ordering::AcqRel);
+                } else if name == "cancel" {
+                    owner.cancel(request.tenant_id, request.request_id, &grant.principal, false)?;
+                    let reply = connection.as_mut().ok_or("Control connection is absent")?
+                        .exchange_diagnostics(&TraceExchangeV1 {
+                        retained: vec![id], ..Default::default()
+                    }).await?;
+                    if reply.cancel != vec![id] || reply.dispatch.is_some() {
+                        return Err("Control did not cancel the retained execution".into());
+                    }
+                    for id in reply.cancel {
+                        node.cancel(id);
+                    }
+                } else if name == "store-failure" {
+                    let batch = node.next_batch(id, 0)?.ok_or("missing active Node output")?;
+                    if batch.frames.len() != 2 || batch.terminal.is_some() {
+                        return Err("Node output was not active before the storage fault".into());
+                    }
+                    let exchange = TraceExchangeV1 {
+                        retained: vec![id], resolved: None,
+                        output: Some(TraceUploadV1 {
+                            request_id: request.request_id, target_index: 0,
+                            original_node_boot_id: [7; 16], batch: batch.clone(),
+                        }),
+                    };
+                    data.set_commit_hook(araphor_data::AnalysisCommitStage::AfterSync, || {
+                        Err(araphor_data::Error::Io {
+                            path: "active Node AfterSync fixture".into(),
+                            source: std::io::Error::from(std::io::ErrorKind::StorageFull),
+                            location: snafu::Location::default(),
+                        })
+                    })?;
+                    for expected in [tonic::Code::Unavailable, tonic::Code::DataLoss] {
+                        match connection.as_mut().ok_or("Control connection is absent")?
+                            .exchange_diagnostics(&exchange).await
+                        {
+                            Err(mithril_node::Error::ControlRpc { source, .. })
+                                if source.code() == expected => fault_codes.push(format!("{:?}", source.code())),
+                            other => return Err(format!("active Node upload returned an ACK or wrong error: {other:?}").into()),
+                        }
+                    }
+                    node.reap()?;
+                    if data.storage_health()?.write_ready || node.terminal(id)?.is_some()
+                        || node.next_batch(id, 0)?.as_ref() != Some(&batch)
+                    {
+                        return Err("failed upload changed active Node output or left the writer ready".into());
+                    }
+                    failed = Some(batch);
+                }
+                drop(connection);
+                let end_limit = Instant::now() + Duration::from_secs(if local_expiry { 15 } else { 5 });
+                let terminal = loop {
+                    node.reap()?;
+                    if let Some(terminal) = node.terminal(id)? {
+                        break terminal;
+                    }
+                    if Instant::now() >= end_limit {
+                        return Err("Node capture did not stop at its local bound".into());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                };
+                if terminal.reason != expected || terminal.cleanup != TraceCleanupV1::Unknown
+                    || terminal.kernel_lost_events.is_some() || !terminal.output_incomplete
+                    || Path::new(&format!("/proc/{pid}")).exists()
+                {
+                    return Err(format!("Node capture returned an incorrect terminal: {terminal:?}").into());
+                }
+                let batch = node.next_batch(id, 0)?.ok_or("missing Node output batch")?;
+                if batch.frames.len() != 2 || batch.terminal.as_ref() != Some(&terminal) {
+                    return Err("Node capture lost output or its terminal".into());
+                }
+                drop(node);
+                let mut node = NodeTraceOwner::open_fixture(
+                    &root, request.tenant_id, "node-a".into(), [7; 16], command,
+                )?;
+                let now = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())?;
+                let duplicate_now = if local_expiry { dispatch.accepted.deadline_unix_ns } else { now };
+                let duplicate = node.admit(dispatch.clone(), None, &dispatch_key, duplicate_now);
+                if local_expiry {
+                    if !matches!(duplicate, Err(mithril_node::Error::Trace {
+                        source: mithril_control::Error::Observability {
+                            code: mithril_control::TraceErrorCodeV1::Expired, ..
+                        }, ..
+                    })) {
+                        return Err("Node accepted an expired cached dispatch".into());
+                    }
+                } else if duplicate? != id {
+                    return Err("Node reopen changed execution identity".into());
+                }
+                if node.next_batch(id, 0)?.as_ref() != Some(&batch) || launches.load(Ordering::Acquire) != 1 {
+                    return Err("Node reopen changed output or repeated execution".into());
+                }
+                let access = TraceReadAccessV1 {
+                    tenant_id: request.tenant_id, namespace_uids: grant.namespace_uids.clone(),
+                    node_ids: grant.node_ids.clone(), host_sensitive: false,
+                    valid_until_unix_ns: grant.valid_until_unix_ns, revoked: false,
+                };
+                if let Some(failed) = &failed {
+                    server.take().ok_or("Control is absent")?.shutdown().await?;
+                    drop(owner);
+                    drop(data);
+                    drop(control);
+                    drop(reopen_control_store(&tls.path().join("control-store")).await?);
+                    control = Self::trace_control(&tls, key)?;
+                    data = control.analysis_store().ok_or("missing recovered Node data")?;
+                    owner = TraceOwner::new(data.clone());
+                    let prefix = owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?;
+                    if prefix != vec![failed.clone()] || !data.storage_health()?.write_ready {
+                        return Err("data reopen lost or changed the synced Node prefix".into());
+                    }
+                }
+                if server.is_none() {
+                    server = Some(tls.start(control.clone()).await?);
+                }
+                let connector = tls.connector(server.as_ref().ok_or("Control is absent")?, "node-a", [7; 16]);
+                let mut connection = connector.connect(registration.clone(), true, &mut cache).await?;
+                let exchange = TraceExchangeV1 {
+                    retained: vec![id], resolved: None,
+                    output: Some(TraceUploadV1 {
+                        request_id: request.request_id, target_index: 0,
+                        original_node_boot_id: [7; 16], batch: batch.clone(),
+                    }),
+                };
+                let first = connection.exchange_diagnostics(&exchange).await?;
+                let replay = connection.exchange_diagnostics(&exchange).await?;
+                let ack = first.acknowledgement.as_ref().ok_or("missing Node output ACK")?;
+                if ack.execution_id != id || ack.last_sequence != terminal.last_sequence
+                    || ack.terminal.as_ref() != Some(&terminal) || replay != first
+                {
+                    return Err("Node output replay changed its durable ACK".into());
+                }
+                node.acknowledge(id, &terminal)?;
+                if node.next_batch(id, 0)?.is_some() {
+                    return Err("Node retained an acknowledged upload".into());
+                }
+                let retained = owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?;
+                if retained != vec![batch] {
+                    return Err("Control retained different Node output".into());
+                }
+                let (_, intent) = data.trace_intent(request.tenant_id, request.request_id)?
+                    .ok_or("missing diagnostic intent")?;
+                let binding = intent.bindings.iter().find(|binding| binding.identity.execution_id == id)
+                    .ok_or("missing diagnostic binding")?;
+                let receipt = data.trace_receipt(&binding.identity)?
+                    .ok_or("missing diagnostic receipt")?;
+                records.push(serde_json::json!({
+                    "name": name, "accepted": dispatch.accepted, "target": target,
+                    "process_id": pid, "launch_count": launches.load(Ordering::Acquire),
+                    "process_reaped": true, "terminal_reopen": true,
+                    "control_stopped": name == "partition-expiry",
+                    "partition_before_admission": name == "partition-expiry",
+                    "supplied_now": supplied_now,
+                    "signed_deadline": dispatch.accepted.deadline_unix_ns,
+                    "collection_seconds": request.collection_seconds,
+                    "expired_dispatch_rejected": local_expiry,
+                    "storage_fault": failed.as_ref().map(|batch| serde_json::json!({
+                        "stage": "AfterSync", "error_codes": fault_codes,
+                        "fault_input": "injected StorageFull error after syncing active Node output",
+                        "writer_unready": true, "active_output_retained": true,
+                        "recovered_prefix": batch, "data_reopened": true,
+                    })),
+                    "acknowledgement": ack, "replay_ack": replay.acknowledgement,
+                    "retained": retained, "receipt": {
+                        "identity": receipt.identity, "last_sequence": receipt.last_sequence,
+                        "output_bytes": receipt.output_bytes, "terminal": receipt.terminal,
+                        "retained_floor": receipt.retained_floor,
+                        "commit_revision": receipt.commit_revision,
+                    },
+                    "storage": data.storage_health()?,
+                }));
+            }
+            if tls.path().join("control-store/discovery-index.sqlite").try_exists()? {
+                return Err("Node capture started a discovery index".into());
+            }
+            Ok::<_, Box<dyn std::error::Error>>(serde_json::json!({
+                "scope": "node-owner-chain", "result": "PASS", "cases": records,
+                "proof_boundary": "Production Control, Node spool and Interceptor supervision with external process, binding-state and admission-clock inputs. Partition and store-failure cases use five seconds left on the signed lease and a 30-second backend collection limit. The storage fault is injected after a real segment sync. Attach notifications are simulated. Node reopen follows a retained terminal, not a process crash. No NodeChassis retry scheduling, physical disk-full, BPF cleanup, enforcement, or performance proof.",
+                "discovery_index_present": false, "physical": false, "performance_claim": false,
+            }))
+        }).await;
+        let shutdown = if let Some(server) = server {
+            server.shutdown().await
+        } else {
+            Ok(())
+        };
         let record = result??;
         shutdown?;
         Ok(record)
@@ -1258,6 +1587,62 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+        let node = &record["node_capture"];
+        assert_eq!(node["scope"], "node-owner-chain");
+        assert_eq!(node["result"], "PASS");
+        assert_eq!(node["physical"], false);
+        assert_eq!(node["performance_claim"], false);
+        assert_eq!(node["discovery_index_present"], false);
+        let cases = node["cases"].as_array().ok_or("missing Node cases")?;
+        assert_eq!(cases.len(), 4);
+        for (case, reason) in
+            cases
+                .iter()
+                .zip(["TargetChanged", "Cancelled", "Deadline", "Deadline"])
+        {
+            assert_eq!(case["launch_count"], 1);
+            assert_eq!(case["process_reaped"], true);
+            assert_eq!(case["terminal_reopen"], true);
+            assert_eq!(case["acknowledgement"], case["replay_ack"]);
+            assert_eq!(case["acknowledgement"]["last_sequence"], 2);
+            assert_eq!(case["acknowledgement"]["terminal"]["reason"], reason);
+            assert_eq!(case["acknowledgement"]["terminal"]["cleanup"], "Unknown");
+            assert!(case["acknowledgement"]["terminal"]["kernel_lost_events"].is_null());
+            assert_eq!(
+                case["retained"][0]["frames"].as_array().map(Vec::len),
+                Some(2)
+            );
+        }
+        assert_eq!(cases[2]["control_stopped"], true);
+        assert_eq!(cases[2]["partition_before_admission"], true);
+        for case in &cases[2..] {
+            assert_eq!(case["expired_dispatch_rejected"], true);
+            assert_eq!(case["collection_seconds"], 30);
+            assert_eq!(
+                case["signed_deadline"]
+                    .as_u64()
+                    .ok_or("missing signed deadline")?
+                    - case["supplied_now"]
+                        .as_u64()
+                        .ok_or("missing supplied time")?,
+                5_000_000_000
+            );
+        }
+        let fault = &cases[3]["storage_fault"];
+        assert_eq!(fault["stage"], "AfterSync");
+        assert_eq!(
+            fault["error_codes"],
+            serde_json::json!(["Unavailable", "DataLoss"])
+        );
+        assert_eq!(fault["writer_unready"], true);
+        assert_eq!(fault["active_output_retained"], true);
+        assert_eq!(fault["data_reopened"], true);
+        assert!(fault["recovered_prefix"]["terminal"].is_null());
+        assert_eq!(
+            fault["recovered_prefix"]["frames"],
+            cases[3]["retained"][0]["frames"]
+        );
+        assert_eq!(cases[3]["storage"]["write_ready"], true);
         assert!(owner.owned_capture().is_err());
         assert_eq!(fs::read(path)?, bytes);
         Ok(())
