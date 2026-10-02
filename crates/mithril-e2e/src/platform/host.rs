@@ -24,6 +24,262 @@ pub(crate) struct Host {
 }
 
 impl Host {
+    #[cfg(test)]
+    fn qualify_restart() -> TestResult<()> {
+        use crate::observability::ResourceSnapshot;
+        use mithril_control::{
+            TraceCleanupV1, TraceExecutionGrantV1, TraceFrameKindV1, TraceOwner, TraceReadAccessV1,
+            TraceRecipeV1, TraceRequestV1, TraceTerminalReasonV1,
+        };
+        use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
+        use std::os::unix::process::ExitStatusExt as _;
+        use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+        let mode = std::env::var("MITHRIL_TRACE_RESTART")?;
+        if !matches!(mode.as_str(), "before" | "after") {
+            return Err("the restart stage must be before or after".into());
+        }
+        let config: mithril_node::NodeTraceConfigV1 =
+            serde_json::from_slice(&fs::read(std::env::var("MITHRIL_TRACE_CONFIG")?)?)?;
+        config.validate()?;
+        let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
+        if proof.exists() {
+            return Err("the restart proof already exists".into());
+        }
+        let mut env = Self::setup("observability-restart")?;
+        env.shared.configure_diagnostics(config)?;
+        env.start_control()?;
+        let policy = serde_json::from_slice(&fs::read(super::policy_path(
+            env.source(),
+            "python_policy.json",
+        )?)?)?;
+        let labels = super::policy_labels(&policy)?;
+        let mut init = env.start_actor("ready.py", &[], &labels)?;
+        env.place(init.id())?;
+        fs::create_dir(env.work().join("second"))?;
+        let mut first = env.add_actor("python", &["/fixtures/proc_read.py", "/work"])?;
+        first.ready()?;
+        env.place(first.id())?;
+        let mut second = env.add_actor("python", &["/fixtures/proc_read.py", "/work/second"])?;
+        second.ready()?;
+        env.place(second.id())?;
+        env.install_policy("python_policy.json")?;
+        env.start_node()?;
+        env.sync_policy()?;
+        env.node_ready()?;
+        env.running(init.id())?;
+        env.recovered(init.id(), "diagnostic restart workload")?;
+        fs::write(env.work().join("act"), b"act")?;
+        first.wait_command(first.id(), &format!("proc-read-{}", libc::EACCES))?;
+        let initial = env.snapshot()?;
+        let (control, fact) = env.shared.diagnostic_context()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let now = || -> TestResult<u64> {
+            Ok(u64::try_from(
+                SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
+            )?)
+        };
+        let tenant = *uuid::Uuid::parse_str(super::shared::TENANT_ID)?.as_bytes();
+        let grant = TraceExecutionGrantV1 {
+            tenant_id: tenant,
+            grant_id: [7; 16],
+            principal: "qualification".into(),
+            namespace_uids: [fact.namespace_uid.clone()].into(),
+            node_ids: [fact.node_id.clone()].into(),
+            recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
+            host_diagnostic: false,
+            valid_until_unix_ns: now()? + 600_000_000_000,
+        };
+        let access = TraceReadAccessV1 {
+            tenant_id: tenant,
+            namespace_uids: grant.namespace_uids.clone(),
+            node_ids: grant.node_ids.clone(),
+            host_sensitive: false,
+            valid_until_unix_ns: grant.valid_until_unix_ns,
+            revoked: false,
+        };
+        let targets = runtime.block_on(control.resolve_trace_targets(vec![fact], &grant))?;
+        let target = targets
+            .first()
+            .and_then(|item| item.target.clone())
+            .ok_or("the diagnostic restart target is unavailable")?;
+        let mut node = env.shared.diagnostic_process()?;
+        let baseline = ResourceSnapshot::read()?;
+        let request = TraceRequestV1 {
+            tenant_id: tenant,
+            request_id: *uuid::Uuid::new_v4().as_bytes(),
+            source: TraceRecipeV1::FailedOpens.manifest()?.source,
+            targets: vec![target],
+            unresolved: Vec::new(),
+            collection_seconds: 30,
+        };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            match control.accept_trace(request.clone(), grant.clone(), None) {
+                Ok(_) => break,
+                Err(error)
+                    if error.code() == tonic::Code::Unavailable && Instant::now() < deadline =>
+                {
+                    node.ensure_running("diagnostic acceptance")?;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let owner = TraceOwner::new(control.analysis_store().ok_or("missing analysis store")?);
+        let (_, accepted) = owner.read(tenant, request.request_id, &access, now()?)?;
+        let id = accepted.execution_id(0)?;
+        let spool = env.shared.diagnostic_spool(id);
+        let marker = env.shared.output().join("trace-intent.ready");
+        let mut prefix = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            node.ensure_running("diagnostic crash boundary")?;
+            if mode == "before" && marker.exists() {
+                break;
+            }
+            if mode == "after" {
+                let after = prefix
+                    .last()
+                    .map_or(0, |frame: &mithril_control::TraceFrameV1| frame.sequence);
+                for batch in owner.output(tenant, request.request_id, 0, &access, now()?, after)? {
+                    if batch.terminal.is_some() {
+                        return Err("capture ended before the crash boundary".into());
+                    }
+                    prefix.extend(batch.frames);
+                }
+                if prefix.iter().any(|frame| {
+                    frame.kind == TraceFrameKindV1::Diagnostic
+                        && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
+                }) {
+                    break;
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err("the diagnostic crash boundary was not reached".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let attached = ResourceSnapshot::read()?;
+        let programs = attached
+            .programs
+            .difference(&baseline.programs)
+            .copied()
+            .collect::<Vec<_>>();
+        let maps = attached
+            .maps
+            .difference(&baseline.maps)
+            .copied()
+            .collect::<Vec<_>>();
+        let links = attached
+            .links
+            .difference(&baseline.links)
+            .copied()
+            .collect::<Vec<_>>();
+        if mode == "before" {
+            assert!(programs.is_empty() && maps.is_empty() && links.is_empty());
+        } else {
+            assert!(
+                !programs.is_empty(),
+                "the attach marker has no observed BPF programs"
+            );
+        }
+        let pid = Pid::from_raw(i32::try_from(node.id())?).ok_or("invalid diagnostic Node PID")?;
+        let handle = pidfd_open(pid, PidfdFlags::empty())?;
+        pidfd_send_signal(&handle, Signal::KILL)?;
+        assert_eq!(
+            node.wait_exit("diagnostic Node crash", Duration::from_secs(10))?
+                .signal(),
+            Some(libc::SIGKILL)
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let current = ResourceSnapshot::read()?;
+            if programs.iter().all(|id| !current.programs.contains(id))
+                && maps.iter().all(|id| !current.maps.contains(id))
+                && links.iter().all(|id| !current.links.contains(id))
+            {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err("diagnostic resources survived Node death".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Do not let fixture cleanup supply the parent-death result.
+        node.stop()?;
+        let mut recovered = env.shared.diagnostic_process()?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !spool.join("ack.json").exists() {
+            recovered.ensure_running("recovered diagnostic acknowledgement")?;
+            if Instant::now() >= deadline {
+                return Err("recovered diagnostic terminal was not acknowledged".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut frames = Vec::new();
+        let mut terminal = None;
+        loop {
+            let after = frames
+                .last()
+                .map_or(0, |frame: &mithril_control::TraceFrameV1| frame.sequence);
+            let batches = owner.output(tenant, request.request_id, 0, &access, now()?, after)?;
+            if batches.is_empty() {
+                break;
+            }
+            for batch in batches {
+                frames.extend(batch.frames);
+                terminal = batch.terminal.or(terminal);
+            }
+            if terminal.is_some() {
+                break;
+            }
+        }
+        let terminal = terminal.ok_or("missing recovered diagnostic terminal")?;
+        assert_eq!(terminal.reason, TraceTerminalReasonV1::NodeRestarted);
+        assert_eq!(terminal.cleanup, TraceCleanupV1::Unknown);
+        assert!(terminal.output_incomplete && frames.starts_with(&prefix));
+        assert_eq!(terminal.last_sequence, frames.len() as u64);
+        assert_eq!(terminal.execution_id, id);
+        let (_, retained) = owner.read(tenant, request.request_id, &access, now()?)?;
+        assert_eq!(retained, accepted);
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|frame| frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n")
+                .count(),
+            usize::from(mode == "after")
+        );
+        fs::write(env.work().join("second/act"), b"act")?;
+        second.wait_command(second.id(), &format!("proc-read-{}", libc::EACCES))?;
+        assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
+        fs::write(
+            &proof,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "case": "node-restart", "stage": mode, "accepted": accepted,
+                "frames": frames, "terminal": terminal, "observed_programs": programs,
+                "observed_maps": maps, "observed_links": links,
+                "cleanup_observed_before_fixture_stop": true, "physical_denials": 2
+            }))?,
+        )?;
+        fs::write(env.work().join("release"), b"release")?;
+        fs::write(env.work().join("second/release"), b"release")?;
+        first.stop()?;
+        second.stop()?;
+        init.stop()?;
+        let pid =
+            Pid::from_raw(i32::try_from(recovered.id())?).ok_or("invalid recovered Node PID")?;
+        let handle = pidfd_open(pid, PidfdFlags::empty())?;
+        pidfd_send_signal(&handle, Signal::TERM)?;
+        assert!(recovered
+            .wait_exit("recovered Node shutdown", Duration::from_secs(30))?
+            .success());
+        recovered.stop()?;
+        env.stop()
+    }
+
     fn qualify_diagnostic_failures() -> TestResult<()> {
         use mithril_control::{
             DiscoveryDigestV1, TraceApprovalV1, TraceCleanupV1, TraceExecutionGrantV1,
@@ -679,6 +935,50 @@ fn observability_owned_capture_five_pairs() -> TestResult<()> {
 #[ignore = "requires the owned Linux VM and a passing diagnostic qualification record"]
 fn observability_owned_capture_failures() -> TestResult<()> {
     super::test_lifecycle::<Host, _>("observability-failures", Host::qualify_diagnostic_failures)
+}
+
+#[test]
+#[ignore = "subprocess helper for the owned diagnostic restart case"]
+fn observability_restart_child() -> TestResult<()> {
+    let root = PathBuf::from(std::env::var("MITHRIL_TEST_OUTPUT")?);
+    let config = mithril_node::NodeConfig::load(&root.join("trace-node.json"))?;
+    let before = std::env::var("MITHRIL_TRACE_RESTART")? == "before";
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let (stop, receiver) = tokio::sync::watch::channel(false);
+        let mut node = mithril_node::NodeChassis::start(config).await?;
+        let marker = root.join("trace-intent.ready");
+        node.set_trace_hook(move || {
+            let saved = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&marker)
+                .and_then(|file| file.sync_all());
+            if saved.is_err() {
+                std::process::exit(74);
+            }
+            if before {
+                loop {
+                    std::thread::park();
+                }
+            }
+        })?;
+        tokio::spawn(async move {
+            signal.recv().await;
+            stop.send_replace(true);
+        });
+        node.run(receiver).await?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    })
+}
+
+#[test]
+#[ignore = "requires the owned Linux VM and a passing diagnostic qualification record"]
+fn observability_owned_restart() -> TestResult<()> {
+    super::test_lifecycle::<Host, _>("observability-restart", Host::qualify_restart)
 }
 
 impl Platform for Host {

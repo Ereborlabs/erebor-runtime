@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (($# < 4 || $# > 5)); then
-  echo "usage: $0 TEST_BINARY FIXTURE_ARCHIVE OUTPUT_DIRECTORY MAX_OVERHEAD_BP [QUALIFIED_CONFIG]" >&2
+if (($# < 4 || $# > 6)); then
+  echo "usage: $0 TEST_BINARY FIXTURE_ARCHIVE OUTPUT_DIRECTORY MAX_OVERHEAD_BP [QUALIFIED_CONFIG [restart-before|restart-after]]" >&2
   exit 2
 fi
 test_binary=$1
@@ -23,10 +23,20 @@ export MITHRIL_TRACE_EXECUTABLE=/usr/bin/bpftrace
 export MITHRIL_TRACE_PROOF="$output/capture-pairs.json"
 export MITHRIL_TRACE_MAX_OVERHEAD_BP=$limit
 test_name=platform::host::observability_owned_capture_five_pairs
-if (($# == 5)); then
+if (($# >= 5)); then
   [[ -r $5 ]] || exit 2
   export MITHRIL_TRACE_CONFIG=$5
   test_name=platform::host::observability_owned_capture_failures
 fi
+if (($# == 6)); then
+  case $6 in
+    restart-before) export MITHRIL_TRACE_RESTART=before ;;
+    restart-after) export MITHRIL_TRACE_RESTART=after ;;
+    *) exit 2 ;;
+  esac
+  test_name=platform::host::observability_owned_restart
+  export MITHRIL_TRACE_PROOF="$output/restart.json"
+fi
 "$test_binary" "$test_name" --ignored --exact --nocapture \
   >"$output/test.log" 2>&1
+[[ -s $MITHRIL_TRACE_PROOF ]]

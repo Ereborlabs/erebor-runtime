@@ -1702,6 +1702,39 @@ impl Shared {
         self.state_path.join("diagnostics").join(hex::encode(id))
     }
 
+    #[cfg(test)]
+    pub(super) fn diagnostic_process(&mut self) -> TestResult<ProcessFixture> {
+        if self.node_task.is_some() {
+            self.stop_node()?;
+        }
+        let path = self.output().join("trace-node.json");
+        fs::write(&path, serde_json::to_vec_pretty(&self.node_config()?)?)?;
+        self.move_out(std::process::id())?;
+        let mut child = ProcessFixture::held_cgroup(
+            &std::env::current_exe()?,
+            [
+                "--exact",
+                "platform::host::observability_restart_child",
+                "--ignored",
+                "--nocapture",
+            ],
+            &self.node_path,
+            Path::new("/"),
+            std::process::id(),
+        )?;
+        child.release()?;
+        let health =
+            RuntimeAdmissionClient::new(self.admit_path.clone(), Duration::from_millis(100))?;
+        child.wait_path(
+            &self.admit_path,
+            "diagnostic Node admission readiness",
+            NODE_START_LIMIT,
+            || Ok(self.runtime.block_on(health.available()).then_some(())),
+            || "the diagnostic Node admission socket is unavailable".into(),
+        )?;
+        Ok(child)
+    }
+
     pub(super) fn stop(&mut self) -> TestResult<()> {
         self.close()
     }
