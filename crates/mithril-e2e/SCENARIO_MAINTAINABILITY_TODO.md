@@ -3647,6 +3647,10 @@ test does not close a row when its physical condition or an assertion changed.
     Its privileged VM check passes for both mount paths, including failed,
     repeated, and fallback cleanup. Local physical checks and strict Clippy
     pass. The old runc runner uses this owner and loses 34 lines.
+    The actor mount path uses Linux `open_tree` and `move_mount`. A short
+    helper thread enters the held namespace; the test thread does not change
+    namespace. This replaces the failed cross-namespace bind command.
+    Privileged cleanup checks, local physical checks, and strict Clippy pass.
   - [x] Replace the two pre-protection passed-descriptor reads with
     `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
     exact-file policy. A child passes each descriptor through `SCM_RIGHTS`
