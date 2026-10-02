@@ -56,12 +56,14 @@ fn hard_link_stays_unresolved<P: Platform>() -> TestResult<()> {
         let effects = EffectCheck::new(&env, task)?;
 
         actor.send(b"hard\n")?;
-        actor.wait_name(
-            pid,
-            &format!("link-hard-{error}-{}", libc::EACCES),
-            "original read and hard-link denial",
-            wait,
-        )?;
+        actor
+            .wait_name(
+                pid,
+                &format!("link-hard-{error}-{}", libc::EACCES),
+                "original read and hard-link denial",
+                wait,
+            )
+            .inspect_err(|_| eprintln!("hard-link failure: {:?}", env.snapshot()))?;
         let original = effects.wait(
             &env,
             reason,

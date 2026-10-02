@@ -2499,6 +2499,17 @@ test does not close a row when its physical condition or an assertion changed.
       until runc and Kubernetes pass. No production or Platform code changes.
       The unchanged runc case passes both modes in 77.42 seconds, including
       the production OCI hook and resource cleanup. Kubernetes remains open.
+      Its first Observe action returns `EACCES` for both paths. The original
+      path must succeed with `WOULD_DENY`; do not accept this result. Keep the
+      old actions. Check the image-overlay condition on lightweight Host
+      before a correction or Kubernetes rerun.
+      The unchanged assertion fails on overlay-backed Host files in 39.11
+      seconds. Evidence records `WOULD_DENY`, then `UNRESOLVED_OBJECT` for
+      the same actor. Its original-path open returns `EACCES`. The reproduction
+      removes its pin, lease, cgroup, and output, and detaches the overlay mount.
+      See `/tmp/mithril-hard-overlay-light-20261002.log`. The diagnostic-only
+      change keeps the test at 94 lines. The final repository Rust CI gate
+      passes. No BPF correction is authorized. Keep Kubernetes unregistered.
   - [ ] Replace both exact-secret bind-alias checks. Keep each live mount ID,
     device, inode, inode generation, and the shared composite authority.
     - [ ] Start with Protect mode. Let the shared actor create two directory bind
