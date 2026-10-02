@@ -87,6 +87,12 @@
   evidence, query, discovery, graph/finding, notification, and trace-output
   data. Control embeds this crate by default; the crate does not depend on
   Control. `mithril-e2e` owns fixtures, qualification, and release proof.
+- `araphor-observability` owns shared trace contracts, recipes, grant checks,
+  request lifecycle, and bounded local capture. It depends on `araphor-data`
+  and the Interceptor, not Control or Node. Control supplies authentication,
+  inventory, grants, and transport. Node supplies current runtime identity and
+  held cgroup descriptors. AnalysisStore retains output; the Interceptor
+  supervises the backend. The shared crate adds no service or store.
 - A Runtime deployment can embed the shared Interceptor only after it obtains
   the same exclusive lease. It must use an authenticated, scoped client when
   Mithril owns the loader. Never start a Runtime loader and a Mithril loader at

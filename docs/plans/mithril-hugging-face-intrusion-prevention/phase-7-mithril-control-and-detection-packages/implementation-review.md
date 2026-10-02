@@ -1883,13 +1883,22 @@ directory. Formatting, workspace checking, Clippy with warnings denied, and
 all selected workspace tests passed. Read the linked result for the command
 and counts. Ignored physical entry points remain unqualified.
 
+The current shared implementation is in
+[araphor-observability](../../../../crates/araphor-observability/src/lib.rs).
+Control calls its TraceOwner. Node calls its NodeTraceOwner. The crate depends
+on the data crate and Interceptor, not on either application. It adds no
+service or retained-output store. Control keeps authentication, inventory,
+grant issuance, signer trust and transport. Node keeps runtime binding
+resolution. AnalysisStore retains intent and output. Interceptor supervises
+the backend and owns its cleanup.
+
 [TraceIntentV1::validate](../../../../crates/araphor-data/src/analysis/trace.rs) checks exact tenant, request, source and execution bindings.<br>
 -> [AnalysisStore::accept_trace](../../../../crates/araphor-data/src/analysis/trace.rs) stores immutable source and intent with one metadata transaction.<br>
 -> [AnalysisStore::update_trace](../../../../crates/araphor-data/src/analysis/trace.rs) commits monotone cancellation and revocation with a revision check.<br>
 -> [AnalysisStore::trace_intents](../../../../crates/araphor-data/src/analysis/trace.rs) reads at most 16 requests without raw catalogue publication.
 
-The intent owner does not authenticate a caller or decode Control authority.
-Control encodes that authority without another source copy. The
+The intent owner does not authenticate a caller or decode trace authority.
+The shared TraceOwner encodes that authority without another source copy. The
 `observability_intent_` tests prove exact retry, restart, corruption rejection,
 paging, cancellation under pressure and non-projecting reads. Their five-test
 receipt is `trace-intent.log` under
@@ -1897,26 +1906,26 @@ receipt is `trace-intent.log` under
 trace persistence. The following route describes the shared-storage changes;
 its complete qualification is still open.
 
-[TraceOwner::accept](../../../../crates/mithril-control/src/observability/owner.rs) TraceOwner accepts an authorized request.<br>
+[TraceOwner::accept](../../../../crates/araphor-observability/src/owner.rs) The shared owner accepts a request under the supplied grant.<br>
 -> [ControlPlane::resolve_trace_targets](../../../../crates/mithril-control/src/service.rs) target resolver freezes authorized workload/container/node lifetimes.<br>
 -> [AnalysisStore::accept_trace](../../../../crates/araphor-data/src/analysis/trace.rs) The data owner commits source, grant, target snapshot, dispatch identities and terminal reservations.<br>
 -> [NodeDiagnostics](../../../../crates/mithril-control/src/service.rs) authenticated node-control service sends the bounded execution grant.<br>
--> [NodeTraceOwner::admit](../../../../crates/mithril-node/src/observability.rs) Node records intent and revalidates each lifetime before attachment.<br>
+-> [NodeTraceOwner::admit](../../../../crates/araphor-observability/src/capture.rs) The shared local owner records intent and revalidates each lifetime before attachment.<br>
 -> [DiagnosticBackend::start](../../../../crates/erebor-interceptor/src/diagnostic.rs) Interceptor runs the reviewed or separately privileged script.<br>
--> [TraceSpool::append](../../../../crates/mithril-node/src/observability.rs) Node appends output to its bounded diagnostic spool.<br>
--> [TraceOwner::append](../../../../crates/mithril-control/src/observability/owner.rs) Control checks the authenticated execution binding.<br>
+-> [TraceSpool::append](../../../../crates/araphor-observability/src/capture.rs) The shared local owner appends output to its bounded diagnostic spool.<br>
+-> [TraceOwner::append](../../../../crates/araphor-observability/src/owner.rs) The shared request owner checks the Control-authenticated execution binding.<br>
 -> [AnalysisStore::append_trace](../../../../crates/araphor-data/src/analysis/raw.rs) The shared segment owner compares retries, syncs raw output and returns its durable receipt without waiting for catalogue publication.<br>
 -> [NodeDiagnostics](../../../../crates/mithril-control/src/service.rs) Control acknowledges that receipt.
 
-[NodeTraceOwner::capture](../../../../crates/mithril-node/src/observability.rs) Identity changes, the lease expires, or cancellation arrives.<br>
--> [NodeTraceOwner::capture](../../../../crates/mithril-node/src/observability.rs) Node stops that execution without following replacements.<br>
+[NodeTraceOwner::capture](../../../../crates/araphor-observability/src/capture.rs) Identity changes, the lease expires, or cancellation arrives.<br>
+-> [NodeTraceOwner::capture](../../../../crates/araphor-observability/src/capture.rs) The shared local owner stops that execution without following replacements.<br>
 -> Partial [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) Interceptor drains and verifies cleanup within the qualified limits. A missing resource identity produces Unknown, not Verified.<br>
--> [TraceOwner::append](../../../../crates/mithril-control/src/observability/owner.rs) Control records per-target result and remaining uncertainty.
+-> [TraceOwner::append](../../../../crates/araphor-observability/src/owner.rs) The shared request owner records per-target result and remaining uncertainty.
 
-[TraceOwner](../../../../crates/mithril-control/src/observability/owner.rs) Control or Node restarts after dispatch.<br>
--> [NodeTraceOwner::recover_inactive](../../../../crates/mithril-node/src/observability.rs) owner recovers the original execution identity.<br>
--> [NodeTraceOwner::admit](../../../../crates/mithril-node/src/observability.rs) duplicate dispatch does not spawn again.<br>
--> Partial [NodeTraceOwner::recover_inactive](../../../../crates/mithril-node/src/observability.rs) uncertain child state is reconciled or terminated, not rerun. Recovery records NodeRestarted and unknown cleanup; combined physical crash proof remains open.
+[TraceOwner](../../../../crates/araphor-observability/src/owner.rs) Control or Node restarts after dispatch.<br>
+-> [NodeTraceOwner::recover_inactive](../../../../crates/araphor-observability/src/capture.rs) The shared local owner recovers the original execution identity.<br>
+-> [NodeTraceOwner::admit](../../../../crates/araphor-observability/src/capture.rs) duplicate dispatch does not spawn again.<br>
+-> Partial [NodeTraceOwner::recover_inactive](../../../../crates/araphor-observability/src/capture.rs) uncertain child state is reconciled or terminated, not rerun. Recovery records NodeRestarted and unknown cleanup; combined physical crash proof remains open.
 
 The plan lists acceptance before resolution as a logical operation. Actual
 callers resolve targets before `ControlPlane::accept_trace`. Acceptance checks
@@ -1982,8 +1991,9 @@ for the new lifetime. This physical case is compiled but has not run.
 | [AnalysisStore](../../../../crates/araphor-data/src/analysis/mod.rs) | Control opens one leased data owner. Raw commits live in segments. DuckDB holds descriptors, context, results, progress, references, and expiry. Reopen retains the UUID, recovery epoch, and source receipts. | Public methods accept Control-validated identity, framed evidence, and coverage. The data owner cannot authenticate a Node or change policy. | [raw tests](../../../../crates/araphor-data/src/analysis/raw.rs), [context tests](../../../../crates/araphor-data/src/analysis/context.rs), [retention tests](../../../../crates/araphor-data/src/analysis/retention.rs), and [mTLS data tests](../../../../crates/mithril-e2e/src/discovery/data_store.rs). |
 | [DiscoveryOwner](../../../../crates/mithril-control/src/discovery/mod.rs) | Recorded methods are stateless. Artifact callers open one index owner and release its handles on drop. No intake scheduler remains. | Supplied recorded input produces exact atoms. Existing artifacts and imported context produce snapshots and context packets. | [recorded tests](../../../../crates/mithril-control/src/discovery/tests.rs) and [index tests](../../../../crates/mithril-control/src/discovery/index.rs). These tests do not prove direct-read live discovery. |
 | [DiscoveryIndex](../../../../crates/mithril-control/src/discovery/index.rs) | Discovery opens the leased SQLite projection. Closing connections retains the database. Recovery can replace only this derived state. | One writer applies retained artifacts. Two query-only readers serve bounded reads. Authoritative artifacts, not SQL rows, determine recovery. | `discovery_index_replacement_keeps_prior_index_on_invalid_authority` in [recovery.rs](../../../../crates/mithril-control/src/discovery/index/recovery.rs). |
-| [TraceOwner](../../../../crates/mithril-control/src/observability/owner.rs) | Control creates the owner over shared AnalysisStore. Accepted inputs, cancellation, receipts and raw output survive owner destruction. | Separate execution/read grants and optional host approval govern acceptance, append, cancellation, and disclosure. The data owner commits the validated changes. | `observability_recovery_commits_once_and_rejects_changed_output` and `observability_target_partial_cohort_never_widens_on_retry`. |
-| [NodeTraceOwner](../../../../crates/mithril-node/src/observability.rs) | Node opens a private leased spool. Drop cancels and joins workers before kernel-host shutdown. Acknowledgement retires retained output; restart never respawns a retained identity. | Signed dispatch and an exact binding lease produce synced frames and a terminal result. Capture workers write output; the owner commits acknowledgement and retirement. | `observability_recovery_preserves_all_pages_and_never_respawns` and `observability_recovery_disk_full_retains_unacknowledged_terminal`. |
+| [TraceOwner](../../../../crates/araphor-observability/src/owner.rs) | Control creates the shared owner over AnalysisStore. Accepted inputs, cancellation, receipts and raw output survive owner destruction. | Control supplies grants and authenticated execution identity. Separate execution/read grants and optional host approval govern acceptance, append, cancellation, and disclosure. AnalysisStore commits the validated changes. | `observability_replay_integrity` and `observability_partial_cohort_retry`. |
+| [NodeTraceOwner](../../../../crates/araphor-observability/src/capture.rs) | Node creates the shared local owner and opens a private leased spool. Drop cancels and joins workers before kernel-host shutdown. Acknowledgement retires retained output; restart never respawns a retained identity. | Signed dispatch and an exact binding lease produce synced frames and a terminal result. Capture workers write output; the owner commits acknowledgement and retirement. | `observability_recovery_preserves_all_pages_and_never_respawns` and `observability_recovery_disk_full_retains_unacknowledged_terminal`. |
+| [TraceTargetLeaseV1](../../../../crates/araphor-observability/src/target.rs) | Node's binding resolver supplies the target, cgroup path and a clone of its held `File`. The shared lease keeps that descriptor until capture ends. | The path must match the held device and inode. Native binding readback must match the frozen lifetime and an eligible lifecycle state. The lease does not resolve runtime identity. | `target_rejects_replaced_lifetime`; Node resolution checks remain in [identity/binding.rs](../../../../crates/mithril-node/src/identity/binding.rs). |
 | [DiagnosticBackend / DiagnosticCapture](../../../../crates/erebor-interceptor/src/diagnostic.rs) | Node creates the backend. Each start owns one supervisor and child process group. Finish or Drop cancels, drains, kills if needed, and reaps. | Pinned executable, exact source, numeric cgroup ID, mode, and duration produce bounded frames and cleanup status. No policy state is writable through this API. | `observability_backend_cancel_and_forced_kill` and `observability_backend_parent_death_kills_child`. |
 
 ## Evidence to profile
@@ -2119,8 +2129,8 @@ refusal cannot become a benign classification. Suggestions do not execute.
 
 ```mermaid
 sequenceDiagram
-    participant C as ControlPlane / TraceOwner
-    participant N as NodeChassis / NodeTraceOwner
+    participant C as ControlPlane / shared TraceOwner
+    participant N as NodeChassis / shared NodeTraceOwner
     participant B as DiagnosticBackend
     participant P as bpftrace child
     participant S as AnalysisStore
@@ -2143,8 +2153,8 @@ sequenceDiagram
 
 ### Authority and exact targets
 
-Start with [TraceRequestV1](../../../../crates/mithril-control/src/observability/model.rs)
-and [TraceOwner](../../../../crates/mithril-control/src/observability/owner.rs).
+Start with [TraceRequestV1](../../../../crates/araphor-observability/src/model.rs)
+and [TraceOwner](../../../../crates/araphor-observability/src/owner.rs).
 Source is UTF-8, has no NUL, and has a 64 KiB bound. A request has at most 16
 resolved plus unresolved participants and at least one executable target.
 Resolved targets bind Control workload facts, their digest, actual container
@@ -2157,7 +2167,7 @@ authority and a separate approval of the request and grant digests. A source
 predicate is not a sandbox. An accepted retry cannot add replacement targets.
 Unbound workloads are Unsupported. A known but unready node is Unavailable.
 
-[TraceDispatchV1](../../../../crates/mithril-control/src/observability/dispatch.rs)
+[TraceDispatchV1](../../../../crates/araphor-observability/src/dispatch.rs)
 uses Ed25519 with the `ARAPHOR-TRACE-DISPATCH-V1` domain. The signature binds
 the complete accepted request and target index. Node checks current signer
 trust, issuer epoch, tenant, node, boot, and time. The
@@ -2167,14 +2177,34 @@ are bounded at 8 MiB; two nonqueued admissions bound diagnostic RPC work.
 There is no direct agent-to-Node endpoint.
 
 [resolve_trace_target](../../../../crates/mithril-node/src/identity/binding.rs)
-holds the original cgroup descriptor and checks the published binding before
-attachment and during capture. Control resolution is bounded and times out.
-Node does not follow a name, PID, or cgroup replacement. Partitioned execution
-ends at its local deadline even if Control cannot deliver cancellation.
+checks the current CRI identity against Node's live binding. It supplies the
+frozen target, cgroup path and a clone of the held `File` to the shared
+[TraceTargetLeaseV1::new](../../../../crates/araphor-observability/src/target.rs).
+[TraceTargetLeaseV1::validate](../../../../crates/araphor-observability/src/target.rs)
+checks the path against that descriptor before attachment and during capture.
+It decodes the native binding with `TryFromBytes`, which checks size and valid
+enum values. It checks lifecycle state, transition guard, boot, binding ID,
+nonce, cgroup live interval, cgroup ID, generation and label epoch.
+Control resolution is bounded and times out. Node does not follow a name,
+PID, or cgroup replacement. Partitioned execution ends at its local deadline
+even if Control cannot deliver cancellation.
+
+Shared [workload facts](../../../../crates/araphor-data/src/workload.rs) and
+[DiscoveryDigestV1](../../../../crates/araphor-data/src/digest.rs) each have one
+data-crate definition. Control and the shared capture crate re-export them.
+The digest uses the existing domain and
+[canonical encoding](../../../../crates/araphor-data/src/canonical.rs).
+The move changes no request, grant or dispatch identity.
+
+[trace_status](../../../../crates/mithril-control/src/service.rs) stays at the
+Control transport boundary. It maps shared trace errors and their nested data
+errors to gRPC status. Capacity, expired retained output, invalid input and
+integrity errors keep separate status codes. Moving an owner does not move
+caller authentication or signer trust into the shared crate.
 
 ### Spool, retry, and shutdown
 
-[NodeTraceOwner](../../../../crates/mithril-node/src/observability.rs) opens a
+[NodeTraceOwner](../../../../crates/araphor-observability/src/capture.rs) opens a
 0700 directory with private files and a no-follow exclusive lease. At most two
 active or unacknowledged executions occupy slots. Each slot reserves 68 MiB for
 encoded output and 4 KiB for its terminal record before durable intent. The
@@ -2205,7 +2235,7 @@ an old identity executable again. Recovery retains the original identity and
 reports NodeRestarted with incomplete output and unknown cleanup. It never
 uses restart as permission to spawn again.
 
-[TraceOwner::output](../../../../crates/mithril-control/src/observability/owner.rs)
+[TraceOwner::output](../../../../crates/araphor-observability/src/owner.rs)
 checks the current read grant and reads one bounded page from AnalysisStore.
 It checks revocation and expiry again after the copy. A shared read lease
 protects selected segment files. Exact result references can pin diagnostic
@@ -2268,7 +2298,7 @@ The executable is `/proc/self/fd/<checked descriptor>`, not a second lookup of
 the configured path. `start` opens and hashes that inode. `SupervisedChild::run`
 writes the exact source bytes to standard input and closes standard input.
 There is no shell, generated C file, Rust parser, or Araphor BPF compiler.
-The production [recipe manifest](../../../../crates/mithril-control/src/observability/recipe.rs)
+The production [recipe manifest](../../../../crates/araphor-observability/src/recipe.rs)
 binds exact source and output semantics; the `.bt` files are physical fixtures.
 
 The referenced libbpf-rs `TracepointCategory` enum is not used by this path.
@@ -2367,8 +2397,9 @@ These checks cannot reconstruct an ID that was never observed.
 | Evidence file to [bounded decoder](../../../../crates/araphor-data/src/analysis/segments.rs) | Existing protobuf frame; big-endian 32-bit length and CRC32C. The shared segment reader checks cursor bounds, offsets, frame length, canonical encoding, and checksum. No raw SHA-256 is required. | Changed frames return data-store errors. A read lease protects selected files until extraction completes. |
 | Control owner to [artifact store](../../../../crates/mithril-control/src/store/discovery.rs) | Versioned MessagePack, SHA-256, bounded payload and dependencies. No cross-platform raw Rust struct serialization. | Typed `Discovery` codes distinguish schema, digest, quota, and reference failures. |
 | Index positions to [SQLite](../../../../crates/mithril-control/src/discovery/index.rs) | Unsigned 64-bit positions use fixed eight-byte big-endian blobs where ordered full-range values are required. Constraints and checked arithmetic protect counts and uniqueness. | Overflow or mismatched replay fails the transaction; no partial count/progress commit. |
-| Control dispatch to [Node](../../../../crates/mithril-control/src/observability/dispatch.rs) | Versioned typed request inside bounded diagnostic transport; Ed25519 signature over domain-separated complete inputs. | Session, trust, digest, scope, lifetime, or signature failure rejects execution through typed trace errors. |
-| bpftrace to [TraceRecipeV1::measurements](../../../../crates/mithril-control/src/observability/recipe.rs) | Bounded raw frame bytes first; exact reviewed JSON map schema second. Integer keys/counts must be valid. Unknown stdout does not become a measurement. | Raw evidence remains available. Spoofed or unknown measurement shapes produce no typed row. Syscall ID `-1` remains unknown, not a guessed syscall. |
+| Control dispatch to [Node](../../../../crates/araphor-observability/src/dispatch.rs) | Versioned typed request inside bounded diagnostic transport; Ed25519 signature over domain-separated complete inputs. | Session, trust, digest, scope, lifetime, or signature failure rejects execution through typed trace errors. |
+| Native binding map to [TraceTargetLeaseV1::validate](../../../../crates/araphor-observability/src/target.rs) | The cgroup key uses native byte order. `TryFromBytes::try_read_from_bytes` checks the exact `ExecutionSetBindingStateV1` size and valid enum values. The shared lease compares frozen lifetime fields and the held descriptor. | A missing, retired or replaced binding fails the lease check. Admission and active checks record TargetChanged; a pre-backend failure can record BackendFailed. No path resolves a replacement. This map is not a wire encoding. |
+| bpftrace to [TraceRecipeV1::measurements](../../../../crates/araphor-observability/src/recipe.rs) | Bounded raw frame bytes first; exact reviewed JSON map schema second. Integer keys/counts must be valid. Unknown stdout does not become a measurement. | Raw evidence remains available. Spoofed or unknown measurement shapes produce no typed row. Syscall ID `-1` remains unknown, not a guessed syscall. |
 
 Raw negative syscall returns include kernel restart codes such as `-512`.
 These values are not necessarily final userspace errno results. A cumulative
@@ -2397,10 +2428,10 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | Read these tests or harnesses | Contract and limit |
 | --- | --- |
 | [diagnostic.rs tests](../../../../crates/erebor-interceptor/src/diagnostic.rs) | Executable/source checks, output bounds, quiet child, deadlines, cancellation, forced kill, and parent death. Process doubles do not prove real BPF attachment. |
-| [owner.rs tests](../../../../crates/mithril-control/src/observability/owner.rs), [dispatch.rs tests](../../../../crates/mithril-control/src/observability/dispatch.rs) | Separate grants, complete signature binding, frozen partial cohorts, regrouped replay, changed frames, and late terminal. |
-| [Node tests](../../../../crates/mithril-node/src/observability.rs) | Recovery does not respawn; only synced output is visible; allocation preserves the evidence reserve; disk-full acknowledgement retains output. |
+| [owner.rs tests](../../../../crates/araphor-observability/src/owner.rs), [dispatch.rs tests](../../../../crates/araphor-observability/src/dispatch.rs) | Separate grants, complete signature binding, frozen partial cohorts, regrouped replay, changed frames, and late terminal. |
+| [capture.rs tests](../../../../crates/araphor-observability/src/capture.rs), [target.rs tests](../../../../crates/araphor-observability/src/target.rs) | Recovery does not respawn; only synced output is visible; allocation preserves the evidence reserve; disk-full acknowledgement retains output. The lease rejects descriptor mismatch, changed lifetime and reused paths. |
 | [service.rs tests](../../../../crates/mithril-control/src/service.rs), [contract.rs](../../../../crates/mithril-control/tests/contract.rs), [control_tls.rs](../../../../crates/mithril-e2e/src/control_tls.rs) | Authenticated dispatch/reconnect, current-session checks, durable output, and revocation. The mTLS test does not itself execute a kernel trace. |
-| [trace intent tests](../../../../crates/araphor-data/src/analysis/trace.rs), [raw tests](../../../../crates/araphor-data/src/analysis/raw.rs), [recipe.rs tests](../../../../crates/mithril-control/src/observability/recipe.rs) | Shared recovery preserves source, exact execution identity, frame order and terminal state. Unknown syscall values remain unknown. Spoofed measurement schemas are rejected. |
+| [trace intent tests](../../../../crates/araphor-data/src/analysis/trace.rs), [raw tests](../../../../crates/araphor-data/src/analysis/raw.rs), [recipe.rs tests](../../../../crates/araphor-observability/src/recipe.rs) | Shared recovery preserves source, exact execution identity, frame order and terminal state. Unknown syscall values remain unknown. Spoofed measurement schemas are rejected. |
 | [observability.rs](../../../../crates/mithril-e2e/src/observability.rs), [test binary](../../../../crates/mithril-e2e/src/bin/mithril_observability_test.rs), [guest.sh](../../../../crates/mithril-e2e/harness/observability/guest.sh) | Automated physical backend cases on a disposable host; resource snapshots before and after each case. Not part of an ordinary unprivileged test run. |
 | [pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh), [Kubernetes capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | Lightweight owner proof precedes same-name real Pod replacement through Control, Node and shared data. Checks actual UID, CRI and cgroup lifetimes, physical denial, frozen old output and diagnostic BPF cleanup. Compiled; physical execution is open. |
 | [Host qualification](../../../../crates/mithril-e2e/src/platform/host.rs), [owned.sh](../../../../crates/mithril-e2e/harness/observability/owned.sh), [process fixture](../../../../crates/mithril-e2e/fixtures/process/observability.py) | Full Node/Control capture, five paired interference runs, and failure cases with physical enforcement checks. |
@@ -2424,14 +2455,25 @@ No new performance experiment ran for the current backend closure.
 combined physical Node crash-before/after-spawn recovery cases. Separate backend
 parent-death and spool-recovery tests do not close those combined gates.
 
-For a new source verification run, use the existing commands. Keep physical
-execution on an explicitly owned disposable host.
+The shared crate's `test-support` feature supplies external process and binding
+inputs and one-use commit callbacks. Normal application builds do not enable
+that feature. Fixture readback still checks the held filesystem identity and
+frozen native lifetime. These tests do not prove BPF attachment or physical
+cleanup.
+
+For a new source verification run, use the commands below. The shared-crate
+commands include the moved owner tests and the native lease test. Keep physical
+execution on an explicitly owned disposable host. These commands are a reading
+route, not a recorded pass for the extraction.
 
 ```sh
 cargo test -p mithril-control discovery::
 cargo test -p mithril-node discovery_
 cargo test -p mithril-e2e discovery_
 cargo test -p erebor-interceptor observability_backend_
+cargo test -p araphor-observability --all-features --lib observability_
+cargo test -p araphor-observability --all-features --lib \
+  target::tests::target_rejects_replaced_lifetime -- --exact
 cargo test -p mithril-control observability_
 cargo test -p mithril-node observability_
 cargo test -p mithril-e2e observability_
@@ -2448,8 +2490,9 @@ future owner exists. UI code and the console-only plan family are excluded.
 | --- | --- |
 | [workspace Cargo.toml](../../../../Cargo.toml), [Cargo.lock](../../../../Cargo.lock), [Control manifest](../../../../crates/mithril-control/Cargo.toml), [data manifest](../../../../crates/araphor-data/Cargo.toml) | Pin SQLite for the existing artifact index and DuckDB for AnalysisStore metadata and derived state. Live intake writes raw segments through AnalysisStore. |
 | [Interceptor manifest](../../../../crates/erebor-interceptor/Cargo.toml), [Interceptor exports](../../../../crates/erebor-interceptor/src/lib.rs) | Add diagnostic process/mount/thread system calls and export the supervised backend. No new daemon or generic backend interface. |
-| [Control build.rs](../../../../crates/mithril-control/build.rs), [Control exports](../../../../crates/mithril-control/src/lib.rs), [observability module](../../../../crates/mithril-control/src/observability/mod.rs), [Control errors](../../../../crates/mithril-control/src/error.rs) | Generate strict JSON support for decision-context protobuf types; expose owner contracts and typed errors. |
-| [Control config](../../../../crates/mithril-control/src/config.rs), [signing-key reader](../../../../crates/mithril-control/src/policy/reconciliation.rs), [server](../../../../crates/mithril-control/src/server.rs) | Discovery is opt-in. Diagnostics require Discovery storage and a trusted configured signing key. Reuse the existing key reader. Register the bounded NodeDiagnostics service on existing authenticated transport. |
+| [shared capture manifest](../../../../crates/araphor-observability/Cargo.toml), [shared exports](../../../../crates/araphor-observability/src/lib.rs), [shared errors](../../../../crates/araphor-observability/src/error.rs) | Move trace contracts, recipes and both capture owners to one crate. Dependencies lead to data and Interceptor, not Control or Node. The `test-support` feature enables data and backend fixture inputs; it adds no production setting. |
+| [Control build.rs](../../../../crates/mithril-control/build.rs), [Control exports](../../../../crates/mithril-control/src/lib.rs), [Control errors](../../../../crates/mithril-control/src/error.rs) | Generate strict JSON support for decision-context protobuf types; re-export shared owner contracts and wrap shared errors. |
+| [Control config](../../../../crates/mithril-control/src/config.rs), [signing-key reader](../../../../crates/mithril-control/src/policy/reconciliation.rs), [server](../../../../crates/mithril-control/src/server.rs) | Discovery is opt-in. Diagnostics require healthy AnalysisStore and a trusted configured signing key, not enabled discovery. Reuse the existing key reader. Register the bounded NodeDiagnostics service on existing authenticated transport. |
 | [evidence intake](../../../../crates/mithril-control/src/evidence.rs) | Preserve CPU in accepted groups. Reject mixed or changed CPU before acceptance. New tests check decision-context transport and restart. |
 | [Node config](../../../../crates/mithril-node/src/config.rs), [Node transport](../../../../crates/mithril-node/src/control.rs), [Node errors](../../../../crates/mithril-node/src/error.rs), [Node exports](../../../../crates/mithril-node/src/lib.rs), [identity exports](../../../../crates/mithril-node/src/identity/mod.rs) | Diagnostics default to absent. Validate the evidence reserve and qualification record. Add bounded exchange on the existing connection and export the target lease. |
 | [e2e manifest](../../../../crates/mithril-e2e/Cargo.toml), [e2e exports](../../../../crates/mithril-e2e/src/lib.rs), [Discovery binary](../../../../crates/mithril-e2e/src/bin/mithril_discovery_test.rs), [experiment requirements](../../../../crates/mithril-e2e/harness/discovery/requirements.txt) | Register runnable qualification entry points. Move shared certificate/temp-directory support where binaries can use it. Keep comparison-only dependencies outside production Control. |
@@ -2471,6 +2514,11 @@ WAL limit plus metadata. Qualification input is an operator-supplied record,
 not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
+
+The shared-capture links describe extraction source `9d570500` and the Node
+error conversion fix at `3248d2a0`. This guide update checks source paths and
+owner boundaries. It reports no new test, physical capture or interference
+result. Earlier pass records apply only to their named source revisions.
 
 The working changes after `3e5bfcea` make
 [EvidenceIntakeOwner](../../../../crates/mithril-control/src/evidence.rs) require

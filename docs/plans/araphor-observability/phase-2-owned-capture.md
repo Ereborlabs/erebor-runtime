@@ -325,6 +325,37 @@ Control 185 passed (2 ignored), e2e 133 passed (412 ignored), and Node 267
 passed (2 ignored). The three new physical entry points were ignored, not
 executed. This result does not qualify physical capture or interference.
 
+Source `9d570500` moves shared trace contracts, recipes, grant checks,
+TraceOwner, NodeTraceOwner and the exact target lease into
+`araphor-observability`. Control and Node call the same implementations.
+Control retains authentication, current inventory, grant issuance, signing and
+transport. Node retains runtime binding resolution. Interceptor retains backend
+supervision. AnalysisStore remains the only retained-output store.
+
+Shared workload facts, container kind, digest and canonical encoding now have
+one definition in `araphor-data`. The digest check preserves the existing
+domain and exact bytes. The target lease checks the held descriptor, current
+path and native binding lifetime. The shared crate does not depend on either
+application crate. Existing executable and protobuf identifiers do not change.
+
+The focused `observability` library run passed 66 tests: Data 25, shared
+observability 21, Control 5, e2e 14 and Node 1. Ten physical or subprocess
+entry points were ignored as standalone tests. The parent tests invoke their
+subprocess helpers. The exact `target_rejects_replaced_lifetime` and
+`digest_preserves_canonical_domain` checks also passed. Receipts are
+`crate-focused-2.log`, `crate-target.log` and `crate-digest.log` in the evidence
+directory above. Use the documented Cargo environment and run:
+
+```sh
+cargo test --locked -p araphor-observability -p araphor-data \
+  -p mithril-control -p mithril-node -p mithril-e2e \
+  --all-features --lib observability -- --nocapture
+```
+
+The physical experiment writes its qualified configuration only after the
+measured pairs pass validation. These component results do not qualify physical
+capture or interference.
+
 Remaining work is execution of the physical lifecycle gates below.
 Physical enablement requires a platform-matched interference receipt. The
 user approved the experiment below. Keep the phase **Not done** and keep
