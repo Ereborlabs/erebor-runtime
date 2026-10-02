@@ -1847,8 +1847,24 @@ owned capture or production enablement.
 ### Owned capture
 
 This route follows the [owned-capture plan](../../araphor-observability/phase-2-owned-capture.md).
-The route exists in source. The two combined physical cases listed under
-verification remain open.
+The shared-storage route is **Partial**. Source `cdb3cbe7` puts portable trace
+contracts in the data crate. Source `692e4f16` adds durable intent methods.
+Control integration and diagnostic segment output are not complete at these
+revisions. The combined physical cases listed under verification remain open.
+
+[TraceIntentV1::validate](../../../../crates/araphor-data/src/analysis/trace.rs) checks exact tenant, request, source and execution bindings.<br>
+-> [AnalysisStore::accept_trace](../../../../crates/araphor-data/src/analysis/trace.rs) stores immutable source and intent with one metadata transaction.<br>
+-> [AnalysisStore::update_trace](../../../../crates/araphor-data/src/analysis/trace.rs) commits monotone cancellation and revocation with a revision check.<br>
+-> [AnalysisStore::trace_intents](../../../../crates/araphor-data/src/analysis/trace.rs) reads at most 16 requests without raw catalogue publication.
+
+The intent owner does not authenticate a caller or decode Control authority.
+Control must encode that authority without another source copy. The
+`observability_intent_` tests prove exact retry, restart, corruption rejection,
+paging, cancellation under pressure and non-projecting reads. Their five-test
+receipt is `trace-intent.log` under
+`/tmp/araphor-capture-qualification.E0VU3eEo/`. This slice does not prove raw
+trace persistence. The following route still describes the Control path at
+these revisions.
 
 [TraceOwner::accept](../../../../crates/mithril-control/src/observability/owner.rs) TraceOwner accepts an authorized request.<br>
 -> [ControlPlane::resolve_trace_targets](../../../../crates/mithril-control/src/service.rs) target resolver freezes authorized workload/container/node lifetimes.<br>

@@ -91,6 +91,40 @@ Control or Node restarts after dispatch
 Status: **Not done** for this storage contract. Physical capture qualification
 also requires the cases below on the implementing revision.
 
+### Verified implementation slices
+
+Source `cdb3cbe7` moves portable source, frame, terminal, measurement and batch
+types into `araphor-data`. Control re-exports these types. Control still owns
+grants, target resolution, dispatch and reviewed recipe decoding. Wire fields
+and existing validation stay unchanged. The focused `observability_` library
+run passed 35 tests; four process or physical tests were not selected for
+ordinary execution.
+
+Source `692e4f16` adds immutable trace intent storage to AnalysisStore. One row
+contains source bytes, exact execution bindings and a bounded Control record.
+Cancellation and read revocation use revision checks. These changes use
+maintenance capacity. Intent reads return at most 16 requests and do not
+publish pending raw commits. Schema 11 rejects older databases; no migration
+or automatic deletion is provided.
+
+The five `observability_intent_` tests passed. They cover restart, exact retry,
+changed-input rejection, monotone state, tenant separation, paging, corrupt
+metadata, cancellation under pressure, and deferred raw publication. Run:
+
+```sh
+CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target \
+CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
+CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 \
+cargo test --locked -p araphor-data -p mithril-control -p mithril-node \
+  -p mithril-e2e --all-features --lib observability_intent_ -- --nocapture
+```
+
+Use `observability_` instead of `observability_intent_` for the portable-type
+check. Receipts are `portable-contract-2.log` and `trace-intent.log` under
+`/tmp/araphor-capture-qualification.E0VU3eEo/`. These results do not prove the
+raw-output migration, Control integration, diagnostic reservations, or physical
+lifecycle gates. Those parts remain **Not done**. No performance experiment ran.
+
 ## Acceptance and verification
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
