@@ -1706,33 +1706,33 @@ impl EffectTestRunner {
                 )?;
             }
         }
-        let unix_stream_marker = observations.cursor();
-        let unix_stream_outcome = fixture.run_prepared(HardClosedOperation::UnixStream)?;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        ensure!(
-            unix_stream_outcome.allowed,
-            InvalidInputSnafu {
-                path: fixture_root.join("relationship.sock"),
-                reason: format!(
-                    "Unix-stream IPC did not produce the configured relationship classification: {unix_stream_outcome:?}; observed {:?}",
-                    observations
-                        .recent_since(unix_stream_marker)
-                        .iter()
-                        .map(|event| {
-                            (
-                                event.reason.as_str(),
-                                event.effect_family,
-                                event.operation,
-                                event.operation_argument,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                ),
-            }
-        );
         if protect {
+            let unix_stream_marker = observations.cursor();
+            let unix_stream_outcome = fixture.run_prepared(HardClosedOperation::UnixStream)?;
+            reader
+                .poll(Duration::from_millis(100))
+                .context(InterceptorSnafu)?;
+            ensure!(
+                unix_stream_outcome.allowed,
+                InvalidInputSnafu {
+                    path: fixture_root.join("relationship.sock"),
+                    reason: format!(
+                        "Unix-stream IPC did not produce the configured relationship classification: {unix_stream_outcome:?}; observed {:?}",
+                        observations
+                            .recent_since(unix_stream_marker)
+                            .iter()
+                            .map(|event| {
+                                (
+                                    event.reason.as_str(),
+                                    event.effect_family,
+                                    event.operation,
+                                    event.operation_argument,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    ),
+                }
+            );
             let passed_secret_control_marker = observations.cursor();
             ensure!(
                 fixture.open(&paths.secret)?.denied(),
@@ -1815,32 +1815,19 @@ impl EffectTestRunner {
                     KernelEffectOperationV1::OpenRead,
                 ),
             )?;
-        } else {
-            wait_for_effect(
-                &reader,
-                &observations,
-                unix_stream_marker,
-                "WOULD_DENY",
-                (
-                    KernelEffectFamilyV1::Ipc,
-                    KernelEffectOperationV1::IpcAccess,
-                ),
-            )?;
-        }
-        ensure!(
-            !observations
-                .recent_since(unix_stream_marker)
-                .iter()
-                .any(|event| {
-                    event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::Create as u16)
-                }),
-            InvalidInputSnafu {
-                path: Path::new("effect_observations"),
-                reason: "the abstract Unix-stream case reached the file-create path",
-            }
-        );
-        if protect {
+            ensure!(
+                !observations
+                    .recent_since(unix_stream_marker)
+                    .iter()
+                    .any(|event| {
+                        event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
+                            && event.operation == u32::from(KernelEffectOperationV1::Create as u16)
+                    }),
+                InvalidInputSnafu {
+                    path: Path::new("effect_observations"),
+                    reason: "the abstract Unix-stream case reached the file-create path",
+                }
+            );
             let device_allow_marker = observations.cursor();
             let device_allow = fixture.run_prepared(HardClosedOperation::Ioctl)?;
             reader

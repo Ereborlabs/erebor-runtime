@@ -3815,7 +3815,7 @@ test does not close a row when its physical condition or an assertion changed.
       the connection for descriptor transfer. Keep that setup until the
       descriptor-transfer replacement passes. Retire only independent
       Protect verdict assertions after all three platforms pass.
-      - [ ] Replace the Observe result with `unix_stream_is_observed`.
+      - [x] Replace the Observe result with `unix_stream_is_observed`.
         Reuse `unix_stream.py`, actor-group setup, and `EffectCheck`. Keep
         two distinct bindings and roles in one network namespace. Use a
         signed Observe policy with no Unix relationship allowance, as in
@@ -3824,8 +3824,8 @@ test does not close a row when its physical condition or an assertion changed.
         result zero, configured `EACCES`, and no File/Create event. Keep
         the standard test below 100 lines. Add no Platform or production
         API. Pass and commit Host, direct runc, then Kubernetes before
-        removing only the legacy Observe result wait. Keep the old stream
-        action, descriptor setup, and combined no-file-create assertion.
+        removing the legacy Observe action and result wait. Keep the Protect
+        stream action, descriptor setup, and combined no-file-create assertion.
         The rejected 2026-10-01 Host draft used two admitted initial roots.
         Two Observe-first starts timed out during admission before the socket
         action. A Protect-start draft activated Observe before socket creation,
@@ -3932,10 +3932,30 @@ test does not close a row when its physical condition or an assertion changed.
           scenario is excluded. See
           `/tmp/mithril-group-recovery-matrix-20261001.log`. No Node, Control,
           BPF, public Platform API, actor, or policy source changes are made.
-          The independent unmatched Observe replacement remains pending.
-          Its new 98-line draft starts the client before Node, outside runtime
-          admission. It uses the shared actor and `ipc_observe` lifecycle.
-          Keep the legacy assertions until this draft passes all platforms.
+          The 97-line Observe replacement passes on Host, runc, and Kubernetes.
+          It reuses `bpf_recovery`: start Control and Node, start unprotected
+          actors, then install policy. Socket creation still occurs after
+          policy activation. Linux read and write deadlines remain five seconds.
+          Kubernetes exec now waits in the actual `worker` cgroup, not the
+          first group member's cgroup. The namespace check runs before policy
+          installation. The 53-line `unowned_read_is_denied` test reproduces
+          the outside-observer denial on all three platforms. No observer
+          permission, production source, or Platform API changes are made.
+          Read [the scenario](src/effect/unix_observe.rs),
+          [the actor](fixtures/process/unix_stream.py), and
+          [the observer check](src/effect/proc_observer.rs).
+          All four lifecycle tests pass in 60.30 seconds on Host, 66.89 seconds
+          on runc, and 157.80 seconds on Kubernetes. Pin, lease, output, and
+          cgroup cleanup checks pass. All 91 local tests and strict release
+          Clippy pass. See `/tmp/mithril-unix-shared-{light,kube}-20261002.log`.
+          The Allow companion passes on Host and runc. Its Kubernetes first
+          `ctypes._endian` import fails before the modified socket action.
+          Keep this issue open; see `/tmp/mithril-unix-allow-kube-20261002.log`.
+          Keep SCM_RIGHTS and the Protect-mode stream setup unchanged.
+          The old Observe action and evidence wait are removed. The combined
+          Protect no-file-create assertion remains. All 25 related effect
+          tests, VM harness checks, and final repository Rust CI pass after
+          the Rust edit. See `/tmp/mithril-unix-observe-retirement-ci-20261002.log`.
   - [x] Replace the remaining Observe-mode descriptor exec with
     `forked_fd_exec_is_observed`. Reuse `exec_on_release.py`, the process
     owner, and `EffectCheck`. Use a distinct signed Observe policy for the
