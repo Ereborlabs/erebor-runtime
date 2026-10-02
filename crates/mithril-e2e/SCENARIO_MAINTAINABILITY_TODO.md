@@ -5661,9 +5661,31 @@ test does not close a row when its physical condition or an assertion changed.
     getter supports Host only, and stock runc emits `null` for an empty list.
     The test uses the launcher cgroup input and serde's optional list. It also
     rejects runtime stderr and a retained container state directory.
-  - [ ] Commit the replacement before removing its old action, duplicate
-    result fields, and shell predicate. Keep the other twelve retained-gate
-    cases and their security assertions.
+  - [x] Commit the verified replacement before removing its old action.
+    Commit `f3821368` contains the standard test and its checked inputs.
+  - [x] Remove the old hostile action and its duplicate result fields.
+    Keep the other twelve retained-gate cases and their security assertions.
+  - [x] Make both retained-upgrade launcher paths invoke the exact standard
+    Rust hostile test. Copy the test binary and required fixture inputs.
+    Keep the remaining runtime-gate assertions in their Rust owner. Remove
+    their duplicate shell predicates. Keep the result-schema and fixture
+    cleanup checks. Verify the complete remaining probe and launcher cleanup
+    in the retained root VM before the retirement commit.
+    The launcher function passed with K3s stock runc 1.4.2. The exact standard
+    test passed in 1.93 seconds. All twelve remaining cases passed. The result
+    contains 34 fields and reports fixture cleanup. No platform output, pin,
+    actor cgroup, or Node cgroup remained. The launcher removed its temporary
+    input and binary directory. This change removes 24 Rust lines and one
+    shell line. The full two-node Kubernetes procedure was not run.
+    Evidence: `target/mithril-hostile-retirement-20261002T221222Z-2136229`.
+    [run_lightweight_upgrade_probe](harness/vm/two-node-convergence.sh) copies
+    the standard test binary and two required fixture inputs, then invokes
+    the exact Rust case. The old runner still asserts all twelve other cases.
+    Shell checks cover the result schema and resource cleanup only.
+  - [x] Pass final Rust CI after the deletion and commit the retirement.
+    All 25 related effect checks passed. Local VM harness checks and final
+    Rust CI passed. The workspace gate uses normal ignored-test exclusions.
+    See `/tmp/mithril-runtime-hostile-retirement-ci-20261002.log`.
     Review route: [hostile_runtime_never_starts](src/identity/scenarios/runtime_hostile.rs)
     binds the checked OCI input and keeps the Node endpoint absent.
       -> [OciBaseSpecOwner](../mithril-node/src/runtime_integration.rs) installs

@@ -230,9 +230,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
 pub struct RuncRetainedRuntimeGateProbeV1 {
     pub schema_version: u32,
     pub runc_version: String,
-    pub hostile_container_denied: bool,
-    pub hostile_process_never_started: bool,
-    pub hostile_decision_logged: bool,
     pub cri_sandbox_allowed: bool,
     pub cri_sandbox_process_started: bool,
     pub cri_sandbox_decision_logged: bool,
@@ -871,17 +868,6 @@ impl RetainedRuntimeGateRuncFixture {
             fs::copy(source, &target).context(IoSnafu { path: source })?;
         }
         Ok(())
-    }
-
-    fn run_hostile(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        let mut config = self.stock_config("hostile")?;
-        config["process"]["args"] = json!([
-            "/bin/sh",
-            "-c",
-            "read line </host/etc/shadow; printf HOSTILE_RAN >/result/hostile"
-        ]);
-        self.add_bind_mount(&mut config, Path::new("/"), Path::new("/host"), false)?;
-        self.run_case("hostile", config)
     }
 
     fn run_cri_sandbox(&self) -> Result<RetainedRuntimeGateCaseResult> {
@@ -1808,7 +1794,6 @@ impl EffectTestRunner {
             k3s_path,
             nsenter_path,
         )?;
-        let hostile = fixture.run_hostile()?;
         let cri_sandbox = fixture.run_cri_sandbox()?;
         let forged_cri_sandbox = fixture.run_forged_cri_sandbox()?;
         let recovery = fixture.run_exact_recovery()?;
@@ -1841,9 +1826,6 @@ impl EffectTestRunner {
         let result = RuncRetainedRuntimeGateProbeV1 {
             schema_version: 5,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
-            hostile_container_denied: !hostile.success,
-            hostile_process_never_started: !fixture.marker_exists("hostile"),
-            hostile_decision_logged: hostile.stderr.contains("decision=DENY_HOSTILE"),
             cri_sandbox_allowed: cri_sandbox.success,
             cri_sandbox_process_started: cri_sandbox.stdout.trim() == "CRI_SANDBOX_ALLOWED",
             cri_sandbox_decision_logged: cri_sandbox_log.contains("decision=ALLOW_CRI_SANDBOX"),
@@ -1886,10 +1868,7 @@ impl EffectTestRunner {
             fixture_root_removed: false,
         };
         ensure!(
-            result.hostile_container_denied
-                && result.hostile_process_never_started
-                && result.hostile_decision_logged
-                && result.cri_sandbox_allowed
+            result.cri_sandbox_allowed
                 && result.cri_sandbox_process_started
                 && result.cri_sandbox_decision_logged
                 && result.forged_cri_sandbox_denied
@@ -1923,8 +1902,7 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; hostile={:?}; cri_sandbox={:?}; forged_cri_sandbox={:?}; recovery={:?}; control_recovery={:?}; changed_control_recovery={:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; changed_recovery={:?}; stock_spec={:?}",
-                    hostile.stderr.trim(),
+                    "the direct runc retained-gate oracle failed: result={result:?}; cri_sandbox={:?}; forged_cri_sandbox={:?}; recovery={:?}; control_recovery={:?}; changed_control_recovery={:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; changed_recovery={:?}; stock_spec={:?}",
                     cri_sandbox.stderr.trim(),
                     forged_cri_sandbox.stderr.trim(),
                     recovery.stderr.trim(),

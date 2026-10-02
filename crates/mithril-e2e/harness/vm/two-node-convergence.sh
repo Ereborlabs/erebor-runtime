@@ -218,11 +218,42 @@ run_lightweight_upgrade_probe() {
   local remote_root=$2
   local hook=$3
   local remote=$remote_root/runtime-gate-lightweight-$run_id
+  local group=/sys/fs/cgroup/$vm-runtime-gate-$run_id
+  local pin=/sys/fs/bpf/$vm-runtime-gate-$run_id
+  local test_name=identity::scenarios::runtime_hostile::hostile_runtime_never_starts::runtime_gate_runc
+  local test_bin
+  test_bin=$(cd -- "$repo_root" && cargo test --locked -p mithril-e2e \
+    --lib --no-run --message-format=json | jq -r \
+    'select(.reason == "compiler-artifact" and .profile.test == true and
+      .target.name == "mithril_e2e" and .executable != null) | .executable')
+  [[ -x $test_bin ]]
+  "$test_bin" --list --ignored | grep -Fx "$test_name: test" >/dev/null
+
+  tar -C "$repo_root" -cf "$output_directory/runtime-gate-inputs.tar" \
+    crates/mithril-e2e/fixtures/process/runtime_hostile.py \
+    crates/mithril-e2e/fixtures/convergence/direct-runc-recovery-v1.json
 
   "$provider" run "$vm" mkdir -p "$remote"
+  "$provider" put "$vm" "$test_bin" "$remote/mithril-e2e-tests"
+  "$provider" put "$vm" "$output_directory/runtime-gate-inputs.tar" "$remote/inputs.tar"
+  "$provider" run "$vm" tar -xf "$remote/inputs.tar" -C "$remote"
   "$provider" put "$vm" "$repo_root/target/debug/mithril-effect-test" \
     "$remote/mithril-effect-test"
   "$provider" put "$vm" "$hook" "$remote/mithril-oci-hook"
+  "$provider" run "$vm" sudo env \
+    "MITHRIL_TEST_ROOT=$remote" \
+    "MITHRIL_TEST_OUTPUT=$remote/platform" \
+    "MITHRIL_TEST_PIN=$pin" \
+    "MITHRIL_TEST_LEASE=$remote/platform/owner.lock" \
+    "MITHRIL_TEST_CGROUP=$group" \
+    "MITHRIL_TEST_RUNC=/var/lib/rancher/k3s/data/current/bin/runc" \
+    "MITHRIL_TEST_OCI_HOOK=$remote/mithril-oci-hook" \
+    "$remote/mithril-e2e-tests" "$test_name" \
+    --exact --ignored --nocapture --test-threads=1 \
+    >"$output_directory/runtime-hostile-runc.txt"
+  for path in "$remote/platform" "$pin" "$group" "$group-node"; do
+    "$provider" run "$vm" sudo test ! -e "$path"
+  done
   "$provider" run "$vm" sudo "$remote/mithril-effect-test" \
     --repo-root "$remote" runc-retained-runtime-gate-probe \
     --output-directory "$remote/evidence" \
@@ -231,43 +262,9 @@ run_lightweight_upgrade_probe() {
   "$provider" get "$vm" \
     "$remote/evidence/runc-retained-runtime-gate-probe.json" \
     "$output_directory/runc-retained-runtime-gate-probe.json"
-  jq -e '
-    .hostile_container_denied == true and
-    .hostile_process_never_started == true and
-    .hostile_decision_logged == true and
-    .cri_sandbox_allowed == true and
-    .cri_sandbox_process_started == true and
-    .cri_sandbox_decision_logged == true and
-    .forged_cri_sandbox_denied == true and
-    .forged_cri_sandbox_process_never_started == true and
-    .forged_cri_sandbox_decision_logged == true and
-    .exact_recovery_allowed == true and
-    .exact_recovery_process_started == true and
-    .exact_recovery_decision_logged == true and
-    .exact_control_recovery_allowed == true and
-    .exact_control_recovery_process_started == true and
-    .exact_control_recovery_decision_logged == true and
-    .changed_control_recovery_denied == true and
-    .changed_control_recovery_process_never_started == true and
-    .changed_control_recovery_decision_logged == true and
-    .version_changed_control_recovery_allowed == true and
-    .version_changed_control_recovery_process_started == true and
-    .exact_installer_allowed == true and
-    .exact_installer_process_started == true and
-    .changed_installer_allowed == true and
-    .changed_installer_process_started == true and
-    .changed_installer_decision_logged == true and
-    .forged_installer_denied == true and
-    .forged_installer_process_never_started == true and
-    .forged_installer_decision_logged == true and
-    .version_changed_node_recovery_allowed == true and
-    .version_changed_node_recovery_process_started == true and
-    .changed_recovery_denied == true and
-    .changed_recovery_process_never_started == true and
-    .unavailable_decision_logged == true and
-    .host_stock_spec_generated == true and
-    .fixture_root_removed == true
-  ' "$output_directory/runc-retained-runtime-gate-probe.json" >/dev/null
+  # The Rust runner checks each retained result before it returns.
+  jq -e '.schema_version == 5 and .fixture_root_removed == true' \
+    "$output_directory/runc-retained-runtime-gate-probe.json" >/dev/null
   "$provider" run "$vm" sudo rm -rf -- "$remote"
 }
 
