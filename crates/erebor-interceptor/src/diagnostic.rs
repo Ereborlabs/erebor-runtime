@@ -133,23 +133,32 @@ impl DiagnosticBackend {
         }
         let source = source.to_vec();
         let path = self.executable.clone();
-        let signals = Arc::new(DiagnosticSignals::default());
-        let cancel = Arc::clone(&signals);
-        let (send, frames) = mpsc::sync_channel(256);
-        let worker = thread::Builder::new()
-            .name("araphor-diagnostic".into())
-            .spawn(move || {
-                let command = Self::command(&executable, cgroup_id, mode);
-                SupervisedChild::run(command, &path, source, mode, collection, cancel, send)
-            })
-            .context(IoSnafu {
-                action: "start diagnostic supervisor",
-                path: &self.executable,
-            })?;
-        Ok(DiagnosticCapture {
-            frames,
-            signals,
-            worker: Some(worker),
+        DiagnosticCapture::spawn(&self.executable, move |signals, send| {
+            let command = Self::command(&executable, cgroup_id, mode);
+            SupervisedChild::run(command, &path, source, mode, collection, signals, send)
+        })
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn start_fixture(
+        mut command: Command,
+        mode: DiagnosticMode,
+        collection: Duration,
+    ) -> Result<DiagnosticCapture> {
+        let path = PathBuf::from(command.get_program());
+        let run_path = path.clone();
+        Self::set_child_io(&mut command);
+        DiagnosticCapture::spawn(&path, move |signals, send| {
+            SupervisedChild::run(
+                command,
+                &run_path,
+                b"fixture".to_vec(),
+                mode,
+                collection,
+                signals,
+                send,
+            )
         })
     }
 
@@ -167,18 +176,23 @@ impl DiagnosticBackend {
             .env("BPFTRACE_MAX_BPF_PROGS", "16")
             .env("BPFTRACE_PERF_RB_PAGES", "8")
             .env("BPFTRACE_MAX_CAT_BYTES", "1024")
-            .current_dir("/")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        Self::set_child_lifetime(&mut command);
+            .current_dir("/");
+        Self::set_child_io(&mut command);
         Self::isolate_filesystem(&mut command, mode);
         if mode == DiagnosticMode::Compile {
             command.arg("-d");
         }
         command.args(["-B", "none", "-f", "json", "-", &cgroup_id.to_string()]);
         command
+    }
+
+    fn set_child_io(command: &mut Command) {
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        Self::set_child_lifetime(command);
     }
 
     #[allow(unsafe_code)]
@@ -281,6 +295,32 @@ impl DiagnosticBackend {
 }
 
 impl DiagnosticCapture {
+    fn spawn(
+        path: &Path,
+        run: impl FnOnce(
+                Arc<DiagnosticSignals>,
+                mpsc::SyncSender<DiagnosticFrame>,
+            ) -> Result<DiagnosticResult>
+            + Send
+            + 'static,
+    ) -> Result<Self> {
+        let signals = Arc::new(DiagnosticSignals::default());
+        let cancel = Arc::clone(&signals);
+        let (send, frames) = mpsc::sync_channel(256);
+        let worker = thread::Builder::new()
+            .name("araphor-diagnostic".into())
+            .spawn(move || run(cancel, send))
+            .context(IoSnafu {
+                action: "start diagnostic supervisor",
+                path,
+            })?;
+        Ok(Self {
+            frames,
+            signals,
+            worker: Some(worker),
+        })
+    }
+
     pub fn frames(&self) -> &mpsc::Receiver<DiagnosticFrame> {
         &self.frames
     }
@@ -654,32 +694,89 @@ mod tests {
 
     fn capture(script: &str) -> Result<DiagnosticCapture> {
         let mut command = Command::new("/bin/sh");
-        command
-            .args(["-c", script])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        DiagnosticBackend::set_child_lifetime(&mut command);
-        let signals = Arc::new(DiagnosticSignals::default());
-        let cancel = Arc::clone(&signals);
-        let (send, frames) = mpsc::sync_channel(4);
-        let worker = thread::spawn(move || {
-            SupervisedChild::run(
-                command,
-                Path::new("/bin/sh"),
-                b"fixture".to_vec(),
-                DiagnosticMode::Compile,
-                Duration::from_secs(1),
-                cancel,
-                send,
-            )
-        });
-        Ok(DiagnosticCapture {
-            frames,
-            signals,
-            worker: Some(worker),
-        })
+        command.args(["-c", script]);
+        DiagnosticBackend::start_fixture(command, DiagnosticMode::Compile, Duration::from_secs(1))
+    }
+
+    fn observe(script: &str, collection: Duration) -> Result<DiagnosticCapture> {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]);
+        DiagnosticBackend::start_fixture(command, DiagnosticMode::Capture, collection)
+    }
+
+    #[test]
+    fn observability_backend_marker_source() -> Result<()> {
+        let capture = observe(
+            "cat >/dev/null; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n'; printf 'Attaching 1 probe...\\n__BPFTRACE_NOTIFY_PROBES_ATTACHED extra\\n' >&2",
+            Duration::from_millis(100),
+        )?;
+        let frames: Vec<_> = capture.frames().iter().collect();
+        let result = capture.finish()?;
+        assert_eq!(frames.len(), 3);
+        assert_eq!(result.stop, DiagnosticStop::Exited);
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.attach_notification_ms, None);
+        assert_eq!(result.cleanup_verified, None);
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_capture_deadline() -> Result<()> {
+        let capture = observe(
+            "cat >/dev/null; for n in $(seq 1 200); do printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; sleep 0.05; done",
+            Duration::from_millis(100),
+        )?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut frames = Vec::new();
+        while !capture.is_finished() && Instant::now() < deadline {
+            frames.extend(capture.frames().try_iter());
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(capture.is_finished());
+        frames.extend(capture.frames().try_iter());
+        let result = capture.finish()?;
+        assert!(frames.iter().any(|frame| frame.stderr));
+        assert_eq!(result.stop, DiagnosticStop::Deadline);
+        assert!(result
+            .attach_notification_ms
+            .is_some_and(|attached| result.elapsed_ms >= attached + 100));
+        assert!(!Path::new(&format!("/proc/{}", result.process_id)).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_preparation_timeout() -> Result<()> {
+        let capture = observe(
+            "cat >/dev/null; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n'; exec sleep 60",
+            Duration::from_millis(100),
+        )?;
+        let _frames: Vec<_> = capture.frames().iter().collect();
+        let result = capture.finish()?;
+        assert_eq!(result.stop, DiagnosticStop::PreparationDeadline);
+        assert_eq!(result.attach_notification_ms, None);
+        assert!(result.elapsed_ms >= PREPARATION_LIMIT.as_millis() as u64);
+        assert!(result.elapsed_ms < 17_000);
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_preparation_cancel() -> Result<()> {
+        let capture = observe(
+            "cat >/dev/null; printf 'preparing\\n'; exec sleep 60",
+            Duration::from_secs(1),
+        )?;
+        assert!(capture
+            .frames()
+            .recv_timeout(Duration::from_secs(2))
+            .is_ok());
+        capture.cancel();
+        let _frames: Vec<_> = capture.frames().iter().collect();
+        let result = capture.finish()?;
+        assert_eq!(result.stop, DiagnosticStop::Cancelled);
+        assert_eq!(result.attach_notification_ms, None);
+        assert!(!result.forced_kill);
+        assert!(!Path::new(&format!("/proc/{}", result.process_id)).exists());
+        Ok(())
     }
 
     #[test]
@@ -711,7 +808,7 @@ mod tests {
         }
         let frames: Vec<_> = capture.frames().try_iter().collect();
         let result = capture.finish()?;
-        assert!(frames.len() <= 4);
+        assert_eq!(frames.len(), 256);
         assert_eq!(result.stop, DiagnosticStop::ConsumerSlow);
         assert!(result.output_incomplete);
         Ok(())
@@ -735,6 +832,24 @@ mod tests {
         let result = capture.finish()?;
         assert_eq!(result.stop, DiagnosticStop::OutputLimit);
         assert_eq!(bytes, MAX_OUTPUT_BYTES);
+        assert!(result.output_incomplete);
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_frame_count() -> Result<()> {
+        let capture = capture("cat >/dev/null")?;
+        let mut result = capture.finish()?;
+        let (send, frames) = mpsc::sync_channel(1);
+        for sequence in 1..=MAX_OUTPUT_FRAMES {
+            SupervisedChild::emit(vec![b'x'], false, &send, &mut result);
+            assert_eq!(frames.try_recv().map(|frame| frame.sequence), Ok(sequence));
+        }
+        assert!(!result.output_incomplete);
+        SupervisedChild::emit(vec![b'x'], false, &send, &mut result);
+        assert!(frames.try_recv().is_err());
+        assert_eq!(result.emitted_frames, MAX_OUTPUT_FRAMES);
+        assert_eq!(result.stop, DiagnosticStop::OutputLimit);
         assert!(result.output_incomplete);
         Ok(())
     }
@@ -811,6 +926,44 @@ mod tests {
         } else {
             assert!(result.is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_request_limits() -> Result<()> {
+        let hash = Sha256::digest(std::fs::read("/bin/false").context(IoSnafu {
+            action: "read fixture executable",
+            path: Path::new("/bin/false"),
+        })?)
+        .into();
+        let backend = DiagnosticBackend::new(PathBuf::from("/bin/false"), hash)?;
+        let source = vec![b' '; MAX_SOURCE_BYTES];
+        let oversize = vec![b' '; MAX_SOURCE_BYTES + 1];
+        for (bytes, cgroup, seconds) in [
+            (&[][..], 1, 1),
+            (&b"\0"[..], 1, 1),
+            (oversize.as_slice(), 1, 1),
+            (source.as_slice(), 0, 1),
+            (source.as_slice(), 1, 0),
+            (source.as_slice(), 1, 301),
+        ] {
+            assert!(backend
+                .start(
+                    bytes,
+                    cgroup,
+                    DiagnosticMode::Capture,
+                    Duration::from_secs(seconds),
+                )
+                .is_err());
+        }
+        assert!(backend
+            .start(
+                &source,
+                1,
+                DiagnosticMode::Capture,
+                Duration::from_secs(300),
+            )
+            .is_ok());
         Ok(())
     }
 
