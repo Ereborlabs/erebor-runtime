@@ -2481,6 +2481,24 @@ test does not close a row when its physical condition or an assertion changed.
       `source` directory did not change that result. The attempted test was
       removed. Do not retire the old assertion or accept the allowed read.
       Check the public policy boundary before another replacement attempt.
+    - [ ] Qualify `hard_link_stays_unresolved` with the old restricted root,
+      not the admitted application root from the rejected draft. Start Node
+      without a matching policy, start the initial actor and one extra actor,
+      then install the shared bootstrap policy before exact policy replacement.
+      Create both links before policy. Check Observe and Protect in one test.
+      Require the same device and inode, exact original-file evidence, and
+      hard-link `EACCES` with attributed `UNRESOLVED_OBJECT`. Reuse
+      `exception.py`, existing Platform operations, and `EffectCheck`.
+      Keep the test below 100 lines. Pass Host, runc, then Kubernetes before
+      removing either old mode's hard-link assertion.
+      Host passes both modes in 46.58 seconds. The 92-line test requires
+      rule zero and `restored_or_unknown_root` before exact policy replacement.
+      The original read has the exact policy result. Both hard-link reads
+      return `EACCES` with fresh actor-attributed `UNRESOLVED_OBJECT` evidence.
+      Pin, lease, cgroup, and output cleanup checks pass. Keep the old action
+      until runc and Kubernetes pass. No production or Platform code changes.
+      The unchanged runc case passes both modes in 77.42 seconds, including
+      the production OCI hook and resource cleanup. Kubernetes remains open.
   - [ ] Replace both exact-secret bind-alias checks. Keep each live mount ID,
     device, inode, inode generation, and the shared composite authority.
     - [ ] Start with Protect mode. Let the shared actor create two directory bind

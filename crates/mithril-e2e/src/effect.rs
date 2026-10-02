@@ -46,6 +46,8 @@ mod file_bind_observe;
 #[cfg(test)]
 mod file_effect;
 #[cfg(test)]
+mod file_hard_link;
+#[cfg(test)]
 mod file_mount_change;
 #[cfg(test)]
 mod file_mutation;
