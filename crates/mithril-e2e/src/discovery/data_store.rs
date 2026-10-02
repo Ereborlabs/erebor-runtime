@@ -274,12 +274,15 @@ impl DataStoreQualification {
             } else {
                 [9; 16]
             };
-            self.check(
-                matches!(data.read_page(&foreign, 1),
+            match data.read_page(&foreign, 1) {
                 Err(araphor_data::Error::AnalysisState { reason, .. })
-                    if reason == "the evidence source is absent"),
-                "foreign tenant read succeeded",
-            )?;
+                    if reason == "the raw source is absent" => {}
+                Err(error) => self.check(
+                    false,
+                    &format!("foreign tenant read returned an unexpected error: {error:?}"),
+                )?,
+                Ok(_) => self.check(false, "foreign tenant read succeeded")?,
+            }
             let status = data
                 .source_status(identity)?
                 .ok_or("tenant source absent")?;

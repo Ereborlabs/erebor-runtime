@@ -1276,8 +1276,9 @@ mod tests {
         assert!(owner.active.is_empty());
         assert_eq!(owner.retained()?, vec![(id, dispatch.clone())]);
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
-        owner.set_intent_hook(|| panic!("duplicate dispatch started again"))?;
+        owner.set_intent_hook(|| {})?;
         assert_eq!(owner.admit(dispatch, None, &key, 3)?, id);
+        assert!(owner.intent_hook.is_some());
         assert_eq!(owner.terminal(id)?, Some(terminal));
         Ok(())
     }

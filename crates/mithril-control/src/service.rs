@@ -3132,7 +3132,8 @@ mod tests {
         unavailable.evidence = None;
         let error = unavailable
             .exchange_trace("node-a", &context, exchange)
-            .expect_err("an unavailable data owner cannot acknowledge output");
+            .err()
+            .ok_or("an unavailable data owner cannot acknowledge output")?;
         assert_eq!(error.code(), tonic::Code::Unavailable);
         Ok(())
     }

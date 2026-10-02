@@ -161,14 +161,17 @@ mod tests {
     }
 
     #[test]
-    fn observability_contract_error_class() {
+    fn observability_contract_error_class() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use erebor_runtime_error::{ErrorExt as _, StatusCode};
 
-        let source = TraceSourceV1::new(Vec::new()).expect_err("empty source must fail");
+        let source = TraceSourceV1::new(Vec::new())
+            .err()
+            .ok_or("empty source must fail")?;
         let error = crate::Error::from(source);
         assert_eq!(error.status_code(), StatusCode::InvalidArguments);
         assert!(matches!(error, crate::Error::DataStore { source, .. }
             if matches!(*source, araphor_data::Error::TraceInvalid { .. })));
+        Ok(())
     }
 
     #[test]

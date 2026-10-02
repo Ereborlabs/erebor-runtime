@@ -730,10 +730,11 @@ pub(crate) mod tests {
         store.set_commit_hook(
             araphor_data::AnalysisCommitStage::AfterTraceFreeze,
             move || {
-                frozen.send(()).expect("the read observer remains live");
-                resume
-                    .recv_timeout(Duration::from_secs(5))
-                    .expect("the read is released");
+                assert!(frozen.send(()).is_ok(), "the read observer remains live");
+                assert!(
+                    resume.recv_timeout(Duration::from_secs(5)).is_ok(),
+                    "the read is released"
+                );
                 Ok(())
             },
         )?;
@@ -743,7 +744,9 @@ pub(crate) mod tests {
                 ready.recv_timeout(Duration::from_secs(5))?;
                 let cancelled = owner.cancel([1; 16], [6; 16], "operator", true);
                 release.send(())?;
-                let result = reader.join().expect("the read thread must not panic");
+                let result = reader
+                    .join()
+                    .map_err(|_| "the read thread must not panic")?;
                 cancelled?;
                 assert!(matches!(
                     result,

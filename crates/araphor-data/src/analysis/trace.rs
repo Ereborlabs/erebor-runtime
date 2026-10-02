@@ -496,9 +496,9 @@ impl AnalysisStore {
 mod tests {
     use super::*;
 
-    fn intent(request: u8) -> TraceIntentV1 {
-        let source = TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec()).unwrap();
-        TraceIntentV1 {
+    fn intent(request: u8) -> Result<TraceIntentV1> {
+        let source = TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
+        Ok(TraceIntentV1 {
             tenant_id: [1; 16],
             request_id: [request; 16],
             bindings: vec![TraceBindingV1 {
@@ -517,7 +517,7 @@ mod tests {
             accepted_unix_ns: 100,
             deadline_unix_ns: 10_000,
             host_sensitive: false,
-        }
+        })
     }
 
     #[test]
@@ -525,7 +525,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
         let store = AnalysisStore::open(&root)?;
-        let input = intent(3);
+        let input = intent(3)?;
         let state = store.accept_trace(&input)?;
         assert_eq!(store.accept_trace(&input)?, state);
         let mut changed = input.clone();
@@ -567,7 +567,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("data"))?;
         for request in 1..=17 {
-            store.accept_trace(&intent(request))?;
+            store.accept_trace(&intent(request)?)?;
         }
         let first = store.trace_intents([1; 16], None)?;
         assert_eq!(first.intents.len(), 16);
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(last.intents[0].0.request_id, [17; 16]);
         assert!(last.next_request.is_none());
         assert!(store.trace_intents([2; 16], None)?.intents.is_empty());
-        let mut invalid = intent(18);
+        let mut invalid = intent(18)?;
         invalid.bindings.push(invalid.bindings[0].clone());
         assert!(store.accept_trace(&invalid).is_err());
         Ok(())
@@ -588,7 +588,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
         let store = AnalysisStore::open(&root)?;
-        store.accept_trace(&intent(3))?;
+        store.accept_trace(&intent(3)?)?;
         store.writer()?.get_mut()?.execute(
             "UPDATE traces SET authority = ?",
             params![b"changed-input".as_slice()],
@@ -604,7 +604,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("data");
         let store = AnalysisStore::open(&root)?;
-        let input = intent(3);
+        let input = intent(3)?;
         let state = store.accept_trace(&input)?;
         let padding = std::fs::OpenOptions::new()
             .write(true)
@@ -612,7 +612,7 @@ mod tests {
             .open(root.join("quota-test"))?;
         padding.set_len(store.storage.disk_max_bytes)?;
         assert!(matches!(
-            store.accept_trace(&intent(4)),
+            store.accept_trace(&intent(4)?),
             Err(crate::Error::StorageCapacity { .. })
         ));
         assert_eq!(store.accept_trace(&input)?, state);
@@ -621,7 +621,12 @@ mod tests {
             read_revoked: true,
             ..state
         })?;
-        assert_eq!(store.trace_intent([1; 16], [3; 16])?.unwrap().0, cancelled);
+        assert_eq!(
+            store
+                .trace_intent([1; 16], [3; 16])?
+                .map(|(state, _)| state),
+            Some(cancelled)
+        );
         Ok(())
     }
 
@@ -635,10 +640,10 @@ mod tests {
             ..Default::default()
         };
         let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
-        let input = intent(3);
+        let input = intent(3)?;
         store.accept_trace(&input)?;
         assert!(matches!(
-            store.accept_trace(&intent(4)),
+            store.accept_trace(&intent(4)?),
             Err(crate::Error::StorageCapacity {
                 resource: "diagnostic logical bytes",
                 ..
@@ -684,10 +689,12 @@ mod tests {
             },
             100,
         )?;
-        store.accept_trace(&intent(4))?;
+        store.accept_trace(&intent(4)?)?;
         drop(store);
         let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
-        assert!(store.trace_receipt(identity)?.unwrap().terminal.is_some());
+        assert!(store
+            .trace_receipt(identity)?
+            .is_some_and(|receipt| receipt.terminal.is_some()));
         assert!(store.trace_intent([1; 16], [4; 16])?.is_some());
         Ok(())
     }
@@ -697,7 +704,7 @@ mod tests {
         use std::sync::atomic::Ordering;
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("data"))?;
-        store.accept_trace(&intent(3))?;
+        store.accept_trace(&intent(3)?)?;
         store.accept_validated_batch(
             crate::EvidenceIntakeIdentityV1 {
                 tenant_id: [1; 16],
