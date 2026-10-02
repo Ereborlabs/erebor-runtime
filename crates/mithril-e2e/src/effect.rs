@@ -106,6 +106,8 @@ mod prestop_path;
 #[cfg(test)]
 mod privilege;
 #[cfg(test)]
+mod proc_mount_view;
+#[cfg(test)]
 mod proc_observer;
 #[cfg(test)]
 mod process_control;

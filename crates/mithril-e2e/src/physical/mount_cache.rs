@@ -2,8 +2,10 @@ use std::{collections::BTreeSet, fs, os::unix::fs::MetadataExt as _, path::PathB
 
 use erebor_interceptor::KernelStateReader;
 use libbpf_rs::{MapCore as _, MapFlags, MapHandle};
+use snafu::ResultExt as _;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
+use crate::error::IoSnafu;
 use crate::platform::{Platform, TestResult};
 
 // These layouts match the named cache structures in identity_maps.h.
@@ -113,12 +115,16 @@ impl MountCache {
                 keys.insert(bytes);
             }
         }
+        let namespace = self.process.join("ns/mnt");
+        let mountinfo = self.process.join("mountinfo");
         Ok(CacheView {
-            namespace: fs::metadata(self.process.join("ns/mnt"))?.ino(),
+            namespace: fs::metadata(&namespace)
+                .context(IoSnafu { path: &namespace })?
+                .ino(),
             epoch,
             generation,
             keys,
-            mountinfo: fs::read(self.process.join("mountinfo"))?,
+            mountinfo: fs::read(&mountinfo).context(IoSnafu { path: &mountinfo })?,
         })
     }
 
