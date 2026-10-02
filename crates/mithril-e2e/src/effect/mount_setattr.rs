@@ -8,7 +8,7 @@ use crate::physical::mount_cache::MountCache;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = bpf_recovery]
 fn setattr_rebuilds_namespaces<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-setattr")?;

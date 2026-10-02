@@ -2971,7 +2971,9 @@ test does not close a row when its physical condition or an assertion changed.
       Host passed the final recursive operation in 40.47 seconds. Both runs
       removed output, pin, lease, actor cgroup, and Node cgroup. The shared
       syscall keeps the baseline `AT_RECURSIVE` flag.
-    - [ ] Pass and commit real Kubernetes. The first run stopped with raw
+    - [x] Pass and commit real Kubernetes. The corrected 93-line shared test
+      passed Protect and Observe in 84.52 seconds. Namespace, output, pin,
+      lease, actor cgroup, and Node cgroup cleanup passed. The first run stopped with raw
       `EACCES` before the mount action in 74.03 seconds. Keep the old block.
       Reproduce an unowned observer's exact mount-namespace and mountinfo reads
       in lightweight. Add operation paths to the cache reader's I/O errors.
