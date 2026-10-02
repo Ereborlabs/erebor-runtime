@@ -59,7 +59,7 @@ pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 9;
+const ANALYSIS_SCHEMA_VERSION: i64 = 10;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -423,6 +423,11 @@ impl AnalysisStore {
                     last_cursor UBIGINT NOT NULL,
                     commit_revision UBIGINT NOT NULL,
                     PRIMARY KEY (stream_key, first_cursor)
+                );
+                CREATE TABLE replay_floors (
+                    tenant_id BLOB PRIMARY KEY,
+                    commit_revision UBIGINT NOT NULL,
+                    ordinal UINTEGER NOT NULL
                 );",
             )
             .context(AnalysisDatabaseSnafu {
@@ -533,6 +538,34 @@ impl AnalysisStore {
         self.read_snapshot(|reader| {
             Self::read_meta_from(reader, &self.root.join("analysis.duckdb"))
         })
+    }
+
+    pub fn replay_floor(&self, tenant: [u8; 16]) -> Result<Option<StorePositionV1>> {
+        if tenant == [0; 16] {
+            return self.reject("the replay floor tenant is invalid");
+        }
+        self.read_snapshot(|snapshot| Self::replay_floor_from(snapshot, tenant))
+    }
+
+    pub(crate) fn replay_floor_from(
+        snapshot: &Connection,
+        tenant: [u8; 16],
+    ) -> Result<Option<StorePositionV1>> {
+        snapshot
+            .query_row(
+                "SELECT commit_revision, ordinal FROM replay_floors WHERE tenant_id = ?",
+                params![tenant.as_slice()],
+                |row| {
+                    Ok(StorePositionV1 {
+                        commit_revision: row.get(0)?,
+                        ordinal: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read tenant replay floor",
+            })
     }
 
     pub fn source_receipt(

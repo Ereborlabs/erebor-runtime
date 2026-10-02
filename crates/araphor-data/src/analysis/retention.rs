@@ -1,7 +1,7 @@
 use duckdb::params;
 use snafu::ResultExt as _;
 
-use super::{source_key, AnalysisStore};
+use super::{source_key, AnalysisStore, StorePositionV1};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
 const SWEEP_SOURCES: usize = 16;
@@ -277,12 +277,55 @@ impl<'a> EvidenceRetentionOwner<'a> {
         let retained_bytes = retained_bytes
             .checked_sub(segment_bytes)
             .ok_or_else(|| self.store.state_error("retained segment bytes underflow"))?;
+        let replay_floor = raw
+            .entries
+            .values()
+            .filter(|entry| entry.reference.id == segment_id)
+            .flat_map(|entry| {
+                entry
+                    .commit
+                    .spans
+                    .iter()
+                    .map(move |span| (entry.commit.revision, span))
+            })
+            .try_fold(None::<StorePositionV1>, |floor, (commit_revision, span)| {
+                let ordinal = span
+                    .last
+                    .checked_sub(span.first)
+                    .and_then(|count| u32::try_from(count).ok())
+                    .and_then(|count| span.ordinal.checked_add(count))
+                    .ok_or_else(|| self.store.state_error("the expired position is invalid"))?;
+                let position = StorePositionV1 {
+                    commit_revision,
+                    ordinal,
+                };
+                Ok::<_, crate::Error>(Some(floor.map_or(position, |prior| prior.max(position))))
+            })?
+            .ok_or_else(|| self.store.state_error("the expired position is absent"))?;
+        let previous_floor = AnalysisStore::replay_floor_from(&transaction, identity.tenant_id)?;
+        let floor_changed = previous_floor.is_none_or(|prior| replay_floor > prior);
         raw.segments.seal_all()?;
         raw.project_paths(&transaction)?;
         transaction.execute(
             "UPDATE segments SET state = 'Deleting', sealed = true WHERE segment_id = ? AND state = 'Live'",
             params![segment_id],
         ).context(AnalysisDatabaseSnafu { operation: "mark eligible segment deletion" })?;
+        if floor_changed {
+            transaction
+                .execute(
+                    "INSERT INTO replay_floors VALUES (?, ?, ?)
+                    ON CONFLICT (tenant_id) DO UPDATE SET
+                        commit_revision = excluded.commit_revision, ordinal = excluded.ordinal",
+                    params![
+                        identity.tenant_id.as_slice(),
+                        replay_floor.commit_revision,
+                        replay_floor.ordinal
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance tenant replay floor",
+                })?;
+        }
         for (first, last) in &merged {
             transaction
                 .execute(
@@ -315,7 +358,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
             "DELETE FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
             params![key.as_slice(), identity.tenant_id.as_slice(), now_utc_ns],
         ).context(AnalysisDatabaseSnafu { operation: "remove expired witness references" })?;
-        super::quota::UsageChange::from(256 * expired as i64 - released)
+        let floor_charge = if previous_floor.is_none() { 256 } else { 0 };
+        super::quota::UsageChange::from(256 * expired as i64 + floor_charge - released)
             .apply(&transaction, &identity.tenant_id)?;
         let next_retained = raw
             .entries
@@ -327,6 +371,9 @@ impl<'a> EvidenceRetentionOwner<'a> {
             .min();
         let retained_floor = next_retained.map_or(receipt.contiguous_cursor, |cursor| cursor - 1);
         let mut relations = vec!["events", "expired_ranges", "evidence_refs"];
+        if floor_changed {
+            relations.push("replay_floors");
+        }
         if retained_floor > receipt.retained_floor {
             transaction
                 .execute(
@@ -398,6 +445,278 @@ mod tests {
             framed_records: prost::bytes::Bytes::from_static(bytes),
             frame_ends: (1..=bytes.len()).collect(),
         }
+    }
+
+    #[test]
+    fn query_follow_retention_commit() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let source = identity(1);
+        let older = EvidenceIntakeIdentityV1 {
+            source_id: [4; 16],
+            ..source.clone()
+        };
+        let foreign = identity(2);
+        store.accept_validated_batch(older.clone(), batch(1, b"gh"))?;
+        store.accept_validated_batch(source.clone(), batch(2, b"b"))?;
+        store.accept_validated_batch(source.clone(), batch(4, b"d"))?;
+        store.accept_validated_batch(source.clone(), batch(1, b"abcdef"))?;
+        let expected = store.read_page(&source, 6)?.records[0].position;
+        assert_eq!(expected.ordinal, 3);
+        store.accept_validated_batch(foreign.clone(), batch(1, b"xy"))?;
+        let foreign_position = store.read_page(&foreign, 2)?.records[0].position;
+        assert_eq!(store.replay_floor(source.tenant_id)?, None);
+        assert_eq!(store.replay_floor(foreign.tenant_id)?, None);
+        assert!(store.replay_floor([0; 16]).is_err());
+        let owner = EvidenceRetentionOwner::new(&store);
+        let result = owner.retain(&source, u64::MAX)?;
+        assert_eq!(result.removed_records, 6);
+        assert!(expected.commit_revision < result.commit_revision);
+        assert_eq!(store.replay_floor(source.tenant_id)?, Some(expected));
+        assert_eq!(owner.retain(&older, u64::MAX)?.removed_records, 2);
+        assert_eq!(store.replay_floor(source.tenant_id)?, Some(expected));
+        assert_eq!(store.replay_floor(foreign.tenant_id)?, None);
+        assert_eq!(owner.retain(&foreign, u64::MAX)?.removed_records, 2);
+        assert_eq!(
+            store.replay_floor(foreign.tenant_id)?,
+            Some(foreign_position)
+        );
+        assert_eq!(store.replay_floor(source.tenant_id)?, Some(expected));
+        store.accept_validated_batch(source.clone(), batch(7, b"i"))?;
+        let later = store.read_page(&source, 7)?.records[0].position;
+        assert_eq!(store.replay_floor(source.tenant_id)?, Some(expected));
+        assert_eq!(owner.retain(&source, u64::MAX)?.removed_records, 1);
+        assert_eq!(store.replay_floor(source.tenant_id)?, Some(later));
+        let before = store.meta()?;
+        assert_eq!(owner.retain(&source, u64::MAX)?.removed_records, 0);
+        assert_eq!(store.meta()?, before);
+        store.read_snapshot(|snapshot| AnalysisStore::validate_usage(snapshot, &store.root))?;
+        Ok(())
+    }
+
+    #[test]
+    fn query_follow_retention_restart() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let source = identity(1);
+        if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
+            let store = AnalysisStore::open(std::path::PathBuf::from(root))?;
+            EvidenceRetentionOwner::new(&store).retain(&source, u64::MAX)?;
+            return Err("the requested retention crash did not occur".into());
+        }
+        for point in [
+            "retention.before",
+            "retention.after",
+            "retention.unlinked",
+            "retention.cleaned",
+        ] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open(&root)?;
+            store.accept_validated_batch(source.clone(), batch(1, b"abc"))?;
+            let position = store.read_page(&source, 3)?.records[0].position;
+            let before = store.meta()?;
+            drop(store);
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "analysis::retention::tests::query_follow_retention_restart",
+                ])
+                .env("ARAPHOR_CRASH_ROOT", &root)
+                .env("ARAPHOR_CRASH_POINT", point)
+                .status()?;
+            assert_eq!(status.code(), Some(73), "{point}");
+            let committed = point != "retention.before";
+            let expected = committed.then_some(position);
+            {
+                let snapshot = AnalysisStore::open_native(&root.join("analysis.duckdb"))?;
+                assert_eq!(
+                    AnalysisStore::replay_floor_from(&snapshot, source.tenant_id)?,
+                    expected,
+                    "{point}"
+                );
+                let deleting: bool = snapshot.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM segments WHERE state = 'Deleting')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(
+                    deleting,
+                    matches!(point, "retention.after" | "retention.unlinked"),
+                    "{point}"
+                );
+            }
+            let mut meta = before;
+            meta.commit_revision += u64::from(committed);
+            for _ in 0..2 {
+                let reopened = AnalysisStore::open(&root)?;
+                assert_eq!(reopened.meta()?, meta, "{point}");
+                assert_eq!(
+                    reopened.replay_floor(source.tenant_id)?,
+                    expected,
+                    "{point}"
+                );
+                if committed {
+                    assert!(matches!(
+                        reopened.read_page(&source, 1),
+                        Err(crate::Error::RetainedRangeExpired { .. })
+                    ));
+                } else {
+                    assert_eq!(reopened.read_page(&source, 1)?.records.len(), 3);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn query_follow_retention_restore() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let source = identity(1);
+        store.accept_validated_batch(source.clone(), batch(1, b"abc"))?;
+        let expected = store.read_page(&source, 3)?.records[0].position;
+        EvidenceRetentionOwner::new(&store).retain(&source, u64::MAX)?;
+        store.accept_validated_batch(source.clone(), batch(4, b"d"))?;
+        let before = store.meta()?;
+        let backup = root.join("backups/floor");
+        let manifest = store.backup(&backup)?;
+        let restored_root = directory.path().join("restored");
+        let restored = AnalysisStore::restore(&backup, &restored_root)?;
+        let mut restored_meta = before.clone();
+        restored_meta.recovery_epoch += 1;
+        assert_eq!(restored.meta()?, restored_meta);
+        assert_eq!(manifest.recovery_epoch, before.recovery_epoch);
+        assert_eq!(restored.replay_floor(source.tenant_id)?, Some(expected));
+        assert_eq!(restored.replay_floor(identity(2).tenant_id)?, None);
+        assert_eq!(
+            restored.read_page(&source, 4)?.records[0].framed_record,
+            b"d"
+        );
+        assert_eq!(store.meta()?, before);
+        drop(restored);
+        let reopened = AnalysisStore::open(&restored_root)?;
+        assert_eq!(reopened.meta()?, restored_meta);
+        assert_eq!(reopened.replay_floor(source.tenant_id)?, Some(expected));
+        Ok(())
+    }
+
+    #[test]
+    fn query_follow_retention_witness() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let source = identity(1);
+        let expires = 3 * 24 * 60 * 60 * 1_000_000_000;
+        store.accept_validated_batch(source.clone(), batch(1, b"a"))?;
+        let witness_position = store.read_page(&source, 1)?.records[0].position;
+        store.backup(&root.join("backups/sealed"))?;
+        store.accept_validated_batch(source.clone(), batch(2, b"bc"))?;
+        let floor = store.read_page(&source, 3)?.records[0].position;
+        let scope = ProcessorScopeV1 {
+            processor_id: "review".into(),
+            method_version: 1,
+            identity: source.clone(),
+        };
+        store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+        store.commit_result(&AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 3,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "retained-witness".into(),
+            body: b"review".to_vec(),
+            created_utc_ns: 100,
+            witnesses: vec![AnalysisWitnessV1 {
+                identity: source.clone(),
+                cursor: 1,
+                expires_utc_ns: expires,
+            }],
+            context_refs: vec![],
+        })?;
+        let result = EvidenceRetentionOwner::new(&store).retain(&source, expires - 1)?;
+        assert_eq!(result.removed_records, 2);
+        assert_eq!(result.retained_floor, 0);
+        assert_eq!(store.replay_floor(source.tenant_id)?, Some(floor));
+        assert!(witness_position < floor);
+        let page = store.read_page(&source, 1)?;
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].framed_record, b"a");
+        assert_eq!(page.records[0].position, witness_position);
+        assert_eq!(page.next_cursor, Some(2));
+        assert!(matches!(
+            store.read_page(&source, 2),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        let before = store.meta()?;
+        drop(store);
+        let reopened = AnalysisStore::open(&root)?;
+        assert_eq!(reopened.meta()?, before);
+        assert_eq!(reopened.replay_floor(source.tenant_id)?, Some(floor));
+        assert_eq!(
+            reopened.read_page(&source, 1)?.records[0].position,
+            witness_position
+        );
+        assert_eq!(
+            EvidenceRetentionOwner::new(&reopened)
+                .retain(&source, expires)?
+                .removed_records,
+            1
+        );
+        assert_eq!(reopened.replay_floor(source.tenant_id)?, Some(floor));
+        reopened.read_snapshot(|snapshot| AnalysisStore::validate_usage(snapshot, &root))?;
+        Ok(())
+    }
+
+    #[test]
+    fn query_follow_retention_validation() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        const FRAMES: [u8; crate::MAX_EVIDENCE_BATCH_RECORDS] =
+            [b'a'; crate::MAX_EVIDENCE_BATCH_RECORDS];
+        for (index, mutation) in [
+            format!(
+                "UPDATE replay_floors SET ordinal = {}",
+                crate::MAX_EVIDENCE_BATCH_RECORDS
+            ),
+            "UPDATE replay_floors SET commit_revision = 0".to_owned(),
+            "UPDATE replay_floors SET commit_revision = (SELECT commit_revision FROM store_meta)"
+                .to_owned(),
+            "UPDATE replay_floors SET tenant_id = from_hex('01')".to_owned(),
+            "DELETE FROM replay_floors".to_owned(),
+            "UPDATE tenant_usage SET logical_bytes = logical_bytes + 1".to_owned(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open(&root)?;
+            let source = identity(1);
+            store.accept_validated_batch(source.clone(), batch(1, &FRAMES))?;
+            let expected = StorePositionV1 {
+                commit_revision: store.meta()?.commit_revision,
+                ordinal: crate::MAX_EVIDENCE_BATCH_RECORDS as u32 - 1,
+            };
+            EvidenceRetentionOwner::new(&store).retain(&source, u64::MAX)?;
+            assert_eq!(store.replay_floor(source.tenant_id)?, Some(expected));
+            store.read_snapshot(|snapshot| AnalysisStore::validate_state(snapshot, &root))?;
+            store.writer()?.get()?.execute_batch(&mutation)?;
+            assert!(
+                matches!(
+                    store.backup(&root.join("backups/invalid")),
+                    Err(crate::Error::AnalysisState { .. })
+                ),
+                "case {index}"
+            );
+            drop(store);
+            assert!(
+                matches!(
+                    AnalysisStore::open(&root),
+                    Err(crate::Error::AnalysisState { .. })
+                ),
+                "case {index}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

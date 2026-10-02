@@ -62,6 +62,12 @@ impl AnalysisStore {
                 OR x.last_cursor < x.first_cursor OR x.last_cursor > s.contiguous_cursor
                 OR EXISTS (SELECT 1 FROM expired_ranges y WHERE y.stream_key = x.stream_key
                     AND y.first_cursor > x.first_cursor AND y.first_cursor <= x.last_cursor)"),
+            ("invalid replay floor", "SELECT 1 FROM replay_floors f
+                WHERE octet_length(f.tenant_id) <> 16 OR f.commit_revision = 0
+                OR f.commit_revision >= COALESCE((SELECT MAX(x.commit_revision)
+                    FROM expired_ranges x WHERE x.tenant_id = f.tenant_id), 0)
+                UNION ALL SELECT 1 FROM expired_ranges x
+                WHERE NOT EXISTS (SELECT 1 FROM replay_floors f WHERE f.tenant_id = x.tenant_id)"),
             ("invalid result body", "SELECT 1 FROM analysis_results WHERE octet_length(tenant_id) <> 16
                 OR result_id = '' OR length(result_id) > 256 OR processor_id = ''
                 OR octet_length(body) = 0 OR octet_length(body) > 16777216 OR sha256(body) <> lower(hex(body_sha256))
@@ -136,6 +142,7 @@ impl AnalysisStore {
             ("processor_gaps", "processor_gaps"),
             ("recovery_gaps", "recovery_gaps"),
             ("expired_ranges", "expired_ranges"),
+            ("replay_floors", "replay_floors"),
         ] {
             let invalid: bool = writer.query_row(&format!(
                 "SELECT EXISTS (SELECT 1 FROM {relation} WHERE commit_revision = 0 OR commit_revision > ?
@@ -149,8 +156,9 @@ impl AnalysisStore {
         }
         let invalid: bool = writer.query_row(
             "SELECT EXISTS (SELECT 1 FROM relation_revisions WHERE last_changed_revision = 0 OR last_changed_revision > ?)
-                OR EXISTS (SELECT 1 FROM store_meta WHERE next_segment_id = 0)",
-            params![meta.commit_revision], |row| row.get(0),
+                OR EXISTS (SELECT 1 FROM store_meta WHERE next_segment_id = 0)
+                OR EXISTS (SELECT 1 FROM replay_floors WHERE ordinal >= ?)",
+            params![meta.commit_revision, crate::MAX_EVIDENCE_BATCH_RECORDS as u64], |row| row.get(0),
         ).context(AnalysisDatabaseSnafu { operation: "validate revision and pending bounds" })?;
         if invalid {
             return Self::reject_path(root, "the stored revision or pending bound is invalid");
@@ -310,6 +318,7 @@ impl AnalysisStore {
             "processor_id, method_version, tenant_id, stream_key, first_cursor, last_cursor, commit_revision FROM processor_gaps",
             "stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM recovery_gaps",
             "segment_id, stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM expired_ranges",
+            "tenant_id, commit_revision, ordinal FROM replay_floors",
         ];
         for projection in projections {
             writer

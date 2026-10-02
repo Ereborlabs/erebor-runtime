@@ -263,5 +263,24 @@ cargo test -p araphor-data query_scope_position_pages -- --nocapture
 cargo test -p araphor-data analysis_extract_ -- --nocapture
 ```
 
-Next: complete QueryOwner, follow, replay floors, windows, and `query-follow`.
-Overall status remains **Not done**.
+The persisted replay floor is **Done**. Schema version 10 adds one floor per
+tenant. Retention commits the greatest deleted raw position with `Deleting`
+and the exact expired ranges, before file removal. The floor has one 256-byte
+metadata charge. Validation rejects missing, invalid, or uncharged floors.
+Restart and backup retain the floor. Restore changes the recovery epoch.
+An older exact witness remains readable below the floor.
+
+The integrated command below ran 38 data tests. The five
+`query_follow_retention_` tests passed. They cover deletion ordering,
+multi-span positions, tenant isolation, crash recovery, restart, restore,
+quota validation, and a retained older witness. In total, 33 tests passed and
+5 query-evaluator tests failed at connection configuration. Those failures
+are not storage qualification failures; their correction remains in progress.
+The command used the six environment settings above:
+
+```sh
+cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query_ -- --nocapture
+```
+
+Next: complete QueryOwner, follow, windows, and `query-follow`. Overall status
+remains **Not done**. The final workspace gate has not run.
