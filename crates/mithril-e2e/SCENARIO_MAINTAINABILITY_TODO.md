@@ -3032,7 +3032,11 @@ test does not close a row when its physical condition or an assertion changed.
       cgroups were removed. Strict package clippy passed. The first draft
       used a task name longer than Linux permits. Short completion names
       now precede the unchanged explicit errno and result assertions.
-    - [ ] Pass and commit direct `runc`.
+    - [x] Pass and commit direct `runc`. The unchanged shared case and the
+      existing mount-attribute regression passed together in 74.38 seconds.
+      Both modes passed through stock `runc` and the production OCI hook.
+      The shared owner started once. Output, pin, lease, and cgroups were
+      removed.
     - [ ] Pass and commit real Kubernetes after the lightweight proof.
     - [ ] Remove the old action, result fields, mailbox peer, and unused
       dedicated cgroup, binding, and object setup only after all three pass.
