@@ -317,3 +317,18 @@ ran their built test executables. No performance test ran.
 
 Next: finish the end-to-end barriers and final acceptance review, then run
 the complete workspace gate. Overall status remains **Not done**.
+
+The data-owner deliverable is commit `6f055e92`. The expanded
+`query_follow_contract` then passed with eight cases. The two added cases
+force a commit between watch registration and the first snapshot, coalesce
+commits behind blocked output, and prove output-timeout cleanup before the
+client drains its queue. Retention and later intake succeed while that old
+output remains queued. These cases call production owners and use small
+temporary stores. They make no throughput or latency claim.
+
+```sh
+cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query_follow_contract -- --nocapture
+```
+
+The command used the same six environment settings. Final acceptance review
+and the full workspace procedure remain required. The CLI case has not yet run.

@@ -13,11 +13,13 @@ use crate::{
 };
 
 mod data_store;
+mod query_follow;
 mod roundtrip;
 #[cfg(test)]
 mod storage;
 mod storage_contract;
 pub use data_store::DataStoreQualification;
+pub use query_follow::QueryFollowQualification;
 pub use roundtrip::DiscoveryQualificationRunner;
 pub use storage_contract::run as run_discovery_storage_contract;
 

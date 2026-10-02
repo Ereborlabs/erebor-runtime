@@ -15,6 +15,7 @@ enum Case {
     DataStoreQuota,
     DataStoreRollout,
     DataStoreInspect,
+    QueryFollow,
 }
 
 #[derive(Parser)]
@@ -69,6 +70,11 @@ async fn main() {
     let result = match cli.case {
         Case::OfflineExact => mithril_e2e::run_discovery_offline(&cli.output_directory)
             .map_err(Box::<dyn std::error::Error>::from),
+        Case::QueryFollow => {
+            mithril_e2e::QueryFollowQualification::new(cli.output_directory)
+                .run()
+                .await
+        }
         Case::StorageContract => mithril_e2e::run_discovery_storage_contract(&cli.output_directory),
         Case::DataStoreRecovery => {
             mithril_e2e::DataStoreQualification::new(cli.output_directory)
@@ -132,6 +138,30 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_follow_arguments_are_scoped() -> Result<(), clap::Error> {
+        let cli = Cli::try_parse_from([
+            "qualification",
+            "--case",
+            "query-follow",
+            "--output-directory",
+            "/tmp/query-follow",
+        ])?;
+        cli.validate()?;
+        assert!(cli.case == Case::QueryFollow);
+        let wrong = Cli::try_parse_from([
+            "qualification",
+            "--case",
+            "query-follow",
+            "--output-directory",
+            "/tmp/query-follow",
+            "--tenants",
+            "2",
+        ])?;
+        assert!(wrong.validate().is_err());
+        Ok(())
+    }
 
     #[test]
     fn tenant_arguments_are_scoped() -> Result<(), clap::Error> {

@@ -31,7 +31,7 @@ pub use closure::ClosureLedgerV1;
 pub use digest::DigestV1;
 pub use discovery::{
     run_discovery_offline, run_discovery_storage_contract, DataStoreQualification,
-    DiscoveryQualificationRunner,
+    DiscoveryQualificationRunner, QueryFollowQualification,
 };
 pub use effect::{
     run_effect_child, EffectHealthV1, EffectPhysicalProbeBundleV1, EffectTestRunner,
