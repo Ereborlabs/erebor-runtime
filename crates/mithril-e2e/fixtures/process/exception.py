@@ -48,7 +48,7 @@ elif mode == "read":
     if sys.stdin.readline() != "read\n":
         raise RuntimeError("expected read")
     write("expired-result", str(open_errno(secret, os.O_RDONLY)))
-elif mode in ("symlink", "procfd", "bind", "bind-allowed"):
+elif mode in ("symlink", "hardlink", "procfd", "bind", "bind-allowed"):
     secret = Path(
         "/tmp/mithril-descriptor-allowed"
         if mode == "bind-allowed"
@@ -91,6 +91,12 @@ elif mode in ("symlink", "procfd", "bind", "bind-allowed"):
         alias = Path("/tmp/mithril-observe-link")
         alias.symlink_to(secret)
         command = "link"
+    elif mode == "hardlink":
+        import select
+
+        alias = Path("/tmp/mithril-observe-hard")
+        os.link(secret, alias)
+        command = "hard"
     else:
         held = os.open(secret, os.O_RDWR)
         alias = Path(f"/proc/self/fd/{held}")
@@ -130,6 +136,15 @@ elif mode in ("symlink", "procfd", "bind", "bind-allowed"):
             else:
                 raise RuntimeError(f"unknown bind action {action}")
             mark(libc, action, error)
+        sys.exit(0)
+    if mode == "hardlink":
+        if sys.stdin.readline() != "hard\n":
+            raise RuntimeError("expected hard")
+        errors = [open_errno(path, os.O_RDONLY) for path in (secret, alias)]
+        mark(libc, "hard", "-".join(map(str, errors)))
+        release = select.poll()
+        release.register(sys.stdin, select.POLLIN | select.POLLHUP | select.POLLERR)
+        release.poll()
         sys.exit(0)
     for action, path in actions:
         if sys.stdin.readline() != f"{action}\n":
