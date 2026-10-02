@@ -332,3 +332,21 @@ cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --a
 
 The command used the same six environment settings. Final acceptance review
 and the full workspace procedure remain required. The CLI case has not yet run.
+
+The end-to-end deliverable is commit `5c89ebcf`. The final Ponytail review
+closed two proof gaps. All ten trusted templates now compare with complete
+scoped input through the pinned DuckDB. The existing query-test filter passed
+11 tests. `query_scope_pin_race` passed both forced commit orders. A pin that
+commits first prevents deletion. Deletion that commits first rejects the pin
+and leaves result/progress unchanged. A held query result stays unchanged in
+both cases. The hooks exist only in test and test-fixture builds.
+
+```sh
+cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query::tests:: -- --nocapture
+cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query_scope_pin_race -- --nocapture
+```
+
+Both commands used the six settings above. The three existing
+`analysis_read_` tests also passed in the built data test executable.
+The new review-guide links and `git diff --check` passed. The full workspace
+procedure and standalone CLI qualification remain **Not done**.

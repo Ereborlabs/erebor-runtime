@@ -100,15 +100,22 @@ impl QueryFixture {
         let mut selection = plan.selection.clone();
         selection.received_from = Bound::Unbounded;
         selection.received_until = Bound::Unbounded;
-        let result = self.owner(QueryLimits::default())?.query_at(
-            &QueryPlan::new(selection, QueryTemplate::Events { operation: None })?,
-            now_ns,
-        )?;
+        let (template, relation) = match &plan.template {
+            QueryTemplate::ContextVersions | QueryTemplate::RevisionDifference => {
+                (QueryTemplate::ContextVersions, "context_versions")
+            }
+            QueryTemplate::Coverage => (QueryTemplate::Coverage, "coverage"),
+            QueryTemplate::Catalog => (QueryTemplate::Catalog, "catalog"),
+            _ => (QueryTemplate::Events { operation: None }, "events"),
+        };
+        let result = self
+            .owner(QueryLimits::default())?
+            .query_at(&QueryPlan::new(selection, template)?, now_ns)?;
         assert!(!result.limited);
         let schema = input::SCHEMAS
             .iter()
-            .find(|schema| schema.name == "events")
-            .ok_or("event schema absent")?;
+            .find(|schema| schema.name == relation)
+            .ok_or("input schema absent")?;
         let input = Arc::new(InputTable {
             columns: schema
                 .columns
@@ -122,7 +129,7 @@ impl QueryFixture {
             .enable_autoload_extension(false)?
             .threads(1)?;
         let connection = Connection::open_in_memory_with_flags(config)?;
-        input.register(&connection, "baseline_rows", "events")?;
+        input.register(&connection, "baseline_rows", relation)?;
         let mut statement = connection.prepare(&plan.sql())?;
         let parameters = plan.parameters(now_ns);
         let mut rows = statement.query(params_from_iter(parameters.iter()))?;
@@ -149,10 +156,8 @@ fn query_input_exact_time() -> TestResult {
         AnalysisSelectionV1::new(fixture.source.tenant_id, vec![fixture.source.clone()]);
     selection.received_from = Bound::Excluded(1_000_000_001);
     selection.received_until = Bound::Included(1_000_000_002);
-    let result = owner.query_at(
-        &QueryPlan::new(selection, QueryTemplate::Events { operation: None })?,
-        0,
-    )?;
+    let plan = QueryPlan::new(selection, QueryTemplate::Events { operation: None })?;
+    let result = owner.query_at(&plan, 0)?;
     assert_eq!(result.rows.len(), 1);
     let index = |name| {
         result
@@ -173,6 +178,12 @@ fn query_input_exact_time() -> TestResult {
     assert_eq!(result.rows[0][index("kernel_sequence")?], Value::Null);
     assert_eq!(result.sources[0].receipt.contiguous_cursor, 3);
     assert!(!result.limited);
+    assert_eq!(result.rows, fixture.baseline(&plan, 0)?);
+    let filtered = fixture.plan(QueryTemplate::Events { operation: Some(7) })?;
+    assert_eq!(
+        owner.query_at(&filtered, 0)?.rows,
+        fixture.baseline(&filtered, 0)?
+    );
     Ok(())
 }
 
@@ -185,14 +196,11 @@ fn query_input_windows() -> TestResult {
     }
     let owner = fixture.owner(QueryLimits::default())?;
     let moving = fixture.plan(QueryTemplate::MovingCount { seconds: 300 })?;
-    assert_eq!(
-        owner.query_at(&moving, 608 * minute)?.rows,
-        vec![vec![Value::BigInt(2)]]
-    );
-    assert_eq!(
-        owner.query_at(&moving, 610 * minute)?.rows,
-        vec![vec![Value::BigInt(1)]]
-    );
+    for (time, count) in [(608, 2), (610, 1)] {
+        let result = owner.query_at(&moving, time * minute)?;
+        assert_eq!(result.rows, vec![vec![Value::BigInt(count)]]);
+        assert_eq!(result.rows, fixture.baseline(&moving, time * minute)?);
+    }
     let mut selection = moving.selection.clone();
     selection.received_from = Bound::Included(600 * minute);
     selection.received_until = Bound::Excluded(610 * minute);
@@ -217,10 +225,12 @@ fn query_input_windows() -> TestResult {
             ],
         ]
     );
+    assert_eq!(result.rows, fixture.baseline(&buckets, 610 * minute)?);
     fixture.event(4, 605 * minute, 7)?;
     let result = owner.query_at(&buckets, 610 * minute)?;
     assert_eq!(result.rows[0][1], Value::BigInt(2));
     assert_eq!(result.rows[1][1], Value::BigInt(2));
+    assert_eq!(result.rows, fixture.baseline(&buckets, 610 * minute)?);
     fixture.commit(
         5,
         620 * minute,
@@ -242,6 +252,7 @@ fn query_input_windows() -> TestResult {
             Value::BigInt(1)
         ]
     );
+    assert_eq!(result.rows, fixture.baseline(&all, 620 * minute)?);
     Ok(())
 }
 
@@ -388,6 +399,7 @@ fn query_scope_bounded_history() -> TestResult {
         .query_at(&plan, 20_000)?;
     let limit = result.scanned_bytes;
     assert_eq!(result.rows, vec![vec![Value::UInt(7), Value::BigInt(2)]]);
+    assert_eq!(result.rows, fixture.baseline(&plan, 20_000)?);
     drop(result);
     let owner = fixture.owner(QueryLimits {
         scan_bytes: limit,
@@ -402,10 +414,9 @@ fn query_scope_bounded_history() -> TestResult {
         .is_err());
     plan.selection.received_from = Bound::Included(20_000);
     fixture.event(21, 21_000, 7)?;
-    assert_eq!(
-        owner.query_at(&plan, 21_000)?.rows,
-        vec![vec![Value::UInt(7), Value::BigInt(2)]]
-    );
+    let result = owner.query_at(&plan, 21_000)?;
+    assert_eq!(result.rows, vec![vec![Value::UInt(7), Value::BigInt(2)]]);
+    assert_eq!(result.rows, fixture.baseline(&plan, 21_000)?);
     Ok(())
 }
 
@@ -711,16 +722,62 @@ fn query_scope_revision_difference() -> TestResult {
         assert!(result.missing_contexts.is_empty());
         assert_eq!(result.scanned_bytes, 0);
         assert_eq!(result.input_rows, 2);
+        assert_eq!(result.rows, fixture.baseline(&plan, 1_000)?);
     }
     selection.contexts[1].owner_revision = 99;
     let missing = selection.contexts[1].clone();
-    let result = owner.query_at(
-        &QueryPlan::new(selection.clone(), QueryTemplate::RevisionDifference)?,
-        1_000,
-    )?;
+    let plan = QueryPlan::new(selection.clone(), QueryTemplate::RevisionDifference)?;
+    let result = owner.query_at(&plan, 1_000)?;
     assert!(result.rows.is_empty());
-    assert_eq!(result.missing_contexts, vec![missing]);
+    assert_eq!(result.missing_contexts, vec![missing.clone()]);
+    assert_eq!(result.rows, fixture.baseline(&plan, 1_000)?);
     drop(result);
+    let mut versions = selection.clone();
+    versions.contexts = [30, 10, 20, 99]
+        .into_iter()
+        .map(|owner_revision| crate::AnalysisContextKeyV1 {
+            owner_revision,
+            ..key.clone()
+        })
+        .collect();
+    let versions = QueryPlan::new(versions, QueryTemplate::ContextVersions)?;
+    let result = owner.query_at(&versions, 1_000)?;
+    assert_eq!(result.rows, fixture.baseline(&versions, 1_000)?);
+    assert_eq!(result.missing_contexts, vec![missing]);
+    assert_eq!(result.scanned_bytes, 0);
+    assert_eq!(result.input_rows, 3);
+    assert!(result.sources.is_empty());
+    let index = |name| {
+        result
+            .columns
+            .iter()
+            .position(|column| column == name)
+            .ok_or("context column absent")
+    };
+    let revision = index("owner_revision")?;
+    let body = index("body")?;
+    assert_eq!(result.rows.len(), 3);
+    for (row, (expected_revision, expected_body)) in result.rows.iter().zip([
+        (10, b"before".as_slice()),
+        (20, b"after".as_slice()),
+        (30, b"after".as_slice()),
+    ]) {
+        assert_eq!(row[revision], Value::UBigInt(expected_revision));
+        assert_eq!(row[body], Value::Blob(expected_body.to_vec()));
+        assert_eq!(
+            row[index("tenant_id")?],
+            Value::Blob(key.tenant_id.to_vec())
+        );
+        assert_eq!(row[index("owner_id")?], Value::Text(key.owner_id.clone()));
+        assert_eq!(
+            row[index("entity_key")?],
+            Value::Blob(key.entity_key.clone())
+        );
+        assert_eq!(
+            row[index("lifetime_key")?],
+            Value::Blob(key.lifetime_key.clone())
+        );
+    }
     for change in 0..3 {
         let mut invalid = selection.clone();
         match change {
@@ -740,10 +797,9 @@ fn query_input_catalog() -> TestResult {
     let fixture = QueryFixture::new()?;
     let owner = fixture.owner(QueryLimits::default())?;
     let selection = AnalysisSelectionV1::new(fixture.source.tenant_id, Vec::new());
-    let result = owner.query_at(
-        &QueryPlan::new(selection.clone(), QueryTemplate::Catalog)?,
-        0,
-    )?;
+    let plan = QueryPlan::new(selection.clone(), QueryTemplate::Catalog)?;
+    let result = owner.query_at(&plan, 0)?;
+    assert_eq!(result.rows, fixture.baseline(&plan, 0)?);
     assert_eq!(
         result.rows.len(),
         input::SCHEMAS
@@ -855,6 +911,7 @@ fn query_scope_coverage() -> TestResult {
     let owner = fixture.owner(QueryLimits::default())?;
     let mut plan = fixture.plan(QueryTemplate::Coverage)?;
     let complete = owner.query_at(&plan, 100)?;
+    assert_eq!(complete.rows, fixture.baseline(&plan, 100)?);
     assert_eq!(complete.sources.len(), 1);
     assert_eq!(complete.sources[0].receipt.identity, fixture.source);
     assert_eq!(complete.sources[0].state, QueryCoverageState::Gapped);
@@ -896,12 +953,14 @@ fn query_scope_coverage() -> TestResult {
         plan.selection.received_until = until;
         let result = owner.query_at(&plan, 100)?;
         assert_eq!(result.rows, complete.rows);
+        assert_eq!(result.rows, fixture.baseline(&plan, 100)?);
         assert_eq!(&result.sources[..], &complete.sources[..]);
         assert_eq!(result.scanned_bytes, 0);
     }
     drop(complete);
     fixture.event(1, 10, 7)?;
     let result = owner.query_at(&plan, 100)?;
+    assert_eq!(result.rows, fixture.baseline(&plan, 100)?);
     assert_eq!(result.sources[0].receipt.contiguous_cursor, 2);
     assert_eq!(result.sources[0].state, QueryCoverageState::Reported);
     assert!(result.sources[0].pending.is_empty());

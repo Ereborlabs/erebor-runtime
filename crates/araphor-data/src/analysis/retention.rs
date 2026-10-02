@@ -388,6 +388,9 @@ impl<'a> EvidenceRetentionOwner<'a> {
         AnalysisStore::record_revision(&transaction, revision, &relations)?;
         #[cfg(test)]
         self.store.crash_at("retention.before");
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.store
+            .run_commit_hook(super::AnalysisCommitStage::BeforeRetentionCommit)?;
         self.store
             .write_ready
             .store(false, std::sync::atomic::Ordering::Release);

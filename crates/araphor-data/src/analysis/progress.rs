@@ -584,6 +584,8 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, &relations)?;
         #[cfg(test)]
         self.crash_at("result.before");
+        #[cfg(any(test, feature = "test-fixtures"))]
+        self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
         self.commit_metadata(transaction, "commit analysis result")?;
         #[cfg(test)]
         self.crash_at("result.after");

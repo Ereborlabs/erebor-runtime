@@ -145,6 +145,19 @@ remain readable below the replay floor.
 
 #### Verification state
 
+Use these source tests to check each owner boundary:
+
+| Boundary | Test reading route |
+| --- | --- |
+| Shared wire decoding | [evidence tests](../../../../crates/araphor-data/src/evidence.rs): `query_input_values`, `query_input_size_bounds`, `query_input_invalid_frames`, `query_input_shared_bytes`. |
+| Snapshot and rotation | [extraction tests](../../../../crates/araphor-data/src/analysis/extraction.rs): `analysis_extract_rotation`, `analysis_extract_lock_waits`, and position-page cases. |
+| Native reader recovery | [read tests](../../../../crates/araphor-data/src/analysis/read.rs): `query_scope_reader_recovery`, `query_input_native_cancel`, `analysis_read_cancel_cleanup`. |
+| Temporary input ownership | [adapter tests](../../../../crates/araphor-data/src/query/adapter.rs): value, repeated-scan, error, and Weak-reference lifetime checks. [input tests](../../../../crates/araphor-data/src/query/input.rs) check generated relations and exact allocation bounds. |
+| Fixed templates | [query tests](../../../../crates/araphor-data/src/query/tests.rs): `QueryFixture::baseline` evaluates complete scoped input through the pinned DuckDB adapter. Each trusted template compares against that result. |
+| Stream lifecycle | [follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs): snapshot race, empty progress, coalesced output, and output stall. [frame tests](../../../../crates/araphor-data/src/query/frame.rs) check envelopes, binding, identity, and shared byte reservations. |
+| Maintenance and evidence | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): reader release, held-output deletion, and both pin/delete commit orders. [retention tests](../../../../crates/araphor-data/src/analysis/retention.rs) check floor persistence, recovery, restore, and exact witnesses. |
+| Production-owner qualification | [query-follow](../../../../crates/mithril-e2e/src/discovery/query_follow.rs): eight small cases for data, time, stream barriers, retention, restart/restore, and policy continuity. The simultaneous pin/delete and rotation proofs are component tests. |
+
 This section describes the data-owner deliverable after `34a12a8a`. The 55
 focused data tests passed after the connection and memory-bound corrections.
 They cover typed input, native scans, input release, fixed templates, frame

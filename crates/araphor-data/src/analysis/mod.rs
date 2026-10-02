@@ -71,6 +71,8 @@ pub enum AnalysisCommitStage {
     BeforeRotation,
     BeforeAppend,
     AfterSync,
+    BeforeResultCommit,
+    BeforeRetentionCommit,
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -1073,7 +1075,9 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in (0..=ANALYSIS_SCHEMA_VERSION + 1).filter(|version| *version != ANALYSIS_SCHEMA_VERSION) {
+        for version in
+            (0..=ANALYSIS_SCHEMA_VERSION + 1).filter(|version| *version != ANALYSIS_SCHEMA_VERSION)
+        {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {

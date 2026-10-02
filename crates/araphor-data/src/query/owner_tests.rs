@@ -171,3 +171,152 @@ fn query_scope_pin_deletion() -> TestResult {
     assert_eq!(expired.sources[0].state, QueryCoverageState::Gapped);
     Ok(())
 }
+
+#[test]
+fn query_scope_pin_race() -> TestResult {
+    for pin_first in [true, false] {
+        let fixture = QueryFixture::new()?;
+        fixture.event(1, 100, 7)?;
+        let position = fixture.store.read_page(&fixture.source, 1)?.records[0].position;
+        let scope = ProcessorScopeV1 {
+            processor_id: "query-race".into(),
+            method_version: 1,
+            identity: fixture.source.clone(),
+        };
+        fixture
+            .store
+            .register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+        let expires = 3 * 24 * 60 * 60 * 1_000_000_000_u64;
+        let input = AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 1,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "query-pin-race".into(),
+            body: b"witness".to_vec(),
+            created_utc_ns: 200,
+            witnesses: vec![AnalysisWitnessV1 {
+                identity: fixture.source.clone(),
+                cursor: 1,
+                expires_utc_ns: expires,
+            }],
+            context_refs: Vec::new(),
+        };
+        let owner = fixture.owner(QueryLimits::default())?;
+        let plan = fixture.plan(QueryTemplate::Events { operation: None })?;
+        let held = owner.query_at(&plan, expires - 1)?;
+        let before = held.meta.commit_revision;
+        assert_eq!(held.rows.len(), 1);
+        let (paused, first_ready) = mpsc::channel();
+        let (release, resumed) = mpsc::channel();
+        fixture.store.set_commit_hook(
+            if pin_first {
+                AnalysisCommitStage::BeforeResultCommit
+            } else {
+                AnalysisCommitStage::BeforeRetentionCommit
+            },
+            move || {
+                paused
+                    .send(())
+                    .map_err(|_| crate::AnalysisReadCancelledSnafu.build())?;
+                resumed
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|_| crate::AnalysisReadCancelledSnafu.build())
+            },
+        )?;
+        let (entered, second_ready) = mpsc::channel();
+        let store = &fixture.store;
+        let source = &fixture.source;
+        let commit = &input;
+        let (pin, deletion) = while_held(held, move || {
+            std::thread::scope(|scope| -> TestResult<_> {
+                if pin_first {
+                    let pin = scope.spawn(|| store.commit_result(commit));
+                    first_ready.recv_timeout(Duration::from_secs(5))?;
+                    let deletion = scope.spawn(move || {
+                        entered
+                            .send(())
+                            .map_err(|_| crate::AnalysisReadCancelledSnafu.build())?;
+                        EvidenceRetentionOwner::new(store).retain(source, expires - 1)
+                    });
+                    second_ready.recv_timeout(Duration::from_secs(5))?;
+                    release.send(())?;
+                    Ok((
+                        pin.join().map_err(|_| "pin worker panicked")?,
+                        deletion.join().map_err(|_| "retention worker panicked")?,
+                    ))
+                } else {
+                    let deletion = scope
+                        .spawn(|| EvidenceRetentionOwner::new(store).retain(source, expires - 1));
+                    first_ready.recv_timeout(Duration::from_secs(5))?;
+                    let pin = scope.spawn(move || {
+                        entered
+                            .send(())
+                            .map_err(|_| crate::AnalysisReadCancelledSnafu.build())?;
+                        store.commit_result(commit)
+                    });
+                    second_ready.recv_timeout(Duration::from_secs(5))?;
+                    release.send(())?;
+                    Ok((
+                        pin.join().map_err(|_| "pin worker panicked")?,
+                        deletion.join().map_err(|_| "retention worker panicked")?,
+                    ))
+                }
+            })
+        })?;
+        let deletion = deletion?;
+        assert_eq!(deletion.removed_records, u32::from(!pin_first));
+        assert_eq!(deletion.commit_revision, before + 1);
+        let stored = fixture
+            .store
+            .read_result(fixture.source.tenant_id, &input.result_id)?;
+        let progress = fixture
+            .store
+            .processor_health(&input.scope)?
+            .ok_or("progress absent")?;
+        assert_eq!(progress.resume_floor, 0);
+        if pin_first {
+            let pin = pin?;
+            assert_eq!(pin.commit_revision, before + 1);
+            assert_eq!(pin.consumed_cursor, 1);
+            assert_eq!(stored, Some(input.body));
+            assert_eq!(progress.consumed_cursor, 1);
+        } else {
+            assert!(matches!(pin, Err(crate::Error::AnalysisState { .. })));
+            assert!(stored.is_none());
+            assert_eq!(progress.consumed_cursor, 0);
+        }
+        let later = owner.query_at(&plan, expires - 1)?;
+        assert_eq!(later.meta.commit_revision, before + 1);
+        assert_eq!(later.rows.len(), usize::from(pin_first));
+        assert_eq!(later.sources[0].receipt.contiguous_cursor, 1);
+        assert_eq!(
+            later.sources[0].receipt.retained_floor,
+            u64::from(!pin_first)
+        );
+        assert_eq!(later.sources[0].expired.len(), usize::from(!pin_first));
+        if pin_first {
+            let cursor = later
+                .columns
+                .iter()
+                .position(|name| name == "source_cursor")
+                .ok_or("source cursor column absent")?;
+            assert_eq!(later.rows[0][cursor], Value::UBigInt(1));
+        } else {
+            assert_eq!(
+                later.sources[0].expired[0],
+                crate::AnalysisGapV1 {
+                    first_cursor: 1,
+                    last_cursor: 1,
+                    commit_revision: before + 1,
+                }
+            );
+        }
+        assert_eq!(
+            fixture.store.replay_floor(fixture.source.tenant_id)?,
+            (!pin_first).then_some(position),
+        );
+    }
+    Ok(())
+}
