@@ -55,8 +55,9 @@ Engineer runs storage proof
    After Control authenticates and validates a group, pass the exact
    `EvidenceIntakeIdentityV1` and `ValidatedEvidenceBatchV1` with CPU, cursor
    range, shared framed bytes, and frame ends to AnalysisStore. The store
-   computes the source key. In 7.2 it syncs raw segments before committing
-   their catalog ranges and source receipt.
+   computes the source key. In 7.2 it syncs self-contained raw segment commits
+   before publishing the durable receipt. Catalogue publication does not
+   delay raw ACK; DuckDB holds no batch-offset directory.
    `Accepted` means the submitted end cursor is contiguous and durable;
    `Pending` means a gap remains. Control issues only the durable contiguous
    ACK. For coverage, pass the validated encoded report, CPU and revision as
@@ -66,15 +67,16 @@ Engineer runs storage proof
    cursors distinct. Freeze query `append`, `replace`, checkpoint, health,
    terminal and error frame schemas. A trace terminal result remains separate
    from gRPC stream closure.
-5. Qualify sqlparser-rs with DuckDbDialect and the closed binder. Pin the
+5. Qualify sqlparser-rs with DuckDbDialect and offline syntax/relation checks. Pin the
    parser/engine pair; parsing alone is not semantic validation. Compare
    optimized extraction with full authorized-input evaluation in DuckDB.
    Test aliases, timestamp parameters, AND/OR, CTE reuse, joins, nested
    predicates, nulls and exact window endpoints. Prove untrusted SQL runs only
    in a no-network, no-credential, OS-limited worker with in-memory DuckDB.
    Use the isolation contract in engine-design.md, not a SELECT-prefix check.
-   Production extraction budgets and worker resource measurements belong to
-   7.3, when QueryOwner and its trusted extractor exist.
+   Phase 7.3 implements trusted extraction and internal evaluation.
+   Observability 3 implements production client SQL admission and worker
+   isolation. This offline proof does not qualify public SQL access.
 6. Extend `crates/mithril-e2e/fixtures/discovery/manifest.json` and `pilot.json`.
    Pin source, context, policy, coverage, expected rows and proof kind.
    Include repeats, rare valid work, poisoned baseline, deployment drift,
@@ -101,8 +103,9 @@ test proves process isolation and failure without opening the data store.
 Record the store identity, revisions, source receipt, counts and result digests.
 The production intake-path proof, ACK and batch latency, disk reuse and
 checkpoint measurements belong to 7.2.
-Query plans, bounded extraction, worker RSS and temporary-byte measurements
-belong to 7.3. No benchmark result follows from choosing DuckDB.
+Trusted read plans and bounded extraction belong to 7.3. Production worker
+limits belong to Observability 3. New performance measurements require user
+approval. No benchmark result follows from choosing DuckDB.
 
 Commands after the new case is implemented:
 
@@ -162,5 +165,6 @@ strict lint, and workspace all-targets tests on this working-tree Rust source.
 The run includes 11 passing `araphor-data` tests with two ignored and 190 passing
 Control library tests with two ignored. Control still uses its existing live
 evidence store. Production Node intake, durable ACK measurements, and recovery
-belong to 7.2. QueryOwner, bounded extraction and query-worker measurements
-belong to 7.3. Wire-level gRPC frames belong to Observability 3.
+belong to 7.2. QueryOwner and bounded extraction belong to 7.3. Production
+SQL admission, worker isolation and wire-level gRPC frames belong to
+Observability 3.

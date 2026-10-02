@@ -292,8 +292,10 @@ Optional discovery does not pin raw history or block intake. Araphor owns no
 AI model; external-client measurements do not block its core release.
 
 Observability 1 qualifies the delegated bpftrace backend. Observability 2 uses
-7.2 shared storage. Observability 3 needs 7.3 and Observability 2; it supplies
-SQL/trace APIs, CLI and console before discovery algorithms are complete.
+7.2 shared storage. Phase 7.3 proves trusted internal query/follow only.
+Observability 3 needs 7.3 and Observability 2; it adds production SQL admission
+and worker isolation before enabling SQL/trace APIs, CLI and console.
+Discovery algorithms are not required for that client release.
 Storage, query and trace must work with discovery disabled. Optional
 Observability 4 adds the finite Trace CRD after Observability 3.
 
@@ -305,7 +307,8 @@ physical results.
 Phase 6 owns Node WAL, upload replay and authenticated source/coverage contracts.
 Phase 6.2 establishes production durable ACK and policy delivery. Phase 7.2
 changes the retained-data destination while preserving that ACK meaning:
-raw segments sync before the receipt/catalog transaction and acknowledgement.
+raw segments sync with self-contained receipts before acknowledgement.
+DuckDB catalogue publication does not delay raw ACK.
 It retires the DuckDB raw-row path, not the reusable segment storage code. Do not add a public
 generic producer API or migrate policy/control state as part of that change.
 

@@ -3,7 +3,7 @@
 **Decision: Option 2 approved.** Raw events and trace output live once in
 segments. The original segment writer runs inside `araphor-data`, not Control.
 Synced segments are authoritative for raw acceptance and replay. DuckDB holds
-a rebuildable raw catalogue and transactional derived state and runs
+file lifecycle rows, source receipts and transactional derived state and runs
 isolated queries over bounded authorized input. The implementation belongs to
 [7.2](phase-7-2-data-store.md); shared contracts are in
 [engine-design.md](engine-design.md#embedded-storage-and-query-contract).
@@ -17,7 +17,8 @@ reader in araphor-data. Do not leave the raw owner in Control or create a
 separate discovery archive.
 
 The selected design must meet query and evidence-retention requirements
-without becoming a custom storage engine. Start with batch-range metadata,
+without becoming a custom storage engine. Keep batch offsets in the segment
+owner's rebuilt memory directory, not in a second DuckDB directory. Use
 whole-segment deletion, and bounded extraction. No per-event raw index,
 background compactor, witness archive, dual write, or backend framework.
 
@@ -39,7 +40,9 @@ or move the raw owner back into Control.
 
 7.2 must prove durable ACK, tail recovery, result/progress atomicity, bounded
 whole-segment pin cost, complete backup/restore, and bounded authorized input
-extraction. 7.3 proves SQL and follow over those reads. 7.4 removes the old
+extraction. 7.3 proves trusted internal query and follow over those reads.
+Observability 3 qualifies public SQL admission and worker isolation.
+7.4 removes the old
 copied raw export while converting discovery. Observability 2 uses the same
 raw-output storage protocol; optional 7.9 moves the whole component.
 
@@ -50,12 +53,13 @@ satisfies the required bounded-window case.
 
 ## Implementation status
 
-**Not done.** The database-independent raw ACK path requires implementation.
-Complete-bundle backup and guarded recovery are
-implemented. Bounded extraction is implemented. The old Control raw writer and
-its callers are removed. The complete workspace gate and paired disk-full case
-pass for this source. Release measurements and Kubernetes qualification remain
-incomplete. See the current 7.2 result.
+**Done** for 7.2 under the approved qualification scope. The raw ACK path is
+independent of DuckDB catalogue publication. The old Control raw writer and
+DuckDB raw-row path are removed. Read the
+[final storage result](phase-7-2-data-store.md#final-storage-qualification)
+for exact revisions, recovery, workspace and physical proof. The approved
+quota test is 1 GiB, not 8 GiB. Full-capacity memory and the original latency
+target remain unqualified. Query/follow and discovery work are separate phases.
 Use fresh development state; no compatibility import or migration is required.
 Tests use temporary stores. This decision does not authorize removal of
 existing deployment data.

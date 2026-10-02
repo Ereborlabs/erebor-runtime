@@ -125,9 +125,9 @@ Each row is a bounded deliverable. The required test level appears below.
 | --- | --- | --- |
 | 1 | [7.1 Contracts and offline proof](phase-7-1-contracts-and-offline-proof.md) | Establish the data crate, freeze schemas and corpus, and prove DuckDB durability/isolation. |
 | 2 | [7.2 Data store](phase-7-2-data-store.md) | Reuse segment storage in the data crate; durable append/metadata commits, whole-segment retention, complete backup and clean activation; needs 7.1. |
-| 3 | [7.3 Query and follow](phase-7-3-query-and-follow.md) | Isolated SQL and commit-driven append/replace streams; needs 7.2. |
+| 3 | [7.3 Query and follow](phase-7-3-query-and-follow.md) | Portable record decoder, trusted internal queries and commit-driven append/replace streams; needs 7.2. No public SQL access. |
 | 4 | [Observability 1](../../araphor-observability/phase-1-contracts-and-backend.md), then [2](../../araphor-observability/phase-2-owned-capture.md) | Backend proof can run alongside 7.1–7.3. Capture integration requires 7.2 and backend proof. |
-| 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Shared protobuf gRPC, SQL/trace CLI, gRPC-Web console views, and old client-route retirement; needs 7.3 and Observability 2. |
+| 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Production SQL admission, disclosure and isolated workers before public access; shared gRPC, SQL/trace CLI, console and old client-route retirement; needs 7.3 and Observability 2. |
 | 6 | [7.4 Profiles and context](phase-7-4-profiles-and-context.md) | Exact discovery, baseline differences and context; start after 7.2, close view/e2e work after 7.3. Can run alongside trace work. |
 | 7 | [7.5 Graphs and notifications](phase-7-5-graphs-findings-and-notifications.md) | Local packages, provenance, mandatory routes and authority records; needs 7.4. |
 | 8 | [7.6 Methods and preview](phase-7-6-methods-and-preview.md) | Deterministic recipes, typed suggestions, requirements and exact native preview; needs 7.3 and 7.5. |
@@ -154,6 +154,11 @@ Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 �
 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 if selected → 7.10.
 Independent work may use the entry gates in the table, not skip them.
 
+The decoder and query engine belong to the data crate from 7.3. Discovery
+algorithms belong there from 7.4. Neither depends on a running Control process
+or Control-local files. Phase 7.9 packages those same owners outside Control;
+it does not move or rewrite them. Control still owns authorization and effects.
+
 Mithril 8 follows the bounded Phase 7 release and adds Kubernetes causality
 and exception tools. Mithril 9 adds verified local/distributed response.
 Mithril 10 adds provider evidence/actions. Mithril 11 qualifies the complete
@@ -168,7 +173,7 @@ production owners without Kubernetes; run a physical case only where listed.
 | --- | --- | --- |
 | 7.1 | Check schema bounds, exact derivation, offline DuckDB recovery, SQL admission and worker isolation. | Run `offline-exact` and `storage-contract` through public recorded and AnalysisStore methods. Do not call live Node intake; no physical case is required. |
 | 7.2 | Check segment-sync/catalog commits, pin/delete races, bounded extraction, bundle backup and clean-start refusal. | Run `data-store-recovery` through Node mTLS with durable ACK and storage measurements, `data-store-startup` on a fresh development state and the paired physical storage/partition case. |
-| 7.3 | Check SQL admission, scope, extraction limits, worker resources, follow frames and cursor limits. | Run `query-follow` against AnalysisStore and QueryOwner with bounded-extraction measurements; physical qualification follows in 7.10. |
+| 7.3 | Check shared decoding, trusted scope, configured extraction limits, follow frames, pending-source visibility and replay floors. | Run internal `query-follow` against AnalysisStore and QueryOwner. Public SQL admission and isolation are tested in Observability 3; physical qualification follows in 7.10. |
 | 7.4 | Check exact atoms, context selection, comparison and deterministic replay. | Run `context-roundtrip` and `profile-restart` from Node WAL through mTLS and DiscoveryOwner; physical qualification follows in 7.10. |
 | 7.5 | Check graph, finding, provenance and routing decisions under gaps and retries. | Run `graph-notification` through intake, graph and router owners, then run the paired physical incident case. |
 | 7.6 | Check method matches, suggestion validation and exact preview counterexamples. | Run `detection-context`, `proposal-preview` and `poisoned-window` through production owners; physical policy proof follows in 7.8 and 7.10. |

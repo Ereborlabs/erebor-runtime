@@ -9,6 +9,35 @@ Reuse shared query code; do not reimplement SQL evaluation or tracing in a clien
 An agent runs `araphor sql` or `araphor trace` in its terminal. Both commands
 print their own results. The console calls the same APIs and shows the same
 source, provenance, limits, and outcomes. MCP is not a release dependency.
+This phase also adds production SQL admission and worker isolation to the
+trusted internal engine from 7.3. Do not enable public SQL before both pass.
+
+## Query boundary before client access
+
+1. Extend `araphor-data` QueryOwner with client SQL admission. Use the pinned
+   `sqlparser` DuckDbDialect and a closed relation/function allowlist. Resolve
+   columns and aliases against the permitted schema; the existing syntax
+   guard alone is not a column-authority check. Freeze current tenant, target,
+   row and field grants before extraction. Hidden fields cannot enter a
+   predicate, join, aggregate or error. Apply only the proved AST time bounds
+   in [engine-design.md](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/engine-design.md#sql-derived-input-bounds).
+   Keep unsupported shapes explicit; do not implement a general optimizer.
+2. Add the isolated worker entry point under `araphor-data/src/bin/`. Reuse
+   the internal evaluator and typed query input, not a second query engine.
+   Transfer only complete bounded authorized pages and an admitted query.
+   No segment path, persistent database handle, credential or network access
+   enters the worker. Enforce OS memory/CPU limits, a deadline, bounded IPC,
+   cancellation and child reaping. Disable external access and extension
+   loading. Do not fall back to in-process evaluation for client SQL.
+3. Add authenticated query receipts and resume tokens. Recheck current grants
+   before every frame and after waits; authorization loss stops disclosure.
+   Bind the exact query, parameters, scope, schema and store identity. Map
+   the tenant replay-floor failure to `OUT_OF_RANGE`; it means replay is
+   unavailable, not proof that this filter lost a matching row. Keep limits
+   in the data crate so the optional remote host uses the same contract.
+
+The client work below starts after this boundary passes. The offline worker
+proof and trusted 7.3 tests do not qualify public arbitrary SQL.
 
 ## Implementation flow
 
@@ -85,12 +114,12 @@ Status: **Not done**.
    request. Return the accepted trace ID before lengthy output.
 5. Extend `catalog` with authorized targets, query fields, recipe source,
    parameters, capability status and examples. SQL `--target` narrows allowed
-   inputs before evaluation, including joins and aggregates. Reuse Mithril 7.3
-   for AST-derived SQL time bounds; no duplicate window flag is required.
+   inputs before evaluation, including joins and aggregates. Use this phase's
+   AST-derived SQL time bounds; no duplicate window flag is required.
    Follow declares append or replace semantics from Mithril 7.3.
    An aggregate uses complete bounded replacements on relevant commits.
    Neither normal nor followed aggregates count a truncated input.
-   Reuse QueryOwner segment extraction and the qualified isolated DuckDB worker.
+   Reuse 7.3 segment extraction and qualify the isolated worker in this phase.
    The CLI and console cannot open segments or the metadata database. Both
    SQL follow and trace output use committed store positions and the same
    expiry contract; neither needs a separate subscription store.
@@ -139,6 +168,16 @@ flags, stdin EOF, source edit after submission, empty output with terminal
 success, missing terminal result, JSON escaping, foreign trace reads, revoked
 token, CSRF, read-only resume, duplicate submit, cursor expiry and slow clients.
 API success must not conceal a partial trace or failed cleanup.
+
+Add `query_admission_` and worker-isolation tests beside the data owner.
+Compare each accepted SQL bound with full authorized-input evaluation in the
+pinned DuckDB. Cover OR, aliases, CTE reuse, self-joins, outer joins, quoted
+and shadowed names, nulls, timestamp offsets/precision and bound endpoints.
+Reject unsupported moving predicates. Check hidden-column predicates and
+foreign-row counts. Reject nested forbidden functions and file/network/extension
+access. Kill, hang and cancel workers; prove cleanup and continued intake.
+Test configured N/N+1 input, output and concurrency bounds with small fixtures.
+These are correctness checks, not authorization for new performance workloads.
 
 Run a terminal-agent task that starts one CLI command and reads it with the
 agent's existing terminal mechanism. No provider call is required for the
