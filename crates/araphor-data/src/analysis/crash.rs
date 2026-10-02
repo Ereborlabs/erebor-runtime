@@ -15,6 +15,95 @@ impl AnalysisStore {
 }
 
 #[test]
+fn observability_trace_crashes() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use super::raw::tests::{trace_intent, trace_terminal};
+    use crate::{TraceBatchV1, TraceFrameKindV1, TraceFrameV1};
+
+    let intent = trace_intent()?;
+    let identity = &intent.bindings[0].identity;
+    let batch = |empty: bool| TraceBatchV1 {
+        execution_id: identity.execution_id,
+        frames: if empty {
+            vec![]
+        } else {
+            vec![TraceFrameV1 {
+                execution_id: identity.execution_id,
+                sequence: 1,
+                kind: TraceFrameKindV1::Data,
+                bytes: b"output".to_vec(),
+            }]
+        },
+        terminal: Some(trace_terminal(u64::from(!empty), if empty { 0 } else { 6 })),
+    };
+    if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
+        let store = AnalysisStore::open(PathBuf::from(root))?;
+        let empty = std::env::var("ARAPHOR_TRACE_EMPTY")? == "true";
+        store.append_trace(identity, &batch(empty), 200)?;
+        store.crash_at("trace.acked");
+        return Err("the requested trace crash did not occur".into());
+    }
+    for empty in [false, true] {
+        for point in [
+            "evidence.before",
+            "segment.reserved",
+            "segment.appended",
+            "segment.synced",
+            "evidence.after",
+            "trace.acked",
+        ] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("data");
+            let store = AnalysisStore::open(&root)?;
+            store.accept_trace(&intent)?;
+            let before = store.meta()?;
+            drop(store);
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", "analysis::crash::observability_trace_crashes"])
+                .env("ARAPHOR_CRASH_ROOT", &root)
+                .env("ARAPHOR_CRASH_POINT", point)
+                .env("ARAPHOR_TRACE_EMPTY", empty.to_string())
+                .status()?;
+            assert_eq!(status.code(), Some(73), "{point}, empty={empty}");
+            let store = AnalysisStore::open(&root)?;
+            let input = batch(empty);
+            let recovered = store.trace_receipt(identity)?.ok_or("receipt absent")?;
+            let applied = recovered.terminal.is_some();
+            if matches!(point, "evidence.before" | "segment.reserved") {
+                assert!(!applied, "{point}, empty={empty}");
+            } else if point != "segment.appended" {
+                assert!(applied, "{point}, empty={empty}");
+            }
+            let page = store.read_trace(identity, 1, &AnalysisReadControl::default())?;
+            if applied {
+                assert_eq!(page.frames, input.frames, "{point}, empty={empty}");
+                assert_eq!(page.terminal, input.terminal, "{point}, empty={empty}");
+                assert_eq!(recovered.output_bytes, if empty { 0 } else { 6 });
+            } else {
+                assert!(page.frames.is_empty(), "{point}, empty={empty}");
+                assert_eq!(page.terminal, None);
+                assert_eq!((recovered.last_sequence, recovered.output_bytes), (0, 0));
+            }
+            let receipt = store.append_trace(identity, &input, 201)?;
+            let watch = store.subscribe_revision();
+            assert_eq!(store.append_trace(identity, &input, 202)?, receipt);
+            assert!(!watch.has_changed()?);
+            assert_eq!(store.meta()?.commit_revision, before.commit_revision + 1);
+            let page = store.read_trace(identity, 1, &AnalysisReadControl::default())?;
+            assert_eq!(page.frames, input.frames);
+            assert_eq!(page.terminal, input.terminal);
+            assert_eq!(page.positions.len(), usize::from(!empty));
+            assert!(page.terminal_position.is_some());
+            assert_eq!(page.next_cursor, None);
+            drop(store);
+            let store = AnalysisStore::open(&root)?;
+            assert_eq!(store.trace_receipt(identity)?, Some(receipt.clone()));
+            assert_eq!(store.append_trace(identity, &input, 203)?, receipt);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
         let root = PathBuf::from(root);

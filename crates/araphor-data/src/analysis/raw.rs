@@ -634,12 +634,32 @@ impl AnalysisStore {
             ));
         }
         let (stream, sequence) = raw.next_position(&identity)?;
-        let (id, added, created) = raw.segments.append_plan(
+        let terminal_only = matches!(&commit.kind, Some(RawKind::Diagnostic(progress))
+            if progress.terminal && commit.spans.len() == 1
+                && commit.spans[0].first == progress.last_sequence + 1);
+        let (mut id, mut added, mut created) = raw.segments.append_plan(
             &identity,
             stream,
             sequence,
             commit.encoded_len() as u64 + 8,
+            false,
         )?;
+        let rotate = terminal_only
+            && !created
+            && raw
+                .budget
+                .pins
+                .get(&id)
+                .is_some_and(|(_, expiry)| *expiry > batch.intake_utc_ns);
+        if rotate {
+            (id, added, created) = raw.segments.append_plan(
+                &identity,
+                stream,
+                sequence,
+                commit.encoded_len() as u64 + 8,
+                true,
+            )?;
+        }
         let json = identity.json(&self.root)?;
         let mut charge = added;
         if created {
@@ -659,9 +679,7 @@ impl AnalysisStore {
         if terminal {
             charge += batch.terminal_bytes as u64;
         }
-        let prepaid = charge <= released_reserve
-            && matches!(&commit.kind, Some(RawKind::Diagnostic(progress)) if progress.terminal
-                && commit.spans.len() == 1 && commit.spans[0].first == progress.last_sequence + 1);
+        let prepaid = terminal_only && charge <= released_reserve;
         let initial = diagnostic
             && !raw
                 .segments
@@ -819,6 +837,9 @@ impl AnalysisStore {
         self.write_ready.store(false, Ordering::Release);
         #[cfg(test)]
         self.crash_at("evidence.before");
+        if rotate {
+            raw.segments.seal_stream(stream)?;
+        }
         let body_bytes = commit.body.len() as u64;
         let prior_cursor = raw
             .sources
@@ -2296,6 +2317,340 @@ pub(super) mod tests {
         assert!(store
             .read_trace(&changed, 1, &super::super::AnalysisReadControl::default())
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_terminal_pin() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::{
+            AnalysisReadControl, AnalysisResultCommitV1, AnalysisWitnessV1, ProcessorClassV1,
+            ProcessorScopeV1, StorageLimitsV1,
+        };
+
+        if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
+            let root = PathBuf::from(root);
+            let intent = trace_intent()?;
+            let identity = &intent.bindings[0].identity;
+            let store = AnalysisStore::open(&root)?;
+            let limits = StorageLimitsV1 {
+                witness_max_bytes: store.witness_usage(identity.tenant_id, 203)?.charged_bytes,
+                ..Default::default()
+            };
+            drop(store);
+            let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+            store.append_trace(
+                identity,
+                &crate::TraceBatchV1 {
+                    execution_id: identity.execution_id,
+                    frames: vec![],
+                    terminal: Some(trace_terminal(1, 1)),
+                },
+                204,
+            )?;
+            return Err("the reserved terminal crash did not occur".into());
+        }
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open(&root)?;
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        let frame = crate::TraceFrameV1 {
+            execution_id: identity.execution_id,
+            sequence: 1,
+            kind: crate::TraceFrameKindV1::Data,
+            bytes: vec![7],
+        };
+        let batch = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![frame.clone()],
+            terminal: None,
+        };
+        store.append_trace(identity, &batch, 200)?;
+        let evidence = EvidenceIntakeIdentityV1 {
+            tenant_id: identity.tenant_id,
+            node_id: identity.node_id.clone(),
+            node_boot_id: identity.node_boot_id,
+            label_epoch: 1,
+            source_id: [5; 16],
+            source_epoch: 1,
+        };
+        store.accept_validated_batch(
+            evidence.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 200,
+                framed_records: vec![1].into(),
+                frame_ends: vec![1],
+            },
+        )?;
+        let scope = ProcessorScopeV1 {
+            processor_id: "trace-witness".into(),
+            method_version: 1,
+            identity: evidence,
+        };
+        store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+        store.commit_result(&AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 1,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "trace-result".into(),
+            body: vec![1],
+            created_utc_ns: 201,
+            witnesses: vec![AnalysisWitnessV1 {
+                identity: identity.clone().into(),
+                cursor: 1,
+                expires_utc_ns: 1_000,
+            }],
+            context_refs: vec![],
+        })?;
+        let usage = store.witness_usage(identity.tenant_id, 202)?;
+        let limits = StorageLimitsV1 {
+            witness_max_bytes: usage.charged_bytes,
+            ..Default::default()
+        };
+        drop(store);
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        let mixed = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![crate::TraceFrameV1 {
+                sequence: 2,
+                ..frame.clone()
+            }],
+            terminal: Some(trace_terminal(2, 2)),
+        };
+        assert!(matches!(
+            store.append_trace(identity, &mixed, 203),
+            Err(crate::Error::StorageCapacity {
+                resource: "tenant witness bytes",
+                ..
+            })
+        ));
+        drop(store);
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "analysis::raw::tests::observability_terminal_pin",
+            ])
+            .env("ARAPHOR_CRASH_ROOT", &root)
+            .env("ARAPHOR_CRASH_POINT", "segment.reserved")
+            .status()?;
+        assert_eq!(status.code(), Some(73));
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        let terminal = trace_terminal(1, 1);
+        let combined = crate::TraceBatchV1 {
+            terminal: Some(terminal.clone()),
+            ..batch
+        };
+        let receipt = store.append_trace(identity, &combined, 204)?;
+        assert_eq!(receipt.terminal, Some(terminal.clone()));
+        let page = store.read_trace(identity, 1, &AnalysisReadControl::default())?;
+        assert_eq!(page.frames, vec![frame.clone()]);
+        assert_eq!(page.terminal, Some(terminal.clone()));
+        {
+            let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
+            assert_ne!(
+                raw.entries[&page.positions[0].commit_revision].reference.id,
+                raw.entries[&page
+                    .terminal_position
+                    .ok_or("terminal position absent")?
+                    .commit_revision]
+                    .reference
+                    .id
+            );
+        }
+        assert_eq!(
+            store.witness_usage(identity.tenant_id, 205)?.charged_bytes,
+            usage.charged_bytes
+        );
+        drop(store);
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        assert_eq!(store.append_trace(identity, &combined, 206)?, receipt);
+        let page = store.read_trace(identity, 1, &AnalysisReadControl::default())?;
+        assert_eq!(page.frames, vec![frame]);
+        assert_eq!(page.terminal, Some(terminal));
+        assert_eq!(
+            store.witness_usage(identity.tenant_id, 207)?.charged_bytes,
+            usage.charged_bytes
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn observability_read_retention() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::sync::{mpsc, TryLockError};
+        use std::time::{Duration, Instant};
+
+        use crate::{AnalysisCommitStage, AnalysisReadControl, EvidenceRetentionOwner};
+
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("data"),
+            crate::RetentionLimitsV1 {
+                raw_max_age_ns: 50,
+                ..Default::default()
+            },
+            Default::default(),
+        )?;
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        let frame = crate::TraceFrameV1 {
+            execution_id: identity.execution_id,
+            sequence: 1,
+            kind: crate::TraceFrameKindV1::Data,
+            bytes: vec![7],
+        };
+        let mut batch = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![frame.clone()],
+            terminal: None,
+        };
+        store.append_trace(identity, &batch, 100)?;
+        let (freeze, frozen) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        store.set_commit_hook(AnalysisCommitStage::AfterTraceFreeze, move || {
+            freeze
+                .send(())
+                .map_err(|_| crate::AnalysisReadCancelledSnafu.build())?;
+            released
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| crate::AnalysisReadDeadlineSnafu.build())
+        })?;
+        std::thread::scope(
+            |scope| -> std::result::Result<(), Box<dyn std::error::Error>> {
+                let resume = release;
+                let reader =
+                    scope.spawn(|| store.read_trace(identity, 1, &AnalysisReadControl::default()));
+                frozen.recv_timeout(Duration::from_secs(5))?;
+                assert!(matches!(
+                    store.maintenance.try_write(),
+                    Err(TryLockError::WouldBlock)
+                ));
+                batch.frames[0].sequence = 2;
+                store.append_trace(identity, &batch, 101)?;
+                let retention =
+                    scope.spawn(|| EvidenceRetentionOwner::new(&store).retain_trace(identity, 200));
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    match store.writer.try_lock() {
+                        Err(TryLockError::WouldBlock) => break,
+                        Err(TryLockError::Poisoned(_)) => return Err("writer poisoned".into()),
+                        Ok(guard) => drop(guard),
+                    }
+                    if Instant::now() >= deadline {
+                        return Err("retention did not acquire the writer".into());
+                    }
+                    std::thread::yield_now();
+                }
+                resume.send(())?;
+                let page = reader.join().map_err(|_| "reader failed")??;
+                let removed = retention.join().map_err(|_| "retention failed")??;
+                assert_eq!(page.frames, vec![frame]);
+                assert_eq!(page.next_cursor, None);
+                assert_eq!(removed.removed_records, 2);
+                assert_eq!(removed.retained_floor, 2);
+                Ok(())
+            },
+        )?;
+        assert!(matches!(
+            store.read_trace(identity, 1, &AnalysisReadControl::default()),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn observability_rotation_totals() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::{AnalysisReadControl, EvidenceRetentionOwner, RetentionLimitsV1};
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 50,
+            ..Default::default()
+        };
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        let mut batch = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![crate::TraceFrameV1 {
+                execution_id: identity.execution_id,
+                sequence: 1,
+                kind: crate::TraceFrameKindV1::Data,
+                bytes: vec![7; crate::MAX_TRACE_FRAME_BYTES],
+            }],
+            terminal: None,
+        };
+        for sequence in 1..=16 {
+            batch.frames[0].sequence = sequence;
+            let receipt = store.append_trace(identity, &batch, 100 + sequence)?;
+            assert_eq!(receipt.last_sequence, sequence);
+            assert_eq!(
+                receipt.output_bytes,
+                sequence * crate::MAX_TRACE_FRAME_BYTES as u64
+            );
+        }
+        let terminal = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![],
+            terminal: Some(trace_terminal(16, 16 * crate::MAX_TRACE_FRAME_BYTES as u64)),
+        };
+        let receipt = store.append_trace(identity, &terminal, 117)?;
+        let first = store.read_trace(identity, 1, &AnalysisReadControl::default())?;
+        let last = store.read_trace(identity, 16, &AnalysisReadControl::default())?;
+        {
+            let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
+            assert_ne!(
+                raw.entries[&first.positions[0].commit_revision]
+                    .reference
+                    .id,
+                raw.entries[&last.positions[0].commit_revision].reference.id
+            );
+        }
+        assert_eq!(last.frames, batch.frames);
+        assert_eq!(last.terminal, terminal.terminal);
+        let removed = EvidenceRetentionOwner::new(&store).retain_trace(identity, 200)?;
+        assert_eq!((removed.removed_records, removed.retained_floor), (15, 15));
+        drop(store);
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let restored = store.trace_receipt(identity)?.ok_or("receipt absent")?;
+        assert_eq!(restored.last_sequence, receipt.last_sequence);
+        assert_eq!(restored.output_bytes, receipt.output_bytes);
+        assert_eq!(restored.terminal, receipt.terminal);
+        assert_eq!(restored.retained_floor, 15);
+        assert!(matches!(
+            store.read_trace(identity, 1, &AnalysisReadControl::default()),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        let page = store.read_trace(identity, 16, &AnalysisReadControl::default())?;
+        assert_eq!(page.frames, batch.frames);
+        assert_eq!(page.terminal, terminal.terminal);
+        let removed = EvidenceRetentionOwner::new(&store).retain_trace(identity, 201)?;
+        assert_eq!((removed.removed_records, removed.retained_floor), (2, 17));
+        let expired = store.trace_receipt(identity)?.ok_or("receipt absent")?;
+        assert_eq!(store.append_trace(identity, &terminal, 202)?, expired);
+        assert!(matches!(
+            store.append_trace(identity, &batch, 202),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        let mut changed = terminal.clone();
+        changed.terminal.as_mut().ok_or("terminal absent")?.reason =
+            crate::TraceTerminalReasonV1::Cancelled;
+        assert!(matches!(
+            store.append_trace(identity, &changed, 202),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        drop(store);
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        assert_eq!(store.append_trace(identity, &terminal, 203)?, expired);
+        assert_eq!(store.trace_receipt(identity)?, Some(expired));
         Ok(())
     }
 

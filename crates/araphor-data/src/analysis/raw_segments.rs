@@ -431,13 +431,15 @@ impl EvidenceSegmentOwner {
         stream: u64,
         sequence: u64,
         bytes: u64,
+        force_new: bool,
     ) -> Result<(u64, u64, bool)> {
         if let Some(state) = self
             .active
             .get(&stream)
             .and_then(|id| self.segments.get(id))
             .filter(|state| {
-                state.descriptor.bounds.last_cursor.checked_add(1) == Some(sequence)
+                !force_new
+                    && state.descriptor.bounds.last_cursor.checked_add(1) == Some(sequence)
                     && state
                         .descriptor
                         .reference
@@ -453,6 +455,23 @@ impl EvidenceSegmentOwner {
             bytes + super::SegmentFile::encode_raw(identity)?.len() as u64,
             true,
         ))
+    }
+
+    pub(super) fn seal_stream(&mut self, stream: u64) -> Result<()> {
+        if let Some(id) = self.active.get(&stream).copied() {
+            self.segments
+                .get_mut(&id)
+                .ok_or_else(|| {
+                    AnalysisStateSnafu {
+                        path: &self.root,
+                        reason: "the active raw segment is absent",
+                    }
+                    .build()
+                })?
+                .seal(&self.root)?;
+            self.active.remove(&stream);
+        }
+        Ok(())
     }
 
     pub(super) fn file_path(&self, id: u64) -> Result<&Path> {

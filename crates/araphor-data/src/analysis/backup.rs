@@ -210,6 +210,7 @@ impl AnalysisStore {
                 .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
             raw.segments.seal_all()?;
             raw.project_paths(writer.get()?)?;
+            raw.refresh_budget(writer.get()?)?;
         }
         let files = Self::backup_segments(writer.get()?)?;
         for (_, bytes, name) in &files {
@@ -361,12 +362,26 @@ impl AnalysisStore {
         if bytes.len() as u64 > MAX_MANIFEST_BYTES {
             return self.reject("the backup manifest exceeds its size bound");
         }
+        let (trace_slots, trace_reserve) = {
+            let raw = self
+                .raw
+                .lock()
+                .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+            (raw.budget.trace_slots, raw.budget.trace_reserve)
+        };
+        let diagnostics = files
+            .iter()
+            .filter(|(_, _, name)| name.split('.').nth(1) == Some("d"))
+            .count();
         let copy_bytes = manifest
             .copy_bytes(&self.root)?
             .checked_add(bytes.len() as u64)
+            .and_then(|bytes| bytes.checked_add(trace_reserve))
             .ok_or_else(|| self.state_error("the backup reservation size is invalid"))?;
-        self.storage
-            .check_backup(self.storage_with_entries(files.len() + 4)?, copy_bytes)?;
+        self.storage.check_backup(
+            self.storage_with_reserve(files.len() - diagnostics + 4, diagnostics + trace_slots)?,
+            copy_bytes,
+        )?;
         fs::DirBuilder::new()
             .mode(0o700)
             .create(destination)
@@ -747,6 +762,185 @@ mod tests {
             framed_records: b"frame".to_vec().into(),
             frame_ends: vec![5],
         }
+    }
+
+    #[test]
+    fn observability_backup_incomplete() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use super::super::raw::tests::{trace_intent, trace_terminal};
+        use crate::{AnalysisReadControl, TraceBatchV1, TraceFrameKindV1, TraceFrameV1};
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open(&root)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        let intent = trace_intent()?;
+        let trace = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        let frame = TraceFrameV1 {
+            execution_id: trace.execution_id,
+            sequence: 1,
+            kind: TraceFrameKindV1::Data,
+            bytes: b"output".to_vec(),
+        };
+        let mut input = TraceBatchV1 {
+            execution_id: trace.execution_id,
+            frames: vec![frame.clone()],
+            terminal: None,
+        };
+        let receipt = store.append_trace(trace, &input, 200)?;
+        let before = store.read_trace(trace, 1, &AnalysisReadControl::default())?;
+        let backup = root.join("backups/saved");
+        let manifest = store.backup(&backup)?;
+        assert_eq!(manifest.segments.len(), 2);
+        let trace_file = manifest
+            .segments
+            .iter()
+            .find(|segment| segment.file_name.split('.').nth(1) == Some("d"))
+            .ok_or("diagnostic backup segment absent")?;
+        let path = super::super::raw::RawJournal::file_path(&backup, &trace_file.file_name)?;
+        let moved = directory.path().join("saved-segment");
+        fs::rename(&path, &moved)?;
+        let target = directory.path().join("restored");
+        assert!(AnalysisStore::restore(&backup, &target).is_err());
+        assert!(!target.exists());
+        fs::rename(&moved, &path)?;
+        input.frames[0].sequence = 2;
+        store.append_trace(trace, &input, 201)?;
+        let restored = AnalysisStore::restore(&backup, &target)?;
+        assert_eq!(restored.meta()?.store_uuid.to_string(), manifest.store_uuid);
+        assert_eq!(restored.meta()?.recovery_epoch, manifest.recovery_epoch + 1);
+        assert_eq!(restored.meta()?.commit_revision, manifest.commit_revision);
+        assert_eq!(restored.trace_receipt(trace)?, Some(receipt));
+        assert_eq!(
+            restored
+                .trace_intent(intent.tenant_id, intent.request_id)?
+                .ok_or("intent absent")?
+                .1,
+            intent
+        );
+        assert_eq!(restored.read_page(&identity(), 1)?.records.len(), 1);
+        let page = restored.read_trace(trace, 1, &AnalysisReadControl::default())?;
+        assert_eq!(page.frames, vec![frame.clone()]);
+        assert_eq!(page.positions, before.positions);
+        assert_eq!(page.terminal, None);
+        let terminal = TraceBatchV1 {
+            execution_id: trace.execution_id,
+            frames: vec![],
+            terminal: Some(trace_terminal(1, 6)),
+        };
+        let receipt = restored.append_trace(trace, &terminal, 202)?;
+        assert_eq!(
+            store
+                .trace_receipt(trace)?
+                .ok_or("receipt absent")?
+                .last_sequence,
+            2
+        );
+        assert!(store
+            .trace_receipt(trace)?
+            .ok_or("receipt absent")?
+            .terminal
+            .is_none());
+        drop(restored);
+        let restored = AnalysisStore::open(&target)?;
+        assert_eq!(restored.append_trace(trace, &terminal, 203)?, receipt);
+        let page = restored.read_trace(trace, 1, &AnalysisReadControl::default())?;
+        assert_eq!(page.frames, vec![frame]);
+        assert_eq!(page.terminal, terminal.terminal);
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backup_reserve() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use super::super::raw::tests::{trace_intent, trace_terminal};
+        use crate::{TraceBatchV1, TraceFrameKindV1, TraceFrameV1};
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let limits = StorageLimitsV1 {
+            disk_max_bytes: 1024 * 1024 * 1024,
+            ..Default::default()
+        };
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        let intent = trace_intent()?;
+        let trace = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        let input = TraceBatchV1 {
+            execution_id: trace.execution_id,
+            frames: vec![TraceFrameV1 {
+                execution_id: trace.execution_id,
+                sequence: 1,
+                kind: TraceFrameKindV1::Data,
+                bytes: vec![7],
+            }],
+            terminal: None,
+        };
+        let receipt = store.append_trace(trace, &input, 200)?;
+        let manifest = store.backup(&root.join("backups/first"))?;
+        let copy_bytes = manifest.copy_bytes(&root)? + serde_json::to_vec(&manifest)?.len() as u64;
+        let usage = store.storage_usage()?;
+        let padding = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(root.join("quota"))?;
+        padding.set_len(
+            limits.disk_max_bytes
+                - 256 * 1024 * 1024
+                - usage.file_bytes
+                - copy_bytes
+                - copy_bytes / 4
+                - 8192,
+        )?;
+        limits.check_backup(store.storage_usage()?, copy_bytes)?;
+        let blocked = root.join("backups/blocked");
+        assert!(matches!(
+            store.backup(&blocked),
+            Err(crate::Error::StorageCapacity {
+                resource: "data files",
+                ..
+            })
+        ));
+        assert!(!blocked.exists());
+        assert_eq!(store.trace_receipt(trace)?, Some(receipt.clone()));
+        padding.set_len(0)?;
+        let held = root.join("backups/held");
+        DirBuilder::new().mode(0o700).create(&held)?;
+        for index in 0..super::super::capacity::MAX_DIAGNOSTIC_ENTRIES - 3 {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(held.join(format!("{index:016x}.d.reserve")))?;
+        }
+        assert!(matches!(
+            store.backup(&blocked),
+            Err(crate::Error::StorageCapacity {
+                resource: "diagnostic storage entries",
+                ..
+            })
+        ));
+        assert!(!blocked.exists());
+        assert_eq!(store.trace_receipt(trace)?, Some(receipt));
+        fs::rename(
+            held.join("0000000000000000.d.reserve"),
+            directory.path().join("saved-entry"),
+        )?;
+        store.backup(&blocked)?;
+        assert_eq!(
+            store.accept_validated_batch(identity(), batch(1))?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        let terminal = TraceBatchV1 {
+            execution_id: trace.execution_id,
+            frames: vec![],
+            terminal: Some(trace_terminal(1, 1)),
+        };
+        assert_eq!(
+            store.append_trace(trace, &terminal, 201)?.terminal,
+            terminal.terminal
+        );
+        Ok(())
     }
 
     #[test]
