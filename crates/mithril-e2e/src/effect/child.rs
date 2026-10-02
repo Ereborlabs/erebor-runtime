@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{self, Read as _, Write as _};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::linux::net::SocketAddrExt as _;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
@@ -1121,24 +1121,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             return Ok(());
         }
     }
-}
-
-pub fn run_mount_setattr_child(namespace: &Path, path: &Path, read_only: bool) -> Result<()> {
-    let namespace = fs::File::open(namespace).context(IoSnafu { path: namespace })?;
-    rustix::thread::move_into_link_name_space(
-        namespace.as_fd(),
-        Some(rustix::thread::LinkNameSpaceType::Mount),
-    )
-    .map_err(io::Error::from)
-    .context(IoSnafu {
-        path: Path::new("mount namespace"),
-    })?;
-    if read_only {
-        fixture_syscalls::set_mount_read_only(path)
-    } else {
-        fixture_syscalls::set_mount_read_write(path)
-    }
-    .context(IoSnafu { path })
 }
 
 #[allow(deprecated)]

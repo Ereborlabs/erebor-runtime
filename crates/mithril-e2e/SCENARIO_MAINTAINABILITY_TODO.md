@@ -2952,7 +2952,7 @@ test does not close a row when its physical condition or an assertion changed.
       The final repository Rust CI procedure passes after the last Rust edit.
       This focused three-platform proof does not close the full physical
       matrix delivery gate.
-  - [ ] Replace the successful external `mount_setattr` block with a shared
+  - [x] Replace the successful external `mount_setattr` block with a shared
     platform test. Keep one workload with a live child in a second mount
     namespace. Use the existing signed mount policies, `ProcessFixture`, and
     `MountCache`. Keep both benign reads and the global guard checks.
@@ -2973,24 +2973,34 @@ test does not close a row when its physical condition or an assertion changed.
       syscall keeps the baseline `AT_RECURSIVE` flag.
     - [x] Pass and commit real Kubernetes. The corrected 93-line shared test
       passed Protect and Observe in 84.52 seconds. Namespace, output, pin,
-      lease, actor cgroup, and Node cgroup cleanup passed. The first run stopped with raw
-      `EACCES` before the mount action in 74.03 seconds. Keep the old block.
-      Reproduce an unowned observer's exact mount-namespace and mountinfo reads
-      in lightweight. Add operation paths to the cache reader's I/O errors.
-      Do not rerun Kubernetes before the missing condition has a local proof.
-      The initial runtime target's namespace stat succeeds. The reproduction
-      must inspect the live child in its private namespace, as this test does.
+      lease, actor cgroup, and Node cgroup cleanup passed. The first run
+      stopped with raw `EACCES` before the mount action in 74.03 seconds.
+      The old block stayed until the correction passed all three platforms.
+      The lightweight reproduction checks the unowned observer's exact
+      namespace and mountinfo reads. Cache I/O errors now include paths.
+      Kubernetes ran only after the missing condition had a local proof.
       The 80-line Host reproduction passed in 27.52 seconds. The initial
       runtime target's namespace stat succeeds. The unowned observer gets
       `EACCES` for the child's namespace link; the child's mountinfo stays
-      readable. Keep this distinction. Use each actor's own namespace stat
-      in its result. Keep both physical reads, distinct namespace IDs, the
-      global epoch, and two new READY cache rows. Do not change BPF access.
+      readable. Each actor reports its own namespace stat. Both physical
+      reads, distinct namespace IDs, the global epoch, and two new READY
+      cache rows stay in the shared test. BPF access remains unchanged.
       The corrected 93-line test passed Protect and Observe on Host in
       40.79 seconds and direct `runc` in 46.66 seconds. Both runs passed
       normal output, pin, lease, actor cgroup, and Node cgroup cleanup.
-    - [ ] Remove the old block, unused helper, CLI path, and result fields only
+    - [x] Remove the old block, unused helper, CLI path, and result fields only
       after the matching coverage passes. Keep propagation coverage separate.
+      The shared test replaces the baseline `95775f48` read-only and restore
+      checks. It requires both namespaces to read after both changes, at least
+      two new READY rows per change, and task-attributed allow evidence in
+      both modes. The old block requires two reads after the first change,
+      one after restore, and at least one new READY row. The separate exact
+      file-object and successful propagation checks stay in the old runner.
+      Retirement removes 166 net Rust lines. All 92 non-privileged library
+      tests and the VM launcher checks pass. The final repository Rust CI
+      procedure passes after the last Rust edit. No Platform API, Node,
+      Control, BPF, or public production result schema changes. This focused
+      three-platform proof does not close the full physical matrix gate.
     - The draft added an exact-object ID assertion absent from this baseline
       block. Its exact-file replacement stayed pending with one and two
       workload targets. The unused policy drafts are removed. Keep the

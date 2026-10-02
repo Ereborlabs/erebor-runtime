@@ -11,8 +11,6 @@ use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::sync::atomic::{fence, Ordering};
 
-const AT_RECURSIVE: libc::c_int = 0x8000;
-const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
 const OPEN_TREE_CLONE: libc::c_uint = 0x0000_0001;
 const IORING_SETUP_R_DISABLED: u32 = 1 << 6;
 const IORING_SETUP_SINGLE_ISSUER: u32 = 1 << 12;
@@ -187,14 +185,6 @@ impl Drop for MappedRegion {
 const _: () = assert!(size_of::<IoUringSqe>() == 64);
 const _: () = assert!(size_of::<IoUringCqe>() == 16);
 const _: () = assert!(size_of::<IoUringRestriction>() == 16);
-
-#[repr(C)]
-struct MountAttr {
-    attr_set: u64,
-    attr_clr: u64,
-    propagation: u64,
-    userns_fd: u64,
-}
 
 pub(super) fn exec_fd(fd: RawFd) -> io::Result<()> {
     let arguments = [
@@ -616,35 +606,6 @@ pub(super) fn open_detached_mount_file(tree: RawFd, path: &Path) -> io::Result<(
     let mut file = unsafe { File::from_raw_fd(fd) };
     let mut byte = [0_u8; 1];
     std::io::Read::read_exact(&mut file, &mut byte)
-}
-
-pub(super) fn set_mount_read_only(path: &Path) -> io::Result<()> {
-    set_mount_readonly_state(path, true)
-}
-
-pub(super) fn set_mount_read_write(path: &Path) -> io::Result<()> {
-    set_mount_readonly_state(path, false)
-}
-
-fn set_mount_readonly_state(path: &Path, read_only: bool) -> io::Result<()> {
-    let path = path_c_string(path)?;
-    let attributes = MountAttr {
-        attr_set: if read_only { MOUNT_ATTR_RDONLY } else { 0 },
-        attr_clr: if read_only { 0 } else { MOUNT_ATTR_RDONLY },
-        propagation: 0,
-        userns_fd: 0,
-    };
-    // SAFETY: path and the complete mount_attr value remain valid for the call.
-    syscall_result(unsafe {
-        libc::syscall(
-            libc::SYS_mount_setattr,
-            libc::AT_FDCWD,
-            path.as_ptr(),
-            AT_RECURSIVE,
-            &attributes,
-            size_of::<MountAttr>(),
-        )
-    })
 }
 
 fn fork_and_wait(child_call: impl FnOnce() -> libc::c_int) -> io::Result<()> {

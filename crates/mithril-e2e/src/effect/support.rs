@@ -623,47 +623,6 @@ impl ExternalMountNamespace {
         Ok(self.output(["cat", "--"], [path])?.stdout)
     }
 
-    pub(super) fn mount_setattr(&self, target: &Path, read_only: bool) -> Result<()> {
-        let executable = std::env::current_exe().context(IoSnafu {
-            path: Path::new("current executable"),
-        })?;
-        let flags = rustix::io::fcntl_getfd(&self.namespace)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu {
-                path: Path::new("held mount namespace"),
-            })?;
-        rustix::io::fcntl_setfd(&self.namespace, flags - rustix::io::FdFlags::CLOEXEC)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu {
-                path: Path::new("held mount namespace"),
-            })?;
-        let output = Command::new(executable)
-            .arg("mount-setattr")
-            .arg("--namespace")
-            .arg(format!("/proc/self/fd/{}", self.namespace.as_raw_fd()))
-            .arg("--path")
-            .arg(target)
-            .arg("--read-only")
-            .arg(read_only.to_string())
-            .output();
-        rustix::io::fcntl_setfd(&self.namespace, flags)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu {
-                path: Path::new("held mount namespace"),
-            })?;
-        let output = output.context(IoSnafu {
-            path: Path::new("mount_setattr helper"),
-        })?;
-        ensure!(
-            output.status.success(),
-            CommandSnafu {
-                program: "mithril-effect-test mount-setattr",
-                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            }
-        );
-        Ok(())
-    }
-
     fn run<const A: usize, const P: usize>(
         &self,
         command: [&str; A],

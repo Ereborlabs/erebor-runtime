@@ -188,7 +188,7 @@ use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::LatencyDistributionV1;
 use crate::Result;
 
-pub use child::{run_effect_child, run_mount_setattr_child};
+pub use child::run_effect_child;
 pub use network::{
     NetworkFixtureResultV1, NetworkPeerServerResultV1, NetworkPeerTargetV1,
     NetworkPhysicalProbeBundleV2, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
@@ -521,8 +521,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub mount_propagation_reached_peer: bool,
     pub mount_propagation_all_views_rebuilt: bool,
     pub mount_propagation_unmount_rebuilt: bool,
-    pub mount_setattr_global_invalidation: bool,
-    pub mount_setattr_snapshot_rebuilt: bool,
     pub external_mount_replacement_failed_closed: bool,
     pub exact_object_restored_after_mount_removal: bool,
     pub active_generation_published: bool,
@@ -2144,56 +2142,6 @@ impl EffectTestRunner {
             }
         );
 
-        let mount_setattr_epoch = global_mount_mutation_epoch(&host)?;
-        let mount_setattr_snapshots = ready_canonical_mount_snapshots(&host)?;
-        external_mount_namespace.mount_setattr(&paths.mount_target, true)?;
-        ensure!(
-            global_mount_mutation_epoch(&host)? > mount_setattr_epoch
-                && fixture.open(&paths.benign)?.allowed
-                && fixture.propagation_peer_open()?.allowed,
-            InvalidInputSnafu {
-                path: &paths.mount_target,
-                reason: "mount_setattr did not advance the guard and rebuild both represented namespaces",
-            }
-        );
-        ensure!(
-            ready_canonical_mount_snapshots(&host)?
-                .difference(&mount_setattr_snapshots)
-                .next()
-                .is_some(),
-            InvalidInputSnafu {
-                path: Path::new("canonical_mount_cache_states"),
-                reason: "mount_setattr did not produce a new BPF mount snapshot for the affected namespace",
-            }
-        );
-        let mount_restore_epoch = global_mount_mutation_epoch(&host)?;
-        let mount_restore_snapshots = ready_canonical_mount_snapshots(&host)?;
-        external_mount_namespace.mount_setattr(&paths.mount_target, false)?;
-        ensure!(
-            global_mount_mutation_epoch(&host)? > mount_restore_epoch,
-            InvalidInputSnafu {
-                path: &paths.mount_target,
-                reason: "mount_setattr restore did not advance the global mutation guard",
-            }
-        );
-        ensure!(
-            fixture.open(&paths.benign)?.allowed,
-            InvalidInputSnafu {
-                path: &paths.benign,
-                reason: "the effect after mount_setattr restore did not rebuild and allow the benign object",
-            }
-        );
-        ensure!(
-            ready_canonical_mount_snapshots(&host)?
-                .difference(&mount_restore_snapshots)
-                .next()
-                .is_some(),
-            InvalidInputSnafu {
-                path: Path::new("canonical_mount_cache_states"),
-                reason: "the effect after mount_setattr restore reused an old BPF mount snapshot",
-            }
-        );
-
         policy = policy
             .reload_and_install_for_test_objects(
                 &next_node_config,
@@ -2491,8 +2439,6 @@ impl EffectTestRunner {
             mount_propagation_reached_peer: true,
             mount_propagation_all_views_rebuilt: true,
             mount_propagation_unmount_rebuilt: true,
-            mount_setattr_global_invalidation: true,
-            mount_setattr_snapshot_rebuilt: true,
             external_mount_replacement_failed_closed: true,
             exact_object_restored_after_mount_removal: true,
             active_generation_published,
