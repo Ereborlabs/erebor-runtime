@@ -15,7 +15,6 @@ pub(super) struct SegmentRange {
     pub(super) byte_start: u64,
     pub(super) byte_end: u64,
     pub(super) first_cursor: u64,
-    pub(super) last_cursor: u64,
     pub(super) reader: super::raw::RawRead,
     pub(super) scan_bytes: usize,
     pub(super) intake: u64,

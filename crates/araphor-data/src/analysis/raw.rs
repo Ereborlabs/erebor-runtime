@@ -497,6 +497,94 @@ pub(super) struct RawJournal {
 }
 
 impl RawJournal {
+    pub(super) fn select_position(
+        &self,
+        selection: &super::AnalysisSelectionV1,
+        after: Option<super::StorePositionV1>,
+        revision: u64,
+        limit: usize,
+        control: &super::AnalysisReadControl,
+    ) -> Result<Option<(EvidenceIntakeIdentityV1, u32, super::segments::SegmentRange)>> {
+        let Some((from, until)) = selection.time_range() else {
+            return Ok(None);
+        };
+        if selection.sources.is_empty() || limit == 0 {
+            return Ok(None);
+        }
+        let first = after.map_or(0, |position| position.commit_revision);
+        for (&id, entry) in self.entries.range(first..=revision) {
+            control.check()?;
+            if !selection.sources.contains(&entry.identity)
+                || entry.commit.intake < from
+                || entry.commit.intake > until
+            {
+                continue;
+            }
+            for (index, span) in entry.commit.spans.iter().enumerate() {
+                let last = super::StorePositionV1 {
+                    commit_revision: id,
+                    ordinal: span.ordinal + (span.last - span.first) as u32,
+                };
+                if after.is_some_and(|position| position >= last) {
+                    continue;
+                }
+                let skipped = after
+                    .filter(|position| position.commit_revision == id)
+                    .map_or(0, |position| {
+                        (u64::from(position.ordinal) + 1).saturating_sub(u64::from(span.ordinal))
+                    });
+                let first = span.first + skipped;
+                let last = span.last.min(first.saturating_add(limit as u64 - 1));
+                return Ok(Some((
+                    entry.identity.clone(),
+                    entry.commit.cpu,
+                    super::segments::SegmentRange {
+                        segment_id: entry.reference.id,
+                        byte_start: entry.body_start + u64::from(span.start),
+                        byte_end: entry.body_start + u64::from(span.start) + u64::from(span.bytes),
+                        first_cursor: first,
+                        scan_bytes: entry.frame_bytes,
+                        intake: entry.commit.intake,
+                        reader: self.freeze(entry, index, first, last)?,
+                    },
+                )));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(super) fn pending_gaps(
+        &self,
+        receipt: &AnalysisSourceReceiptV1,
+        revision: u64,
+        control: &super::AnalysisReadControl,
+    ) -> Result<Vec<super::AnalysisGapV1>> {
+        let Some(mut next) = receipt.contiguous_cursor.checked_add(1) else {
+            return Ok(Vec::new());
+        };
+        let key = source_key(&receipt.identity);
+        let mut gaps = Vec::new();
+        for (_, &(id, index)) in self.ranges.range((key, next)..=(key, u64::MAX)) {
+            control.check()?;
+            if id > revision {
+                continue;
+            }
+            let span = &self.entries[&id].commit.spans[index];
+            if span.first > next {
+                gaps.push(super::AnalysisGapV1 {
+                    first_cursor: next,
+                    last_cursor: span.first - 1,
+                    commit_revision: revision,
+                });
+            }
+            let Some(end) = span.last.checked_add(1) else {
+                break;
+            };
+            next = end;
+        }
+        Ok(gaps)
+    }
+
     pub(super) fn forget_segment(&mut self, id: u64) -> Result<()> {
         self.segments.forget(id);
         self.entries.retain(|_, entry| entry.reference.id != id);
@@ -559,7 +647,6 @@ impl RawJournal {
                 byte_start: entry.body_start + u64::from(span.start),
                 byte_end: entry.body_start + u64::from(span.start) + u64::from(span.bytes),
                 first_cursor: span.first,
-                last_cursor: span.last,
                 scan_bytes: entry.frame_bytes,
                 intake: entry.commit.intake,
                 reader: self.freeze(entry, index, span.first, span.last)?,

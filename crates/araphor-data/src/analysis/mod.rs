@@ -41,8 +41,8 @@ pub use backup::{AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisReco
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
 pub use extraction::{
-    AnalysisExtractionV1, AnalysisInputPageV1, AnalysisInputV1, AnalysisRelationV1,
-    AnalysisSelectionV1, AnalysisSourceSnapshotV1,
+    AnalysisExtractionV1, AnalysisInputPageV1, AnalysisInputV1, AnalysisPositionPageV1,
+    AnalysisRelationV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1,
 };
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use progress::{
@@ -108,7 +108,9 @@ pub struct AnalysisStoreMetaV1 {
     pub commit_revision: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
+)]
 pub struct StorePositionV1 {
     pub commit_revision: u64,
     pub ordinal: u32,
@@ -563,38 +565,46 @@ impl AnalysisStore {
                 .lock()
                 .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
                 .record_count(key, 1, u64::MAX, revision);
-            let latest_coverage_report = if receipt.coverage_revision == 0 {
-                None
-            } else {
-                let stored: Option<(Vec<u8>, Vec<u8>)> = writer
-                    .query_row(
-                        "SELECT report, report_sha256 FROM coverage
-                     WHERE stream_key = ? AND tenant_id = ? AND revision = ?",
-                        params![
-                            key.as_slice(),
-                            identity.tenant_id.as_slice(),
-                            receipt.coverage_revision
-                        ],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .optional()
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "read retained coverage",
-                    })?;
-                let Some((report, digest)) = stored else {
-                    return self.reject("the source coverage receipt has no retained report");
-                };
-                if Sha256::digest(&report).as_slice() != digest {
-                    return self.reject("the retained coverage digest does not match its report");
-                }
-                Some(report)
-            };
+            let latest_coverage_report = self.read_coverage_from(writer, &receipt)?;
             Ok(Some(AnalysisSourceStatusV1 {
                 receipt,
                 retained_event_count,
                 latest_coverage_report,
             }))
         })
+    }
+
+    fn read_coverage_from(
+        &self,
+        snapshot: &Connection,
+        receipt: &AnalysisSourceReceiptV1,
+    ) -> Result<Option<Vec<u8>>> {
+        if receipt.coverage_revision == 0 {
+            return Ok(None);
+        }
+        let identity = &receipt.identity;
+        let stored: Option<(Vec<u8>, Vec<u8>)> = snapshot
+            .query_row(
+                "SELECT report, report_sha256 FROM coverage
+                 WHERE stream_key = ? AND tenant_id = ? AND revision = ?",
+                params![
+                    source_key(identity).as_slice(),
+                    identity.tenant_id.as_slice(),
+                    receipt.coverage_revision
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read retained coverage",
+            })?;
+        let Some((report, digest)) = stored else {
+            return self.reject("the source coverage receipt has no retained report");
+        };
+        if Sha256::digest(&report).as_slice() != digest {
+            return self.reject("the retained coverage digest does not match its report");
+        }
+        Ok(Some(report))
     }
 
     pub fn accept_validated_batch(

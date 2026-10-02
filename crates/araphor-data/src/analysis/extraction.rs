@@ -8,7 +8,7 @@ use snafu::ResultExt as _;
 use super::segments::SegmentRange;
 use super::{
     source_key, AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl,
-    AnalysisRecordV1, AnalysisSourceReceiptV1, AnalysisStore, AnalysisStoreMetaV1,
+    AnalysisRecordV1, AnalysisSourceReceiptV1, AnalysisStore, AnalysisStoreMetaV1, StorePositionV1,
     MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, Result};
@@ -62,7 +62,7 @@ impl AnalysisSelectionV1 {
             && self.results.iter().collect::<BTreeSet<_>>().len() == self.results.len()
     }
 
-    fn time_range(&self) -> Option<(u64, u64)> {
+    pub(super) fn time_range(&self) -> Option<(u64, u64)> {
         let first = match self.received_from {
             Bound::Unbounded => 0,
             Bound::Included(value) => value,
@@ -111,6 +111,9 @@ pub struct AnalysisSourceSnapshotV1 {
     pub receipt: AnalysisSourceReceiptV1,
     pub expired: Vec<AnalysisGapV1>,
     pub recovery: Vec<AnalysisGapV1>,
+    /// Missing source cursors above the ACK through the last durable cursor.
+    pub pending: Vec<AnalysisGapV1>,
+    pub coverage_report: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -124,6 +127,19 @@ pub struct AnalysisExtractionV1 {
     pub projected_bytes: usize,
     /// Includes projected bytes, row descriptors, page headers, and coverage metadata.
     pub input_bytes: usize,
+}
+
+#[derive(Debug)]
+pub struct AnalysisPositionPageV1 {
+    pub extraction: AnalysisExtractionV1,
+    /// Includes scanned rows that did not pass the projection.
+    pub scanned_through: StorePositionV1,
+    pub exhausted: bool,
+}
+
+enum ExtractMode {
+    Complete,
+    Page(Option<StorePositionV1>),
 }
 
 impl AnalysisExtractionV1 {
@@ -206,8 +222,30 @@ impl AnalysisStore {
         &self,
         selection: &AnalysisSelectionV1,
         control: &AnalysisReadControl,
-        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
+        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
     ) -> Result<AnalysisExtractionV1> {
+        self.extract_mode(selection, ExtractMode::Complete, control, project)
+            .map(|page| page.extraction)
+    }
+
+    /// Read a bounded page in durable commit order, including pending source ranges.
+    pub fn read_positions(
+        &self,
+        selection: &AnalysisSelectionV1,
+        after: Option<StorePositionV1>,
+        control: &AnalysisReadControl,
+        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
+    ) -> Result<AnalysisPositionPageV1> {
+        self.extract_mode(selection, ExtractMode::Page(after), control, project)
+    }
+
+    fn extract_mode(
+        &self,
+        selection: &AnalysisSelectionV1,
+        mode: ExtractMode,
+        control: &AnalysisReadControl,
+        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
+    ) -> Result<AnalysisPositionPageV1> {
         control.check()?;
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
@@ -216,6 +254,17 @@ impl AnalysisStore {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
+            let end = StorePositionV1 {
+                commit_revision: meta.commit_revision,
+                ordinal: u32::MAX,
+            };
+            let mut after = match mode {
+                ExtractMode::Complete => None,
+                ExtractMode::Page(after) => after,
+            };
+            if after.is_some_and(|position| position > end) {
+                return self.reject("the position read starts beyond the captured revision");
+            }
             // The revision fixes raw selection. The lease prevents segment deletion.
             drop(coordinator);
             let mut output = AnalysisExtractionV1 {
@@ -237,47 +286,80 @@ impl AnalysisStore {
                 let expired = self.extract_gaps(snapshot, identity, false, control, &mut output)?;
                 let recovery = self.extract_gaps(snapshot, identity, true, control, &mut output)?;
                 self.check_selected_source(snapshot, &receipt, &expired, control)?;
-                if let Some((first, last)) = selection.time_range() {
-                    let mut cursor = 0;
-                    while cursor < receipt.contiguous_cursor {
-                        control.check()?;
-                        let ranges = self.selected_ranges(
-                            snapshot,
-                            identity,
-                            cursor,
-                            receipt.contiguous_cursor,
-                            (first, last),
-                            control,
-                        )?;
-                        if ranges.is_empty() {
-                            break;
-                        }
-                        for (range, received) in ranges {
-                            control.check()?;
-                            output.scan(range.scan_bytes)?;
-                            for record in range.read(&self.root)? {
-                                control.check()?;
-                                if record.cursor > receipt.contiguous_cursor {
-                                    continue;
-                                }
-                                if let Some(row) = project(AnalysisInputV1::Event {
-                                    identity,
-                                    cpu_id: receipt.cpu_id,
-                                    received_utc_ns: received,
-                                    record: &record,
-                                })? {
-                                    output.push(AnalysisRelationV1::Events, row)?;
-                                }
-                            }
-                            cursor = range.last_cursor;
-                        }
-                    }
-                }
+                let pending = control.lock(|| self.raw.try_lock())?.pending_gaps(
+                    &receipt,
+                    output.meta.commit_revision,
+                    control,
+                )?;
+                output.charge(pending.len() * size_of::<AnalysisGapV1>())?;
+                let coverage_report = self.read_coverage_from(snapshot, &receipt)?;
+                output.charge(coverage_report.as_ref().map_or(0, Vec::len))?;
                 output.sources.push(AnalysisSourceSnapshotV1 {
                     receipt,
                     expired,
                     recovery,
+                    pending,
+                    coverage_report,
                 });
+            }
+            let mut scanned = 0;
+            let mut row_bytes = 0_usize;
+            let mut exhausted = false;
+            'scan: loop {
+                control.check()?;
+                let limit = match mode {
+                    ExtractMode::Complete => usize::MAX,
+                    ExtractMode::Page(_) => MAX_ANALYSIS_PAGE_RECORDS - scanned,
+                };
+                if limit == 0 {
+                    exhausted = self
+                        .selected_position(selection, after, end.commit_revision, 1, control)?
+                        .is_none();
+                    if exhausted {
+                        after = Some(end);
+                    }
+                    break;
+                }
+                let selected =
+                    self.selected_position(selection, after, end.commit_revision, limit, control)?;
+                let Some((identity, cpu, range)) = selected else {
+                    after = Some(end);
+                    exhausted = true;
+                    break;
+                };
+                if matches!(mode, ExtractMode::Page(_))
+                    && output.scanned_bytes != 0
+                    && output.scanned_bytes.saturating_add(range.scan_bytes) > MAX_SCAN_BYTES
+                {
+                    break;
+                }
+                output.scan(range.scan_bytes)?;
+                for record in range.read(&self.root)? {
+                    control.check()?;
+                    if let Some(row) = project(AnalysisInputV1::Event {
+                        identity: &identity,
+                        cpu_id: cpu,
+                        received_utc_ns: range.intake,
+                        record: &record,
+                    })? {
+                        let bytes = row.len().saturating_add(size_of::<Box<[u8]>>());
+                        if matches!(mode, ExtractMode::Page(_))
+                            && row_bytes.saturating_add(bytes) > MAX_ANALYSIS_PAGE_BYTES
+                        {
+                            if row_bytes == 0 {
+                                return AnalysisInputTooLargeSnafu {
+                                    resource: "projected row bytes",
+                                }
+                                .fail();
+                            }
+                            break 'scan;
+                        }
+                        output.push(AnalysisRelationV1::Events, row)?;
+                        row_bytes += bytes;
+                    }
+                    scanned += 1;
+                    after = Some(record.position);
+                }
             }
             for key in &selection.contexts {
                 control.check()?;
@@ -316,36 +398,28 @@ impl AnalysisStore {
                 }
             }
             control.check()?;
-            Ok(output)
+            Ok(AnalysisPositionPageV1 {
+                extraction: output,
+                scanned_through: after.unwrap_or(StorePositionV1 {
+                    commit_revision: 0,
+                    ordinal: 0,
+                }),
+                exhausted,
+            })
         })
     }
 
-    fn selected_ranges(
+    fn selected_position(
         &self,
-        snapshot: &Connection,
-        identity: &EvidenceIntakeIdentityV1,
-        after: u64,
-        accepted: u64,
-        time: (u64, u64),
+        selection: &AnalysisSelectionV1,
+        after: Option<StorePositionV1>,
+        revision: u64,
+        limit: usize,
         control: &AnalysisReadControl,
-    ) -> Result<Vec<(SegmentRange, u64)>> {
-        let revision = Self::read_meta_from(snapshot, &self.root)?.commit_revision;
-        let raw = control.lock(|| self.raw.try_lock())?;
-        Ok(raw
-            .select_ranges(
-                identity,
-                after.saturating_add(1),
-                accepted,
-                revision,
-                Some(time),
-                MAX_ANALYSIS_PAGE_RECORDS,
-            )?
-            .into_iter()
-            .map(|range| {
-                let intake = range.intake;
-                (range, intake)
-            })
-            .collect())
+    ) -> Result<Option<(EvidenceIntakeIdentityV1, u32, SegmentRange)>> {
+        control
+            .lock(|| self.raw.try_lock())?
+            .select_position(selection, after, revision, limit, control)
     }
 
     fn check_selected_source(
@@ -453,6 +527,311 @@ mod tests {
             framed_records: vec![7; count].into(),
             frame_ends: (1..=count).collect(),
         }
+    }
+
+    #[test]
+    fn query_input_pending_positions() -> TestResult {
+        use prost::Message as _;
+
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let identity = identity(1);
+        store.accept_validated_batch(identity.clone(), batch(11, 10, 10))?;
+        let report = crate::CoverageReport {
+            source_id: identity.source_id.to_vec(),
+            source_epoch: identity.source_epoch,
+            revision: 1,
+            ..Default::default()
+        }
+        .encode_to_vec();
+        store.accept_validated_coverage(crate::ValidatedCoverageV1 {
+            identity: identity.clone(),
+            cpu_id: 0,
+            revision: 1,
+            encoded_report: report.clone(),
+        })?;
+        assert!(store.read_page(&identity, 1)?.records.is_empty());
+        let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
+        let complete = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+            let AnalysisInputV1::Event { record, .. } = input else {
+                return store.reject("unexpected relation");
+            };
+            Ok(Some(vec![record.cursor as u8]))
+        })?;
+        assert_eq!(complete.pages[0].rows.len(), 10);
+        let before = store.meta()?;
+        let mut positions = Vec::new();
+        let first =
+            store.read_positions(&selection, None, &AnalysisReadControl::default(), |input| {
+                let AnalysisInputV1::Event {
+                    record,
+                    received_utc_ns,
+                    ..
+                } = input
+                else {
+                    return store.reject("unexpected relation");
+                };
+                if record.cursor == 11 {
+                    store.accept_validated_batch(identity.clone(), batch(1, 10, 20))?;
+                }
+                assert_eq!(received_utc_ns, 10);
+                positions.push(record.position);
+                Ok(Some(vec![record.cursor as u8]))
+            })?;
+        assert!(first.exhausted);
+        assert_eq!(first.extraction.meta, before);
+        let source = &first.extraction.sources[0];
+        assert_eq!(source.receipt.contiguous_cursor, 0);
+        assert_eq!(source.coverage_report.as_ref(), Some(&report));
+        assert_eq!(source.pending.len(), 1);
+        assert_eq!(
+            (
+                source.pending[0].first_cursor,
+                source.pending[0].last_cursor
+            ),
+            (1, 10)
+        );
+        assert_eq!(
+            first.extraction.pages[0]
+                .rows
+                .iter()
+                .map(|row| row[0])
+                .collect::<Vec<_>>(),
+            (11..=20).collect::<Vec<_>>()
+        );
+        let next = store.read_positions(
+            &selection,
+            Some(first.scanned_through),
+            &AnalysisReadControl::default(),
+            |input| {
+                let AnalysisInputV1::Event {
+                    record,
+                    received_utc_ns,
+                    ..
+                } = input
+                else {
+                    return store.reject("unexpected relation");
+                };
+                assert!(record.position > first.scanned_through);
+                assert_eq!(received_utc_ns, 20);
+                positions.push(record.position);
+                Ok(Some(vec![record.cursor as u8]))
+            },
+        )?;
+        assert!(next.exhausted);
+        assert_eq!(next.extraction.sources[0].receipt.contiguous_cursor, 20);
+        assert!(next.extraction.sources[0].pending.is_empty());
+        assert_eq!(
+            next.extraction.pages[0]
+                .rows
+                .iter()
+                .map(|row| row[0])
+                .collect::<Vec<_>>(),
+            (1..=10).collect::<Vec<_>>()
+        );
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        let ordered = store.read_page(&identity, 1)?;
+        assert_eq!(
+            ordered
+                .records
+                .iter()
+                .map(|record| record.cursor)
+                .collect::<Vec<_>>(),
+            (1..=20).collect::<Vec<_>>()
+        );
+        assert_eq!(ordered.records[10].position, positions[0]);
+        assert_eq!(ordered.records[0].position, positions[10]);
+        let meta = store.meta()?;
+        store.accept_validated_batch(identity.clone(), batch(11, 10, 10))?;
+        assert_eq!(store.meta()?, meta);
+        let retry = store.read_positions(
+            &selection,
+            Some(next.scanned_through),
+            &AnalysisReadControl::default(),
+            |_| store.reject("an exact retry produced another query row"),
+        )?;
+        assert!(retry.exhausted && retry.extraction.pages.is_empty());
+        assert_eq!(retry.scanned_through, next.scanned_through);
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn query_scope_position_pages() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let identity = identity(1);
+        let other = EvidenceIntakeIdentityV1 {
+            source_epoch: 2,
+            ..identity.clone()
+        };
+        let foreign = EvidenceIntakeIdentityV1 {
+            tenant_id: [2; 16],
+            ..identity.clone()
+        };
+        store.accept_validated_batch(identity.clone(), batch(1, 257, 10))?;
+        store.accept_validated_batch(foreign, batch(1, 1, 10))?;
+        store.accept_validated_batch(other.clone(), batch(1, 1, 20))?;
+        let selection =
+            AnalysisSelectionV1::new(identity.tenant_id, vec![other.clone(), identity.clone()]);
+        let mut seen = Vec::new();
+        let first =
+            store.read_positions(&selection, None, &AnalysisReadControl::default(), |input| {
+                let AnalysisInputV1::Event {
+                    identity: source,
+                    record,
+                    ..
+                } = input
+                else {
+                    return store.reject("unexpected relation");
+                };
+                assert_eq!(source, &identity);
+                seen.push(record.position);
+                Ok(None)
+            })?;
+        assert!(!first.exhausted);
+        assert_eq!(seen.len(), 256);
+        assert!(first.extraction.pages.is_empty());
+        assert_eq!(first.scanned_through, seen[255]);
+        let next = store.read_positions(
+            &selection,
+            Some(first.scanned_through),
+            &AnalysisReadControl::default(),
+            |input| {
+                let AnalysisInputV1::Event {
+                    identity: source,
+                    record,
+                    ..
+                } = input
+                else {
+                    return store.reject("unexpected relation");
+                };
+                assert_eq!(source.tenant_id, identity.tenant_id);
+                seen.push(record.position);
+                Ok(Some(vec![source.source_epoch as u8]))
+            },
+        )?;
+        assert!(next.exhausted);
+        assert_eq!(
+            next.extraction.pages[0]
+                .rows
+                .iter()
+                .map(|row| row[0])
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(seen.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(
+            next.scanned_through.commit_revision,
+            store.meta()?.commit_revision
+        );
+        assert_eq!(next.scanned_through.ordinal, u32::MAX);
+        Ok(())
+    }
+
+    #[test]
+    fn query_input_sparse_positions() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let identity = identity(1);
+        for cursor in [3, 7] {
+            store.accept_validated_batch(identity.clone(), batch(cursor, 1, 1))?;
+        }
+        store.accept_validated_batch(identity.clone(), batch(1, 10, 2))?;
+        let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
+        let mut positions = Vec::new();
+        let page =
+            store.read_positions(&selection, None, &AnalysisReadControl::default(), |input| {
+                let AnalysisInputV1::Event { record, .. } = input else {
+                    return store.reject("unexpected relation");
+                };
+                positions.push(record.position);
+                Ok(Some(vec![record.cursor as u8]))
+            })?;
+        let expected = [3, 7, 1, 2, 4, 5, 6, 8, 9, 10];
+        assert_eq!(
+            page.extraction.pages[0]
+                .rows
+                .iter()
+                .map(|row| row[0])
+                .collect::<Vec<_>>(),
+            expected
+        );
+        for (index, position) in positions.iter().enumerate() {
+            let page = store.read_positions(
+                &selection,
+                Some(*position),
+                &AnalysisReadControl::default(),
+                |input| {
+                    let AnalysisInputV1::Event { record, .. } = input else {
+                        return store.reject("unexpected relation");
+                    };
+                    Ok(Some(vec![record.cursor as u8]))
+                },
+            )?;
+            assert!(page.exhausted);
+            assert_eq!(
+                page.extraction
+                    .pages
+                    .iter()
+                    .flat_map(|page| &page.rows)
+                    .map(|row| row[0])
+                    .collect::<Vec<_>>(),
+                expected[index + 1..]
+            );
+        }
+        assert_eq!(
+            store
+                .source_receipt(&identity)?
+                .ok_or("source absent")?
+                .contiguous_cursor,
+            10
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn query_input_page_resume() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let identity = identity(1);
+        store.accept_validated_batch(identity.clone(), batch(1, 3, 1))?;
+        let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity]);
+        let mut positions = Vec::new();
+        let first =
+            store.read_positions(&selection, None, &AnalysisReadControl::default(), |input| {
+                let AnalysisInputV1::Event { record, .. } = input else {
+                    return store.reject("unexpected relation");
+                };
+                positions.push(record.position);
+                Ok((record.cursor != 2).then(|| vec![record.cursor as u8; 600 * 1024]))
+            })?;
+        assert!(!first.exhausted);
+        assert_eq!(first.extraction.pages[0].rows.len(), 1);
+        assert_eq!(first.extraction.pages[0].rows[0][0], 1);
+        assert_eq!(first.scanned_through, positions[1]);
+        let next = store.read_positions(
+            &selection,
+            Some(first.scanned_through),
+            &AnalysisReadControl::default(),
+            |input| {
+                let AnalysisInputV1::Event { record, .. } = input else {
+                    return store.reject("unexpected relation");
+                };
+                assert_eq!(record.cursor, 3);
+                Ok(Some(vec![3; 600 * 1024]))
+            },
+        )?;
+        assert!(next.exhausted);
+        assert_eq!(next.extraction.pages[0].rows.len(), 1);
+        assert_eq!(next.extraction.pages[0].rows[0][0], 3);
+        assert!(store
+            .read_positions(&selection, None, &AnalysisReadControl::default(), |_| Ok(
+                Some(vec![0; MAX_ANALYSIS_PAGE_BYTES])
+            ))
+            .is_err());
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
     }
 
     #[test]
@@ -614,7 +993,16 @@ mod tests {
                     held.recv_timeout(Duration::from_secs(2))?;
                     let result = match access {
                         0 => store
-                            .selected_ranges(reader.get()?, &identity, 0, 1, (0, 10), control)
+                            .selected_position(
+                                &AnalysisSelectionV1::new(
+                                    identity.tenant_id,
+                                    vec![identity.clone()],
+                                ),
+                                None,
+                                1,
+                                1,
+                                control,
+                            )
                             .map(|_| ()),
                         1 => store.check_selected_source(reader.get()?, &receipt, &[], control),
                         _ => store.read_coordinator(control).map(|_| ()),

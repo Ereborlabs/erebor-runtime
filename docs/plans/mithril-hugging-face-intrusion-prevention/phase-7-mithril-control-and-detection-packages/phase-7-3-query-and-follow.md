@@ -231,9 +231,9 @@ The focused data command below passed 7 tests. Four tests check decoding,
 size boundaries, invalid frames and shared byte ownership. Three tests check
 the position-reader work that follows this deliverable. The contract command
 passed 3 tests, including exact protobuf fields and shared Rust type identity.
-The contract build compiled the production Control, Node and e2e callers.
-Caller library-test filters remain pending; their native dependency build is
-in progress. No performance case ran.
+The contract build compiled data and Control production code. Node and e2e
+compilation and caller library-test filters remain pending; their native
+dependency build is in progress. No performance case ran.
 
 Use the six environment settings from the locking command for these commands:
 
@@ -242,5 +242,26 @@ cargo test -p araphor-data query_input_ -- --nocapture
 cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --test contract
 ```
 
-Next: commit the verified position reader, then complete QueryOwner, follow,
-replay floors, windows, and `query-follow`. Overall status remains **Not done**.
+The decoder deliverable is commit `ec96c32a`. The locking deliverable is
+commit `61a20f82`.
+
+Position reads are **Done**. The segment owner selects durable commit positions
+across all selected sources, including ranges above the contiguous ACK. A
+snapshot captures receipts, pending gaps, retention/recovery gaps, and the
+coverage report. Existing ordered source reads retain their ACK boundary.
+No SQL offset directory or second raw store was added.
+
+The position tests passed: three `query_input_` tests plus one
+`query_scope_position_pages` test. They check pending cursors 11–20 before
+1–10, a commit during projection, exact retry, sparse duplicate spans,
+cross-tenant exclusion, filtered-page progress, byte limits, and resume.
+The extraction regression filter then passed 8 tests with one existing
+release-history test ignored. All commands used the six settings above:
+
+```sh
+cargo test -p araphor-data query_scope_position_pages -- --nocapture
+cargo test -p araphor-data analysis_extract_ -- --nocapture
+```
+
+Next: complete QueryOwner, follow, replay floors, windows, and `query-follow`.
+Overall status remains **Not done**.
