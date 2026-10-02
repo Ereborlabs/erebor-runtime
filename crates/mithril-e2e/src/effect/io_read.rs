@@ -8,7 +8,7 @@ use crate::error::InterceptorSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn async_read_keeps_authority<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("io-read")?;

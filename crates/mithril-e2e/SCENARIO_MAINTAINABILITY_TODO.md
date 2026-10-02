@@ -3653,6 +3653,8 @@ test does not close a row when its physical condition or an assertion changed.
     35.35 seconds. It closes each ring and mapping with `ExitStack`. The
     draft has 97 lines. All 91 local E2E tests, 25 related effect checks,
     strict Clippy, and formatting pass. Keep Observe and other platforms open.
+    The unchanged direct-runc case passes in 34.98 seconds with the real
+    OCI hook and complete resource cleanup. Register and commit this platform.
   - [ ] Replace the abstract Unix-stream round trip with
     `unix_stream_is_allowed`. Use the existing actor-group setup for two
     distinct bindings under one policy and one shared network namespace.
