@@ -7,6 +7,9 @@ scripts, not a new tracing language.
 Capture authorization and dispatch belong to Mithril Control. Retained trace
 output and reads belong to `araphor-data`, which Mithril 7 embeds by default;
 capture does not require discovery analysis to be enabled.
+The shared trace contracts, recipes and capture owners belong to
+`araphor-observability`. Control and Node call that crate. The shared crate
+does not depend on either application crate or add a service.
 This plan does not replace prevention or response.
 
 Read the shared [implementation review guide](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/implementation-review.md)
@@ -226,8 +229,10 @@ ownership. It does not claim that stock bpftrace uses Interceptor's existing
 object loader. No second daemon, Kubernetes debug Job, or host shell is added.
 Keep this exception disabled until lifecycle and interference tests pass.
 
-`TraceOwner` in Control owns intent, authorization, dispatch, and aggregate
-result decisions. The data crate commits accepted intent and output under
+Control calls `TraceOwner` from `araphor-observability` for intent, grant checks
+and aggregate result decisions. Control retains authentication, target
+resolution, grant issuance and dispatch. The data crate commits accepted
+intent and output under
 owner-qualified requests; it does not grant execution. Node owns exact runtime
 identity and the local execution record.
 Interceptor owns the child process, BPF resource inventory, and cleanup.
@@ -282,7 +287,7 @@ tests are release gates, not optional tuning.
 Use the shared segment-backed AnalysisStore from Mithril 7.2. Raw trace output
 lives once in diagnostic segments. Intent, state, receipts, and reviewed derived
 measurements use the transactional metadata store.
-TraceOwner remains in Control and stores accepted source, grant, target,
+Control calls the shared TraceOwner to store accepted source, grant, target,
 dispatch intent, output and result through that data owner. A trace requires
 healthy durable data storage, not an enabled DiscoveryOwner. A query-worker
 failure does not block output upload; failure of the authoritative data store

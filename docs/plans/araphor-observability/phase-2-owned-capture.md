@@ -11,6 +11,24 @@ One accepted request creates at most one execution per frozen target lifetime.
 Output, uncertainty, and cleanup survive client and Control failures. Existing
 enforcement and its evidence reserve remain independent.
 
+### Shared implementation crate
+
+Put the shared trace contracts, recipes, grant checks, request owner and local
+capture owner in `araphor-observability`. Control and Node call this crate.
+The crate does not depend on `mithril-control` or `mithril-node`.
+
+Control authenticates callers and Nodes, resolves authorized target cohorts,
+issues grants, signs dispatch and checks disclosure. Node resolves current
+runtime bindings and supplies an exact target lease to the shared capture
+owner. The shared owner retains bounded output and handles expiry, replay and
+restart. Interceptor retains backend supervision and cleanup. AnalysisStore in
+`araphor-data` remains the only retained-output store.
+
+Move existing implementations and their tests. Do not add another service,
+database, protocol or execution owner. Keep shared workload facts and digest
+encoding in one lower-level definition. Keep the current executable and
+protobuf names; a repository-wide rename is outside this change.
+
 ## Implementation flow
 
 ```text
@@ -37,7 +55,7 @@ Control or Node restarts after dispatch
 
 ## Scope, owners, and changes
 
-1. Keep `TraceOwner` in `mithril-control/src/observability/`, backed by
+1. Put `TraceOwner` in `araphor-observability`, called by Control and backed by
    `araphor-data` AnalysisStore owner methods. Commit immutable source and
    request records with revision-checked state. Control decides transitions;
    the data crate commits them durably. Store source once; do not place output in the main state
@@ -47,7 +65,8 @@ Control or Node restarts after dispatch
    a diagnostic service family. Bind dispatch, output and cancellation to
    `NodeSessionContext`, node boot, and execution identity. Limit message sizes.
    Reuse existing trust/session verification; no agent-to-node endpoint.
-3. Add the Node owner in `mithril-node/src/observability.rs`. Keep the spool
+3. Put the local capture owner in `araphor-observability`, called by Node.
+   Keep the spool
    separate from enforcement WAL quotas. Start with at most two concurrent
    diagnostic children per node and 16 target instances per request. Reject
    excess work; do not add an unbounded queue. Reserve a terminal-status slot.
@@ -66,7 +85,8 @@ Control or Node restarts after dispatch
    the parent. Do not expose arbitrary source under a namespace-only grant.
    Pin complete approved inputs; reject stale approvals and changed source.
 7. Add `traces`, `trace_output` and `trace_measurements` to AnalysisStore in
-   `araphor-data`. Reuse Control's `observability/{model,owner,dispatch,recipe}.rs`;
+   `araphor-data`. Move the existing model, owner, dispatch and recipe code to
+   `araphor-observability`.
    adapt `TraceOwner` to owner-qualified data commits and reads.
    Store raw output only in diagnostic segments. The durable segment commit
    contains the output sequence and replay metadata. Catalogue publication

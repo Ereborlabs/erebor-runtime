@@ -19,6 +19,10 @@ notification, and trace-output persistence and reads. An optional deployment
 runs that same crate outside Control. CLI and console can connect directly to
 either deployment. Control retains Node authentication and ACK, trace intent
 and dispatch, policy, approval, publication, and response authority.
+The separate `araphor-observability` crate owns shared trace contracts, recipes,
+grant checks and capture owners. Control and Node call those owners. The crate
+does not depend on either application. It uses AnalysisStore for retained
+output and Interceptor for backend supervision; it adds no service or store.
 
 ControlStore retains policy, trust, rollout and authority state. AnalysisStore
 owns one raw segment store and one DuckDB metadata/derived-state database.
