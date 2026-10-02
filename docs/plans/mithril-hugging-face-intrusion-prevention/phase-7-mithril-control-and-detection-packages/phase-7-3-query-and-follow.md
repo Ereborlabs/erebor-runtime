@@ -6,7 +6,8 @@ Provide the internal read engine for retained and live data.
 
 QueryOwner evaluates trusted internal read plans and returns one bounded stream.
 Immutable event reads append rows. Aggregate and mutable-view reads replace
-the complete bounded result. Entry: 7.2. Status: **Not done**.
+the complete bounded result. Entry: 7.2. Status: **Done** for trusted internal
+query and follow. Read the [final result](#final-query-qualification).
 
 The owner, record decoder, and query input types live in `araphor-data`.
 They work without a Control process or Control crate dependency. Phase 7.9
@@ -201,7 +202,8 @@ public API or durable subscription registry is not required.
 
 ## Implementation result
 
-Status: **Not done**. Reader/rotation locking is **Done**. The writer keeps
+Status: **Done** for the approved internal scope. The records below describe
+each deliverable. Reader/rotation locking is **Done**. The writer keeps
 its coordinator, releases the raw-directory mutex before the rotation wait,
 and acquires that mutex again after segment protection. Directory waits in
 extraction and reader coordination check cancellation and deadlines.
@@ -215,7 +217,7 @@ deadlines at all three directory-access sites and subsequent intake.
 On base `ce0a9fd8` with this lock correction, the command below passed:
 8 tests, zero failures, and one ignored release-history test. Formatting and
 `git diff --check` passed. No performance case ran. The final workspace gate
-remains required after the last implementation edit.
+was still required after the last implementation edit.
 
 ```sh
 CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 cargo test -p araphor-data analysis_extract_ -- --nocapture
@@ -231,9 +233,10 @@ The focused data command below passed 7 tests. Four tests check decoding,
 size boundaries, invalid frames and shared byte ownership. Three tests check
 the position-reader work that follows this deliverable. The contract command
 passed 3 tests, including exact protobuf fields and shared Rust type identity.
-The contract build compiled data and Control production code. Node and e2e
-compilation and caller library-test filters remain pending; their native
-dependency build is in progress. No performance case ran.
+The contract build compiled data and Control production code. At this point,
+Node and e2e compilation and caller library-test filters were pending.
+The later caller and final workspace results are recorded below.
+No performance case ran.
 
 Use the six environment settings from the locking command for these commands:
 
@@ -250,6 +253,7 @@ across all selected sources, including ranges above the contiguous ACK. A
 snapshot captures receipts, pending gaps, retention/recovery gaps, and the
 coverage report. Existing ordered source reads retain their ACK boundary.
 No SQL offset directory or second raw store was added.
+The position-reader deliverable is commit `4c6e0900`.
 
 The position tests passed: three `query_input_` tests plus one
 `query_scope_position_pages` test. They check pending cursors 11–20 before
@@ -269,6 +273,7 @@ and the exact expired ranges, before file removal. The floor has one 256-byte
 metadata charge. Validation rejects missing, invalid, or uncharged floors.
 Restart and backup retain the floor. Restore changes the recovery epoch.
 An older exact witness remains readable below the floor.
+The replay-floor deliverable is commit `34a12a8a`.
 
 The integrated command below ran 38 data tests. The five
 `query_follow_retention_` tests passed. They cover deletion ordering,
@@ -308,15 +313,16 @@ stalled output, reader release during backup/rotation, and pinned evidence
 during deletion. Weak input references prove release after stream evaluations.
 The e2e query-follow contract passed its six-case source version: pending
 ranges, counts, windows, bounded input, retention/restart/restore, and policy
-work after cancellation. Additional stream barriers remain under qualification.
+work after cancellation. The later eight-case result includes the additional
+stream barriers.
 
 Decoder caller checks also passed: 17 Control evidence tests, 49 Node
 observation tests, 1 Node context-catalog test, and 1 e2e context-bound test.
 The first command compiled all four libraries. The Node and context filters
 ran their built test executables. No performance test ran.
 
-Next: finish the end-to-end barriers and final acceptance review, then run
-the complete workspace gate. Overall status remains **Not done**.
+At this point, the end-to-end barriers, final acceptance review, and complete
+workspace gate remained open. Their results follow.
 
 The data-owner deliverable is commit `6f055e92`. The expanded
 `query_follow_contract` then passed with eight cases. The two added cases
@@ -330,8 +336,8 @@ temporary stores. They make no throughput or latency claim.
 cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query_follow_contract -- --nocapture
 ```
 
-The command used the same six environment settings. Final acceptance review
-and the full workspace procedure remain required. The CLI case has not yet run.
+The command used the same six environment settings. Final acceptance review,
+the workspace procedure, and the standalone CLI case had not yet run.
 
 The end-to-end deliverable is commit `5c89ebcf`. The final Ponytail review
 closed two proof gaps. All ten trusted templates now compare with complete
@@ -348,5 +354,63 @@ cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --a
 
 Both commands used the six settings above. The three existing
 `analysis_read_` tests also passed in the built data test executable.
-The new review-guide links and `git diff --check` passed. The full workspace
-procedure and standalone CLI qualification remain **Not done**.
+The new review-guide links and `git diff --check` passed. This proof deliverable
+is commit `038c3bd4`. The final workspace and CLI results follow.
+
+### Final query qualification
+
+Status: **Done, PASS** at source commit `68db8105`. The complete workspace
+procedure and standalone production-owner case passed after the last code edit.
+No acceptance item remains open within the trusted internal scope.
+
+The first two workspace attempts found test-only Clippy errors: one unnecessary
+borrow, five explicit panic branches, and one unchecked field lookup. Commit
+`68db8105` removes the borrow and uses ordinary errors for test failures.
+It changes no production behavior, expected test result, or lint setting.
+The complete procedure then passed:
+
+```sh
+CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case query-follow --output-directory /tmp/araphor-query-follow
+```
+
+Both commands exited with code 0. The procedure runs formatting, workspace
+compilation, Clippy with warnings denied, and all-target/all-feature tests.
+The affected library results were:
+
+| Library | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| `araphor-data` | 139 | 0 | 5 |
+| `mithril-control` | 176 | 0 | 2 |
+| `mithril-node` | 266 | 0 | 1 |
+| `mithril-e2e` | 124 | 0 | 406 |
+
+Other enabled workspace tests also passed. The ignored cases keep their existing
+physical-environment, release-only, or subprocess-helper requirements. This run
+does not qualify those cases. `query_follow_contract` and
+`query_follow_arguments_are_scoped` both passed.
+
+The standalone receipt records **PASS** for all eight cases: pending replay and
+scope; complete operation counts; moving and fixed windows; bounded input and
+recovery; retention, restart, restore, and exact witnesses; cancellation with
+continued policy work and intake; the initial-snapshot race and coalesced wake;
+and blocked-output cleanup. It records schema 1, configured limits, coverage,
+read revisions, checkpoints, and frame operations.
+
+Evidence paths:
+
+- Workspace log: `/tmp/araphor-query-final-ci-3.log`.
+- Standalone command log: `/tmp/araphor-query-follow-cli.log`.
+- Standalone receipt: `/tmp/araphor-query-follow/result.json`.
+
+The final Ponytail review is complete. The owner uses the existing segment
+reader, query-owned temporary input, one follow task, and one bounded output
+queue. It adds no durable raw copy, input registry, or subscription service.
+The [implementation review](implementation-review.md#trusted-query-and-follow-review)
+links the source owners and their checks.
+
+These are component and lightweight production-owner proofs. Forced pin/delete
+orders and concurrent rotation are component proofs, not physical e2e proofs.
+Public SQL, authenticated client cursors, production process isolation, remote
+packaging, and later discovery algorithms remain outside this phase. No new
+performance experiment or retired 8-GiB qualification ran.

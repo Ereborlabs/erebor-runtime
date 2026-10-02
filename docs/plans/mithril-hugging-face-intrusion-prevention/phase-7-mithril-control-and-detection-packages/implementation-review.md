@@ -158,13 +158,15 @@ Use these source tests to check each owner boundary:
 | Maintenance and evidence | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): reader release, held-output deletion, and both pin/delete commit orders. [retention tests](../../../../crates/araphor-data/src/analysis/retention.rs) check floor persistence, recovery, restore, and exact witnesses. |
 | Production-owner qualification | [query-follow](../../../../crates/mithril-e2e/src/discovery/query_follow.rs): eight small cases for data, time, stream barriers, retention, restart/restore, and policy continuity. The simultaneous pin/delete and rotation proofs are component tests. |
 
-This section describes the data-owner deliverable after `34a12a8a`. The 55
-focused data tests passed after the connection and memory-bound corrections.
-They cover typed input, native scans, input release, fixed templates, frame
-fields, checkpoints, shared output reservations, stream races, and retention
-with held query results. Two Control tests and two e2e tests also passed.
-Final end-to-end qualification remains **Not done**. The final workspace gate
-has not run.
+The final source is `68db8105`. Verification is **Done, PASS**. The complete
+workspace procedure passed after the last code edit. Its data library ran 139
+tests with zero failures and five existing exclusions. All ten fixed templates
+have complete-input comparisons. The forced pin/delete orders, reader/rotation
+barriers, native cancellation, exact allocation bounds, and stream cleanup
+checks passed. The standalone query-follow command passed all eight cases.
+It uses synthetic evidence and a controlled clock through production owners.
+It does not qualify public SQL, OS process isolation, physical capture, or
+performance. The final Ponytail review added no storage or service layer.
 Use the [phase result](phase-7-3-query-and-follow.md#implementation-result)
 for the final source revision, commands, and verification limits.
 

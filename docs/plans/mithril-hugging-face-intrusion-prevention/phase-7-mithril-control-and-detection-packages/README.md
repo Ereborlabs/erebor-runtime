@@ -148,7 +148,13 @@ A separate preliminary
 kernel-cache setup check failed; this closure does not qualify that behavior.
 The data crate now owns segment storage. The DuckDB raw-row path and
 Control-owned raw writer are removed. 7.4 removes discovery's copied raw
-export archive. 7.3 is next; this closure does not start it.
+export archive. At that storage closure, 7.3 had not started.
+
+7.3 is now **Done** for trusted internal query and follow at source `68db8105`.
+The complete workspace procedure and all eight standalone query-follow cases
+passed. Read its [final result](phase-7-3-query-and-follow.md#final-query-qualification)
+for commands, counts, and proof limits. Public SQL and process isolation still
+belong to Observability 3. This closure does not start another phase.
 
 Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 →
 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 if selected → 7.10.
