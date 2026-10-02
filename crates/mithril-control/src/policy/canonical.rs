@@ -14,7 +14,7 @@ pub(crate) fn canonical_cbor<T: Serialize>(policy_id: &str, value: &T) -> Result
         .build()
     })?;
     let mut bytes = Vec::new();
-    crate::canonical::encode_value(&mut Encoder::new(&mut bytes), &value).map_err(|error| {
+    araphor_data::encode_value(&mut Encoder::new(&mut bytes), &value).map_err(|error| {
         PolicyValidationSnafu {
             policy_id,
             code: "CFG_CANONICAL_CBOR",

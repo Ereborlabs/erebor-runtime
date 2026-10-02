@@ -115,6 +115,7 @@ impl TraceDispatchV1 {
             &self.signing_key_id,
             self.issuer_epoch,
         ))
+        .map_err(Into::into)
     }
 
     pub fn verify(
@@ -150,12 +151,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn observability_target_signed_lease_binds_complete_request_and_node(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_signed_lease() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key = SigningKey::from_bytes(&[23; 32]);
         let accepted = TraceAcceptedV1 {
-            request: super::super::owner::tests::request()?,
-            grant: super::super::owner::tests::grant()?,
+            request: crate::test_support::request()?,
+            grant: crate::test_support::grant()?,
             approval: None,
             accepted_unix_ns: 1,
             deadline_unix_ns: 16_000_000_001,

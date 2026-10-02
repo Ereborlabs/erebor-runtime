@@ -21,22 +21,10 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Araphor trace rejected {code:?}: {reason}"))]
+    #[snafu(display("Araphor observability failed: {source}"))]
     Observability {
-        code: crate::TraceErrorCodeV1,
-        reason: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Trace authority encoding failed: {source}"))]
-    TraceEncoding {
-        source: rmp_serde::encode::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Stored trace authority is invalid: {source}"))]
-    TraceDecoding {
-        source: rmp_serde::decode::Error,
+        #[snafu(source(from(araphor_observability::Error, Box::new)))]
+        source: Box<araphor_observability::Error>,
         #[snafu(implicit)]
         location: Location,
     },
@@ -164,13 +152,20 @@ impl From<araphor_data::Error> for Error {
     }
 }
 
+impl From<araphor_observability::Error> for Error {
+    fn from(source: araphor_observability::Error) -> Self {
+        ObservabilitySnafu.into_error(source)
+    }
+}
+
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::DataStore { source, .. }
                 if matches!(
                     source.as_ref(),
-                    araphor_data::Error::TraceInvalid { .. }
+                    araphor_data::Error::CanonicalEncoding { .. }
+                        | araphor_data::Error::TraceInvalid { .. }
                         | araphor_data::Error::AnalysisConflict { .. }
                         | araphor_data::Error::RetainedRangeExpired { .. }
                         | araphor_data::Error::StorageCapacity { .. }
@@ -180,18 +175,9 @@ impl ErrorExt for Error {
             {
                 source.status_code()
             }
-            Self::Observability { code, .. } => match code {
-                crate::TraceErrorCodeV1::Denied => StatusCode::PermissionDenied,
-                crate::TraceErrorCodeV1::Conflict => StatusCode::AlreadyExists,
-                crate::TraceErrorCodeV1::Expired => StatusCode::DeadlineExceeded,
-                crate::TraceErrorCodeV1::Missing => StatusCode::NotFound,
-                crate::TraceErrorCodeV1::Capacity => StatusCode::Unavailable,
-                crate::TraceErrorCodeV1::Invalid => StatusCode::InvalidArguments,
-                crate::TraceErrorCodeV1::Integrity => StatusCode::IllegalState,
-            },
+            Self::Observability { source, .. } => source.status_code(),
             Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
-            Self::CoverageDecode { .. } | Self::TraceDecoding { .. } => StatusCode::IllegalState,
-            Self::TraceEncoding { .. } => StatusCode::Internal,
+            Self::CoverageDecode { .. } => StatusCode::IllegalState,
             Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
@@ -223,11 +209,7 @@ impl ErrorExt for Error {
             {
                 source.retry_hint()
             }
-            Self::Observability {
-                code: crate::TraceErrorCodeV1::Capacity,
-                ..
-            } => RetryHint::Retryable,
-            Self::Observability { .. } => RetryHint::NonRetryable,
+            Self::Observability { source, .. } => source.retry_hint(),
             Self::DiscoveryDatabase { source, .. } => {
                 if matches!(
                     source.sqlite_error_code(),
@@ -241,8 +223,6 @@ impl ErrorExt for Error {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
             Self::CoverageDecode { .. }
-            | Self::TraceEncoding { .. }
-            | Self::TraceDecoding { .. }
             | Self::DataStore { .. }
             | Self::RetainedRangeExpired { .. }
             | Self::Discovery { .. }

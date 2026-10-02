@@ -16,18 +16,13 @@ use erebor_interceptor::{
     diagnostic::{DiagnosticBackend, DiagnosticCapture, DiagnosticMode, DiagnosticStop},
     KernelStateReader,
 };
-use mithril_control::{
-    TraceBatchV1, TraceCleanupV1, TraceDispatchV1, TraceFrameKindV1, TraceFrameV1,
-    TraceTerminalReasonV1, TraceTerminalV1,
-};
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
 use crate::{
-    error::{
-        AuthorizationSnafu, IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu, TraceSnafu,
-    },
-    Result, TraceTargetLeaseV1,
+    error::{AuthorizationSnafu, IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu},
+    Result, TraceBatchV1, TraceCleanupV1, TraceDispatchV1, TraceFrameKindV1, TraceFrameV1,
+    TraceTargetLeaseV1, TraceTerminalReasonV1, TraceTerminalV1,
 };
 
 const SPOOL_BYTES: u64 = 68 * 1024 * 1024;
@@ -347,11 +342,7 @@ impl NodeTraceOwner {
             let dispatch: TraceDispatchV1 = TraceSpool::json(&path, 5 * 1024 * 1024)?;
             ensure!(
                 dispatch.accepted.request.tenant_id == self.tenant_id
-                    && dispatch
-                        .accepted
-                        .execution_id(dispatch.target_index)
-                        .context(TraceSnafu)?
-                        == id,
+                    && dispatch.accepted.execution_id(dispatch.target_index)? == id,
                 IdentityStateSnafu {
                     reason: "diagnostic directory does not match its execution"
                 }
@@ -381,9 +372,7 @@ impl NodeTraceOwner {
                 }
                 .build()
             })?;
-        dispatch
-            .verify(key, self.tenant_id, &self.node_id, self.node_boot_id, now)
-            .context(TraceSnafu)?;
+        dispatch.verify(key, self.tenant_id, &self.node_id, self.node_boot_id, now)?;
         ensure!(
             target
                 .as_ref()
@@ -392,9 +381,7 @@ impl NodeTraceOwner {
                 reason: "diagnostic target differs from its signed lifetime"
             }
         );
-        let id = accepted
-            .execution_id(dispatch.target_index)
-            .context(TraceSnafu)?;
+        let id = accepted.execution_id(dispatch.target_index)?;
         self.reap()?;
         self.expire_acknowledged(now)?;
         let retained = self.retained()?;
@@ -548,10 +535,7 @@ impl NodeTraceOwner {
         };
         let terminal: TraceTerminalV1 =
             serde_json::from_slice(&bytes[..end]).context(JsonSnafu { path: &path })?;
-        terminal
-            .validate()
-            .map_err(mithril_control::Error::from)
-            .context(TraceSnafu)?;
+        terminal.validate()?;
         ensure!(
             terminal.execution_id == id,
             IdentityStateSnafu {
@@ -680,10 +664,7 @@ impl NodeTraceOwner {
         cancel: Arc<AtomicBool>,
         deadline: Instant,
     ) -> Result<()> {
-        let id = dispatch
-            .accepted
-            .execution_id(dispatch.target_index)
-            .context(TraceSnafu)?;
+        let id = dispatch.accepted.execution_id(dispatch.target_index)?;
         let mut reason = None;
         let result = (|| {
             target.validate(&reader)?;
@@ -876,12 +857,7 @@ impl TraceSpool {
         let final_root = root;
         let root = final_root.with_file_name(format!(
             "pending-{}",
-            hex::encode(
-                dispatch
-                    .accepted
-                    .execution_id(dispatch.target_index)
-                    .context(TraceSnafu)?
-            )
+            hex::encode(dispatch.accepted.execution_id(dispatch.target_index)?)
         ));
         Self::directory(&root)?;
         let mut files = Vec::new();
@@ -981,15 +957,11 @@ impl TraceSpool {
     }
 
     fn append(&mut self, frame: &TraceFrameV1) -> Result<()> {
-        frame
-            .validate()
-            .map_err(mithril_control::Error::from)
-            .context(TraceSnafu)?;
+        frame.validate()?;
         ensure!(
             frame.sequence == self.sequence + 1
                 && frame.sequence <= 4096
-                && self.output_bytes + frame.bytes.len() as u64
-                    <= mithril_control::MAX_TRACE_OUTPUT_BYTES,
+                && self.output_bytes + frame.bytes.len() as u64 <= crate::MAX_TRACE_OUTPUT_BYTES,
             IdentityStateSnafu {
                 reason: "diagnostic output sequence or quota changed"
             }
@@ -1016,10 +988,7 @@ impl TraceSpool {
     }
 
     fn complete(&mut self, terminal: &TraceTerminalV1) -> Result<()> {
-        terminal
-            .validate()
-            .map_err(mithril_control::Error::from)
-            .context(TraceSnafu)?;
+        terminal.validate()?;
         let path = self.root.join("terminal.pending");
         let mut bytes = serde_json::to_vec(terminal).context(JsonSnafu { path: &path })?;
         bytes.push(b'\n');
@@ -1066,10 +1035,7 @@ impl TraceSpool {
             }
             let frame: TraceFrameV1 =
                 serde_json::from_slice(&line).context(JsonSnafu { path: &path })?;
-            frame
-                .validate()
-                .map_err(mithril_control::Error::from)
-                .context(TraceSnafu)?;
+            frame.validate()?;
             ensure!(
                 frame.sequence == sequence + 1
                     && frame.sequence <= 4096
@@ -1096,7 +1062,7 @@ impl TraceSpool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mithril_control::{
+    use crate::{
         ContainerKindV1, DiscoveryDigestV1, TraceAcceptedV1, TraceExecutionGrantV1, TraceRecipeV1,
         TraceRequestV1, TraceTargetV1, WorkloadTargetFactV1,
     };
@@ -1251,7 +1217,7 @@ mod tests {
         let status = std::process::Command::new(std::env::current_exe()?)
             .args([
                 "--exact",
-                "observability::tests::observability_intent_crash_child",
+                "capture::tests::observability_intent_crash_child",
                 "--ignored",
             ])
             .env("ARAPHOR_TRACE_CRASH_ROOT", directory.path())

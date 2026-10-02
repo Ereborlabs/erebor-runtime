@@ -235,7 +235,7 @@ impl EvidenceDecisionCatalogV1 {
     pub fn content_digest(&self) -> crate::Result<crate::DiscoveryDigestV1> {
         let mut content = self.clone();
         content.digest = crate::DiscoveryDigestV1([0; 32]);
-        crate::DiscoveryDigestV1::of(&("decision-catalog-v1", content))
+        crate::DiscoveryDigestV1::of(&("decision-catalog-v1", content)).map_err(Into::into)
     }
 
     pub fn seal(mut self) -> crate::Result<Vec<u8>> {

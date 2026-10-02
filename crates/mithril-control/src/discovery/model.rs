@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use crate::{
     error::DiscoverySnafu, CoverageStateV1, EvidenceIdV1, EvidenceIntakeIdentityV1,
@@ -30,30 +29,7 @@ impl std::io::Write for InputByteLimit {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(transparent)]
-pub struct DiscoveryDigestV1(pub [u8; 32]);
-
-impl DiscoveryDigestV1 {
-    pub fn of(value: &impl Serialize) -> Result<Self> {
-        let value = serde_json::to_value(value).map_err(|error| Self::error(&error))?;
-        let mut bytes = Vec::new();
-        crate::canonical::encode_value(&mut minicbor::Encoder::new(&mut bytes), &value)
-            .map_err(|error| Self::error(&error))?;
-        let mut hash = Sha256::new();
-        hash.update(b"ARAPHOR-DISCOVERY-V1\0");
-        hash.update(bytes);
-        Ok(Self(hash.finalize().into()))
-    }
-
-    fn error(error: &impl std::fmt::Display) -> crate::Error {
-        DiscoverySnafu {
-            code: "CANONICAL_ENCODING",
-            reason: error.to_string(),
-        }
-        .build()
-    }
-}
+pub use araphor_data::DiscoveryDigestV1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

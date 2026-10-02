@@ -1301,11 +1301,11 @@ impl Host {
             storage_reserve_bytes: 256 * 1024 * 1024,
             qualification,
         };
+        config.validate()?;
         fs::write(
             proof.with_extension("config.json"),
             serde_json::to_vec_pretty(&config)?,
         )?;
-        config.validate()?;
         fs::write(env.work().join("release"), b"release")?;
         actor.stop()?;
         init.stop()?;

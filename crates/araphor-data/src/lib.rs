@@ -3,11 +3,16 @@
 use serde::{Deserialize, Serialize};
 
 mod analysis;
+mod canonical;
+mod digest;
 mod error;
 mod evidence;
 mod query;
 mod trace;
+mod workload;
 
+pub use canonical::encode_value;
+pub use digest::DiscoveryDigestV1;
 pub(crate) use error::*;
 pub use error::{Error, Result};
 pub use evidence::{
@@ -26,6 +31,7 @@ pub use trace::{
     TraceMeasurementV1, TraceSourceV1, TraceTerminalReasonV1, TraceTerminalV1,
     MAX_TRACE_FRAME_BYTES, MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
 };
+pub use workload::{ContainerKindV1, KubernetesWorkloadIdentityV1, WorkloadTargetFactV1};
 
 pub use analysis::{
     AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,

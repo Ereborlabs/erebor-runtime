@@ -6,9 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-test-support = ["erebor-interceptor/test-fixtures"]
+test-support = ["erebor-interceptor/test-fixtures", "araphor-observability/test-support"]
 
 [dependencies]
+araphor-observability = { path = "../araphor-observability" }
 clap.workspace = true
 containerd-client.workspace = true
 crc32c.workspace = true

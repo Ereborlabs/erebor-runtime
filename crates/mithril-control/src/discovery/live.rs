@@ -162,7 +162,7 @@ impl DiscoveryProfileV1 {
     fn digest(&self) -> Result<DiscoveryDigestV1> {
         let mut content = self.clone();
         content.content_digest = DiscoveryDigestV1([0; 32]);
-        DiscoveryDigestV1::of(&content)
+        DiscoveryDigestV1::of(&content).map_err(Into::into)
     }
 
     fn dependencies(&self) -> Vec<DiscoveryArtifactRefV1> {

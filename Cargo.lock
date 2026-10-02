@@ -129,9 +129,11 @@ dependencies = [
  "crc32c",
  "duckdb",
  "erebor-runtime-error",
+ "minicbor",
  "prost",
  "prost-build",
  "rustix 1.1.4",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -141,6 +143,25 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "araphor-observability"
+version = "0.1.0"
+dependencies = [
+ "araphor-data",
+ "ed25519-dalek 3.0.0",
+ "erebor-interceptor",
+ "erebor-interceptor-abi",
+ "erebor-runtime-error",
+ "hex",
+ "rmp-serde",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "zerocopy",
 ]
 
 [[package]]
@@ -3644,6 +3665,7 @@ name = "mithril-control"
 version = "0.1.0"
 dependencies = [
  "araphor-data",
+ "araphor-observability",
  "axum",
  "axum-server",
  "clap",
@@ -3689,6 +3711,7 @@ name = "mithril-e2e"
 version = "0.1.0"
 dependencies = [
  "araphor-data",
+ "araphor-observability",
  "axum",
  "clap",
  "containerd-client",
@@ -3747,6 +3770,7 @@ dependencies = [
 name = "mithril-node"
 version = "0.1.0"
 dependencies = [
+ "araphor-observability",
  "clap",
  "containerd-client",
  "crc32c",

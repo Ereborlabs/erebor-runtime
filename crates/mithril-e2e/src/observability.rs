@@ -895,10 +895,8 @@ impl ObservabilityQualification {
                 let duplicate_now = if local_expiry { dispatch.accepted.deadline_unix_ns } else { now };
                 let duplicate = node.admit(dispatch.clone(), None, &dispatch_key, duplicate_now);
                 if local_expiry {
-                    if !matches!(duplicate, Err(mithril_node::Error::Trace {
-                        source: mithril_control::Error::Observability {
-                            code: mithril_control::TraceErrorCodeV1::Expired, ..
-                        }, ..
+                    if !matches!(duplicate, Err(araphor_observability::Error::Observability {
+                        code: mithril_control::TraceErrorCodeV1::Expired, ..
                     })) {
                         return Err("Node accepted an expired cached dispatch".into());
                     }

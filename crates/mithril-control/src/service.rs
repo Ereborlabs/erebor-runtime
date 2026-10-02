@@ -1778,7 +1778,7 @@ impl ControlPlane {
         // Retried acceptance uses its frozen inputs even if the live inventory changed.
         let absent = match owner.request_state(request.tenant_id, request.request_id) {
             Ok(_) => false,
-            Err(crate::Error::Observability {
+            Err(araphor_observability::Error::Observability {
                 code: crate::TraceErrorCodeV1::Missing,
                 ..
             }) => true,
@@ -2020,9 +2020,18 @@ impl ControlPlane {
     }
 }
 
-fn trace_status(error: crate::Error) -> Status {
-    let code = match &error {
-        crate::Error::DataStore { source, .. } => match source.as_ref() {
+fn trace_status(error: impl Into<crate::Error>) -> Status {
+    let error = error.into();
+    let data = match &error {
+        crate::Error::DataStore { source, .. } => Some(source.as_ref()),
+        crate::Error::Observability { source, .. } => match source.as_ref() {
+            araphor_observability::Error::DataStore { source, .. } => Some(source.as_ref()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let code = if let Some(source) = data {
+        match source {
             araphor_data::Error::TraceInvalid { .. } => tonic::Code::InvalidArgument,
             araphor_data::Error::AnalysisConflict { .. } => tonic::Code::AlreadyExists,
             araphor_data::Error::RetainedRangeExpired { .. } => tonic::Code::OutOfRange,
@@ -2038,19 +2047,31 @@ fn trace_status(error: crate::Error) -> Status {
             | araphor_data::Error::AnalysisDatabase { .. }
             | araphor_data::Error::Io { .. } => tonic::Code::Unavailable,
             _ => tonic::Code::Internal,
-        },
-        crate::Error::TraceEncoding { .. } => tonic::Code::Internal,
-        crate::Error::TraceDecoding { .. } => tonic::Code::DataLoss,
-        crate::Error::Observability { code, .. } => match code {
-            crate::TraceErrorCodeV1::Denied => tonic::Code::PermissionDenied,
-            crate::TraceErrorCodeV1::Conflict => tonic::Code::AlreadyExists,
-            crate::TraceErrorCodeV1::Expired => tonic::Code::DeadlineExceeded,
-            crate::TraceErrorCodeV1::Missing => tonic::Code::NotFound,
-            crate::TraceErrorCodeV1::Capacity => tonic::Code::ResourceExhausted,
-            crate::TraceErrorCodeV1::Invalid => tonic::Code::InvalidArgument,
-            crate::TraceErrorCodeV1::Integrity => tonic::Code::DataLoss,
-        },
-        _ => tonic::Code::FailedPrecondition,
+        }
+    } else if let crate::Error::Observability { source, .. } = &error {
+        match source.as_ref() {
+            araphor_observability::Error::TraceEncoding { .. } => tonic::Code::Internal,
+            araphor_observability::Error::TraceDecoding { .. }
+            | araphor_observability::Error::Json { .. } => tonic::Code::DataLoss,
+            araphor_observability::Error::Observability { code, .. } => match code {
+                crate::TraceErrorCodeV1::Denied => tonic::Code::PermissionDenied,
+                crate::TraceErrorCodeV1::Conflict => tonic::Code::AlreadyExists,
+                crate::TraceErrorCodeV1::Expired => tonic::Code::DeadlineExceeded,
+                crate::TraceErrorCodeV1::Missing => tonic::Code::NotFound,
+                crate::TraceErrorCodeV1::Capacity => tonic::Code::ResourceExhausted,
+                crate::TraceErrorCodeV1::Invalid => tonic::Code::InvalidArgument,
+                crate::TraceErrorCodeV1::Integrity => tonic::Code::DataLoss,
+            },
+            araphor_observability::Error::InvalidConfiguration { .. } => {
+                tonic::Code::InvalidArgument
+            }
+            araphor_observability::Error::Authorization { .. } => tonic::Code::PermissionDenied,
+            araphor_observability::Error::Io { .. }
+            | araphor_observability::Error::Interceptor { .. } => tonic::Code::Unavailable,
+            _ => tonic::Code::FailedPrecondition,
+        }
+    } else {
+        tonic::Code::FailedPrecondition
     };
     Status::new(code, error.to_string())
 }
@@ -2974,14 +2995,22 @@ mod tests {
             ),
         ];
         for (error, expected) in errors {
-            assert_eq!(super::trace_status(error.into()).code(), expected);
+            assert_eq!(super::trace_status(error).code(), expected);
         }
+        let error = araphor_observability::Error::from(araphor_data::Error::StorageCapacity {
+            resource: "diagnostic bytes",
+            location: snafu::Location::default(),
+        });
+        assert_eq!(
+            super::trace_status(error).code(),
+            tonic::Code::ResourceExhausted
+        );
     }
 
     #[tokio::test]
     async fn observability_recovery_session_dispatch_ack_and_revocation() -> TestResult {
-        use crate::observability::owner::tests::{grant, request};
         use crate::{TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceUploadV1};
+        use araphor_observability::test_support::{grant, request};
         let directory = TempDir::new()?;
         let store = crate::ControlStore::open(directory.path())?;
         let key = SigningKey::from_bytes(&[23; 32]);

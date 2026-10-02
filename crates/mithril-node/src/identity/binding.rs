@@ -7,6 +7,7 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use araphor_observability::TraceTargetLeaseV1;
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, DeclaredEntryRequestV1,
@@ -56,94 +57,6 @@ struct PublishedBinding {
     spec: WorkloadBindingConfig,
     runtime_identity: Option<RuntimeContainerIdentity>,
     held_initial_pid: Option<u32>,
-}
-
-pub struct TraceTargetLeaseV1 {
-    target: mithril_control::TraceTargetV1,
-    root_path: PathBuf,
-    root_handle: File,
-    #[cfg(feature = "test-support")]
-    readback: Option<Box<dyn Fn() -> Result<Option<ExecutionSetBindingStateV1>> + Send + Sync>>,
-}
-
-impl TraceTargetLeaseV1 {
-    pub fn target(&self) -> &mithril_control::TraceTargetV1 {
-        &self.target
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn fixture(
-        target: mithril_control::TraceTargetV1,
-        root_path: PathBuf,
-        readback: impl Fn() -> Result<Option<ExecutionSetBindingStateV1>> + Send + Sync + 'static,
-    ) -> Result<Self> {
-        let root_handle = File::open(&root_path).context(IoSnafu { path: &root_path })?;
-        let lease = Self {
-            target,
-            root_path,
-            root_handle,
-            readback: Some(Box::new(readback)),
-        };
-        lease.validate_path()?;
-        Ok(lease)
-    }
-
-    pub fn validate(&self, reader: &erebor_interceptor::KernelStateReader) -> Result<()> {
-        self.validate_path()?;
-        #[cfg(feature = "test-support")]
-        if let Some(readback) = &self.readback {
-            return self.validate_state(&readback()?.context(IdentityStateSnafu {
-                reason: "trace binding disappeared",
-            })?);
-        }
-        let bytes = reader
-            .lookup(
-                "execution_set_bindings",
-                &self.target.cgroup_id.to_ne_bytes(),
-            )
-            .context(InterceptorSnafu)?
-            .context(IdentityStateSnafu {
-                reason: "trace binding disappeared",
-            })?;
-        self.validate_state(&execution_set_binding_state(&bytes)?)
-    }
-
-    fn validate_path(&self) -> Result<()> {
-        let path = fs::metadata(&self.root_path).context(IoSnafu {
-            path: &self.root_path,
-        })?;
-        let held = self.root_handle.metadata().context(IoSnafu {
-            path: &self.root_path,
-        })?;
-        ensure!(
-            path.dev() == held.dev()
-                && path.ino() == held.ino()
-                && held.ino() == self.target.cgroup_id,
-            IdentityStateSnafu {
-                reason: "trace cgroup lifetime changed"
-            }
-        );
-        Ok(())
-    }
-
-    fn validate_state(&self, state: &ExecutionSetBindingStateV1) -> Result<()> {
-        ensure!(
-            binding_lifecycle_allows_effects(state.lifecycle_state)
-                && state.transition_guard == 0
-                && state.node_boot_id.to_be_bytes() == self.target.node_boot_id
-                && state.binding_id.to_be_bytes() == self.target.binding_id
-                && state.binding_nonce.to_be_bytes() == self.target.binding_nonce
-                && state.root_cgroup_live_interval_id.to_be_bytes()
-                    == self.target.root_cgroup_live_interval_id
-                && state.root_cgroup_id == self.target.cgroup_id
-                && state.label_epoch == self.target.label_epoch
-                && state.container_generation == self.target.container_generation,
-            IdentityStateSnafu {
-                reason: "trace binding was retired or replaced"
-            }
-        );
-        Ok(())
-    }
 }
 
 enum InitialRootPreparationV1<'a> {
@@ -795,7 +708,8 @@ impl WorkloadBindingOwner {
         let target = mithril_control::TraceTargetV1 {
             fact: fact.clone(),
             fact_digest: mithril_control::DiscoveryDigestV1::of(fact)
-                .context(crate::error::PolicySnafu)?,
+                .map_err(araphor_observability::Error::from)
+                .context(crate::error::TraceSnafu)?,
             runtime_container_id: runtime.full_container_id.clone(),
             node_boot_id: binding.state.node_boot_id.to_be_bytes(),
             cgroup_id: binding.root_cgroup_id,
@@ -805,16 +719,15 @@ impl WorkloadBindingOwner {
             container_generation: binding.state.container_generation,
             label_epoch: binding.state.label_epoch,
         };
-        target.validate().context(crate::error::PolicySnafu)?;
-        Ok(TraceTargetLeaseV1 {
+        target.validate().context(crate::error::TraceSnafu)?;
+        TraceTargetLeaseV1::new(
             target,
-            root_path: binding.root_cgroup_path.clone(),
-            root_handle: binding.root_handle.try_clone().context(IoSnafu {
+            binding.root_cgroup_path.clone(),
+            binding.root_handle.try_clone().context(IoSnafu {
                 path: &binding.root_cgroup_path,
             })?,
-            #[cfg(feature = "test-support")]
-            readback: None,
-        })
+        )
+        .context(crate::error::TraceSnafu)
     }
 
     pub fn administrative_target(
@@ -2978,6 +2891,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::fs::MetadataExt as _;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
@@ -3096,53 +3010,21 @@ mod tests {
         assert!(owner.resolve_trace_target("other", &fact).is_err());
         let lease = owner.resolve_trace_target("node", &fact)?;
         assert_eq!(lease.target().runtime_container_id, spec.container_id);
-        lease.validate_path()?;
-        lease.validate_state(&state)?;
-        let mut replacement = state;
-        replacement.binding_nonce = Id128V1::new(9, 9);
-        assert!(lease.validate_state(&replacement).is_err());
-        replacement = state;
-        replacement.container_generation += 1;
-        assert!(lease.validate_state(&replacement).is_err());
-        replacement = state;
-        replacement.label_epoch += 1;
-        assert!(lease.validate_state(&replacement).is_err());
-        #[cfg(feature = "test-support")]
-        let fixture = {
-            use super::{ExecutionSetBindingStateV1, TraceTargetLeaseV1};
-            use std::sync::{
-                atomic::{AtomicU64, Ordering},
-                Arc,
-            };
-            let generation = Arc::new(AtomicU64::new(state.container_generation));
-            let current = generation.clone();
-            let fixture =
-                TraceTargetLeaseV1::fixture(lease.target().clone(), root.clone(), move || {
-                    let generation = current.load(Ordering::Acquire);
-                    Ok((generation != 0).then_some(ExecutionSetBindingStateV1 {
-                        container_generation: generation,
-                        ..state
-                    }))
-                })?;
-            let reader = erebor_interceptor::KernelStateReader::new(temporary.path());
-            fixture.validate(&reader)?;
-            generation.store(state.container_generation + 1, Ordering::Release);
-            assert!(fixture.validate(&reader).is_err());
-            generation.store(0, Ordering::Release);
-            assert!(fixture.validate(&reader).is_err());
-            generation.store(state.container_generation, Ordering::Release);
-            fixture.validate(&reader)?;
-            fixture
-        };
-        fs::rename(&root, temporary.path().join("retired"))?;
-        fs::create_dir(&root)?;
-        assert!(lease.validate_path().is_err());
-        #[cfg(feature = "test-support")]
-        assert!(fixture
-            .validate(&erebor_interceptor::KernelStateReader::new(
-                temporary.path()
-            ))
-            .is_err());
+        assert_eq!(
+            lease.target().node_boot_id,
+            state.node_boot_id.to_be_bytes()
+        );
+        assert_eq!(lease.target().binding_id, state.binding_id.to_be_bytes());
+        assert_eq!(
+            lease.target().binding_nonce,
+            state.binding_nonce.to_be_bytes()
+        );
+        assert_eq!(lease.target().cgroup_id, fs::metadata(&root)?.ino());
+        assert_eq!(
+            lease.target().container_generation,
+            state.container_generation
+        );
+        assert_eq!(lease.target().label_epoch, state.label_epoch);
         Ok(())
     }
 

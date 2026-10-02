@@ -988,6 +988,7 @@ impl NodeChassis {
                 .build()
             })?
             .set_intent_hook(callback)
+            .map_err(Into::into)
     }
 
     async fn poll_diagnostics(
@@ -1056,7 +1057,7 @@ impl NodeChassis {
             let mut participants = Vec::new();
             for fact in request.facts {
                 let digest = mithril_control::DiscoveryDigestV1::of(&fact)
-                    .context(crate::error::TraceSnafu)?;
+                    .map_err(araphor_observability::Error::from)?;
                 let target = self
                     .bindings
                     .resolve_trace_target(&self.config.node_id, &fact)

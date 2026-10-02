@@ -200,6 +200,7 @@ impl DiscoveryContextViewV1 {
             &self.omissions,
             &self.conflicts,
         ))
+        .map_err(Into::into)
     }
 }
 

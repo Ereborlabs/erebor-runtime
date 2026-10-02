@@ -12,8 +12,7 @@ pub use authorization::{
 };
 pub(crate) use binding::{binding_lifecycle_is_addressable, ExactObjectBindingTargetV1};
 pub use binding::{
-    AdministrativeBindingTargetV1, RuntimeReconciliationResultV1, TraceTargetLeaseV1,
-    WorkloadBindingOwner,
+    AdministrativeBindingTargetV1, RuntimeReconciliationResultV1, WorkloadBindingOwner,
 };
 pub use inspection::{
     NativeIdentityInspector, NativeRuntimeBindingSnapshotV1, NativeTaskSnapshotV1,

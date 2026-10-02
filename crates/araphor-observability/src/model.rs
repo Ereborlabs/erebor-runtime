@@ -124,7 +124,7 @@ impl TraceRequestV1 {
 
     pub fn digest(&self) -> Result<DiscoveryDigestV1> {
         self.validate()?;
-        DiscoveryDigestV1::of(self)
+        DiscoveryDigestV1::of(self).map_err(Into::into)
     }
 
     pub(crate) fn require(valid: bool, reason: &'static str) -> Result<()> {

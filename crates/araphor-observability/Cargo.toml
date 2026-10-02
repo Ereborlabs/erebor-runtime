@@ -1,32 +1,26 @@
 [package]
-name = "araphor-data"
+name = "araphor-observability"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [features]
-test-fixtures = []
+test-support = ["araphor-data/test-fixtures", "erebor-interceptor/test-fixtures"]
 
 [dependencies]
-crc32c.workspace = true
-duckdb = { workspace = true, features = ["vtab"] }
+araphor-data = { path = "../araphor-data" }
+ed25519-dalek.workspace = true
+erebor-interceptor = { path = "../erebor-interceptor" }
+erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
-minicbor.workspace = true
-prost.workspace = true
+hex.workspace = true
+rmp-serde.workspace = true
 rustix = { version = "1.1.4", features = ["fs"] }
-schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 snafu.workspace = true
-sqlparser.workspace = true
-time.workspace = true
-tokio.workspace = true
-uuid.workspace = true
-
-[build-dependencies]
-prost-build.workspace = true
+zerocopy.workspace = true
 
 [dev-dependencies]
 tempfile = "3.23.0"

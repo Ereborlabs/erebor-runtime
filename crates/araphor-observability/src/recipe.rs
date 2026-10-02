@@ -97,12 +97,12 @@ impl TraceRecipeV1 {
     pub fn manifest(self) -> Result<TraceRecipeManifestV1> {
         let (source, hook, keys): (&[u8], &str, &[&str]) = match self {
             Self::SyscallErrors => (
-                include_bytes!("../../../mithril-e2e/fixtures/observability/syscall-errors.bt"),
+                include_bytes!("../../mithril-e2e/fixtures/observability/syscall-errors.bt"),
                 "tracepoint:raw_syscalls:sys_exit",
                 &["syscall_id", "errno"],
             ),
             Self::FailedOpens => (
-                include_bytes!("../../../mithril-e2e/fixtures/observability/failed-opens.bt"),
+                include_bytes!("../../mithril-e2e/fixtures/observability/failed-opens.bt"),
                 "tracepoint:syscalls:sys_exit_openat",
                 &["errno"],
             ),
@@ -126,7 +126,7 @@ impl TraceRecipeV1 {
     }
 
     pub fn digest(self) -> Result<DiscoveryDigestV1> {
-        DiscoveryDigestV1::of(&self.manifest()?)
+        DiscoveryDigestV1::of(&self.manifest()?).map_err(Into::into)
     }
 
     pub fn identify(source: &TraceSourceV1) -> Result<Option<Self>> {
@@ -145,15 +145,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn observability_projection_retains_k3s_unknown_syscall_with_valid_counts() {
+    fn observability_projection_counts() {
         let frame = TraceFrameV1 {
             execution_id: [1; 16],
             sequence: 1,
             kind: TraceFrameKindV1::Data,
-            bytes: include_bytes!(
-                "../../../mithril-e2e/fixtures/observability/k3s-syscall-map.json"
-            )
-            .to_vec(),
+            bytes: include_bytes!("../../mithril-e2e/fixtures/observability/k3s-syscall-map.json")
+                .to_vec(),
         };
         let measurements = TraceRecipeV1::SyscallErrors.measurements(&frame);
         assert!(measurements.is_some());
@@ -168,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn observability_projection_rejects_unknown_or_spoofed_schema(
+    fn observability_projection_rejects_schema(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut frame = TraceFrameV1 {
             execution_id: [1; 16],

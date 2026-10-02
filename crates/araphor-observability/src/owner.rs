@@ -26,7 +26,7 @@ pub enum TraceErrorCodeV1 {
 }
 
 impl TraceErrorCodeV1 {
-    pub(crate) fn require(self, condition: bool, reason: &'static str) -> Result<()> {
+    pub fn require(self, condition: bool, reason: &'static str) -> Result<()> {
         if condition {
             Ok(())
         } else {
@@ -95,7 +95,7 @@ pub struct TraceOwner {
     store: Arc<AnalysisStore>,
 }
 
-pub(crate) struct TraceNodeWorkV1 {
+pub struct TraceNodeWorkV1 {
     pub pending: Option<(TraceAcceptedV1, u16)>,
     pub cancel: Vec<[u8; 16]>,
 }
@@ -105,7 +105,7 @@ impl TraceOwner {
         Self { store }
     }
 
-    pub(crate) fn node_work(
+    pub fn node_work(
         &self,
         tenant: [u8; 16],
         node: &str,
@@ -538,15 +538,12 @@ impl TryFrom<TraceIntentV1> for TraceAcceptedV1 {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
     use super::*;
-    use crate::{
-        ContainerKindV1, TraceFrameKindV1, TraceFrameV1, TraceSourceV1, TraceTerminalV1,
-        WorkloadTargetFactV1,
-    };
+    use crate::{ContainerKindV1, WorkloadTargetFactV1};
 
-    pub(crate) fn request() -> Result<TraceRequestV1> {
+    pub fn request() -> Result<TraceRequestV1> {
         let fact = WorkloadTargetFactV1 {
             node_id: "node-a".into(),
             workload_binding_generation_digest: "revision-a".into(),
@@ -585,7 +582,7 @@ pub(crate) mod tests {
         })
     }
 
-    pub(crate) fn grant() -> Result<TraceExecutionGrantV1> {
+    pub fn grant() -> Result<TraceExecutionGrantV1> {
         Ok(TraceExecutionGrantV1 {
             tenant_id: [1; 16],
             grant_id: [7; 16],
@@ -598,7 +595,7 @@ pub(crate) mod tests {
         })
     }
 
-    pub(crate) fn access() -> TraceReadAccessV1 {
+    pub fn access() -> TraceReadAccessV1 {
         TraceReadAccessV1 {
             tenant_id: [1; 16],
             namespace_uids: ["namespace".into()].into(),
@@ -608,6 +605,13 @@ pub(crate) mod tests {
             revoked: false,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{access, grant, request};
+    use super::*;
+    use crate::{TraceFrameKindV1, TraceFrameV1, TraceSourceV1, TraceTerminalV1};
 
     #[test]
     fn observability_recovery_source_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -693,7 +697,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(feature = "test-support")]
     #[test]
     fn observability_recovery_read_revocation(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -856,8 +860,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn observability_target_partial_cohort_never_widens_on_retry(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_partial_cohort_retry() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
             directory.path().join("data"),
@@ -884,8 +887,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn observability_target_grants_pin_source_namespace_and_approval(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_target_grants() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
             directory.path().join("data"),
@@ -935,8 +937,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn observability_recovery_accepts_regrouped_frames_and_late_terminal(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_regrouped_late_terminal() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
@@ -990,8 +992,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn observability_recovery_commits_once_and_rejects_changed_output(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_replay_integrity() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());

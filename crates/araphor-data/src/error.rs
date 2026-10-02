@@ -6,6 +6,12 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Canonical encoding failed: {reason}"))]
+    CanonicalEncoding {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Trace contract is invalid: {reason}"))]
     TraceInvalid {
         reason: &'static str,
@@ -144,7 +150,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::TraceInvalid { .. }
+            Self::CanonicalEncoding { .. }
+            | Self::TraceInvalid { .. }
             | Self::QueryInvalid { .. }
             | Self::QueryLimit { .. }
             | Self::AnalysisInputTooLarge { .. } => StatusCode::InvalidArguments,

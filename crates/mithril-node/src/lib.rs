@@ -9,7 +9,6 @@ mod exact_object;
 mod identity;
 mod local;
 mod node;
-mod observability;
 mod observation;
 mod policy;
 mod policy_delivery;
@@ -20,6 +19,10 @@ mod runtime_seccomp;
 mod trust;
 mod unix_socket;
 
+pub use araphor_observability::{
+    NodeTraceConfigV1, NodeTraceOwner, TraceQualificationPairV1, TraceQualificationV1,
+    TraceTargetLeaseV1,
+};
 pub use config::{
     AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
     ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig, InterceptorConfig, NodeConfig,
@@ -38,14 +41,13 @@ pub use identity::{
     CriRuntimeContainerObservationV1, IssuerTrustV1, NativeIdentityInspector,
     NativeRuntimeBindingSnapshotV1, NativeSecurityStateOwner, NativeTaskSnapshotV1,
     PortableProfileGenerationIdentityV1, PreparedAuthorizationProofV1, ReconciliationReportV1,
-    ResolvedAdministrativeExecutableIdentityV1, RuntimeReconciliationResultV1, TraceTargetLeaseV1,
-    TrustBundleV1, WorkloadBindingOwner,
+    ResolvedAdministrativeExecutableIdentityV1, RuntimeReconciliationResultV1, TrustBundleV1,
+    WorkloadBindingOwner,
 };
 pub use local::RuntimeObservationServer;
 #[cfg(feature = "test-support")]
 pub use node::{AdministrativeExecTestOwner, PolicyControlPacingOwner};
 pub use node::{NodeBindingReconciliation, NodeChassis, NodeReadinessV1};
-pub use observability::*;
 pub use observation::{
     CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, CoverageIntervalV1,
     CoverageSnapshotV1, CoverageStateV1, DeterministicLocalWindowOwner, EffectObservationCpuHealth,

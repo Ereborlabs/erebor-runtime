@@ -2,14 +2,14 @@ use std::any::Any;
 use std::path::PathBuf;
 
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
-use snafu::{Location, Snafu};
+use snafu::{IntoError as _, Location, Snafu};
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
     #[snafu(display("Araphor diagnostic contract failed: {source}"))]
     Trace {
-        source: mithril_control::Error,
+        source: araphor_observability::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -124,6 +124,12 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<araphor_observability::Error> for Error {
+    fn from(source: araphor_observability::Error) -> Self {
+        TraceSnafu.into_error(source)
+    }
+}
 
 impl Error {
     pub(crate) fn control_rpc_can_reuse_session(&self) -> bool {

@@ -381,16 +381,7 @@ pub struct WorkloadSelectorV1 {
     pub image_digests: Vec<String>,
 }
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ContainerKindV1 {
-    Init,
-    Sidecar,
-    Application,
-    Ephemeral,
-}
+pub use araphor_data::ContainerKindV1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

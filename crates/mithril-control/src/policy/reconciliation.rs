@@ -14,7 +14,7 @@ use snafu::{ensure, ResultExt as _};
 use tokio_stream::StreamExt as _;
 
 use super::{
-    CohortSelectionV1, ContainerKindV1, ErrnoV1, EvaluationStageV1, LabelOperatorV1,
+    CohortSelectionV1, ErrnoV1, EvaluationStageV1, LabelOperatorV1,
     PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1,
     PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1, PolicyDispositionV1, PolicyDocumentV1,
     PolicyRolloutCountsV1, PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1,
@@ -27,43 +27,7 @@ use crate::{ControlStore, PolicyCompiler, Result};
 const RECONCILE_WRITER_LIMIT: u64 = 1;
 const DESIRED_STATE_WATCH_COUNT: u64 = 2;
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Captures the exact workload and scheduler facts that can enter a target snapshot.
-pub struct WorkloadTargetFactV1 {
-    pub node_id: String,
-    pub workload_binding_generation_digest: String,
-    pub execution_set_id: String,
-    pub cluster_uid: String,
-    pub namespace_uid: String,
-    pub controller_uid: String,
-    pub service_account_uid: String,
-    pub pod_uid: String,
-    pub container_id: String,
-    pub container_name: String,
-    pub container_kind: ContainerKindV1,
-    pub image_digest: String,
-    pub pod_labels: BTreeMap<String, String>,
-    #[serde(default)]
-    pub kubernetes: Option<KubernetesWorkloadIdentityV1>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct KubernetesWorkloadIdentityV1 {
-    pub namespace_name: String,
-    #[serde(default)]
-    pub pod_name: String,
-    pub profile_id: String,
-    pub policy_source_revision_id: String,
-    pub binding_id: String,
-    pub protected_scope_id: String,
-    pub workload_selector_id: String,
-    pub kubernetes_node_name: String,
-    pub kubernetes_node_uid: String,
-    pub node_boot_id: String,
-    pub label_epoch: u64,
-}
+pub use araphor_data::{KubernetesWorkloadIdentityV1, WorkloadTargetFactV1};
 
 pub fn workload_target_fact_digest(target: &WorkloadTargetFactV1) -> Result<String> {
     // Exclude the digest field so that the remaining immutable facts define its value.

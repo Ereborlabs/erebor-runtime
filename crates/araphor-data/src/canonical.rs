@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use minicbor::Encoder;
 
-pub(crate) fn encode_value(
+pub fn encode_value(
     encoder: &mut Encoder<&mut Vec<u8>>,
     value: &serde_json::Value,
 ) -> std::result::Result<(), minicbor::encode::Error<Infallible>> {

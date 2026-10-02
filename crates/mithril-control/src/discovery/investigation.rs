@@ -549,7 +549,7 @@ impl AssessmentReport {
             .detections
             .iter()
             .map(DiscoveryDigestV1::of)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<araphor_data::Result<Vec<_>>>()?;
         require(
             self.classification.detection_digests == detection_digests,
             "DETECTION_DIGESTS",

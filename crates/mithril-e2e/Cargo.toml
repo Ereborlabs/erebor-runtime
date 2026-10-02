@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
+araphor-observability = { path = "../araphor-observability", features = ["test-support"] }
 clap.workspace = true
 containerd-client.workspace = true
 crc32c.workspace = true
