@@ -3861,7 +3861,9 @@ test does not close a row when its physical condition or an assertion changed.
     a JSON trailing-characters error. That exact test passed alone without a
     code change. The CLI helper's timestamp-and-PID filename can collide, but
     the cause of this run is not proved. No CLI change is part of this work.
-    The full gate with `RUST_TEST_THREADS=1` passed. No test was skipped.
+    The full gate with `RUST_TEST_THREADS=1` passed with its normal ignored-test
+    exclusions. The three physical cases passed through the separate exact
+    `--ignored` commands above. No additional test filter was used.
     The four related CLI tests also passed with distinct paths under tracing.
     This result does not prove or fix the earlier default-CI failure.
     The prior implementation and verification record follows.
