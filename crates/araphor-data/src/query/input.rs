@@ -771,13 +771,13 @@ mod tests {
         })
     }
 
-    fn value<'a>(schema: &InputSchema, row: &'a [Value], name: &str) -> &'a Value {
+    fn value<'a>(schema: &InputSchema, row: &'a [Value], name: &str) -> TestResult<&'a Value> {
         let index = schema
             .columns
             .iter()
             .position(|field| field.0 == name)
-            .unwrap();
-        &row[index]
+            .ok_or("column absent")?;
+        row.get(index).ok_or_else(|| "row value absent".into())
     }
 
     fn empty_input() -> AnalysisExtractionV1<InputRow> {
@@ -987,23 +987,23 @@ mod tests {
             "kernel_sequence",
             "inode",
         ] {
-            assert_eq!(value(&EVENTS, &absent.0, name), &Value::Null);
+            assert_eq!(value(&EVENTS, &absent.0, name)?, &Value::Null);
         }
         assert_eq!(
-            value(&EVENTS, &absent.0, "process_lineage_id"),
+            value(&EVENTS, &absent.0, "process_lineage_id")?,
             &Value::Blob(Vec::new())
         );
         record.decision_context = Some(EvidenceDecisionContext::default());
         let present = event(&record)?;
         assert_eq!(
-            value(&EVENTS, &present.0, "context_schema_version"),
+            value(&EVENTS, &present.0, "context_schema_version")?,
             &Value::UInt(0)
         );
         assert_eq!(
-            value(&EVENTS, &present.0, "kernel_sequence"),
+            value(&EVENTS, &present.0, "kernel_sequence")?,
             &Value::UBigInt(0)
         );
-        assert_eq!(value(&EVENTS, &present.0, "inode"), &Value::Null);
+        assert_eq!(value(&EVENTS, &present.0, "inode")?, &Value::Null);
         let mut corrupt = framed(&record);
         corrupt.framed_record[4] ^= 1;
         assert!(matches!(
@@ -1065,7 +1065,7 @@ mod tests {
             InputRelations::new(&mut extraction, 1_000_000, &QueryTemplate::ContextVersions)?;
         assert_eq!(input.tables[0].rows.len(), 2);
         assert_eq!(
-            value(&EVENTS, &input.tables[0].rows[1], "operation"),
+            value(&EVENTS, &input.tables[0].rows[1], "operation")?,
             &Value::UInt(42)
         );
         assert_eq!(input.tables[2].rows, vec![expected]);
@@ -1140,75 +1140,75 @@ mod tests {
         assert_eq!(rows.len(), 6);
         let kinds: Vec<_> = rows
             .iter()
-            .map(|row| value(&COVERAGE, row, "kind").clone())
-            .collect();
+            .map(|row| value(&COVERAGE, row, "kind").cloned())
+            .collect::<TestResult<_>>()?;
         assert_eq!(
             kinds,
             ["receipt", "expired", "recovery", "pending", "interval", "receipt"]
                 .map(|kind| Value::Text(kind.into()))
         );
         assert_eq!(
-            value(&COVERAGE, &rows[0], "state"),
+            value(&COVERAGE, &rows[0], "state")?,
             &Value::Text("reported".into())
         );
         assert_eq!(
-            value(&COVERAGE, &rows[5], "state"),
+            value(&COVERAGE, &rows[5], "state")?,
             &Value::Text("unknown".into())
         );
         assert_eq!(
-            value(&COVERAGE, &rows[3], "contiguous_cursor"),
+            value(&COVERAGE, &rows[3], "contiguous_cursor")?,
             &Value::UBigInt(0)
         );
         assert_eq!(
-            value(&COVERAGE, &rows[3], "first_cursor"),
+            value(&COVERAGE, &rows[3], "first_cursor")?,
             &Value::UBigInt(1)
         );
         assert_eq!(
-            value(&COVERAGE, &rows[3], "last_cursor"),
+            value(&COVERAGE, &rows[3], "last_cursor")?,
             &Value::UBigInt(10)
         );
         assert_eq!(
-            value(&COVERAGE, &rows[3], "commit_revision"),
+            value(&COVERAGE, &rows[3], "commit_revision")?,
             &Value::UBigInt(9)
         );
-        assert_eq!(value(&COVERAGE, &rows[3], "first_sequence"), &Value::Null);
+        assert_eq!(value(&COVERAGE, &rows[3], "first_sequence")?, &Value::Null);
         let interval = &rows[4];
         assert_eq!(
-            value(&COVERAGE, interval, "state"),
+            value(&COVERAGE, interval, "state")?,
             &Value::Text("FUTURE_STATE".into())
         );
         assert_eq!(
-            value(&COVERAGE, interval, "source_epoch"),
+            value(&COVERAGE, interval, "source_epoch")?,
             &Value::UBigInt(5)
         );
         assert_eq!(
-            value(&COVERAGE, interval, "interval_source_epoch"),
+            value(&COVERAGE, interval, "interval_source_epoch")?,
             &Value::UBigInt(4)
         );
         assert_eq!(
-            value(&COVERAGE, interval, "first_sequence"),
+            value(&COVERAGE, interval, "first_sequence")?,
             &Value::UBigInt(100)
         );
-        assert_eq!(value(&COVERAGE, interval, "last_sequence"), &Value::Null);
-        assert_eq!(value(&COVERAGE, interval, "first_cursor"), &Value::Null);
+        assert_eq!(value(&COVERAGE, interval, "last_sequence")?, &Value::Null);
+        assert_eq!(value(&COVERAGE, interval, "first_cursor")?, &Value::Null);
         assert_eq!(
-            value(&COVERAGE, interval, "current"),
+            value(&COVERAGE, interval, "current")?,
             &Value::Boolean(false)
         );
         assert_eq!(
-            value(&COVERAGE, interval, "opening_attempted"),
+            value(&COVERAGE, interval, "opening_attempted")?,
             &Value::UBigInt(u64::MAX)
         );
         assert_eq!(
-            value(&COVERAGE, interval, "opening_next_sequence"),
+            value(&COVERAGE, interval, "opening_next_sequence")?,
             &Value::UBigInt(8)
         );
         assert_eq!(
-            value(&COVERAGE, interval, "closing_attempted"),
+            value(&COVERAGE, interval, "closing_attempted")?,
             &Value::Null
         );
         assert_eq!(
-            value(&COVERAGE, interval, "gap_reasons"),
+            value(&COVERAGE, interval, "gap_reasons")?,
             &Value::Text(serde_json::to_string(&report.intervals[0].gap_reasons)?)
         );
         assert_eq!(extraction.sources[0].receipt.coverage_revision, 10);
@@ -1340,17 +1340,17 @@ mod tests {
                 .sum::<usize>()
         );
         for relation in ["traces", "trace_output", "trace_measurements"] {
-            let fields: Vec<_> = rows
-                .iter()
-                .filter(|row| value(&CATALOG, row, "relation") == &Value::Text(relation.into()))
-                .collect();
-            assert!(!fields.is_empty());
-            assert!(
-                fields
-                    .iter()
-                    .all(|row| value(&CATALOG, row, "readiness")
-                        == &Value::Text("unavailable".into()))
-            );
+            let mut found = false;
+            for row in rows {
+                if value(&CATALOG, row, "relation")? == &Value::Text(relation.into()) {
+                    found = true;
+                    assert_eq!(
+                        value(&CATALOG, row, "readiness")?,
+                        &Value::Text("unavailable".into())
+                    );
+                }
+            }
+            assert!(found);
         }
         let connection = Connection::open_in_memory()?;
         input.register(&connection)?;

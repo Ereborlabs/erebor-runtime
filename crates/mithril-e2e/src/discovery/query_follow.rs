@@ -761,7 +761,7 @@ impl QueryFollowQualification {
             .policy_document(&first_id)?
             .ok_or("initial policy absent")?;
         let control_before = control.health()?.commit_index;
-        let store = Arc::new(AnalysisStore::open(&root.join("analysis"))?);
+        let store = Arc::new(AnalysisStore::open(root.join("analysis"))?);
         let source = evidence_source(1, 3);
         commit(&store, &source, 1, MINUTE, records(1, 1, 7))?;
         let owner = Arc::new(QueryOwner::new(store.clone(), QueryLimits::default())?);

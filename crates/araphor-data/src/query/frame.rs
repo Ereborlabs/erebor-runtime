@@ -1130,7 +1130,7 @@ mod tests {
         assert_eq!(frame.coverage().as_ptr(), coverage);
         assert!(fixture.budget.evaluate([1; 16]).is_err());
         let QueryPayload::Append { result, .. } = &frame.payload else {
-            panic!("append absent")
+            return Err("append absent".into());
         };
         assert_eq!(result.rows.as_ptr(), rows);
         drop(frame);
@@ -1320,7 +1320,7 @@ mod tests {
             assert_eq!(metadata.read_revision, fixture.meta.commit_revision);
             assert_eq!(metadata.coverage(), &**result.sources);
             let QueryPayload::Metadata(metadata) = &metadata.payload else {
-                panic!("metadata absent")
+                return Err("metadata absent".into());
             };
             assert_eq!(metadata.dependency_revision, 7);
             assert_eq!(metadata.row_limit, limits.output_rows);
@@ -1348,7 +1348,7 @@ mod tests {
                 ..
             } = frame.payload
             else {
-                panic!("checkpoint absent")
+                return Err("checkpoint absent".into());
             };
             assert_eq!(captured, checkpoint);
             let storage_health = crate::StorageHealthV1 {
@@ -1394,7 +1394,7 @@ mod tests {
                 ..
             } = error.payload
             else {
-                panic!("error absent")
+                return Err("error absent".into());
             };
             assert_eq!(code, QueryErrorCode::EvaluationFailed);
             assert_eq!(reason, code.reason());
@@ -1422,7 +1422,7 @@ mod tests {
         count.rows = vec![vec![Value::BigInt(2)]];
         let metadata = QueryFrame::metadata(&moving, &count, &QueryLimits::default(), 7)?;
         let QueryPayload::Metadata(metadata) = metadata.payload else {
-            panic!("metadata absent")
+            return Err("metadata absent".into());
         };
         assert_eq!(metadata.moving_resolution_ns, Some(1_000_000_000));
         assert!(metadata.resume_semantics.contains("current state"));
