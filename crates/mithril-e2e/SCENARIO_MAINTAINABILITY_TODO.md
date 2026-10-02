@@ -3648,6 +3648,9 @@ test does not close a row when its physical condition or an assertion changed.
     The final 90-line test compares each event with its production-lowered
     exact selector. Host passes in 34.69 seconds and runc in 40.02 seconds.
     The unchanged existing Kubernetes descriptor case passes in 72.12 seconds.
+    The same passed-file test passes on Kubernetes in 76.04 seconds with
+    deployed Control, Node, and CRD policy. Cleanup passes on all three
+    platforms. Commit this result before removing the two legacy read actions.
   - [ ] Replace both exact-file `io_uring` reads with a small shared test.
     Reuse the descriptor policy, Python process owner, and effect observer.
     Keep the retained descriptors, disabled restricted ring, asynchronous
