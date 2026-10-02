@@ -8,7 +8,7 @@ use mithril_control::{ContainerKindV1 as Kind, WorkloadProtectionPolicy as Polic
 use super::check::EffectCheck;
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = bpf_recovery]
 fn unix_stream_is_observed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("unix-observe")?;
