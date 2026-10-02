@@ -49,20 +49,28 @@ Reader is slow, cancelled or disconnected
 
 ## Changes in implementation order
 
-1. Put the shared evidence protobuf messages and bounded record decoder in
+1. Correct reader/rotation locking before adding QueryOwner. In
+   `analysis/raw.rs`, keep the writer coordinator but release the raw-directory
+   mutex before waiting for exclusive maintenance protection. Reacquire the
+   mutex after obtaining protection, then rotate and commit. In
+   `analysis/extraction.rs`, use `AnalysisReadControl::lock` for directory
+   access in `selected_ranges` and `check_selected_source`. Preserve snapshot
+   and durable ACK rules. Pass the deterministic regression case below before
+   proceeding. Follow the [locking contract](engine-design.md#reader-and-rotation-locking).
+2. Put the shared evidence protobuf messages and bounded record decoder in
    `araphor-data`. Generate each shared message once. Control's service code
    imports/re-exports those types; it keeps source authentication and policy
    validation. Keep the wire package, field numbers and segment format.
    Do not create a second observation model or a DuckDB row archive. Decode
    only selected records into temporary pages. Discovery reuses this decoder
    in 7.4. Follow the [representation contract](engine-design.md#portable-records-and-query-input).
-2. Add a position-based read to AnalysisStore through its existing segment
+3. Add a position-based read to AnalysisStore through its existing segment
    owner. Query reads include durable pending ranges above the contiguous ACK.
    Keep source cursor, store position and kernel sequence distinct. Preserve
    contiguous source reads for ordered processors. Capture source membership,
    coverage and metadata in the same snapshot. A coverage correction changes
    coverage, not an immutable event row or its store position.
-3. Add `QueryOwner` under `crates/araphor-data/src/query/`. Accept only
+4. Add `QueryOwner` under `crates/araphor-data/src/query/`. Accept only
    code-owned read plans with fixed SQL templates and checked parameters.
    Templates specify relations, columns, source selection, time bounds and
    append/replace behavior. No network request, client attachment, stored
@@ -74,13 +82,13 @@ Reader is slow, cancelled or disconnected
    with the existing DuckDB `VTab` trait. Register query-owned input and expose
    SQL views over it; do not insert raw records into DuckDB tables. Reuse the
    same adapter in the later isolated worker. No loadable plugin is required.
-4. Implement typed rows and internal frames for `catalog`, `events`, `coverage`
+5. Implement typed rows and internal frames for `catalog`, `events`, `coverage`
    and `context_versions`. Document units, nulls, exact join keys and proof
    limits. `received_at` is Control intake time; source boot-relative time is
    separate. Metadata/results use their existing owner reads. Add later views
    only when their owners exist; unavailable capability is not an empty table.
    Register shared evidence and trace schemas without a second query owner.
-5. For append, select positions after the last scanned position and through
+6. For append, select positions after the last scanned position and through
    one captured end. Page the initial retained range and later commits without
    repeatedly extracting full history. Advance checkpoints across nonmatching
    records; a full frame stops before its next unreturned match. For replace,
@@ -89,7 +97,7 @@ Reader is slow, cancelled or disconnected
    overflow; never calculate a partial aggregate.
    Register watch before snapshot capture. Use one evaluation and one dirty
    flag per stream; recheck dependency revisions before waiting.
-6. Bind checkpoints to store UUID/epoch, plan/schema version, parameters and
+7. Bind checkpoints to store UUID/epoch, plan/schema version, parameters and
    exact scope. Retention commits a per-tenant replay floor with deletion
    intent before unlink. The floor is the greatest deleted raw store position.
    Reject older append checkpoints conservatively, even if their filter could
@@ -97,14 +105,18 @@ Reader is slow, cancelled or disconnected
    a particular matching row was lost. The floor survives restart and backup.
    Retained witnesses below it remain queryable. Replacement resume evaluates
    current state. Neither cursor type pins history.
-7. Implement the existing moving intake-time window as a trusted template.
-   Bind one evaluation instant to selection and SQL. Use a controllable clock
-   and an expiry timer; quiet streams still lose expired rows. Report clock
-   changes. Additional window semantics require user review before they enter
-   this plan.
+8. Implement moving intake-time windows and fixed buckets as trusted
+   templates under the [window contract](engine-design.md#intake-time-windows).
+   Bind one evaluation instant to moving selection and SQL. Use a controllable
+   clock and an expiry timer; quiet streams still lose expired rows. Report
+   clock changes. Fixed buckets use DuckDB `time_bucket`, UTC, an explicit
+   origin and separate input bounds. Both return complete replacements.
+   Preserve late evidence and label intake time separately from source time.
+   Defer overlapping windows, sessions and event-time finality. Do not add
+   persistent per-query state or a second raw representation.
    Templates for exact match, counts, revision difference and qualified
    within-subject sequence retain their limitations; interpretation is 7.6.
-8. Add validated `QueryLimits` in the data crate. The host supplies the same
+9. Add validated `QueryLimits` in the data crate. The host supplies the same
    settings in embedded and remote mode. Use verification.md defaults for
    scan/input/output bytes, deadlines, evaluation concurrency and stream count.
    Reserve concurrent input and output capacity before extraction. Close all
@@ -114,6 +126,15 @@ Reader is slow, cancelled or disconnected
    Observability 3 adds and qualifies the worker OS limits and public grants.
 
 ## Unit tests and end-to-end proof
+
+First add a component regression case for extraction and rotation. Use
+barriers, not sleep-based scheduling. Pause a reader after it acquires segment
+protection and releases the writer coordinator. Start a write that requires
+rotation. Use a writer barrier immediately before its exclusive-protection
+request, then let the reader request directory access. Require both to
+finish, preserve the first read's snapshot and include the new commit in a
+later read. Check cancellation/deadline handling at directory-lock waits.
+This is a correctness check, not a performance benchmark.
 
 Unit tests `query_input_`, `query_scope_`, `query_follow_` must cover decoding,
 exact source selection, cross-tenant keys, snapshot consistency, input/output
@@ -143,8 +164,16 @@ For `SELECT operation, COUNT(*) ... GROUP BY operation`, verify each replace
 equals a normal query at the same revision, never the sum of prior snapshots.
 Use a tenant history larger than the extraction budget with a small matching
 trusted time window. Require a correct count and bounded extraction, then add a
-matching batch and require a complete replacement. Expire a moving-window row
-with no new traffic. Prove reader cancellation leaves intake and policy work
+matching batch and require a complete replacement. For records at 10:01,
+10:04 and 10:07, require moving five-minute counts of 2 at 10:08 and 1 at
+10:10 without new traffic. Require fixed five-minute bucket counts of 2 at
+10:00 and 1 at 10:05 for the 10:00–10:10 input range. Add a record at exactly
+10:05 and require it only in the second bucket. Compare each replacement
+with a normal query at the same revision and evaluation time. Test configured
+input/output overflow, clock changes and explicit retention gaps. A delayed
+source record uses its intake bucket without losing its source timestamp.
+Reuse these fixtures in component tests and the production-owner e2e case.
+Prove reader cancellation leaves intake and policy work
 active. Fail an evaluation and prove subsequent reads and intake still work.
 Test a pin/delete race and concurrent segment rotation during snapshot capture.
 Require counts to match a full authorized scan at that same revision. Confirm

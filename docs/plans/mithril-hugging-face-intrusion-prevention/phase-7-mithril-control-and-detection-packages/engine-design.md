@@ -772,6 +772,37 @@ Use the existing authenticated NodeEvidence.ReportFloor contract to commit
 exact recovery gaps. It is not an evidence ACK and cannot advance receipts
 or processor progress. Report Partial recovery; do not invent missing records.
 
+### Reader and rotation locking
+
+AnalysisStore keeps the existing writer coordinator, segment-protection
+guard (`maintenance`) and raw-directory mutex (`raw`). The protection guard
+keeps selected files stable during reads; rotation can rename an active file.
+No writer may hold the raw-directory mutex while waiting for exclusive
+segment protection.
+
+When `commit_evidence` requires rotation:
+
+1. Keep the writer coordinator so another writer cannot change the planned write.
+2. Release the raw-directory mutex before waiting for exclusive protection.
+3. Acquire exclusive protection after existing readers finish.
+4. Reacquire the raw-directory mutex, then rotate and commit.
+
+Readers can thus finish directory lookups and release protection while
+rotation waits. Keep the coordinator until the write finishes. Preserve the
+segment format, snapshot boundary and durable ACK rules. Do not remove file
+protection or hold the writer coordinator throughout a query scan.
+
+In `extraction.rs`, use the existing `AnalysisReadControl::lock` for directory
+access in `selected_ranges` and `check_selected_source`. Those waits must
+observe cancellation and the read deadline. A DuckDB interrupt does not
+interrupt a blocking Rust mutex acquisition.
+
+Implement this correction first in 7.3, before building QueryOwner on the
+reader. Its required regression case uses barriers: pause extraction after
+it obtains protection and releases the coordinator; start a write that needs
+rotation; then resume the reader. Both operations must finish. The first read
+keeps its original snapshot, and a later read includes the new commit.
+
 ### Read snapshot and selection
 
 Capture source membership, coverage, the metadata snapshot, store revision,
@@ -995,6 +1026,9 @@ time expression a supported subscription. Normal fixed-range queries can use
 the complete-input fallback above.
 No traffic is needed for an old row to leave a window.
 
+The [window contract](#intake-time-windows) adds fixed buckets over this same
+bounded evaluator. Both window forms use complete replacement results.
+
 Each frame has schema version, operation, store epoch, read revision, frame ID,
 coverage and bounded payload. Append checkpoints carry the last scanned
 position, including nonmatching rows. A full frame stops before the next
@@ -1041,6 +1075,85 @@ not put an untrusted SQL expression or a secret in a frame ID.
 | Health | Current relation revisions, owner readiness and lag. It has no result rows and does not mark missing evidence complete. |
 | Error | Typed code, bounded safe reason and last complete checkpoint if available. Close the stream after this frame. |
 | Terminal | Terminal reason and last complete checkpoint if available. A trace terminal also contains its execution and cleanup result; transport closure alone has neither meaning. |
+
+### Intake-time windows
+
+Implement moving intake-time windows and fixed intake-time buckets in 7.3.
+Use trusted templates there. Observability 3 admits their SQL forms through
+the public query boundary. Both deployments use the same QueryOwner and
+DuckDB adapter. No new window flag, service or subscription database is needed.
+
+A moving window answers a current question, such as the number of records
+received during the last five minutes:
+
+```sql
+SELECT COUNT(*) AS event_count
+FROM events
+WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '300 seconds';
+```
+
+For records received at 10:01, 10:04 and 10:07, this query returns 2 at 10:08
+and 1 at 10:10. Freeze one evaluation instant for extraction and SQL. Evaluate
+on relevant commits and row-expiry timers, including when no traffic arrives.
+Send a complete replacement, then release input before waiting. The client
+replaces 2 with 1; it does not add the counts. Use the existing one-second
+expiry resolution and report clock changes.
+
+Fixed buckets answer a history question, such as the number of records in
+each five-minute interval. Use DuckDB's existing
+[`time_bucket`](https://duckdb.org/docs/current/sql/functions/timestamp)
+with UTC and an explicit origin:
+
+```sql
+SELECT time_bucket(INTERVAL '5 minutes', received_at,
+                   TIMESTAMP '1970-01-01 00:00:00') AS window_start,
+       COUNT(*) AS event_count
+FROM events
+WHERE received_at >= $1 AND received_at < $2
+GROUP BY window_start
+ORDER BY window_start;
+```
+
+For a 10:00–10:10 input range, the same records give 2 in the 10:00 bucket
+and 1 in the 10:05 bucket. Bucket starts are inclusive and ends are exclusive;
+a record at 10:05 belongs only to the second bucket. Validate a positive
+fixed-duration width. The WHERE predicate bounds extraction; the bucket
+expression only groups the selected input. Apply the same scan, input and
+output limits. Do not truncate input or send a partial bucket result.
+Do not add empty buckets unless a later approved query requires them.
+
+For fixed bounds, follow replaces the complete bucket result when a relevant
+commit or retention change affects it. The passage of a bucket boundary alone
+does not change that fixed-input query. This differs from moving-window expiry.
+Keep coverage and retention gaps visible; exact counts of retained records
+do not prove complete capture or physical-action counts.
+
+Keep intake time separate from source event time. An action at 10:04 that
+arrives after an outage at 10:20 belongs to the 10:20 intake-time bucket.
+Preserve its source timestamp and clock domain separately. Do not relabel
+intake time as action time. Do not discard accepted evidence because it
+arrived after a window grace period, or claim complete event-time results
+because a clock interval ended. Event-time finality requires qualified
+timestamps, clock relationships, source progress and coverage.
+
+[ksqlDB](https://docs.confluent.io/platform/current/ksqldb/concepts/time-and-windows-in-ksqldb-queries.html)
+distinguishes overlapping windows, sessions, grace and final output. These
+distinctions do not require a Kafka dependency. Defer overlapping windows and
+sessions until a reviewed detection method needs their separate behavior:
+
+- Five-minute windows starting every minute can contain the same record
+  more than once. Do not sum their counts as independent events. A moving
+  five-minute count already serves a current burst-count query.
+- With a 40-second inactivity gap, records at 10:01:00 and 10:02:00 form two
+  sessions. A late record at 10:01:30 can merge them. A session method needs
+  an exact grouping identity, such as a process lifetime, and correction rules.
+
+Recompute complete bounded input for these initial window queries. This can
+repeat extraction work; it is not an incremental-throughput claim. No
+persistent per-query aggregates, second raw archive or general streaming SQL
+engine is part of this work. If a required workload cannot meet its budget,
+report that workload and obtain approval before adding maintained state.
+New performance measurements require separate user approval.
 
 ### Query isolation
 
