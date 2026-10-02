@@ -25,12 +25,12 @@ spec:
         - name: work
           mountPath: /work
         - name: work
-          mountPath: /home/secret
-          subPath: path-tree
-          readOnly: true
-        - name: work
           mountPath: /home/kubelet-attack
           subPath: path-tree/models
+          readOnly: true
+        - name: work
+          mountPath: /home/secret
+          subPath: path-tree
           readOnly: true
         - name: work
           mountPath: /home/kubelet-attack-newer

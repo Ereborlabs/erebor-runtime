@@ -6047,7 +6047,12 @@ setup, production actions, assertions, and focused test.
       through stock runc and the production OCI hook. All 2,053 reads,
       captured fields, window changes, health counters, and normal cleanup
       checks passed. Only platform registration changed.
-    - [ ] Pass and commit Kubernetes.
+    - [x] Pass Kubernetes. The same 98-line capture body and the existing
+      actual subPath test passed together: two tests in 120.90 seconds.
+      The Pod fixture now keeps the original older-alias, source, newer-alias
+      mount order. Both denials and normal namespace cleanup passed. Control,
+      Node, BPF, Platform code, and readiness limits did not change for these
+      two cases. The existing local VM harness checks passed.
     - [ ] Remove only the old five-denial count and its string matchers after
       all three pass. Keep the separate full-interval overlap capture and
       obsolete-row collection checks. This test does not replace those checks.
