@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 mod analysis;
 mod error;
 mod evidence;
+mod query;
 
 pub(crate) use error::*;
 pub use error::{Error, Result};
@@ -12,6 +13,12 @@ pub use evidence::{
     CoverageCounters, CoverageInterval, CoverageReport, EvidenceDecisionContext,
     EvidenceExactFileObject, EvidenceRecord, EvidenceRecords, EvidenceTemporalCoverage,
     MAX_EVIDENCE_RECORD_BYTES,
+};
+pub use query::{
+    QueryCheckpoint, QueryClock, QueryColumn, QueryCoverage, QueryCoverageRows, QueryCoverageState,
+    QueryErrorCode, QueryFrame, QueryLimits, QueryMetadata, QueryOperation, QueryOwner,
+    QueryPayload, QueryPlan, QueryResult, QueryStream, QueryTemplate, QueryTerminalReason,
+    SystemQueryClock, QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
 };
 
 pub use analysis::{

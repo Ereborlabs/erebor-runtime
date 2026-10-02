@@ -28,6 +28,133 @@ declarative captures are not delivered by these changes.
 
 ## Linked implementation flows
 
+### Trusted query and follow review
+
+This section covers the new data-crate query owner. The intended result is the
+[trusted query flow](phase-7-3-query-and-follow.md#implementation-flow).
+Public SQL, client grants, authenticated cursors, and isolated worker processes
+are not part of this implementation. No new BPF program or kernel attachment
+is part of this change.
+
+[QueryPlan::new](../../../../crates/araphor-data/src/query/plan.rs) Trusted code supplies a reviewed read plan, typed parameters and exact tenant/source scope.<br>
+-> [QueryOwner::new](../../../../crates/araphor-data/src/query/mod.rs) QueryOwner validates the plan and its configured limits.<br>
+-> [AnalysisStore::extract_rows](../../../../crates/araphor-data/src/analysis/extraction.rs) AnalysisStore captures source membership, metadata revision and committed segment ends.<br>
+-> [EvidenceRecord::try_from](../../../../crates/araphor-data/src/evidence.rs) The shared decoder reads bounded segment records into temporary typed pages.<br>
+-> [InputScan](../../../../crates/araphor-data/src/query/adapter.rs) The built-in DuckDB table function exposes those pages as logical relations.<br>
+-> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) QueryOwner evaluates its fixed SQL template against these pages in memory.<br>
+-> [QueryCheckpoint::from_result](../../../../crates/araphor-data/src/query/frame.rs) The owner returns rows, coverage, read revision and a checked internal checkpoint.
+
+[AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) A batch arrives before an earlier source range.<br>
+-> [AnalysisStore::position_rows](../../../../crates/araphor-data/src/analysis/extraction.rs) Segment sync makes its rows visible at their original store positions.<br>
+-> [AnalysisSourceSnapshotV1](../../../../crates/araphor-data/src/analysis/extraction.rs) Coverage reports the missing source range.<br>
+-> [RawJournal::refresh_receipts](../../../../crates/araphor-data/src/analysis/raw.rs) Contiguous ACK and ordered processor progress do not cross that range.<br>
+-> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) Arrival of the missing range adds its rows and updates coverage.
+
+[QueryOwner::follow_clock](../../../../crates/araphor-data/src/query/follow.rs) Follow is requested.<br>
+-> [QueryOwner::follow_clock](../../../../crates/araphor-data/src/query/follow.rs) QueryOwner registers dependency notifications before the initial snapshot.<br>
+-> [QueryFollow::run_loop](../../../../crates/araphor-data/src/query/follow.rs) The owner sends metadata, initial result and a checkpoint on one stream.<br>
+-> [AnalysisStore::dependency_revision](../../../../crates/araphor-data/src/analysis/dependencies.rs) Relevant commits mark one evaluation dirty.<br>
+-> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) Append reads new committed positions; replace evaluates a complete snapshot.<br>
+-> [QueryFollow::run_loop](../../../../crates/araphor-data/src/query/follow.rs) Supported time-window expiry also triggers replacement without new input.<br>
+-> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) The owner closes all database readers and evaluations before waiting.
+
+[QueryStream::cancel](../../../../crates/araphor-data/src/query/follow.rs) A reader is slow, cancelled or disconnected.<br>
+-> [QueryFollow::send](../../../../crates/araphor-data/src/query/follow.rs) The owner stops this bounded read; source intake continues.<br>
+-> [QueryCheckpoint::validate](../../../../crates/araphor-data/src/query/frame.rs) Retry checks the scope, epoch and last complete checkpoint.<br>
+-> [AnalysisStore::position_rows](../../../../crates/araphor-data/src/analysis/extraction.rs) A checkpoint below the tenant replay floor returns CursorExpired.<br>
+-> [QueryFollow::run](../../../../crates/araphor-data/src/query/follow.rs) No retry silently starts at a newer position.
+
+#### Owners and lifetime
+
+```mermaid
+sequenceDiagram
+    participant H as Trusted host
+    participant Q as QueryOwner
+    participant S as AnalysisStore
+    participant D as Temporary DuckDB
+    H->>Q: Fixed plan and exact scope
+    Q->>S: Capture and extract bounded input
+    S-->>Q: Owned rows; storage leases closed
+    Q->>D: Register input and evaluate fixed SQL
+    D-->>Q: Bounded rows or error
+    Q->>D: Drop connection and input
+    Q-->>H: Result or stream frame
+```
+
+The host creates QueryOwner with an `Arc<AnalysisStore>` and validated limits.
+The owner accepts QueryPlan, not a SQL string. QueryPlan selects a code-owned
+template and typed parameters. The fixed template determines append or replace
+behavior. Empty source selection does not mean all sources.
+
+AnalysisStore owns durable raw segments and metadata. Its writer coordinator
+fixes the read revision before extraction. The reader holds segment protection
+while it decodes selected frames. Rotation releases the raw-directory mutex
+before it waits for exclusive protection. Cancellation and deadlines also
+apply to directory-lock waits.
+
+InputRelations owns temporary typed rows. InputTable registers an `Arc` with
+one temporary DuckDB connection through the VTab trait. Each scan has its own
+row offset. The connection exposes temporary views, not stored event tables.
+No process-wide input registry exists. QueryOwner drops the connection and
+input before it returns rows or waits for an output slot. Native external
+access, automatic extension loading, and temporary files are disabled.
+These settings are not an operating-system memory or security boundary.
+
+QueryFollow owns one task, one active evaluation, one dirty flag, and a
+one-frame output queue. A store watch is registered before the task starts.
+The task checks exact dependency revisions before it waits. It closes the
+storage snapshot before native SQL execution. A stalled output cannot retain
+a segment lease. QueryStream cancellation interrupts native work and wakes
+the task. Dropping QueryStream also cancels the task.
+
+QueryBudget reserves evaluation, stream, input, and output capacity. QueryResult
+owns its returned rows and an output reservation. QueryCoverageRows owns one
+shared source summary and its reservation. Metadata, data, checkpoints, and
+health frames share that summary without copying it. Frame reservations charge
+their separate fields. Dropping the last owner releases each reservation.
+
+#### Evidence, time, and resume rules
+
+The shared protobuf definitions are generated in `araphor-data`. Control
+re-exports the same Rust types. Control still authenticates intake and checks
+semantic validity. The shared decoder checks frame length, CRC32C, and bounded
+protobuf decoding. This move changes no wire field number or segment format.
+
+Source cursor, kernel sequence, and store position are separate fields.
+Source cursor defines source delivery order. Store position defines commit
+order, including durable rows above a missing source range. Kernel sequence
+comes from the original decision context. A qualified subject sequence needs
+the same exact source/task partition, complete row coverage, and adjacent
+nonzero kernel sequences. This match does not prove source-wide health or
+the absence of another action.
+
+`received_utc_ns` keeps exact intake nanoseconds. `received_at` is a DuckDB
+timestamp with microsecond precision. SQL input bounds use the nanosecond
+field. Moving windows bind one evaluation instant and use one-second expiry
+resolution. Fixed buckets use native `time_bucket` with an explicit UTC
+origin. Late source evidence retains its source time but enters its intake
+bucket. Replacements contain complete snapshots; consumers must not add
+successive counts together.
+
+QueryCheckpoint binds the store UUID, recovery epoch, schema, plan, parameters,
+and exact scope. It is an internal resume value, not an authorization token.
+The tenant replay floor commits with deletion intent before segment removal.
+An append checkpoint below that floor fails. A replacement resume evaluates
+current state. Neither checkpoint pins history. Exact pinned witnesses can
+remain readable below the replay floor.
+
+#### Verification state
+
+This section describes the data-owner deliverable after `34a12a8a`. The 55
+focused data tests passed after the connection and memory-bound corrections.
+They cover typed input, native scans, input release, fixed templates, frame
+fields, checkpoints, shared output reservations, stream races, and retention
+with held query results. Two Control tests and two e2e tests also passed.
+Final end-to-end qualification remains **Not done**. The final workspace gate
+has not run.
+Use the [phase result](phase-7-3-query-and-follow.md#implementation-result)
+for the final source revision, commands, and verification limits.
+
 ### Storage owner review
 
 The accepted owner changes remove unused segment modes and duplicate limits.

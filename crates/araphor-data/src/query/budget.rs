@@ -1,0 +1,322 @@
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use super::QueryLimits;
+use crate::Result;
+
+#[derive(Default)]
+struct Usage {
+    evaluations: usize,
+    streams: usize,
+    output_bytes: usize,
+    tenants: BTreeMap<[u8; 16], (usize, usize)>,
+}
+
+pub(super) struct QueryBudget {
+    limits: QueryLimits,
+    usage: Mutex<Usage>,
+}
+
+#[derive(Clone, Copy)]
+enum LeaseKind {
+    Evaluation,
+    Stream,
+    Output,
+}
+
+pub(super) struct QueryLease {
+    budget: Arc<QueryBudget>,
+    tenant: [u8; 16],
+    kind: LeaseKind,
+    bytes: usize,
+}
+
+impl QueryBudget {
+    pub(super) fn new(limits: QueryLimits) -> Arc<Self> {
+        Arc::new(Self {
+            limits,
+            usage: Mutex::new(Usage::default()),
+        })
+    }
+
+    pub(super) fn evaluate(self: &Arc<Self>, tenant: [u8; 16]) -> Result<QueryLease> {
+        self.reserve(tenant, LeaseKind::Evaluation, self.limits.output_bytes)
+    }
+
+    pub(super) fn stream(self: &Arc<Self>, tenant: [u8; 16]) -> Result<QueryLease> {
+        self.reserve(tenant, LeaseKind::Stream, 0)
+    }
+
+    pub(super) fn output(self: &Arc<Self>, bytes: usize) -> Result<QueryLease> {
+        self.reserve([0; 16], LeaseKind::Output, bytes)
+    }
+
+    fn reserve(
+        self: &Arc<Self>,
+        tenant: [u8; 16],
+        kind: LeaseKind,
+        bytes: usize,
+    ) -> Result<QueryLease> {
+        let mut usage = self.usage.lock().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "query budget lock",
+            }
+            .build()
+        })?;
+        let output_bytes = usage
+            .output_bytes
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limits.output_capacity)
+            .ok_or_else(|| {
+                crate::AnalysisBusySnafu {
+                    resource: "query output capacity",
+                }
+                .build()
+            })?;
+        let (evaluations, streams) = usage.tenants.get(&tenant).copied().unwrap_or_default();
+        match kind {
+            LeaseKind::Evaluation => {
+                if usage.evaluations >= self.limits.global_evaluations
+                    || evaluations >= self.limits.tenant_evaluations
+                    || usage.evaluations >= self.limits.input_capacity / self.limits.input_bytes
+                {
+                    return crate::AnalysisBusySnafu {
+                        resource: "query evaluation capacity",
+                    }
+                    .fail();
+                }
+                usage.evaluations += 1;
+                usage.tenants.entry(tenant).or_default().0 += 1;
+            }
+            LeaseKind::Stream => {
+                if usage.streams >= self.limits.global_streams
+                    || streams >= self.limits.tenant_streams
+                {
+                    return crate::AnalysisBusySnafu {
+                        resource: "query stream capacity",
+                    }
+                    .fail();
+                }
+                usage.streams += 1;
+                usage.tenants.entry(tenant).or_default().1 += 1;
+            }
+            LeaseKind::Output => {}
+        }
+        usage.output_bytes = output_bytes;
+        Ok(QueryLease {
+            budget: self.clone(),
+            tenant,
+            kind,
+            bytes,
+        })
+    }
+}
+
+impl QueryLease {
+    /// Transfer bytes to a separate output guard. The total charge does not change.
+    pub(super) fn split(&mut self, bytes: usize) -> Result<Self> {
+        if matches!(self.kind, LeaseKind::Stream) || bytes > self.bytes {
+            return crate::QueryLimitSnafu {
+                resource: "query output bytes",
+                limit: self.bytes,
+            }
+            .fail();
+        }
+        self.bytes -= bytes;
+        Ok(Self {
+            budget: self.budget.clone(),
+            tenant: self.tenant,
+            kind: LeaseKind::Output,
+            bytes,
+        })
+    }
+
+    /// Release input and evaluation capacity. Keep output capacity until drop.
+    pub(super) fn output(mut self, bytes: usize) -> Result<Self> {
+        if matches!(self.kind, LeaseKind::Stream) || bytes > self.bytes {
+            return crate::QueryLimitSnafu {
+                resource: "query output bytes",
+                limit: self.bytes,
+            }
+            .fail();
+        }
+        let mut usage = self
+            .budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let LeaseKind::Evaluation = self.kind {
+            usage.evaluations -= 1;
+            if let Some(tenant) = usage.tenants.get_mut(&self.tenant) {
+                tenant.0 -= 1;
+                if *tenant == (0, 0) {
+                    usage.tenants.remove(&self.tenant);
+                }
+            }
+            self.kind = LeaseKind::Output;
+        }
+        usage.output_bytes -= self.bytes - bytes;
+        self.bytes = bytes;
+        drop(usage);
+        Ok(self)
+    }
+}
+
+impl Drop for QueryLease {
+    fn drop(&mut self) {
+        let mut usage = self
+            .budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match self.kind {
+            LeaseKind::Evaluation => {
+                usage.evaluations -= 1;
+            }
+            LeaseKind::Stream => usage.streams -= 1,
+            LeaseKind::Output => {}
+        }
+        usage.output_bytes -= self.bytes;
+        if let Some(tenant) = usage.tenants.get_mut(&self.tenant) {
+            match self.kind {
+                LeaseKind::Evaluation => tenant.0 -= 1,
+                LeaseKind::Stream => tenant.1 -= 1,
+                LeaseKind::Output => {}
+            }
+            if *tenant == (0, 0) {
+                usage.tenants.remove(&self.tenant);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for QueryLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("QueryLease")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_scope_capacity() -> Result<()> {
+        let limits = QueryLimits {
+            input_bytes: 10,
+            output_bytes: 10,
+            input_capacity: 20,
+            output_capacity: 20,
+            global_streams: 2,
+            tenant_streams: 1,
+            ..QueryLimits::default()
+        };
+        let budget = QueryBudget::new(limits);
+        let first = budget.evaluate([1; 16])?;
+        assert!(budget.evaluate([1; 16]).is_err());
+        let second = budget.evaluate([2; 16])?;
+        assert!(budget.evaluate([3; 16]).is_err());
+        let output = first.output(10)?;
+        assert!(budget.evaluate([1; 16]).is_err());
+        drop(output);
+        drop(budget.evaluate([1; 16])?);
+        drop(second);
+        let first = budget.stream([1; 16])?;
+        assert!(budget.stream([1; 16]).is_err());
+        let second = budget.stream([2; 16])?;
+        assert!(budget.stream([3; 16]).is_err());
+        drop(first);
+        drop(budget.stream([1; 16])?);
+        drop(second);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            (usage.evaluations, usage.streams, usage.output_bytes),
+            (0, 0, 0)
+        );
+        assert!(usage.tenants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn query_scope_output_split() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            output_bytes: 10,
+            input_capacity: 20,
+            output_capacity: 20,
+            ..Default::default()
+        });
+        let mut evaluation = budget.evaluate([1; 16])?;
+        let summary = Arc::new(evaluation.split(3)?);
+        assert!(evaluation.split(8).is_err());
+        let rows = evaluation.output(4)?;
+        let retained = summary.clone();
+        drop(summary);
+        let rest = budget.output(13)?;
+        assert!(budget.output(1).is_err());
+        drop(rows);
+        drop(budget.output(4)?);
+        drop(rest);
+        drop(retained);
+        {
+            let usage = budget
+                .usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!((usage.evaluations, usage.output_bytes), (0, 0));
+            assert!(usage.tenants.is_empty());
+        }
+
+        let mut evaluation = budget.evaluate([1; 16])?;
+        let summary = evaluation.split(3)?;
+        assert!(evaluation.output(8).is_err());
+        drop(budget.output(17)?);
+        assert!(budget.output(usize::MAX).is_err());
+        drop(summary);
+        let stream = budget.stream([1; 16])?;
+        assert!(stream.output(0).is_err());
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            (usage.evaluations, usage.streams, usage.output_bytes),
+            (0, 0, 0)
+        );
+        assert!(usage.tenants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn query_scope_idle_output() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            output_bytes: 100,
+            output_capacity: 1600,
+            ..Default::default()
+        });
+        let mut summaries = Vec::new();
+        for _ in 0..16 {
+            let mut evaluation = budget.evaluate([1; 16])?;
+            summaries.push(Arc::new(evaluation.split(1)?));
+            drop(evaluation.output(0)?);
+        }
+        drop(budget.evaluate([1; 16])?);
+        {
+            let usage = budget
+                .usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!((usage.evaluations, usage.output_bytes), (0, 16));
+        }
+        drop(summaries);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(usage.output_bytes, 0);
+        Ok(())
+    }
+}

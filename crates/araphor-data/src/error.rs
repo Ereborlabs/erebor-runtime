@@ -1,10 +1,43 @@
 use std::path::PathBuf;
 
+use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use snafu::{Location, Snafu};
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Query {field} is invalid"))]
+    QueryInvalid {
+        field: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Query relation {relation} is unavailable"))]
+    QueryUnsupported {
+        relation: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Query {resource} exceeds its limit of {limit}"))]
+    QueryLimit {
+        resource: &'static str,
+        limit: usize,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Query checkpoint cannot replay below the tenant retention floor"))]
+    QueryCursorExpired {
+        position: crate::StorePositionV1,
+        floor: crate::StorePositionV1,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Query metadata encoding failed: {source}"))]
+    QueryEncoding {
+        source: serde_json::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("{reason}"))]
     EvidenceFrame {
         reason: &'static str,
@@ -101,3 +134,45 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ErrorExt for Error {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::QueryInvalid { .. }
+            | Self::QueryLimit { .. }
+            | Self::AnalysisInputTooLarge { .. } => StatusCode::InvalidArguments,
+            Self::QueryUnsupported { .. } => StatusCode::Unsupported,
+            Self::QueryCursorExpired { .. } | Self::RetainedRangeExpired { .. } => {
+                StatusCode::NotFound
+            }
+            Self::AnalysisReadCancelled { .. } => StatusCode::Cancelled,
+            Self::AnalysisReadDeadline { .. } => StatusCode::DeadlineExceeded,
+            Self::StorageCapacity { .. }
+            | Self::AnalysisBusy { .. }
+            | Self::ProtectedInputCapacity { .. }
+            | Self::RetentionUnavailable { .. } => StatusCode::Unavailable,
+            Self::AnalysisConflict { .. } => StatusCode::AlreadyExists,
+            Self::EvidenceFrame { .. }
+            | Self::EvidenceDecode { .. }
+            | Self::AnalysisState { .. }
+            | Self::Json { .. } => StatusCode::IllegalState,
+            Self::AnalysisDatabase { .. } | Self::Io { .. } => StatusCode::External,
+            Self::QueryEncoding { .. } => StatusCode::Internal,
+        }
+    }
+
+    fn retry_hint(&self) -> RetryHint {
+        match self {
+            Self::AnalysisBusy { .. }
+            | Self::StorageCapacity { .. }
+            | Self::ProtectedInputCapacity { .. }
+            | Self::RetentionUnavailable { .. } => RetryHint::Retryable,
+            Self::Io { source, .. } => RetryHint::from_io_error(source),
+            _ => RetryHint::NonRetryable,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}

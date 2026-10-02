@@ -23,6 +23,7 @@ mod connection;
 mod context;
 #[cfg(test)]
 mod crash;
+mod dependencies;
 mod extraction;
 mod health;
 mod progress;
@@ -40,6 +41,7 @@ mod segments;
 pub use backup::{AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
+pub(crate) use extraction::AnalysisExtractLimits;
 pub use extraction::{
     AnalysisExtractionV1, AnalysisInputPageV1, AnalysisInputV1, AnalysisPositionPageV1,
     AnalysisRelationV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1,
@@ -1071,7 +1073,7 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in [0, 2, 3, 4, 5, 6, 7, 8, 10] {
+        for version in (0..=ANALYSIS_SCHEMA_VERSION + 1).filter(|version| *version != ANALYSIS_SCHEMA_VERSION) {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {

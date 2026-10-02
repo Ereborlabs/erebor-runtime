@@ -275,12 +275,45 @@ The integrated command below ran 38 data tests. The five
 multi-span positions, tenant isolation, crash recovery, restart, restore,
 quota validation, and a retained older witness. In total, 33 tests passed and
 5 query-evaluator tests failed at connection configuration. Those failures
-are not storage qualification failures; their correction remains in progress.
+are not storage qualification failures. The correction and later results
+are recorded below.
 The command used the six environment settings above:
 
 ```sh
 cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query_ -- --nocapture
 ```
 
-Next: complete QueryOwner, follow, windows, and `query-follow`. Overall status
-remains **Not done**. The final workspace gate has not run.
+QueryOwner, typed input, internal follow, and intake windows are **Done** at
+the focused component-test level. Raw events stay in segments. The temporary
+VTab adapter owns no durable rows or process-wide registry. Catalog and
+coverage SQL rows are generated only when the template needs those relations.
+All native query connections disable external access, extension loading, and
+temporary files. Temporary storage is configured before external access is
+disabled, as required by the pinned DuckDB version.
+
+Output frames share one charged coverage summary. Each frame reserves its
+own fields before construction. The owner checks exact input/output bounds,
+including row descriptors during transfer. A cancelled read that did not
+start a native snapshot keeps its reader. A failed native reader is replaced
+with a fresh connection to the same open database. Cancellation does not
+require full-store recovery. The regression checks deadline-before-BEGIN,
+failed BEGIN, failed rollback, and subsequent reads.
+
+The integrated `query_` command above then passed 55 data tests, 2 Control
+tests, and 2 e2e tests. One existing isolated-worker helper was ignored.
+The data tests include full-input template comparisons, exact timestamps,
+input/output N and N+1, shared output ownership, native cancellation,
+initial-snapshot races, nonmatching append progress, coalesced replacements,
+stalled output, reader release during backup/rotation, and pinned evidence
+during deletion. Weak input references prove release after stream evaluations.
+The e2e query-follow contract passed its six-case source version: pending
+ranges, counts, windows, bounded input, retention/restart/restore, and policy
+work after cancellation. Additional stream barriers remain under qualification.
+
+Decoder caller checks also passed: 17 Control evidence tests, 49 Node
+observation tests, 1 Node context-catalog test, and 1 e2e context-bound test.
+The first command compiled all four libraries. The Node and context filters
+ran their built test executables. No performance test ran.
+
+Next: finish the end-to-end barriers and final acceptance review, then run
+the complete workspace gate. Overall status remains **Not done**.

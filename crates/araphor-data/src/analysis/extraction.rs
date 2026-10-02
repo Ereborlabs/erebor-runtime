@@ -17,6 +17,25 @@ const MAX_EXTRACT_KEYS: usize = 1024;
 const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AnalysisExtractLimits {
+    pub scan_bytes: usize,
+    pub input_bytes: usize,
+    pub page_bytes: usize,
+    pub page_rows: usize,
+}
+
+impl Default for AnalysisExtractLimits {
+    fn default() -> Self {
+        Self {
+            scan_bytes: MAX_SCAN_BYTES,
+            input_bytes: MAX_INPUT_BYTES,
+            page_bytes: MAX_ANALYSIS_PAGE_BYTES,
+            page_rows: MAX_ANALYSIS_PAGE_RECORDS,
+        }
+    }
+}
+
 /// Trusted selection after authorization. An empty source list selects no events.
 #[derive(Clone, Debug)]
 pub struct AnalysisSelectionV1 {
@@ -40,7 +59,7 @@ impl AnalysisSelectionV1 {
         }
     }
 
-    fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         self.tenant_id != [0; 16]
             && self.sources.len() <= MAX_EXTRACT_KEYS
             && self.contexts.len() <= MAX_EXTRACT_KEYS - self.sources.len()
@@ -62,7 +81,7 @@ impl AnalysisSelectionV1 {
             && self.results.iter().collect::<BTreeSet<_>>().len() == self.results.len()
     }
 
-    pub(super) fn time_range(&self) -> Option<(u64, u64)> {
+    pub(crate) fn time_range(&self) -> Option<(u64, u64)> {
         let first = match self.received_from {
             Bound::Unbounded => 0,
             Bound::Included(value) => value,
@@ -100,9 +119,9 @@ pub enum AnalysisRelationV1 {
 }
 
 #[derive(Debug)]
-pub struct AnalysisInputPageV1 {
+pub struct AnalysisInputPageV1<T = Box<[u8]>> {
     pub relation: AnalysisRelationV1,
-    pub rows: Vec<Box<[u8]>>,
+    pub rows: Vec<T>,
     pub input_bytes: usize,
 }
 
@@ -117,21 +136,23 @@ pub struct AnalysisSourceSnapshotV1 {
 }
 
 #[derive(Debug)]
-pub struct AnalysisExtractionV1 {
+pub struct AnalysisExtractionV1<T = Box<[u8]>> {
     pub meta: AnalysisStoreMetaV1,
     pub sources: Vec<AnalysisSourceSnapshotV1>,
     pub missing_contexts: Vec<AnalysisContextKeyV1>,
     pub missing_results: Vec<String>,
-    pub pages: Vec<AnalysisInputPageV1>,
+    pub pages: Vec<AnalysisInputPageV1<T>>,
+    pub replay_floor: Option<StorePositionV1>,
     pub scanned_bytes: usize,
     pub projected_bytes: usize,
     /// Includes projected bytes, row descriptors, page headers, and coverage metadata.
     pub input_bytes: usize,
+    pub(crate) limits: AnalysisExtractLimits,
 }
 
 #[derive(Debug)]
-pub struct AnalysisPositionPageV1 {
-    pub extraction: AnalysisExtractionV1,
+pub struct AnalysisPositionPageV1<T = Box<[u8]>> {
+    pub extraction: AnalysisExtractionV1<T>,
     /// Includes scanned rows that did not pass the projection.
     pub scanned_through: StorePositionV1,
     pub exhausted: bool,
@@ -139,15 +160,53 @@ pub struct AnalysisPositionPageV1 {
 
 enum ExtractMode {
     Complete,
+    Metadata,
     Page(Option<StorePositionV1>),
 }
 
-impl AnalysisExtractionV1 {
+impl<T> AnalysisExtractionV1<T> {
+    fn grow<U>(values: &mut Vec<U>, used: usize, limit: usize) -> Result<usize> {
+        if values.len() < values.capacity() {
+            return Ok(0);
+        }
+        let error = || {
+            AnalysisInputTooLargeSnafu {
+                resource: "selected input bytes",
+            }
+            .build()
+        };
+        let width = size_of::<U>();
+        if width == 0 {
+            values.try_reserve_exact(1).map_err(|_| error())?;
+            return Ok(0);
+        }
+        let available = limit.checked_sub(used).ok_or_else(error)?;
+        let previous = values.capacity();
+        let capacity = previous
+            .saturating_mul(2)
+            .max(4)
+            .min(previous.saturating_add(available / width));
+        if capacity <= previous {
+            return Err(error());
+        }
+        let requested = (capacity - previous)
+            .checked_mul(width)
+            .filter(|bytes| *bytes <= available)
+            .ok_or_else(error)?;
+        values
+            .try_reserve_exact(requested / width)
+            .map_err(|_| error())?;
+        (values.capacity() - previous)
+            .checked_mul(width)
+            .filter(|bytes| *bytes <= available)
+            .ok_or_else(error)
+    }
+
     fn charge(&mut self, bytes: usize) -> Result<()> {
         self.input_bytes = self
             .input_bytes
             .checked_add(bytes)
-            .filter(|total| *total <= MAX_INPUT_BYTES)
+            .filter(|total| *total <= self.limits.input_bytes)
             .ok_or_else(|| {
                 AnalysisInputTooLargeSnafu {
                     resource: "selected input bytes",
@@ -161,7 +220,7 @@ impl AnalysisExtractionV1 {
         self.scanned_bytes = self
             .scanned_bytes
             .checked_add(bytes)
-            .filter(|total| *total <= MAX_SCAN_BYTES)
+            .filter(|total| *total <= self.limits.scan_bytes)
             .ok_or_else(|| {
                 AnalysisInputTooLargeSnafu {
                     resource: "scanned segment bytes",
@@ -171,11 +230,10 @@ impl AnalysisExtractionV1 {
         Ok(())
     }
 
-    fn push(&mut self, relation: AnalysisRelationV1, row: Vec<u8>) -> Result<()> {
-        let bytes = row
-            .len()
-            .checked_add(size_of::<Box<[u8]>>())
-            .filter(|bytes| *bytes <= MAX_ANALYSIS_PAGE_BYTES)
+    fn push(&mut self, relation: AnalysisRelationV1, (row, heap): (T, usize)) -> Result<()> {
+        let bytes = heap
+            .checked_add(size_of::<T>())
+            .filter(|bytes| *bytes <= self.limits.page_bytes)
             .ok_or_else(|| {
                 AnalysisInputTooLargeSnafu {
                     resource: "projected row bytes",
@@ -184,34 +242,36 @@ impl AnalysisExtractionV1 {
             })?;
         let new_page = self.pages.last().is_none_or(|page| {
             page.relation != relation
-                || page.rows.len() == MAX_ANALYSIS_PAGE_RECORDS
-                || page.input_bytes + bytes > MAX_ANALYSIS_PAGE_BYTES
+                || page.rows.len() == self.limits.page_rows
+                || page
+                    .input_bytes
+                    .checked_add(bytes)
+                    .is_none_or(|total| total > self.limits.page_bytes)
         });
-        self.charge(
-            bytes
-                + if new_page {
-                    size_of::<AnalysisInputPageV1>()
-                } else {
-                    0
-                },
-        )?;
-        self.projected_bytes += row.len();
+        self.charge(heap)?;
         if new_page {
+            let added = Self::grow(&mut self.pages, self.input_bytes, self.limits.input_bytes)?;
+            self.charge(added)?;
             self.pages.push(AnalysisInputPageV1 {
                 relation,
                 rows: Vec::new(),
                 input_bytes: 0,
             });
         }
-        let page = self.pages.last_mut().ok_or_else(|| {
+        let missing = || {
             crate::AnalysisStateSnafu {
                 path: std::path::Path::new("<extraction>"),
                 reason: "the charged input page is absent",
             }
             .build()
-        })?;
+        };
+        let page = self.pages.last_mut().ok_or_else(missing)?;
+        let added = Self::grow(&mut page.rows, self.input_bytes, self.limits.input_bytes)?;
+        self.charge(added)?;
+        self.projected_bytes += heap;
+        let page = self.pages.last_mut().ok_or_else(missing)?;
         page.input_bytes += bytes;
-        page.rows.push(row.into_boxed_slice());
+        page.rows.push(row);
         Ok(())
     }
 }
@@ -222,10 +282,23 @@ impl AnalysisStore {
         &self,
         selection: &AnalysisSelectionV1,
         control: &AnalysisReadControl,
-        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
+        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
     ) -> Result<AnalysisExtractionV1> {
-        self.extract_mode(selection, ExtractMode::Complete, control, project)
-            .map(|page| page.extraction)
+        self.extract_mode(
+            selection,
+            ExtractMode::Complete,
+            AnalysisExtractLimits::default(),
+            control,
+            |input| {
+                project(input).map(|row| {
+                    row.map(|row| {
+                        let bytes = row.len();
+                        (row.into_boxed_slice(), bytes)
+                    })
+                })
+            },
+        )
+        .map(|page| page.extraction)
     }
 
     /// Read a bounded page in durable commit order, including pending source ranges.
@@ -234,21 +307,79 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         after: Option<StorePositionV1>,
         control: &AnalysisReadControl,
-        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
+        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
     ) -> Result<AnalysisPositionPageV1> {
-        self.extract_mode(selection, ExtractMode::Page(after), control, project)
+        self.extract_mode(
+            selection,
+            ExtractMode::Page(after),
+            AnalysisExtractLimits::default(),
+            control,
+            |input| {
+                project(input).map(|row| {
+                    row.map(|row| {
+                        let bytes = row.len();
+                        (row.into_boxed_slice(), bytes)
+                    })
+                })
+            },
+        )
     }
 
-    fn extract_mode(
+    pub(crate) fn extract_rows<T>(
+        &self,
+        selection: &AnalysisSelectionV1,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+    ) -> Result<AnalysisPositionPageV1<T>> {
+        self.extract_mode(selection, ExtractMode::Complete, limits, control, project)
+    }
+
+    pub(crate) fn position_rows<T>(
+        &self,
+        selection: &AnalysisSelectionV1,
+        after: Option<StorePositionV1>,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+    ) -> Result<AnalysisPositionPageV1<T>> {
+        self.extract_mode(
+            selection,
+            ExtractMode::Page(after),
+            limits,
+            control,
+            project,
+        )
+    }
+
+    pub(crate) fn metadata_rows<T>(
+        &self,
+        selection: &AnalysisSelectionV1,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+    ) -> Result<AnalysisPositionPageV1<T>> {
+        self.extract_mode(selection, ExtractMode::Metadata, limits, control, project)
+    }
+
+    fn extract_mode<T>(
         &self,
         selection: &AnalysisSelectionV1,
         mode: ExtractMode,
+        limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
-    ) -> Result<AnalysisPositionPageV1> {
+        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+    ) -> Result<AnalysisPositionPageV1<T>> {
         control.check()?;
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
+        }
+        if limits.scan_bytes == 0
+            || limits.input_bytes == 0
+            || limits.page_bytes == 0
+            || limits.page_rows == 0
+        {
+            return self.reject("the extraction limits must be positive");
         }
         let coordinator = self.read_coordinator(control)?;
         let mut reader = self.reader_until(control)?;
@@ -259,7 +390,7 @@ impl AnalysisStore {
                 ordinal: u32::MAX,
             };
             let mut after = match mode {
-                ExtractMode::Complete => None,
+                ExtractMode::Complete | ExtractMode::Metadata => None,
                 ExtractMode::Page(after) => after,
             };
             if after.is_some_and(|position| position > end) {
@@ -275,14 +406,26 @@ impl AnalysisStore {
                 pages: Vec::new(),
                 scanned_bytes: 0,
                 projected_bytes: 0,
-                input_bytes: size_of::<AnalysisExtractionV1>(),
+                input_bytes: 0,
+                limits,
+                replay_floor: Self::replay_floor_from(snapshot, selection.tenant_id)?,
             };
+            output.charge(size_of::<AnalysisExtractionV1<T>>())?;
+            if let (ExtractMode::Page(Some(position)), Some(floor)) = (&mode, output.replay_floor) {
+                if *position < floor {
+                    return crate::QueryCursorExpiredSnafu {
+                        position: *position,
+                        floor,
+                    }
+                    .fail();
+                }
+            }
             for identity in &selection.sources {
                 control.check()?;
                 let key = source_key(identity);
                 let receipt = Self::read_receipt_from(snapshot, &self.root, identity, &key)?
                     .ok_or_else(|| self.state_error("the selected source is absent"))?;
-                output.charge(size_of::<AnalysisSourceSnapshotV1>() + identity.node_id.len())?;
+                output.charge(receipt.identity.node_id.capacity())?;
                 let expired = self.extract_gaps(snapshot, identity, false, control, &mut output)?;
                 let recovery = self.extract_gaps(snapshot, identity, true, control, &mut output)?;
                 self.check_selected_source(snapshot, &receipt, &expired, control)?;
@@ -291,9 +434,15 @@ impl AnalysisStore {
                     output.meta.commit_revision,
                     control,
                 )?;
-                output.charge(pending.len() * size_of::<AnalysisGapV1>())?;
+                output.charge(pending.capacity() * size_of::<AnalysisGapV1>())?;
                 let coverage_report = self.read_coverage_from(snapshot, &receipt)?;
-                output.charge(coverage_report.as_ref().map_or(0, Vec::len))?;
+                output.charge(coverage_report.as_ref().map_or(0, Vec::capacity))?;
+                let added = AnalysisExtractionV1::<T>::grow(
+                    &mut output.sources,
+                    output.input_bytes,
+                    output.limits.input_bytes,
+                )?;
+                output.charge(added)?;
                 output.sources.push(AnalysisSourceSnapshotV1 {
                     receipt,
                     expired,
@@ -307,9 +456,14 @@ impl AnalysisStore {
             let mut exhausted = false;
             'scan: loop {
                 control.check()?;
+                if matches!(mode, ExtractMode::Metadata) {
+                    after = Some(end);
+                    exhausted = true;
+                    break;
+                }
                 let limit = match mode {
-                    ExtractMode::Complete => usize::MAX,
-                    ExtractMode::Page(_) => MAX_ANALYSIS_PAGE_RECORDS - scanned,
+                    ExtractMode::Complete | ExtractMode::Metadata => usize::MAX,
+                    ExtractMode::Page(_) => limits.page_rows - scanned,
                 };
                 if limit == 0 {
                     exhausted = self
@@ -329,7 +483,7 @@ impl AnalysisStore {
                 };
                 if matches!(mode, ExtractMode::Page(_))
                     && output.scanned_bytes != 0
-                    && output.scanned_bytes.saturating_add(range.scan_bytes) > MAX_SCAN_BYTES
+                    && output.scanned_bytes.saturating_add(range.scan_bytes) > limits.scan_bytes
                 {
                     break;
                 }
@@ -342,9 +496,9 @@ impl AnalysisStore {
                         received_utc_ns: range.intake,
                         record: &record,
                     })? {
-                        let bytes = row.len().saturating_add(size_of::<Box<[u8]>>());
+                        let bytes = row.1.saturating_add(size_of::<T>());
                         if matches!(mode, ExtractMode::Page(_))
-                            && row_bytes.saturating_add(bytes) > MAX_ANALYSIS_PAGE_BYTES
+                            && row_bytes.saturating_add(bytes) > limits.page_bytes
                         {
                             if row_bytes == 0 {
                                 return AnalysisInputTooLargeSnafu {
@@ -370,13 +524,19 @@ impl AnalysisStore {
                         }
                     }
                     None => {
+                        let key = key.clone();
                         output.charge(
-                            size_of::<AnalysisContextKeyV1>()
-                                + key.owner_id.len()
-                                + key.entity_key.len()
-                                + key.lifetime_key.len(),
+                            key.owner_id.capacity()
+                                + key.entity_key.capacity()
+                                + key.lifetime_key.capacity(),
                         )?;
-                        output.missing_contexts.push(key.clone());
+                        let added = AnalysisExtractionV1::<T>::grow(
+                            &mut output.missing_contexts,
+                            output.input_bytes,
+                            output.limits.input_bytes,
+                        )?;
+                        output.charge(added)?;
+                        output.missing_contexts.push(key);
                     }
                 }
             }
@@ -392,8 +552,15 @@ impl AnalysisStore {
                         }
                     }
                     None => {
-                        output.charge(size_of::<String>() + id.len())?;
-                        output.missing_results.push(id.clone());
+                        let id = id.clone();
+                        output.charge(id.capacity())?;
+                        let added = AnalysisExtractionV1::<T>::grow(
+                            &mut output.missing_results,
+                            output.input_bytes,
+                            output.limits.input_bytes,
+                        )?;
+                        output.charge(added)?;
+                        output.missing_results.push(id);
                     }
                 }
             }
@@ -449,13 +616,13 @@ impl AnalysisStore {
         Ok(())
     }
 
-    fn extract_gaps(
+    fn extract_gaps<T>(
         &self,
         snapshot: &Connection,
         identity: &EvidenceIntakeIdentityV1,
         recovery: bool,
         control: &AnalysisReadControl,
-        output: &mut AnalysisExtractionV1,
+        output: &mut AnalysisExtractionV1<T>,
     ) -> Result<Vec<AnalysisGapV1>> {
         // Expired ranges have no time proof. A time filter cannot hide these gaps.
         let sql = if recovery {
@@ -488,7 +655,12 @@ impl AnalysisStore {
         let mut gaps = Vec::new();
         for row in rows {
             control.check()?;
-            output.charge(size_of::<AnalysisGapV1>())?;
+            let added = AnalysisExtractionV1::<T>::grow(
+                &mut gaps,
+                output.input_bytes,
+                output.limits.input_bytes,
+            )?;
+            output.charge(added)?;
             gaps.push(row.context(AnalysisDatabaseSnafu {
                 operation: "decode selected coverage gap",
             })?);
@@ -1315,6 +1487,7 @@ mod tests {
         let output = store.extract(&selection, &AnalysisReadControl::default(), |_| {
             Ok(Some(vec![2]))
         })?;
+        assert_eq!(output.input_bytes, owned_bytes(&output));
         assert_eq!(
             output.scanned_bytes,
             store
@@ -1351,6 +1524,119 @@ mod tests {
         assert!(store
             .extract(&selection, &AnalysisReadControl::default(), |_| Ok(None))
             .is_err());
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
+    }
+
+    fn owned_bytes(output: &AnalysisExtractionV1) -> usize {
+        size_of::<AnalysisExtractionV1>()
+            + output.pages.capacity() * size_of::<AnalysisInputPageV1>()
+            + output.sources.capacity() * size_of::<AnalysisSourceSnapshotV1>()
+            + output.missing_contexts.capacity() * size_of::<AnalysisContextKeyV1>()
+            + output.missing_results.capacity() * size_of::<String>()
+            + output
+                .pages
+                .iter()
+                .map(|page| {
+                    page.rows.capacity() * size_of::<Box<[u8]>>()
+                        + page.rows.iter().map(|row| row.len()).sum::<usize>()
+                })
+                .sum::<usize>()
+            + output
+                .sources
+                .iter()
+                .map(|source| {
+                    source.receipt.identity.node_id.capacity()
+                        + (source.expired.capacity()
+                            + source.recovery.capacity()
+                            + source.pending.capacity())
+                            * size_of::<AnalysisGapV1>()
+                        + source.coverage_report.as_ref().map_or(0, Vec::capacity)
+                })
+                .sum::<usize>()
+            + output
+                .missing_contexts
+                .iter()
+                .map(|key| {
+                    key.owner_id.capacity()
+                        + key.entity_key.capacity()
+                        + key.lifetime_key.capacity()
+                })
+                .sum::<usize>()
+            + output
+                .missing_results
+                .iter()
+                .map(String::capacity)
+                .sum::<usize>()
+    }
+
+    #[test]
+    fn query_input_allocation_bounds() -> TestResult {
+        use prost::Message as _;
+
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let identity = identity(1);
+        store.accept_validated_batch(identity.clone(), batch(11, 4, 10))?;
+        store.accept_validated_coverage(crate::ValidatedCoverageV1 {
+            identity: identity.clone(),
+            cpu_id: 0,
+            revision: 1,
+            encoded_report: crate::CoverageReport {
+                source_id: identity.source_id.to_vec(),
+                source_epoch: identity.source_epoch,
+                revision: 1,
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        })?;
+        store.record_recovery_floor(&identity, 5)?;
+        let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
+        for revision in 0..4 {
+            selection.contexts.push(AnalysisContextKeyV1 {
+                tenant_id: identity.tenant_id,
+                owner_id: "missing".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![2],
+                owner_revision: revision,
+            });
+            selection.results.push(format!("missing-{revision}"));
+        }
+        let output = store.extract(&selection, &AnalysisReadControl::default(), |_| {
+            Ok(Some(vec![1]))
+        })?;
+        let required = owned_bytes(&output);
+        assert_eq!(output.input_bytes, required);
+        assert_eq!(output.pages[0].rows.len(), 4);
+        assert_eq!(output.sources[0].pending.len(), 1);
+        assert_eq!(output.sources[0].recovery.len(), 1);
+        assert_eq!(output.missing_contexts.len(), 4);
+        assert_eq!(output.missing_results.len(), 4);
+        drop(output);
+        for limit in [required, required - 1] {
+            let result = store.extract_rows(
+                &selection,
+                AnalysisExtractLimits {
+                    input_bytes: limit,
+                    ..Default::default()
+                },
+                &AnalysisReadControl::default(),
+                |_| Ok(Some((vec![1].into_boxed_slice(), 1))),
+            );
+            if limit == required {
+                let output = result?.extraction;
+                assert_eq!(output.input_bytes, required);
+                assert_eq!(output.input_bytes, owned_bytes(&output));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(crate::Error::AnalysisInputTooLarge {
+                        resource: "selected input bytes",
+                        ..
+                    })
+                ));
+            }
+        }
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
@@ -1426,15 +1712,22 @@ mod tests {
         )?;
         output.push(
             AnalysisRelationV1::Events,
-            vec![0; MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>()],
+            (
+                vec![0; MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>()].into_boxed_slice(),
+                MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>(),
+            ),
         )?;
         assert_eq!(output.pages[0].input_bytes, MAX_ANALYSIS_PAGE_BYTES);
-        output.push(AnalysisRelationV1::Events, vec![])?;
+        output.push(AnalysisRelationV1::Events, (Box::default(), 0))?;
         assert_eq!(output.pages.len(), 2);
         assert!(matches!(
             output.push(
                 AnalysisRelationV1::Events,
-                vec![0; MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>() + 1]
+                (
+                    vec![0; MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>() + 1]
+                        .into_boxed_slice(),
+                    MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>() + 1,
+                )
             ),
             Err(crate::Error::AnalysisInputTooLarge {
                 resource: "projected row bytes",

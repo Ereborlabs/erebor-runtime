@@ -10,11 +10,11 @@ use snafu::ResultExt as _;
 use super::{source_key, AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
-/// One snapshot deadline and cancellation flag. The deadline is one second.
+/// One deadline for a read stage and shared cancellation. The default is one second.
 pub struct AnalysisReadControl {
     deadline: Instant,
-    cancelled: AtomicBool,
-    interrupt: Mutex<Option<Arc<duckdb::InterruptHandle>>>,
+    cancelled: Arc<AtomicBool>,
+    interrupt: Arc<Mutex<Option<Arc<duckdb::InterruptHandle>>>>,
     #[cfg(test)]
     pub(super) wait_signal: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
@@ -23,8 +23,8 @@ impl Default for AnalysisReadControl {
     fn default() -> Self {
         Self {
             deadline: Instant::now() + Duration::from_secs(1),
-            cancelled: AtomicBool::new(false),
-            interrupt: Mutex::new(None),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            interrupt: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             wait_signal: Mutex::new(None),
         }
@@ -32,6 +32,38 @@ impl Default for AnalysisReadControl {
 }
 
 impl AnalysisReadControl {
+    pub fn with_timeout(timeout: Duration) -> Result<Self> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .filter(|_| !timeout.is_zero())
+            .ok_or_else(|| {
+                crate::AnalysisStateSnafu {
+                    path: std::path::Path::new("<analysis-read>"),
+                    reason: "the read timeout is zero or exceeds the clock range",
+                }
+                .build()
+            })?;
+        Ok(Self {
+            deadline,
+            ..Default::default()
+        })
+    }
+
+    pub(crate) fn stage(&self, timeout: Duration) -> Result<Self> {
+        Ok(Self {
+            cancelled: Arc::clone(&self.cancelled),
+            interrupt: Arc::clone(&self.interrupt),
+            ..Self::with_timeout(timeout)?
+        })
+    }
+
+    pub(crate) fn within(&self, timeout: Duration) -> Result<Self> {
+        self.check()?;
+        let mut stage = self.stage(timeout)?;
+        stage.deadline = stage.deadline.min(self.deadline);
+        Ok(stage)
+    }
+
     pub fn cancel(&self) -> Result<()> {
         self.cancelled.store(true, Ordering::Release);
         if let Some(interrupt) = self
@@ -45,7 +77,7 @@ impl AnalysisReadControl {
         Ok(())
     }
 
-    pub(super) fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         if self.cancelled.load(Ordering::Acquire) {
             return crate::AnalysisReadCancelledSnafu.fail();
         }
@@ -95,8 +127,52 @@ impl AnalysisReadControl {
     ) -> Result<T> {
         self.check()?;
         let connection = reader.get_mut()?;
-        let interrupt = connection.interrupt_handle();
-        let mut slot = self.interrupt.lock().map_err(|_| Self::lock_error())?;
+        let mut snapshot = None;
+        let mut attempted = false;
+        let result = self.native_run(connection.interrupt_handle(), || {
+            attempted = true;
+            let transaction = connection.transaction().context(AnalysisDatabaseSnafu {
+                operation: "begin read snapshot",
+            })?;
+            read(snapshot.insert(transaction))
+        });
+        // Both interrupt sources stop before rollback. Replace a failed native reader.
+        let opened = snapshot.is_some();
+        let cleanup = snapshot
+            .map(duckdb::Transaction::rollback)
+            .transpose()
+            .context(AnalysisDatabaseSnafu {
+                operation: "close read snapshot",
+            });
+        if cleanup.is_err() || (attempted && !opened && result.is_err()) {
+            let replacement = reader.get()?.try_clone().context(AnalysisDatabaseSnafu {
+                operation: "replace failed read connection",
+            });
+            drop(reader.connection.take());
+            *reader.connection = Some(replacement?);
+        }
+        cleanup?;
+        self.check()?;
+        result
+    }
+
+    pub(crate) fn query_run<T>(
+        &self,
+        connection: &duckdb::Connection,
+        query: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let result = self.native_run(connection.interrupt_handle(), query);
+        self.check()?;
+        result
+    }
+
+    fn native_run<T>(
+        &self,
+        interrupt: Arc<duckdb::InterruptHandle>,
+        read: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        self.check()?;
+        let mut slot = self.lock(|| self.interrupt.try_lock())?;
         if slot.is_some() {
             return crate::AnalysisBusySnafu {
                 resource: "read control",
@@ -107,7 +183,6 @@ impl AnalysisReadControl {
         drop(slot);
         let guard = ReadInterrupt(self);
         self.check()?;
-        let mut snapshot = None;
         let result = std::thread::scope(|scope| {
             let (stop, stopped) = std::sync::mpsc::channel::<()>();
             let remaining = self.deadline.saturating_duration_since(Instant::now());
@@ -130,27 +205,11 @@ impl AnalysisReadControl {
                     }
                     .build()
                 })?;
-            let transaction = connection.transaction().context(AnalysisDatabaseSnafu {
-                operation: "begin read snapshot",
-            })?;
-            let result = read(snapshot.insert(transaction));
+            let result = read();
             drop(stop);
             result
         });
-        // Stop both interrupt sources before rollback. Never reuse a failed snapshot.
         drop(guard);
-        let opened = snapshot.is_some();
-        let cleanup = snapshot
-            .map(duckdb::Transaction::rollback)
-            .transpose()
-            .context(AnalysisDatabaseSnafu {
-                operation: "close read snapshot",
-            });
-        if cleanup.is_err() || (!opened && result.is_err()) {
-            drop(reader.connection.take());
-        }
-        cleanup?;
-        self.check()?;
         result
     }
 }
@@ -248,6 +307,143 @@ mod tests {
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
     #[test]
+    fn query_scope_reader_recovery() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let expected = store.meta()?;
+        let control = AnalysisReadControl::with_timeout(Duration::from_millis(50))?;
+        let (entered, entering) = std::sync::mpsc::channel();
+        *control.wait_signal.lock().map_err(|_| "signal poisoned")? = Some(entered);
+        let held = control.interrupt.lock().map_err(|_| "interrupt poisoned")?;
+        std::thread::scope(|scope| -> TestResult {
+            let waiting = scope.spawn(|| -> Result<()> {
+                let mut reader = store.reader()?;
+                let result = control.run(&mut reader, |_| Ok(()));
+                assert!(reader.connection.is_some());
+                result
+            });
+            entering.recv_timeout(Duration::from_secs(2))?;
+            assert!(matches!(
+                waiting.join().map_err(|_| "reader panicked")?,
+                Err(crate::Error::AnalysisReadDeadline { .. })
+            ));
+            Ok(())
+        })?;
+        drop(held);
+        assert_eq!(store.meta()?, expected);
+
+        for failure in ["begin", "rollback"] {
+            let mut reader = store.reader()?;
+            if failure == "begin" {
+                reader.get()?.execute_batch("BEGIN TRANSACTION")?;
+            }
+            let result = AnalysisReadControl::default().run(&mut reader, |snapshot| {
+                snapshot
+                    .execute_batch("ROLLBACK")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "force read rollback failure",
+                    })
+            });
+            assert!(result.is_err(), "{failure}");
+            AnalysisReadControl::default().run(&mut reader, |snapshot| {
+                assert_eq!(
+                    AnalysisStore::read_meta_from(snapshot, directory.path())?,
+                    expected
+                );
+                Ok(())
+            })?;
+        }
+        assert_eq!(store.meta()?, expected);
+        assert!(store.storage_health()?.write_ready);
+        Ok(())
+    }
+
+    #[test]
+    fn query_input_native_cancel() -> TestResult {
+        use std::sync::mpsc;
+
+        assert!(AnalysisReadControl::with_timeout(Duration::ZERO).is_err());
+        assert!(AnalysisReadControl::with_timeout(Duration::MAX).is_err());
+        assert!(AnalysisReadControl::with_timeout(Duration::from_nanos(1)).is_ok());
+        let config = duckdb::Config::default()
+            .enable_external_access(false)?
+            .enable_autoload_extension(false)?
+            .threads(1)?;
+        let connection = duckdb::Connection::open_in_memory_with_flags(config)?;
+        let mut control = AnalysisReadControl::with_timeout(Duration::from_secs(2))?;
+        control.deadline = Instant::now();
+        assert!(matches!(
+            control.check(),
+            Err(crate::Error::AnalysisReadDeadline { .. })
+        ));
+        assert!(control.within(Duration::from_secs(2)).is_err());
+        let outer = AnalysisReadControl::with_timeout(Duration::from_secs(60))?;
+        let bounded = outer.within(Duration::from_secs(1))?;
+        assert!(bounded.deadline < outer.deadline);
+        assert_eq!(
+            outer.within(Duration::from_secs(120))?.deadline,
+            outer.deadline
+        );
+        let evaluation = control.stage(Duration::from_secs(2))?;
+        evaluation.check()?;
+        let (start, started) = mpsc::channel();
+        let (stop, stopped) = mpsc::channel::<()>();
+        std::thread::scope(|scope| -> TestResult {
+            let control = &control;
+            let cancel = scope.spawn(move || -> TestResult {
+                started.recv_timeout(Duration::from_secs(2))?;
+                while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                    control.cancel()?;
+                    std::thread::yield_now();
+                }
+                Ok(())
+            });
+            let mut native_failed = false;
+            let result = evaluation.query_run(&connection, || {
+                let sibling = control.stage(Duration::from_secs(2))?;
+                let nested = sibling.query_run(&connection, || Ok(()));
+                assert!(matches!(nested, Err(crate::Error::AnalysisBusy { .. })));
+                let _sent = start.send(());
+                let result =
+                    connection.query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
+                        row.get::<_, i128>(0)
+                    });
+                native_failed = result.is_err();
+                result.context(AnalysisDatabaseSnafu {
+                    operation: "test direct native cancellation",
+                })
+            });
+            drop(stop);
+            cancel.join().map_err(|_| "cancel worker panicked")??;
+            assert!(native_failed);
+            assert!(
+                matches!(result, Err(crate::Error::AnalysisReadCancelled { .. })),
+                "{result:?}"
+            );
+            Ok(())
+        })?;
+        assert!(matches!(
+            evaluation.check(),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        assert!(control
+            .interrupt
+            .lock()
+            .map_err(|_| "interrupt poisoned")?
+            .is_none());
+        let fresh = AnalysisReadControl::with_timeout(Duration::from_secs(1))?;
+        let value = fresh.query_run(&connection, || {
+            connection
+                .query_row("SELECT 1", [], |row| row.get::<_, i64>(0))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "test native cancellation cleanup",
+                })
+        })?;
+        assert_eq!(value, 1);
+        Ok(())
+    }
+
+    #[test]
     fn analysis_metadata_read_deadlines() -> TestResult {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
@@ -335,10 +531,7 @@ mod tests {
             } else {
                 None
             };
-            let control = AnalysisReadControl {
-                deadline: Instant::now() + Duration::from_millis(50),
-                ..Default::default()
-            };
+            let control = AnalysisReadControl::with_timeout(Duration::from_millis(50))?;
             if held == 2 {
                 assert_eq!(
                     store
@@ -400,10 +593,7 @@ mod tests {
         let before = store.meta()?;
         let mut reader = store.reader()?;
         for _ in 0..16 {
-            let control = AnalysisReadControl {
-                deadline: Instant::now() + Duration::from_millis(50),
-                ..Default::default()
-            };
+            let control = AnalysisReadControl::with_timeout(Duration::from_millis(50))?;
             let started = Instant::now();
             let result = control.run(&mut reader, |snapshot| {
                 snapshot
@@ -499,11 +689,10 @@ mod tests {
                     })
             })
             .is_err());
-        assert!(reader.connection.is_none());
+        assert!(reader.connection.is_some());
         drop(reader);
         assert_eq!(store.read_slots.available_permits(), 16);
         assert!(store.maintenance.try_write().is_ok());
-        store.recover()?;
         assert_eq!(store.meta()?, before);
         store.checkpoint()?;
         Ok(())

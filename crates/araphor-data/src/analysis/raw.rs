@@ -497,6 +497,36 @@ pub(super) struct RawJournal {
 }
 
 impl RawJournal {
+    pub(super) fn selection_revision(
+        &self,
+        selection: &super::AnalysisSelectionV1,
+        revision: u64,
+        control: &super::AnalysisReadControl,
+    ) -> Result<u64> {
+        let Some((from, until)) = selection.time_range() else {
+            return Ok(0);
+        };
+        let mut latest = 0;
+        for identity in &selection.sources {
+            control.check()?;
+            let key = source_key(identity);
+            for (_, &(id, _)) in self.ranges.range((key, 0)..=(key, u64::MAX)) {
+                control.check()?;
+                if id > revision || id <= latest {
+                    continue;
+                }
+                let entry = &self.entries[&id];
+                if &entry.identity == identity
+                    && entry.commit.intake >= from
+                    && entry.commit.intake <= until
+                {
+                    latest = id;
+                }
+            }
+        }
+        Ok(latest)
+    }
+
     pub(super) fn select_position(
         &self,
         selection: &super::AnalysisSelectionV1,
