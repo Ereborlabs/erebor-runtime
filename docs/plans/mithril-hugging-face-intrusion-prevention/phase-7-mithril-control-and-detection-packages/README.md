@@ -161,6 +161,8 @@ Observability 1 is **Done** at source `8e752bdb`. Its
 records direct partial-attach and missing-hook proof, paired lightweight and
 physical runs, and full workspace checks. Observability 2 is **Not done**.
 Shared trace storage and the lightweight Node capture chain are implemented.
+Source `7dc26bd2` adds compiled physical capture harnesses and a passing
+before-append owner case. Physical execution remains open.
 Read its [current result](../../araphor-observability/phase-2-owned-capture.md#verified-implementation-slices)
 for source revisions, checks, and open physical gates. Production enablement
 still requires physical capture and approved interference proof.

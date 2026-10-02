@@ -272,26 +272,68 @@ Node 267 passed (2 ignored). The owned-capture chain and both corrected tenant
 checks passed in this run. Ignored physical cases are not qualified by this
 procedure. No performance or interference experiment ran.
 
-Remaining work is completion of the physical harnesses and lifecycle gates below.
+Source `7dc26bd2` adds the owned physical capture harnesses. The exact
+`observability::tests::observability_owned_upload` check passed in 17.33 seconds.
+Its receipt is `capture-harness-focused-3.log` in the same evidence directory.
+Use the documented Cargo environment and these arguments:
+
+```sh
+cargo test --locked -p araphor-data -p mithril-control -p mithril-node \
+  -p mithril-e2e --all-features --lib \
+  observability::tests::observability_owned_upload -- --exact --nocapture
+```
+
+The Node chain now has five cases. The new `BeforeAppend` case injects a
+storage error before the raw write. That hook leaves the writer ready. The
+case stops Control transport until local expiry, then reopens Control and data.
+Reopen has no output and a zero-progress terminal reservation: sequence, bytes
+and commit revision are zero; the terminal is absent. Replay stores one copy
+and does not start another child. The existing `AfterSync` case still checks
+an unready writer, no ACK, a recovered synced prefix and exact replay. Neither
+injected error is a physical full-disk result.
+
+Compilation includes the ignored Pod, restart and full-store entry points.
+`bash -n` passed for `owned.sh`, `pods.sh` and `disk-full.sh`. No owned physical
+case or performance experiment ran at this source.
+
+The workspace procedure above passed at source `7dc26bd2`, after the final
+code edit. Formatting, workspace checking, Clippy with warnings denied, and
+all selected workspace tests passed. The receipt is
+`capture-workspace-final-6.log` in the same evidence directory. Main library
+results were Data 166 passed (5 ignored), Interceptor 39 passed (1 ignored),
+Control 185 passed (2 ignored), e2e 133 passed (412 ignored), and Node 267
+passed (2 ignored). The three new physical entry points were ignored, not
+executed. This result does not qualify physical capture or interference.
+
+Remaining work is execution of the physical lifecycle gates below.
 Physical enablement requires a platform-matched interference receipt. The
 five-pair experiment still needs explicit approval and an allowed overhead
 limit. Keep the phase **Not done** and keep deployment diagnostics disabled.
 
-The current physical scripts do not close these capture gates:
+The physical harnesses require these checks. Their compiled source is not a
+physical pass:
 
-- `pods.sh` checks direct backend recipe filtering. It does not run the Node
-  owner through replacement of a real Pod. Use real Control inventory and the
-  existing Kubernetes fixture for the replacement case. Do not substitute
-  synthetic Pod identifiers or add a public trace API for the test.
-- `disk-full.sh` checks local ACK-file failure after a terminal already exists.
-  It does not make AnalysisStore full during capture. The shared store must
-  use the task-owned fault filesystem; the enforcement WAL must stay outside
-  that filesystem. Require a real failed append, no ACK, bounded local stop,
-  recovery and exact replay.
-- The existing physical partition case has a three-second backend limit and
-  an 18-second signed lease. It does not isolate the Node lease-expiry branch.
-  The paired case must make the Node lease expire first and check no ACK before
-  repair. Check a physical denial for each induced failure.
+- `pods.sh` runs the lightweight owner chain before the ignored Kubernetes
+  case. A finite Control child uses the existing Deployment, configuration,
+  inventory, authorization and controllers. Pod deletion uses the exact UID.
+  The replacement has the same name and new UID, CRI ID and cgroup lifetime.
+  The case checks `TargetChanged`, physical denials, unchanged original output,
+  and diagnostic resource cleanup. Task-owned read-only backend mounts use
+  exact runtime recovery entries. Native `ldd` checks reject incompatible
+  libraries. Mount and argument limits stay unchanged.
+- `disk-full.sh` runs the same lightweight case, then puts AnalysisStore on a
+  task-owned 1 GiB tmpfs. Node state and Control authority stay outside that
+  filesystem. The case delays real dispatch, attaches the reviewed backend,
+  and fills the filesystem immediately before the first diagnostic append.
+  The hook returns success. The native segment write must fail with ENOSPC
+  (no space left on device).
+  Require no ACK or committed progress, local lease expiry, bounded output,
+  physical denials, full owner reopen, and exact replay through current mTLS.
+- `owned.sh` uses a real 25-second dispatch hold and a 30-second backend limit
+  for partition. The case requires Node lease expiry before backend timeout,
+  no terminal ACK before repair, and exact local-output replay after repair.
+  Each induced failure has a physical denial check. Retirement checks a new
+  admitted lifetime; it does not wait for recovery state.
 - The Node-process restart harness requires a matching qualified configuration.
   Its before-attachment and after-attachment cases have not run on the current
   capture source. A prior backend result is not an owned-capture result.

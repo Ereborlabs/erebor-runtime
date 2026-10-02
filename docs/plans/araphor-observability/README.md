@@ -402,8 +402,9 @@ for direct partial-attach and missing-hook proof, paired lightweight and
 physical runs, and full workspace checks. Phase 2 is **Not done**. Shared trace
 storage and the lightweight Node capture chain are implemented. Read its
 [current result](phase-2-owned-capture.md#verified-implementation-slices) for
-source revisions and checks. Physical capture and interference gates remain
-open. Deployment diagnostics stay disabled.
+source revisions and checks. Source `7dc26bd2` adds compiled physical capture
+harnesses and a passing before-append owner case. Physical capture and
+interference gates remain open. Deployment diagnostics stay disabled.
 
 The initial recipe set is syscall errors and failed file opens. Connection
 outcomes and latency follow only with explicit asynchronous/entry-return

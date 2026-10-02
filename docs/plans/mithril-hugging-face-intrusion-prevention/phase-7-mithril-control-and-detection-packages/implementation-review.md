@@ -1868,6 +1868,21 @@ code edit. It includes the owned-capture chain and shared tenant-read checks.
 Read the linked result for the exact command, receipt and ignored-case counts.
 This result does not close the physical capture or interference gates.
 
+Source `7dc26bd2` adds the physical capture harnesses. The exact
+`observability_owned_upload` check passed with five Node cases. Its new
+before-append case checks no ACK, unchanged local output and expiry. Reopen
+has no output and a zero-progress terminal reservation. Exact replay stores
+one copy and does not execute again. The after-sync case retains its separate
+unready-writer and synced-prefix checks. The receipt is
+`capture-harness-focused-3.log` in the same evidence directory. Compilation
+and shell syntax passed. The owned physical and interference cases did not run.
+
+The final workspace procedure passed at source `7dc26bd2`, after the final
+code edit. Its receipt is `capture-workspace-final-6.log` in the same evidence
+directory. Formatting, workspace checking, Clippy with warnings denied, and
+all selected workspace tests passed. Read the linked result for the command
+and counts. Ignored physical entry points remain unqualified.
+
 [TraceIntentV1::validate](../../../../crates/araphor-data/src/analysis/trace.rs) checks exact tenant, request, source and execution bindings.<br>
 -> [AnalysisStore::accept_trace](../../../../crates/araphor-data/src/analysis/trace.rs) stores immutable source and intent with one metadata transaction.<br>
 -> [AnalysisStore::update_trace](../../../../crates/araphor-data/src/analysis/trace.rs) commits monotone cancellation and revocation with a revision check.<br>
@@ -1932,8 +1947,30 @@ is the physical Node-process restart case. It requires a qualified diagnostic
 configuration. It kills only Node, checks observed diagnostic resources before
 fixture cleanup, and reopens the same state. The terminal retains unknown
 cleanup even when an independent resource check passes. This case has not run
-for the current capture implementation. The Pod and full-store physical cases
-also remain open; their existing scripts do not prove owned capture.
+for the current capture implementation.
+
+[Kubernetes::qualify_pods](../../../../crates/mithril-e2e/src/platform/kubernetes.rs)
+uses the existing task-owned Kubernetes fixture. Its finite Control child
+retains the production listeners and controllers. Exact UID deletion precedes
+same-name replacement. The case checks frozen target changes, physical denials,
+unchanged old output and observed diagnostic resources. It preserves runtime
+recovery mount validation and rejects excess mounts or arguments. Native
+container `ldd` checks reject missing or incompatible backend dependencies.
+This physical case is compiled but has not run.
+
+[Host::qualify_storage](../../../../crates/mithril-e2e/src/platform/host.rs)
+puts AnalysisStore on a separate task-owned 1 GiB tmpfs. It holds transport at
+durable Node intent, then starts the real capture. The append hook fills that
+filesystem and returns success. The native raw write must fail with ENOSPC and
+no ACK. Reopen checks zero committed output before exact replay. The Node
+registration comes from the running owner; no manifest digest is invented.
+This physical case is compiled but has not run.
+
+[Host::qualify_diagnostic_failures](../../../../crates/mithril-e2e/src/platform/host.rs)
+holds dispatch for 25 real seconds. Its partition branch requires Node lease
+expiry before the 30-second backend limit. It checks no terminal ACK before
+repair, exact replay and physical denial. Retirement uses normal held admission
+for the new lifetime. This physical case is compiled but has not run.
 
 ## Owners and lifetime
 
@@ -2365,9 +2402,9 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | [service.rs tests](../../../../crates/mithril-control/src/service.rs), [contract.rs](../../../../crates/mithril-control/tests/contract.rs), [control_tls.rs](../../../../crates/mithril-e2e/src/control_tls.rs) | Authenticated dispatch/reconnect, current-session checks, durable output, and revocation. The mTLS test does not itself execute a kernel trace. |
 | [trace intent tests](../../../../crates/araphor-data/src/analysis/trace.rs), [raw tests](../../../../crates/araphor-data/src/analysis/raw.rs), [recipe.rs tests](../../../../crates/mithril-control/src/observability/recipe.rs) | Shared recovery preserves source, exact execution identity, frame order and terminal state. Unknown syscall values remain unknown. Spoofed measurement schemas are rejected. |
 | [observability.rs](../../../../crates/mithril-e2e/src/observability.rs), [test binary](../../../../crates/mithril-e2e/src/bin/mithril_observability_test.rs), [guest.sh](../../../../crates/mithril-e2e/harness/observability/guest.sh) | Automated physical backend cases on a disposable host; resource snapshots before and after each case. Not part of an ordinary unprivileged test run. |
-| [pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh), [pods.yaml](../../../../crates/mithril-e2e/fixtures/observability/pods.yaml), [k3s-syscall-map.json](../../../../crates/mithril-e2e/fixtures/observability/k3s-syscall-map.json) | Real target/foreign-Pod attribution for both recipes. This is backend attribution, not the complete Node-owned Pod replacement test. |
+| [pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh), [Kubernetes capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | Lightweight owner proof precedes same-name real Pod replacement through Control, Node and shared data. Checks actual UID, CRI and cgroup lifetimes, physical denial, frozen old output and diagnostic BPF cleanup. Compiled; physical execution is open. |
 | [Host qualification](../../../../crates/mithril-e2e/src/platform/host.rs), [owned.sh](../../../../crates/mithril-e2e/harness/observability/owned.sh), [process fixture](../../../../crates/mithril-e2e/fixtures/process/observability.py) | Full Node/Control capture, five paired interference runs, and failure cases with physical enforcement checks. |
-| [disk-full.sh](../../../../crates/mithril-e2e/harness/observability/disk-full.sh) | Physical bounded-filesystem proof that failed acknowledgement preserves output and a later retry succeeds. |
+| [disk-full.sh](../../../../crates/mithril-e2e/harness/observability/disk-full.sh) | Lightweight owner proof precedes native AnalysisStore ENOSPC during active capture on a separate 1 GiB tmpfs. Requires no ACK, local expiry, bounded output, physical denial, zero committed progress and exact current-session replay. Compiled; physical execution is open. |
 
 The source review recorded storage, crash, context and runtime proof.
 Its shared-host interference run
