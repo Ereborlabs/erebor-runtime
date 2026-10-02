@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,35 @@ impl QueryClock for GateClock {
             })?;
         }
         Ok(1_000_000_000_000 + self.origin.elapsed().as_nanos() as u64)
+    }
+}
+
+struct ExpiryClock {
+    now: AtomicU64,
+    reads: AtomicUsize,
+    second: Mutex<Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>>,
+}
+
+impl QueryClock for ExpiryClock {
+    fn now_ns(&self) -> Result<u64> {
+        let now = self.now.load(Ordering::SeqCst);
+        if self.reads.fetch_add(1, Ordering::SeqCst) == 1 {
+            if let Some((entered, released)) = self
+                .second
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+            {
+                let _entered = entered.send(());
+                released.recv_timeout(WAIT).map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "test expiry clock gate",
+                    }
+                    .build()
+                })?;
+            }
+        }
+        Ok(now)
     }
 }
 
@@ -262,6 +292,77 @@ async fn query_follow_coalesced_output() -> TestResult {
     assert_eq!(complete.position(), None);
     cancelled(&mut stream, Some(&complete)).await?;
     inputs_released(&owner);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_follow_autonomous_expiry() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    fixture.event(1, 2_000_000_000, 7)?;
+    let meta = fixture.store.meta()?;
+    let limits = QueryLimits {
+        heartbeat: Duration::from_secs(15),
+        ..Default::default()
+    };
+    assert!(WAIT < limits.heartbeat);
+    let owner = Arc::new(fixture.owner(limits)?);
+    let plan = fixture.plan(QueryTemplate::MovingCount { seconds: 1 })?;
+    let (entered, entering) = oneshot::channel();
+    let (release, released) = mpsc::channel();
+    let clock = Arc::new(ExpiryClock {
+        now: AtomicU64::new(3_000_000_000),
+        reads: AtomicUsize::new(0),
+        second: Mutex::new(Some((entered, released))),
+    });
+    assert!(clock.changes().is_none());
+    let deadline = tokio::time::Instant::now() + WAIT;
+    let mut stream = owner.follow_clock(plan, None, clock.clone())?;
+    let mut last = None;
+    let proof: TestResult<_> = match tokio::time::timeout_at(deadline, async {
+        let metadata = next(&mut stream).await?;
+        let initial = next(&mut stream).await?;
+        let first = checkpoint(&next(&mut stream).await?)?;
+        last = Some(first.clone());
+        entering.await?;
+        // The idle loop must keep its old sample after this silent advance.
+        clock.now.store(4_000_000_000, Ordering::SeqCst);
+        release.send(())?;
+        let expired = next(&mut stream).await?;
+        let complete = checkpoint(&next(&mut stream).await?)?;
+        last = Some(complete.clone());
+        Ok((metadata, initial, first, expired, complete))
+    })
+    .await
+    {
+        Ok(proof) => proof,
+        Err(error) => Err(error.into()),
+    };
+    let _released = release.send(());
+    let cleanup = cancelled(&mut stream, last.as_ref()).await;
+    let (metadata, initial, first, expired, complete) = proof?;
+    cleanup?;
+    assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
+    assert_eq!(metadata.operation, QueryOperation::Replace);
+    for (frame, count, now, expiry) in [
+        (&initial, 1, 3_000_000_000, Some(4_000_000_000)),
+        (&expired, 0, 4_000_000_000, None),
+    ] {
+        let QueryPayload::Replace { result, .. } = &frame.payload else {
+            return Err(format!("expected timer replacement, received {:?}", frame.payload).into());
+        };
+        assert_eq!(result.rows, vec![vec![Value::BigInt(count)]]);
+        assert_eq!(result.evaluated_utc_ns, now);
+        assert_eq!(result.next_expiry_ns, expiry);
+        assert_eq!(result.meta, meta);
+        assert_eq!(frame.read_revision, meta.commit_revision);
+        assert!(!frame.clock_changed);
+    }
+    assert_eq!(first, complete);
+    assert_eq!(complete.read_revision(), meta.commit_revision);
+    assert_eq!(complete.position(), None);
+    assert_eq!(fixture.store.meta()?, meta);
+    inputs_released(&owner);
+    assert_eq!(Arc::strong_count(&owner), 1);
     Ok(())
 }
 
