@@ -5,9 +5,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use erebor_interceptor::diagnostic::{DiagnosticBackend, DiagnosticMode, DiagnosticResult};
+use erebor_interceptor::diagnostic::{
+    DiagnosticBackend, DiagnosticFrame, DiagnosticMode, DiagnosticResult, DiagnosticStop,
+    PREPARATION_LIMIT,
+};
 use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
 use serde::{Deserialize, Serialize};
+
+mod lifecycle;
 
 type ProofResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -31,6 +36,7 @@ struct CaseResult {
     frames: Vec<erebor_interceptor::diagnostic::DiagnosticFrame>,
     observed_program_ids: BTreeSet<u64>,
     observed_map_ids: BTreeSet<u64>,
+    observed_link_ids: BTreeSet<u64>,
     map_memlock_bytes: BTreeMap<u64, Option<u64>>,
     kernel_runtime: BTreeMap<u32, KernelRunTime>,
     cleanup_verified: bool,
@@ -66,6 +72,10 @@ impl KernelRuntimeStats {
 }
 
 impl CaseResult {
+    fn attached(frame: &DiagnosticFrame) -> bool {
+        frame.stderr && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
+    }
+
     fn verify(&self) -> ProofResult<()> {
         let diagnostics: Vec<_> = self
             .frames
@@ -74,6 +84,62 @@ impl CaseResult {
             .flat_map(|frame| frame.bytes.iter().copied())
             .collect();
         let diagnostics = String::from_utf8_lossy(&diagnostics);
+        if matches!(
+            self.name,
+            "quiet"
+                | "histogram"
+                | "graceful"
+                | "deadline"
+                | "forced-kill"
+                | "syscall-errors"
+                | "failed-opens"
+        ) {
+            if self.result.attach_notification_ms.is_none()
+                || !self.frames.iter().any(Self::attached)
+                || self.observed_program_ids.is_empty()
+            {
+                return Err(
+                    format!("{}: qualified capture readiness is missing", self.name).into(),
+                );
+            }
+            let stop = match self.name {
+                "quiet" | "histogram" | "forced-kill" => DiagnosticStop::Cancelled,
+                "graceful" => DiagnosticStop::Exited,
+                _ => DiagnosticStop::Deadline,
+            };
+            if self.result.stop != stop
+                || if self.name == "forced-kill" {
+                    !self.result.forced_kill
+                        || !self.result.output_incomplete
+                        || self.result.exit_code.is_some()
+                } else {
+                    self.result.forced_kill
+                        || self.result.output_incomplete
+                        || self.result.exit_code != Some(0)
+                }
+            {
+                return Err(
+                    format!("{}: capture did not reach its expected result", self.name).into(),
+                );
+            }
+        }
+        if matches!(
+            self.name,
+            "parse-error" | "probe-limit" | "unsafe-helper" | "unsupported-hook" | "partial-attach"
+        ) && (self.result.stop != DiagnosticStop::Exited
+            || self.result.exit_code.is_none_or(|code| code == 0)
+            || self.result.forced_kill
+            || self.result.output_incomplete
+            || self.result.attach_notification_ms.is_some()
+            || self.frames.iter().any(Self::attached))
+        {
+            return Err(format!("{}: the expected backend rejection is missing", self.name).into());
+        }
+        if self.name == "unsupported-hook"
+            && !diagnostics.contains("Error attaching probe: 'kprobe:araphor_missing_hook_5f6d'")
+        {
+            return Err("unsupported-hook: the selected hook did not fail attachment".into());
+        }
         if self.name == "probe-limit" && !diagnostics.contains("exceeds") {
             return Err("probe-limit: the backend did not report its probe ceiling".into());
         }
@@ -114,7 +180,14 @@ impl CaseResult {
             }
         }
         if self.name == "compile-valid"
-            && (self.result.exit_code != Some(0) || !self.observed_program_ids.is_empty())
+            && (self.result.stop != DiagnosticStop::Exited
+                || self.result.exit_code != Some(0)
+                || self.result.forced_kill
+                || self.result.output_incomplete
+                || self.result.attach_notification_ms.is_some()
+                || !self.observed_program_ids.is_empty()
+                || !self.observed_map_ids.is_empty()
+                || !self.observed_link_ids.is_empty())
         {
             return Err("compile-valid: compilation failed or loaded a program".into());
         }
@@ -187,8 +260,7 @@ impl ObservabilityQualification {
                 let mut ready = false;
                 while Instant::now() < deadline && !capture.is_finished() {
                     for frame in capture.frames().try_iter() {
-                        ready |=
-                            frame.stderr && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n";
+                        ready |= CaseResult::attached(&frame);
                         frames.push(frame);
                     }
                     if ready {
@@ -318,13 +390,20 @@ impl ObservabilityQualification {
         executable: PathBuf,
         digest: [u8; 32],
     ) -> ProofResult<()> {
-        let backend = DiagnosticBackend::new(executable, digest)?;
+        let backend = DiagnosticBackend::new(executable.clone(), digest)?;
         let baseline = ResourceSnapshot::read()?;
         Self::missing_btf()?;
         if ResourceSnapshot::read()? != baseline {
             return Err("missing BTF changed live resources".into());
         }
-        self.write("missing-btf.json", &true)?;
+        self.write(
+            "missing-btf.json",
+            &serde_json::json!({
+                "owner": "KernelHostOwner",
+                "stage": "preflight",
+                "missing_runtime_btf_rejected": true,
+            }),
+        )?;
         self.write("baseline.json", &baseline)?;
         self.write("enforcement-manifest.json", host.manifest())?;
         let cases = [
@@ -431,20 +510,27 @@ impl ObservabilityQualification {
                 source.as_bytes(),
                 1,
                 mode,
-                Duration::from_secs(if cancel { 3 } else { 1 }),
+                Duration::from_secs(if cancel || name == "graceful" { 3 } else { 1 }),
             )?;
-            let start = Instant::now();
+            let mut attached = None;
             let mut frames = Vec::new();
             let mut observed_program_ids = BTreeSet::new();
             let mut observed_map_ids = BTreeSet::new();
+            let mut observed_link_ids = BTreeSet::new();
             let mut map_memlock_bytes = BTreeMap::new();
             let mut kernel_runtime = BTreeMap::new();
             let mut stopped = false;
             while !capture.is_finished() {
-                frames.extend(capture.frames().try_iter());
+                for frame in capture.frames().try_iter() {
+                    if attached.is_none() && CaseResult::attached(&frame) {
+                        attached = Some(Instant::now());
+                    }
+                    frames.push(frame);
+                }
                 let live = ResourceSnapshot::read()?;
                 observed_program_ids.extend(live.programs.difference(&baseline.programs).copied());
                 observed_map_ids.extend(live.maps.difference(&baseline.maps).copied());
+                observed_link_ids.extend(live.links.difference(&baseline.links).copied());
                 for program in libbpf_rs::query::ProgInfoIter::default()
                     .filter(|program| observed_program_ids.contains(&u64::from(program.id)))
                 {
@@ -465,7 +551,9 @@ impl ObservabilityQualification {
                     map_memlock_bytes.insert(*id, memory);
                 }
                 if !stopped
-                    && ((name == "forced-kill" && !observed_program_ids.is_empty())
+                    && ((name == "forced-kill"
+                        && attached.is_some()
+                        && !observed_program_ids.is_empty())
                         || (name == "compile-timeout" && capture.process_id().is_some()))
                 {
                     let pid = capture
@@ -480,7 +568,7 @@ impl ObservabilityQualification {
                     }
                     stopped = true;
                 }
-                if cancel && start.elapsed() > Duration::from_secs(2) {
+                if cancel && attached.is_some_and(|time| time.elapsed() > Duration::from_secs(2)) {
                     capture.cancel();
                 }
                 std::thread::sleep(Duration::from_millis(20));
@@ -495,6 +583,7 @@ impl ObservabilityQualification {
                 frames,
                 observed_program_ids,
                 observed_map_ids,
+                observed_link_ids,
                 map_memlock_bytes,
                 kernel_runtime,
                 cleanup_verified: after == baseline,
@@ -526,27 +615,13 @@ impl ObservabilityQualification {
             {
                 return Err(format!("{name}: backend accepted prohibited source").into());
             }
-            if name == "forced-kill" && !record.result.forced_kill {
-                return Err("forced-kill: the supervisor did not kill the stopped child".into());
-            }
-            if name == "deadline"
-                && record.result.stop != erebor_interceptor::diagnostic::DiagnosticStop::Deadline
-            {
-                return Err("deadline: the collection lease did not expire".into());
-            }
             if !record.cleanup_verified {
                 return Err(format!("{name}: BPF resource inventory changed after cleanup").into());
-            }
-            if cancel && record.observed_program_ids.is_empty() {
-                return Err(format!("{name}: no diagnostic program was observed").into());
-            }
-            if name == "graceful" && record.result.exit_code != Some(0) {
-                return Err("graceful bpftrace fixture failed".into());
             }
             results.push(record);
         }
         self.write("backend-results.json", &results)?;
-        self.parent_death(host, &baseline, digest)?;
+        self.parent_death(host, &baseline, &executable, digest)?;
         Ok(())
     }
 
@@ -559,55 +634,85 @@ impl ObservabilityQualification {
             Duration::from_secs(30),
         )?;
         let started = Instant::now();
-        while capture.process_id().is_none()
-            && !capture.is_finished()
-            && started.elapsed() < Duration::from_secs(5)
+        while !capture.is_finished()
+            && started.elapsed() < PREPARATION_LIMIT + Duration::from_secs(2)
         {
+            for frame in capture.frames().try_iter() {
+                if CaseResult::attached(&frame) {
+                    self.write(
+                        "pid.json",
+                        &capture
+                            .process_id()
+                            .ok_or("parent fixture exited before readiness")?,
+                    )?;
+                    self.write("ready-pending.json", &frame)?;
+                    fs::rename(
+                        self.output.join("ready-pending.json"),
+                        self.output.join("ready.json"),
+                    )?;
+                    capture.frames().iter().for_each(drop);
+                    return Err(format!(
+                        "parent fixture ended before parent death: {:?}",
+                        capture.finish()?
+                    )
+                    .into());
+                }
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
-        self.write(
-            "pid.json",
-            &capture
-                .process_id()
-                .ok_or("parent fixture could not spawn bpftrace")?,
-        )?;
-        let _frames: Vec<_> = capture.frames().iter().collect();
-        capture.finish()?;
-        Ok(())
+        Err("parent fixture did not report qualified attachment readiness".into())
     }
 
     fn parent_death(
         &self,
         host: &erebor_interceptor::KernelHost,
         baseline: &ResourceSnapshot,
+        executable: &Path,
         digest: [u8; 32],
     ) -> ProofResult<()> {
         let path = self.output.join("parent-fixture");
+        if path.exists() {
+            return Err("parent fixture output already exists".into());
+        }
         let mut fixture = QualificationChild(
             Command::new(std::env::current_exe()?)
                 .arg("--parent-fixture")
-                .args([
-                    "--executable",
-                    "/usr/bin/bpftrace",
-                    "--sha256",
-                    &hex::encode(digest),
-                ])
+                .arg("--executable")
+                .arg(executable)
+                .args(["--sha256", &hex::encode(digest)])
                 .arg("--output-directory")
                 .arg(&path)
                 .spawn()?,
         );
         let started = Instant::now();
-        let mut observed = BTreeSet::new();
-        while started.elapsed() < Duration::from_secs(5) {
+        let mut observed = ResourceSnapshot {
+            programs: BTreeSet::new(),
+            maps: BTreeSet::new(),
+            links: BTreeSet::new(),
+        };
+        let mut ready = false;
+        while started.elapsed() < PREPARATION_LIMIT + Duration::from_secs(2) {
+            if fixture.0.try_wait()?.is_some() {
+                return Err("parent fixture exited before qualified readiness".into());
+            }
             let live = ResourceSnapshot::read()?;
-            observed.extend(live.programs.difference(&baseline.programs).copied());
-            if path.join("pid.json").is_file()
-                && !observed.is_empty()
-                && started.elapsed() >= Duration::from_secs(1)
-            {
+            observed
+                .programs
+                .extend(live.programs.difference(&baseline.programs).copied());
+            observed
+                .maps
+                .extend(live.maps.difference(&baseline.maps).copied());
+            observed
+                .links
+                .extend(live.links.difference(&baseline.links).copied());
+            if Self::parent_ready(&path, &live, baseline)? {
+                ready = true;
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
+        }
+        if !ready {
+            return Err("parent fixture did not reach qualified attachment readiness".into());
         }
         fixture.0.kill()?;
         fixture.0.wait()?;
@@ -621,12 +726,31 @@ impl ObservabilityQualification {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        if observed.is_empty() {
-            return Err("parent-death fixture never loaded a diagnostic program".into());
-        }
         host.verify_live_manifest()?;
-        self.write("parent-death-program-ids.json", &observed)?;
+        self.write("parent-death-program-ids.json", &observed.programs)?;
+        self.write("parent-death-map-ids.json", &observed.maps)?;
+        self.write("parent-death-link-ids.json", &observed.links)?;
         Ok(())
+    }
+
+    fn parent_ready(
+        path: &Path,
+        live: &ResourceSnapshot,
+        baseline: &ResourceSnapshot,
+    ) -> ProofResult<bool> {
+        let bytes = match fs::read(path.join("ready.json")) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        if !CaseResult::attached(&serde_json::from_slice::<DiagnosticFrame>(&bytes)?) {
+            return Err("parent fixture readiness is not an attachment notification".into());
+        }
+        Ok(live
+            .programs
+            .difference(&baseline.programs)
+            .next()
+            .is_some())
     }
 
     fn write(&self, name: &str, value: &impl Serialize) -> ProofResult<()> {
@@ -671,6 +795,209 @@ impl Drop for QualificationChild {
 mod tests {
     use super::*;
 
+    fn capture_case(name: &'static str) -> CaseResult {
+        let mut frames = vec![DiagnosticFrame {
+            sequence: 1,
+            stderr: true,
+            bytes: b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n".to_vec(),
+        }];
+        if name == "histogram" {
+            frames.push(DiagnosticFrame {
+                sequence: 2,
+                stderr: false,
+                bytes: b"{\"type\":\"hist\",\"data\":{}}\n".to_vec(),
+            });
+        }
+        CaseResult {
+            name,
+            result: DiagnosticResult {
+                process_id: 1,
+                stop: match name {
+                    "quiet" | "histogram" | "forced-kill" => DiagnosticStop::Cancelled,
+                    "graceful" => DiagnosticStop::Exited,
+                    _ => DiagnosticStop::Deadline,
+                },
+                exit_code: (name != "forced-kill").then_some(0),
+                forced_kill: name == "forced-kill",
+                output_incomplete: name == "forced-kill",
+                emitted_frames: frames.len() as u64,
+                retained_bytes: frames.iter().map(|frame| frame.bytes.len()).sum(),
+                elapsed_ms: 3_000,
+                attach_notification_ms: Some(100),
+                program_ids: BTreeSet::from([11]),
+                map_ids: BTreeSet::from([12]),
+                cleanup_verified: Some(true),
+                peak_rss_kib: None,
+            },
+            frames,
+            observed_program_ids: BTreeSet::from([11]),
+            observed_map_ids: BTreeSet::from([12]),
+            observed_link_ids: BTreeSet::new(),
+            map_memlock_bytes: BTreeMap::new(),
+            kernel_runtime: BTreeMap::new(),
+            cleanup_verified: true,
+            enforcement_manifest_unchanged: true,
+        }
+    }
+
+    #[test]
+    fn observability_backend_capture_readiness() -> ProofResult<()> {
+        for name in [
+            "quiet",
+            "histogram",
+            "graceful",
+            "deadline",
+            "forced-kill",
+            "syscall-errors",
+            "failed-opens",
+        ] {
+            let mut record = capture_case(name);
+            record.verify()?;
+            record.result.attach_notification_ms = None;
+            assert!(record.verify().is_err(), "{name}: missing notification");
+            record.result.attach_notification_ms = Some(100);
+            record.frames[0].stderr = false;
+            assert!(record.verify().is_err(), "{name}: stdout marker");
+            record.frames[0].stderr = true;
+            for bytes in [
+                b"Attaching 1 probe...\n".as_slice(),
+                b"__BPFTRACE_NOTIFY_PROBES_ATTACHED extra\n".as_slice(),
+            ] {
+                record.frames[0].bytes = bytes.to_vec();
+                assert!(record.verify().is_err(), "{name}: wrong marker");
+            }
+            record.frames[0].bytes = b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n".to_vec();
+            record.observed_program_ids.clear();
+            assert!(record.verify().is_err(), "{name}: no observed program");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_capture_outcome() -> ProofResult<()> {
+        for name in [
+            "quiet",
+            "histogram",
+            "graceful",
+            "deadline",
+            "forced-kill",
+            "syscall-errors",
+            "failed-opens",
+        ] {
+            let mut record = capture_case(name);
+            record.verify()?;
+            let stop = record.result.stop;
+            record.result.stop = DiagnosticStop::PreparationDeadline;
+            assert!(record.verify().is_err(), "{name}: preparation failure");
+            record.result.stop = stop;
+            record.result.output_incomplete = !record.result.output_incomplete;
+            assert!(record.verify().is_err(), "{name}: output completeness");
+            record.result.output_incomplete = !record.result.output_incomplete;
+            record.result.forced_kill = !record.result.forced_kill;
+            assert!(record.verify().is_err(), "{name}: wrong termination");
+            record.result.forced_kill = !record.result.forced_kill;
+            record.result.exit_code = Some(1);
+            assert!(record.verify().is_err(), "{name}: unsuccessful capture");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_hook_rejection() -> ProofResult<()> {
+        let mut record = capture_case("quiet");
+        record.name = "unsupported-hook";
+        record.result.stop = DiagnosticStop::Exited;
+        record.result.exit_code = Some(1);
+        record.result.attach_notification_ms = None;
+        record.frames[0].bytes =
+            b"ERROR: Error attaching probe: 'kprobe:araphor_missing_hook_5f6d'\n".to_vec();
+        record.verify()?;
+        record.result.exit_code = Some(0);
+        assert!(record.verify().is_err());
+        record.result.exit_code = None;
+        assert!(record.verify().is_err());
+        record.result.exit_code = Some(1);
+        record.result.stop = DiagnosticStop::Deadline;
+        assert!(record.verify().is_err());
+        record.result.stop = DiagnosticStop::Exited;
+        record.result.attach_notification_ms = Some(100);
+        assert!(record.verify().is_err());
+        record.result.attach_notification_ms = None;
+        for bytes in [
+            b"ERROR: bpftrace currently only supports running as the root user.\n".as_slice(),
+            b"ERROR: Error attaching probe: 'kprobe:another_hook'\n".as_slice(),
+            b"WARNING: araphor_missing_hook_5f6d is not traceable\n".as_slice(),
+        ] {
+            record.frames[0].bytes = bytes.to_vec();
+            assert!(record.verify().is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_compile_resources() -> ProofResult<()> {
+        let mut record = capture_case("graceful");
+        record.name = "compile-valid";
+        record.result.attach_notification_ms = None;
+        record.frames.clear();
+        record.observed_program_ids.clear();
+        record.observed_map_ids.clear();
+        record.verify()?;
+        record.observed_link_ids.insert(13);
+        assert!(record.verify().is_err());
+        assert_eq!(
+            serde_json::to_value(&record)?["observed_link_ids"],
+            serde_json::json!([13]),
+        );
+        record.observed_link_ids.clear();
+        record.observed_map_ids.insert(12);
+        assert!(record.verify().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_parent_readiness() -> ProofResult<()> {
+        let directory = tempfile::tempdir()?;
+        let baseline = ResourceSnapshot {
+            programs: BTreeSet::from([1]),
+            maps: BTreeSet::new(),
+            links: BTreeSet::new(),
+        };
+        let mut live = baseline.clone();
+        live.programs.insert(2);
+        fs::write(directory.path().join("pid.json"), b"123")?;
+        assert!(!ObservabilityQualification::parent_ready(
+            directory.path(),
+            &live,
+            &baseline,
+        )?);
+        let mut frame = capture_case("quiet").frames.remove(0);
+        let path = directory.path().join("ready.json");
+        fs::write(&path, serde_json::to_vec(&frame)?)?;
+        assert!(!ObservabilityQualification::parent_ready(
+            directory.path(),
+            &baseline,
+            &baseline,
+        )?);
+        assert!(ObservabilityQualification::parent_ready(
+            directory.path(),
+            &live,
+            &baseline,
+        )?);
+        frame.stderr = false;
+        fs::write(&path, serde_json::to_vec(&frame)?)?;
+        assert!(
+            ObservabilityQualification::parent_ready(directory.path(), &live, &baseline,).is_err()
+        );
+        frame.stderr = true;
+        frame.bytes = b"Attaching 1 probe...\n".to_vec();
+        fs::write(&path, serde_json::to_vec(&frame)?)?;
+        assert!(
+            ObservabilityQualification::parent_ready(directory.path(), &live, &baseline,).is_err()
+        );
+        Ok(())
+    }
+
     #[test]
     fn observability_target_latency_fixture_needs_no_protected_file_writes() -> ProofResult<()> {
         let status = Command::new("python3")
@@ -705,7 +1032,9 @@ assert len(names) == 10 and all(name.startswith(f'tr{i}:') for i, name in enumer
 
     #[test]
     fn observability_target_accepts_the_k3s_systemd_cgroup_layout() {
-        assert!(kubernetes_cgroup_path(Path::new("/sys/fs/cgroup/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod123.slice/cri-containerd-456.scope")));
+        assert!(kubernetes_cgroup_path(Path::new(
+            "/sys/fs/cgroup/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod123.slice/cri-containerd-456.scope"
+        )));
         assert!(kubernetes_cgroup_path(Path::new(
             "/sys/fs/cgroup/kubepods/besteffort/pod123/456"
         )));
@@ -749,6 +1078,7 @@ assert len(names) == 10 and all(name.startswith(f'tr{i}:') for i, name in enumer
             }],
             observed_program_ids: BTreeSet::new(),
             observed_map_ids: BTreeSet::new(),
+            observed_link_ids: BTreeSet::new(),
             map_memlock_bytes: BTreeMap::new(),
             kernel_runtime: BTreeMap::new(),
             cleanup_verified: true,

@@ -14,7 +14,7 @@ crc32c.workspace = true
 duckdb.workspace = true
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
-erebor-interceptor = { path = "../erebor-interceptor" }
+erebor-interceptor = { path = "../erebor-interceptor", features = ["test-fixtures"] }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 futures-util.workspace = true
