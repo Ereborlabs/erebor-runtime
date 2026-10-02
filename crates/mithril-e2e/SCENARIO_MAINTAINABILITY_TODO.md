@@ -3660,6 +3660,26 @@ test does not close a row when its physical condition or an assertion changed.
     the successful control, all request fields, and cleanup checks. Host
     passes in 42.39 seconds and direct runc in 47.12 seconds. Related effect
     checks, strict Clippy, and formatting pass. Kubernetes remains pending.
+    Kubernetes fails before Observe: both reads return `EACCES`, including
+    the Allow control. Keep the old block. Its actor files are on the image
+    overlay filesystem; Host and runc use plain files. Reproduce that physical
+    condition on lightweight Host before a correction or Kubernetes rerun.
+    Add failure-only snapshot diagnostics; the test stays below 100 lines.
+    The unchanged Host assertion fails on overlay-backed files in 39.82
+    seconds. Its Allow event is followed by `CORRUPT_IDENTITY_OR_GENERATION`
+    for the same async request. All owned resources are removed and the
+    temporary overlay mount is detached. See `/tmp/mithril-io-overlay-light-20261002.log`.
+    The old files were in the VM fixture directory, not an image layer.
+    Use the existing owned `/work` mount for both files on all platforms.
+    Keep the exact selectors, all assertions, and both policy modes. This
+    setup change does not fix or qualify overlay-backed async reads. Keep
+    that production condition open; no BPF change is authorized here.
+    The `/work` draft does not activate its exact policy on Host. Its
+    predecessor stays active and activation remains pending. Discard that
+    draft and restore the qualified actor and policy inputs. Keep Kubernetes
+    unregistered and the legacy block intact. The new failure diagnostic
+    preserves the 99-line limit. A BPF correction needs approval; do not
+    weaken the Allow control or hide the overlay condition in setup.
   - [ ] Replace the abstract Unix-stream round trip with
     `unix_stream_is_allowed`. Use the existing actor-group setup for two
     distinct bindings under one policy and one shared network namespace.

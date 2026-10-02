@@ -35,7 +35,9 @@ fn async_read_keeps_authority<P: Platform>() -> TestResult<()> {
 
         actor.send(b"act\n")?;
         let name = format!("uring-{denied}-0");
-        actor.wait_name(pid, &name, "async reads", limit)?;
+        actor
+            .wait_name(pid, &name, "async reads", limit)
+            .inspect_err(|_| eprintln!("io_uring failure: {:?}", env.snapshot()))?;
         let mut objects = Vec::new();
         for (reason, result) in [(reason, -denied), ("EXACT_POLICY_ALLOW", 0)] {
             let event = effects.wait_match(&env, "asynchronous file read", |event| {
