@@ -2952,6 +2952,34 @@ test does not close a row when its physical condition or an assertion changed.
       The final repository Rust CI procedure passes after the last Rust edit.
       This focused three-platform proof does not close the full physical
       matrix delivery gate.
+  - [ ] Replace the successful external `mount_setattr` block with a shared
+    platform test. Keep one workload with a live child in a second mount
+    namespace. Use the existing signed mount policies, `ProcessFixture`, and
+    `MountCache`. Keep both benign reads and the global guard checks.
+    - [x] Acquire the external helper's namespace and root before protection.
+      Use the shared Python file. Do not add a Rust helper or Platform API.
+    - [x] Set the target mount read-only, then restore write access. Require
+      syscall success and read back each actual mount attribute.
+    - [x] In Protect and Observe, require the global mutation epoch to advance,
+      both benign reads to succeed, and new READY cache rows after each change.
+      Keep task-attributed allow evidence and normal process cleanup.
+    - [x] Pass Host. The 87-line shared test passed both modes in 39.61 seconds
+      on 2026-10-02. Output, pin, lease, and cgroup cleanup passed. Strict
+      package clippy passed. Shared actor tooling is committed first.
+    - [ ] Pass and commit direct `runc`.
+    - [ ] Pass and commit real Kubernetes.
+    - [ ] Remove the old block, unused helper, CLI path, and result fields only
+      after the matching coverage passes. Keep propagation coverage separate.
+    - The draft added an exact-object ID assertion absent from this baseline
+      block. Its exact-file replacement stayed pending with one and two
+      workload targets. The unused policy drafts are removed. Keep the
+      separate legacy exact-object checks. This case must prove the signed
+      file rule, mount guard, two namespace rebuilds, and physical reads.
+    - Review [the shared test](src/effect/mount_setattr.rs), then
+      [the Python actor](fixtures/process/mount_alias.py) and
+      [the cache reader](src/physical/mount_cache.rs). The actor owns its child
+      pipes and normal child exit. `ProcessFixture` owns bounded readiness and
+      fallback cleanup. The test keeps policy delivery and assertions visible.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full
