@@ -1854,7 +1854,19 @@ segments, receipts, shared retention and the Control adapter. The focused run
 passed 58 tests. Existing analysis regressions passed 109 tests, and the changed
 query-catalogue check passed. The combined physical cases listed under
 verification remain open. Read the [current result](../../araphor-observability/phase-2-owned-capture.md#verified-implementation-slices)
-for commands, receipts and the remaining reservation and crash checks.
+for commands, receipts and current proof limits. Source `5b716fe6` adds the
+terminal pin, backup reservation, raw crash, read-lease and mixed-backup checks.
+These six checks passed. Physical capture qualification remains open.
+Source `e4a332c1` adds the passing quota-pressure check. The corrected focused
+run passed 68 checks. Source `4ec3d360` rejects unsupported index schemas before
+write or install; its final three rejection checks and sealing check passed.
+Source `1a5da4c0` adds the four-case Node capture chain. Its final failed-ACK,
+local-expiry and reopen/replay check passed. Source `06e614e4` adds the physical
+restart harness, with compilation and shell syntax checks only.
+The final workspace procedure passed at source `6887a178`, after the last
+code edit. It includes the owned-capture chain and shared tenant-read checks.
+Read the linked result for the exact command, receipt and ignored-case counts.
+This result does not close the physical capture or interference gates.
 
 [TraceIntentV1::validate](../../../../crates/araphor-data/src/analysis/trace.rs) checks exact tenant, request, source and execution bindings.<br>
 -> [AnalysisStore::accept_trace](../../../../crates/araphor-data/src/analysis/trace.rs) stores immutable source and intent with one metadata transaction.<br>
@@ -1895,6 +1907,33 @@ The plan lists acceptance before resolution as a logical operation. Actual
 callers resolve targets before `ControlPlane::accept_trace`. Acceptance checks
 the frozen facts against current inventory. `TraceOwner::accept` commits those
 facts; it does not resolve a name or broaden a cohort on retry.
+
+[AnalysisStore::commit_raw](../../../../crates/araphor-data/src/analysis/raw.rs)
+keeps the exact witness charge for a pinned diagnostic file unchanged. A
+terminal-only append seals that file and uses a reserved new file.
+[AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs)
+preserves terminal bytes and file slots before it makes copies. The tests
+`observability_terminal_pin` and `observability_backup_reserve` exercise these
+boundaries. `observability_trace_crashes` exits at six commit stages and checks
+exact replay. `observability_read_retention` holds a real read lease while
+retention waits. `observability_backup_incomplete` rejects a bundle without its
+diagnostic segment and restores an unfinished execution from a complete bundle.
+
+[ObservabilityQualification::owned_node](../../../../crates/mithril-e2e/src/observability.rs)
+connects signed Control dispatch, Node spooling, Interceptor process supervision,
+mTLS upload and shared reads. Test-only inputs supply the process command,
+binding readback and admission clock. The binding lease still checks the held
+filesystem identity, frozen target lifetime fields and lifecycle state. Attach
+notifications are simulated. This case does not prove BPF attachment, kernel
+cleanup, or `NodeChassis::poll_diagnostics` retry scheduling.
+
+[Host::qualify_restart](../../../../crates/mithril-e2e/src/platform/host.rs)
+is the physical Node-process restart case. It requires a qualified diagnostic
+configuration. It kills only Node, checks observed diagnostic resources before
+fixture cleanup, and reopens the same state. The terminal retains unknown
+cleanup even when an independent resource check passes. This case has not run
+for the current capture implementation. The Pod and full-store physical cases
+also remain open; their existing scripts do not prove owned capture.
 
 ## Owners and lifetime
 

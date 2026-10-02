@@ -399,8 +399,11 @@ No separate gap-review document is required.
 Phase 1 is **Done** at source `8e752bdb`. Read its
 [corrected result](phase-1-contracts-and-backend.md#corrected-backend-proof)
 for direct partial-attach and missing-hook proof, paired lightweight and
-physical runs, and full workspace checks. Phase 2 can start. Shared storage
-and production enablement remain open.
+physical runs, and full workspace checks. Phase 2 is **Not done**. Shared trace
+storage and the lightweight Node capture chain are implemented. Read its
+[current result](phase-2-owned-capture.md#verified-implementation-slices) for
+source revisions and checks. Physical capture and interference gates remain
+open. Deployment diagnostics stay disabled.
 
 The initial recipe set is syscall errors and failed file opens. Connection
 outcomes and latency follow only with explicit asynchronous/entry-return

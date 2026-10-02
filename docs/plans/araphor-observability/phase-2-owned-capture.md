@@ -151,7 +151,8 @@ Use `observability_` instead of `observability_intent_` for the portable-type
 check. Receipts are `portable-contract-2.log` and `trace-intent.log` under
 `/tmp/araphor-capture-qualification.E0VU3eEo/`. These results do not prove the
 raw-output migration, Control integration, diagnostic reservations, or physical
-lifecycle gates. Those parts remain **Not done**. No performance experiment ran.
+lifecycle gates. The later slices below record those results. No performance
+experiment ran for this slice.
 
 Source `13cc6076` adds a test-only exit hook after durable Node intent and
 before backend execution. The child exits with code 73. Reopen preserves the
@@ -183,11 +184,117 @@ are `shared-capture-3.log`, `shared-analysis.log` and `catalogue-schema.log` in
 the evidence directory above. Use the documented Cargo environment and the
 `observability` filter without `--lib` to include the CLI parser tests.
 
-Remaining work includes diagnostic crash-stage, read-lease and incomplete-backup
-proof, terminal reservations when a segment is pinned or copied for backup,
-the lightweight Node/Interceptor capture path, physical lifecycle cases, and
-final workspace CI. Physical enablement still requires a platform-matched
-interference receipt. That experiment needs separate approval.
+Source `5b716fe6` preserves terminal capacity when an active segment is pinned.
+The segment owner seals that file and writes the terminal to a reserved new
+file. This does not increase the pinned file's charge. Backup capacity checks
+also preserve diagnostic file slots and terminal bytes.
+
+Six new checks passed in `capture-hardening-2.log`: pinned-terminal recovery,
+read versus retention, segment rotation and lifetime totals, incomplete backup,
+backup reservations, and process exits at six raw-commit boundaries. The crash
+check uses both an output-plus-terminal batch and an empty terminal. Exact
+replay produces one retained copy. This run passed 24 data checks and failed
+the separate quota-pressure fixture; it is not a complete-suite pass.
+
+Source `e4a332c1` adds tenant and global quota-pressure checks. New frames fail
+under ordinary pressure. A terminal-only commit uses its reservation once;
+retry and reopen preserve the receipt and quota totals. The initial fixture
+failure came from a repeated result ID across tenants. The corrected check
+passed without a production quota change.
+
+The corrected `observability` run passed 68 checks: data 25, Control 20, e2e
+14, CLI parsing 2, and Node 7. Seven helper or physical cases were excluded
+from ordinary execution. The receipt is `capture-hardening-fixed.log`. This
+run precedes the final nonempty-schema-zero rejection and combined failed-ACK
+case described below.
+
+Source `4ec3d360` rejects retired DiscoveryIndex schemas before a writable
+connection or install rename can change them. The current schema is 6. Schema
+zero is valid only for an empty database. A new index has no trace tables.
+The owner does not migrate an old schema. Three `observability_index_` checks and the
+exact `discovery::index::tests::discovery_index_sealing_reopen` check passed.
+Receipts are `capture-index-final.log` and `capture-sealing-final.log`.
+
+Source `1a5da4c0` extends `owned-capture` through the production Node owner and
+Interceptor supervisor. Its external inputs are a process command, binding
+readback and admission clock. Four cases check target replacement, cancellation,
+Control partition and failed storage ACK. The storage fault occurs after real
+segment sync while capture is active. Node keeps its output and ends at its
+local lease. Store reopen recovers that exact prefix. Replay returns one copy
+and a stable ACK; Node retires output only after that ACK. Each case launches
+once. Cleanup remains unknown and kernel loss remains unspecified.
+
+The final exact `observability::tests::observability_owned_upload` check passed
+in 16.27 seconds. Its receipt is `owned-chain-final.log`. This result does not
+prove Node polling/retry scheduling, physical BPF cleanup, or real disk-full
+behavior. The lightweight lifecycle cases also passed after output-limit cases
+received a separate collection budget. Deadline cases retain their original
+deadline; no latency or throughput claim follows from these correctness tests.
+
+Source `06e614e4` adds the Node-process restart harness. The final focused build
+compiled it, and `bash -n` passed for `owned.sh`. No physical restart result is
+claimed. Supply a qualified configuration as the fifth argument and
+`restart-before` or `restart-after` as the sixth argument. The four-argument
+form runs the interference experiment and requires separate approval. The
+script rejects a successful test command that did not write its expected proof.
+
+Source `6887a178` corrects the shared tenant-read test and removes prohibited
+test unwraps. The failed workspace run had rejected the foreign read with
+`AnalysisState: the raw source is absent`. Its assertion expected the old
+evidence-only text and incorrectly reported that the read succeeded. The
+corrected check still requires that exact typed absence. It reports other errors separately from a
+successful read. No production read or authorization rule changed.
+
+The exact `data_load_contract` check reproduced that failure, then passed.
+The exact `data_tenant_load` check also passed. The Node `observability` filter
+passed seven tests; two helper or physical cases were excluded from ordinary
+execution. Receipts are `capture-data-load-red.log`,
+`capture-data-load-green.log`, `capture-data-tenants-green.log` and
+`capture-node-lint-green.log` in the same evidence directory. The e2e commands
+used the documented Cargo environment and the full test names under
+`discovery::data_store::tests::`, with `--exact --nocapture`.
+
+The final workspace procedure passed at source `6887a178`, after the last code
+edit. Formatting, workspace checking, Clippy with warnings denied, and all
+selected workspace tests passed. The receipt is `capture-workspace-final-5.log`
+in the same evidence directory. Run from `worktrees/mithril-ui`:
+
+```sh
+CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target \
+CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
+CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 \
+bash .github/scripts/verify-rust-ci.sh
+```
+
+Main library results were Data 166 passed (5 ignored), Interceptor 39 passed
+(1 ignored), Control 185 passed (2 ignored), e2e 133 passed (409 ignored), and
+Node 267 passed (2 ignored). The owned-capture chain and both corrected tenant
+checks passed in this run. Ignored physical cases are not qualified by this
+procedure. No performance or interference experiment ran.
+
+Remaining work is completion of the physical harnesses and lifecycle gates below.
+Physical enablement requires a platform-matched interference receipt. The
+five-pair experiment still needs explicit approval and an allowed overhead
+limit. Keep the phase **Not done** and keep deployment diagnostics disabled.
+
+The current physical scripts do not close these capture gates:
+
+- `pods.sh` checks direct backend recipe filtering. It does not run the Node
+  owner through replacement of a real Pod. Use real Control inventory and the
+  existing Kubernetes fixture for the replacement case. Do not substitute
+  synthetic Pod identifiers or add a public trace API for the test.
+- `disk-full.sh` checks local ACK-file failure after a terminal already exists.
+  It does not make AnalysisStore full during capture. The shared store must
+  use the task-owned fault filesystem; the enforcement WAL must stay outside
+  that filesystem. Require a real failed append, no ACK, bounded local stop,
+  recovery and exact replay.
+- The existing physical partition case has a three-second backend limit and
+  an 18-second signed lease. It does not isolate the Node lease-expiry branch.
+  The paired case must make the Node lease expire first and check no ACK before
+  repair. Check a physical denial for each induced failure.
+- The Node-process restart harness requires a matching qualified configuration.
+  Its before-attachment and after-attachment cases have not run on the current
+  capture source. A prior backend result is not an owned-capture result.
 
 ## Acceptance and verification
 

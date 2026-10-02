@@ -159,8 +159,11 @@ belong to Observability 3. This closure does not start another phase.
 Observability 1 is **Done** at source `8e752bdb`. Its
 [corrected result](../../araphor-observability/phase-1-contracts-and-backend.md#corrected-backend-proof)
 records direct partial-attach and missing-hook proof, paired lightweight and
-physical runs, and full workspace checks. Observability 2 can start.
-Production enablement still requires capture integration and interference proof.
+physical runs, and full workspace checks. Observability 2 is **Not done**.
+Shared trace storage and the lightweight Node capture chain are implemented.
+Read its [current result](../../araphor-observability/phase-2-owned-capture.md#verified-implementation-slices)
+for source revisions, checks, and open physical gates. Production enablement
+still requires physical capture and approved interference proof.
 
 Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 →
 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 if selected → 7.10.
