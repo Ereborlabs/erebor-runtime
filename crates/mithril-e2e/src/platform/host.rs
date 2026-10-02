@@ -118,7 +118,7 @@ impl Host {
         let pid = actor.id();
         let placement = self
             .shared
-            .node_running()
+            .protected()
             .then(|| self.shared.task(pid, "added actor placement"))
             .transpose()?;
         actor.release()?;
