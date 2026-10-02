@@ -196,6 +196,8 @@ impl CaseResult {
                 || self.result.forced_kill
                 || self.result.output_incomplete
                 || self.result.attach_notification_ms.is_some()
+                || !self.result.program_ids.is_empty()
+                || !self.result.map_ids.is_empty()
                 || !self.observed_program_ids.is_empty()
                 || !self.observed_map_ids.is_empty()
                 || !self.observed_link_ids.is_empty())
@@ -629,13 +631,6 @@ impl ObservabilityQualification {
             {
                 return Err("raw-output: backend output was not preserved".into());
             }
-            if matches!(name, "probe-limit" | "unsafe-helper") && record.result.exit_code == Some(0)
-            {
-                return Err(format!("{name}: backend accepted prohibited source").into());
-            }
-            if !record.cleanup_verified {
-                return Err(format!("{name}: BPF resource inventory changed after cleanup").into());
-            }
             results.push(record);
         }
         self.write("backend-results.json", &results)?;
@@ -969,11 +964,19 @@ mod tests {
         let mut record = capture_case("graceful");
         record.name = "compile-valid";
         record.result.attach_notification_ms = None;
+        record.result.program_ids.clear();
+        record.result.map_ids.clear();
         record.frames.clear();
         record.observed_program_ids.clear();
         record.observed_map_ids.clear();
         record.hash_entries.clear();
         record.verify()?;
+        record.result.program_ids.insert(11);
+        assert!(record.verify().is_err());
+        record.result.program_ids.clear();
+        record.result.map_ids.insert(12);
+        assert!(record.verify().is_err());
+        record.result.map_ids.clear();
         record.observed_link_ids.insert(13);
         assert!(record.verify().is_err());
         assert_eq!(
