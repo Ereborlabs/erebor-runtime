@@ -114,6 +114,8 @@ mod proc_observer;
 #[cfg(test)]
 mod process_control;
 #[cfg(test)]
+mod reader_capture;
+#[cfg(test)]
 mod reader_queue;
 mod runc;
 #[cfg(test)]

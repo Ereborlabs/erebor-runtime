@@ -6024,6 +6024,36 @@ setup, production actions, assertions, and focused test.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
   exec operation, topology snapshots, bounded queue, and fail-closed results
   as `two-node-convergence.sh`.
+  - [ ] Replace the five-denial capture check with `capture_keeps_path_denials`.
+    Use the existing `read_path.py`, signed mount policy, `EffectCheck`, and
+    `mount_late` lifecycle. Capture five real `OpenRead` denials through the
+    production Node snapshot API. Require `EACCES`, the actor task cookie,
+    signed role and entry rule, current generation, and a zero exact-object
+    key. Make more denied reads. Require the first five source IDs to leave
+    Node's recent window but stay in the captured results. Require unchanged
+    queue-drop, lost-event, decoder-error, evidence-error, and WAL-block counts.
+    Keep the test below 100 lines. Add no actor, Platform API, or legacy helper.
+    - [x] Pass Host. The 98-line test passed in 52.33 seconds. All 2,053
+      physical reads returned `EACCES`. The five captured source IDs left
+      Node's recent window. Queue-drop, lost-event, decoder-error,
+      evidence-error, and WAL-block counts did not change. Normal pin, lease,
+      cgroup, and output cleanup passed. No fixture or Platform API changed.
+      Strict crate Clippy passed. The repository Rust gate passed formatting,
+      workspace check, and strict Clippy, then stopped at the unchanged
+      `retained_wal_survives_restart` acknowledgement deadline. Its unchanged
+      focused check passed in 3.63 seconds. The timeout cause is not proved.
+      Run the final Rust gate again after registration and legacy retirement.
+    - [ ] Pass and commit runc, then Kubernetes.
+    - [ ] Remove only the old five-denial count and its string matchers after
+      all three pass. Keep the separate full-interval overlap capture and
+      obsolete-row collection checks. This test does not replace those checks.
+    - [ ] Retire the duplicate Rust subPath actions and physical setup after
+      the existing Kubernetes subPath test passes again. Keep the original
+      older-alias, source, newer-alias mount order in its Pod fixture. Remove
+      `FixtureBindMounts` and its fixture-only test when its last legacy
+      consumer is gone. Keep the bind-alias read that supplies the current
+      cache to the separate overlap and obsolete-row checks. Verify the
+      complete reduced legacy probe before committing the deletion.
   - [x] Make [CacheView](src/physical/mount_cache.rs) comparable with `Eq`
     and `PartialEq`. Read `MountCache::snapshot` in the same file for the
     cache map layout and row selection. The snapshot does not write a map.
