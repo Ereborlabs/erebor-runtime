@@ -15,11 +15,17 @@ use crate::{AnalysisDatabaseSnafu, AnalysisStateSnafu, Result};
 
 type CallbackResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+#[cfg(test)]
+pub(super) type ScanGate = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
+
 pub(super) struct InputColumn(pub(super) &'static str, pub(super) LogicalTypeId);
 
+#[cfg_attr(test, derive(Default))]
 pub(super) struct InputTable {
     pub(super) columns: Vec<InputColumn>,
     pub(super) rows: Vec<Vec<Value>>,
+    #[cfg(test)]
+    pub(super) scan_gate: std::sync::Mutex<Option<ScanGate>>,
 }
 
 impl InputTable {
@@ -201,6 +207,17 @@ impl VTab for InputScan {
             column.write(&mut output.flat_vector(index), rows, index)?;
         }
         output.set_len(count);
+        #[cfg(test)]
+        if let Some((entered, release)) = input
+            .scan_gate
+            .lock()
+            .map_err(|_| "scan gate lock poisoned")?
+            .take()
+        {
+            entered.send(())?;
+            release.recv_timeout(std::time::Duration::from_secs(5))?;
+            entered.send(())?;
+        }
         Ok(())
     }
 }
@@ -271,6 +288,7 @@ mod tests {
                 ],
                 [vec![Value::UBigInt(2)], vec![Value::Null; 8]].concat(),
             ],
+            ..Default::default()
         });
         let connection = connection()?;
         input.register(&connection, "_query_events", "events")?;
@@ -303,6 +321,7 @@ mod tests {
                     ]
                 })
                 .collect(),
+            ..Default::default()
         });
         let connection = connection()?;
         input.register(&connection, "_query_events", "events")?;
@@ -341,6 +360,7 @@ mod tests {
                 let input = Arc::new(InputTable {
                     columns: vec![InputColumn("id", LogicalTypeId::UBigint)],
                     rows: vec![vec![Value::UBigInt(7)]],
+                    ..Default::default()
                 });
                 let weak = Arc::downgrade(&input);
                 let connection = connection()?;
@@ -366,26 +386,32 @@ mod tests {
             InputTable {
                 columns: Vec::new(),
                 rows: Vec::new(),
+                ..Default::default()
             },
             InputTable {
                 columns: vec![InputColumn("id", LogicalTypeId::UBigint)],
                 rows: vec![Vec::new()],
+                ..Default::default()
             },
             InputTable {
                 columns: vec![InputColumn("id", LogicalTypeId::UBigint)],
                 rows: vec![vec![Value::UBigInt(1), Value::UBigInt(2)]],
+                ..Default::default()
             },
             InputTable {
                 columns: vec![InputColumn("id", LogicalTypeId::UBigint)],
                 rows: vec![vec![Value::BigInt(-1)]],
+                ..Default::default()
             },
             InputTable {
                 columns: vec![InputColumn("id", LogicalTypeId::Double)],
                 rows: vec![vec![Value::Double(1.0)]],
+                ..Default::default()
             },
             InputTable {
                 columns: vec![InputColumn("time", LogicalTypeId::Timestamp)],
                 rows: vec![vec![Value::Timestamp(TimeUnit::Nanosecond, 1)]],
+                ..Default::default()
             },
             InputTable {
                 columns: vec![
@@ -393,10 +419,12 @@ mod tests {
                     InputColumn("id", LogicalTypeId::UBigint),
                 ],
                 rows: Vec::new(),
+                ..Default::default()
             },
             InputTable {
                 columns: vec![InputColumn("bad\0name", LogicalTypeId::UBigint)],
                 rows: Vec::new(),
+                ..Default::default()
             },
         ] {
             assert!(Arc::new(input)
@@ -406,6 +434,7 @@ mod tests {
         let input = Arc::new(InputTable {
             columns: vec![InputColumn("id", LogicalTypeId::UBigint)],
             rows: Vec::new(),
+            ..Default::default()
         });
         assert!(input
             .register(&connection, "invalid(); SELECT 1", "events")

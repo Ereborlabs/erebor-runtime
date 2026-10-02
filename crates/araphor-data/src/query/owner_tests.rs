@@ -320,3 +320,78 @@ fn query_scope_pin_race() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn query_scope_native_cancel() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    fixture.event(1, 100, 7)?;
+    let capacity = 64 * 1024;
+    let owner = fixture.owner(QueryLimits {
+        input_bytes: capacity,
+        output_bytes: capacity,
+        input_capacity: capacity,
+        output_capacity: capacity,
+        global_evaluations: 1,
+        extract_timeout: Duration::from_secs(30),
+        evaluate_timeout: Duration::from_secs(30),
+        ..Default::default()
+    })?;
+    let plan = fixture.plan(QueryTemplate::OperationCounts)?;
+    let before = fixture.store.meta()?;
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let (entered, ready) = mpsc::channel();
+    let (release, resumed) = mpsc::channel();
+    *owner.scan_gate.lock().map_err(|_| "scan gate poisoned")? = Some((entered, resumed));
+    std::thread::scope(|scope| -> TestResult {
+        let worker = scope.spawn(|| owner.query_cancel(&plan, 100, &control));
+        let checks = (|| -> TestResult {
+            ready.recv_timeout(Duration::from_secs(5))?;
+            {
+                let inputs = owner
+                    .input_refs
+                    .lock()
+                    .map_err(|_| "input references poisoned")?;
+                assert!(!inputs.is_empty());
+                assert!(inputs.iter().all(|input| input.upgrade().is_some()));
+            }
+            assert!(owner.budget.evaluate(fixture.source.tenant_id).is_err());
+            assert!(owner.budget.output(1).is_err());
+            control.cancel()?;
+            release.send(())?;
+            ready.recv_timeout(Duration::from_secs(5))?;
+            Ok(())
+        })();
+        // Release the scan on error before the worker is joined.
+        drop(release);
+        let result = worker.join().map_err(|_| "query worker panicked")?;
+        checks?;
+        assert!(owner
+            .native_failed
+            .load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            matches!(result, Err(crate::Error::AnalysisReadCancelled { .. })),
+            "{result:?}"
+        );
+        Ok(())
+    })?;
+    {
+        let inputs = owner
+            .input_refs
+            .lock()
+            .map_err(|_| "input references poisoned")?;
+        assert!(!inputs.is_empty());
+        assert!(inputs.iter().all(|input| input.upgrade().is_none()));
+    }
+    drop(owner.budget.evaluate(fixture.source.tenant_id)?);
+    drop(owner.budget.output(capacity)?);
+    assert_eq!(fixture.store.meta()?, before);
+    fixture.event(2, 200, 7)?;
+    let result = owner.query_at(&plan, 200)?;
+    assert_eq!(result.rows, vec![vec![Value::UInt(7), Value::BigInt(2)]]);
+    assert_eq!(result.sources[0].receipt.contiguous_cursor, 2);
+    assert_eq!(result.meta.commit_revision, before.commit_revision + 1);
+    drop(result);
+    drop(owner.budget.evaluate(fixture.source.tenant_id)?);
+    drop(owner.budget.output(capacity)?);
+    Ok(())
+}

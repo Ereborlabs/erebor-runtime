@@ -631,6 +631,17 @@ impl InputRelations {
         self.tables.iter().map(Arc::downgrade)
     }
 
+    #[cfg(test)]
+    pub(super) fn set_scan_gate(&self, gate: Option<super::adapter::ScanGate>) -> Result<()> {
+        *self.tables[0].scan_gate.lock().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "test scan gate",
+            }
+            .build()
+        })? = gate;
+        Ok(())
+    }
+
     fn table(
         schema: &InputSchema,
         rows: usize,
@@ -652,7 +663,12 @@ impl InputRelations {
         Self::charge(bytes, rows.saturating_mul(size_of::<Vec<Value>>()), limit)?;
         let rows = Vec::with_capacity(rows);
         // Source and destination row descriptors coexist during transfer.
-        Ok(InputTable { columns, rows })
+        Ok(InputTable {
+            columns,
+            rows,
+            #[cfg(test)]
+            scan_gate: Default::default(),
+        })
     }
 
     fn push(table: &mut InputTable, row: InputRow, bytes: &mut usize, limit: usize) -> Result<()> {

@@ -133,6 +133,10 @@ pub struct QueryOwner {
     budget: Arc<QueryBudget>,
     #[cfg(test)]
     input_refs: std::sync::Mutex<Vec<std::sync::Weak<adapter::InputTable>>>,
+    #[cfg(test)]
+    scan_gate: std::sync::Mutex<Option<adapter::ScanGate>>,
+    #[cfg(test)]
+    native_failed: std::sync::atomic::AtomicBool,
 }
 
 impl QueryOwner {
@@ -147,6 +151,10 @@ impl QueryOwner {
             budget,
             #[cfg(test)]
             input_refs: std::sync::Mutex::new(Vec::new()),
+            #[cfg(test)]
+            scan_gate: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            native_failed: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -229,6 +237,18 @@ impl QueryOwner {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .extend(input.references());
+        #[cfg(test)]
+        input.set_scan_gate(
+            self.scan_gate
+                .lock()
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "test scan gate",
+                    }
+                    .build()
+                })?
+                .take(),
+        )?;
         let sources: Vec<_> = std::mem::take(&mut page.extraction.sources)
             .into_iter()
             .map(QueryCoverage::from)
@@ -295,11 +315,13 @@ impl QueryOwner {
                             operation: "prepare trusted query",
                         })?;
                 let parameters = plan.parameters(now_ns);
-                let mut result = statement
-                    .query(params_from_iter(parameters.iter()))
-                    .context(crate::AnalysisDatabaseSnafu {
-                        operation: "execute trusted query",
-                    })?;
+                let native = statement.query(params_from_iter(parameters.iter()));
+                #[cfg(test)]
+                self.native_failed
+                    .store(native.is_err(), std::sync::atomic::Ordering::Release);
+                let mut result = native.context(crate::AnalysisDatabaseSnafu {
+                    operation: "execute trusted query",
+                })?;
                 let schema = result.as_ref().ok_or_else(|| {
                     crate::QueryInvalidSnafu {
                         field: "query result schema",

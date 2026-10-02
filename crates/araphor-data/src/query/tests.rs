@@ -123,6 +123,7 @@ impl QueryFixture {
                 .map(|field| InputColumn(field.0, field.1))
                 .collect(),
             rows: result.rows,
+            ..Default::default()
         });
         let config = Config::default()
             .enable_external_access(false)?
