@@ -4,7 +4,6 @@ use std::error::Error as StdError;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -20,9 +19,8 @@ use mithril_control::{
     ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 use mithril_node::{
-    CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
-    NodeControlConnector, NodeControlMessage, ObservationCanonicalizer, PolicyControlPacingOwner,
-    TrustCache,
+    EvidenceIdV1, EvidenceWalLimits, NodeControlConnector, NodeControlMessage,
+    PolicyControlPacingOwner, TrustCache,
 };
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{oneshot, watch};
@@ -611,203 +609,6 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
 
     drop(connection);
     second_server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor(
-) -> Result<(), Box<dyn StdError>> {
-    let tls = MtlsFixture::new(false)?;
-    let store = ControlStore::open(tls.path().join("control-store"))?;
-    let fixture = OutagePolicyFixture::new(store.clone());
-    let first_resource = fixture.resource(1)?;
-    let inventory = fixture.inventory(&first_resource)?;
-    let control = tls
-        .control_with_store(store, 1)?
-        .with_policy_desired_state(fixture.owner.clone());
-    assert!(control.replace_kubernetes_workload_inventory(inventory.clone())?);
-    let first = fixture.owner.reconcile(
-        &first_resource,
-        OUTAGE_NAMESPACE_UID,
-        &inventory,
-        OUTAGE_NOW,
-    )?;
-    let first_bundle = first.bundles.first().ok_or("missing first bundle")?;
-    let first_candidate = first_bundle.candidate.candidate_content_id.clone();
-    let first_digest = first_bundle.bundle_digest.clone();
-
-    let server = tls.start(control.clone()).await?;
-    let proxy = TcpBlackholeOwner::start(server.address()).await?;
-    let connector = NodeControlConnector::new(
-        tls.node_config(proxy.address()),
-        "node-a".to_owned(),
-        [7; 16],
-    );
-    let mut trust = TrustCache::load(&tls.path().join("trust"))?;
-    let mut first_connection = connector
-        .connect(
-            OutagePolicyFixture::registration([7; 16], false),
-            false,
-            &mut trust,
-        )
-        .await?;
-    first_connection.report_readiness(true, true).await?;
-    control.bind_kubernetes_node_session("worker-a", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")?;
-    let offered = first_connection.policy_inventory(None, Vec::new()).await?;
-    assert_eq!(offered.candidate_content_id, first_candidate);
-    let accepted = first_connection
-        .acknowledge_policy(OutagePolicyFixture::active_acknowledgement(
-            first_bundle,
-            1,
-            OUTAGE_NOW + 1,
-        ))
-        .await?;
-    assert_eq!(accepted.rollout_state, "ACTIVE");
-    proxy.block()?;
-
-    let second_resource = fixture.resource(2)?;
-    let second = fixture.owner.reconcile(
-        &second_resource,
-        OUTAGE_NAMESPACE_UID,
-        &inventory,
-        OUTAGE_NOW + 2,
-    )?;
-    let second_bundle = second.bundles.first().ok_or("missing replacement bundle")?;
-    assert_ne!(
-        second_bundle.candidate.candidate_content_id,
-        first_candidate
-    );
-
-    match tokio::time::timeout(Duration::from_secs(30), first_connection.next_message()).await {
-        Ok(Err(_closed)) => {}
-        Ok(Ok(_message)) => return Err("the blackholed Control session returned a message".into()),
-        Err(_elapsed) => {
-            return Err("the blackholed Control session did not force a reconnect".into());
-        }
-    }
-    drop(first_connection);
-    proxy.unblock()?;
-
-    let observations = EffectObservationStore::durable(
-        4,
-        tls.path().join("node-wal"),
-        EvidenceWalLimits::default(),
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
-    observations.record_bytes(
-        erebor_interceptor_abi::EffectObservationV1 {
-            observed_boottime_ns: 1,
-            source_sequence: 1,
-            source_cpu_id: 0,
-            task_cookie: 7,
-            reason: 9,
-            physical_result: 1,
-            effect_family: 1,
-            operation: 1,
-            ..erebor_interceptor_abi::EffectObservationV1::default()
-        }
-        .as_bytes(),
-    );
-    observations.mark_coverage_gapped(CoverageGapReasonV1::ControlDelay)?;
-    let retained = observations
-        .next_evidence_batch()
-        .ok_or("missing partition evidence")?;
-    let mut reconnected = connector
-        .connect(
-            OutagePolicyFixture::registration([7; 16], true),
-            true,
-            &mut trust,
-        )
-        .await?;
-    reconnected.report_readiness(true, true).await?;
-    reconnected.send_evidence_batch(retained).await?;
-    let NodeControlMessage::EvidenceAck(acknowledgement) = reconnected.next_message().await? else {
-        return Err("Control did not acknowledge retained partition evidence".into());
-    };
-    observations.acknowledge_evidence(acknowledgement)?;
-    let coverage = observations
-        .coverage_snapshot()
-        .ok_or("missing partition coverage")?;
-    let mut current_intervals = coverage.current_intervals();
-    let interval = current_intervals
-        .pop()
-        .ok_or("partition coverage has no current interval")?;
-    assert!(current_intervals.is_empty());
-
-    let priority_entered = Arc::new(Barrier::new(2));
-    let priority_release = Arc::new(Barrier::new(2));
-    let evidence_entered = Arc::new(Barrier::new(2));
-    let evidence_release = Arc::new(Barrier::new(2));
-    let coordination_store = fixture.owner.store();
-    assert!(coordination_store.pause_next_evidence_wait_for_test(
-        Arc::clone(&evidence_entered),
-        Arc::clone(&evidence_release),
-    ));
-    let priority_store = coordination_store.clone();
-    let priority_task = tokio::task::spawn_blocking({
-        let entered = Arc::clone(&priority_entered);
-        let release = Arc::clone(&priority_release);
-        move || priority_store.hold_priority_for_test(&entered, &release)
-    });
-    tokio::task::spawn_blocking({
-        let entered = Arc::clone(&priority_entered);
-        move || entered.wait()
-    })
-    .await?;
-    let mut coverage_task = tokio::spawn(async move {
-        let result = reconnected.send_coverage_report(&coverage, &interval).await;
-        (reconnected, result)
-    });
-    tokio::task::spawn_blocking({
-        let entered = Arc::clone(&evidence_entered);
-        move || entered.wait()
-    })
-    .await?;
-    tokio::task::spawn_blocking({
-        let release = Arc::clone(&priority_release);
-        move || release.wait()
-    })
-    .await?;
-    tokio::task::spawn_blocking(move || evidence_release.wait()).await?;
-
-    let completed_without_rescue =
-        tokio::time::timeout(Duration::from_millis(500), &mut coverage_task).await;
-    let needed_rescue = completed_without_rescue.is_err();
-    let (mut reconnected, coverage_result) = match completed_without_rescue {
-        Ok(result) => result?,
-        Err(_elapsed) => {
-            let rescue_store = coordination_store.clone();
-            tokio::task::spawn_blocking(move || rescue_store.commit_index()).await?;
-            coverage_task.await?
-        }
-    };
-    priority_task.await??;
-    assert!(
-        !needed_rescue,
-        "partition coverage slept after the final priority store operation completed"
-    );
-    let expected = coverage_result?;
-    let NodeControlMessage::CoverageAck(actual) = reconnected.next_message().await? else {
-        return Err("Control did not acknowledge partition coverage".into());
-    };
-    assert_eq!(actual, expected);
-    let replacement = reconnected
-        .policy_inventory(Some(&first_candidate), vec![first_digest])
-        .await?;
-    assert!(replacement.candidate_available);
-    assert_eq!(
-        replacement.candidate_content_id,
-        second_bundle.candidate.candidate_content_id
-    );
-
-    drop(reconnected);
-    proxy.stop().await?;
-    server.shutdown().await?;
     Ok(())
 }
 

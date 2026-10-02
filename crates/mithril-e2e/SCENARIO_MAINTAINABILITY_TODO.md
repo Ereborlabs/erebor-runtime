@@ -1401,7 +1401,7 @@ acknowledgement, or decommission operations directly.
     setup step does not complete the remaining scenario migration.
     All 19 related Control/TLS tests, strict E2E Clippy, and harness checks
     pass. No fixture or production operation changes. Remove 31 Rust lines net.
-- [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
+- [x] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
   - [x] Replace its two protocol behaviors with small standard tests in
     `control_tls/partition.rs`. Keep policy replacement and durable evidence
     replay in one test. Keep the final-priority-release race in a separate
@@ -1427,7 +1427,8 @@ acknowledgement, or decommission operations directly.
     Keep the diagnostic rescue operation and require that rescue was not
     needed. Keep exact coverage acknowledgement, replacement candidate,
     and normal proxy and Control shutdown checks.
-  - A temporary source prototype has 138 lines after formatting. It reuses
+  - The previous temporary source prototype has 138 lines after formatting.
+    It reuses
     the WAL fixture and keeps all production calls and security assertions
     in the test. No scenario helper hides the sequence. The prototype has
     not been compiled or executed. It is not in the crate. A one-time size
