@@ -441,7 +441,7 @@ mod tests {
             let held = std::fs::File::open(&target).context(IoSnafu { path: &target })?;
             assert!(target.join("file").exists());
             assert!(mounts.cleanup().is_err());
-            assert_eq!(mounts.targets, [target.clone()]);
+            assert_eq!(mounts.targets.as_slice(), std::slice::from_ref(&target));
             drop(held);
             mounts.cleanup()?;
             mounts.cleanup()?;
