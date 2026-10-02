@@ -154,19 +154,23 @@ Use these source tests to check each owner boundary:
 | Native reader recovery | [read tests](../../../../crates/araphor-data/src/analysis/read.rs): `query_scope_reader_recovery`, `query_input_native_cancel`, `analysis_read_cancel_cleanup`. |
 | Temporary input ownership | [adapter tests](../../../../crates/araphor-data/src/query/adapter.rs): value, repeated-scan, error, and Weak-reference lifetime checks. [input tests](../../../../crates/araphor-data/src/query/input.rs) check generated relations and exact allocation bounds. |
 | Fixed templates | [query tests](../../../../crates/araphor-data/src/query/tests.rs): `QueryFixture::baseline` evaluates complete scoped input through the pinned DuckDB adapter. Each trusted template compares against that result. |
-| Stream lifecycle | [follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs): snapshot race, empty progress, coalesced output, and output stall. [frame tests](../../../../crates/araphor-data/src/query/frame.rs) check envelopes, binding, identity, and shared byte reservations. |
+| Stream lifecycle | [follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs): snapshot race, empty progress, coalesced output, output stall, and `query_follow_autonomous_expiry` without a clock notification or heartbeat wake. [frame tests](../../../../crates/araphor-data/src/query/frame.rs) check envelopes, binding, identity, and shared byte reservations. |
+| Active evaluation cancellation | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): `query_scope_native_cancel` pauses inside a real native input scan, requires native failure after cancellation, and checks input/capacity release and later intake/query. Its barrier and native-error flag are test-only. |
 | Maintenance and evidence | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): reader release, held-output deletion, and both pin/delete commit orders. [retention tests](../../../../crates/araphor-data/src/analysis/retention.rs) check floor persistence, recovery, restore, and exact witnesses. |
-| Production-owner qualification | [query-follow](../../../../crates/mithril-e2e/src/discovery/query_follow.rs): eight small cases for data, time, stream barriers, retention, restart/restore, and policy continuity. The simultaneous pin/delete and rotation proofs are component tests. |
+| Production-owner qualification | [query-follow](../../../../crates/mithril-e2e/src/discovery/query_follow.rs): eight small cases for data, time, stream barriers, retention, restart/restore, and policy continuity. `timer_expiry` checks a timer-only replacement. `bounded_window` checks input/output overflow after a complete replacement, the retained checkpoint, no partial result, closure, and recovery. The simultaneous pin/delete and rotation proofs are component tests. |
 
-The final source is `68db8105`. Verification is **Done, PASS**. The complete
-workspace procedure passed after the last code edit. Its data library ran 139
+The final source is `17d8262e`. Verification is **Done, PASS**. The complete
+workspace procedure passed after the last code edit. Its data library ran 141
 tests with zero failures and five existing exclusions. All ten fixed templates
 have complete-input comparisons. The forced pin/delete orders, reader/rotation
 barriers, native cancellation, exact allocation bounds, and stream cleanup
 checks passed. The standalone query-follow command passed all eight cases.
 It uses synthetic evidence and a controlled clock through production owners.
 It does not qualify public SQL, OS process isolation, physical capture, or
-performance. The final Ponytail review added no storage or service layer.
+performance. The additional checks prove timer-only expiry, active native
+evaluation cancellation and cleanup, and established-stream overflow without
+a partial replacement or checkpoint advance. The final Ponytail review added
+no storage or service layer.
 Use the [phase result](phase-7-3-query-and-follow.md#implementation-result)
 for the final source revision, commands, and verification limits.
 

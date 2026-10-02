@@ -7,7 +7,8 @@ Provide the internal read engine for retained and live data.
 QueryOwner evaluates trusted internal read plans and returns one bounded stream.
 Immutable event reads append rows. Aggregate and mutable-view reads replace
 the complete bounded result. Entry: 7.2. Status: **Done** for trusted internal
-query and follow. Read the [final result](#final-query-qualification).
+query and follow. Read the [additional correctness checks](#additional-correctness-checks)
+for the latest verification result.
 
 The owner, record decoder, and query input types live in `araphor-data`.
 They work without a Control process or Control crate dependency. Phase 7.9
@@ -202,8 +203,9 @@ public API or durable subscription registry is not required.
 
 ## Implementation result
 
-Status: **Done** for the approved internal scope. The records below describe
-each deliverable. Reader/rotation locking is **Done**. The writer keeps
+Status: **Done** for the approved internal scope, including the additional
+checks below. The records describe each deliverable. Reader/rotation locking
+is **Done**. The writer keeps
 its coordinator, releases the raw-directory mutex before the rotation wait,
 and acquires that mutex again after segment protection. Directory waits in
 extraction and reader coordination check cancellation and deadlines.
@@ -361,7 +363,8 @@ is commit `038c3bd4`. The final workspace and CLI results follow.
 
 Status: **Done, PASS** at source commit `68db8105`. The complete workspace
 procedure and standalone production-owner case passed after the last code edit.
-No acceptance item remains open within the trusted internal scope.
+The later audit found three missing checks. The passing runs below do not
+prove those paths; their current status is recorded below.
 
 The first two workspace attempts found test-only Clippy errors: one unnecessary
 borrow, five explicit panic branches, and one unchecked field lookup. Commit
@@ -414,3 +417,77 @@ orders and concurrent rotation are component proofs, not physical e2e proofs.
 Public SQL, authenticated client cursors, production process isolation, remote
 packaging, and later discovery algorithms remain outside this phase. No new
 performance experiment or retired 8-GiB qualification ran.
+
+### Additional correctness checks
+
+Status: **Done, PASS** at source `17d8262e`. The three focused checks, complete
+workspace procedure, and standalone command passed after the last code edit.
+
+1. Commit `8126f431` adds `query_follow_autonomous_expiry`. The clock captures
+   the idle loop's old sample before a silent advance. The expiry timer returns
+   count 0 after count 1, with unchanged storage and checkpoint revisions.
+   The five-second deadline ends before the fifteen-second heartbeat. The
+   clock supplies no change notifications. Cancellation releases the input.
+2. Commit `1aa326ed` adds `query_scope_native_cancel`. A test-only barrier pauses
+   the native scan after its first actual chunk. Cancellation must make native
+   execution fail, not only the wrapper's final check. A release acknowledgement
+   excludes a barrier timeout as the failure cause. Weak input references then
+   expire, full capacity is available, and later intake and a count query pass.
+3. Commit `17d8262e` extends the existing eight-case qualification. Its windows
+   case checks timer-only expiry. Its bounded-window case consumes a complete
+   replacement and checkpoint before each input/output overflow. Only Health
+   frames may precede the typed error. The error keeps the previous checkpoint,
+   no partial replacement is sent, and the stream closes. Later intake and
+   bounded queries pass.
+
+The changes reuse existing owners, clock interfaces, frames, and temporary
+stores. The scan barrier and native-error flag compile only in data-crate test
+builds. No production behavior or storage format changes. The final Ponytail
+review found no blocker in these three checks.
+
+Each command below passed one test, with zero failures. Use the six environment
+settings from the final query qualification above:
+
+```sh
+cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query_follow_autonomous_expiry -- --nocapture
+cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query_scope_native_cancel -- --nocapture
+cargo test -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --lib query_follow_contract -- --nocapture
+```
+
+Logs: `/tmp/araphor-query-timer-proof.log`,
+`/tmp/araphor-query-cancel-proof.log`, and
+`/tmp/araphor-query-follow-proof-2.log`. The first E2E attempt failed because
+the fixture did not create its parent directory. The correction creates that
+temporary directory before opening its two stores. No production correction
+was required. These are correctness checks, not performance measurements.
+
+Final commands, with the same six environment settings shown above:
+
+```sh
+bash .github/scripts/verify-rust-ci.sh
+cargo run -p mithril-e2e --bin mithril_discovery_test -- --case query-follow --output-directory /tmp/araphor-query-follow-correctness
+```
+
+Both commands exited with code 0. Formatting, workspace compilation, Clippy
+with warnings denied, and all-target/all-feature tests passed. The affected
+library results were:
+
+| Library | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| `araphor-data` | 141 | 0 | 5 |
+| `mithril-control` | 176 | 0 | 2 |
+| `mithril-node` | 266 | 0 | 1 |
+| `mithril-e2e` | 124 | 0 | 406 |
+
+Other enabled workspace tests also passed. Existing ignored cases remain
+unqualified. All eight standalone cases passed, including the added timer-only
+expiry and established-stream overflow checks. The receipt records
+`ResultTooLarge` and `InputTooLarge`, each with the last complete checkpoint
+and a closed stream. The timer-only case records no clock notifications and
+unchanged storage. The proof limits from the earlier qualification still apply.
+
+Evidence paths:
+
+- Workspace log: `/tmp/araphor-query-proof-ci.log`.
+- Standalone command log: `/tmp/araphor-query-follow-correctness.log`.
+- Standalone receipt: `/tmp/araphor-query-follow-correctness/result.json`.

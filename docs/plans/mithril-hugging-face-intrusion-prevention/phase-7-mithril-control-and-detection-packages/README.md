@@ -150,9 +150,9 @@ The data crate now owns segment storage. The DuckDB raw-row path and
 Control-owned raw writer are removed. 7.4 removes discovery's copied raw
 export archive. At that storage closure, 7.3 had not started.
 
-7.3 is now **Done** for trusted internal query and follow at source `68db8105`.
+7.3 is now **Done** for trusted internal query and follow at source `17d8262e`.
 The complete workspace procedure and all eight standalone query-follow cases
-passed. Read its [final result](phase-7-3-query-and-follow.md#final-query-qualification)
+passed. Read its [final result](phase-7-3-query-and-follow.md#additional-correctness-checks)
 for commands, counts, and proof limits. Public SQL and process isolation still
 belong to Observability 3. This closure does not start another phase.
 
