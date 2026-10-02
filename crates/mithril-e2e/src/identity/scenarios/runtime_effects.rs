@@ -97,7 +97,7 @@ fn incomplete_probe_fails_closed<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = recovery_entry]
+#[lifecycle = bootstrap_recovery]
 fn recovered_bootstrap_exec<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("recovered-bootstrap-exec")?;
     env.start_control()?;
@@ -173,7 +173,7 @@ fn recovered_bootstrap_exec<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(runc, kubernetes)]
-#[lifecycle = recovery_entry]
+#[lifecycle = ptrace_entry_recovery]
 fn recovered_ptrace_is_scoped<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("recovered-ptrace")?;
     env.start_control()?;

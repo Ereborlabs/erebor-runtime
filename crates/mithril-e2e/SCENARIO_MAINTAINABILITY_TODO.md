@@ -3803,6 +3803,18 @@ test does not close a row when its physical condition or an assertion changed.
           cleanup, VM harness checks, and final Rust CI pass. See
           `/tmp/mithril-mount-cold-{light,kube,kube-remaining,ci}-20261001.log`.
           Continue only the 32 unfinished Kubernetes cases in 24 groups.
+          The continuation passes nine groups, then three recovered-entry
+          cases fail at actor creation with the same retained-gate denial.
+          Give readiness order, bootstrap exec, and scoped ptrace separate
+          cold-start lifecycles. The socket-transfer Allow and Deny pair has
+          the same actor-first requirement; separate those lifecycles too.
+          Keep all bodies and assertions unchanged. Verify affected Host and
+          runc cases before Kubernetes, then resume the unfinished groups.
+          All seven applicable Host and runc checks pass. All four affected
+          Kubernetes checks pass, with resource cleanup. Harness checks and
+          final Rust CI pass. See `/tmp/mithril-cold-recovery-{light,kube,ci}-20261001.log`.
+          The continuation now has 129 passing Kubernetes cases of 143.
+          Run only the remaining 14 cases. Do not restart passed groups.
           The continuation logs are
           `/tmp/mithril-group-recovery-matrix-{final,remaining}-20261001.log`.
           It contains 152 Host, 143 runc, and 143 Kubernetes cases. Only the

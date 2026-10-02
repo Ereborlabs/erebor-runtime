@@ -8,7 +8,7 @@ use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = socket_cross_recovery]
+#[lifecycle = socket_cross_allow]
 fn cross_namespace_socket_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-cross-allowed")?;
     env.start_control()?;
