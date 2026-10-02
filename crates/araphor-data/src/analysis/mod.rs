@@ -37,6 +37,7 @@ mod retirement;
 mod schema;
 mod segment_file;
 mod segments;
+mod trace;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
@@ -58,10 +59,11 @@ pub use retention::{
 };
 pub use retirement::ProcessorRetirementV1;
 pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
+pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 10;
+const ANALYSIS_SCHEMA_VERSION: i64 = 11;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -437,6 +439,11 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "create schema",
             })?;
+            transaction
+                .execute_batch(Self::TRACE_SCHEMA)
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create trace metadata",
+                })?;
             let initial_uuid = Uuid::new_v4().hyphenated().to_string();
             transaction
                 .execute(

@@ -228,6 +228,9 @@ impl AnalysisStore {
                     UNION ALL SELECT tenant_id, 'recovery_gaps', 256 FROM recovery_gaps
                     UNION ALL SELECT tenant_id, 'expired_ranges', 256 FROM expired_ranges
                     UNION ALL SELECT tenant_id, 'replay_floors', 256 FROM replay_floors
+                    UNION ALL SELECT tenant_id, 'traces',
+                        256 + octet_length(source) + octet_length(encode(bindings))
+                        + octet_length(authority) FROM traces
                 ) SELECT tenant_id, SUM(bytes)::UBIGINT AS logical_bytes,
                     COUNT(*) FILTER (WHERE family = 'coverage')::UBIGINT AS coverage_count,
                     COUNT(*) FILTER (WHERE family = 'context')::UBIGINT AS context_count,

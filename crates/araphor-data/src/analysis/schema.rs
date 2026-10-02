@@ -42,6 +42,7 @@ impl AnalysisStore {
         }
         Self::validate_sources(writer, root)?;
         Self::validate_contexts(writer, root)?;
+        Self::validate_traces(writer, root)?;
         let checks = [
             ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) <> 32"),
             ("invalid segment identity or state", "SELECT 1 FROM segments e
@@ -319,6 +320,7 @@ impl AnalysisStore {
             "stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM recovery_gaps",
             "segment_id, stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM expired_ranges",
             "tenant_id, commit_revision, ordinal FROM replay_floors",
+            "tenant_id, request_id, source, source_sha256, bindings, authority, accepted_unix_ns, deadline_unix_ns, host_sensitive, content_sha256, revision, cancel_requested, read_revoked FROM traces",
         ];
         for projection in projections {
             writer

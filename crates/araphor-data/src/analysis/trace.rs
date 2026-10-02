@@ -1,0 +1,659 @@
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use duckdb::{params, Connection, OptionalExt as _};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+use snafu::{ensure, ResultExt as _};
+
+use super::{AnalysisReadControl, AnalysisStore};
+use crate::{
+    AnalysisConflictSnafu, AnalysisDatabaseSnafu, JsonSnafu, Result, TraceIdentityV1,
+    TraceInvalidSnafu, TraceSourceV1, MAX_TRACE_TARGETS,
+};
+
+const MAX_AUTHORITY_BYTES: usize = 1024 * 1024;
+const TRACE_PAGE_ROWS: usize = 16;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceBindingV1 {
+    pub identity: TraceIdentityV1,
+    pub namespace_uid: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceIntentV1 {
+    pub tenant_id: [u8; 16],
+    pub request_id: [u8; 16],
+    pub source: TraceSourceV1,
+    pub bindings: Vec<TraceBindingV1>,
+    /// Control owns this bounded record. It does not contain source bytes.
+    pub authority: Vec<u8>,
+    pub accepted_unix_ns: u64,
+    pub deadline_unix_ns: u64,
+    pub host_sensitive: bool,
+}
+
+impl TraceIntentV1 {
+    pub fn validate(&self) -> Result<()> {
+        self.source.validate()?;
+        ensure!(
+            self.tenant_id != [0; 16]
+                && self.request_id != [0; 16]
+                && !self.bindings.is_empty()
+                && self.bindings.len() <= MAX_TRACE_TARGETS
+                && !self.authority.is_empty()
+                && self.authority.len() <= MAX_AUTHORITY_BYTES
+                && self.accepted_unix_ns > 0
+                && self.deadline_unix_ns > self.accepted_unix_ns
+                && self.deadline_unix_ns - self.accepted_unix_ns <= 315_000_000_000,
+            TraceInvalidSnafu {
+                reason: "trace intent identity, lifetime, or size is invalid",
+            }
+        );
+        let mut executions = BTreeSet::new();
+        for binding in &self.bindings {
+            binding.identity.validate()?;
+            ensure!(
+                binding.identity.tenant_id == self.tenant_id
+                    && binding.identity.request_id == self.request_id
+                    && binding.identity.source_sha256 == self.source.sha256
+                    && executions.insert(binding.identity.execution_id)
+                    && !binding.namespace_uid.is_empty()
+                    && binding.namespace_uid.len() <= 256
+                    && !binding.namespace_uid.chars().any(char::is_control),
+                TraceInvalidSnafu {
+                    reason: "trace intent changed or repeated a frozen binding",
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn digest(&self, root: &Path) -> Result<[u8; 32]> {
+        let bytes = serde_json::to_vec(self).context(JsonSnafu { path: root })?;
+        Ok(Sha256::digest(bytes).into())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceStateV1 {
+    pub tenant_id: [u8; 16],
+    pub request_id: [u8; 16],
+    pub revision: u64,
+    pub cancel_requested: bool,
+    pub read_revoked: bool,
+}
+
+#[derive(Debug)]
+pub struct TraceIntentPageV1 {
+    pub intents: Vec<(TraceStateV1, TraceIntentV1)>,
+    pub next_request: Option<[u8; 16]>,
+}
+
+impl AnalysisStore {
+    pub(super) const TRACE_SCHEMA: &'static str = "CREATE TABLE traces (
+        tenant_id BLOB NOT NULL,
+        request_id BLOB NOT NULL,
+        source BLOB NOT NULL,
+        source_sha256 BLOB NOT NULL,
+        bindings VARCHAR NOT NULL,
+        authority BLOB NOT NULL,
+        accepted_unix_ns UBIGINT NOT NULL,
+        deadline_unix_ns UBIGINT NOT NULL,
+        host_sensitive BOOLEAN NOT NULL,
+        content_sha256 BLOB NOT NULL,
+        revision UBIGINT NOT NULL,
+        cancel_requested BOOLEAN NOT NULL,
+        read_revoked BOOLEAN NOT NULL,
+        PRIMARY KEY (tenant_id, request_id)
+    )";
+
+    pub fn accept_trace(&self, intent: &TraceIntentV1) -> Result<TraceStateV1> {
+        intent.validate()?;
+        let bindings =
+            serde_json::to_string(&intent.bindings).context(JsonSnafu { path: &self.root })?;
+        let digest = intent.digest(&self.root)?;
+        let mut writer = self.maintenance_writer()?;
+        let transaction = writer
+            .get_mut()?
+            .transaction()
+            .context(AnalysisDatabaseSnafu {
+                operation: "begin trace intent",
+            })?;
+        if let Some((state, stored)) = Self::read_trace_intent(
+            &transaction,
+            &self.root,
+            intent.tenant_id,
+            intent.request_id,
+        )? {
+            if &stored != intent {
+                return AnalysisConflictSnafu.fail();
+            }
+            return Ok(state);
+        }
+        self.require_capacity(false)?;
+        let (total, scoped): (u64, u64) = transaction.query_row(
+            "SELECT COUNT(*)::UBIGINT, COUNT(*) FILTER (WHERE tenant_id = ?)::UBIGINT FROM traces",
+            params![intent.tenant_id.as_slice()], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "count retained trace requests" })?;
+        if total >= 1024 || scoped >= 256 {
+            return crate::StorageCapacitySnafu {
+                resource: "retained trace requests",
+            }
+            .fail();
+        }
+        let revision = Self::read_meta_from(&transaction, &self.root)?
+            .commit_revision
+            .checked_add(1)
+            .ok_or_else(|| self.state_error("the trace intent revision is exhausted"))?;
+        transaction
+            .execute(
+                "INSERT INTO traces VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, false)",
+                params![
+                    intent.tenant_id.as_slice(),
+                    intent.request_id.as_slice(),
+                    intent.source.bytes.as_slice(),
+                    intent.source.sha256.as_slice(),
+                    bindings,
+                    intent.authority.as_slice(),
+                    intent.accepted_unix_ns,
+                    intent.deadline_unix_ns,
+                    intent.host_sensitive,
+                    digest.as_slice(),
+                    revision,
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "insert immutable trace intent",
+            })?;
+        super::quota::UsageChange::from(
+            (256 + intent.source.bytes.len() + bindings.len() + intent.authority.len()) as i64,
+        )
+        .apply(&transaction, &intent.tenant_id)?;
+        self.check_logical(&transaction, intent.tenant_id, false)?;
+        Self::record_revision(&transaction, revision, &["traces"])?;
+        self.commit_metadata(transaction, "commit trace intent")?;
+        self.revision.send_replace(revision);
+        Ok(TraceStateV1 {
+            tenant_id: intent.tenant_id,
+            request_id: intent.request_id,
+            revision,
+            cancel_requested: false,
+            read_revoked: false,
+        })
+    }
+
+    pub fn trace_intent(
+        &self,
+        tenant: [u8; 16],
+        request: [u8; 16],
+    ) -> Result<Option<(TraceStateV1, TraceIntentV1)>> {
+        Self::check_trace_key(tenant, request)?;
+        let control = AnalysisReadControl::default();
+        // Intent reads must not publish the pending raw catalogue before an upload ACK.
+        let writer = self.raw_coordinator(&control)?;
+        let reader = writer.get()?;
+        control.query_run(reader, || {
+            Self::read_trace_intent(reader, &self.root, tenant, request)
+        })
+    }
+
+    pub fn trace_intents(
+        &self,
+        tenant: [u8; 16],
+        after: Option<[u8; 16]>,
+    ) -> Result<TraceIntentPageV1> {
+        ensure!(
+            tenant != [0; 16] && after.is_none_or(|id| id != [0; 16]),
+            TraceInvalidSnafu {
+                reason: "trace intent page identity is invalid",
+            }
+        );
+        let control = AnalysisReadControl::default();
+        let writer = self.raw_coordinator(&control)?;
+        let reader = writer.get()?;
+        control.query_run(reader, || {
+            let mut statement = reader
+                .prepare(
+                    "SELECT request_id FROM traces WHERE tenant_id = ?
+                     AND (CAST(? AS BLOB) IS NULL OR request_id > ?)
+                     ORDER BY request_id LIMIT ?",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare trace intent page",
+                })?;
+            let requests = statement
+                .query_map(
+                    params![
+                        tenant.as_slice(),
+                        after.as_ref().map(|id| id.as_slice()),
+                        after.as_ref().map(|id| id.as_slice()),
+                        TRACE_PAGE_ROWS as u32,
+                    ],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read trace intent keys",
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode trace intent keys",
+                })?;
+            let mut intents = Vec::with_capacity(requests.len());
+            for request in requests {
+                control.check()?;
+                let request = request
+                    .try_into()
+                    .map_err(|_| self.state_error("the stored trace request key is invalid"))?;
+                intents.push(
+                    Self::read_trace_intent(reader, &self.root, tenant, request)?
+                        .ok_or_else(|| self.state_error("the stored trace intent is absent"))?,
+                );
+            }
+            let next_request = (intents.len() == TRACE_PAGE_ROWS)
+                .then(|| intents.last().map(|(state, _)| state.request_id))
+                .flatten();
+            Ok(TraceIntentPageV1 {
+                intents,
+                next_request,
+            })
+        })
+    }
+
+    pub fn update_trace(&self, next: &TraceStateV1) -> Result<TraceStateV1> {
+        Self::check_trace_key(next.tenant_id, next.request_id)?;
+        let expected = next.revision;
+        ensure!(
+            expected > 0 && (!next.read_revoked || next.cancel_requested),
+            TraceInvalidSnafu {
+                reason: "trace state revision or cancellation is invalid",
+            }
+        );
+        let mut writer = self.maintenance_writer()?;
+        let transaction = writer
+            .get_mut()?
+            .transaction()
+            .context(AnalysisDatabaseSnafu {
+                operation: "begin trace state",
+            })?;
+        let Some((stored, _)) =
+            Self::read_trace_intent(&transaction, &self.root, next.tenant_id, next.request_id)?
+        else {
+            return self.reject("the trace request is absent");
+        };
+        if stored.revision != expected
+            || (stored.cancel_requested && !next.cancel_requested)
+            || (stored.read_revoked && !next.read_revoked)
+        {
+            return AnalysisConflictSnafu.fail();
+        }
+        if &stored == next {
+            return Ok(stored);
+        }
+        let revision = Self::read_meta_from(&transaction, &self.root)?
+            .commit_revision
+            .checked_add(1)
+            .ok_or_else(|| self.state_error("the trace state revision is exhausted"))?;
+        transaction
+            .execute(
+                "UPDATE traces SET revision = ?, cancel_requested = ?, read_revoked = ?
+             WHERE tenant_id = ? AND request_id = ? AND revision = ?",
+                params![
+                    revision,
+                    next.cancel_requested,
+                    next.read_revoked,
+                    next.tenant_id.as_slice(),
+                    next.request_id.as_slice(),
+                    expected
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "update trace state",
+            })?;
+        Self::record_revision(&transaction, revision, &["traces"])?;
+        self.commit_metadata(transaction, "commit trace state")?;
+        self.revision.send_replace(revision);
+        Ok(TraceStateV1 {
+            revision,
+            ..next.clone()
+        })
+    }
+
+    fn check_trace_key(tenant: [u8; 16], request: [u8; 16]) -> Result<()> {
+        ensure!(
+            tenant != [0; 16] && request != [0; 16],
+            TraceInvalidSnafu {
+                reason: "trace request key is invalid"
+            }
+        );
+        Ok(())
+    }
+
+    fn read_trace_intent(
+        reader: &Connection,
+        root: &Path,
+        tenant: [u8; 16],
+        request: [u8; 16],
+    ) -> Result<Option<(TraceStateV1, TraceIntentV1)>> {
+        let mut statement = reader
+            .prepare(
+                "SELECT source, source_sha256, bindings, authority, accepted_unix_ns,
+             deadline_unix_ns, host_sensitive, content_sha256, revision,
+             cancel_requested, read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?",
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare trace intent",
+            })?;
+        let row = statement
+            .query_row(params![tenant.as_slice(), request.as_slice()], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, u64>(4)?,
+                    row.get::<_, u64>(5)?,
+                    row.get::<_, bool>(6)?,
+                    row.get::<_, Vec<u8>>(7)?,
+                    row.get::<_, u64>(8)?,
+                    row.get::<_, bool>(9)?,
+                    row.get::<_, bool>(10)?,
+                ))
+            })
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read trace intent",
+            })?;
+        let Some((
+            bytes,
+            digest,
+            bindings,
+            authority,
+            accepted,
+            deadline,
+            host,
+            checksum,
+            revision,
+            cancel,
+            revoked,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        let sha256 = digest.try_into().map_err(|_| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the stored trace source digest is invalid",
+            }
+            .build()
+        })?;
+        let source = TraceSourceV1 { bytes, sha256 };
+        if revision == 0 || (revoked && !cancel) {
+            return Self::reject_path(root, "the stored trace source or state changed");
+        }
+        let intent = TraceIntentV1 {
+            tenant_id: tenant,
+            request_id: request,
+            source,
+            bindings: serde_json::from_str(&bindings).context(JsonSnafu { path: root })?,
+            authority,
+            accepted_unix_ns: accepted,
+            deadline_unix_ns: deadline,
+            host_sensitive: host,
+        };
+        if intent.validate().is_err() {
+            return Self::reject_path(root, "the stored trace intent is invalid");
+        }
+        if intent.digest(root)?.as_slice() != checksum {
+            return Self::reject_path(root, "the immutable trace intent changed");
+        }
+        Ok(Some((
+            TraceStateV1 {
+                tenant_id: tenant,
+                request_id: request,
+                revision,
+                cancel_requested: cancel,
+                read_revoked: revoked,
+            },
+            intent,
+        )))
+    }
+
+    pub(super) fn validate_traces(reader: &Connection, root: &Path) -> Result<()> {
+        let meta = Self::read_meta_from(reader, root)?;
+        let revision: u64 = reader
+            .query_row(
+                "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT FROM relation_revisions
+             WHERE relation_name = 'traces'",
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read trace relation revision",
+            })?;
+        let mut after = -1_i64;
+        loop {
+            let mut statement = reader
+                .prepare(
+                    "SELECT rowid, tenant_id, request_id, revision FROM traces
+                 WHERE rowid > ? ORDER BY rowid LIMIT 16",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare trace recovery page",
+                })?;
+            let rows = statement
+                .query_map(params![after], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, u64>(3)?,
+                    ))
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read trace recovery page",
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode trace recovery page",
+                })?;
+            if rows.is_empty() {
+                break;
+            }
+            for (row, tenant, request, changed) in rows {
+                let tenant = tenant.try_into().map_err(|_| {
+                    crate::AnalysisStateSnafu {
+                        path: root,
+                        reason: "the retained trace tenant is invalid",
+                    }
+                    .build()
+                })?;
+                let request = request.try_into().map_err(|_| {
+                    crate::AnalysisStateSnafu {
+                        path: root,
+                        reason: "the retained trace request is invalid",
+                    }
+                    .build()
+                })?;
+                if changed > meta.commit_revision
+                    || changed > revision
+                    || Self::read_trace_intent(reader, root, tenant, request)?.is_none()
+                {
+                    return Self::reject_path(root, "the retained trace revision is invalid");
+                }
+                after = row;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn intent(request: u8) -> TraceIntentV1 {
+        let source = TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec()).unwrap();
+        TraceIntentV1 {
+            tenant_id: [1; 16],
+            request_id: [request; 16],
+            bindings: vec![TraceBindingV1 {
+                identity: TraceIdentityV1 {
+                    tenant_id: [1; 16],
+                    node_id: "node-a".into(),
+                    node_boot_id: [2; 16],
+                    request_id: [request; 16],
+                    execution_id: [request; 16],
+                    source_sha256: source.sha256,
+                },
+                namespace_uid: "namespace-a".into(),
+            }],
+            source,
+            authority: b"authorized-input".to_vec(),
+            accepted_unix_ns: 100,
+            deadline_unix_ns: 10_000,
+            host_sensitive: false,
+        }
+    }
+
+    #[test]
+    fn observability_intent_recovery() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open(&root)?;
+        let input = intent(3);
+        let state = store.accept_trace(&input)?;
+        assert_eq!(store.accept_trace(&input)?, state);
+        let mut changed = input.clone();
+        changed.authority.push(b'!');
+        assert!(matches!(
+            store.accept_trace(&changed),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        let cancelled = store.update_trace(&TraceStateV1 {
+            cancel_requested: true,
+            read_revoked: true,
+            ..state.clone()
+        })?;
+        assert_eq!(store.update_trace(&cancelled)?, cancelled);
+        assert!(matches!(
+            store.update_trace(&state),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        assert!(matches!(
+            store.update_trace(&TraceStateV1 {
+                cancel_requested: false,
+                read_revoked: false,
+                ..cancelled.clone()
+            }),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(
+            store.trace_intent(input.tenant_id, input.request_id)?,
+            Some((cancelled, input))
+        );
+        assert!(store.trace_intent([4; 16], [3; 16])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_intent_pages() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("data"))?;
+        for request in 1..=17 {
+            store.accept_trace(&intent(request))?;
+        }
+        let first = store.trace_intents([1; 16], None)?;
+        assert_eq!(first.intents.len(), 16);
+        assert_eq!(first.next_request, Some([16; 16]));
+        let last = store.trace_intents([1; 16], first.next_request)?;
+        assert_eq!(last.intents.len(), 1);
+        assert_eq!(last.intents[0].0.request_id, [17; 16]);
+        assert!(last.next_request.is_none());
+        assert!(store.trace_intents([2; 16], None)?.intents.is_empty());
+        let mut invalid = intent(18);
+        invalid.bindings.push(invalid.bindings[0].clone());
+        assert!(store.accept_trace(&invalid).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_intent_corruption() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open(&root)?;
+        store.accept_trace(&intent(3))?;
+        store.writer()?.get_mut()?.execute(
+            "UPDATE traces SET authority = ?",
+            params![b"changed-input".as_slice()],
+        )?;
+        assert!(store.trace_intent([1; 16], [3; 16]).is_err());
+        drop(store);
+        assert!(AnalysisStore::open(&root).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_intent_pressure() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open(&root)?;
+        let input = intent(3);
+        let state = store.accept_trace(&input)?;
+        let padding = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join("quota-test"))?;
+        padding.set_len(store.storage.disk_max_bytes)?;
+        assert!(matches!(
+            store.accept_trace(&intent(4)),
+            Err(crate::Error::StorageCapacity { .. })
+        ));
+        assert_eq!(store.accept_trace(&input)?, state);
+        let cancelled = store.update_trace(&TraceStateV1 {
+            cancel_requested: true,
+            read_revoked: true,
+            ..state
+        })?;
+        assert_eq!(store.trace_intent([1; 16], [3; 16])?.unwrap().0, cancelled);
+        Ok(())
+    }
+
+    #[test]
+    fn observability_intent_raw_pending() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::Ordering;
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("data"))?;
+        store.accept_trace(&intent(3))?;
+        store.accept_validated_batch(
+            crate::EvidenceIntakeIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "node-a".into(),
+                node_boot_id: [2; 16],
+                label_epoch: 1,
+                source_id: [3; 16],
+                source_epoch: 1,
+            },
+            crate::ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 100,
+                framed_records: vec![1, 2, 3].into(),
+                frame_ends: vec![3],
+            },
+        )?;
+        for _ in 0..2 {
+            assert!(store.trace_intent([1; 16], [3; 16])?.is_some());
+            assert_eq!(store.trace_intents([1; 16], None)?.intents.len(), 1);
+            assert!(store.raw_pending.load(Ordering::Acquire));
+            assert!(!store.raw_dirty.load(Ordering::Acquire));
+        }
+        Ok(())
+    }
+}
