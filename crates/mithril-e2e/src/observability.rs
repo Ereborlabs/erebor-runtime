@@ -37,6 +37,7 @@ struct CaseResult {
     observed_program_ids: BTreeSet<u64>,
     observed_map_ids: BTreeSet<u64>,
     observed_link_ids: BTreeSet<u64>,
+    hash_entries: BTreeMap<u64, u32>,
     map_memlock_bytes: BTreeMap<u64, Option<u64>>,
     kernel_runtime: BTreeMap<u32, KernelRunTime>,
     cleanup_verified: bool,
@@ -77,6 +78,16 @@ impl CaseResult {
     }
 
     fn verify(&self) -> ProofResult<()> {
+        if self.hash_entries.values().any(|entries| *entries > 4096)
+            || (matches!(self.name, "syscall-errors" | "failed-opens")
+                && self.hash_entries.is_empty())
+        {
+            return Err(format!(
+                "{}: the diagnostic map-key ceiling is not proved",
+                self.name
+            )
+            .into());
+        }
         let diagnostics: Vec<_> = self
             .frames
             .iter()
@@ -517,6 +528,7 @@ impl ObservabilityQualification {
             let mut observed_program_ids = BTreeSet::new();
             let mut observed_map_ids = BTreeSet::new();
             let mut observed_link_ids = BTreeSet::new();
+            let mut hash_entries = BTreeMap::new();
             let mut map_memlock_bytes = BTreeMap::new();
             let mut kernel_runtime = BTreeMap::new();
             let mut stopped = false;
@@ -531,6 +543,11 @@ impl ObservabilityQualification {
                 observed_program_ids.extend(live.programs.difference(&baseline.programs).copied());
                 observed_map_ids.extend(live.maps.difference(&baseline.maps).copied());
                 observed_link_ids.extend(live.links.difference(&baseline.links).copied());
+                for map in libbpf_rs::query::MapInfoIter::default().filter(|map| {
+                    observed_map_ids.contains(&u64::from(map.id)) && map.ty.is_hash_map()
+                }) {
+                    hash_entries.insert(u64::from(map.id), map.max_entries);
+                }
                 for program in libbpf_rs::query::ProgInfoIter::default()
                     .filter(|program| observed_program_ids.contains(&u64::from(program.id)))
                 {
@@ -584,6 +601,7 @@ impl ObservabilityQualification {
                 observed_program_ids,
                 observed_map_ids,
                 observed_link_ids,
+                hash_entries,
                 map_memlock_bytes,
                 kernel_runtime,
                 cleanup_verified: after == baseline,
@@ -833,6 +851,7 @@ mod tests {
             observed_program_ids: BTreeSet::from([11]),
             observed_map_ids: BTreeSet::from([12]),
             observed_link_ids: BTreeSet::new(),
+            hash_entries: BTreeMap::from([(12, 4096)]),
             map_memlock_bytes: BTreeMap::new(),
             kernel_runtime: BTreeMap::new(),
             cleanup_verified: true,
@@ -870,6 +889,17 @@ mod tests {
             record.observed_program_ids.clear();
             assert!(record.verify().is_err(), "{name}: no observed program");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_map_capacity() -> ProofResult<()> {
+        let mut record = capture_case("syscall-errors");
+        record.verify()?;
+        record.hash_entries.insert(12, 4097);
+        assert!(record.verify().is_err());
+        record.hash_entries.clear();
+        assert!(record.verify().is_err());
         Ok(())
     }
 
@@ -942,6 +972,7 @@ mod tests {
         record.frames.clear();
         record.observed_program_ids.clear();
         record.observed_map_ids.clear();
+        record.hash_entries.clear();
         record.verify()?;
         record.observed_link_ids.insert(13);
         assert!(record.verify().is_err());
@@ -1079,6 +1110,7 @@ assert len(names) == 10 and all(name.startswith(f'tr{i}:') for i, name in enumer
             observed_program_ids: BTreeSet::new(),
             observed_map_ids: BTreeSet::new(),
             observed_link_ids: BTreeSet::new(),
+            hash_entries: BTreeMap::new(),
             map_memlock_bytes: BTreeMap::new(),
             kernel_runtime: BTreeMap::new(),
             cleanup_verified: true,
