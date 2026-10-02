@@ -3642,6 +3642,17 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace both exact-file `io_uring` reads with a small shared test.
+    Reuse the descriptor policy, Python process owner, and effect observer.
+    Keep the retained descriptors, disabled restricted ring, asynchronous
+    one-byte read, denied secret, successful control, and Observe result.
+    Check every old request field and empty ring, request, and generation
+    references after completion. Keep the old actions until all platforms
+    pass. Add no Platform or production API.
+    The shared Python actor passes the production-backed Host draft in
+    35.35 seconds. It closes each ring and mapping with `ExitStack`. The
+    draft has 97 lines. All 91 local E2E tests, 25 related effect checks,
+    strict Clippy, and formatting pass. Keep Observe and other platforms open.
   - [ ] Replace the abstract Unix-stream round trip with
     `unix_stream_is_allowed`. Use the existing actor-group setup for two
     distinct bindings under one policy and one shared network namespace.
