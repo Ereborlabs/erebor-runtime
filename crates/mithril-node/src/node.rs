@@ -968,6 +968,22 @@ impl NodeChassis {
         )
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn set_trace_hook(&mut self, callback: impl FnOnce() + Send + 'static) -> Result<()> {
+        let owner = self.trace.as_ref().context(IdentityStateSnafu {
+            reason: "the diagnostic owner is absent",
+        })?;
+        owner
+            .lock()
+            .map_err(|_| {
+                IdentityStateSnafu {
+                    reason: "diagnostic owner lock failed",
+                }
+                .build()
+            })?
+            .set_intent_hook(callback)
+    }
+
     async fn poll_diagnostics(
         &mut self,
         connection: &mut crate::control::ControlConnection,

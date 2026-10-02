@@ -101,6 +101,8 @@ pub struct NodeTraceOwner {
     config: NodeTraceConfigV1,
     reader: KernelStateReader,
     active: BTreeMap<[u8; 16], ActiveTrace>,
+    #[cfg(any(test, feature = "test-support"))]
+    intent_hook: Option<Box<dyn FnOnce() + Send>>,
 }
 
 struct TraceSpool {
@@ -171,6 +173,8 @@ impl NodeTraceOwner {
             config,
             reader,
             active: BTreeMap::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            intent_hook: None,
         };
         for entry in fs::read_dir(&owner.root).context(IoSnafu { path: &owner.root })? {
             let entry = entry.context(IoSnafu { path: &owner.root })?;
@@ -184,6 +188,18 @@ impl NodeTraceOwner {
         }
         owner.recover_inactive()?;
         Ok(owner)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_intent_hook(&mut self, callback: impl FnOnce() + Send + 'static) -> Result<()> {
+        ensure!(
+            self.intent_hook.is_none(),
+            IdentityStateSnafu {
+                reason: "a diagnostic intent hook is already installed"
+            }
+        );
+        self.intent_hook = Some(Box::new(callback));
+        Ok(())
     }
 
     fn recover_inactive(&self) -> Result<()> {
@@ -368,6 +384,10 @@ impl NodeTraceOwner {
                 return Err(error);
             }
         };
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(callback) = self.intent_hook.take() {
+            callback();
+        }
         let Some(target) = target.filter(|target| target.validate(&self.reader).is_ok()) else {
             spool.complete(&TraceTerminalV1 {
                 execution_id: id,
@@ -1141,6 +1161,63 @@ mod tests {
         assert_eq!(terminal.reason, TraceTerminalReasonV1::TargetChanged);
         assert!(owner.active.is_empty());
         assert_eq!(owner.retained()?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "subprocess helper; run through observability_intent_crash"]
+    fn observability_intent_crash_child() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let root =
+            PathBuf::from(std::env::var_os("ARAPHOR_TRACE_CRASH_ROOT").ok_or("missing root")?);
+        let mut owner = NodeTraceOwner::open(
+            &root,
+            [1; 16],
+            "node-a".into(),
+            [2; 16],
+            config(),
+            KernelStateReader::new(&root),
+        )?;
+        owner.set_intent_hook(|| std::process::exit(73))?;
+        assert!(owner.set_intent_hook(|| {}).is_err());
+        let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
+        owner.admit(dispatch()?, None, &key, 2)?;
+        Err("the intent hook did not exit".into())
+    }
+
+    #[test]
+    fn observability_intent_crash() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "observability::tests::observability_intent_crash_child",
+                "--ignored",
+            ])
+            .env("ARAPHOR_TRACE_CRASH_ROOT", directory.path())
+            .status()?;
+        assert_eq!(status.code(), Some(73));
+        let mut owner = NodeTraceOwner::open(
+            directory.path(),
+            [1; 16],
+            "node-a".into(),
+            [2; 16],
+            config(),
+            KernelStateReader::new(directory.path()),
+        )?;
+        let dispatch = dispatch()?;
+        let id = dispatch.accepted.execution_id(0)?;
+        let terminal = owner.terminal(id)?.ok_or("missing recovered terminal")?;
+        assert_eq!(terminal.reason, TraceTerminalReasonV1::NodeRestarted);
+        assert_eq!(terminal.cleanup, TraceCleanupV1::Unknown);
+        assert!(terminal.output_incomplete);
+        assert_eq!(terminal.last_sequence, 0);
+        assert_eq!(terminal.output_bytes, 0);
+        assert!(owner.active.is_empty());
+        assert_eq!(owner.retained()?, vec![(id, dispatch.clone())]);
+        let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
+        owner.set_intent_hook(|| panic!("duplicate dispatch started again"))?;
+        assert_eq!(owner.admit(dispatch, None, &key, 3)?, id);
+        assert_eq!(owner.terminal(id)?, Some(terminal));
         Ok(())
     }
 
