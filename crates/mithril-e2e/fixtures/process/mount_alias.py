@@ -14,6 +14,7 @@ libc.mount.argtypes = [
     ctypes.c_ulong,
     ctypes.c_void_p,
 ]
+libc.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
 libc.open_tree.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
 libc.open_tree.restype = ctypes.c_int
 libc.move_mount.argtypes = [
@@ -77,7 +78,7 @@ def move_tree(tree, target):
         os.close(tree)
 
 
-def read_file(path):
+def read_file(path, marker=None):
     result = {"mount_namespace": os.stat("/proc/self/ns/mnt").st_ino,
               "errno": 0, "value": None}
     try:
@@ -85,11 +86,18 @@ def read_file(path):
             result["value"] = source.read()
     except OSError as error:
         result["errno"] = error.errno
+    if marker is not None:
+        try:
+            os.stat(marker)
+            result["marker_errno"] = 0
+        except OSError as error:
+            result["marker_errno"] = error.errno
     return result
 
 
 args = sys.argv[2:]
-if args == ["external-setattr"]:
+if args in (["external-setattr"], ["external-bind"]):
+    kind = args[0]
     pid = int(sys.argv[1])
     namespace = os.open(f"/proc/{pid}/ns/mnt", os.O_RDONLY)
     root = os.open(f"/proc/{pid}/root", os.O_RDONLY | os.O_DIRECTORY)
@@ -103,25 +111,41 @@ if args == ["external-setattr"]:
         os.close(root)
         os.close(namespace)
     target = b"/work/mount/allowed-alias"
+    if kind == "external-bind":
+        target += b"/target"
     print("native-fixture-ready", flush=True)
     for command in sys.stdin:
         if command == "stop\n":
             sys.exit(0)
-        if command not in ("ro\n", "rw\n"):
-            sys.exit(2)
-        readonly = command == "ro\n"
-        attr = MountAttr(int(readonly), int(not readonly), 0, 0)
-        check(libc.mount_setattr(
-            AT_FDCWD, target, AT_RECURSIVE, ctypes.byref(attr), ctypes.sizeof(attr)
-        ))
-        actual = bool(os.statvfs(target).f_flag & os.ST_RDONLY)
-        if actual != readonly:
-            raise RuntimeError(f"mount read-only state is {actual}; expected {readonly}")
+        if kind == "external-bind":
+            if command == "bind\n":
+                check(libc.mount(b"/work/mount/propagation-source", target, None, MS_BIND, None))
+            elif command == "unmount\n":
+                check(libc.umount2(target, 0))
+            else:
+                sys.exit(2)
+            expected = command == "bind\n"
+            try:
+                os.stat(target + b"/marker")
+                actual = True
+            except FileNotFoundError:
+                actual = False
+        else:
+            if command not in ("ro\n", "rw\n"):
+                sys.exit(2)
+            expected = command == "ro\n"
+            attr = MountAttr(int(expected), int(not expected), 0, 0)
+            check(libc.mount_setattr(
+                AT_FDCWD, target, AT_RECURSIVE, ctypes.byref(attr), ctypes.sizeof(attr)
+            ))
+            actual = bool(os.statvfs(target).f_flag & os.ST_RDONLY)
+        if actual != expected:
+            raise RuntimeError(f"mount state is {actual}; expected {expected}")
         name = ctypes.create_string_buffer(f"mnt-{command.strip()}-{int(actual)}".encode())
         check(libc.prctl(15, name, 0, 0, 0))
     sys.exit(0)
 if args not in (
-    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"], ["reconfigure"], ["cache"]
+    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"], ["reconfigure"], ["cache"], ["shared"]
 ):
     sys.exit(2)
 mode = args[0] if args else "early"
@@ -168,6 +192,14 @@ if mode == "early":
     check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
 if mode not in ("recursive", "future", "runtime", "reconfigure"):
     check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
+marker = None
+if mode == "shared":
+    source = os.path.join(root, "propagation-source")
+    os.mkdir(source)
+    with open(os.path.join(source, "marker"), "w", encoding="utf-8") as output:
+        output.write("propagated mount\n")
+    os.mkdir(os.path.join(allowed_alias, "target"))
+    marker = os.path.join(allowed_alias, "target", "marker")
 prepared_tree = None
 if mode == "prepared":
     prepared_tree = open_tree(secret)
@@ -189,10 +221,13 @@ if mode == "race":
         thread.start()
 print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
-if mode == "cache":
+if mode in ("cache", "shared"):
+    phases = ("b\n", "bind\n", "unmount\n") if mode == "shared" else ("b\n", "ro\n", "rw\n")
     peer, request, reply = None, None, None
     while command != "stop\n":
         if command == "peer\n" and peer is None:
+            if mode == "shared":
+                check(libc.mount(None, allowed_alias.encode(), None, MS_SHARED, None))
             rx, tx = os.pipe()
             rd, wr = os.pipe()
             peer = os.fork()
@@ -206,9 +241,9 @@ if mode == "cache":
                     for phase in commands:
                         if phase == "stop\n":
                             break
-                        if phase not in ("b\n", "ro\n", "rw\n"):
+                        if phase not in phases:
                             sys.exit(2)
-                        replies.write(json.dumps(read_file(os.path.join(allowed, "open"))) + "\n")
+                        replies.write(json.dumps(read_file(os.path.join(allowed, "open"), marker)) + "\n")
                         replies.flush()
                 sys.exit(0)
             os.close(rx)
@@ -220,17 +255,19 @@ if mode == "cache":
             check(libc.prctl(15, ctypes.create_string_buffer(b"cache-peer-up"), 0, 0, 0))
             command = sys.stdin.readline()
             continue
-        if command not in ("b\n", "ro\n", "rw\n", "pb\n", "pro\n", "prw\n"):
+        phase = command[1:] if command.startswith("p") else command
+        if phase not in phases:
             sys.exit(2)
         if command.startswith("p"):
             request.write(command[1:])
             request.flush()
             result = json.loads(reply.readline())
         else:
-            result = read_file(os.path.join(allowed, "open"))
+            result = read_file(os.path.join(allowed, "open"), marker)
         with open(result_path, "w", encoding="utf-8") as output:
             json.dump(result, output)
-        name = ctypes.create_string_buffer(f"cache-{command.strip()}-{result['errno']}".encode())
+        label = f"read-{command.strip()}" if mode == "shared" else f"cache-{command.strip()}-{result['errno']}"
+        name = ctypes.create_string_buffer(label.encode())
         check(libc.prctl(15, name, 0, 0, 0))
         command = sys.stdin.readline()
     if peer is not None:
@@ -250,7 +287,6 @@ if mode == "reconfigure":
     libc.fsconfig.argtypes = [
         ctypes.c_int, ctypes.c_uint, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int
     ]
-    libc.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
     while command != "stop\n":
         code = 0
         if command == "mount\n":
