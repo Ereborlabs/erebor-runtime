@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 use mithril_control::WorkloadProtectionPolicy as Policy;
@@ -34,7 +34,6 @@ fn setattr_rebuilds_namespaces<P: Platform>() -> TestResult<()> {
     let peer = actor.wait_child(actor.id(), "mount peer")?;
     actor.track(peer)?;
     let cache = MountCache::new(&env, actor.id())?;
-    let peer_cache = MountCache::new(&env, peer)?;
 
     for policy in ["mount_alias_policy.json", "mount_observe_policy.json"] {
         assert_eq!(env.install_policy(policy)?, labels);
@@ -42,7 +41,7 @@ fn setattr_rebuilds_namespaces<P: Platform>() -> TestResult<()> {
         env.node_ready()?;
         for phase in ["b", "ro", "rw"] {
             let before = cache.snapshot()?;
-            assert_ne!(before.namespace, peer_cache.snapshot()?.namespace);
+            let mut namespaces = BTreeSet::new();
             if phase != "b" {
                 helper.send(format!("{phase}\n").as_bytes())?;
                 let readonly = u8::from(phase == "ro");
@@ -61,6 +60,11 @@ fn setattr_rebuilds_namespaces<P: Platform>() -> TestResult<()> {
                 let result: serde_json::Value = serde_json::from_str(&text)?;
                 assert_eq!(result["errno"], 0, "{policy}: {phase}: {text}");
                 assert_eq!(result["value"], "allowed bind source\n");
+                let namespace = result["mount_namespace"]
+                    .as_u64()
+                    .ok_or("missing namespace")?;
+                assert_ne!(namespace, 0);
+                namespaces.insert(namespace);
                 let task = env.task(pid, "benign reader identity")?;
                 assert_eq!(task.snapshot.task_cookie, cookie);
                 let event = effects.wait_match(&env, "benign cache evidence", |event| {
@@ -68,6 +72,8 @@ fn setattr_rebuilds_namespaces<P: Platform>() -> TestResult<()> {
                 })?;
                 assert_ne!(event.composite_atom_id, 0, "{event:?}");
             }
+            assert_eq!(namespaces.len(), 2, "{policy}: {phase}: {namespaces:?}");
+            assert!(namespaces.contains(&before.namespace));
             let after = cache.snapshot()?;
             assert!(!after.keys.is_empty(), "{policy}: {phase}: {after:?}");
             if phase != "b" {

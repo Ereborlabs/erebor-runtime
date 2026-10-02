@@ -2984,6 +2984,9 @@ test does not close a row when its physical condition or an assertion changed.
       readable. Keep this distinction. Use each actor's own namespace stat
       in its result. Keep both physical reads, distinct namespace IDs, the
       global epoch, and two new READY cache rows. Do not change BPF access.
+      The corrected 93-line test passed Protect and Observe on Host in
+      40.79 seconds and direct `runc` in 46.66 seconds. Both runs passed
+      normal output, pin, lease, actor cgroup, and Node cgroup cleanup.
     - [ ] Remove the old block, unused helper, CLI path, and result fields only
       after the matching coverage passes. Keep propagation coverage separate.
     - The draft added an exact-object ID assertion absent from this baseline

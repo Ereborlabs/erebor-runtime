@@ -78,11 +78,14 @@ def move_tree(tree, target):
 
 
 def read_file(path):
+    result = {"mount_namespace": os.stat("/proc/self/ns/mnt").st_ino,
+              "errno": 0, "value": None}
     try:
         with open(path, encoding="utf-8") as source:
-            return {"errno": 0, "value": source.read()}
+            result["value"] = source.read()
     except OSError as error:
-        return {"errno": error.errno, "value": None}
+        result["errno"] = error.errno
+    return result
 
 
 args = sys.argv[2:]
