@@ -8,8 +8,8 @@ async fn mtls_rejects_wrong_node() -> Result<(), Box<dyn StdError>> {
     let connector = fixture.connector(&server, "node-b", [7; 16]);
     let mut trust = TrustCache::load(fixture.path())?;
 
-    let error = connector
-        .connect(registration(), true, &mut trust)
+    let error = server
+        .connect(connector, registration(), true, &mut trust)
         .await
         .err()
         .ok_or("Control accepted a mismatched Node ID")?;
@@ -19,8 +19,11 @@ async fn mtls_rejects_wrong_node() -> Result<(), Box<dyn StdError>> {
             .contains("node identity does not match its mTLS certificate"),
         "{error}"
     );
+    assert!(
+        error.to_string().contains("server result: Ok(())"),
+        "{error}"
+    );
     assert_eq!(control.registered_nonce_count(), 0);
-    server.shutdown().await?;
     Ok(())
 }
 

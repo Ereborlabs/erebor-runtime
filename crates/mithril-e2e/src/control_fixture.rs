@@ -7,12 +7,12 @@ use std::time::Duration;
 use mithril_control::{
     serve, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
     EvidenceIntakeIdentityV1, KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner,
-    KubernetesNodeReadinessOwner, NodeDecommissionAuthorizationV1, PolicyDesiredStateOwner,
-    SignedNodeDecommissionV1, TrustGenerationV1,
+    KubernetesNodeReadinessOwner, NodeDecommissionAuthorizationV1, NodeRegistration,
+    PolicyDesiredStateOwner, SignedNodeDecommissionV1, TrustGenerationV1,
 };
 use mithril_node::{
-    EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
-    NodeControlConnector, NodeDecommissionConfig, ObservationCanonicalizer,
+    ControlConnection, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
+    NodeControlConnector, NodeDecommissionConfig, ObservationCanonicalizer, TrustCache,
 };
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
@@ -284,6 +284,26 @@ impl ControlServerFixture {
 
     pub(crate) fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    pub(crate) async fn connect(
+        self,
+        client: NodeControlConnector,
+        registration: NodeRegistration,
+        ready: bool,
+        trust: &mut TrustCache,
+    ) -> Result<(Self, ControlConnection), Box<dyn StdError>> {
+        match client.connect(registration, ready, trust).await {
+            Ok(node) => Ok((self, node)),
+            Err(source) => {
+                let address = self.address;
+                let result = self.shutdown().await;
+                Err(
+                    format!("connect Control at {address}: {source}; server result: {result:?}")
+                        .into(),
+                )
+            }
+        }
     }
 
     pub(crate) async fn from_running(

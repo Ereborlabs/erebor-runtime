@@ -1394,6 +1394,22 @@ acknowledgement, or decommission operations directly.
     Exact WAL-batch equality and complete accepted-record equality are added.
     No fixture, Platform, or production source changed.
 - [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
+  - [x] Preserve the connection-failure diagnostic in the existing
+    `ControlServerFixture::connect` operation. Use the production
+    `NodeControlConnector`. Return the server and ready connection on success.
+    On failure, stop the server and report its address, connection error, and
+    server result. The existing wrong-node test keeps the certificate identity
+    denial and zero registered nonces. It also requires successful cleanup in
+    the returned diagnostic. All 20 Control/TLS tests pass in 26.12 seconds;
+    three release-budget tests remain ignored. Commit this fixture first.
+  - [ ] Replace the duplicated Control lifetimes with an explicit restart
+    loop in a small standard Rust test. Reuse `MtlsFixture` and
+    `OutagePolicyFixture`. Keep the first ACTIVE acknowledgement, retained
+    Node WAL, second candidate, complete chunk transfer, rollout counts,
+    both evidence and coverage acknowledgements, exact accepted records,
+    and normal shutdown. Add no production or Platform API. Run the focused
+    protocol test, the complete Control/TLS family, harness checks, strict
+    Clippy, and the final Rust CI gate before retiring the old function.
   - Reuse `MtlsFixture` for both Control instances, connectors, trust input,
     and the durable Node WAL. Remove duplicate setup. Keep both policy
     generations, retained evidence, coverage, and all assertions in the test.
