@@ -9,7 +9,8 @@ use snafu::{IntoError as _, Location, Snafu};
 pub enum Error {
     #[snafu(display("Araphor diagnostic contract failed: {source}"))]
     Trace {
-        source: araphor_observability::Error,
+        #[snafu(source(from(araphor_observability::Error, Box::new)))]
+        source: Box<araphor_observability::Error>,
         #[snafu(implicit)]
         location: Location,
     },
