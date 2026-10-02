@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = bpf_recovery]
 fn hard_link_stays_unresolved<P: Platform>() -> TestResult<()> {
     for (case, policy, error, reason) in [
