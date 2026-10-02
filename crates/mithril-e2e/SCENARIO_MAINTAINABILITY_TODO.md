@@ -3011,6 +3011,32 @@ test does not close a row when its physical condition or an assertion changed.
       [the cache reader](src/physical/mount_cache.rs). The actor owns its child
       pipes and normal child exit. `ProcessFixture` owns bounded readiness and
       fallback cleanup. The test keeps policy delivery and assertions visible.
+  - [ ] Replace successful mount propagation with
+    `propagation_rebuilds_namespaces`. Compare with baseline `95775f48`.
+    - [x] Extend the shared mount actor's existing child and pipe protocol.
+      Mark the bind mount `MS_SHARED`, then fork and unshare the child's mount
+      namespace. Use the existing signed policies and process fixture.
+    - [x] Acquire the external helper's namespace and root before protection.
+      Bind the marker source beneath the shared mount, then unmount it.
+    - [x] In Protect and Observe, require two distinct live namespaces, the
+      marker in both after bind, and `ENOENT` in both after unmount. Require
+      both benign reads to succeed and keep their task-attributed evidence.
+    - [x] Require the global mutation epoch to advance and at least two new
+      READY cache rows after each action. The old unmount check requires one
+      peer read and one new row; keep the stronger shared check.
+    - [x] Keep the standard Rust test below 100 lines. Add no Platform API,
+      separate process wrapper, production sequencing, or BPF change.
+    - [x] Pass and commit Host. The 95-line shared test and the existing
+      mount-attribute regression passed together in 59.83 seconds. Both
+      modes passed with one Control and Node. Output, pin, lease, and both
+      cgroups were removed. Strict package clippy passed. The first draft
+      used a task name longer than Linux permits. Short completion names
+      now precede the unchanged explicit errno and result assertions.
+    - [ ] Pass and commit direct `runc`.
+    - [ ] Pass and commit real Kubernetes after the lightweight proof.
+    - [ ] Remove the old action, result fields, mailbox peer, and unused
+      dedicated cgroup, binding, and object setup only after all three pass.
+      Keep the separate mount-change exact-object checks.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full

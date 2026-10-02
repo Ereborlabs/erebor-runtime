@@ -76,6 +76,8 @@ mod mailbox;
 #[cfg(test)]
 mod memory_observe;
 #[cfg(test)]
+mod mount_propagation;
+#[cfg(test)]
 mod mount_reconfigure;
 #[cfg(test)]
 mod mount_setattr;
