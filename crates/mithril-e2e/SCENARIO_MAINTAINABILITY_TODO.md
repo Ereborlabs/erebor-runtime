@@ -3633,7 +3633,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the two pre-protection passed-descriptor reads with
+  - [x] Replace the two pre-protection passed-descriptor reads with
     `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
     exact-file policy. A child passes each descriptor through `SCM_RIGHTS`
     before Node starts. After recovery, require secret Read `EACCES`, benign
@@ -3650,7 +3650,12 @@ test does not close a row when its physical condition or an assertion changed.
     The unchanged existing Kubernetes descriptor case passes in 72.12 seconds.
     The same passed-file test passes on Kubernetes in 76.04 seconds with
     deployed Control, Node, and CRD policy. Cleanup passes on all three
-    platforms. Commit this result before removing the two legacy read actions.
+    platforms. Each platform result was committed before legacy removal.
+    The retirement removes 69 Rust lines. Two test-only guards keep the
+    separate descriptor-transfer exec check. The later acquisition pair stays.
+    After removal, all 25 related checks, all 91 local library tests, strict
+    Clippy, formatting, and harness checks pass. The unchanged retained-file
+    runc case passes in 34.84 seconds.
   - [ ] Replace both exact-file `io_uring` reads with a small shared test.
     Reuse the descriptor policy, Python process owner, and effect observer.
     Keep the retained descriptors, disabled restricted ring, asynchronous

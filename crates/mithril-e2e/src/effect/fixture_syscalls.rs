@@ -6,6 +6,7 @@ use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::fd::{AsRawFd as _, FromRawFd as _, RawFd};
 use std::os::unix::ffi::OsStrExt as _;
+#[cfg(test)]
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::sync::atomic::{fence, Ordering};
@@ -441,6 +442,7 @@ pub(super) fn io_uring_read_one(fd: RawFd, expected: u8) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn receive_file_from_actor(path: &Path) -> io::Result<File> {
     let path = path_c_string(path)?;
     let (receiver, sender) = UnixDatagram::pair()?;

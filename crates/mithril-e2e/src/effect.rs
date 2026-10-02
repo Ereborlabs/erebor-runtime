@@ -496,8 +496,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub managed_link_pin_unlink_denied: bool,
     pub hard_link_alias_denied: bool,
     pub unattached_mount_fd_access_denied: bool,
-    pub passed_fd_read_denied: bool,
-    pub passed_benign_fd_read_allowed: bool,
     pub passed_fd_acquisition_denied: bool,
     pub passed_fd_acquisition_installed_nothing: bool,
     pub passed_benign_fd_acquisition_allowed: bool,
@@ -2050,47 +2048,6 @@ impl EffectTestRunner {
                 PathSelectorV1::kernel_handle_for_id("manual-secret"),
                 None,
             )?;
-
-            reconcile_policy_lifecycle(&policy, &mut host)?;
-            let passed_secret_marker = observations.cursor();
-            ensure!(
-                fixture
-                    .run_prepared(HardClosedOperation::PassedSecretRead)?
-                    .denied(),
-                InvalidInputSnafu {
-                    path: &paths.secret,
-                    reason: "an SCM_RIGHTS descriptor bypassed the current actor decision",
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                passed_secret_marker,
-                "EXACT_POLICY_DENY",
-                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-                PathSelectorV1::kernel_handle_for_id("manual-secret"),
-                None,
-            )?;
-
-            let passed_benign_marker = observations.cursor();
-            ensure!(
-                fixture
-                    .run_prepared(HardClosedOperation::PassedBenignRead)?
-                    .allowed,
-                InvalidInputSnafu {
-                    path: &paths.benign,
-                    reason: "the SCM_RIGHTS benign descriptor control was denied",
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                passed_benign_marker,
-                "EXACT_POLICY_ALLOW",
-                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-                PathSelectorV1::kernel_handle_for_id("manual-benign"),
-                None,
-            )?;
         }
 
         let hard_link_marker = observations.cursor();
@@ -2550,8 +2507,6 @@ impl EffectTestRunner {
             managed_link_pin_unlink_denied: true,
             hard_link_alias_denied: true,
             unattached_mount_fd_access_denied: protect,
-            passed_fd_read_denied: protect,
-            passed_benign_fd_read_allowed: protect,
             passed_fd_acquisition_denied: protect,
             passed_fd_acquisition_installed_nothing: protect,
             passed_benign_fd_acquisition_allowed: protect,

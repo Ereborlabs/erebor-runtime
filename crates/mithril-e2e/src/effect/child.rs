@@ -138,8 +138,6 @@ pub(super) enum PreparedOperation {
     SecretMmapExec,
     SecretMprotectReadExec,
     SecretMprotectWriteExec,
-    PassedSecretRead,
-    PassedBenignRead,
     IoUringSecretRead,
     IoUringBenignRead,
     DetachedMountOpen,
@@ -1518,8 +1516,6 @@ struct PreparedOperations {
     benign_file: fs::File,
     secret_read_mapping: Option<memmap2::Mmap>,
     secret_write_mapping: Option<memmap2::MmapMut>,
-    passed_secret_file: fs::File,
-    passed_benign_file: fs::File,
     mount_tree: fs::File,
     ioctl_file: fs::File,
     unsupported_ioctl_file: fs::File,
@@ -1574,22 +1570,6 @@ impl PreparedOperations {
                 source,
                 location: snafu::location!(),
             })?;
-        let passed_secret_file =
-            fixture_syscalls::receive_file_from_actor(secret_path).map_err(|source| {
-                crate::Error::Io {
-                    path: "SCM_RIGHTS secret fixture".into(),
-                    source,
-                    location: snafu::location!(),
-                }
-            })?;
-        let passed_benign_file =
-            fixture_syscalls::receive_file_from_actor(benign_path).map_err(|source| {
-                crate::Error::Io {
-                    path: "SCM_RIGHTS benign fixture".into(),
-                    source,
-                    location: snafu::location!(),
-                }
-            })?;
         let mount_tree =
             fixture_syscalls::open_mount_tree(mount_source).map_err(|source| crate::Error::Io {
                 path: "open_tree fixture".into(),
@@ -1609,8 +1589,6 @@ impl PreparedOperations {
             benign_file,
             secret_read_mapping: Some(secret_read_mapping),
             secret_write_mapping: Some(secret_write_mapping),
-            passed_secret_file,
-            passed_benign_file,
             mount_tree,
             ioctl_file,
             unsupported_ioctl_file,
@@ -1690,8 +1668,6 @@ impl PreparedOperations {
                         .make_exec()
                         .map_or_else(error_outcome, |_| allowed_outcome())
                 }),
-            PreparedOperation::PassedSecretRead => read_outcome(&mut self.passed_secret_file),
-            PreparedOperation::PassedBenignRead => read_outcome(&mut self.passed_benign_file),
             PreparedOperation::IoUringSecretRead => io_outcome(
                 fixture_syscalls::io_uring_read_one(self.secret_file.as_raw_fd(), b'r'),
             ),
