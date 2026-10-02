@@ -3037,7 +3037,11 @@ test does not close a row when its physical condition or an assertion changed.
       Both modes passed through stock `runc` and the production OCI hook.
       The shared owner started once. Output, pin, lease, and cgroups were
       removed.
-    - [ ] Pass and commit real Kubernetes after the lightweight proof.
+    - [x] Pass and commit real Kubernetes after the lightweight proof. The
+      shared case and the existing mount-attribute regression passed together
+      in 120.19 seconds. Both modes used one real Control, Node, and runtime
+      integration in retained K3s. Namespace, output, pin, lease, and cgroup
+      cleanup passed. No platform, timeout, or production change was needed.
     - [ ] Remove the old action, result fields, mailbox peer, and unused
       dedicated cgroup, binding, and object setup only after all three pass.
       Keep the separate mount-change exact-object checks.
