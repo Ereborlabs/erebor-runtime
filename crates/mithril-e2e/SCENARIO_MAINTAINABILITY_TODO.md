@@ -3651,6 +3651,12 @@ test does not close a row when its physical condition or an assertion changed.
     helper thread enters the held namespace; the test thread does not change
     namespace. This replaces the failed cross-namespace bind command.
     Privileged cleanup checks, local physical checks, and strict Clippy pass.
+    Host passes both modes in 48.95 seconds with the same 86-line test.
+    Keep the old unknown-entry actor condition: start the extra actor before
+    Node and require `restored_or_unknown_root` with no admitted entry rule.
+    The admitted application draft did not preserve that condition and was
+    rejected. Both modes require the denial and retained real pin. Resource
+    cleanup, 25 related checks, formatting, and strict Clippy pass.
   - [x] Replace the two pre-protection passed-descriptor reads with
     `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
     exact-file policy. A child passes each descriptor through `SCM_RIGHTS`

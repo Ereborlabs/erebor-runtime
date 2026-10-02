@@ -68,6 +68,8 @@ mod inactive_grant;
 mod independent_mmap;
 #[cfg(test)]
 mod io_read;
+#[cfg(test)]
+mod link_pin;
 mod mailbox;
 #[cfg(test)]
 mod memory_observe;
