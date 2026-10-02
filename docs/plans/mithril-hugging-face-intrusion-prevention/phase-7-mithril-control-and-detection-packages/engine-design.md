@@ -811,6 +811,41 @@ Observability 3 sends authorized input to an isolated worker, which has no
 segment access. Remote placement runs the same extractor beside its segments;
 no query depends on Control-local files.
 
+### Built-in DuckDB input adapter
+
+Implement one internal table-function adapter in `araphor-data/src/query/`.
+Use the pinned DuckDB Rust binding's `VTab` trait and its registration API.
+Expose logical relations such as `events` as SQL views over bounded typed
+input. Map fields to ordinary SQL columns; do not add custom SQL types,
+a loadable extension, a plugin registry, or a new stored event format.
+
+```text
+AnalysisStore selects committed segment records
+  -> shared decoder produces bounded typed input
+  -> storage readers and leases close
+  -> internal table function supplies DuckDB execution chunks
+  -> SQL returns a bounded result
+  -> evaluation connection and input are released
+```
+
+Register query-owned input through `register_table_function_with_extra_info`.
+Each scan has its own position; repeated references and joins must not share
+one consumed iterator. Keep input alive through evaluation, then release it
+on success, error or cancellation. Do not use the pinned binding's
+`arrow_recordbatch_to_query_params` process-lifetime batch registry for this
+path. Input ownership must not grow with the number of follow evaluations.
+
+The internal function accepts no client-supplied pointer, segment path or
+storage handle. Only owner-created views can invoke it. Client SQL still
+passes the closed admission rules. DuckDB vectors and execution buffers are
+temporary; no raw-event table or persistent query copy is created. Conversion
+can copy values, so this contract does not claim zero-copy execution.
+
+Phase 7.3 uses this adapter for trusted internal evaluation. Observability 3
+reuses it inside the isolated worker over transferred authorized input; the
+worker does not read segment files. Embedded and remote data hosts use the
+same decoder and adapter. AnalysisStore remains the only segment owner.
+
 ### One query contract
 
 Use `query(sql, follow=false, cursor?, parameters?, scope?)`. CLI and console
@@ -836,7 +871,9 @@ Normal mode evaluates one admitted SELECT against a committed snapshot.
 Support projection/filter, nonrecursive CTEs, qualified equijoins, aggregates
 and bounded window functions used by the reviewed recipes. Require explicit
 stable ordering where output order matters. Reject writes, multiple statements,
-recursion, unapproved catalogs/functions, extensions and table functions.
+recursion, unapproved catalogs/functions, loadable extensions and direct
+client calls to table functions. The owner-created input views use only the
+built-in adapter above.
 LIMIT limits output, not work. Freeze the authorized relation set before binding.
 
 Return schema, rows, read revision, receipt, coverage, owner lag and limits.
