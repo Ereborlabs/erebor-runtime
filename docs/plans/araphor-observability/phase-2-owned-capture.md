@@ -307,8 +307,23 @@ executed. This result does not qualify physical capture or interference.
 
 Remaining work is execution of the physical lifecycle gates below.
 Physical enablement requires a platform-matched interference receipt. The
-five-pair experiment still needs explicit approval and an allowed overhead
-limit. Keep the phase **Not done** and keep deployment diagnostics disabled.
+user approved the experiment below. Keep the phase **Not done** and keep
+deployment diagnostics disabled until the required physical checks pass.
+
+### Approved interference experiment
+
+The user approved this experiment on 2026-10-02. Run it only on the task-owned
+VM `mithril-runtime-qualification-20261002163710`, UUID
+`fb6a3ee1-b6b0-4f57-82e6-834bf8629d1c`. The VM has two virtual CPUs and 4 GiB
+memory. Use the tested capture source after the shared crate extraction.
+
+Run five trace-off/trace-on pairs. Each run attempts 1,000 policy-denied file
+opens. Enforcement stays active in both runs. Stop the experiment after at
+most ten minutes. Each pair must have at most 10% p99 latency increase, zero
+enforcement-event loss, and unchanged denial decisions. Store the measured
+results and the matching Node configuration. Do not substitute synthetic
+measurements. A pass on this VM does not enable production diagnostics or
+qualify another platform.
 
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
