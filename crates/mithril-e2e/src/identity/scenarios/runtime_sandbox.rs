@@ -9,9 +9,9 @@ use crate::process::ProcessFixture;
 fn inert_sandbox_can_start<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-sandbox")?;
     let bundle = OciBundle::new(&env, "cri-sandbox")?;
-    let manifest = env
-        .source()
-        .join("crates/mithril-e2e/fixtures/convergence/direct-runc-recovery-v1.json");
+    let manifest = bundle.manifest(include_str!(
+        "../../../fixtures/convergence/direct-runc-recovery-v1.json"
+    ))?;
     let mut actor = bundle.spawn(
         include_str!("../../../fixtures/process/runtime_sandbox.json"),
         &manifest,

@@ -42,17 +42,14 @@ impl OciBundle {
         Ok(result)
     }
 
+    pub(crate) fn manifest(&self, input: &str) -> TestResult<PathBuf> {
+        let path = self.bundle.join("recovery-manifest.json");
+        fs::write(&path, serde_json::to_vec(&self.bind(input)?)?)?;
+        Ok(path)
+    }
+
     pub(crate) fn spawn(&self, input: &str, manifest: &Path) -> TestResult<ProcessFixture> {
-        let mut input = input.to_owned();
-        for (key, path) in [
-            ("MITHRIL_FIXTURES", self.fixtures.as_path()),
-            ("MITHRIL_WORK", self.markers.as_path()),
-            ("MITHRIL_CGROUP", self.group.strip_prefix("/sys/fs/cgroup")?),
-        ] {
-            input = input.replace(key, path.to_str().ok_or("OCI input path is not UTF-8")?);
-        }
-        let input = input.replace("MITHRIL_ID", &self.id);
-        let spec: serde_json::Value = serde_json::from_str(&input)?;
+        let spec = self.bind(input)?;
         let root = self.bundle.join("rootfs");
         for mount in spec["mounts"].as_array().ok_or("OCI mounts are missing")? {
             let destination = mount["destination"]
@@ -91,6 +88,20 @@ impl OciBundle {
         let mut actor = ProcessFixture::spawn(&mut command, &self.bundle)?;
         actor.set_group(&self.group);
         Ok(actor)
+    }
+
+    fn bind(&self, input: &str) -> TestResult<serde_json::Value> {
+        let mut input = input.to_owned();
+        for (key, path) in [
+            ("MITHRIL_FIXTURES", self.fixtures.as_path()),
+            ("MITHRIL_WORK", self.markers.as_path()),
+            ("MITHRIL_CGROUP", self.group.strip_prefix("/sys/fs/cgroup")?),
+        ] {
+            input = input.replace(key, path.to_str().ok_or("OCI input path is not UTF-8")?);
+        }
+        Ok(serde_json::from_str(
+            &input.replace("MITHRIL_ID", &self.id),
+        )?)
     }
 
     pub(crate) fn containers(&self) -> TestResult<Vec<serde_json::Value>> {

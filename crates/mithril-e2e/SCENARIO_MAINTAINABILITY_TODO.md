@@ -5641,6 +5641,23 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `EffectTestRunner::runc_retained_runtime_gate_probe`: own the bundle
   and marker cleanup. Keep the production OCI hook invocation for hostile,
   CRI, installer, recovery, and host-stock shapes explicit.
+  - [x] Share native recovery-manifest path binding on `OciBundle` before
+    the exact recovery-command migration. Reuse the OCI input binder. Keep
+    manifest validation and the recovery decision in the production hook.
+    Qualify the three existing gate cases without changing their assertions.
+    The three cases passed in 2.25 seconds in the retained root VM. All ten
+    remaining legacy cases and cleanup checks passed. VM harness checks and
+    final Rust CI passed. See `/tmp/mithril-oci-manifest-ci-20261002.log`.
+    Evidence: `target/mithril-oci-manifest-20261002T233813Z-2211321`.
+    No Platform API or production code changed.
+  - [ ] Replace the exact Node recovery-command case with one small standard
+    direct-runc test. Use a checked Python actor and native manifest. Keep
+    the 35 extra arguments, host PID namespace, `CAP_SYS_ADMIN`, and all three
+    required writable mounts. Require a successful physical marker write and
+    the public hook's `ALLOW_EXACT_RECOVERY` log. Check runtime, process,
+    cgroup, and temporary-file cleanup. Commit the replacement before removing
+    its old action and result fields. Keep changed-command and changed-version
+    cases until their own replacements pass.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

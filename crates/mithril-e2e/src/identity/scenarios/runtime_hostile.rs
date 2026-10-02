@@ -8,9 +8,9 @@ use crate::platform::{platform_test, Platform, TestResult};
 fn hostile_runtime_never_starts<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-hostile")?;
     let bundle = OciBundle::new(&env, "hostile")?;
-    let manifest = env
-        .source()
-        .join("crates/mithril-e2e/fixtures/convergence/direct-runc-recovery-v1.json");
+    let manifest = bundle.manifest(include_str!(
+        "../../../fixtures/convergence/direct-runc-recovery-v1.json"
+    ))?;
     let mut actor = bundle.spawn(
         include_str!("../../../fixtures/process/runtime_hostile.json"),
         &manifest,
