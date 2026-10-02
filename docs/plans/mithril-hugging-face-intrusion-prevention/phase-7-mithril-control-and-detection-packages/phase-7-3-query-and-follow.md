@@ -22,6 +22,7 @@ Trusted code supplies a reviewed read plan, typed parameters and exact tenant/so
   -> QueryOwner validates the plan and its configured limits
   -> AnalysisStore captures source membership, metadata revision and committed segment ends
   -> shared decoder reads bounded segment records into temporary typed pages
+  -> built-in DuckDB table function exposes those pages as logical relations
   -> QueryOwner evaluates its fixed SQL template against these pages in memory
   -> owner returns rows, coverage, read revision and checked internal checkpoint
 
@@ -69,6 +70,10 @@ Reader is slow, cancelled or disconnected
    evaluator when Observability 3 adds its isolated process entry point.
    Use a temporary in-memory connection, never the persistent metadata
    connection. Keep native external access and extension loading disabled.
+   Implement the [built-in input adapter](engine-design.md#built-in-duckdb-input-adapter)
+   with the existing DuckDB `VTab` trait. Register query-owned input and expose
+   SQL views over it; do not insert raw records into DuckDB tables. Reuse the
+   same adapter in the later isolated worker. No loadable plugin is required.
 4. Implement typed rows and internal frames for `catalog`, `events`, `coverage`
    and `context_versions`. Document units, nulls, exact join keys and proof
    limits. `received_at` is Control intake time; source boot-relative time is
@@ -79,7 +84,7 @@ Reader is slow, cancelled or disconnected
    one captured end. Page the initial retained range and later commits without
    repeatedly extracting full history. Advance checkpoints across nonmatching
    records; a full frame stops before its next unreturned match. For replace,
-   evaluate complete bounded input. Initially require the complete replacement
+   evaluate complete bounded input. Require the complete replacement
    to fit the configured output bound, initially 200 rows/1 MiB. Reject
    overflow; never calculate a partial aggregate.
    Register watch before snapshot capture. Use one evaluation and one dirty
@@ -113,6 +118,11 @@ Reader is slow, cancelled or disconnected
 Unit tests `query_input_`, `query_scope_`, `query_follow_` must cover decoding,
 exact source selection, cross-tenant keys, snapshot consistency, input/output
 N/N+1, cancellation and cleanup. Use small configured limits for boundary tests.
+For the adapter, compare decoded values with query output, including nulls,
+bytes, unknown enum values and timestamp precision. Scan one input twice and
+through a self-join. Use drop counters to prove input release after success,
+error, cancellation and repeated follow evaluations. No process-lifetime
+input registry or persistent event table may remain.
 Check every emitted append, replace, checkpoint, health, error and terminal
 frame against its fields and ordering. A closed stream is not a trace terminal
 result. Public SQL admission, authenticated tokens, grants, disclosure, sandbox
