@@ -45,6 +45,10 @@ Operator changes placement
    Add the optional host binary in `crates/mithril-control/src/bin/` so it can
    reuse the client authentication and gRPC adapters without a crate cycle.
    It calls `araphor-data` owners and does not start Control authority owners.
+   Reuse the decoder, segment reader, query input and QueryLimits from 7.3,
+   and the discovery algorithms from 7.4. Run extraction beside the remote
+   segments. No query or discovery read can depend on Control-local files
+   or a callback into a Control-owned record decoder.
    Do not fork algorithms, schemas or retention code.
 2. Add Embedded/Remote placement configuration. In remote mode, Control must
    not open a local data directory or raw mirror. Keep policy/trust/approval,
@@ -99,6 +103,9 @@ retry, query/follow, profile, graph/finding, notification and assessment cases
 against both placements. Point the actual CLI directly at each endpoint for
 SQL, trace submit/output/cancel, assessment and reviewed policy publication.
 Require equal semantic IDs/counts/digests; permit transport timing differences.
+Include out-of-order durable input, separate contiguous ACK/processor progress,
+and replay-floor rejection after expiry and restart. Use the same query limits
+in both placements. Transfer the replay floor with the complete store bundle.
 Drop the link after data commit, trace intent, source write and notification
 delivery. Restart each process; retain one capture/source effect and notification
 deduplication state with the original deadline. Notification delivery itself

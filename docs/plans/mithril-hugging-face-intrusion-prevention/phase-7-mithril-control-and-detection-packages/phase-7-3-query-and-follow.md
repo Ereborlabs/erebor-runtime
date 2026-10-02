@@ -1,23 +1,35 @@
-# Phase 7.3: Scoped Query And Commit-Driven Follow
+# Phase 7.3: Trusted Query And Commit-Driven Follow
 
-Provide one read operation for retained and live data.
+Provide the internal read engine for retained and live data.
 
 ## Intended end state
 
-QueryOwner returns authorized SQL results and one bounded subscription stream.
-Simple immutable queries append rows. Aggregate and mutable-view queries replace
-the full bounded result. Entry: 7.2. Status: **Not done**.
+QueryOwner evaluates trusted internal read plans and returns one bounded stream.
+Immutable event reads append rows. Aggregate and mutable-view reads replace
+the complete bounded result. Entry: 7.2. Status: **Not done**.
+
+The owner, record decoder, and query input types live in `araphor-data`.
+They work without a Control process or Control crate dependency. Phase 7.9
+packages these same owners as the optional remote data service.
+Observability 3 adds client SQL admission, current caller grants, disclosure,
+authenticated receipts/cursors, and the production isolated worker before
+public SQL access. This phase must not expose arbitrary SQL through a service.
 
 ## Implementation flow
 
 ```text
-Caller supplies SQL, parameters, scope and optional follow/cursor
-  -> QueryOwner checks current grants and binds permitted relations and fields
-  -> binder derives only proven-safe time bounds from the SQL AST
-  -> AnalysisStore captures metadata revision and committed segment ends
-  -> trusted reader decodes complete bounded authorized input under short read leases
-  -> isolated DuckDB worker evaluates admitted SQL
-  -> QueryOwner checks output and creates an authenticated receipt
+Trusted code supplies a reviewed read plan, typed parameters and exact tenant/source scope
+  -> QueryOwner validates the plan and its configured limits
+  -> AnalysisStore captures source membership, metadata revision and committed segment ends
+  -> shared decoder reads bounded segment records into temporary typed pages
+  -> QueryOwner evaluates its fixed SQL template against these pages in memory
+  -> owner returns rows, coverage, read revision and checked internal checkpoint
+
+A batch arrives before an earlier source range
+  -> segment sync makes its rows visible at their original store positions
+  -> coverage reports the missing source range
+  -> contiguous ACK and ordered processor progress do not cross that range
+  -> arrival of the missing range adds its rows and updates coverage
 
 Follow is requested
   -> QueryOwner registers dependency notifications before the initial snapshot
@@ -25,95 +37,113 @@ Follow is requested
   -> relevant commits mark one evaluation dirty
   -> append reads new committed positions; replace evaluates a complete snapshot
   -> supported time-window expiry also triggers replacement without new input
-  -> owner closes all DB readers and workers before waiting
+  -> owner closes all DB readers and evaluations before waiting
 
-Reader is slow, revoked or disconnected
+Reader is slow, cancelled or disconnected
   -> owner stops this bounded read; source intake continues
-  -> retry checks current grants and the last complete checkpoint
-  -> expired append history returns an explicit gap, never a silent reset
+  -> retry checks the scope, epoch and last complete checkpoint
+  -> a checkpoint below the tenant replay floor returns CursorExpired
+  -> no retry silently starts at a newer position
 ```
 
 ## Changes in implementation order
 
-1. Add `QueryOwner::{query,follow}` under `crates/araphor-data/src/query/` and
-   the isolated query-worker entry point under its `src/bin/`. Reuse 7.1 admission
-   and sandbox proof. Do not expose a storage handle or arbitrary SQL to
-   credentialed Control. The segment owner selects committed ranges and decodes
-   batches inside AnalysisStore. DuckDB does not supply physical batch offsets.
-   The events and trace_output relations are logical views, not raw DB tables.
-2. Implement typed request/result/frame/cursor records and documented
-   `catalog`, `events`, `coverage` and context-version reads. Bind scope,
-   redaction and export policy before evaluation. Use sqlparser-rs DuckDbDialect
-   and the single-relation bound rules in engine-design.md. No window flag is
-   required. Preserve the full predicate after trusted extraction. Unproven
-   fixed-range shapes use complete input or fail explicitly at the budget.
-   Add later views only when
-   their owners exist; return Unsupported for unavailable owner capabilities.
-3. Implement normal SELECT and the two follow operations exactly as specified
-   in engine-design.md. A replace snapshot must fit one 200-row/1-MiB frame.
-   Reject complete-input overflow rather than calculate a partial aggregate.
-   No second SQL request is needed to refresh a followed aggregate.
-4. Reuse 7.2 batch/source/time bounds and metadata/segment snapshot leases.
-   Enforce both the 256-MiB scan and 64-MiB authorized-input limits within
-   one second. A sparse predicate cannot cause an unlimited raw scan. Unknown
-   metadata never excludes a batch. Do not add a raw mirror or per-event index.
-   Bind dependencies through CTEs and joins, including context and coverage.
-   Register watch before snapshot capture. Read snapshot data and revision
-   consistently. Recheck durable table revisions before sleep. Permit one
-   active evaluation and one dirty flag per stream; no unbounded task list.
-5. Implement stable append ordering, nonmatching scan progress, frame IDs
-   and checkpoint binding. Replacement resumes with the latest complete
-   snapshot; it does not promise every intermediate state. A cursor does not
-   pin history. Store epoch/schema/scope changes reject mismatched cursors.
-6. Implement the specified moving-window subset with a controllable clock.
-   Compute row-expiry deadlines; reject unsupported volatile expressions.
-   Bind the evaluation time through a checked AST parameter, not string
-   replacement. Test forward/backward wall-clock changes and report them.
-   Use heartbeat for health/auth checks, not unconditional SQL polling.
-7. Release segment leases and close metadata readers before response writes. Enforce worker limits, one queued
-   frame, 10-second stalled-output timeout, grant revocation, stream lifetime
-   and shutdown cancellation. Emit a typed terminal/error state when possible.
-   Keep query-worker health separate from intake storage health. A worker
-   failure does not stop intake. A query error is never an empty success.
-8. Add fixed recipes for exact match, revision difference, counts and qualified
-   within-subject sequence. Recipes describe required fields and limitations;
-   detection interpretation remains 7.6. gRPC/CLI wiring belongs to
-   Observability 3; no second query implementation is needed there.
+1. Put the shared evidence protobuf messages and bounded record decoder in
+   `araphor-data`. Generate each shared message once. Control's service code
+   imports/re-exports those types; it keeps source authentication and policy
+   validation. Keep the wire package, field numbers and segment format.
+   Do not create a second observation model or a DuckDB row archive. Decode
+   only selected records into temporary pages. Discovery reuses this decoder
+   in 7.4. Follow the [representation contract](engine-design.md#portable-records-and-query-input).
+2. Add a position-based read to AnalysisStore through its existing segment
+   owner. Query reads include durable pending ranges above the contiguous ACK.
+   Keep source cursor, store position and kernel sequence distinct. Preserve
+   contiguous source reads for ordered processors. Capture source membership,
+   coverage and metadata in the same snapshot. A coverage correction changes
+   coverage, not an immutable event row or its store position.
+3. Add `QueryOwner` under `crates/araphor-data/src/query/`. Accept only
+   code-owned read plans with fixed SQL templates and checked parameters.
+   Templates specify relations, columns, source selection, time bounds and
+   append/replace behavior. No network request, client attachment, stored
+   document or caller SQL string can construct a trusted plan. Reuse one
+   evaluator when Observability 3 adds its isolated process entry point.
+   Use a temporary in-memory connection, never the persistent metadata
+   connection. Keep native external access and extension loading disabled.
+4. Implement typed rows and internal frames for `catalog`, `events`, `coverage`
+   and `context_versions`. Document units, nulls, exact join keys and proof
+   limits. `received_at` is Control intake time; source boot-relative time is
+   separate. Metadata/results use their existing owner reads. Add later views
+   only when their owners exist; unavailable capability is not an empty table.
+   Register shared evidence and trace schemas without a second query owner.
+5. For append, select positions after the last scanned position and through
+   one captured end. Page the initial retained range and later commits without
+   repeatedly extracting full history. Advance checkpoints across nonmatching
+   records; a full frame stops before its next unreturned match. For replace,
+   evaluate complete bounded input. Initially require the complete replacement
+   to fit the configured output bound, initially 200 rows/1 MiB. Reject
+   overflow; never calculate a partial aggregate.
+   Register watch before snapshot capture. Use one evaluation and one dirty
+   flag per stream; recheck dependency revisions before waiting.
+6. Bind checkpoints to store UUID/epoch, plan/schema version, parameters and
+   exact scope. Retention commits a per-tenant replay floor with deletion
+   intent before unlink. The floor is the greatest deleted raw store position.
+   Reject older append checkpoints conservatively, even if their filter could
+   have excluded the deleted rows. Report that replay is unavailable, not that
+   a particular matching row was lost. The floor survives restart and backup.
+   Retained witnesses below it remain queryable. Replacement resume evaluates
+   current state. Neither cursor type pins history.
+7. Implement the existing moving intake-time window as a trusted template.
+   Bind one evaluation instant to selection and SQL. Use a controllable clock
+   and an expiry timer; quiet streams still lose expired rows. Report clock
+   changes. Additional window semantics require user review before they enter
+   this plan.
+   Templates for exact match, counts, revision difference and qualified
+   within-subject sequence retain their limitations; interpretation is 7.6.
+8. Add validated `QueryLimits` in the data crate. The host supplies the same
+   settings in embedded and remote mode. Use verification.md defaults for
+   scan/input/output bytes, deadlines, evaluation concurrency and stream count.
+   Reserve concurrent input and output capacity before extraction. Close all
+   segment leases and metadata readers before evaluation or output waits.
+   Cancel native evaluation, release buffers on every exit and enforce the
+   output-stall timeout. Native memory settings are not an OS process cap.
+   Observability 3 adds and qualifies the worker OS limits and public grants.
 
 ## Unit tests and end-to-end proof
 
-Unit tests `query_admission_`, `query_scope_`, `query_follow_` must cover
-nested forbidden functions, hidden-column predicates, cross-tenant aggregates,
-external access, input/output N/N+1, worker timeout and sandbox failure.
+Unit tests `query_input_`, `query_scope_`, `query_follow_` must cover decoding,
+exact source selection, cross-tenant keys, snapshot consistency, input/output
+N/N+1, cancellation and cleanup. Use small configured limits for boundary tests.
 Check every emitted append, replace, checkpoint, health, error and terminal
-frame against the frozen version-one fields and ordering. A closed stream is
-not a trace terminal result. Wire-level protobuf and gRPC client checks belong
-to Observability 3.
-Use deterministic commit barriers, not sleep-based race tests. Compare each
-optimized result with full authorized-input execution in the pinned DuckDB.
-Include an OR branch with older matching rows, two aliases of events, CTE reuse,
-outer joins, quoted/shadowed names, timestamp offsets, nulls and bound endpoints.
-Unsupported moving predicates reject; no parser success implies safe pushdown.
+frame against its fields and ordering. A closed stream is not a trace terminal
+result. Public SQL admission, authenticated tokens, grants, disclosure, sandbox
+and wire-level gRPC tests belong to Observability 3. Compare each trusted
+template with full scoped-input execution in the pinned DuckDB.
 
 Add `query-follow` to `mithril_discovery_test`. Use actual AnalysisStore
-commits and QueryOwner streams. Verify initial snapshot/commit race, empty
+commits and QueryOwner streams. Use deterministic commit barriers. Verify
+initial snapshot/commit race, empty
 filters, replay, coalesced notifications, unrelated commits, full batches,
-late events, correction, retention expiry, failed worker and restart.
+late events, coverage correction, retention expiry, cancellation and restart.
+Commit source cursors 11–20 before 1–10. Require the first query to return
+11–20 with a gap and ACK zero. Follow must then return 1–10 once, with ACK 20
+and corrected coverage. An exact retry emits no duplicate record.
+Expire history after a checkpoint and test the persisted replay floor across
+restart and restore. A retained witness remains readable below that floor.
 For `SELECT operation, COUNT(*) ... GROUP BY operation`, verify each replace
 equals a normal query at the same revision, never the sum of prior snapshots.
 Use a tenant history larger than the extraction budget with a small matching
-SQL-derived window. Require a correct count and bounded extraction, then add a
+trusted time window. Require a correct count and bounded extraction, then add a
 matching batch and require a complete replacement. Expire a moving-window row
-with no new traffic. Revoke access during a quiet
-stream. Prove reader cancellation leaves intake and policy work active.
-Kill or time out the isolated worker and prove intake, policy work and the
-authoritative AnalysisStore remain healthy.
+with no new traffic. Prove reader cancellation leaves intake and policy work
+active. Fail an evaluation and prove subsequent reads and intake still work.
 Test a pin/delete race and concurrent segment rotation during snapshot capture.
 Require counts to match a full authorized scan at that same revision. Confirm
 no segment lease survives a cancelled read or a blocked client response.
-Record the trusted extraction plan, scanned segments/bytes, extracted row/byte counts, worker native
-RSS, temporary bytes and evaluation time for the bounded case and the complete-
-input fallback. Reject an over-budget input before returning an aggregate.
+Record the template, read revision, scanned bytes and extracted row/byte counts.
+Check that no raw-event database table or persistent query copy is created.
+Reject over-budget input before returning an aggregate. New performance tests,
+workloads and pass limits require separate user approval; this plan is not that
+approval. The accepted 1-GiB storage qualification is not an 8-GiB claim.
 
 ```sh
 cargo test -p araphor-data
@@ -124,7 +154,8 @@ bash .github/scripts/verify-rust-ci.sh
 
 ## Completion gate
 
-Pass DE-QUERY, DE-FOLLOW, DE-DISCLOSE, DE-TENANT and DE-LIMIT. Record schema,
-operations, read revisions, receipts, checkpoints, worker RSS and latency.
-A model, discovery profile, public API or durable subscription registry is not
-required. External readers use this same contract through Observability 3.
+Pass the internal DE-QUERY, DE-FOLLOW, DE-TENANT and DE-LIMIT cases. Record
+schema, operations, read revisions, coverage, checkpoints and configured limits.
+Full public DE-QUERY and DE-DISCLOSE require Observability 3. This phase cannot
+enable client SQL or claim OS worker isolation. A model, discovery profile,
+public API or durable subscription registry is not required.

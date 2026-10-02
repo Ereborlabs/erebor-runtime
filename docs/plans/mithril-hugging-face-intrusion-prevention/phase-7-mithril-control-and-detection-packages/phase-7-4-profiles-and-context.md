@@ -37,12 +37,17 @@ Derivation fails or is disabled
 
 1. Move the portable model, recorded derivation and context selection from
    Control `src/discovery/` into `crates/araphor-data/src/discovery/`.
-   Implement the live worker with bounded AnalysisStore segment reads
+   Reuse the shared record decoder from 7.3, not a Control-only decoder.
+   Derivation can start after 7.2; decoder integration and closure need 7.3.
+   Implement the live worker with bounded contiguous AnalysisStore source reads
    and one metadata transaction for result,
    references, and progress. Read raw evidence directly; no export artifact
    or staging table may contain another full copy before derivation.
    Control exports qualified policy facts; exact native preview stays in
    Control. Prove parity with the recorded derivation tests before live use.
+   Queries can expose durable pending ranges before the contiguous ACK moves.
+   Ordered discovery progress still waits for missing input or qualified loss;
+   early query visibility does not authorize a processor to skip that input.
    Do not make `araphor-data` depend on Control.
    Keep storage startup outside `DiscoveryOwner::run`. No second database,
    copied raw-event archive or public derivation-job API is required.

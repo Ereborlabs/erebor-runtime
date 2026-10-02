@@ -77,7 +77,8 @@ A local-defense or model-quality claim requires its actual measured result.
    credential access and deployment drift. Include exact columns, SQL recipes,
    required/optional checks, alternatives, and a stopping checklist. Use the
    context view for predictable lookups; do not requery unchanged facts.
-3. Extend the shared query/export enforcement from Phase 7.3 with `DisclosurePolicyV1`: approved
+3. Extend the shared query/export enforcement from Observability 3 with
+   `DisclosurePolicyV1`: approved
    recipient/purpose, row/field scope, redaction, scoped pseudonyms, and expiry.
    Filter before evaluation so predicates/counts cannot leak hidden data.
    Fail closed. Revoke later reads; do not claim recall of prior exports.

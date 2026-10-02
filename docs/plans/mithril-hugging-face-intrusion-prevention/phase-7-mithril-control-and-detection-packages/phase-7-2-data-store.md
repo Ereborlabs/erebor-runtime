@@ -229,7 +229,8 @@ Storage fails or cannot meet capacity
    newer expired ranges. No full-store decoded index is required.
    Add trusted range extraction using conservative batch time/source metadata.
    Prove complete authorized input under the scan and extraction limits before
-   closing this storage phase; public SQL and follow remain in 7.3.
+   closing this storage phase. Trusted query/follow belong to 7.3;
+   public SQL access belongs to Observability 3.
 
 4. Retain results, exact references, and progress in one metadata transaction.
    Recheck expected progress and input availability under the same writer
@@ -2200,7 +2201,7 @@ store position, intake time, and checked frame bytes. It selects rows and
 fields before output admission. It is not a client callback or SQL execution
 interface. The caller must authorize this selection before the call and must
 not perform caller I/O inside projection. Public SQL binding, grants, and worker
-isolation remain in 7.3.
+isolation belong to Observability 3.
 
 The owner reads each selected batch once. It checks 256-MiB scanned bytes before
 reading a range. It buffers complete projected input up to 64 MiB, including

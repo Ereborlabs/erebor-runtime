@@ -164,9 +164,10 @@ that a different probe attributes work to the current cgroup correctly.
 ## Shared APIs and output
 
 Reuse the planned `ClientGrpcOwner`, audience checks, browser sessions, and
-service-principal grants. Observability 3 owns query/trace authentication and
-transport; Phase 7.8 extends it. The CLI is not a privileged proxy. Mithril 7.3
-owns QueryOwner; this plan owns its transport and client adapters.
+service-principal grants. Observability 3 owns production SQL admission,
+worker isolation, query/trace authentication and transport; Phase 7.8 extends
+it. The CLI is not a privileged proxy. Mithril 7.3 owns the trusted internal
+QueryOwner engine. Observability 3 adds public access to that same owner.
 Console JavaScript uses generated gRPC-Web clients; the server does not run
 the CLI.
 The remote deployment reuses this service implementation. Follow the
@@ -288,10 +289,11 @@ failure does not block output upload; failure of the authoritative data store
 does block its ACK. Node keeps bounded diagnostic output until ACK or explicit
 quota loss. Reserve enforcement evidence capacity separately.
 
-Sync each deduplicated raw-output batch to its segment, then commit the batch
-range, trace state, source receipt, and relation revisions in one metadata
-transaction before ACK or reader notification. Use the same recovery protocol
-as evidence intake; do not create a trace-specific raw archive or journal.
+Sync each deduplicated raw-output batch with its self-contained replay metadata
+to the segment, then publish the durable raw receipt and revision before ACK.
+Catalogue publication does not delay output ACK. Trace intent and lifecycle
+changes use metadata transactions. Use the same recovery protocol as evidence
+intake; no SQL batch-offset directory, trace-specific archive or journal.
 Trace output positions never advance the enforcement source cursor. Retain sources and
 measurement semantics while output references them. The same data component
 can run remotely; Control dispatch and Node expiry do not move.
@@ -367,7 +369,7 @@ for cross-plan sequencing.
 | --- | --- | --- |
 | [1: Contracts and backend](phase-1-contracts-and-backend.md) | Approved delegated-loader boundary | Exact source/target contracts and real bpftrace lifecycle proof. Can run alongside Mithril 7.1–7.3. |
 | [2: Owned capture](phase-2-owned-capture.md) | Observability 1 and Mithril 7.2 | Durable state and segment-backed output through shared AnalysisStore; discovery-disabled and physical lifecycle proof. |
-| [3: CLI, API and console](phase-3-cli-api-and-console.md) | Observability 2 and Mithril 7.3 | Shared authentication, SQL/trace streams, CLI and console integration. |
+| [3: CLI, API and console](phase-3-cli-api-and-console.md) | Observability 2 and Mithril 7.3 | Production SQL admission and worker isolation before public access; shared authentication, SQL/trace streams, CLI and console. |
 | [4: Declarative capture](phase-4-declarative-captures.md) | Observability 3 | Optional finite Trace CRD adapter. |
 
 Use the linked combined order as the single cross-plan sequence. Discovery
@@ -385,7 +387,7 @@ production owners without Kubernetes; run a physical case only where listed.
 | --- | --- | --- |
 | 1 | Check source limits, process supervision, output bounds and cleanup. | Run `backend-lifecycle` with a process double, then run the paired real-bpftrace case. |
 | 2 | Check target grants, dispatch identity, Node spooling, commits and recovery. | Run `owned-capture` through the production owners, then run paired physical Pod, restart and partition cases. |
-| 3 | Check CLI parsing, gRPC grants, CSRF, console states, and old client-route retirement. | Run `query-trace-client` with the built CLI and gRPC owner, browser gRPC-Web tests, and migrated admin/decommission cases. |
+| 3 | Check public SQL admission, disclosure, worker isolation, CLI parsing, gRPC grants, CSRF, console states and old client-route retirement. | Run `query-trace-client` with the built CLI and gRPC owner, browser gRPC-Web tests, and migrated admin/decommission cases. |
 | 4 | Check CRD schema, RBAC, reconciliation identity and finalizer behavior. | Run `trace-crd` with a Kubernetes API double, then run the paired physical Kubernetes case. |
 
 Status: **Not done** for the complete target. Existing backend tests must run

@@ -62,8 +62,9 @@ re-exported by Control. Control authenticates the Node and validates the wire
 record before calling a data owner. The data owner computes a source key from
 the exact identity fields and checks receipt, duplicate, gap, and size rules.
 It must not accept client-supplied tenant or source keys as authority.
-Mithril 7 owns data recovery, query admission, and retention. Discovery analysis
-and Control's TraceOwner use those facilities independently. The
+Mithril 7 owns data recovery, query evaluation, and retention. Observability 3
+adds production client SQL admission and isolation to the same data owner.
+Discovery analysis and Control's TraceOwner use those facilities independently. The
 query credential has no source-write,
 signing, Kubernetes, response, or model-provider authority. The external agent
 owns model execution. Control applies export policy before query evaluation.
@@ -563,6 +564,7 @@ relations; create later result families only in their owning phase.
 | `context_versions` | Exact owner/lifetime/revision, validity, sensitivity, bounded body, and digest. |
 | `processor_progress`, `evidence_refs`, `context_refs` | Processor/version/scope, consumed position, exact dependencies, reason, expiry, and required input floor. A raw witness stores source, cursor, and segment ID, not a raw-frame digest. |
 | `expired_ranges` | Source, tenant, segment ID, exact expired cursor interval, and commit revision. The segment ID binds the interval to its deletion intent. This relation contains no byte offsets. |
+| `replay_floors` | One greatest deleted raw store position per tenant. Commit it with deletion intent. It bounds append replay, not ordinary retained-witness reads. |
 | `profiles`, `behavior_atoms`, `behavior_buckets` | Derived counts, keys, manifests, lifecycle coverage, and method version. Working rows are separate from sealed results. |
 | `relationships`, `findings`, `notifications` | Owner-qualified revisions, references, route attempts, and deadlines. |
 | `assessments`, `requirements`, `proposals`, `reviews`, `publications` | Bounded immutable bodies, parent references, expected revisions, request digests, and owner state. |
@@ -590,12 +592,19 @@ separate measured need and is outside this change.
 
 `StorePositionV1` remains `(commit_revision: u64, ordinal: u32)`.
 The serialized data owner assigns one revision and distinct ordinals to newly
-visible records. A raw segment commit persists those positions. Derived
+committed records. A raw segment commit persists those positions. Derived
 transactions persist their positions in DuckDB. Catalogue publication keeps
 the original raw positions. An exact retry changes neither revision nor notification.
 Source cursor, kernel sequence, and store position remain separate. Revisions
 order commits, not cross-node causality. Ordinary restart keeps the store UUID
 and epoch; restore changes the recovery epoch.
+
+Query visibility follows durable commit, not the contiguous source ACK.
+If cursors 11–20 arrive first, query returns those rows with a missing 1–10
+range. ACK remains zero. When 1–10 arrive, they receive new store positions;
+follow appends them once and reports corrected coverage. It does not replay
+11–20 at new positions. Ordered processors still use contiguous source reads.
+Coverage is a separate revision, not a mutable field in an immutable event.
 
 Store result bodies and canonical manifests in DuckDB. References identify
 segment records by exact source/cursor/segment identity; they do not copy their payloads.
@@ -720,6 +729,13 @@ A query cursor or external consumption ACK never pins history. Holes caused by
 expiry remain explicit even when an older witness segment survives. Never hide
 such a retained witness behind a single contiguous floor.
 
+For append replay, persist the greatest deleted raw store position per tenant
+with the deletion intent. A checkpoint below this floor returns CursorExpired,
+even when its filter might have excluded the deleted records. This conservative
+rule needs no per-query retention index. Report unavailable replay, not proof
+that a matching record was lost. Keep exact expiry intervals for coverage and
+keep retained witnesses readable. Backup and restore include the replay floor.
+
 Initially reclaim whole segments only. No row-level raw deletion, background
 compaction, or selective witness archive. If measured pin amplification or
 query scans cannot meet the unchanged budgets, stop and propose the smallest
@@ -758,8 +774,9 @@ or processor progress. Report Partial recovery; do not invent missing records.
 
 ### Read snapshot and selection
 
-Capture the metadata snapshot, store revision, committed byte ends, and bounded
-segment read leases under the writer coordinator. Release the coordinator
+Capture source membership, coverage, the metadata snapshot, store revision,
+committed byte ends, and bounded segment read leases under the writer
+coordinator. Release the coordinator
 before scanning. Readers see only those committed ends; later appends cannot
 enter the snapshot. Keep context/result reads at the same metadata snapshot.
 Cancel and release leases at the deadline, before waiting on the caller.
@@ -772,11 +789,40 @@ scanned bytes and extracted bytes; return an explicit limit, not a partial
 aggregate. Query workers receive decoded authorized batches, never segment
 paths or the persistent database.
 
+### Portable records and query input
+
+The data crate owns the shared evidence protobuf messages and one bounded
+decoder. Generate each shared message once; Control imports or re-exports it.
+Keep the wire package, field numbers and segment format. Control keeps source
+authentication and policy checks. Move only the record definitions and decoder,
+not the full Control validation model. Discovery reuses the decoder in 7.4.
+
+Decode selected records into temporary typed pages. Map identities, integer
+positions, enums, optional context, bytes and timestamps to documented SQL
+columns. Preserve exact integer timestamp units; SQL timestamp conversion
+must state its precision. Unknown enum values and absent fields remain explicit.
+`received_at` means Control intake time, not Node boot-relative event time.
+No raw-event table, second archive or persistent query cache is created.
+
+AnalysisStore selects and decodes bounded input, then releases storage guards.
+Temporary conversion and evaluation buffers are required; they are not a
+durable raw replica. Release them on success, error and cancellation.
+Observability 3 sends authorized input to an isolated worker, which has no
+segment access. Remote placement runs the same extractor beside its segments;
+no query depends on Control-local files.
+
 ### One query contract
 
 Use `query(sql, follow=false, cursor?, parameters?, scope?)`. CLI and console
-call the same Control API. Caller scope only narrows authenticated scope.
+call the same API at the selected deployment. Caller scope only narrows
+authenticated scope.
 No read-job, subscription-registration, start/status/stop protocol is required.
+
+This public contract is delivered in Observability 3. Phase 7.3 delivers its
+trusted internal evaluator and follow engine only. A trusted plan contains a
+code-owned SQL template and checked typed parameters, not caller SQL. Public
+admission, disclosure, authenticated cursors and OS isolation must pass before
+any client can submit SQL. The earlier offline proof is not that release gate.
 
 | View | Contract |
 | --- | --- |
@@ -806,7 +852,10 @@ Use [sqlparser-rs](https://docs.rs/sqlparser/0.63.0/sqlparser/) with
 [DuckDbDialect](https://docs.rs/sqlparser/0.63.0/sqlparser/dialect/struct.DuckDbDialect.html).
 Phase 7.1 pins a compatible parser/engine pair and tests the admitted subset.
 The parser supplies an AST, not authorization, name binding or a sandbox.
-Use the existing closed binder to resolve permitted columns and aliases.
+Observability 3 extends the existing syntax/relation guard with production
+column binding against the authorized schema. The current guard is not that
+binder. Phase 7.3 uses declared bounds in reviewed templates, not this public
+SQL admission path.
 Do not build a second SQL parser or a general query optimizer.
 
 The SQL predicate is the source of the time bound. No duplicate window flag
@@ -919,8 +968,10 @@ delivery is at least once, not exactly once.
 
 A cursor binds SQL/parameters, target snapshot, current scope, disclosure,
 view version, store UUID/epoch and position. It grants no permission and pins
-no history. Changed bindings reject. A lost retained append range returns
-gRPC `OUT_OF_RANGE` with authorized missing bounds. Replacement resumption promises current
+no history. Changed bindings reject. An append checkpoint below the tenant
+replay floor returns gRPC `OUT_OF_RANGE` with authorized expiry information.
+This conservative rejection does not prove a matching record was lost.
+Replacement resumption promises current
 state, not all intermediate states; metadata states this contract. Query errors
 are error frames followed by stream close, never empty successful results.
 Keep at most one outgoing frame per reader; on a 10-second blocked write,
@@ -956,6 +1007,9 @@ not put an untrusted SQL expression or a secret in a frame ID.
 
 ### Query isolation
 
+Observability 3 implements and qualifies this production boundary before
+public SQL access. Phase 7.3 must not claim it from an in-process evaluator.
+
 Read-only SQL is not a sandbox. Follow [DuckDB security guidance](https://duckdb.org/docs/current/operations_manual/securing_duckdb/overview).
 QueryOwner uses a maintained parser plus a closed relation/function binder.
 Resolve aliases, nested expressions, CTEs and star expansion against authorized
@@ -975,6 +1029,13 @@ limits and a deadline. Disable engine external access, extension installation/
 autoload and configuration changes. These settings supplement OS isolation.
 Worker failure cannot terminate Control or change a receipt/progress record.
 No SQL worker remains alive merely to wait for a follow notification.
+
+Use validated data-owned QueryLimits in both placements. Configure scan,
+input and output bounds, deadlines, concurrency and stream count. Reserve
+aggregate buffer capacity before extraction; individual query limits alone
+do not bound concurrent allocations. The defaults in verification.md are
+provisional, not measured capacity. Observability 3 also applies the worker
+OS budget. New performance workloads or pass limits require user approval.
 
 Pin the engine dialect, explicit ordering and canonical integer reductions.
 Floating-point/model scores do not enter deterministic fact digests.
@@ -1010,6 +1071,9 @@ Run `araphor-data` in the optional data process instead of linking it into
 Control's process. AnalysisStore, EvidenceRetentionOwner, QueryOwner,
 DiscoveryOwner, GraphAndFindingOwner, NotificationRouter and trace-output reads
 use the same crate, segment files, and local metadata transactions in either placement.
+The shared decoder, query input and query limits are portable from 7.3;
+discovery algorithms are portable from 7.4. Phase 7.9 adds deployment and
+delegation, not a second implementation of these owners.
 Graph/finding/progress commits and notification recovery do not cross RPC.
 Control retains policy/trust/approval authority, source publication, TraceOwner,
 Node authentication and dispatch. External agents retain model execution.

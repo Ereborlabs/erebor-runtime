@@ -7,7 +7,7 @@ not a measured product capability.
 ## Test ownership
 
 Pure schema, grouping, transformation, and state tests belong with their
-Control owner. Lightweight end-to-end cases belong in `crates/mithril-e2e/src`
+owner in `araphor-data` or Control. Lightweight end-to-end cases belong in `crates/mithril-e2e/src`
 and call supported production APIs. Their command entry points belong in
 `crates/mithril-e2e/src/bin`. Physical Kubernetes harnesses belong in
 `crates/mithril-e2e/harness`, with inputs in `fixtures`.
@@ -39,7 +39,7 @@ and has checks only when delivered.
 | `DE-WIDEN` | Four sibling files; `/tmp` resources; read vs write; exact vs recursive path; symlink/mount ambiguity; label group with unobserved member; changed DNS membership | Exact default. Broadening has a receipt and separate review. Unknown scope is not equivalence. |
 | `DE-PREVIEW` | Exact compiled key; missing cell; hard safety condition; incomplete policy generation; absent dynamic exception binding; held-out valid-work case; synthetic scan; unsupported TLS/provider semantics | Existing static simulator result preserved. Unsupported runtime authority stays Unknown even if a compiled cell says Allow. No physical effect claim. |
 | `DE-POISON` | Repeated credential read; attack inserted early in training; benign-looking command name; gradual behavior change; path flood; malicious tool description | No automatic allow, authority inference, or silent baseline update. Forbidden case remains visible. |
-| `DE-STORE` | Crash before/after raw append, segment sync, metadata commit, and ACK; result/reference/progress commit failure; unsupported schema; retained duplicate conflict; expired duplicate; stale backup | Only catalog-committed synced segments become visible; recover uncommitted tails and uncertain commits. No double count or false durable ACK. Restore reports source data lost since backup. Policy/control persistence is unchanged. |
+| `DE-STORE` | Crash before/after raw append, segment sync, metadata commit, and ACK; result/reference/progress commit failure; unsupported schema; retained duplicate conflict; expired duplicate; stale backup | Synced self-contained segment commits are authoritative. Metadata publication does not delay raw ACK. Recover incomplete tails and uncertain commits. No double count or false durable ACK. Restore reports source data lost since backup. Policy/control persistence is unchanged. |
 | `DE-RETENTION` | Stall required processor; unexpired witnesses; pin/delete race; mark/unlink/cleanup crash; idle-segment sealing; disable/retire; quota; late context; raw expiry; pinned-segment amplification | Commit exact expiry and Deleting state before unlink. Resume only recorded deletions. Charge each full pinned segment once. Optional discovery expiry records a gap and does not block intake. Required security input blocks reclamation and intake only at protected age/byte or physical capacity bounds. Summaries and exact pinned witnesses survive raw expiry. No external cursor pins history. |
 | `DE-TENANT` | Foreign profile ID, evidence link, cursor, client attachment, report ID, and publication request | Reject before content access. No identifier, timing-detail, or audit-content leak. |
 | `DE-LIMIT` | Every byte/row/interval/page/worker limit at N and N+1; cancellation; slow reader; concurrent policy rollout | Bounded work, clear quota result, no priority inversion or wildcard fallback. |
@@ -122,8 +122,9 @@ These are proposed pilot limits, not measured capacity or final service-level
 commitments. Phase 7.1 pins offline feasibility defaults. Phase 7.2 requires
 storage correctness, recovery, and bounded extraction before completion.
 Its capacity and throughput measurements are separate qualification; prove
-a capacity before advertising it. Phase 7.3 measures extraction and
-query-worker limits before query release. Enforce both count and byte limits;
+a capacity before advertising it. Phase 7.3 checks trusted extraction and
+evaluation limits. Observability 3 qualifies production worker isolation
+before public SQL release. Enforce both count and byte limits;
 use the first one reached.
 
 | Resource | Initial limit | Limit behavior |
@@ -142,16 +143,17 @@ use the first one reached.
 | Canonical record body | 16 MiB; at most 8,192 dependencies | Split only through a bounded manifest. No growing JSON history array. |
 | Sealed profile set | 128 MiB | Typed failure before commit. |
 | Data memory test ceiling | 512 MiB/process, including queues and caches | Applies to the existing component tests. This is not a production memory cap or a measured deployment budget. |
-| Data engine | 1 writer with 8 queued writes; 2 trusted readers with 16 active or queued reads in total | Bounded admission; no wait under ControlStore locks. Checkpoint and backup wait for read guards to close. |
-| Node intake admission | 8 active or queued groups/process, 2/tenant | Evidence and coverage share permits. Reject excess work with ResourceExhausted before ACK. Idle streams hold no permit. |
+| Data engine | 1 serialized writer; 2 trusted readers with 16 active or queued reads in total | Intake admission owns the write bound; do not add a second fixed eight-write queue. No wait under ControlStore locks. Checkpoint and backup wait for read guards to close. |
+| Node intake admission | Configurable active slots; defaults 8 global and 2 per Node | Evidence and coverage share permits. Wait for the Node slot, then a global slot; do not reject only because slots are busy. Idle streams hold no permit. These slots do not cap open network connections. |
 | Intake batch | 4,096 records, 4 MiB encoded or 50 ms | Commit first bound reached; decoded data must fit working memory. |
 | Metadata engine memory/WAL | 64 MiB memory target; 16 MiB WAL checkpoint threshold | Leave space for allocations outside the native buffer manager. Measure RSS; checkpoint before reserve exhaustion. If it fails, backpressure data writes. |
 | Native allocator release | Zero bulk-deallocation release threshold | Keep the process-wide allocator policy unchanged. Qualify multiple calling threads; this setting is not an RSS cap. |
 | Native temporary files | 128 MiB/process; two engine threads | Reject over-budget native work. This setting is not an operating-system memory cap. |
 | Data admission reserve | 256 MiB policy space plus 256 MiB write allowance; ordinary writes also require 25% of the configured data budget free | Sample actual available bytes before work. Maintenance keeps access above the ordinary data-file limit. Physical tests must prove the allowance is sufficient. |
-| Trusted extraction | 256 rows/1 MiB pages; 256 MiB scanned segment bytes; 64 MiB admitted input after safe scope/column/AST-range selection; 1 second | Complete input or explicit rejection; never truncate COUNT/joins. No unproven predicate pushdown. |
+| Trusted extraction | 256 rows/1 MiB pages; 256 MiB scanned segment bytes; 64 MiB admitted input; 1 second | Apply scope and reviewed template bounds in 7.3. Observability 3 adds field disclosure and proved AST bounds. Complete input or explicit rejection; never truncate COUNT/joins. |
 | SQL input/result | 16 KiB SQL; 200 rows/1 MiB output | Explicit limited normal result; oversized replacement fails without changing the displayed snapshot. |
-| Isolated query workers | 2/process, 1/tenant; 256 MiB OS memory and 1 CPU each; 1-second evaluation deadline | No network/credentials/live DB; terminate over-budget evaluation. Worker memory is separate from analysis memory. |
+| Query evaluations | 2/process, 1/tenant; 1-second evaluation deadline | Configure in 7.3. Reserve concurrent input/output capacity before extraction. Close readers before evaluation or output waits. |
+| Isolated query workers | Same evaluation slots; 256 MiB OS memory and 1 CPU each | Observability 3 adds this boundary. No network/credentials/live DB; terminate over-budget evaluation. Worker memory is separate from analysis memory. |
 | Follow | 16 streams/process, 4/tenant; one evaluation and one queued frame/stream | One dirty flag coalesces changes. No read transaction while waiting. |
 | Follow timing | 15-second heartbeat, 500-ms minimum replacement interval, 10-second output-stall timeout | Recheck grants/health; close slow readers without blocking intake. |
 | Moving-window follow | 1–86,400-second lower window, one-second expiry resolution | Bind one evaluation clock; timer removes expired rows without new commits. Other volatile forms reject. |
@@ -163,7 +165,11 @@ use the first one reached.
 | Trace | Observability 1 source/probe/output limits; separate Node spool reserve | Stop diagnostics before exhausting enforcement reserve; local expiry remains active. |
 
 These limits are pilot defaults. Freeze any measured adjustment before dependent
-phases qualify. Test N and N+1 for both encoded and decoded limits. Store record
+phases qualify. Put query limits in validated data-owned configuration, shared
+by embedded and remote hosts. Record effective limits with test results.
+Test N and N+1 with small configured limits. New performance workloads and
+pass thresholds require user approval. No measurement follows from these
+defaults or from a successful limit-rejection test. Store record
 families include immutable revisions and idempotency receipts, not only current
 heads. Check physical free bytes before admission; logical tenant charging alone
 does not bound segment files, a metadata database, or its native WAL. Keep a separate filesystem reserve for
@@ -364,7 +370,7 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | --- | --- | --- |
 | 7.1 | schema, exact aggregation, offline DuckDB transaction, SQL-admission and isolation tests | offline-exact; storage-contract through public AnalysisStore methods |
 | 7.2 | analysis_store_, analysis_startup_, control_retention_ | data-store-recovery through production intake with ACK/storage measurements; data-store-startup on clean development state |
-| 7.3 | query_admission_, query_scope_, query_follow_, frame and extraction-limit tests | query-follow with extraction/worker measurements |
+| 7.3 | query_input_, query_scope_, query_follow_, frame and configured extraction-limit tests | internal query-follow, durable pending ranges, replay-floor restart and input cleanup |
 | 7.4 | discovery_derivation_, discovery_context_, discovery_comparison_ | context-roundtrip; profile-restart |
 | 7.5 | control_graph_, control_notification_, control_authority_ | graph-notification |
 | 7.6 | discovery_detection_, discovery_proposal_, discovery_suggestion_ | detection-context; proposal-preview; poisoned-window |
@@ -374,7 +380,7 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | 7.10 | full relevant crate suites | all for the frozen capability set; paired physical harness |
 | Observability 1 | observability_backend_ | backend-lifecycle; real backend pair |
 | Observability 2 | observability_target_, observability_recovery_, measurement validation | owned-capture; existing owned/pods/disk-full physical pairs |
-| Observability 3 | observability_cli_, observability_grpc_, UI stream tests | query-trace-client |
+| Observability 3 | query_admission_, disclosure, worker isolation, observability_cli_, observability_grpc_, UI stream tests | query-trace-client with public SQL security and native/browser stream parity |
 | Observability 4 | observability_crd_ | trace-crd; physical Kubernetes pair |
 
 Keep discovery cases in `src/discovery/` and their entry point in
