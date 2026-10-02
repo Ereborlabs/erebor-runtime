@@ -3645,6 +3645,9 @@ test does not close a row when its physical condition or an assertion changed.
     descriptor case passes in 34.44 seconds. Initial recovery uses the open
     bootstrap policy; the exact policy then replaces it before either read.
     Related effect tests, harness checks, formatting, and strict Clippy pass.
+    The final 90-line test compares each event with its production-lowered
+    exact selector. Host passes in 34.69 seconds and runc in 40.02 seconds.
+    The unchanged existing Kubernetes descriptor case passes in 72.12 seconds.
   - [ ] Replace both exact-file `io_uring` reads with a small shared test.
     Reuse the descriptor policy, Python process owner, and effect observer.
     Keep the retained descriptors, disabled restricted ring, asynchronous
