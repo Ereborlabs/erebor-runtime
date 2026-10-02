@@ -46,6 +46,8 @@ struct CaseResult {
 
 #[derive(Serialize)]
 struct KernelRunTime {
+    name: String,
+    kind: u32,
     run_time_ns: u64,
     run_count: u64,
     recursion_misses: u64,
@@ -147,9 +149,17 @@ impl CaseResult {
             return Err(format!("{}: the expected backend rejection is missing", self.name).into());
         }
         if self.name == "unsupported-hook"
-            && !diagnostics.contains("Error attaching probe: 'kprobe:araphor_missing_hook_5f6d'")
+            && (!diagnostics.lines().any(|line| {
+                line == "ERROR: Probe does not exist: rawtracepoint:araphor_missing_hook_5f6d"
+            }) || [
+                "Read-only file system",
+                "Permission denied",
+                "Operation not permitted",
+            ]
+            .iter()
+            .any(|error| diagnostics.contains(error)))
         {
-            return Err("unsupported-hook: the selected hook did not fail attachment".into());
+            return Err("unsupported-hook: missing-hook rejection was not proved".into());
         }
         if self.name == "probe-limit" && !diagnostics.contains("exceeds") {
             return Err("probe-limit: the backend did not report its probe ceiling".into());
@@ -166,11 +176,17 @@ impl CaseResult {
             return Err("histogram: final histogram output is missing".into());
         }
         if self.name == "partial-attach"
-            && (self.result.exit_code == Some(0)
-                || self.result.attach_notification_ms.is_some()
-                || self.observed_program_ids.len() < 2)
+            && (!diagnostics.contains("Error attaching probe: 'kprobe:araphor_missing_hook_5f6d'")
+                || !self.kernel_runtime.iter().any(|(id, sample)| {
+                    self.result.program_ids.contains(id)
+                        && sample.kind == libbpf_rs::ProgramType::PerfEvent as u32
+                        && sample.name == "10"
+                        && sample.run_count > 0
+                }))
         {
-            return Err("partial-attach: failure after partial loading was not observed".into());
+            return Err(
+                "partial-attach: requested interval execution before failure is unproved".into(),
+            );
         }
         if !self.cleanup_verified
             || !self.enforcement_manifest_unchanged
@@ -464,7 +480,7 @@ impl ObservabilityQualification {
             ),
             (
                 "unsupported-hook",
-                "kprobe:araphor_missing_hook_5f6d { @x = count(); }",
+                "rawtracepoint:araphor_missing_hook_5f6d { @x = count(); }",
                 DiagnosticMode::Capture,
                 false,
             ),
@@ -556,6 +572,8 @@ impl ObservabilityQualification {
                     kernel_runtime.insert(
                         program.id,
                         KernelRunTime {
+                            name: program.name.to_string_lossy().into_owned(),
+                            kind: program.ty as u32,
                             run_time_ns: program.run_time_ns,
                             run_count: program.run_cnt,
                             recursion_misses: program.recursion_misses,
@@ -928,6 +946,61 @@ mod tests {
     }
 
     #[test]
+    fn observability_backend_partial_proof() -> ProofResult<()> {
+        let mut record = capture_case("quiet");
+        record.name = "partial-attach";
+        record.result.stop = DiagnosticStop::Exited;
+        record.result.exit_code = Some(255);
+        record.result.attach_notification_ms = None;
+        record.observed_program_ids = BTreeSet::from([11, 12]);
+        record.frames[0].bytes =
+            b"ERROR: Error attaching probe: 'kprobe:araphor_missing_hook_5f6d'\n".to_vec();
+        assert!(
+            record.verify().is_err(),
+            "loaded programs do not prove attachment"
+        );
+        record.kernel_runtime.insert(
+            11,
+            KernelRunTime {
+                name: "10".into(),
+                kind: libbpf_rs::ProgramType::PerfEvent as u32,
+                run_time_ns: 100,
+                run_count: 1,
+                recursion_misses: 0,
+            },
+        );
+        record.verify()?;
+        record.result.program_ids.clear();
+        assert!(
+            record.verify().is_err(),
+            "another child's program is not proof"
+        );
+        record.result.program_ids.insert(11);
+        for (name, kind, count) in [
+            ("BEGIN", libbpf_rs::ProgramType::RawTracepoint, 1),
+            ("10", libbpf_rs::ProgramType::RawTracepoint, 1),
+            ("1", libbpf_rs::ProgramType::PerfEvent, 1),
+            ("10", libbpf_rs::ProgramType::PerfEvent, 0),
+        ] {
+            record.kernel_runtime.insert(
+                11,
+                KernelRunTime {
+                    name: name.into(),
+                    kind: kind as u32,
+                    run_time_ns: 100,
+                    run_count: count,
+                    recursion_misses: 0,
+                },
+            );
+            assert!(
+                record.verify().is_err(),
+                "unrelated or idle program is not proof"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn observability_backend_hook_rejection() -> ProofResult<()> {
         let mut record = capture_case("quiet");
         record.name = "unsupported-hook";
@@ -935,7 +1008,7 @@ mod tests {
         record.result.exit_code = Some(1);
         record.result.attach_notification_ms = None;
         record.frames[0].bytes =
-            b"ERROR: Error attaching probe: 'kprobe:araphor_missing_hook_5f6d'\n".to_vec();
+            b"ERROR: Probe does not exist: rawtracepoint:araphor_missing_hook_5f6d\n".to_vec();
         record.verify()?;
         record.result.exit_code = Some(0);
         assert!(record.verify().is_err());
@@ -952,6 +1025,11 @@ mod tests {
             b"ERROR: bpftrace currently only supports running as the root user.\n".as_slice(),
             b"ERROR: Error attaching probe: 'kprobe:another_hook'\n".as_slice(),
             b"WARNING: araphor_missing_hook_5f6d is not traceable\n".as_slice(),
+            b"create_probe_event: Read-only file system\nERROR: Error attaching probe: 'kprobe:araphor_missing_hook_5f6d'\n".as_slice(),
+            b"create_probe_event: Permission denied\nERROR: Error attaching probe: 'kprobe:araphor_missing_hook_5f6d'\n".as_slice(),
+            b"Read-only file system\nERROR: Probe does not exist: rawtracepoint:araphor_missing_hook_5f6d\n".as_slice(),
+            b"Permission denied\nERROR: Probe does not exist: rawtracepoint:araphor_missing_hook_5f6d\n".as_slice(),
+            b"Operation not permitted\nERROR: Probe does not exist: rawtracepoint:araphor_missing_hook_5f6d\n".as_slice(),
         ] {
             record.frames[0].bytes = bytes.to_vec();
             assert!(record.verify().is_err());
