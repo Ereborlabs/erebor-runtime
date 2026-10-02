@@ -957,10 +957,8 @@ impl KubernetesState {
     }
 
     fn start_entry(&mut self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
-        let group = self
-            .actor_cgroup
-            .as_ref()
-            .ok_or("the Kubernetes actor has no recorded cgroup")?;
+        let member = self.container_id_for(CONTAINER)?;
+        let group = Self::cgroup(self.inspect_pid(&member)?)?;
         let mut command = if let Some(kube) = self.approval.kubeconfig() {
             let mut command = Command::new(&self.exec_path);
             command
@@ -1004,7 +1002,7 @@ impl KubernetesState {
                     .unwrap_or_else(|error| error.to_string());
                 format!("{source}; Node logs: {logs}")
             })?;
-        let pid = actor.wait_group_task(group, &before, program, "Kubernetes exec host PID")?;
+        let pid = actor.wait_group_task(&group, &before, program, "Kubernetes exec host PID")?;
         if !self.hook_up {
             let input_path = PathBuf::from(format!("/proc/{pid}/fd/0"));
             let input = File::options()

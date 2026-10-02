@@ -102,6 +102,8 @@ mod prestop_path;
 #[cfg(test)]
 mod privilege;
 #[cfg(test)]
+mod proc_observer;
+#[cfg(test)]
 mod process_control;
 #[cfg(test)]
 mod reader_queue;

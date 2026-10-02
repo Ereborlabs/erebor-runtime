@@ -1,5 +1,7 @@
 import ctypes
+import select
 import socket
+import struct
 import sys
 
 
@@ -16,11 +18,16 @@ class UnixPeer:
         if self.libc.prctl(15, ctypes.addressof(name), 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
 
+    def deadline(self, stream):
+        timeout = struct.pack("@ll", 5, 0)
+        for option in (socket.SO_RCVTIMEO, socket.SO_SNDTIMEO):
+            stream.setsockopt(socket.SOL_SOCKET, option, timeout)
+
     def prepare(self):
         if self.stream is not None:
             raise RuntimeError("socket is already prepared")
         self.stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.stream.settimeout(5)
+        self.deadline(self.stream)
         if self.mode == "server":
             self.stream.bind("\0mithril-stream")
             self.stream.listen(1)
@@ -31,7 +38,7 @@ class UnixPeer:
             raise RuntimeError("socket is not prepared")
         if self.mode == "server":
             with self.stream.accept()[0] as stream:
-                stream.settimeout(5)
+                self.deadline(stream)
                 if stream.recv(1) != b"\x01":
                     raise RuntimeError("incorrect request byte")
                 stream.sendall(b"\x02")
@@ -50,6 +57,13 @@ class UnixPeer:
                     self.prepare()
                 elif command == "exchange\n":
                     self.exchange()
+                elif command == "roundtrip\n":
+                    self.prepare()
+                    self.exchange()
+                    release = select.poll()
+                    release.register(sys.stdin, select.POLLIN | select.POLLHUP | select.POLLERR)
+                    release.poll()
+                    break
                 elif command == "release\n":
                     break
                 else:
