@@ -5700,7 +5700,7 @@ test does not close a row when its physical condition or an assertion changed.
       old signed-denial action because its event feeds the public
       `mithril-inspect` capture in this probe. The reduced probe passed with
       that capture and its earlier startup and bootstrap assertions.
-    - [ ] Qualify the same public `mithril-inspect` denial capture on Host and
+    - [x] Qualify the same public `mithril-inspect` denial capture on Host and
       direct `runc` before removing the old action and capture. The current
       shared test checks the production observation API, but does not call the
       CLI. The deployed two-node Kubernetes lane checks the CLI separately.
@@ -5721,7 +5721,13 @@ test does not close a row when its physical condition or an assertion changed.
         The final repository Rust CI passed with normal ignored-test
         exclusions and no extra skips. See
         `/tmp/mithril-inspection-host-ci-20261002.log`.
-      - [ ] Pass and commit direct runc with the unchanged body.
+      - [x] Direct runc passed the unchanged 97-line body in 52.33 seconds.
+        Stock runc and the production OCI hook created the declared entry.
+        The exact physical denial, Node evidence, CLI fields, and normal
+        output, container, pin, lease, and cgroup cleanup passed. Only the
+        platform attribute changed after Host commit `a8b8c6b7`.
+        The final repository Rust CI passed for that attribute edit. See
+        `/tmp/mithril-inspection-runc-ci-20261002.log`.
       - [ ] Remove only the matched legacy denial action and temporary
         observation server after both pass. Keep the real Kubernetes CLI lane.
       Review route:

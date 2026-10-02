@@ -9,7 +9,7 @@ use crate::effect::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = inspection_recovery]
 fn inspection_keeps_signed_deny<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("inspection-capture")?;
