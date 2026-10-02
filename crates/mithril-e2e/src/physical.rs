@@ -13,6 +13,8 @@ use crate::Result;
 
 #[cfg(test)]
 pub(crate) mod mount_cache;
+#[cfg(test)]
+pub(crate) mod oci_bundle;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(test)]

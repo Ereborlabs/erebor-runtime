@@ -5641,6 +5641,30 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `EffectTestRunner::runc_retained_runtime_gate_probe`: own the bundle
   and marker cleanup. Keep the production OCI hook invocation for hostile,
   CRI, installer, recovery, and host-stock shapes explicit.
+  - [x] Share checked OCI bundle preparation before the next runtime-gate
+    migration. Keep production hook installation on `OciBaseSpecOwner` and
+    process start, exit, diagnostics, and stop on `ProcessFixture`. The
+    bundle input owner must not own a process or reproduce admission.
+    Qualify the unchanged hostile assertions before committing the tooling.
+    Add no Platform method and no legacy fixture code.
+    The hostile case passed in 19.54 seconds in the retained lightweight VM.
+    Its 57-line body keeps every denial, output, marker, runtime-state, and
+    cgroup assertion. The 110-line
+    [OciBundle](src/physical/oci_bundle.rs) binds checked OCI input paths and
+    calls the public production spec owner. It returns `ProcessFixture` and
+    owns no process or admission state. The existing environment removes its
+    temporary files. VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-oci-bundle-ci-20261002.log`.
+  - [ ] Replace the inert CRI sandbox case with a small direct-runc test.
+    Keep `/pause`, the read-only root and binds, `noNewPrivileges`, the
+    non-administrative capabilities, sandbox annotations, the unavailable
+    Node endpoint, actor output, and `ALLOW_CRI_SANDBOX` log assertion.
+    Use a checked Python actor. Keep the old case until the replacement passes.
+  - [ ] Replace the forged sandbox command in a separate small direct-runc
+    test. Keep the sandbox annotations but run a different actor command with
+    its writable result mount. Require failed start, `DENY_NODE_UNAVAILABLE`,
+    no actor marker, empty runtime state, and cgroup cleanup. Retire only
+    these two old cases after their focused verification and commits.
   - [x] Replace the hostile-container case with one standard direct-runc test
     below 100 lines. Use the shared process owner and checked OCI and Python
     inputs. Keep the host PID namespace, root user, `CAP_SYS_ADMIN`, writable

@@ -35,6 +35,7 @@
     ]
   },
   "annotations": {
-    "io.kubernetes.cri.container-type": "container"
+    "io.kubernetes.cri.container-type": "container",
+    "io.kubernetes.cri.container-id": "MITHRIL_ID"
   }
 }
