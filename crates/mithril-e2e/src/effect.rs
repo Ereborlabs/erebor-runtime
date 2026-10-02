@@ -66,6 +66,8 @@ mod fixture_syscalls;
 mod inactive_grant;
 #[cfg(test)]
 mod independent_mmap;
+#[cfg(test)]
+mod io_read;
 mod mailbox;
 #[cfg(test)]
 mod memory_observe;
