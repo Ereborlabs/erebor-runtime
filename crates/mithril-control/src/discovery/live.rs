@@ -197,18 +197,11 @@ impl DiscoveryOwner {
                     if matches!(error.code, rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)) =>
             {
                 store.recover_discovery_artifacts()?;
-                let owner = Self::rebuild_index(store.clone())?;
-                store
-                    .discovery_recovered
-                    .store(true, std::sync::atomic::Ordering::Release);
-                return Ok(owner);
+                return Self::rebuild_index(store);
             }
             Err(error) => return Err(error),
         };
         store.recover_discovery_artifacts()?;
-        store
-            .discovery_recovered
-            .store(true, std::sync::atomic::Ordering::Release);
         Ok(Self {
             live: DiscoveryLive {
                 store,

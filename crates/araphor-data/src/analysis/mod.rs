@@ -53,6 +53,7 @@ pub use progress::{
     AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
 pub use quota::WitnessUsageV1;
+pub use raw::{AnalysisStreamIdentityV1, TraceOutputPageV1, TraceOutputReceiptV1};
 pub use read::AnalysisReadControl;
 pub use retention::{
     EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1,
@@ -63,7 +64,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 11;
+const ANALYSIS_SCHEMA_VERSION: i64 = 12;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -73,6 +74,7 @@ pub enum AnalysisCommitStage {
     BeforeRotation,
     BeforeAppend,
     AfterSync,
+    AfterTraceFreeze,
     BeforeResultCommit,
     BeforeRetentionCommit,
 }
@@ -320,12 +322,22 @@ impl AnalysisStore {
                     node_boot_id BLOB NOT NULL,
                     label_epoch UBIGINT NOT NULL
                 );
+                CREATE TABLE trace_receipts (
+                    stream_key BLOB PRIMARY KEY,
+                    identity_json VARCHAR NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    last_sequence UBIGINT NOT NULL,
+                    output_bytes UBIGINT NOT NULL,
+                    terminal VARCHAR,
+                    retained_floor UBIGINT NOT NULL,
+                    commit_revision UBIGINT NOT NULL
+                );
                 CREATE TABLE segments (
                     segment_id UBIGINT PRIMARY KEY,
                     stream_key BLOB NOT NULL,
                     tenant_id BLOB NOT NULL,
                     identity_json VARCHAR NOT NULL,
-                    cpu_id UINTEGER NOT NULL,
+                    cpu_id UINTEGER,
                     stream_kind VARCHAR NOT NULL,
                     state VARCHAR NOT NULL CHECK (state IN ('Live', 'Deleting')),
                     sealed BOOLEAN NOT NULL,
@@ -590,8 +602,9 @@ impl AnalysisStore {
         Ok(raw
             .sources
             .get(&source_key(identity))
-            .filter(|source| &source.receipt.identity == identity)
-            .map(|source| source.receipt.clone()))
+            .and_then(|source| source.receipt.evidence())
+            .filter(|receipt| &receipt.identity == identity)
+            .cloned())
     }
 
     pub fn source_status(
@@ -791,7 +804,9 @@ impl AnalysisStore {
                 }
                 .into()
             });
-            source.receipt.coverage_revision = input.revision;
+            if let raw::RawReceipt::Evidence(receipt) = &mut source.receipt {
+                receipt.coverage_revision = input.revision;
+            }
         }
         #[cfg(test)]
         self.crash_at("coverage.after");

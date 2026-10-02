@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use prost::Message as _;
+use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::raw_segments::{
@@ -11,12 +12,295 @@ use super::raw_segments::{
 use super::{source_key, AnalysisSourceReceiptV1, AnalysisStore, ValidatedEvidenceBatchV1};
 use crate::{EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, Result};
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+pub enum AnalysisStreamIdentityV1 {
+    Evidence(EvidenceIntakeIdentityV1),
+    Diagnostic(crate::TraceIdentityV1),
+}
+
+pub(super) use AnalysisStreamIdentityV1 as RawIdentity;
+
+impl From<EvidenceIntakeIdentityV1> for RawIdentity {
+    fn from(identity: EvidenceIntakeIdentityV1) -> Self {
+        Self::Evidence(identity)
+    }
+}
+
+impl From<crate::TraceIdentityV1> for RawIdentity {
+    fn from(identity: crate::TraceIdentityV1) -> Self {
+        Self::Diagnostic(identity)
+    }
+}
+
+impl PartialEq<EvidenceIntakeIdentityV1> for RawIdentity {
+    fn eq(&self, identity: &EvidenceIntakeIdentityV1) -> bool {
+        matches!(self, Self::Evidence(saved) if saved == identity)
+    }
+}
+
+impl RawIdentity {
+    pub(super) fn key(&self) -> [u8; 32] {
+        match self {
+            Self::Evidence(identity) => source_key(identity),
+            Self::Diagnostic(identity) => {
+                let mut hash = Sha256::new();
+                hash.update(b"ARAPHOR-DIAGNOSTIC-STREAM-V1\0");
+                hash.update(identity.tenant_id);
+                hash.update(identity.execution_id);
+                hash.finalize().into()
+            }
+        }
+    }
+
+    pub(super) fn tenant(&self) -> [u8; 16] {
+        match self {
+            Self::Evidence(identity) => identity.tenant_id,
+            Self::Diagnostic(identity) => identity.tenant_id,
+        }
+    }
+
+    pub(super) fn kind(&self) -> &'static str {
+        match self {
+            Self::Evidence(_) => "records",
+            Self::Diagnostic(_) => "diagnostic",
+        }
+    }
+
+    pub(super) fn valid(&self) -> bool {
+        match self {
+            Self::Evidence(identity) => identity.valid(),
+            Self::Diagnostic(identity) => identity.validate().is_ok(),
+        }
+    }
+
+    pub(super) fn evidence(&self) -> Option<&EvidenceIntakeIdentityV1> {
+        match self {
+            Self::Evidence(identity) => Some(identity),
+            Self::Diagnostic(_) => None,
+        }
+    }
+
+    pub(super) fn json(&self, root: &Path) -> Result<String> {
+        match self {
+            Self::Evidence(identity) => serde_json::to_string(identity),
+            Self::Diagnostic(identity) => serde_json::to_string(identity),
+        }
+        .context(crate::JsonSnafu { path: root })
+    }
+
+    pub(super) fn parse(kind: &str, json: &str, root: &Path) -> Result<Self> {
+        match kind {
+            "records" => serde_json::from_str(json).map(Self::Evidence),
+            "diagnostic" => serde_json::from_str(json).map(Self::Diagnostic),
+            _ => return AnalysisStore::reject_path(root, "the raw stream kind is invalid"),
+        }
+        .context(crate::JsonSnafu { path: root })
+    }
+}
+
+struct RawBatch {
+    kind: RawKind,
+    first_cursor: u64,
+    last_cursor: u64,
+    intake_utc_ns: u64,
+    framed_records: prost::bytes::Bytes,
+    frame_ends: Vec<usize>,
+    terminal_bytes: usize,
+}
+
+impl From<ValidatedEvidenceBatchV1> for RawBatch {
+    fn from(batch: ValidatedEvidenceBatchV1) -> Self {
+        Self {
+            kind: RawKind::Evidence(batch.cpu_id),
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+            intake_utc_ns: batch.intake_utc_ns,
+            framed_records: batch.framed_records,
+            frame_ends: batch.frame_ends,
+            terminal_bytes: 0,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct TraceRecord {
+    #[prost(oneof = "TracePayload", tags = "1, 2, 3, 4")]
+    payload: Option<TracePayload>,
+}
+
+#[derive(Clone, PartialEq, prost::Oneof)]
+enum TracePayload {
+    #[prost(bytes, tag = "1")]
+    Metadata(Vec<u8>),
+    #[prost(bytes, tag = "2")]
+    Data(Vec<u8>),
+    #[prost(bytes, tag = "3")]
+    Diagnostic(Vec<u8>),
+    #[prost(bytes, tag = "4")]
+    Terminal(Vec<u8>),
+}
+
+impl TraceRecord {
+    fn read(bytes: &[u8], root: &Path) -> Result<TracePayload> {
+        let record = Self::decode(bytes).map_err(|_| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the stored trace record is invalid",
+            }
+            .build()
+        })?;
+        if record.encode_to_vec() != bytes {
+            return AnalysisStore::reject_path(root, "the trace record is not canonical");
+        }
+        record.payload.ok_or_else(|| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the trace record kind is absent",
+            }
+            .build()
+        })
+    }
+
+    fn terminal(bytes: &[u8], root: &Path) -> Result<crate::TraceTerminalV1> {
+        if bytes.len() > 4096 {
+            return AnalysisStore::reject_path(root, "the trace terminal exceeds its reserve");
+        }
+        let terminal: crate::TraceTerminalV1 = serde_json::from_slice(bytes).map_err(|_| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the stored trace terminal is invalid",
+            }
+            .build()
+        })?;
+        terminal.validate().map_err(|_| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the stored trace terminal is invalid",
+            }
+            .build()
+        })?;
+        if serde_json::to_vec(&terminal).context(crate::JsonSnafu { path: root })? != bytes {
+            return AnalysisStore::reject_path(root, "the trace terminal is not canonical");
+        }
+        Ok(terminal)
+    }
+}
+
+impl RawBatch {
+    fn trace(batch: &crate::TraceBatchV1, intake: u64, root: &Path) -> Result<Self> {
+        batch.validate()?;
+        if intake == 0 {
+            return crate::TraceInvalidSnafu {
+                reason: "the trace intake time is absent",
+            }
+            .fail();
+        }
+        let first = batch
+            .frames
+            .first()
+            .map(|frame| frame.sequence)
+            .or_else(|| {
+                batch
+                    .terminal
+                    .as_ref()
+                    .map(|terminal| terminal.last_sequence + 1)
+            })
+            .ok_or_else(|| {
+                crate::TraceInvalidSnafu {
+                    reason: "the trace batch is empty",
+                }
+                .build()
+            })?;
+        let mut bytes = Vec::new();
+        let mut terminal_bytes = 0;
+        let mut ends =
+            Vec::with_capacity(batch.frames.len() + usize::from(batch.terminal.is_some()));
+        for frame in &batch.frames {
+            let payload = match frame.kind {
+                crate::TraceFrameKindV1::Metadata => TracePayload::Metadata(frame.bytes.clone()),
+                crate::TraceFrameKindV1::Data => TracePayload::Data(frame.bytes.clone()),
+                crate::TraceFrameKindV1::Diagnostic => {
+                    TracePayload::Diagnostic(frame.bytes.clone())
+                }
+            };
+            TraceRecord {
+                payload: Some(payload),
+            }
+            .encode(&mut bytes)
+            .map_err(|_| {
+                crate::TraceInvalidSnafu {
+                    reason: "trace record encoding failed",
+                }
+                .build()
+            })?;
+            ends.push(bytes.len());
+        }
+        if let Some(terminal) = &batch.terminal {
+            if batch
+                .frames
+                .last()
+                .is_some_and(|frame| frame.sequence != terminal.last_sequence)
+            {
+                return crate::TraceInvalidSnafu {
+                    reason: "the trace terminal skips output",
+                }
+                .fail();
+            }
+            let json = serde_json::to_vec(terminal).context(crate::JsonSnafu { path: root })?;
+            terminal_bytes = json.len();
+            if json.len() > 4096 {
+                return crate::TraceInvalidSnafu {
+                    reason: "the trace terminal exceeds its reserve",
+                }
+                .fail();
+            }
+            TraceRecord {
+                payload: Some(TracePayload::Terminal(json)),
+            }
+            .encode(&mut bytes)
+            .map_err(|_| {
+                crate::TraceInvalidSnafu {
+                    reason: "trace terminal encoding failed",
+                }
+                .build()
+            })?;
+            ends.push(bytes.len());
+        }
+        Ok(Self {
+            kind: RawKind::Diagnostic(RawTraceMeta::default()),
+            first_cursor: first,
+            last_cursor: first + ends.len() as u64 - 1,
+            intake_utc_ns: intake,
+            framed_records: bytes.into(),
+            frame_ends: ends,
+            terminal_bytes,
+        })
+    }
+}
+
 impl AnalysisStore {
     pub fn read_page_cancel(
         &self,
         identity: &EvidenceIntakeIdentityV1,
         first_cursor: u64,
         control: &super::AnalysisReadControl,
+    ) -> Result<super::AnalysisReadPageV1> {
+        self.read_raw(
+            &identity.clone().into(),
+            first_cursor,
+            control,
+            super::MAX_ANALYSIS_PAGE_RECORDS,
+            super::MAX_ANALYSIS_PAGE_BYTES,
+        )
+    }
+
+    fn read_raw(
+        &self,
+        identity: &RawIdentity,
+        first_cursor: u64,
+        control: &super::AnalysisReadControl,
+        max_records: usize,
+        max_bytes: usize,
     ) -> Result<super::AnalysisReadPageV1> {
         control.check()?;
         let _permit = self
@@ -26,14 +310,14 @@ impl AnalysisStore {
         let coordinator = self.raw_coordinator(control)?;
         let _snapshot = control.lock(|| self.maintenance.try_read())?;
         let raw = control.lock(|| self.raw.try_lock())?;
-        let key = source_key(identity);
+        let key = identity.key();
         let source = raw
             .sources
             .get(&key)
-            .filter(|source| &source.receipt.identity == identity)
-            .ok_or_else(|| self.state_error("the evidence source is absent"))?;
+            .filter(|source| source.receipt.matches(identity))
+            .ok_or_else(|| self.state_error("the raw source is absent"))?;
         let receipt = &source.receipt;
-        if first_cursor == 0 || first_cursor > receipt.contiguous_cursor.saturating_add(1) {
+        if first_cursor == 0 || first_cursor > receipt.cursor().saturating_add(1) {
             return self.reject("the evidence read cursor is outside the accepted range");
         }
         let expired = raw
@@ -43,10 +327,10 @@ impl AnalysisStore {
             .next_back()
             .map(|(_, &last)| last)
             .filter(|last| *last >= first_cursor);
-        if first_cursor <= receipt.retained_floor || expired.is_some() {
+        if first_cursor <= receipt.floor() || expired.is_some() {
             return crate::RetainedRangeExpiredSnafu {
                 first_cursor,
-                last_cursor: expired.unwrap_or(receipt.retained_floor),
+                last_cursor: expired.unwrap_or(receipt.floor()),
             }
             .fail();
         }
@@ -56,8 +340,8 @@ impl AnalysisStore {
             .range((key, first_cursor)..=(key, u64::MAX))
             .next()
             .map(|((_, first), _)| *first)
-            .filter(|first| *first <= receipt.contiguous_cursor);
-        let page_end = expiry.map_or(receipt.contiguous_cursor, |first| first - 1);
+            .filter(|first| *first <= receipt.cursor());
+        let page_end = expiry.map_or(receipt.cursor(), |first| first - 1);
         let mut frozen = Vec::new();
         let mut count = 0;
         let mut bounded = false;
@@ -78,14 +362,14 @@ impl AnalysisStore {
                 if first_cursor.checked_add(count as u64) != Some(first) {
                     return self.reject("the accepted evidence range has a missing record");
                 }
-                let available = super::MAX_ANALYSIS_PAGE_RECORDS - count;
+                let available = max_records - count;
                 let last = span
                     .last
                     .min(page_end)
                     .min(first.saturating_add(available as u64 - 1));
                 count += (last - first + 1) as usize;
                 frozen.push(raw.freeze(entry, index, first, last)?);
-                bounded = count == super::MAX_ANALYSIS_PAGE_RECORDS;
+                bounded = count == max_records;
                 if bounded {
                     break;
                 }
@@ -95,16 +379,20 @@ impl AnalysisStore {
         if next_cursor.is_some_and(|next| next <= page_end) && !bounded {
             return self.reject("the accepted evidence range has a missing record");
         }
-        let accepted = receipt.contiguous_cursor;
+        let accepted = receipt.cursor();
         let read_revision = *self.revision.borrow();
         drop(raw);
         drop(coordinator);
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if matches!(identity, RawIdentity::Diagnostic(_)) {
+            self.run_commit_hook(super::AnalysisCommitStage::AfterTraceFreeze)?;
+        }
         let mut records = Vec::with_capacity(count);
         let mut encoded_bytes = 0;
         'pages: for range in frozen {
             control.check()?;
             for record in range.read(&self.root)? {
-                if encoded_bytes + record.framed_record.len() > super::MAX_ANALYSIS_PAGE_BYTES {
+                if encoded_bytes + record.framed_record.len() > max_bytes {
                     if records.is_empty() {
                         return self.reject("one evidence frame exceeds the read page bound");
                     }
@@ -127,26 +415,188 @@ impl AnalysisStore {
         })
     }
 
+    pub fn append_trace(
+        &self,
+        identity: &crate::TraceIdentityV1,
+        batch: &crate::TraceBatchV1,
+        intake_utc_ns: u64,
+    ) -> Result<TraceOutputReceiptV1> {
+        identity.validate()?;
+        if batch.execution_id != identity.execution_id {
+            return crate::TraceInvalidSnafu {
+                reason: "the trace batch execution differs",
+            }
+            .fail();
+        }
+        let input = RawBatch::trace(batch, intake_utc_ns, &self.root)?;
+        let first = input.first_cursor;
+        let last = input.last_cursor;
+        let (outcome, receipt) = self.commit_raw(identity.clone().into(), input)?;
+        let RawReceipt::Diagnostic(receipt) = receipt else {
+            return self.reject("the durable trace receipt has the wrong kind");
+        };
+        if outcome == EvidenceStoreOutcomeV1::AlreadyAcceptedExpired
+            && batch.frames.is_empty()
+            && receipt.terminal != batch.terminal
+        {
+            return crate::AnalysisConflictSnafu.fail();
+        }
+        if outcome == EvidenceStoreOutcomeV1::AlreadyAcceptedExpired
+            && !(batch.frames.is_empty() && receipt.terminal == batch.terminal)
+        {
+            return crate::RetainedRangeExpiredSnafu {
+                first_cursor: first,
+                last_cursor: last,
+            }
+            .fail();
+        }
+        Ok(receipt)
+    }
+
+    pub fn trace_receipt(
+        &self,
+        identity: &crate::TraceIdentityV1,
+    ) -> Result<Option<TraceOutputReceiptV1>> {
+        identity.validate()?;
+        let _writer = self.raw_access()?;
+        let raw = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+        let source = RawIdentity::Diagnostic(identity.clone());
+        Ok(raw
+            .sources
+            .get(&source.key())
+            .and_then(|source| match &source.receipt {
+                RawReceipt::Diagnostic(receipt) if &receipt.identity == identity => {
+                    Some(receipt.clone())
+                }
+                _ => None,
+            }))
+    }
+
+    pub fn read_trace(
+        &self,
+        identity: &crate::TraceIdentityV1,
+        first_cursor: u64,
+        control: &super::AnalysisReadControl,
+    ) -> Result<TraceOutputPageV1> {
+        identity.validate()?;
+        let page = self.read_raw(
+            &identity.clone().into(),
+            first_cursor,
+            control,
+            201,
+            crate::MAX_TRACE_FRAME_BYTES + 201 * 8 + 4096,
+        )?;
+        let mut output = TraceOutputPageV1 {
+            frames: Vec::new(),
+            terminal: None,
+            positions: Vec::new(),
+            terminal_position: None,
+            next_cursor: page.next_cursor,
+            read_revision: page.read_revision,
+        };
+        let mut bytes = 0;
+        for record in page.records {
+            control.check()?;
+            let payload = TraceRecord::read(&record.framed_record, &self.root)?;
+            let (kind, data) = match payload {
+                TracePayload::Metadata(data) => (crate::TraceFrameKindV1::Metadata, data),
+                TracePayload::Data(data) => (crate::TraceFrameKindV1::Data, data),
+                TracePayload::Diagnostic(data) => (crate::TraceFrameKindV1::Diagnostic, data),
+                TracePayload::Terminal(data) => {
+                    output.terminal = Some(TraceRecord::terminal(&data, &self.root)?);
+                    output.terminal_position = Some(record.position);
+                    continue;
+                }
+            };
+            if output.frames.len() == 200 || bytes + data.len() > crate::MAX_TRACE_FRAME_BYTES {
+                output.next_cursor = Some(record.cursor);
+                break;
+            }
+            bytes += data.len();
+            output.positions.push(record.position);
+            output.frames.push(crate::TraceFrameV1 {
+                execution_id: identity.execution_id,
+                sequence: record.cursor,
+                kind,
+                bytes: data,
+            });
+        }
+        Ok(output)
+    }
+
     pub(super) fn commit_evidence(
         &self,
         identity: EvidenceIntakeIdentityV1,
         batch: ValidatedEvidenceBatchV1,
     ) -> Result<EvidenceStoreOutcomeV1> {
         self.validate_batch(&identity, &batch)?;
-        let _writer = self.raw_access()?;
+        self.commit_raw(identity.into(), batch.into())
+            .map(|(outcome, _)| outcome)
+    }
+
+    fn commit_raw(
+        &self,
+        identity: RawIdentity,
+        batch: RawBatch,
+    ) -> Result<(EvidenceStoreOutcomeV1, RawReceipt)> {
+        let writer = self.raw_access()?;
         let mut raw = self
             .raw
             .lock()
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
         self.require_retention()?;
-        let key = source_key(&identity);
+        let key = identity.key();
+        let tenant = identity.tenant();
+        if let RawIdentity::Diagnostic(trace) = &identity {
+            if raw
+                .sources
+                .get(&key)
+                .is_none_or(|source| source.stream == 0)
+            {
+                let (_, intent) = Self::read_trace_intent(
+                    writer.get()?,
+                    &self.root,
+                    trace.tenant_id,
+                    trace.request_id,
+                )?
+                .ok_or_else(|| {
+                    crate::TraceInvalidSnafu {
+                        reason: "the diagnostic execution is not admitted",
+                    }
+                    .build()
+                })?;
+                if !intent
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.identity == *trace)
+                {
+                    return crate::AnalysisConflictSnafu.fail();
+                }
+            }
+        }
         if let Some(source) = raw.sources.get(&key) {
-            if source.receipt.cpu_id != batch.cpu_id || source.receipt.identity != identity {
+            if source.receipt.cpu() != batch.kind.cpu() || !source.receipt.matches(&identity) {
+                if matches!(identity, RawIdentity::Diagnostic(_)) {
+                    return crate::AnalysisConflictSnafu.fail();
+                }
                 return self.reject("the evidence source changed its identity or CPU");
             }
-            if batch.first_cursor <= source.receipt.retained_floor {
-                if batch.last_cursor <= source.receipt.retained_floor {
-                    return Ok(EvidenceStoreOutcomeV1::AlreadyAcceptedExpired);
+            if batch.first_cursor <= source.receipt.floor() {
+                if batch.last_cursor <= source.receipt.floor() {
+                    return Ok((
+                        EvidenceStoreOutcomeV1::AlreadyAcceptedExpired,
+                        source.receipt.clone(),
+                    ));
+                }
+                if matches!(identity, RawIdentity::Diagnostic(_)) {
+                    return crate::RetainedRangeExpiredSnafu {
+                        first_cursor: batch.first_cursor,
+                        last_cursor: source.receipt.floor(),
+                    }
+                    .fail();
                 }
                 return self.reject("an evidence retry crosses an expired range boundary");
             }
@@ -159,7 +609,17 @@ impl AnalysisStore {
             .filter(|(_, last)| **last >= batch.first_cursor)
         {
             if *first <= batch.first_cursor && *last >= batch.last_cursor {
-                return Ok(EvidenceStoreOutcomeV1::AlreadyAcceptedExpired);
+                return Ok((
+                    EvidenceStoreOutcomeV1::AlreadyAcceptedExpired,
+                    raw.sources[&key].receipt.clone(),
+                ));
+            }
+            if matches!(identity, RawIdentity::Diagnostic(_)) {
+                return crate::RetainedRangeExpiredSnafu {
+                    first_cursor: batch.first_cursor.max(*first),
+                    last_cursor: *last,
+                }
+                .fail();
             }
             return self.reject("an evidence retry crosses an expired range boundary");
         }
@@ -168,7 +628,10 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
         let commit = raw.prepare(&identity, &batch, revision)?;
         if commit.spans.is_empty() {
-            return Ok(raw.outcome(&identity, batch.last_cursor));
+            return Ok((
+                raw.outcome(&identity, batch.last_cursor),
+                raw.sources[&key].receipt.clone(),
+            ));
         }
         let (stream, sequence) = raw.next_position(&identity)?;
         let (id, added, created) = raw.segments.append_plan(
@@ -177,8 +640,7 @@ impl AnalysisStore {
             sequence,
             commit.encoded_len() as u64 + 8,
         )?;
-        let json =
-            serde_json::to_string(&identity).context(crate::JsonSnafu { path: &self.root })?;
+        let json = identity.json(&self.root)?;
         let mut charge = added;
         if created {
             charge += 256 + json.len() as u64;
@@ -186,27 +648,101 @@ impl AnalysisStore {
         if !raw.sources.contains_key(&key) {
             charge += 512 + json.len() as u64;
         }
-        let scoped = raw
+        let diagnostic = matches!(identity, RawIdentity::Diagnostic(_));
+        let terminal =
+            matches!(&commit.kind, Some(RawKind::Diagnostic(progress)) if progress.terminal);
+        let released_reserve = if terminal {
+            super::quota::TRACE_RESERVE
+        } else {
+            0
+        };
+        if terminal {
+            charge += batch.terminal_bytes as u64;
+        }
+        let prepaid = charge <= released_reserve
+            && matches!(&commit.kind, Some(RawKind::Diagnostic(progress)) if progress.terminal
+                && commit.spans.len() == 1 && commit.spans[0].first == progress.last_sequence + 1);
+        let initial = diagnostic
+            && !raw
+                .segments
+                .descriptors()
+                .any(|segment| segment.bounds.stream_id == stream);
+        let released_slots = if terminal {
+            if initial {
+                2
+            } else {
+                1
+            }
+        } else {
+            usize::from(initial && created)
+        };
+        let trace_slots = raw
             .budget
-            .usage
-            .get(&identity.tenant_id)
-            .copied()
-            .unwrap_or(0);
-        if scoped.checked_add(charge).is_none_or(|bytes| {
-            bytes > self.storage.tenant_max_bytes - self.storage.tenant_max_bytes / 4
-        }) {
+            .trace_slots
+            .checked_sub(released_slots)
+            .ok_or_else(|| self.state_error("the diagnostic slot reserve underflows"))?;
+        let trace_reserve = raw
+            .budget
+            .trace_reserve
+            .checked_sub(released_reserve)
+            .ok_or_else(|| self.state_error("the diagnostic byte reserve underflows"))?;
+        let scoped = raw.budget.usage.get(&tenant).copied().unwrap_or(0);
+        if scoped
+            .checked_add(charge)
+            .and_then(|bytes| bytes.checked_sub(released_reserve))
+            .is_none_or(|bytes| {
+                bytes
+                    > self.storage.tenant_max_bytes
+                        - if prepaid {
+                            0
+                        } else {
+                            self.storage.tenant_max_bytes / 4
+                        }
+            })
+        {
             return crate::StorageCapacitySnafu {
                 resource: "tenant logical bytes",
             }
             .fail();
         }
-        if raw.budget.total.checked_add(charge).is_none_or(|bytes| {
-            bytes > self.storage.logical_max_bytes - self.storage.logical_max_bytes / 4
-        }) {
+        if raw
+            .budget
+            .total
+            .checked_add(charge)
+            .and_then(|bytes| bytes.checked_sub(released_reserve))
+            .is_none_or(|bytes| {
+                bytes
+                    > self.storage.logical_max_bytes
+                        - if prepaid {
+                            0
+                        } else {
+                            self.storage.logical_max_bytes / 4
+                        }
+            })
+        {
             return crate::StorageCapacitySnafu {
                 resource: "global logical bytes",
             }
             .fail();
+        }
+        if diagnostic {
+            let tenant_bytes = raw.budget.diagnostics.get(&tenant).copied().unwrap_or(0);
+            if tenant_bytes
+                .checked_add(charge)
+                .and_then(|bytes| bytes.checked_sub(released_reserve))
+                .is_none_or(|bytes| bytes > self.storage.tenant_max_bytes / 8)
+                || raw
+                    .budget
+                    .diagnostic_total
+                    .checked_add(charge)
+                    .and_then(|bytes| bytes.checked_sub(released_reserve))
+                    .is_none_or(|bytes| bytes > self.storage.logical_max_bytes / 8)
+            {
+                return crate::StorageCapacitySnafu {
+                    resource: "diagnostic logical bytes",
+                }
+                .fail();
+            }
         }
         let required = raw.budget.required.contains_key(&key);
         if required {
@@ -215,12 +751,7 @@ impl AnalysisStore {
             }) {
                 return crate::ProtectedInputCapacitySnafu { resource: "age" }.fail();
             }
-            let protected = raw
-                .budget
-                .protected
-                .get(&identity.tenant_id)
-                .copied()
-                .unwrap_or(0);
+            let protected = raw.budget.protected.get(&tenant).copied().unwrap_or(0);
             if protected
                 .checked_add(commit.body.len() as u64)
                 .is_none_or(|bytes| bytes > self.retention.raw_max_bytes)
@@ -228,19 +759,14 @@ impl AnalysisStore {
                 return crate::ProtectedInputCapacitySnafu { resource: "bytes" }.fail();
             }
         }
-        let mut witnesses = raw
-            .budget
-            .contexts
-            .get(&identity.tenant_id)
-            .copied()
-            .unwrap_or(0);
+        let mut witnesses = raw.budget.contexts.get(&tenant).copied().unwrap_or(0);
         for descriptor in raw.segments.descriptors() {
             if raw
                 .budget
                 .pins
                 .get(&descriptor.reference.id)
                 .is_some_and(|(tenant, expiry)| {
-                    *tenant == identity.tenant_id && *expiry > batch.intake_utc_ns
+                    *tenant == identity.tenant() && *expiry > batch.intake_utc_ns
                 })
             {
                 witnesses += descriptor.reference.offset;
@@ -255,12 +781,18 @@ impl AnalysisStore {
             }
             .fail();
         }
-        let usage = if created {
-            self.storage_with_entries(1)?
+        let usage = self.storage_with_reserve(
+            usize::from(created && !diagnostic),
+            trace_slots + usize::from(created && diagnostic),
+        )?;
+        let projected = added
+            .checked_add(trace_reserve)
+            .ok_or_else(|| self.state_error("the diagnostic physical reserve is exhausted"))?;
+        if prepaid {
+            self.storage.check_terminal(usage, projected)?;
         } else {
-            self.storage_usage()?
-        };
-        self.storage.check_append(usage, added)?;
+            self.storage.check_append(usage, projected)?;
+        }
         let _rotation = if created
             && raw
                 .sources
@@ -291,18 +823,28 @@ impl AnalysisStore {
         let prior_cursor = raw
             .sources
             .get(&key)
-            .map_or(0, |source| source.receipt.contiguous_cursor);
+            .map_or(0, |source| source.receipt.cursor());
         raw.append(&identity, commit)?;
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(super::AnalysisCommitStage::AfterSync)?;
         #[cfg(test)]
         self.crash_at("evidence.after");
         raw.budget.total += charge;
-        *raw.budget.usage.entry(identity.tenant_id).or_default() += charge;
+        raw.budget.total -= released_reserve;
+        *raw.budget.usage.entry(tenant).or_default() += charge;
+        *raw.budget.usage.entry(tenant).or_default() -= released_reserve;
+        raw.budget.trace_slots = trace_slots;
+        raw.budget.trace_reserve = trace_reserve;
+        if diagnostic {
+            raw.budget.diagnostic_total += charge;
+            raw.budget.diagnostic_total -= released_reserve;
+            *raw.budget.diagnostics.entry(tenant).or_default() += charge;
+            *raw.budget.diagnostics.entry(tenant).or_default() -= released_reserve;
+        }
         if required {
-            *raw.budget.protected.entry(identity.tenant_id).or_default() += body_bytes;
+            *raw.budget.protected.entry(tenant).or_default() += body_bytes;
             let floor = raw.budget.required[&key];
-            let contiguous = raw.sources[&key].receipt.contiguous_cursor;
+            let contiguous = raw.sources[&key].receipt.cursor();
             let oldest = prior_cursor
                 .max(floor)
                 .checked_add(1)
@@ -324,7 +866,10 @@ impl AnalysisStore {
         self.write_ready.store(true, Ordering::Release);
         self.raw_pending.store(true, Ordering::Release);
         self.revision.send_replace(revision);
-        Ok(raw.outcome(&identity, batch.last_cursor))
+        Ok((
+            raw.outcome(&identity, batch.last_cursor),
+            raw.sources[&key].receipt.clone(),
+        ))
     }
 }
 
@@ -346,14 +891,119 @@ pub(super) struct RawSpan {
 pub(super) struct RawCommit {
     #[prost(uint64, tag = "1")]
     pub revision: u64,
-    #[prost(uint32, tag = "2")]
-    pub cpu: u32,
+    #[prost(oneof = "RawKind", tags = "2, 6")]
+    pub kind: Option<RawKind>,
     #[prost(uint64, tag = "3")]
     pub intake: u64,
     #[prost(message, repeated, tag = "4")]
     pub spans: Vec<RawSpan>,
-    #[prost(bytes = "bytes", tag = "5")]
+    #[prost(bytes = "bytes", tag = "7")]
     pub body: prost::bytes::Bytes,
+}
+
+#[derive(Clone, PartialEq, prost::Oneof)]
+pub(super) enum RawKind {
+    #[prost(uint32, tag = "2")]
+    Evidence(u32),
+    #[prost(message, tag = "6")]
+    Diagnostic(RawTraceMeta),
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub(super) struct RawTraceMeta {
+    #[prost(uint64, tag = "1")]
+    pub last_sequence: u64,
+    #[prost(uint64, tag = "2")]
+    pub output_bytes: u64,
+    #[prost(bool, tag = "3")]
+    pub terminal: bool,
+}
+
+impl RawKind {
+    pub(super) fn cpu(&self) -> Option<u32> {
+        match self {
+            Self::Evidence(cpu) => Some(*cpu),
+            Self::Diagnostic(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceOutputReceiptV1 {
+    pub identity: crate::TraceIdentityV1,
+    pub last_sequence: u64,
+    pub output_bytes: u64,
+    pub terminal: Option<crate::TraceTerminalV1>,
+    pub retained_floor: u64,
+    pub commit_revision: u64,
+}
+
+impl TraceOutputReceiptV1 {
+    pub(super) fn cursor(&self) -> u64 {
+        self.last_sequence + u64::from(self.terminal.is_some())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceOutputPageV1 {
+    pub frames: Vec<crate::TraceFrameV1>,
+    pub terminal: Option<crate::TraceTerminalV1>,
+    pub positions: Vec<super::StorePositionV1>,
+    pub terminal_position: Option<super::StorePositionV1>,
+    pub next_cursor: Option<u64>,
+    pub read_revision: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum RawReceipt {
+    Evidence(AnalysisSourceReceiptV1),
+    Diagnostic(TraceOutputReceiptV1),
+}
+
+impl RawReceipt {
+    pub(super) fn matches(&self, identity: &RawIdentity) -> bool {
+        match (self, identity) {
+            (Self::Evidence(receipt), RawIdentity::Evidence(identity)) => {
+                &receipt.identity == identity
+            }
+            (Self::Diagnostic(receipt), RawIdentity::Diagnostic(identity)) => {
+                &receipt.identity == identity
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn cursor(&self) -> u64 {
+        match self {
+            Self::Evidence(receipt) => receipt.contiguous_cursor,
+            Self::Diagnostic(receipt) => receipt.cursor(),
+        }
+    }
+
+    pub(super) fn floor(&self) -> u64 {
+        match self {
+            Self::Evidence(receipt) => receipt.retained_floor,
+            Self::Diagnostic(receipt) => receipt.retained_floor,
+        }
+    }
+
+    pub(super) fn set_floor(&mut self, floor: u64) {
+        match self {
+            Self::Evidence(receipt) => receipt.retained_floor = floor,
+            Self::Diagnostic(receipt) => receipt.retained_floor = floor,
+        }
+    }
+
+    pub(super) fn evidence(&self) -> Option<&AnalysisSourceReceiptV1> {
+        match self {
+            Self::Evidence(receipt) => Some(receipt),
+            Self::Diagnostic(_) => None,
+        }
+    }
+
+    pub(super) fn cpu(&self) -> Option<u32> {
+        self.evidence().map(|receipt| receipt.cpu_id)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -380,25 +1030,33 @@ impl From<&RawSpan> for RawRange {
 #[derive(Clone)]
 pub(super) struct RawMeta {
     pub revision: u64,
-    pub cpu: u32,
+    pub kind: RawKind,
     pub intake: u64,
     pub spans: Vec<RawRange>,
 }
 
-impl From<&RawCommit> for RawMeta {
-    fn from(commit: &RawCommit) -> Self {
-        Self {
+impl TryFrom<&RawCommit> for RawMeta {
+    type Error = crate::Error;
+
+    fn try_from(commit: &RawCommit) -> Result<Self> {
+        Ok(Self {
             revision: commit.revision,
-            cpu: commit.cpu,
+            kind: commit.kind.clone().ok_or_else(|| {
+                crate::AnalysisStateSnafu {
+                    path: Path::new("<raw-commit>"),
+                    reason: "the raw commit kind is absent",
+                }
+                .build()
+            })?,
             intake: commit.intake,
             spans: commit.spans.iter().map(RawRange::from).collect(),
-        }
+        })
     }
 }
 
 #[derive(Clone)]
 pub(super) struct RawEntry {
-    pub identity: EvidenceIntakeIdentityV1,
+    pub identity: RawIdentity,
     pub commit: RawMeta,
     pub reference: EvidenceSegmentRefV1,
     pub stream: u64,
@@ -409,7 +1067,7 @@ pub(super) struct RawEntry {
 }
 
 pub(super) struct RawSource {
-    pub receipt: AnalysisSourceReceiptV1,
+    pub receipt: RawReceipt,
     pub stream: u64,
     pub sequence: u64,
 }
@@ -417,7 +1075,7 @@ pub(super) struct RawSource {
 impl From<AnalysisSourceReceiptV1> for RawSource {
     fn from(receipt: AnalysisSourceReceiptV1) -> Self {
         Self {
-            receipt,
+            receipt: RawReceipt::Evidence(receipt),
             stream: 0,
             sequence: 0,
         }
@@ -428,7 +1086,7 @@ pub(super) struct RawRead {
     reader: EvidenceSegmentReadV1,
     span: RawRange,
     revision: u64,
-    cpu: u32,
+    kind: RawKind,
     intake: u64,
     first: u64,
     last: u64,
@@ -449,7 +1107,7 @@ impl RawRead {
             .iter()
             .find(|span| RawRange::from(*span) == self.span);
         if commit.revision != self.revision
-            || commit.cpu != self.cpu
+            || commit.kind.as_ref() != Some(&self.kind)
             || commit.intake != self.intake
             || span.is_none()
         {
@@ -497,6 +1155,178 @@ pub(super) struct RawJournal {
 }
 
 impl RawJournal {
+    fn prepare_trace(&self, identity: &RawIdentity, commit: &mut RawCommit) -> Result<()> {
+        let RawIdentity::Diagnostic(identity) = identity else {
+            return Ok(());
+        };
+        if commit.spans.is_empty() {
+            return Ok(());
+        }
+        let saved = self
+            .sources
+            .get(&RawIdentity::Diagnostic(identity.clone()).key())
+            .and_then(|source| match &source.receipt {
+                RawReceipt::Diagnostic(receipt) => Some(receipt),
+                RawReceipt::Evidence(_) => None,
+            });
+        let mut progress = RawTraceMeta {
+            last_sequence: saved.map_or(0, |receipt| receipt.last_sequence),
+            output_bytes: saved.map_or(0, |receipt| receipt.output_bytes),
+            terminal: saved.is_some_and(|receipt| receipt.terminal.is_some()),
+        };
+        for (cursor, bytes) in commit.records() {
+            if progress.terminal {
+                return crate::AnalysisConflictSnafu.fail();
+            }
+            if cursor != progress.last_sequence + 1 {
+                return crate::TraceInvalidSnafu {
+                    reason: "the diagnostic output skips a sequence",
+                }
+                .fail();
+            }
+            match TraceRecord::read(bytes, &self.root)? {
+                TracePayload::Metadata(bytes)
+                | TracePayload::Data(bytes)
+                | TracePayload::Diagnostic(bytes) => {
+                    if bytes.is_empty() || bytes.len() > crate::MAX_TRACE_FRAME_BYTES {
+                        return crate::TraceInvalidSnafu {
+                            reason: "the diagnostic frame size is invalid",
+                        }
+                        .fail();
+                    }
+                    progress.last_sequence = cursor;
+                    progress.output_bytes += bytes.len() as u64;
+                }
+                TracePayload::Terminal(bytes) => {
+                    let terminal = TraceRecord::terminal(&bytes, &self.root)?;
+                    if terminal.execution_id != identity.execution_id
+                        || terminal.last_sequence != progress.last_sequence
+                        || terminal.output_bytes != progress.output_bytes
+                    {
+                        return crate::TraceInvalidSnafu {
+                            reason: "the diagnostic terminal differs from accepted output",
+                        }
+                        .fail();
+                    }
+                    progress.terminal = true;
+                }
+            }
+            if progress.last_sequence > 4096
+                || progress.output_bytes > crate::MAX_TRACE_OUTPUT_BYTES
+            {
+                return crate::TraceInvalidSnafu {
+                    reason: "the diagnostic execution exceeds its output bound",
+                }
+                .fail();
+            }
+        }
+        commit.kind = Some(RawKind::Diagnostic(progress));
+        Ok(())
+    }
+
+    pub(super) fn commit_receipt(
+        &self,
+        entry: &RawEntry,
+        commit: &RawCommit,
+    ) -> Result<RawReceipt> {
+        match (&entry.identity, &entry.commit.kind) {
+            (RawIdentity::Evidence(identity), RawKind::Evidence(cpu)) => {
+                Ok(RawReceipt::Evidence(AnalysisSourceReceiptV1 {
+                    identity: identity.clone(),
+                    cpu_id: *cpu,
+                    contiguous_cursor: 0,
+                    coverage_revision: 0,
+                    retained_floor: 0,
+                }))
+            }
+            (RawIdentity::Diagnostic(identity), RawKind::Diagnostic(progress)) => {
+                if commit.spans.len() != 1 {
+                    return Err(self.invalid("the diagnostic commit has disjoint output"));
+                }
+                let mut terminal = None;
+                let mut added = 0_u64;
+                let mut frames = 0_u64;
+                let mut last = 0;
+                for (cursor, bytes) in commit.records() {
+                    if terminal.is_some() {
+                        return Err(self.invalid("the diagnostic terminal is not last"));
+                    }
+                    last = cursor;
+                    match TraceRecord::read(bytes, &self.root)? {
+                        TracePayload::Metadata(bytes)
+                        | TracePayload::Data(bytes)
+                        | TracePayload::Diagnostic(bytes) => {
+                            if bytes.is_empty()
+                                || bytes.len() > crate::MAX_TRACE_FRAME_BYTES
+                                || cursor > progress.last_sequence
+                            {
+                                return Err(
+                                    self.invalid("the recovered diagnostic frame is invalid")
+                                );
+                            }
+                            added += bytes.len() as u64;
+                            frames += 1;
+                        }
+                        TracePayload::Terminal(bytes) => {
+                            let value = TraceRecord::terminal(&bytes, &self.root)?;
+                            if value.execution_id != identity.execution_id
+                                || value.last_sequence != progress.last_sequence
+                                || value.output_bytes != progress.output_bytes
+                                || cursor != value.last_sequence + 1
+                            {
+                                return Err(
+                                    self.invalid("the recovered diagnostic terminal conflicts")
+                                );
+                            }
+                            terminal = Some(value);
+                        }
+                    }
+                }
+                if progress.last_sequence > 4096
+                    || progress.output_bytes > crate::MAX_TRACE_OUTPUT_BYTES
+                    || progress.output_bytes < added
+                    || progress.output_bytes < progress.last_sequence
+                    || progress.terminal != terminal.is_some()
+                    || last != progress.last_sequence + u64::from(progress.terminal)
+                {
+                    return Err(self.invalid("the recovered diagnostic progress is invalid"));
+                }
+                let saved =
+                    self.sources.get(&entry.identity.key()).and_then(|source| {
+                        match &source.receipt {
+                            RawReceipt::Diagnostic(receipt) => Some(receipt),
+                            RawReceipt::Evidence(_) => None,
+                        }
+                    });
+                let first = commit.spans[0].first;
+                let prior_cursor = saved.map_or(0, TraceOutputReceiptV1::cursor);
+                if first == prior_cursor + 1
+                    && (saved.map_or(0, |receipt| receipt.last_sequence) + frames
+                        != progress.last_sequence
+                        || saved.map_or(0, |receipt| receipt.output_bytes) + added
+                            != progress.output_bytes)
+                {
+                    return Err(
+                        self.invalid("the diagnostic cumulative counters differ from output")
+                    );
+                }
+                let retained_floor = self
+                    .sources
+                    .get(&entry.identity.key())
+                    .map_or(0, |source| source.receipt.floor());
+                Ok(RawReceipt::Diagnostic(TraceOutputReceiptV1 {
+                    identity: identity.clone(),
+                    last_sequence: progress.last_sequence,
+                    output_bytes: progress.output_bytes,
+                    terminal,
+                    retained_floor,
+                    commit_revision: entry.commit.revision,
+                }))
+            }
+            _ => Err(self.invalid("the raw commit kind differs from its stream")),
+        }
+    }
+
     pub(super) fn selection_revision(
         &self,
         selection: &super::AnalysisSelectionV1,
@@ -544,7 +1374,10 @@ impl RawJournal {
         let first = after.map_or(0, |position| position.commit_revision);
         for (&id, entry) in self.entries.range(first..=revision) {
             control.check()?;
-            if !selection.sources.contains(&entry.identity)
+            if !entry
+                .identity
+                .evidence()
+                .is_some_and(|identity| selection.sources.contains(identity))
                 || entry.commit.intake < from
                 || entry.commit.intake > until
             {
@@ -566,8 +1399,16 @@ impl RawJournal {
                 let first = span.first + skipped;
                 let last = span.last.min(first.saturating_add(limit as u64 - 1));
                 return Ok(Some((
-                    entry.identity.clone(),
-                    entry.commit.cpu,
+                    entry
+                        .identity
+                        .evidence()
+                        .cloned()
+                        .ok_or_else(|| self.invalid("the selected source is not evidence"))?,
+                    entry
+                        .commit
+                        .kind
+                        .cpu()
+                        .ok_or_else(|| self.invalid("the evidence CPU is absent"))?,
                     super::segments::SegmentRange {
                         segment_id: entry.reference.id,
                         byte_start: entry.body_start + u64::from(span.start),
@@ -643,7 +1484,7 @@ impl RawJournal {
 
     pub(super) fn select_ranges(
         &self,
-        identity: &EvidenceIntakeIdentityV1,
+        identity: &RawIdentity,
         first: u64,
         last: u64,
         revision: u64,
@@ -653,7 +1494,7 @@ impl RawJournal {
         if first > last || limit == 0 {
             return Ok(Vec::new());
         }
-        let key = source_key(identity);
+        let key = identity.key();
         let start = self
             .ranges
             .range((key, 0)..=(key, first))
@@ -718,7 +1559,7 @@ impl RawJournal {
             reader: self.reader(entry.reference.id, entry.stream, entry.sequence)?,
             span: entry.commit.spans[index].clone(),
             revision: entry.commit.revision,
-            cpu: entry.commit.cpu,
+            kind: entry.commit.kind.clone(),
             intake: entry.commit.intake,
             first,
             last,
@@ -764,53 +1605,82 @@ impl RawJournal {
                     .offset
                     .checked_sub(4 + body_bytes as u64)
                     .ok_or_else(|| journal.invalid("the raw payload offset is invalid"))?;
-                journal.publish(RawEntry {
-                    identity: identity.clone(),
-                    commit: RawMeta::from(&commit),
-                    reference,
-                    stream: stream_id,
-                    sequence,
-                    body_start,
-                    body_bytes,
-                    frame_bytes: commit.encoded_len() + 8,
-                })?;
+                journal.publish(
+                    RawEntry {
+                        identity: identity.clone(),
+                        commit: RawMeta::try_from(&commit)?,
+                        reference,
+                        stream: stream_id,
+                        sequence,
+                        body_start,
+                        body_bytes,
+                        frame_bytes: commit.encoded_len() + 8,
+                    },
+                    &commit,
+                )?;
             }
         }
         journal.refresh_receipts()?;
         Ok(journal)
     }
 
-    pub(super) fn prepare(
+    fn prepare(
         &self,
-        identity: &EvidenceIntakeIdentityV1,
-        batch: &ValidatedEvidenceBatchV1,
+        identity: &RawIdentity,
+        batch: &RawBatch,
         revision: u64,
     ) -> Result<RawCommit> {
-        let key = source_key(identity);
+        let key = identity.key();
         let source = self.sources.get(&key);
         if let Some(source) = source {
-            if &source.receipt.identity != identity || source.receipt.cpu_id != batch.cpu_id {
+            if !source.receipt.matches(identity) || source.receipt.cpu() != batch.kind.cpu() {
+                if matches!(identity, RawIdentity::Diagnostic(_)) {
+                    return crate::AnalysisConflictSnafu.fail();
+                }
                 return Err(self.invalid("the raw source changed its identity or CPU"));
             }
         } else {
-            if self.sources.len() >= 4096 {
+            if self
+                .sources
+                .values()
+                .filter(|source| {
+                    source.receipt.evidence().is_some() == identity.evidence().is_some()
+                })
+                .count()
+                >= if identity.evidence().is_some() {
+                    4096
+                } else {
+                    1024
+                }
+            {
                 return crate::StorageCapacitySnafu {
                     resource: "source bindings",
                 }
                 .fail();
             }
-            if self.sources.values().any(|source| {
-                let saved = &source.receipt.identity;
-                saved.tenant_id == identity.tenant_id
-                    && saved.node_id == identity.node_id
-                    && saved.source_id == identity.source_id
-                    && saved.source_epoch == identity.source_epoch
-                    && saved != identity
+            if identity.evidence().is_some_and(|identity| {
+                self.sources
+                    .values()
+                    .filter_map(|source| source.receipt.evidence())
+                    .any(|source| {
+                        let saved = &source.identity;
+                        saved.tenant_id == identity.tenant_id
+                            && saved.node_id == identity.node_id
+                            && saved.source_id == identity.source_id
+                            && saved.source_epoch == identity.source_epoch
+                            && saved != identity
+                    })
             }) {
                 return Err(self.invalid("one raw source epoch changed its boot or label"));
             }
         }
-        let contiguous = source.map_or(0, |source| source.receipt.contiguous_cursor);
+        let contiguous = source.map_or(0, |source| source.receipt.cursor());
+        if identity.evidence().is_none() && batch.first_cursor > contiguous.saturating_add(1) {
+            return crate::TraceInvalidSnafu {
+                reason: "the diagnostic output skips a sequence",
+            }
+            .fail();
+        }
         if batch.first_cursor > contiguous.saturating_add(1)
             && batch.last_cursor > contiguous.saturating_add(crate::MAX_PENDING_EVIDENCE_RECORDS)
         {
@@ -824,9 +1694,9 @@ impl RawJournal {
                 self.entries[&id].commit.spans[index].last >= batch.first_cursor
             });
         if !overlap && batch.first_cursor > contiguous {
-            return Ok(RawCommit {
+            let mut commit = RawCommit {
                 revision,
-                cpu: batch.cpu_id,
+                kind: Some(batch.kind.clone()),
                 intake: batch.intake_utc_ns,
                 spans: vec![RawSpan {
                     first: batch.first_cursor,
@@ -836,7 +1706,9 @@ impl RawJournal {
                     ordinal: 0,
                 }],
                 body: batch.framed_records.clone(),
-            });
+            };
+            self.prepare_trace(identity, &mut commit)?;
+            return Ok(commit);
         }
         let mut retained = vec![false; batch.frame_ends.len()];
         for (_, &(stored_revision, index)) in
@@ -865,6 +1737,9 @@ impl RawJournal {
                 let stored = &commit.body[span.start as usize + saved_start
                     ..span.start as usize + saved_span.ends[saved] as usize];
                 if stored != &batch.framed_records[input_start..batch.frame_ends[input]] {
+                    if matches!(identity, RawIdentity::Diagnostic(_)) {
+                        return crate::AnalysisConflictSnafu.fail();
+                    }
                     return Err(self.invalid("an evidence retry has conflicting record content"));
                 }
                 retained[input] = true;
@@ -872,7 +1747,7 @@ impl RawJournal {
         }
         let mut commit = RawCommit {
             revision,
-            cpu: batch.cpu_id,
+            kind: Some(batch.kind.clone()),
             intake: batch.intake_utc_ns,
             spans: Vec::new(),
             body: prost::bytes::Bytes::new(),
@@ -911,16 +1786,13 @@ impl RawJournal {
             start = end;
         }
         commit.body = body.into();
+        self.prepare_trace(identity, &mut commit)?;
         Ok(commit)
     }
 
-    pub(super) fn append(
-        &mut self,
-        identity: &EvidenceIntakeIdentityV1,
-        commit: RawCommit,
-    ) -> Result<()> {
+    pub(super) fn append(&mut self, identity: &RawIdentity, commit: RawCommit) -> Result<()> {
         commit.validate(&self.root)?;
-        let key = source_key(identity);
+        let key = identity.key();
         let (stream, sequence) = self.next_position(identity)?;
         let body_bytes = commit.body.len();
         let length = u32::try_from(commit.encoded_len())
@@ -948,22 +1820,25 @@ impl RawJournal {
         }
         let reference = written.segment;
         let body_start = reference.offset - 4 - body_bytes as u64;
-        self.publish(RawEntry {
-            identity: identity.clone(),
-            commit: RawMeta::from(&commit),
-            reference,
-            stream,
-            sequence,
-            body_start,
-            body_bytes,
-            frame_bytes: end,
-        })?;
+        self.publish(
+            RawEntry {
+                identity: identity.clone(),
+                commit: RawMeta::try_from(&commit)?,
+                reference,
+                stream,
+                sequence,
+                body_start,
+                body_bytes,
+                frame_bytes: end,
+            },
+            &commit,
+        )?;
         self.refresh_source(&key)?;
         Ok(())
     }
 
-    fn next_position(&self, identity: &EvidenceIntakeIdentityV1) -> Result<(u64, u64)> {
-        let key = source_key(identity);
+    fn next_position(&self, identity: &RawIdentity) -> Result<(u64, u64)> {
+        let key = identity.key();
         let stream = match self.sources.get(&key).filter(|source| source.stream != 0) {
             Some(source) => source.stream,
             None => self
@@ -984,23 +1859,28 @@ impl RawJournal {
         Ok((stream, sequence))
     }
 
-    fn publish(&mut self, entry: RawEntry) -> Result<()> {
+    fn publish(&mut self, entry: RawEntry, commit: &RawCommit) -> Result<()> {
         if !entry.identity.valid() {
             return Err(self.invalid("the raw source identity is invalid"));
         }
-        let key = source_key(&entry.identity);
+        let key = entry.identity.key();
         let revision = entry.commit.revision;
         if self.entries.contains_key(&revision) {
             return Err(self.invalid("the raw revision is duplicated"));
         }
         if !self.sources.contains_key(&key)
-            && self.sources.values().any(|source| {
-                let saved = &source.receipt.identity;
-                saved.tenant_id == entry.identity.tenant_id
-                    && saved.node_id == entry.identity.node_id
-                    && saved.source_id == entry.identity.source_id
-                    && saved.source_epoch == entry.identity.source_epoch
-                    && saved != &entry.identity
+            && entry.identity.evidence().is_some_and(|identity| {
+                self.sources
+                    .values()
+                    .filter_map(|source| source.receipt.evidence())
+                    .any(|source| {
+                        let saved = &source.identity;
+                        saved.tenant_id == identity.tenant_id
+                            && saved.node_id == identity.node_id
+                            && saved.source_id == identity.source_id
+                            && saved.source_epoch == identity.source_epoch
+                            && saved != identity
+                    })
             })
         {
             return Err(self.invalid("one raw source epoch changed its boot or label"));
@@ -1017,25 +1897,43 @@ impl RawJournal {
                 return Err(self.invalid("raw cursor ranges overlap"));
             }
         }
+        let receipt = self.commit_receipt(&entry, commit)?;
         let source = self.sources.entry(key).or_insert_with(|| RawSource {
-            receipt: AnalysisSourceReceiptV1 {
-                identity: entry.identity.clone(),
-                cpu_id: entry.commit.cpu,
-                contiguous_cursor: 0,
-                coverage_revision: 0,
-                retained_floor: 0,
-            },
+            receipt: receipt.clone(),
             stream: entry.stream,
             sequence: 0,
         });
         if source.stream == 0 {
             source.stream = entry.stream;
         }
-        if source.receipt.identity != entry.identity
-            || source.receipt.cpu_id != entry.commit.cpu
+        if !source.receipt.matches(&entry.identity)
+            || source.receipt.cpu() != entry.commit.kind.cpu()
             || source.stream != entry.stream
         {
             return Err(self.invalid("the recovered raw source binding conflicts"));
+        }
+        if let RawReceipt::Diagnostic(next) = receipt {
+            let RawReceipt::Diagnostic(saved) = &source.receipt else {
+                return Err(crate::AnalysisStateSnafu {
+                    path: &self.root,
+                    reason: "the raw source kind changed",
+                }
+                .build());
+            };
+            if next.last_sequence < saved.last_sequence
+                || next.output_bytes < saved.output_bytes
+                || saved
+                    .terminal
+                    .as_ref()
+                    .is_some_and(|terminal| next.terminal.as_ref() != Some(terminal))
+            {
+                return Err(crate::AnalysisStateSnafu {
+                    path: &self.root,
+                    reason: "the raw diagnostic receipt regressed",
+                }
+                .build());
+            }
+            source.receipt = RawReceipt::Diagnostic(next);
         }
         source.sequence = source.sequence.max(entry.sequence);
         self.revision = self.revision.max(revision);
@@ -1050,7 +1948,7 @@ impl RawJournal {
         let mut contiguous = self
             .sources
             .get(key)
-            .map_or(0, |source| source.receipt.contiguous_cursor);
+            .map_or(0, |source| source.receipt.cursor());
         for (_, &(revision, index)) in self
             .ranges
             .range((*key, contiguous.saturating_add(1))..=(*key, u64::MAX))
@@ -1062,7 +1960,9 @@ impl RawJournal {
             contiguous = contiguous.max(span.last);
         }
         if let Some(source) = self.sources.get_mut(key) {
-            source.receipt.contiguous_cursor = contiguous;
+            if let RawReceipt::Evidence(receipt) = &mut source.receipt {
+                receipt.contiguous_cursor = contiguous;
+            }
         }
         Ok(())
     }
@@ -1075,15 +1975,11 @@ impl RawJournal {
         Ok(())
     }
 
-    pub(super) fn outcome(
-        &self,
-        identity: &EvidenceIntakeIdentityV1,
-        last: u64,
-    ) -> EvidenceStoreOutcomeV1 {
+    pub(super) fn outcome(&self, identity: &RawIdentity, last: u64) -> EvidenceStoreOutcomeV1 {
         if self
             .sources
-            .get(&source_key(identity))
-            .is_some_and(|source| source.receipt.contiguous_cursor >= last)
+            .get(&identity.key())
+            .is_some_and(|source| source.receipt.cursor() >= last)
         {
             EvidenceStoreOutcomeV1::Accepted
         } else {
@@ -1120,7 +2016,7 @@ impl RawJournal {
             .ok_or_else(|| self.invalid("the raw commit is absent"))?;
         commit.validate(&self.root)?;
         if commit.revision != entry.commit.revision
-            || commit.cpu != entry.commit.cpu
+            || commit.kind.as_ref() != Some(&entry.commit.kind)
             || commit.intake != entry.commit.intake
             || commit.spans.iter().map(RawRange::from).collect::<Vec<_>>() != entry.commit.spans
             || commit.body.len() != entry.body_bytes
@@ -1140,6 +2036,23 @@ impl RawJournal {
 }
 
 impl RawCommit {
+    fn records(&self) -> impl Iterator<Item = (u64, &[u8])> {
+        self.spans.iter().flat_map(move |span| {
+            span.ends.iter().enumerate().map(move |(index, end)| {
+                let start = span.start as usize
+                    + if index == 0 {
+                        0
+                    } else {
+                        span.ends[index - 1] as usize
+                    };
+                (
+                    span.first + index as u64,
+                    &self.body[start..span.start as usize + *end as usize],
+                )
+            })
+        })
+    }
+
     fn validate(&self, root: &Path) -> Result<()> {
         let mut end = 0_u32;
         let mut ordinal = 0_usize;
@@ -1170,7 +2083,8 @@ impl RawCommit {
             ordinal += span.ends.len();
             prior = span.last;
         }
-        if self.revision == 0
+        if self.kind.is_none()
+            || self.revision == 0
             || self.intake == 0
             || ordinal == 0
             || ordinal > crate::MAX_EVIDENCE_BATCH_RECORDS
@@ -1184,10 +2098,206 @@ impl RawCommit {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::io::Write as _;
     use std::os::unix::fs::FileExt as _;
+
+    pub(crate) fn trace_intent() -> crate::Result<super::super::TraceIntentV1> {
+        let source = crate::TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
+        Ok(super::super::TraceIntentV1 {
+            tenant_id: [1; 16],
+            request_id: [3; 16],
+            bindings: vec![super::super::TraceBindingV1 {
+                identity: crate::TraceIdentityV1 {
+                    tenant_id: [1; 16],
+                    node_id: "node-a".into(),
+                    node_boot_id: [2; 16],
+                    request_id: [3; 16],
+                    execution_id: [4; 16],
+                    source_sha256: source.sha256,
+                },
+                namespace_uid: "namespace-a".into(),
+            }],
+            source,
+            authority: b"accepted".to_vec(),
+            accepted_unix_ns: 100,
+            deadline_unix_ns: 10_000,
+            host_sensitive: false,
+        })
+    }
+
+    pub(crate) fn trace_terminal(sequence: u64, bytes: u64) -> crate::TraceTerminalV1 {
+        crate::TraceTerminalV1 {
+            execution_id: [4; 16],
+            reason: crate::TraceTerminalReasonV1::Completed,
+            last_sequence: sequence,
+            output_bytes: bytes,
+            output_incomplete: false,
+            kernel_lost_events: None,
+            ready_at_unix_ns: None,
+            exit_code: Some(0),
+            forced_kill: false,
+            cleanup: crate::TraceCleanupV1::Unknown,
+        }
+    }
+
+    #[test]
+    fn observability_raw_recovery() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let store = AnalysisStore::open(&root)?;
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        let state = store.accept_trace(&intent)?;
+        let control = super::super::AnalysisReadControl::default();
+        assert!(store.read_trace(identity, 1, &control)?.frames.is_empty());
+        let frame = crate::TraceFrameV1 {
+            execution_id: identity.execution_id,
+            sequence: 1,
+            kind: crate::TraceFrameKindV1::Metadata,
+            bytes: b"metadata".to_vec(),
+        };
+        let batch = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![frame.clone()],
+            terminal: None,
+        };
+        let receipt = store.append_trace(identity, &batch, 200)?;
+        assert_eq!((receipt.last_sequence, receipt.output_bytes), (1, 8));
+        assert_eq!(store.append_trace(identity, &batch, 201)?, receipt);
+        let page = store.read_trace(identity, 1, &control)?;
+        assert_eq!(page.frames, vec![frame.clone()]);
+        assert_eq!(page.positions.len(), 1);
+        assert_eq!(page.next_cursor, None);
+        {
+            let writer = store.writer.lock().map_err(|_| "writer poisoned")?;
+            let connection = writer.as_ref().ok_or("writer absent")?;
+            assert_eq!(
+                AnalysisStore::read_meta_from(connection, &root)?.commit_revision,
+                state.revision
+            );
+            let stored: u64 =
+                connection.query_row("SELECT last_sequence FROM trace_receipts", [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(stored, 0);
+        }
+        let mut conflict = batch.clone();
+        conflict.frames[0].kind = crate::TraceFrameKindV1::Data;
+        assert!(matches!(
+            store.append_trace(identity, &conflict, 202),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        let mut gap = batch.clone();
+        gap.frames[0].sequence = 3;
+        assert!(matches!(
+            store.append_trace(identity, &gap, 202),
+            Err(crate::Error::TraceInvalid { .. })
+        ));
+        let invalid = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![],
+            terminal: Some(trace_terminal(1, 9)),
+        };
+        assert!(matches!(
+            store.append_trace(identity, &invalid, 202),
+            Err(crate::Error::TraceInvalid { .. })
+        ));
+        let terminal = trace_terminal(1, 8);
+        let combined = crate::TraceBatchV1 {
+            terminal: Some(terminal.clone()),
+            ..batch
+        };
+        let receipt = store.append_trace(identity, &combined, 203)?;
+        assert_eq!(receipt.terminal, Some(terminal.clone()));
+        assert_eq!(store.append_trace(identity, &combined, 204)?, receipt);
+        assert!(matches!(
+            store.append_trace(identity, &gap, 204),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        let mut changed = combined.clone();
+        changed.terminal.as_mut().ok_or("terminal absent")?.reason =
+            crate::TraceTerminalReasonV1::Cancelled;
+        assert!(matches!(
+            store.append_trace(identity, &changed, 204),
+            Err(crate::Error::AnalysisConflict { .. })
+        ));
+        assert!(matches!(
+            TraceRecord::read(&[0], &root),
+            Err(crate::Error::AnalysisState { .. })
+        ));
+        let page = store.read_trace(identity, 2, &control)?;
+        assert!(page.frames.is_empty());
+        assert_eq!(page.terminal, Some(terminal.clone()));
+        assert!(page.terminal_position.is_some());
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.trace_receipt(identity)?, Some(receipt));
+        let page = store.read_trace(identity, 1, &control)?;
+        assert_eq!(page.frames, vec![frame]);
+        assert_eq!(page.terminal, Some(terminal));
+        Ok(())
+    }
+
+    #[test]
+    fn observability_empty_recovery() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        let store = AnalysisStore::open(&root)?;
+        let batch = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![],
+            terminal: Some(trace_terminal(0, 0)),
+        };
+        assert!(store.append_trace(identity, &batch, 100).is_err());
+        store.accept_trace(&intent)?;
+        let receipt = store.append_trace(identity, &batch, 200)?;
+        assert_eq!((receipt.last_sequence, receipt.output_bytes), (0, 0));
+        assert!(receipt.terminal.is_some());
+        let page = store.read_trace(identity, 1, &super::super::AnalysisReadControl::default())?;
+        assert!(page.frames.is_empty());
+        assert_eq!(page.terminal, batch.terminal);
+        assert_eq!(page.next_cursor, None);
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.append_trace(identity, &batch, 201)?, receipt);
+        assert_eq!(store.trace_receipt(identity)?, Some(receipt));
+        Ok(())
+    }
+
+    #[test]
+    fn observability_frame_bound() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("data"))?;
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        let frame = crate::TraceFrameV1 {
+            execution_id: identity.execution_id,
+            sequence: 1,
+            kind: crate::TraceFrameKindV1::Data,
+            bytes: vec![7; crate::MAX_TRACE_FRAME_BYTES],
+        };
+        let batch = crate::TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![frame.clone()],
+            terminal: Some(trace_terminal(1, crate::MAX_TRACE_FRAME_BYTES as u64)),
+        };
+        store.append_trace(identity, &batch, 200)?;
+        let page = store.read_trace(identity, 1, &super::super::AnalysisReadControl::default())?;
+        assert_eq!(page.frames, vec![frame]);
+        assert_eq!(page.terminal, batch.terminal);
+        let mut changed = identity.clone();
+        changed.node_boot_id = [9; 16];
+        assert!(store.append_trace(&changed, &batch, 201).is_err());
+        assert!(store
+            .read_trace(&changed, 1, &super::super::AnalysisReadControl::default())
+            .is_err());
+        Ok(())
+    }
 
     #[test]
     fn raw_acceptance_defers_catalogue() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -1282,12 +2392,10 @@ mod tests {
             frame_ends: vec![1],
         };
         let mut journal = RawJournal::open(root, &BTreeMap::new())?;
-        let commit = journal.prepare(&identity, &batch, 1)?;
-        journal.append(&identity, commit)?;
-        assert_eq!(
-            journal.outcome(&identity, 2),
-            EvidenceStoreOutcomeV1::Pending
-        );
+        let raw = RawIdentity::Evidence(identity.clone());
+        let commit = journal.prepare(&raw, &batch.clone().into(), 1)?;
+        journal.append(&raw, commit)?;
+        assert_eq!(journal.outcome(&raw, 2), EvidenceStoreOutcomeV1::Pending);
         let batch = ValidatedEvidenceBatchV1 {
             first_cursor: 1,
             last_cursor: 3,
@@ -1295,13 +2403,10 @@ mod tests {
             frame_ends: vec![1, 2, 3],
             ..batch
         };
-        let commit = journal.prepare(&identity, &batch, 2)?;
+        let commit = journal.prepare(&raw, &batch.clone().into(), 2)?;
         assert_eq!(commit.spans.len(), 2);
-        journal.append(&identity, commit)?;
-        assert_eq!(
-            journal.outcome(&identity, 3),
-            EvidenceStoreOutcomeV1::Accepted
-        );
+        journal.append(&raw, commit)?;
+        assert_eq!(journal.outcome(&raw, 3), EvidenceStoreOutcomeV1::Accepted);
         let file = journal.segments.file_path(1)?.to_path_buf();
         let length = std::fs::metadata(&file)?.len();
         drop(journal);
@@ -1312,20 +2417,18 @@ mod tests {
         drop(tail);
         let journal = RawJournal::open(root, &BTreeMap::new())?;
         assert_eq!(std::fs::metadata(&file)?.len(), length);
-        assert_eq!(
-            journal.sources[&source_key(&identity)]
-                .receipt
-                .contiguous_cursor,
-            3
-        );
+        assert_eq!(journal.sources[&source_key(&identity)].receipt.cursor(), 3);
         assert_eq!(journal.revision, 2);
-        assert!(journal.prepare(&identity, &batch, 3)?.spans.is_empty());
+        assert!(journal
+            .prepare(&raw, &batch.clone().into(), 3)?
+            .spans
+            .is_empty());
         let mut conflict = batch.clone();
         conflict.framed_records = prost::bytes::Bytes::from_static(b"axc");
-        assert!(journal.prepare(&identity, &conflict, 3).is_err());
+        assert!(journal.prepare(&raw, &conflict.into(), 3).is_err());
         conflict = batch;
         conflict.cpu_id = 1;
-        assert!(journal.prepare(&identity, &conflict, 3).is_err());
+        assert!(journal.prepare(&raw, &conflict.into(), 3).is_err());
         let entry = &journal.entries[&2];
         let body = journal.read_entry(entry)?.body;
         let stored =

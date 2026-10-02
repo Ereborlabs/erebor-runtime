@@ -6,6 +6,13 @@ use crate::{AnalysisDatabaseSnafu, Result, StorageCapacitySnafu};
 
 const TENANT_REVISIONS: u64 = 1_024;
 const GLOBAL_REVISIONS: u64 = 4_096;
+pub(super) const TRACE_RESERVE: u64 = 16 * 1024;
+pub(super) const TRACE_CHARGES: &str = "SELECT tenant_id,
+    256 + octet_length(source) + octet_length(encode(bindings)) + octet_length(authority) AS bytes FROM traces
+    UNION ALL SELECT tenant_id, 256 + octet_length(encode(identity_json))
+        + CASE WHEN terminal IS NULL THEN 16 * 1024 ELSE octet_length(encode(terminal)) END FROM trace_receipts
+    UNION ALL SELECT tenant_id, 256 + committed_end + octet_length(encode(identity_json))
+        FROM segments WHERE stream_kind = 'diagnostic'";
 
 #[derive(Default)]
 pub(super) struct UsageChange {
@@ -101,6 +108,67 @@ impl TryFrom<&duckdb::Row<'_>> for WitnessUsageV1 {
 }
 
 impl AnalysisStore {
+    pub(super) fn reserve_trace(
+        &self,
+        transaction: &Transaction<'_>,
+        intent: &super::TraceIntentV1,
+    ) -> Result<()> {
+        let mut charge = 0;
+        for binding in &intent.bindings {
+            let identity = super::raw::RawIdentity::Diagnostic(binding.identity.clone());
+            let json = identity.json(&self.root)?;
+            let changed = transaction
+                .execute(
+                    "INSERT INTO trace_receipts VALUES (?, ?, ?, 0, 0, NULL, 0, 0)
+                 ON CONFLICT DO NOTHING",
+                    params![
+                        identity.key().as_slice(),
+                        json,
+                        identity.tenant().as_slice()
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "reserve diagnostic terminal state",
+                })?;
+            if changed != 1 {
+                return crate::AnalysisConflictSnafu.fail();
+            }
+            charge += 256 + json.len() as i64 + TRACE_RESERVE as i64;
+        }
+        UsageChange::from(charge).apply(transaction, &intent.tenant_id)?;
+        let (total, scoped): (u64, u64) = transaction.query_row(
+            "SELECT COUNT(*)::UBIGINT, COUNT(*) FILTER (WHERE tenant_id = ?)::UBIGINT FROM trace_receipts",
+            params![intent.tenant_id.as_slice()], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "count diagnostic sources" })?;
+        if total > super::capacity::MAX_DIAGNOSTIC_ENTRIES as u64 || scoped > 256 {
+            return StorageCapacitySnafu {
+                resource: "diagnostic sources",
+            }
+            .fail();
+        }
+        let (total, scoped): (u64, u64) = transaction.query_row(
+            &format!("SELECT COALESCE(SUM(bytes), 0)::UBIGINT,
+                COALESCE(SUM(bytes) FILTER (WHERE tenant_id = ?), 0)::UBIGINT FROM ({TRACE_CHARGES})"),
+            params![intent.tenant_id.as_slice()], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "check diagnostic byte partition" })?;
+        if total > self.storage.logical_max_bytes / 8 || scoped > self.storage.tenant_max_bytes / 8
+        {
+            return StorageCapacitySnafu {
+                resource: "diagnostic logical bytes",
+            }
+            .fail();
+        }
+        let (reserved, slots): (u64, usize) = transaction.query_row(
+            "SELECT COUNT(*)::UBIGINT * 16384,
+                COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
+                    WHERE s.stream_key = t.stream_key AND s.state = 'Live') THEN 1 ELSE 2 END), 0)::UBIGINT
+                FROM trace_receipts t WHERE terminal IS NULL", [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "count diagnostic terminal reserves" })?;
+        self.storage
+            .check_append(self.storage_with_reserve(0, slots)?, reserved)
+    }
+
     const WITNESS_USAGE: &'static str = "WITH pins AS (
             SELECT DISTINCT segment_id FROM evidence_refs
             WHERE tenant_id = ? AND expires_utc_ns > ?
@@ -231,6 +299,10 @@ impl AnalysisStore {
                     UNION ALL SELECT tenant_id, 'traces',
                         256 + octet_length(source) + octet_length(encode(bindings))
                         + octet_length(authority) FROM traces
+                    UNION ALL SELECT tenant_id, 'trace_receipts',
+                        256 + octet_length(encode(identity_json))
+                        + CASE WHEN terminal IS NULL THEN 16 * 1024
+                            ELSE octet_length(encode(terminal)) END FROM trace_receipts
                 ) SELECT tenant_id, SUM(bytes)::UBIGINT AS logical_bytes,
                     COUNT(*) FILTER (WHERE family = 'coverage')::UBIGINT AS coverage_count,
                     COUNT(*) FILTER (WHERE family = 'context')::UBIGINT AS context_count,
@@ -520,7 +592,7 @@ mod tests {
             body: vec![1],
             created_utc_ns: 2,
             witnesses: vec![AnalysisWitnessV1 {
-                identity,
+                identity: identity.into(),
                 cursor: 1,
                 expires_utc_ns: 100,
             }],
@@ -711,7 +783,7 @@ mod tests {
             witnesses: [1, 2, 3073, 4096]
                 .into_iter()
                 .map(|cursor| AnalysisWitnessV1 {
-                    identity: identity.clone(),
+                    identity: identity.clone().into(),
                     cursor,
                     expires_utc_ns: 100,
                 })

@@ -194,7 +194,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
                     body: b"result".to_vec(),
                     created_utc_ns: 101,
                     witnesses: vec![AnalysisWitnessV1 {
-                        identity: scope.identity.clone(),
+                        identity: scope.identity.clone().into(),
                         cursor: 1,
                         expires_utc_ns: 1_000,
                     }],
@@ -571,7 +571,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         body: b"result".to_vec(),
         created_utc_ns: 150,
         witnesses: vec![AnalysisWitnessV1 {
-            identity: source.clone(),
+            identity: source.clone().into(),
             cursor: 3,
             expires_utc_ns: 1_000,
         }],

@@ -292,7 +292,11 @@ impl AnalysisStore {
             })?;
         let files = statement
             .query_map(
-                params![super::capacity::MAX_STORAGE_ENTRIES as u64 + 1],
+                params![
+                    (super::capacity::MAX_STORAGE_ENTRIES + super::capacity::MAX_DIAGNOSTIC_ENTRIES)
+                        as u64
+                        + 1
+                ],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .context(AnalysisDatabaseSnafu {
@@ -302,7 +306,9 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "decode backup segment list",
             })?;
-        if files.len() > super::capacity::MAX_STORAGE_ENTRIES {
+        if files.len()
+            > super::capacity::MAX_STORAGE_ENTRIES + super::capacity::MAX_DIAGNOSTIC_ENTRIES
+        {
             return Self::reject_path(
                 Path::new("<backup-catalog>"),
                 "the backup has too many segments",
@@ -448,7 +454,8 @@ impl AnalysisStore {
         if manifest.schema_version != ANALYSIS_SCHEMA_VERSION as u32
             || Uuid::parse_str(&manifest.store_uuid).is_err()
             || manifest.database_bytes == 0
-            || manifest.segments.len() > super::capacity::MAX_STORAGE_ENTRIES
+            || manifest.segments.len()
+                > super::capacity::MAX_STORAGE_ENTRIES + super::capacity::MAX_DIAGNOSTIC_ENTRIES
             || manifest
                 .segments
                 .windows(2)
@@ -576,7 +583,14 @@ impl AnalysisStore {
                 return Self::reject_path(backup, "the backup contains an unlisted entry");
             }
         }
-        if manifest.segments.len() + 5 > super::capacity::MAX_STORAGE_ENTRIES {
+        let diagnostics = manifest
+            .segments
+            .iter()
+            .filter(|segment| segment.file_name.split('.').nth(1) == Some("d"))
+            .count();
+        if manifest.segments.len() - diagnostics + 5 > super::capacity::MAX_STORAGE_ENTRIES
+            || diagnostics > super::capacity::MAX_DIAGNOSTIC_ENTRIES
+        {
             return Self::reject_path(backup, "the restored store would exceed its entry bound");
         }
         let lease = super::connection::AnalysisLease::acquire(root)?;

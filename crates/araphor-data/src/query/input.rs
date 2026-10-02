@@ -188,19 +188,27 @@ const CATALOG: InputSchema = InputSchema {
     description: "Code-owned schemas for this internal evaluator. An unavailable relation is not registered as an empty table. This catalog grants no client access.",
 };
 
-// Trace fields follow Control observability model.rs, owner.rs, and recipe.rs.
-// No portable trace data owner exists, so these relations are not registered.
+// Trace schemas use portable data contracts and Control's reviewed measurement decoder.
+// Public query authorization and registration are not part of diagnostic capture.
 const TRACES: InputSchema = InputSchema {
     name: "traces",
     columns: &[
         InputField("tenant_id", Blob, "16-byte ID", ""),
         InputField("request_id", Blob, "16-byte ID", ""),
-        InputField("target_index", UInteger, "accepted target index", "This revision applies to the request."),
+        InputField("target_index", UInteger, "accepted target index", ""),
+        InputField("execution_id", Blob, "16-byte frozen execution ID", ""),
+        InputField("node_id", Varchar, "exact Node ID", ""),
+        InputField("node_boot_id", Blob, "16-byte original Node boot ID", ""),
+        InputField("namespace_uid", Varchar, "exact namespace UID", ""),
+        InputField("source", Blob, "unchanged accepted source bytes", ""),
+        InputField("source_sha256", Blob, "SHA-256 of accepted source; not a raw batch digest", ""),
         InputField("trace_schema_version", UInteger, "trace schema version", ""),
+        InputField("request_revision", UBigint, "metadata revision for cancellation and read revocation", ""),
         InputField("accepted_unix_ns", UBigint, "UTC nanoseconds", ""),
         InputField("deadline_unix_ns", UBigint, "UTC nanoseconds", ""),
         InputField("last_sequence", UBigint, "trace frame sequence", ""),
         InputField("output_bytes", UBigint, "bytes", ""),
+        InputField("retained_floor", UBigint, "expired diagnostic record cursor; terminal uses last_sequence plus one", ""),
         InputField("cancel_requested", Boolean, "request cancellation state", ""),
         InputField("read_revoked", Boolean, "read authority state", ""),
         InputField("terminal_reason", Varchar, "terminal reason", "No terminal result is present."),
@@ -211,29 +219,38 @@ const TRACES: InputSchema = InputSchema {
         InputField("forced_kill", Boolean, "terminal forced-kill state", "No terminal result is present."),
         InputField("cleanup", Varchar, "terminal cleanup proof", "No terminal result is present."),
     ],
-    join_keys: "tenant_id,request_id,target_index; execution identity must come from the accepted target",
-    owner: "Control.TraceOwner; portable data owner absent",
+    join_keys: "tenant_id,request_id,execution_id. The target index selects the immutable accepted binding. Original Node boot and source digest must match; names do not identify a target lifetime.",
+    owner: "araphor-data.AnalysisStore; Control.TraceOwner authorizes disclosure",
     readiness: "unavailable",
-    description: "Source fields exist in Control TraceAcceptedV1 and TraceRevisionV1. Portable storage and scoped reads are not available. A closed stream is not a terminal result.",
+    description: "One execution's intent, request state and output receipt. Not registered with QueryOwner. Source lives once in shared metadata. A closed stream is not a terminal result; receipt counters do not prove raw output remains retained.",
 };
 
 const TRACE_OUTPUT: InputSchema = InputSchema {
     name: "trace_output",
     columns: &[
+        InputField("tenant_id", Blob, "16-byte ID", ""),
+        InputField("request_id", Blob, "16-byte request ID", ""),
         InputField("execution_id", Blob, "16-byte execution ID", ""),
+        InputField("node_id", Varchar, "exact Node ID", ""),
+        InputField("node_boot_id", Blob, "16-byte original Node boot ID", ""),
+        InputField("source_sha256", Blob, "SHA-256 of accepted source; not a raw batch digest", ""),
         InputField("sequence", UBigint, "trace frame sequence", ""),
+        InputField("commit_revision", UBigint, "raw store revision", ""),
+        InputField("ordinal", UInteger, "record index within raw commit", ""),
         InputField("kind", Varchar, "trace frame kind", ""),
         InputField("bytes", Blob, "unchanged raw output bytes", ""),
     ],
-    join_keys: "execution_id,sequence within an authorized tenant/request/target",
-    owner: "Control.TraceFrameV1; portable data owner absent",
+    join_keys: "tenant_id,request_id,execution_id,sequence. Store order: commit_revision,ordinal within the result store UUID and recovery epoch. Match original Node boot and source digest.",
+    owner: "araphor-data.AnalysisStore; Control.TraceOwner authorizes disclosure",
     readiness: "unavailable",
-    description: "Source fields exist in Control TraceFrameV1. Portable segment reads are not available. Empty output does not prove absence of activity.",
+    description: "Portable TraceFrameV1 with exact shared segment positions. Not registered with QueryOwner. Terminal state is not a data frame. Empty output does not prove absence of activity; expired output is not an empty successful read.",
 };
 
 const TRACE_MEASUREMENTS: InputSchema = InputSchema {
     name: "trace_measurements",
     columns: &[
+        InputField("tenant_id", Blob, "16-byte ID", ""),
+        InputField("request_id", Blob, "16-byte request ID", ""),
         InputField("execution_id", Blob, "16-byte execution ID; reset epoch", ""),
         InputField("sequence", UBigint, "source trace frame sequence", ""),
         InputField("ordinal", UInteger, "measurement index within frame", ""),
@@ -244,10 +261,10 @@ const TRACE_MEASUREMENTS: InputSchema = InputSchema {
         InputField("atomic_snapshot", Boolean, "snapshot atomicity", ""),
         InputField("unit", Varchar, "reviewed recipe unit", ""),
     ],
-    join_keys: "execution_id,sequence,ordinal within an authorized tenant/request/target",
-    owner: "Control.TraceMeasurementV1; portable data owner absent",
+    join_keys: "tenant_id,request_id,execution_id,sequence,ordinal. The sequence identifies the source trace_output frame; ordinal identifies a measurement within that frame, not a store ordinal.",
+    owner: "araphor-data.TraceMeasurementV1; Control.TraceRecipeV1 decodes reviewed schemas",
     readiness: "unavailable",
-    description: "Source fields exist in Control TraceMeasurementV1. Do not sum cumulative snapshots. The execution ID separates reset epochs. Sampling and loss are not inferred from these rows.",
+    description: "Reviewed measurements decoded from retained raw frames. Not registered with QueryOwner. Do not sum cumulative snapshots. The execution ID separates reset epochs. Sampling and loss are not inferred from these rows.",
 };
 
 pub(super) const SCHEMAS: &[InputSchema] = &[
@@ -1367,6 +1384,14 @@ mod tests {
                 }
             }
             assert!(found);
+        }
+        for schema in [&TRACES, &TRACE_OUTPUT, &TRACE_MEASUREMENTS] {
+            for name in ["tenant_id", "request_id", "execution_id"] {
+                assert!(schema.columns.iter().any(|field| field.0 == name));
+            }
+        }
+        for name in ["source_sha256", "commit_revision", "ordinal"] {
+            assert!(TRACE_OUTPUT.columns.iter().any(|field| field.0 == name));
         }
         let connection = Connection::open_in_memory()?;
         input.register(&connection)?;

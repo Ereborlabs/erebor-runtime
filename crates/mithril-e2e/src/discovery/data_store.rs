@@ -922,7 +922,7 @@ impl DataStoreQualification {
             body: br#"{"proof_kind":"synthetic","accepted_records":3}"#.to_vec(),
             created_utc_ns: START + 48 * HOUR,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: identity.clone(),
+                identity: identity.clone().into(),
                 cursor: 3,
                 expires_utc_ns: START + 96 * HOUR,
             }],
@@ -1907,7 +1907,7 @@ mod tests {
             if result {
                 data.commit_result(&AnalysisResultCommitV1 {
                     witnesses: vec![AnalysisWitnessV1 {
-                        identity: scope.identity.clone(),
+                        identity: scope.identity.clone().into(),
                         cursor: 1,
                         expires_utc_ns: START + 48 * HOUR,
                     }],

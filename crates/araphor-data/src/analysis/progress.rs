@@ -5,7 +5,8 @@ use snafu::ResultExt as _;
 
 use super::{source_key, AnalysisContextKeyV1, AnalysisStore};
 use crate::{
-    AnalysisConflictSnafu, AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result,
+    AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStreamIdentityV1,
+    EvidenceIntakeIdentityV1, JsonSnafu, Result,
 };
 
 const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
@@ -50,7 +51,7 @@ pub struct ProcessorScopeV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AnalysisWitnessV1 {
-    pub identity: EvidenceIntakeIdentityV1,
+    pub identity: AnalysisStreamIdentityV1,
     pub cursor: u64,
     pub expires_utc_ns: u64,
 }
@@ -349,7 +350,7 @@ impl AnalysisStore {
             .checked_add(MAX_WITNESS_AGE_NS)
             .ok_or_else(|| self.state_error("the witness deadline is exhausted"))?;
         if input.witnesses.iter().any(|witness| {
-            witness.identity.tenant_id != input.scope.identity.tenant_id
+            witness.identity.tenant() != input.scope.identity.tenant_id
                 || !witness.identity.valid()
                 || witness.cursor == 0
                 || witness.expires_utc_ns < input.created_utc_ns
@@ -462,13 +463,18 @@ impl AnalysisStore {
                     .last()
                     .is_none_or(|record| witness.cursor > record.cursor)
             {
-                let ranges = self.raw_ranges(
-                    &transaction,
-                    &witness.identity,
-                    witness.cursor,
-                    witness.cursor,
-                    2,
-                )?;
+                let ranges = self
+                    .raw
+                    .lock()
+                    .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
+                    .select_ranges(
+                        &witness.identity,
+                        witness.cursor,
+                        witness.cursor,
+                        revision,
+                        None,
+                        2,
+                    )?;
                 if ranges.len() != 1 {
                     return self.reject("the result witness is not retained exactly once");
                 }
@@ -513,8 +519,8 @@ impl AnalysisStore {
                     "INSERT INTO evidence_refs VALUES (?, ?, ?, ?, ?, ?)",
                     params![
                         input.result_id,
-                        witness.identity.tenant_id.as_slice(),
-                        source_key(&witness.identity).as_slice(),
+                        witness.identity.tenant().as_slice(),
+                        witness.identity.key().as_slice(),
                         witness.cursor,
                         witness.expires_utc_ns,
                         segment,
@@ -676,7 +682,7 @@ mod tests {
             body: b"result".to_vec(),
             created_utc_ns: 1_000_000_000,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: source,
+                identity: source.into(),
                 cursor: 1,
                 expires_utc_ns: 1_000_000_001,
             }],
@@ -706,7 +712,7 @@ mod tests {
         input.context_refs[0].content_sha256[0] ^= 1;
         assert!(store.commit_result(&input).is_err());
         input.context_refs[0].content_sha256[0] ^= 1;
-        input.witnesses[0].identity = identity(4);
+        input.witnesses[0].identity = identity(4).into();
         assert!(store.commit_result(&input).is_err());
         assert_eq!(store.meta()?.commit_revision, 4);
         store.writer()?.get()?.execute(
@@ -717,6 +723,155 @@ mod tests {
             store.read_result([1; 16], "finding-1"),
             Err(crate::Error::AnalysisState { .. })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn observability_recovery_mixed_witnesses(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::{
+            AnalysisReadControl, EvidenceRetentionOwner, RetentionLimitsV1, TraceBatchV1,
+            TraceBindingV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
+            TraceIntentV1, TraceSourceV1, TraceTerminalReasonV1, TraceTerminalV1,
+        };
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 100,
+            raw_max_bytes: 64 * 1024 * 1024,
+        };
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let evidence = identity(1);
+        store.accept_validated_batch(
+            evidence.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 100,
+                framed_records: b"event".to_vec().into(),
+                frame_ends: vec![5],
+            },
+        )?;
+        let scope = ProcessorScopeV1 {
+            processor_id: "mixed-witness".into(),
+            method_version: 1,
+            identity: evidence.clone(),
+        };
+        store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+        let source = TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
+        let diagnostic = TraceIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".into(),
+            node_boot_id: [2; 16],
+            request_id: [7; 16],
+            execution_id: [8; 16],
+            source_sha256: source.sha256,
+        };
+        store.accept_trace(&TraceIntentV1 {
+            tenant_id: [1; 16],
+            request_id: diagnostic.request_id,
+            source,
+            bindings: vec![TraceBindingV1 {
+                identity: diagnostic.clone(),
+                namespace_uid: "namespace-a".into(),
+            }],
+            authority: b"Control-owned inputs".to_vec(),
+            accepted_unix_ns: 100,
+            deadline_unix_ns: 1_000_000_000,
+            host_sensitive: true,
+        })?;
+        let frame = TraceFrameV1 {
+            execution_id: diagnostic.execution_id,
+            sequence: 1,
+            kind: TraceFrameKindV1::Data,
+            bytes: b"raw\n".to_vec(),
+        };
+        let terminal = TraceTerminalV1 {
+            execution_id: diagnostic.execution_id,
+            reason: TraceTerminalReasonV1::Completed,
+            last_sequence: 1,
+            output_bytes: 4,
+            output_incomplete: false,
+            kernel_lost_events: None,
+            ready_at_unix_ns: None,
+            exit_code: Some(0),
+            forced_kill: false,
+            cleanup: TraceCleanupV1::Unknown,
+        };
+        store.append_trace(
+            &diagnostic,
+            &TraceBatchV1 {
+                execution_id: diagnostic.execution_id,
+                frames: vec![frame.clone()],
+                terminal: Some(terminal.clone()),
+            },
+            100,
+        )?;
+        let input = AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 1,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "mixed-result".into(),
+            body: b"result".to_vec(),
+            created_utc_ns: 101,
+            witnesses: vec![
+                AnalysisWitnessV1 {
+                    identity: evidence.into(),
+                    cursor: 1,
+                    expires_utc_ns: 300,
+                },
+                AnalysisWitnessV1 {
+                    identity: diagnostic.clone().into(),
+                    cursor: 2,
+                    expires_utc_ns: 300,
+                },
+            ],
+            context_refs: vec![],
+        };
+        let mut invalid = input.clone();
+        invalid.witnesses[1].cursor = 3;
+        assert!(store.commit_result(&invalid).is_err());
+        invalid.witnesses[1].cursor = 2;
+        invalid.witnesses[1].identity = TraceIdentityV1 {
+            source_sha256: [9; 32],
+            ..diagnostic.clone()
+        }
+        .into();
+        assert!(store.commit_result(&invalid).is_err());
+        invalid.witnesses[1].identity = TraceIdentityV1 {
+            tenant_id: [9; 16],
+            ..diagnostic.clone()
+        }
+        .into();
+        assert!(store.commit_result(&invalid).is_err());
+        assert!(store.read_result([1; 16], "mixed-result")?.is_none());
+        let receipt = store.commit_result(&input)?;
+        let retained = EvidenceRetentionOwner::new(&store).retain_trace(&diagnostic, 201)?;
+        assert_eq!(retained.removed_records, 0);
+        assert_eq!(retained.retained_floor, 0);
+        drop(store);
+
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        assert_eq!(store.commit_result(&input)?, receipt);
+        assert_eq!(
+            store.read_result([1; 16], "mixed-result")?,
+            Some(b"result".to_vec())
+        );
+        let output = store.read_trace(&diagnostic, 1, &AnalysisReadControl::default())?;
+        assert_eq!(output.frames, vec![frame]);
+        assert_eq!(output.terminal, Some(terminal));
+        let expired = EvidenceRetentionOwner::new(&store).retain_trace(&diagnostic, 301)?;
+        assert_eq!(expired.removed_records, 2);
+        assert_eq!(expired.retained_floor, 2);
+        assert!(matches!(
+            store.read_trace(&diagnostic, 1, &AnalysisReadControl::default()),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        assert_eq!(store.commit_result(&input)?, receipt);
         Ok(())
     }
 }

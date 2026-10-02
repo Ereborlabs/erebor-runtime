@@ -1,11 +1,17 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use araphor_data::{
+    AnalysisReadControl, AnalysisStore, TraceBindingV1, TraceIntentV1, TraceOutputReceiptV1,
+    TraceStateV1,
+};
+use serde::{Deserialize, Serialize};
+use snafu::ResultExt as _;
 
 use crate::{
-    error::ObservabilitySnafu, ControlStore, DiscoveryArtifactRefV1, DiscoveryArtifactV1,
-    DiscoveryDigestV1, DiscoveryHeadKeyV1, DiscoveryHeadV1, Result, TraceBatchV1, TraceRecipeV1,
-    TraceRequestV1, TraceTerminalV1, MAX_TRACE_OUTPUT_BYTES,
+    error::ObservabilitySnafu, DiscoveryDigestV1, Result, TraceBatchV1, TraceIdentityV1,
+    TraceParticipantV1, TraceRecipeV1, TraceRequestV1, TraceTargetV1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,24 +79,20 @@ pub struct TraceAcceptedV1 {
     pub recipe: Option<TraceRecipeV1>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct TraceRevisionV1 {
-    pub trace_schema_version: u32,
-    pub accepted: DiscoveryArtifactRefV1,
-    pub target_index: Option<u16>,
-    pub previous: Option<DiscoveryHeadV1>,
-    pub batch: Option<DiscoveryArtifactRefV1>,
-    pub last_sequence: u64,
-    pub output_bytes: u64,
-    pub terminal: Option<TraceTerminalV1>,
-    pub cancel_requested: bool,
-    pub read_revoked: bool,
+struct StoredTrace {
+    targets: Vec<TraceTargetV1>,
+    unresolved: Vec<TraceParticipantV1>,
+    collection_seconds: u16,
+    grant: TraceExecutionGrantV1,
+    approval: Option<TraceApprovalV1>,
+    recipe: Option<TraceRecipeV1>,
 }
 
 #[derive(Clone)]
 pub struct TraceOwner {
-    store: ControlStore,
+    store: Arc<AnalysisStore>,
 }
 
 pub(crate) struct TraceNodeWorkV1 {
@@ -99,7 +101,7 @@ pub(crate) struct TraceNodeWorkV1 {
 }
 
 impl TraceOwner {
-    pub fn new(store: ControlStore) -> Self {
+    pub fn new(store: Arc<AnalysisStore>) -> Self {
         Self { store }
     }
 
@@ -113,41 +115,47 @@ impl TraceOwner {
     ) -> Result<TraceNodeWorkV1> {
         let mut pending = None;
         let mut cancel = Vec::new();
-        // ponytail: scan bounded tenant heads; use the SQLite projection if this exceeds the poll budget.
-        for head in self.store.discovery_heads(tenant)? {
-            let artifact = self.store.read_discovery_artifact(&head.artifact)?;
-            let Ok(candidate) = Self::decode::<TraceRevisionV1>(&artifact.payload) else {
-                continue;
-            };
-            if candidate.target_index.is_some() {
-                continue;
-            }
-            let (revision, accepted) = TraceRevisionV1::read(&self.store, &head)?;
-            for (index, target) in accepted.request.targets.iter().enumerate() {
-                if target.fact.node_id != node || target.node_boot_id != boot {
-                    continue;
-                }
-                let index = index as u16;
-                let execution = self.store.discovery_head(&TraceRevisionV1::key(
-                    tenant,
-                    accepted.request.request_id,
-                    Some(index),
-                )?)?;
-                if execution
-                    .as_ref()
-                    .map(|head| TraceRevisionV1::read(&self.store, head))
-                    .transpose()?
-                    .is_some_and(|(revision, _)| revision.terminal.is_some())
-                {
-                    continue;
-                }
-                if revision.cancel_requested || now >= accepted.deadline_unix_ns {
-                    if cancel.len() < 16 {
-                        cancel.push(accepted.execution_id(index)?);
+        let mut after = None;
+        loop {
+            let page = self.store.trace_intents(tenant, after)?;
+            for (state, intent) in page.intents {
+                let accepted = TraceAcceptedV1::try_from(intent)?;
+                for (index, target) in accepted.request.targets.iter().enumerate() {
+                    if target.fact.node_id != node || target.node_boot_id != boot {
+                        continue;
                     }
-                } else if pending.is_none() && !retained.contains(&accepted.execution_id(index)?) {
-                    pending = Some((accepted.clone(), index));
+                    let index = index as u16;
+                    let identity = accepted.binding(index)?.identity;
+                    if self
+                        .store
+                        .trace_receipt(&identity)?
+                        .is_some_and(|receipt| receipt.terminal.is_some())
+                    {
+                        continue;
+                    }
+                    if state.cancel_requested || now >= accepted.deadline_unix_ns {
+                        if retained.contains(&identity.execution_id) && cancel.len() < 16 {
+                            cancel.push(identity.execution_id);
+                        }
+                    } else if pending.is_none() && !retained.contains(&identity.execution_id) {
+                        pending = Some((accepted.clone(), index));
+                    }
                 }
+            }
+            after = page.next_request;
+            if after.is_none() {
+                break;
+            }
+        }
+        if let Some((accepted, index)) = &pending {
+            let identity = accepted.binding(*index)?.identity;
+            let terminal = self
+                .store
+                .trace_receipt(&identity)?
+                .is_some_and(|receipt| receipt.terminal.is_some());
+            let state = self.request_state(tenant, accepted.request.request_id)?;
+            if terminal || state.cancel_requested || state.read_revoked {
+                pending = None;
             }
         }
         Ok(TraceNodeWorkV1 { pending, cancel })
@@ -159,19 +167,21 @@ impl TraceOwner {
         grant: TraceExecutionGrantV1,
         approval: Option<TraceApprovalV1>,
         now: u64,
-    ) -> Result<DiscoveryHeadV1> {
+    ) -> Result<TraceStateV1> {
         request.validate()?;
         let recipe = grant.authorize(&request, now)?;
-        let key = TraceRevisionV1::key(request.tenant_id, request.request_id, None)?;
-        if let Some(head) = self.store.discovery_head(&key)? {
-            let (_, accepted) = TraceRevisionV1::read(&self.store, &head)?;
+        if let Some((state, intent)) = self
+            .store
+            .trace_intent(request.tenant_id, request.request_id)?
+        {
+            let accepted = TraceAcceptedV1::try_from(intent)?;
             TraceErrorCodeV1::Conflict.require(
                 accepted.request == request
                     && accepted.grant == grant
                     && accepted.approval == approval,
                 "trace request ID names different inputs",
             )?;
-            return Ok(head);
+            return Ok(state);
         }
         let deadline = now
             .checked_add((u64::from(request.collection_seconds) + 15) * 1_000_000_000)
@@ -190,21 +200,21 @@ impl TraceOwner {
             accepted_unix_ns: now,
             deadline_unix_ns: deadline,
         };
-        accepted.validate()?;
-        let accepted = self.put(&accepted, key.tenant_id, Vec::new())?;
-        let revision = TraceRevisionV1 {
-            trace_schema_version: 1,
-            accepted,
-            target_index: None,
-            previous: None,
-            batch: None,
-            last_sequence: 0,
-            output_bytes: 0,
-            terminal: None,
-            cancel_requested: false,
-            read_revoked: false,
-        };
-        self.commit(key, revision)
+        let intent = TraceIntentV1::try_from(&accepted)?;
+        match self.store.accept_trace(&intent) {
+            Ok(state) => Ok(state),
+            Err(araphor_data::Error::AnalysisConflict { .. }) => {
+                let (state, stored) = self.accepted(intent.tenant_id, intent.request_id)?;
+                TraceErrorCodeV1::Conflict.require(
+                    stored.request == accepted.request
+                        && stored.grant == accepted.grant
+                        && stored.approval == accepted.approval,
+                    "trace request ID names different inputs",
+                )?;
+                Ok(state)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn read(
@@ -213,25 +223,31 @@ impl TraceOwner {
         request: [u8; 16],
         access: &TraceReadAccessV1,
         now: u64,
-    ) -> Result<(DiscoveryHeadV1, TraceAcceptedV1)> {
-        let head = self.request_head(tenant, request)?;
-        let (revision, accepted) = TraceRevisionV1::read(&self.store, &head)?;
+    ) -> Result<(TraceStateV1, TraceAcceptedV1)> {
+        let (state, accepted) = self.accepted(tenant, request)?;
         accepted.authorize_read(access, now)?;
         TraceErrorCodeV1::Denied
-            .require(!revision.read_revoked, "trace read authority was revoked")?;
-        Ok((head, accepted))
+            .require(!state.read_revoked, "trace read authority was revoked")?;
+        Ok((state, accepted))
     }
 
-    pub fn request_head(&self, tenant: [u8; 16], request: [u8; 16]) -> Result<DiscoveryHeadV1> {
-        self.store
-            .discovery_head(&TraceRevisionV1::key(tenant, request, None)?)?
-            .ok_or_else(|| {
-                ObservabilitySnafu {
-                    code: TraceErrorCodeV1::Missing,
-                    reason: "trace request is absent",
-                }
-                .build()
-            })
+    pub fn request_state(&self, tenant: [u8; 16], request: [u8; 16]) -> Result<TraceStateV1> {
+        self.accepted(tenant, request).map(|(state, _)| state)
+    }
+
+    fn accepted(
+        &self,
+        tenant: [u8; 16],
+        request: [u8; 16],
+    ) -> Result<(TraceStateV1, TraceAcceptedV1)> {
+        let (state, intent) = self.store.trace_intent(tenant, request)?.ok_or_else(|| {
+            ObservabilitySnafu {
+                code: TraceErrorCodeV1::Missing,
+                reason: "trace request is absent",
+            }
+            .build()
+        })?;
+        Ok((state, TraceAcceptedV1::try_from(intent)?))
     }
 
     pub fn cancel(
@@ -240,20 +256,18 @@ impl TraceOwner {
         request: [u8; 16],
         principal: &str,
         revoke_read: bool,
-    ) -> Result<DiscoveryHeadV1> {
-        let head = self.request_head(tenant, request)?;
-        let (mut revision, accepted) = TraceRevisionV1::read(&self.store, &head)?;
+    ) -> Result<TraceStateV1> {
+        let (mut state, accepted) = self.accepted(tenant, request)?;
         TraceErrorCodeV1::Denied.require(
             accepted.grant.principal == principal,
             "trace cancellation requires the execution principal",
         )?;
-        if revision.cancel_requested && (!revoke_read || revision.read_revoked) {
-            return Ok(head);
+        if state.cancel_requested && (!revoke_read || state.read_revoked) {
+            return Ok(state);
         }
-        revision.previous = Some(head.clone());
-        revision.cancel_requested = true;
-        revision.read_revoked |= revoke_read;
-        self.commit(head.key, revision)
+        state.cancel_requested = true;
+        state.read_revoked |= revoke_read;
+        self.store.update_trace(&state).map_err(Into::into)
     }
 
     pub fn append(
@@ -263,113 +277,32 @@ impl TraceOwner {
         target_index: u16,
         node_id: &str,
         node_boot_id: [u8; 16],
-        mut batch: TraceBatchV1,
-    ) -> Result<DiscoveryHeadV1> {
+        batch: TraceBatchV1,
+    ) -> Result<TraceOutputReceiptV1> {
         batch.validate()?;
-        let request_head = self.request_head(tenant, request)?;
-        let (request_revision, accepted) = TraceRevisionV1::read(&self.store, &request_head)?;
-        let execution = accepted.execution_id(target_index)?;
-        let target = &accepted.request.targets[target_index as usize];
+        let (_, accepted) = self.accepted(tenant, request)?;
+        let identity = accepted.binding(target_index)?.identity;
         TraceErrorCodeV1::Denied.require(
-            target.fact.node_id == node_id
-                && target.node_boot_id == node_boot_id
-                && execution == batch.execution_id,
+            identity.node_id == node_id
+                && identity.node_boot_id == node_boot_id
+                && identity.execution_id == batch.execution_id,
             "trace output does not match the authenticated execution",
         )?;
-        let key = TraceRevisionV1::key(tenant, request, Some(target_index))?;
-        let previous = self.store.discovery_head(&key)?;
-        let mut revision = if let Some(head) = &previous {
-            TraceRevisionV1::read(&self.store, head)?.0
-        } else {
-            TraceRevisionV1 {
-                trace_schema_version: 1,
-                accepted: request_revision.accepted,
-                target_index: Some(target_index),
-                previous: None,
-                batch: None,
-                last_sequence: 0,
-                output_bytes: 0,
-                terminal: None,
-                cancel_requested: false,
-                read_revoked: false,
-            }
-        };
-        // Compare source frames. A reconnect can change batch boundaries.
-        let overlap = batch
-            .frames
-            .iter()
-            .take_while(|frame| frame.sequence <= revision.last_sequence)
-            .count();
-        let mut matched = 0;
-        let mut cursor = previous.clone();
-        while matched < overlap {
-            let Some(head) = cursor else { break };
-            let (prior, _) = TraceRevisionV1::read(&self.store, &head)?;
-            if let Some(reference) = &prior.batch {
-                let stored: TraceBatchV1 = Self::read_artifact(&self.store, reference)?;
-                for frame in stored.frames {
-                    if let Some(retry) = batch.frames[..overlap]
-                        .iter()
-                        .find(|retry| retry.sequence == frame.sequence)
-                    {
-                        TraceErrorCodeV1::Conflict
-                            .require(*retry == frame, "trace retry changed a committed frame")?;
-                        matched += 1;
-                    }
-                }
-            }
-            cursor = prior.previous;
-        }
-        TraceErrorCodeV1::Integrity
-            .require(matched == overlap, "trace replay history is incomplete")?;
-        batch.frames.drain(..overlap);
-        if batch.frames.is_empty()
-            && (batch.terminal.is_none() || batch.terminal == revision.terminal)
-        {
-            return previous.ok_or_else(|| {
+        let intake = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| u64::try_from(elapsed.as_nanos()).ok())
+            .filter(|now| *now > 0)
+            .ok_or_else(|| {
                 ObservabilitySnafu {
                     code: TraceErrorCodeV1::Integrity,
-                    reason: "trace replay has no committed head",
+                    reason: "trace intake time is outside the supported range",
                 }
                 .build()
-            });
-        }
-        TraceErrorCodeV1::Conflict.require(
-            revision.terminal.is_none(),
-            "trace execution already has a terminal result",
-        )?;
-        if let Some(first) = batch.frames.first() {
-            TraceErrorCodeV1::Conflict.require(
-                first.sequence == revision.last_sequence + 1,
-                "trace output has a gap or changed duplicate",
-            )?;
-        }
-        let next_sequence = batch
-            .frames
-            .last()
-            .map_or(revision.last_sequence, |frame| frame.sequence);
-        let output_bytes = revision.output_bytes
-            + batch
-                .frames
-                .iter()
-                .map(|frame| frame.bytes.len() as u64)
-                .sum::<u64>();
-        TraceErrorCodeV1::Capacity.require(
-            output_bytes <= MAX_TRACE_OUTPUT_BYTES,
-            "trace retained output is full",
-        )?;
-        if let Some(terminal) = &batch.terminal {
-            TraceErrorCodeV1::Conflict.require(
-                terminal.last_sequence == next_sequence && terminal.output_bytes == output_bytes,
-                "trace terminal does not close its retained output",
-            )?;
-        }
-        revision.batch = Some(self.put(&batch, tenant, Vec::new())?);
-        revision.previous = previous;
-        revision.last_sequence = next_sequence;
-        revision.output_bytes = output_bytes;
-        revision.terminal = batch.terminal;
-        self.commit(key, revision)
+            })?;
+        self.store
+            .append_trace(&identity, &batch, intake)
+            .map_err(Into::into)
     }
 
     pub fn output(
@@ -381,94 +314,32 @@ impl TraceOwner {
         now: u64,
         after: u64,
     ) -> Result<Vec<TraceBatchV1>> {
+        let started = Instant::now();
+        TraceErrorCodeV1::Invalid.require(after <= 4096, "trace cursor exceeds the frame bound")?;
         let (_, accepted) = self.read(tenant, request, access, now)?;
-        accepted.execution_id(target_index)?;
-        let mut cursor = self.store.discovery_head(&TraceRevisionV1::key(
-            tenant,
-            request,
-            Some(target_index),
-        )?)?;
-        let mut refs = Vec::new();
-        while let Some(head) = cursor {
-            let (revision, _) = TraceRevisionV1::read(&self.store, &head)?;
-            if revision.last_sequence < after {
-                break;
-            }
-            if let Some(reference) = revision.batch {
-                refs.push(reference);
-            }
-            cursor = revision.previous;
+        let identity = accepted.binding(target_index)?.identity;
+        let page = self
+            .store
+            .read_trace(&identity, after + 1, &AnalysisReadControl::default())?;
+        let checked_now = u64::try_from(started.elapsed().as_nanos())
+            .ok()
+            .and_then(|elapsed| now.checked_add(elapsed))
+            .ok_or_else(|| {
+                ObservabilitySnafu {
+                    code: TraceErrorCodeV1::Denied,
+                    reason: "trace read time exceeds its supported range",
+                }
+                .build()
+            })?;
+        self.read(tenant, request, access, checked_now)?;
+        if page.frames.is_empty() && page.terminal.is_none() {
+            return Ok(Vec::new());
         }
-        let mut result = Vec::new();
-        let mut bytes = 0;
-        let mut frames = 0;
-        for reference in refs.into_iter().rev() {
-            let mut batch: TraceBatchV1 = Self::read_artifact(&self.store, &reference)?;
-            batch.validate()?;
-            batch.frames.retain(|frame| frame.sequence > after);
-            let count = batch
-                .frames
-                .iter()
-                .map(|frame| frame.bytes.len())
-                .sum::<usize>();
-            if bytes + count > 1024 * 1024 || frames + batch.frames.len() > 200 {
-                break;
-            }
-            bytes += count;
-            frames += batch.frames.len();
-            if !batch.frames.is_empty() || batch.terminal.is_some() {
-                result.push(batch);
-            }
-        }
-        Ok(result)
-    }
-
-    fn commit(
-        &self,
-        key: DiscoveryHeadKeyV1,
-        revision: TraceRevisionV1,
-    ) -> Result<DiscoveryHeadV1> {
-        let reference = self.put(&revision, key.tenant_id, revision.dependencies())?;
-        self.store
-            .commit_discovery_head(key, revision.previous.as_ref(), reference)
-    }
-
-    fn put(
-        &self,
-        value: &impl Serialize,
-        tenant: [u8; 16],
-        dependencies: Vec<DiscoveryArtifactRefV1>,
-    ) -> Result<DiscoveryArtifactRefV1> {
-        let payload = rmp_serde::to_vec_named(value).map_err(|error| {
-            ObservabilitySnafu {
-                code: TraceErrorCodeV1::Invalid,
-                reason: error.to_string(),
-            }
-            .build()
-        })?;
-        self.store.put_discovery_artifact(&DiscoveryArtifactV1 {
-            schema_version: 1,
-            tenant_id: tenant,
-            dependencies,
-            payload,
-        })
-    }
-
-    pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-        rmp_serde::from_slice(bytes).map_err(|error| {
-            ObservabilitySnafu {
-                code: TraceErrorCodeV1::Integrity,
-                reason: error.to_string(),
-            }
-            .build()
-        })
-    }
-
-    pub(crate) fn read_artifact<T: DeserializeOwned>(
-        store: &ControlStore,
-        reference: &DiscoveryArtifactRefV1,
-    ) -> Result<T> {
-        Self::decode(&store.read_discovery_artifact(reference)?.payload)
+        Ok(vec![TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: page.frames,
+            terminal: page.terminal,
+        }])
     }
 }
 
@@ -564,6 +435,22 @@ impl TraceAcceptedV1 {
         Ok(id)
     }
 
+    fn binding(&self, index: u16) -> Result<TraceBindingV1> {
+        let execution_id = self.execution_id(index)?;
+        let target = &self.request.targets[index as usize];
+        Ok(TraceBindingV1 {
+            identity: TraceIdentityV1 {
+                tenant_id: self.request.tenant_id,
+                node_id: target.fact.node_id.clone(),
+                node_boot_id: target.node_boot_id,
+                request_id: self.request.request_id,
+                execution_id,
+                source_sha256: self.request.source.sha256,
+            },
+            namespace_uid: target.fact.namespace_uid.clone(),
+        })
+    }
+
     pub fn authorize_read(&self, access: &TraceReadAccessV1, now: u64) -> Result<()> {
         TraceErrorCodeV1::Denied.require(
             !access.revoked
@@ -580,117 +467,74 @@ impl TraceAcceptedV1 {
     }
 }
 
-impl TraceRevisionV1 {
-    pub fn key(
-        tenant_id: [u8; 16],
-        request_id: [u8; 16],
-        target_index: Option<u16>,
-    ) -> Result<DiscoveryHeadKeyV1> {
-        Ok(DiscoveryHeadKeyV1 {
-            tenant_id,
-            id: DiscoveryDigestV1::of(&("ARAPHOR-TRACE-HEAD-V1", request_id, target_index))?,
-        })
-    }
+impl TryFrom<&TraceAcceptedV1> for TraceIntentV1 {
+    type Error = crate::Error;
 
-    fn dependencies(&self) -> Vec<DiscoveryArtifactRefV1> {
-        let mut refs = vec![self.accepted.clone()];
-        refs.extend(self.previous.as_ref().map(|head| head.artifact.clone()));
-        refs.extend(self.batch.clone());
-        refs.sort();
-        refs.dedup();
-        refs
-    }
-
-    pub fn read(store: &ControlStore, head: &DiscoveryHeadV1) -> Result<(Self, TraceAcceptedV1)> {
-        use TraceErrorCodeV1 as Code;
-        let artifact = store.read_discovery_artifact(&head.artifact)?;
-        let revision: Self = TraceOwner::decode(&artifact.payload)?;
-        let accepted: TraceAcceptedV1 = TraceOwner::read_artifact(store, &revision.accepted)?;
+    fn try_from(accepted: &TraceAcceptedV1) -> Result<Self> {
         accepted.validate()?;
-        Code::Integrity.require(
-            revision.trace_schema_version == 1
-                && head.key
-                    == Self::key(
-                        accepted.request.tenant_id,
-                        accepted.request.request_id,
-                        revision.target_index,
-                    )?
-                && revision.dependencies() == artifact.dependencies
-                && revision.last_sequence <= 4096
-                && revision.output_bytes <= MAX_TRACE_OUTPUT_BYTES
-                && match &revision.previous {
-                    Some(previous) => {
-                        previous.key == head.key
-                            && previous.revision.checked_add(1) == Some(head.revision)
-                            && previous.commit_index < head.commit_index
-                    }
-                    None => head.revision == 1,
-                },
-            "trace revision identity or chain is invalid",
+        let stored = StoredTrace {
+            targets: accepted.request.targets.clone(),
+            unresolved: accepted.request.unresolved.clone(),
+            collection_seconds: accepted.request.collection_seconds,
+            grant: accepted.grant.clone(),
+            approval: accepted.approval.clone(),
+            recipe: accepted.recipe,
+        };
+        let authority =
+            rmp_serde::to_vec_named(&stored).context(crate::error::TraceEncodingSnafu)?;
+        let bindings = (0..accepted.request.targets.len())
+            .map(|index| accepted.binding(index as u16))
+            .collect::<Result<Vec<_>>>()?;
+        let intent = Self {
+            tenant_id: accepted.request.tenant_id,
+            request_id: accepted.request.request_id,
+            source: accepted.request.source.clone(),
+            bindings,
+            authority,
+            accepted_unix_ns: accepted.accepted_unix_ns,
+            deadline_unix_ns: accepted.deadline_unix_ns,
+            host_sensitive: accepted.recipe.is_none(),
+        };
+        intent.validate()?;
+        Ok(intent)
+    }
+}
+
+impl TryFrom<TraceIntentV1> for TraceAcceptedV1 {
+    type Error = crate::Error;
+
+    fn try_from(intent: TraceIntentV1) -> Result<Self> {
+        intent.validate()?;
+        let stored: StoredTrace =
+            rmp_serde::from_slice(&intent.authority).context(crate::error::TraceDecodingSnafu)?;
+        let accepted = Self {
+            request: TraceRequestV1 {
+                tenant_id: intent.tenant_id,
+                request_id: intent.request_id,
+                source: intent.source,
+                targets: stored.targets,
+                unresolved: stored.unresolved,
+                collection_seconds: stored.collection_seconds,
+            },
+            grant: stored.grant,
+            approval: stored.approval,
+            recipe: stored.recipe,
+            accepted_unix_ns: intent.accepted_unix_ns,
+            deadline_unix_ns: intent.deadline_unix_ns,
+        };
+        accepted.validate()?;
+        TraceErrorCodeV1::Integrity.require(
+            intent.host_sensitive == accepted.recipe.is_none()
+                && intent.bindings.len() == accepted.request.targets.len(),
+            "trace intent changed its disclosure or target count",
         )?;
-        let prior = revision
-            .previous
-            .as_ref()
-            .map(|previous| TraceOwner::read_artifact::<Self>(store, &previous.artifact))
-            .transpose()?;
-        if let Some(prior) = &prior {
-            Code::Integrity.require(
-                prior.trace_schema_version == 1
-                    && prior.accepted == revision.accepted
-                    && prior.target_index == revision.target_index
-                    && (!prior.cancel_requested || revision.cancel_requested)
-                    && (!prior.read_revoked || revision.read_revoked),
-                "trace predecessor changed its immutable inputs",
+        for (index, binding) in intent.bindings.iter().enumerate() {
+            TraceErrorCodeV1::Integrity.require(
+                accepted.binding(index as u16)? == *binding,
+                "trace intent changed its frozen execution binding",
             )?;
         }
-        if let Some(index) = revision.target_index {
-            let execution = accepted.execution_id(index)?;
-            let reference = revision.batch.as_ref().ok_or_else(|| {
-                ObservabilitySnafu {
-                    code: Code::Integrity,
-                    reason: "trace output revision has no batch",
-                }
-                .build()
-            })?;
-            let batch: TraceBatchV1 = TraceOwner::read_artifact(store, reference)?;
-            batch.validate()?;
-            let first = prior.as_ref().map_or(0, |prior| prior.last_sequence);
-            let bytes = prior.as_ref().map_or(0, |prior| prior.output_bytes);
-            Code::Integrity.require(
-                batch.execution_id == execution
-                    && prior.as_ref().is_none_or(|prior| prior.terminal.is_none())
-                    && batch
-                        .frames
-                        .first()
-                        .is_none_or(|frame| frame.sequence == first + 1)
-                    && batch.frames.last().map_or(first, |frame| frame.sequence)
-                        == revision.last_sequence
-                    && bytes.checked_add(
-                        batch
-                            .frames
-                            .iter()
-                            .map(|frame| frame.bytes.len() as u64)
-                            .sum(),
-                    ) == Some(revision.output_bytes)
-                    && revision.terminal == batch.terminal
-                    && batch.terminal.as_ref().is_none_or(|terminal| {
-                        terminal.last_sequence == revision.last_sequence
-                            && terminal.output_bytes == revision.output_bytes
-                    })
-                    && !revision.cancel_requested
-                    && !revision.read_revoked,
-                "trace output revision does not match its batch",
-            )?;
-        } else {
-            Code::Integrity.require(
-                revision.batch.is_none()
-                    && revision.terminal.is_none()
-                    && revision.last_sequence == 0
-                    && revision.output_bytes == 0,
-                "trace request head contains execution output",
-            )?;
-        }
-        Ok((revision, accepted))
+        Ok(accepted)
     }
 }
 
@@ -698,7 +542,7 @@ impl TraceRevisionV1 {
 pub(crate) mod tests {
     use super::*;
     use crate::{
-        ContainerKindV1, TraceFrameKindV1, TraceFrameV1, TraceSourceV1, TraceTargetV1,
+        ContainerKindV1, TraceFrameKindV1, TraceFrameV1, TraceSourceV1, TraceTerminalV1,
         WorkloadTargetFactV1,
     };
 
@@ -766,10 +610,255 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn observability_recovery_source_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let owner = TraceOwner::new(store.clone());
+        let state = owner.accept(request()?, grant()?, None, 1)?;
+        let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
+        let (stored, intent) = store
+            .trace_intent([1; 16], [6; 16])?
+            .ok_or("missing intent")?;
+        assert_eq!(stored, state);
+        assert_eq!(intent.source, accepted.request.source);
+        let authority: serde_json::Value = rmp_serde::from_slice(&intent.authority)?;
+        let fields: BTreeSet<_> = authority
+            .as_object()
+            .ok_or("authority is not a record")?
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            fields,
+            BTreeSet::from([
+                "approval",
+                "collection_seconds",
+                "grant",
+                "recipe",
+                "targets",
+                "unresolved"
+            ])
+        );
+        assert!(!intent
+            .authority
+            .windows(intent.source.bytes.len())
+            .any(|bytes| bytes == intent.source.bytes.as_slice()));
+        assert_eq!(TraceAcceptedV1::try_from(intent.clone())?, accepted);
+        assert_eq!(TraceIntentV1::try_from(&accepted)?, intent);
+
+        let mut changed = intent.clone();
+        changed.bindings[0].identity.execution_id = [9; 16];
+        assert!(TraceAcceptedV1::try_from(changed).is_err());
+        let mut changed = intent.clone();
+        changed.bindings[0].namespace_uid = "foreign".into();
+        assert!(TraceAcceptedV1::try_from(changed).is_err());
+        let mut changed = intent.clone();
+        changed.host_sensitive = true;
+        assert!(TraceAcceptedV1::try_from(changed).is_err());
+        let mut changed = intent;
+        changed.authority = vec![0xc1];
+        assert!(matches!(
+            TraceAcceptedV1::try_from(changed),
+            Err(crate::Error::TraceDecoding { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn observability_recovery_retained_cancellations(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
+            directory.path().join("data"),
+        )?));
+        let mut retained = [0; 16];
+        for key in 1..=17 {
+            let mut request = request()?;
+            request.request_id = [key; 16];
+            owner.accept(request, grant()?, None, 1)?;
+            if key == 17 {
+                retained = owner
+                    .read([1; 16], [key; 16], &access(), 2)?
+                    .1
+                    .execution_id(0)?;
+            }
+            owner.cancel([1; 16], [key; 16], "operator", false)?;
+        }
+        let work = owner.node_work([1; 16], "node-a", [2; 16], 3, &[retained])?;
+        assert!(work.pending.is_none());
+        assert_eq!(work.cancel, vec![retained]);
+        let work = owner.node_work([1; 16], "node-a", [2; 16], 3, &[])?;
+        assert!(work.pending.is_none());
+        assert!(work.cancel.is_empty());
+        Ok(())
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn observability_recovery_read_revocation(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let owner = TraceOwner::new(store.clone());
+        owner.accept(request()?, grant()?, None, 1)?;
+        let execution_id = owner
+            .read([1; 16], [6; 16], &access(), 2)?
+            .1
+            .execution_id(0)?;
+        owner.append(
+            [1; 16],
+            [6; 16],
+            0,
+            "node-a",
+            [2; 16],
+            TraceBatchV1 {
+                execution_id,
+                frames: vec![TraceFrameV1 {
+                    execution_id,
+                    sequence: 1,
+                    kind: TraceFrameKindV1::Data,
+                    bytes: b"private output".to_vec(),
+                }],
+                terminal: None,
+            },
+        )?;
+        let (frozen, ready) = mpsc::sync_channel(0);
+        let (release, resume) = mpsc::sync_channel(0);
+        store.set_commit_hook(
+            araphor_data::AnalysisCommitStage::AfterTraceFreeze,
+            move || {
+                frozen.send(()).expect("the read observer remains live");
+                resume
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the read is released");
+                Ok(())
+            },
+        )?;
+        std::thread::scope(
+            |scope| -> std::result::Result<(), Box<dyn std::error::Error>> {
+                let reader = scope.spawn(|| owner.output([1; 16], [6; 16], 0, &access(), 3, 0));
+                ready.recv_timeout(Duration::from_secs(5))?;
+                let cancelled = owner.cancel([1; 16], [6; 16], "operator", true);
+                release.send(())?;
+                let result = reader.join().expect("the read thread must not panic");
+                cancelled?;
+                assert!(matches!(
+                    result,
+                    Err(crate::Error::Observability {
+                        code: TraceErrorCodeV1::Denied,
+                        ..
+                    })
+                ));
+                Ok(())
+            },
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn observability_recovery_read_expiry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
+            directory.path().join("data"),
+        )?));
+        owner.accept(request()?, grant()?, None, 1)?;
+        for now in [2, u64::MAX - 1] {
+            let mut access = access();
+            access.valid_until_unix_ns = now + 1;
+            owner.read([1; 16], [6; 16], &access, now)?;
+            assert!(matches!(
+                owner.output([1; 16], [6; 16], 0, &access, now, 0),
+                Err(crate::Error::Observability {
+                    code: TraceErrorCodeV1::Denied,
+                    ..
+                })
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_projection_reopen_grants(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let owner = TraceOwner::new(store.clone());
+        owner.accept(request()?, grant()?, None, 1)?;
+        let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
+        let execution_id = accepted.execution_id(0)?;
+        let frames: Vec<_> = (1..=2)
+            .map(|sequence| TraceFrameV1 {
+                execution_id,
+                sequence,
+                kind: TraceFrameKindV1::Data,
+                bytes: br#"{"type":"map","data":{"@errors":{"257,-2":7}}}"#.to_vec(),
+            })
+            .collect();
+        let batch = TraceBatchV1 {
+            execution_id,
+            frames: frames.clone(),
+            terminal: None,
+        };
+        owner.append([1; 16], [6; 16], 0, "node-a", [2; 16], batch.clone())?;
+        assert_eq!(
+            owner.output([1; 16], [6; 16], 0, &access(), 2, 0)?,
+            vec![batch.clone()]
+        );
+        drop(owner);
+        drop(store);
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let owner = TraceOwner::new(store);
+        let batches = owner.output([1; 16], [6; 16], 0, &access(), 3, 0)?;
+        assert_eq!(batches, vec![batch]);
+        let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 3)?;
+        let recipe = accepted.recipe.ok_or("reviewed recipe is absent")?;
+        let measurements: Vec<_> = batches
+            .iter()
+            .flat_map(|batch| &batch.frames)
+            .flat_map(|frame| recipe.measurements(frame).unwrap_or_default())
+            .collect();
+        assert_eq!(measurements.len(), 2);
+        assert_eq!(
+            measurements
+                .iter()
+                .map(|row| row.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(measurements.iter().all(|row| row.count == 7
+            && row.cumulative
+            && !row.atomic_snapshot
+            && row.unit == "count"
+            && row.execution_id == execution_id
+            && row.syscall_id == Some(257)));
+        assert_eq!(
+            owner.output([1; 16], [6; 16], 0, &access(), 3, 1)?[0].frames,
+            frames[1..]
+        );
+        assert!(owner
+            .output([1; 16], [6; 16], 0, &access(), 3, 4097)
+            .is_err());
+        let mut revoked = access();
+        revoked.revoked = true;
+        assert!(owner.read([1; 16], [6; 16], &revoked, 3).is_err());
+        assert!(owner.output([1; 16], [6; 16], 0, &revoked, 3, 0).is_err());
+        let cancelled = owner.cancel([1; 16], [6; 16], "operator", true)?;
+        assert_eq!(owner.cancel([1; 16], [6; 16], "operator", true)?, cancelled);
+        assert!(owner.output([1; 16], [6; 16], 0, &access(), 4, 0).is_err());
+        assert!(!directory.path().join("discovery-index.sqlite").exists());
+        Ok(())
+    }
+
+    #[test]
     fn observability_target_partial_cohort_never_widens_on_retry(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let owner = TraceOwner::new(ControlStore::open(directory.path())?);
+        let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
+            directory.path().join("data"),
+        )?));
         let mut request = request()?;
         let mut unavailable = request.targets[0].clone();
         unavailable.fact.pod_uid = "replacement".into();
@@ -795,7 +884,9 @@ pub(crate) mod tests {
     fn observability_target_grants_pin_source_namespace_and_approval(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let owner = TraceOwner::new(ControlStore::open(directory.path())?);
+        let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
+            directory.path().join("data"),
+        )?));
         let mut request = request()?;
         let grant = grant()?;
         request.tenant_id = [9; 16];
@@ -844,7 +935,7 @@ pub(crate) mod tests {
     fn observability_recovery_accepts_regrouped_frames_and_late_terminal(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = ControlStore::open(directory.path())?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
         owner.accept(request()?, grant()?, None, 1)?;
         let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
@@ -888,8 +979,7 @@ pub(crate) mod tests {
         let head = append(frames.clone(), Some(terminal.clone()))?;
         assert_eq!(head, append(frames.clone(), Some(terminal))?);
         assert_eq!(head, append(frames[..1].to_vec(), None)?);
-        let (revision, _) = TraceRevisionV1::read(&store, &head)?;
-        assert_eq!((revision.last_sequence, revision.output_bytes), (3, 3));
+        assert_eq!((head.last_sequence, head.output_bytes), (3, 3));
         let mut changed = frames;
         changed[1].bytes = vec![99];
         assert!(append(changed, None).is_err());
@@ -900,7 +990,7 @@ pub(crate) mod tests {
     fn observability_recovery_commits_once_and_rejects_changed_output(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = ControlStore::open(directory.path())?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
         let request = request()?;
         let head = owner.accept(request.clone(), grant()?, None, 1)?;
@@ -935,7 +1025,7 @@ pub(crate) mod tests {
             .is_err());
         drop(owner);
         drop(store);
-        let store = ControlStore::open(directory.path())?;
+        let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
         assert_eq!(
             owner.output([1; 16], [6; 16], 0, &access(), 3, 0)?,
@@ -944,14 +1034,7 @@ pub(crate) mod tests {
         let mut changed = request;
         changed.targets[0].binding_nonce = [8; 16];
         assert!(owner.accept(changed, grant()?, None, 3).is_err());
-        let discovery = crate::DiscoveryOwner::open(store.clone())?;
-        while !discovery.project_revisions()? {}
-        let page = discovery.read_revisions([1; 16].into(), None)?;
-        assert_eq!(page.events.len(), 2);
-        assert!(page
-            .events
-            .iter()
-            .all(|event| matches!(event.change, crate::DiscoveryRevisionKindV1::Trace { .. })));
+        assert!(!directory.path().join("discovery-index.sqlite").exists());
         assert!(owner.cancel([1; 16], [6; 16], "foreign", true).is_err());
         owner.cancel([1; 16], [6; 16], "operator", true)?;
         assert!(owner.output([1; 16], [6; 16], 0, &access(), 4, 0).is_err());

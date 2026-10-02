@@ -28,6 +28,18 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Trace authority encoding failed: {source}"))]
+    TraceEncoding {
+        source: rmp_serde::encode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Stored trace authority is invalid: {source}"))]
+    TraceDecoding {
+        source: rmp_serde::decode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Discovery database operation {operation} failed: {source}"))]
     DiscoveryDatabase {
         operation: &'static str,
@@ -156,9 +168,17 @@ impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::DataStore { source, .. }
-                if matches!(source.as_ref(), araphor_data::Error::TraceInvalid { .. }) =>
+                if matches!(
+                    source.as_ref(),
+                    araphor_data::Error::TraceInvalid { .. }
+                        | araphor_data::Error::AnalysisConflict { .. }
+                        | araphor_data::Error::RetainedRangeExpired { .. }
+                        | araphor_data::Error::StorageCapacity { .. }
+                        | araphor_data::Error::ProtectedInputCapacity { .. }
+                        | araphor_data::Error::AnalysisBusy { .. }
+                ) =>
             {
-                StatusCode::InvalidArguments
+                source.status_code()
             }
             Self::Observability { code, .. } => match code {
                 crate::TraceErrorCodeV1::Denied => StatusCode::PermissionDenied,
@@ -170,7 +190,8 @@ impl ErrorExt for Error {
                 crate::TraceErrorCodeV1::Integrity => StatusCode::IllegalState,
             },
             Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
-            Self::CoverageDecode { .. } => StatusCode::IllegalState,
+            Self::CoverageDecode { .. } | Self::TraceDecoding { .. } => StatusCode::IllegalState,
+            Self::TraceEncoding { .. } => StatusCode::Internal,
             Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
@@ -192,6 +213,16 @@ impl ErrorExt for Error {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::DataStore { source, .. }
+                if matches!(
+                    source.as_ref(),
+                    araphor_data::Error::StorageCapacity { .. }
+                        | araphor_data::Error::ProtectedInputCapacity { .. }
+                        | araphor_data::Error::AnalysisBusy { .. }
+                ) =>
+            {
+                source.retry_hint()
+            }
             Self::Observability {
                 code: crate::TraceErrorCodeV1::Capacity,
                 ..
@@ -210,6 +241,8 @@ impl ErrorExt for Error {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
             Self::CoverageDecode { .. }
+            | Self::TraceEncoding { .. }
+            | Self::TraceDecoding { .. }
             | Self::DataStore { .. }
             | Self::RetainedRangeExpired { .. }
             | Self::Discovery { .. }

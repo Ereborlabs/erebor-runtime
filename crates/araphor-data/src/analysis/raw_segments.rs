@@ -6,6 +6,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
+use super::raw::RawIdentity;
 use crate::Result;
 use crate::{AnalysisStateSnafu, IoSnafu};
 
@@ -145,15 +146,26 @@ impl EncodedEvidenceFramesV1 {
 #[derive(Debug)]
 struct EvidenceSegmentStateV1 {
     descriptor: EvidenceSegmentDescriptorV1,
-    identity: crate::EvidenceIntakeIdentityV1,
+    identity: RawIdentity,
     path: PathBuf,
     frames: Vec<EvidenceFrameIndexV1>,
     active: bool,
 }
 
 impl EvidenceSegmentStateV1 {
-    fn active_path(root: &Path, id: u64, stream: u64, first: u64) -> PathBuf {
-        root.join(format!("{id:016x}.r.{stream:016x}.{first:016x}.open"))
+    fn active_path(
+        root: &Path,
+        id: u64,
+        stream: u64,
+        first: u64,
+        identity: &RawIdentity,
+    ) -> PathBuf {
+        let kind = if identity.evidence().is_some() {
+            "r"
+        } else {
+            "d"
+        };
+        root.join(format!("{id:016x}.{kind}.{stream:016x}.{first:016x}.open"))
     }
 
     fn sealed_path(&self, root: &Path) -> PathBuf {
@@ -162,25 +174,30 @@ impl EvidenceSegmentStateV1 {
         let stream = bounds.stream_id;
         let first = bounds.first_cursor;
         let last = bounds.last_cursor;
+        let kind = if self.identity.evidence().is_some() {
+            "r"
+        } else {
+            "d"
+        };
         root.join(format!(
-            "{id:016x}.r.{stream:016x}.{first:016x}.{last:016x}.seg"
+            "{id:016x}.{kind}.{stream:016x}.{first:016x}.{last:016x}.seg"
         ))
     }
 
-    fn parse_name(path: &Path) -> Result<(u64, u64, u64, Option<u64>)> {
+    fn parse_name(path: &Path) -> Result<(u64, u64, u64, Option<u64>, &'static str)> {
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
         let fields = name.split('.').collect::<Vec<_>>();
         let (id, stream_id, first, last) = match fields.as_slice() {
-            [id, "r", stream_id, first, "open"] => (
+            [id, "r" | "d", stream_id, first, "open"] => (
                 Self::field(id, path)?,
                 Self::field(stream_id, path)?,
                 Self::field(first, path)?,
                 None,
             ),
-            [id, "r", stream_id, first, last, "seg"] => (
+            [id, "r" | "d", stream_id, first, last, "seg"] => (
                 Self::field(id, path)?,
                 Self::field(stream_id, path)?,
                 Self::field(first, path)?,
@@ -201,7 +218,12 @@ impl EvidenceSegmentStateV1 {
             }
             .fail();
         }
-        Ok((id, stream_id, first, last))
+        let kind = if fields[1] == "r" {
+            "records"
+        } else {
+            "diagnostic"
+        };
+        Ok((id, stream_id, first, last, kind))
     }
 
     fn field(value: &str, path: &Path) -> Result<u64> {
@@ -228,6 +250,7 @@ impl EvidenceSegmentStateV1 {
         first: u64,
         sealed_last: Option<u64>,
         committed_end: u64,
+        kind: &str,
     ) -> Result<Option<Self>> {
         let file = super::SegmentFile::open(&path)?;
         let mut bytes = file.read(0, file.length()? as usize)?;
@@ -238,7 +261,7 @@ impl EvidenceSegmentStateV1 {
             }
             .fail();
         }
-        let (identity, header_bytes) = super::SegmentFile::decode_identity(&bytes, &path)?;
+        let (identity, header_bytes) = super::SegmentFile::decode_raw(kind, &bytes, &path)?;
         let active = sealed_last.is_none();
         let mut frames = Vec::new();
         let mut offset = header_bytes;
@@ -382,7 +405,7 @@ pub(crate) struct EvidenceSegmentOwner {
     root: PathBuf,
     segments: BTreeMap<u64, EvidenceSegmentStateV1>,
     active: BTreeMap<u64, u64>,
-    identities: BTreeMap<u64, crate::EvidenceIntakeIdentityV1>,
+    identities: BTreeMap<u64, RawIdentity>,
     next_id: u64,
 }
 
@@ -404,7 +427,7 @@ impl EvidenceSegmentOwner {
 
     pub(super) fn append_plan(
         &self,
-        identity: &crate::EvidenceIntakeIdentityV1,
+        identity: &RawIdentity,
         stream: u64,
         sequence: u64,
         bytes: u64,
@@ -427,7 +450,7 @@ impl EvidenceSegmentOwner {
         }
         Ok((
             self.next_id,
-            bytes + super::SegmentFile::encode_identity(identity)?.len() as u64,
+            bytes + super::SegmentFile::encode_raw(identity)?.len() as u64,
             true,
         ))
     }
@@ -466,11 +489,15 @@ impl EvidenceSegmentOwner {
         let mut identities = BTreeMap::new();
         let mut next_id = 1_u64;
         let mut directory_changed = false;
+        let mut diagnostic_count = 0;
+        let mut evidence_count = 0;
         for (count, entry) in fs::read_dir(&root)
             .context(IoSnafu { path: &root })?
             .enumerate()
         {
-            if count >= super::capacity::MAX_STORAGE_ENTRIES {
+            if count
+                >= super::capacity::MAX_STORAGE_ENTRIES + super::capacity::MAX_DIAGNOSTIC_ENTRIES
+            {
                 return super::AnalysisStore::reject_path(
                     &root,
                     "the raw segment directory exceeds its entry bound",
@@ -486,7 +513,20 @@ impl EvidenceSegmentOwner {
                 }
                 .fail();
             }
-            let (id, stream, first, sealed_last) = EvidenceSegmentStateV1::parse_name(&path)?;
+            let (id, stream, first, sealed_last, kind) = EvidenceSegmentStateV1::parse_name(&path)?;
+            if kind == "diagnostic" {
+                diagnostic_count += 1;
+            } else {
+                evidence_count += 1;
+            }
+            if diagnostic_count > super::capacity::MAX_DIAGNOSTIC_ENTRIES
+                || evidence_count > super::capacity::MAX_STORAGE_ENTRIES
+            {
+                return super::AnalysisStore::reject_path(
+                    &root,
+                    "the raw stream kind exceeds its entry bound",
+                );
+            }
             next_id = next_id.max(id.checked_add(1).ok_or_else(|| {
                 AnalysisStateSnafu {
                     path: root.clone(),
@@ -501,6 +541,7 @@ impl EvidenceSegmentOwner {
                 first,
                 sealed_last,
                 committed.get(&id).copied().unwrap_or(0),
+                kind,
             )?
             else {
                 directory_changed = true;
@@ -545,7 +586,7 @@ impl EvidenceSegmentOwner {
 
     pub(crate) fn write_frames(
         &mut self,
-        identity: &crate::EvidenceIntakeIdentityV1,
+        identity: &RawIdentity,
         stream_id: u64,
         first_cursor: u64,
         last_cursor: u64,
@@ -692,9 +733,7 @@ impl EvidenceSegmentOwner {
         self.segments.values().map(|state| state.descriptor)
     }
 
-    pub(crate) fn identities(
-        &self,
-    ) -> impl Iterator<Item = (u64, &crate::EvidenceIntakeIdentityV1)> + '_ {
+    pub(crate) fn identities(&self) -> impl Iterator<Item = (u64, &RawIdentity)> + '_ {
         self.identities
             .iter()
             .map(|(stream_id, identity)| (*stream_id, identity))
@@ -737,7 +776,7 @@ impl EvidenceSegmentOwner {
 
     fn append_capacity(
         &self,
-        identity: &crate::EvidenceIntakeIdentityV1,
+        identity: &RawIdentity,
         stream: u64,
         first: u64,
         first_frame_bytes: usize,
@@ -756,7 +795,7 @@ impl EvidenceSegmentOwner {
         if let Some(capacity) = active_capacity {
             return Ok(capacity);
         }
-        let identity_bytes = super::SegmentFile::encode_identity(identity)?.len();
+        let identity_bytes = super::SegmentFile::encode_raw(identity)?.len();
         let capacity = crate::MAX_EVIDENCE_SEGMENT_BYTES
             .checked_sub(identity_bytes)
             .ok_or_else(|| {
@@ -778,7 +817,7 @@ impl EvidenceSegmentOwner {
 
     fn append_without_sync(
         &mut self,
-        identity: &crate::EvidenceIntakeIdentityV1,
+        identity: &RawIdentity,
         stream: u64,
         first: u64,
         last: u64,
@@ -806,7 +845,7 @@ impl EvidenceSegmentOwner {
             .fail();
         }
         let frame_bytes = frames.bytes.len() as u64;
-        let identity_bytes = super::SegmentFile::encode_identity(identity)?;
+        let identity_bytes = super::SegmentFile::encode_raw(identity)?;
         let new_segment_bytes = frame_bytes
             .checked_add(identity_bytes.len() as u64)
             .ok_or_else(|| {
@@ -877,7 +916,7 @@ impl EvidenceSegmentOwner {
             state.descriptor.bounds.last_cursor = last;
             state.descriptor.reference.offset += frame_bytes;
         } else {
-            let path = EvidenceSegmentStateV1::active_path(&self.root, id, stream, first);
+            let path = EvidenceSegmentStateV1::active_path(&self.root, id, stream, first, identity);
             let file = super::SegmentFile::create(&path, &identity_bytes)?;
             #[cfg(test)]
             super::AnalysisStore::crash_path(

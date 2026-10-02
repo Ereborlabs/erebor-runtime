@@ -721,9 +721,6 @@ impl Shared {
             }],
         }
         .with_computed_bundle_digest();
-        if self.diagnostics.is_some() {
-            let _discovery = mithril_control::DiscoveryOwner::open(store.clone())?;
-        }
         let mut control = ControlPlane::with_control_store(
             vec![AllowedNodeIdentity {
                 node_id: NODE_ID.to_owned(),

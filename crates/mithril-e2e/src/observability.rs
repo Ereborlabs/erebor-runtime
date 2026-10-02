@@ -259,6 +259,400 @@ impl ObservabilityQualification {
         Self { output }
     }
 
+    pub fn owned_capture(&self) -> ProofResult<()> {
+        use crate::control_fixture::{MtlsFixture, OutagePolicyFixture, OUTAGE_TENANT_ID};
+        use ed25519_dalek::SigningKey;
+        use mithril_control::{
+            ControlStore, DiscoveryDigestV1, TraceBatchV1, TraceCleanupV1, TraceExchangeV1,
+            TraceExecutionGrantV1, TraceFrameKindV1, TraceFrameV1, TraceOwner, TraceReadAccessV1,
+            TraceRecipeV1, TraceRequestV1, TraceTargetV1, TraceTerminalReasonV1, TraceTerminalV1,
+            TraceUploadV1,
+        };
+        use mithril_node::TrustCache;
+
+        fs::create_dir(&self.output)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async {
+            let tls = MtlsFixture::new(false)?;
+            let fixture = OutagePolicyFixture::new(ControlStore::open(tls.path().join("inventory"))?);
+            let facts = fixture.inventory(&fixture.resource(1)?)?;
+            let fact = facts.first().ok_or("missing workload fact")?.clone();
+            drop(fixture);
+            let key = SigningKey::from_bytes(&[23; 32]);
+            let control = Self::trace_control(&tls, &key)?;
+            let data = control.analysis_store().ok_or("missing analysis store")?;
+            let owner = TraceOwner::new(data);
+            let index = tls.path().join("control-store/discovery-index.sqlite");
+            if index.try_exists()? {
+                return Err("discovery started before diagnostic acceptance".into());
+            }
+            control.replace_kubernetes_workload_inventory(facts)?;
+            let server = tls.start(control.clone()).await?;
+            let result = tokio::time::timeout(Duration::from_secs(20), async {
+                let connector = tls.connector(&server, "node-a", [7; 16]);
+                let mut cache = TrustCache::load(&tls.path().join("trace-trust"))?;
+                let mut registration = OutagePolicyFixture::registration([7; 16], false);
+                registration.effect_prevention_claims_enabled = false;
+                let mut connection = connector.connect(registration.clone(), true, &mut cache).await?;
+                let now = u64::try_from(
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos(),
+                )?;
+                let tenant = *uuid::Uuid::parse_str(OUTAGE_TENANT_ID)?.as_bytes();
+                let target = TraceTargetV1 {
+                    fact_digest: DiscoveryDigestV1::of(&fact)?,
+                    fact,
+                    runtime_container_id: "1".repeat(64),
+                    node_boot_id: [7; 16],
+                    cgroup_id: 17,
+                    binding_id: [3; 16],
+                    binding_nonce: [4; 16],
+                    root_cgroup_live_interval_id: [5; 16],
+                    container_generation: 1,
+                    label_epoch: 1,
+                };
+                let grant = TraceExecutionGrantV1 {
+                    tenant_id: tenant,
+                    grant_id: [7; 16],
+                    principal: "qualification".into(),
+                    namespace_uids: [target.fact.namespace_uid.clone()].into(),
+                    node_ids: ["node-a".into()].into(),
+                    recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
+                    host_diagnostic: false,
+                    valid_until_unix_ns: now + 120_000_000_000,
+                };
+                let access = TraceReadAccessV1 {
+                    tenant_id: tenant,
+                    namespace_uids: grant.namespace_uids.clone(),
+                    node_ids: grant.node_ids.clone(),
+                    host_sensitive: false,
+                    valid_until_unix_ns: grant.valid_until_unix_ns,
+                    revoked: false,
+                };
+                let request = TraceRequestV1 {
+                    tenant_id: tenant,
+                    request_id: [6; 16],
+                    source: TraceRecipeV1::FailedOpens.manifest()?.source,
+                    targets: vec![target],
+                    unresolved: Vec::new(),
+                    collection_seconds: 30,
+                };
+                connection.report_readiness(true, true).await?;
+                let state = control.accept_trace(request.clone(), grant.clone(), None)?;
+                if control.accept_trace(request.clone(), grant.clone(), None)? != state {
+                    return Err("acceptance retry changed durable state".into());
+                }
+                let mut changed = request.clone();
+                changed.collection_seconds += 1;
+                let conflict = control.accept_trace(changed, grant.clone(), None)
+                    .err().ok_or("changed request was accepted")?;
+                if conflict.code() != tonic::Code::AlreadyExists {
+                    return Err(format!("changed request failed for another reason: {conflict}").into());
+                }
+                let dispatch = connection.exchange_diagnostics(&TraceExchangeV1::default()).await?
+                    .dispatch.ok_or("missing signed dispatch")?;
+                let now = u64::try_from(
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos(),
+                )?;
+                dispatch.verify(&key.verifying_key(), tenant, "node-a", [7; 16], now)?;
+                if dispatch.accepted.request != request {
+                    return Err("dispatch changed accepted inputs".into());
+                }
+                let id = dispatch.accepted.execution_id(0)?;
+                let frame = TraceFrameV1 {
+                    execution_id: id,
+                    sequence: 1,
+                    kind: TraceFrameKindV1::Data,
+                    bytes: b"external output fixture\n".to_vec(),
+                };
+                let mut exchange = TraceExchangeV1 {
+                    retained: vec![id],
+                    resolved: None,
+                    output: Some(TraceUploadV1 {
+                        request_id: request.request_id,
+                        target_index: 0,
+                        original_node_boot_id: [7; 16],
+                        batch: TraceBatchV1 {
+                            execution_id: id,
+                            frames: vec![frame.clone()],
+                            terminal: None,
+                        },
+                    }),
+                };
+                let first = connection.exchange_diagnostics(&exchange).await?;
+                let ack = first.acknowledgement.as_ref().ok_or("missing output ack")?;
+                if ack.execution_id != id || ack.last_sequence != 1 || ack.terminal.is_some()
+                    || first.dispatch.is_some()
+                {
+                    return Err("output acknowledgement changed the retained sequence".into());
+                }
+                drop(connection);
+                let mut connection = connector.connect(registration, true, &mut cache).await?;
+                let replay = connection.exchange_diagnostics(&exchange).await?;
+                if replay != first {
+                    return Err("output retry changed its acknowledgement".into());
+                }
+                let mut changed = exchange.clone();
+                changed.output.as_mut().ok_or("missing output")?.batch.frames[0].bytes.push(b'!');
+                let rejected = connection.exchange_diagnostics(&changed).await
+                    .err().ok_or("conflicting output was accepted")?;
+                if !matches!(&rejected, mithril_node::Error::ControlRpc { source, .. }
+                    if source.code() == tonic::Code::AlreadyExists)
+                {
+                    return Err(format!("conflicting output failed for another reason: {rejected}").into());
+                }
+                let terminal = TraceTerminalV1 {
+                    execution_id: id,
+                    reason: TraceTerminalReasonV1::Completed,
+                    last_sequence: 1,
+                    output_bytes: frame.bytes.len() as u64,
+                    output_incomplete: false,
+                    kernel_lost_events: None,
+                    ready_at_unix_ns: None,
+                    exit_code: Some(0),
+                    forced_kill: false,
+                    cleanup: TraceCleanupV1::Unknown,
+                };
+                let batch = &mut exchange.output.as_mut().ok_or("missing output")?.batch;
+                batch.frames.clear();
+                batch.terminal = Some(terminal.clone());
+                let completed = connection.exchange_diagnostics(&exchange).await?;
+                if completed.acknowledgement.as_ref().and_then(|ack| ack.terminal.as_ref()) != Some(&terminal)
+                    || completed.dispatch.is_some()
+                    || connection.exchange_diagnostics(&exchange).await? != completed
+                {
+                    return Err("terminal retry changed its acknowledgement".into());
+                }
+                let retained = owner.output(tenant, request.request_id, 0, &access, now, 0)?;
+                if retained != vec![TraceBatchV1 {
+                    execution_id: id,
+                    frames: vec![frame],
+                    terminal: Some(terminal),
+                }] || owner.read(tenant, request.request_id, &access, now)? != (state.clone(), dispatch.accepted)
+                {
+                    return Err("retained trace changed after retry or conflict".into());
+                }
+                if index.try_exists()? {
+                    return Err("diagnostics started a discovery index".into());
+                }
+                Ok::<_, Box<dyn std::error::Error>>((serde_json::json!({
+                    "schema_version": 1,
+                    "case": "owned-capture",
+                    "scope": "owner-upload",
+                    "result": "PASS",
+                    "proof_boundary": "Production Control and Node transport with external target and output fixtures. No backend execution, Node spool, process crash, BPF cleanup, enforcement, or performance proof.",
+                    "physical": false,
+                    "performance_claim": false,
+                    "discovery_index_present": false,
+                    "source_sha256": hex::encode(request.source.sha256),
+                    "state": state,
+                    "output_ack": first.acknowledgement,
+                    "replay_ack": replay.acknowledgement,
+                    "terminal_ack": completed.acknowledgement,
+                    "request_conflict": format!("{:?}", conflict.code()),
+                    "output_conflict": "AlreadyExists",
+                    "retained": retained,
+                }), request, grant))
+            }).await;
+            let shutdown = server.shutdown().await;
+            let (mut record, request, grant) = result??;
+            shutdown?;
+            drop(owner);
+            drop(control);
+            drop(crate::control_fixture::reopen_control_store(&tls.path().join("control-store")).await?);
+            record["storage_recovery"] = self.owned_storage(&tls, &key, request, grant).await?;
+            self.write("result.json", &record)
+        })
+    }
+
+    fn trace_control(
+        tls: &crate::control_fixture::MtlsFixture,
+        key: &ed25519_dalek::SigningKey,
+    ) -> ProofResult<mithril_control::ControlPlane> {
+        let mut config = tls.configuration()?;
+        config.trust = mithril_control::TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: String::new(),
+            policy_issuer_sequence_epoch: 1,
+            policy_signers: vec![mithril_control::PolicySignerTrustV1 {
+                signing_key_id: "trace-key".into(),
+                ed25519_public_key_hex: hex::encode(key.verifying_key().as_bytes()),
+                revoked: false,
+            }],
+        }
+        .with_computed_bundle_digest();
+        let parts = config.into_parts()?;
+        if let Some(error) = parts.data_error {
+            return Err(error.into());
+        }
+        Ok(parts
+            .control
+            .with_trace_signer("trace-key".into(), 1, key.clone())?)
+    }
+
+    async fn owned_storage(
+        &self,
+        tls: &crate::control_fixture::MtlsFixture,
+        key: &ed25519_dalek::SigningKey,
+        mut request: mithril_control::TraceRequestV1,
+        mut grant: mithril_control::TraceExecutionGrantV1,
+    ) -> ProofResult<serde_json::Value> {
+        use crate::control_fixture::{reopen_control_store, OutagePolicyFixture};
+        use mithril_control::{
+            TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceOwner,
+            TraceReadAccessV1, TraceUploadV1,
+        };
+        use mithril_node::TrustCache;
+
+        request.request_id = [8; 16];
+        let now = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos(),
+        )?;
+        grant.valid_until_unix_ns = now + 120_000_000_000;
+        let access = TraceReadAccessV1 {
+            tenant_id: request.tenant_id,
+            namespace_uids: grant.namespace_uids.clone(),
+            node_ids: grant.node_ids.clone(),
+            host_sensitive: false,
+            valid_until_unix_ns: grant.valid_until_unix_ns,
+            revoked: false,
+        };
+        let control = Self::trace_control(tls, key)?;
+        let data = control.analysis_store().ok_or("missing analysis store")?;
+        control.replace_kubernetes_workload_inventory(
+            request
+                .targets
+                .iter()
+                .map(|target| target.fact.clone())
+                .collect(),
+        )?;
+        let server = tls.start(control.clone()).await?;
+        let mut registration = OutagePolicyFixture::registration([7; 16], false);
+        registration.effect_prevention_claims_enabled = false;
+        let mut cache = TrustCache::load(&tls.path().join("storage-trust"))?;
+        let result = tokio::time::timeout(Duration::from_secs(20), async {
+            let connector = tls.connector(&server, "node-a", [7; 16]);
+            let mut connection = connector
+                .connect(registration.clone(), true, &mut cache)
+                .await?;
+            connection.report_readiness(true, true).await?;
+            control.accept_trace(request.clone(), grant, None)?;
+            let dispatch = connection
+                .exchange_diagnostics(&TraceExchangeV1::default())
+                .await?
+                .dispatch
+                .ok_or("missing storage dispatch")?;
+            let id = dispatch.accepted.execution_id(0)?;
+            let batch = TraceBatchV1 {
+                execution_id: id,
+                frames: vec![TraceFrameV1 {
+                    execution_id: id,
+                    sequence: 1,
+                    kind: TraceFrameKindV1::Data,
+                    bytes: b"synced output fixture\n".to_vec(),
+                }],
+                terminal: None,
+            };
+            let exchange = TraceExchangeV1 {
+                retained: vec![id],
+                resolved: None,
+                output: Some(TraceUploadV1 {
+                    request_id: request.request_id,
+                    target_index: 0,
+                    original_node_boot_id: [7; 16],
+                    batch: batch.clone(),
+                }),
+            };
+            data.set_commit_hook(araphor_data::AnalysisCommitStage::AfterSync, || {
+                Err(araphor_data::Error::Io {
+                    path: "diagnostic AfterSync fixture".into(),
+                    source: std::io::Error::from(std::io::ErrorKind::StorageFull),
+                    location: snafu::Location::default(),
+                })
+            })?;
+            let mut errors = Vec::new();
+            for expected in [tonic::Code::Unavailable, tonic::Code::DataLoss] {
+                match connection.exchange_diagnostics(&exchange).await {
+                    Err(mithril_node::Error::ControlRpc { source, .. })
+                        if source.code() == expected =>
+                    {
+                        errors.push(format!("{:?}", source.code()));
+                    }
+                    other => {
+                        return Err(format!(
+                            "failed store returned an ACK or wrong error: {other:?}"
+                        )
+                        .into())
+                    }
+                }
+            }
+            if data.storage_health()?.write_ready {
+                return Err("failed sync hook left the data writer ready".into());
+            }
+            Ok::<_, Box<dyn std::error::Error>>((exchange, batch, errors))
+        })
+        .await;
+        let shutdown = server.shutdown().await;
+        drop(data);
+        drop(control);
+        let (exchange, batch, errors) = result??;
+        shutdown?;
+        drop(reopen_control_store(&tls.path().join("control-store")).await?);
+
+        let control = Self::trace_control(tls, key)?;
+        let server = tls.start(control.clone()).await?;
+        let result = tokio::time::timeout(Duration::from_secs(20), async {
+            let connector = tls.connector(&server, "node-a", [7; 16]);
+            let mut connection = connector.connect(registration, true, &mut cache).await?;
+            let reply = connection.exchange_diagnostics(&exchange).await?;
+            let ack = reply
+                .acknowledgement
+                .as_ref()
+                .ok_or("missing recovered ACK")?;
+            if ack.execution_id != batch.execution_id
+                || ack.last_sequence != 1
+                || ack.terminal.is_some()
+                || connection.exchange_diagnostics(&exchange).await? != reply
+            {
+                return Err("recovered output retry changed its ACK".into());
+            }
+            let owner = TraceOwner::new(control.analysis_store().ok_or("missing recovered data")?);
+            let retained =
+                owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?;
+            if retained != vec![batch]
+                || owner
+                    .read(request.tenant_id, request.request_id, &access, now)?
+                    .1
+                    .request
+                    != request
+            {
+                return Err("store recovery changed the accepted request or synced output".into());
+            }
+            if tls
+                .path()
+                .join("control-store/discovery-index.sqlite")
+                .try_exists()?
+            {
+                return Err("store recovery started a discovery index".into());
+            }
+            Ok::<_, Box<dyn std::error::Error>>(serde_json::json!({
+                "fault_stage": "AfterSync",
+                "fault_input": "injected StorageFull error after a real diagnostic segment sync",
+                "error_codes": errors,
+                "acknowledgement": reply.acknowledgement,
+                "retained": retained,
+            }))
+        })
+        .await;
+        let shutdown = server.shutdown().await;
+        let record = result??;
+        shutdown?;
+        Ok(record)
+    }
+
     pub fn pod_recipes(
         &self,
         executable: PathBuf,
@@ -825,6 +1219,49 @@ impl Drop for QualificationChild {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observability_owned_upload() -> ProofResult<()> {
+        let directory = tempfile::tempdir()?;
+        let owner = ObservabilityQualification::new(directory.path().join("owned"));
+        owner.owned_capture()?;
+        let path = owner.output.join("result.json");
+        let bytes = fs::read(&path)?;
+        let record: serde_json::Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(record["case"], "owned-capture");
+        assert_eq!(record["scope"], "owner-upload");
+        assert_eq!(record["result"], "PASS");
+        assert_eq!(record["physical"], false);
+        assert_eq!(record["performance_claim"], false);
+        assert_eq!(record["discovery_index_present"], false);
+        assert_eq!(record["output_ack"], record["replay_ack"]);
+        assert_eq!(record["output_ack"]["last_sequence"], 1);
+        assert_eq!(record["retained"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            record["retained"][0]["frames"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(record["terminal_ack"]["terminal"]["cleanup"], "Unknown");
+        assert!(record["terminal_ack"]["terminal"]["kernel_lost_events"].is_null());
+        assert_eq!(record["storage_recovery"]["fault_stage"], "AfterSync");
+        assert_eq!(
+            record["storage_recovery"]["error_codes"],
+            serde_json::json!(["Unavailable", "DataLoss"])
+        );
+        assert_eq!(
+            record["storage_recovery"]["acknowledgement"]["last_sequence"],
+            1
+        );
+        assert_eq!(
+            record["storage_recovery"]["retained"][0]["frames"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert!(owner.owned_capture().is_err());
+        assert_eq!(fs::read(path)?, bytes);
+        Ok(())
+    }
 
     fn capture_case(name: &'static str) -> CaseResult {
         let mut frames = vec![DiagnosticFrame {

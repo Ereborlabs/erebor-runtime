@@ -1857,7 +1857,7 @@ mod tests {
             created_utc_ns: 21,
             witnesses: (0..18)
                 .map(|group| crate::AnalysisWitnessV1 {
-                    identity: identity.clone(),
+                    identity: identity.clone().into(),
                     cursor: group * 32 + 1,
                     expires_utc_ns: 100,
                 })

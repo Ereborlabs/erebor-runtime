@@ -4,7 +4,7 @@ use std::path::Path;
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
-use super::raw::RawJournal;
+use super::raw::{RawIdentity, RawJournal, RawReceipt, RawSource, TraceOutputReceiptV1};
 use super::{source_key, AnalysisSourceReceiptV1, AnalysisStore};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
 
@@ -53,12 +53,7 @@ mod tests {
                     .contiguous_cursor,
                 64
             );
-            assert_eq!(
-                raw.sources[&source_key(&identity)]
-                    .receipt
-                    .contiguous_cursor,
-                65
-            );
+            assert_eq!(raw.sources[&source_key(&identity)].receipt.cursor(), 65);
         }
         drop(store);
         let store = AnalysisStore::open(&root)?;
@@ -78,6 +73,10 @@ pub(super) struct RawBudget {
     pub pins: BTreeMap<u64, ([u8; 16], u64)>,
     pub contexts: BTreeMap<[u8; 16], u64>,
     pub expired: BTreeMap<([u8; 32], u64), u64>,
+    pub diagnostics: BTreeMap<[u8; 16], u64>,
+    pub diagnostic_total: u64,
+    pub trace_reserve: u64,
+    pub trace_slots: usize,
 }
 
 impl RawJournal {
@@ -186,7 +185,7 @@ impl RawJournal {
     fn validate_catalog(&self, writer: &Connection) -> Result<()> {
         let revision = AnalysisStore::read_meta_from(writer, &self.root)?.commit_revision;
         {
-            let mut statement = writer.prepare("SELECT segment_id, committed_end, identity_json, cpu_id, file_name FROM segments")
+            let mut statement = writer.prepare("SELECT segment_id, committed_end, identity_json, cpu_id, file_name, stream_kind FROM segments")
                 .context(AnalysisDatabaseSnafu { operation: "prepare raw segment catalogue check" })?;
             let rows = statement
                 .query_map([], |row| {
@@ -194,8 +193,9 @@ impl RawJournal {
                         row.get::<_, u64>(0)?,
                         row.get::<_, u64>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, u32>(3)?,
+                        row.get::<_, Option<u32>>(3)?,
                         row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
                     ))
                 })
                 .context(AnalysisDatabaseSnafu {
@@ -208,15 +208,14 @@ impl RawJournal {
                 .collect();
             let mut seen = BTreeSet::new();
             for row in rows {
-                let (id, end, json, cpu, name) = row.context(AnalysisDatabaseSnafu {
+                let (id, end, json, cpu, name, kind) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode raw segment catalogue check",
                 })?;
                 seen.insert(id);
                 let entry = projected
                     .get(&id)
                     .ok_or_else(|| self.invalid("a catalogued raw segment is absent"))?;
-                let identity: EvidenceIntakeIdentityV1 =
-                    serde_json::from_str(&json).context(JsonSnafu { path: &self.root })?;
+                let identity = RawIdentity::parse(&kind, &json, &self.root)?;
                 let path = self.segments.file_path(id)?;
                 let current = path
                     .file_name()
@@ -226,7 +225,7 @@ impl RawJournal {
                     && name.split('.').take(4).eq(current.split('.').take(4));
                 if end != entry.reference.offset
                     || identity != entry.identity
-                    || cpu != entry.commit.cpu
+                    || cpu != entry.commit.kind.cpu()
                     || (name != current && !rotated)
                 {
                     return Err(
@@ -239,7 +238,9 @@ impl RawJournal {
             }
         }
         let mut statement = writer.prepare(
-            "SELECT stream_key, identity_json, contiguous_cursor, retained_floor FROM source_receipts"
+            "SELECT stream_key, identity_json, contiguous_cursor, retained_floor, 'records' FROM source_receipts
+             UNION ALL SELECT stream_key, identity_json, last_sequence + CASE WHEN terminal IS NULL THEN 0 ELSE 1 END,
+             retained_floor, 'diagnostic' FROM trace_receipts"
         ).context(AnalysisDatabaseSnafu { operation: "prepare raw source validation" })?;
         let rows = statement
             .query_map([], |row| {
@@ -248,20 +249,20 @@ impl RawJournal {
                     row.get::<_, String>(1)?,
                     row.get::<_, u64>(2)?,
                     row.get::<_, u64>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             })
             .context(AnalysisDatabaseSnafu {
                 operation: "read raw source validation",
             })?;
         for row in rows {
-            let (key, json, accepted, floor) = row.context(AnalysisDatabaseSnafu {
+            let (key, json, accepted, floor, kind) = row.context(AnalysisDatabaseSnafu {
                 operation: "decode raw source validation",
             })?;
             let key: [u8; 32] = key
                 .try_into()
                 .map_err(|_| self.invalid("the raw source key is invalid"))?;
-            let identity: EvidenceIntakeIdentityV1 =
-                serde_json::from_str(&json).context(JsonSnafu { path: &self.root })?;
+            let identity = RawIdentity::parse(&kind, &json, &self.root)?;
             let expired: u64 = writer.query_row(
                 "SELECT COALESCE(SUM(last_cursor::HUGEINT - first_cursor + 1), 0)::UBIGINT FROM expired_ranges WHERE stream_key = ?",
                 params![key.as_slice()], |row| row.get(0)
@@ -283,7 +284,7 @@ impl RawJournal {
             for entry in self
                 .entries
                 .values()
-                .filter(|entry| source_key(&entry.identity) == key)
+                .filter(|entry| entry.identity.key() == key)
             {
                 if entry.commit.spans.iter().any(|span| {
                     span.last > accepted.saturating_add(crate::MAX_PENDING_EVIDENCE_RECORDS)
@@ -355,6 +356,46 @@ impl RawJournal {
     pub(super) fn refresh_budget(&mut self, writer: &Connection) -> Result<()> {
         self.restore_receipts(writer)?;
         let mut budget = RawBudget::default();
+        {
+            let mut statement = writer
+                .prepare(&format!(
+                    "SELECT tenant_id, SUM(bytes)::UBIGINT FROM ({}) GROUP BY tenant_id",
+                    super::quota::TRACE_CHARGES
+                ))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare diagnostic budget",
+                })?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?))
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read diagnostic budget",
+                })?;
+            for row in rows {
+                let (tenant, bytes) = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode diagnostic budget",
+                })?;
+                let tenant = tenant
+                    .try_into()
+                    .map_err(|_| self.invalid("the diagnostic tenant is invalid"))?;
+                budget.diagnostics.insert(tenant, bytes);
+                budget.diagnostic_total = budget
+                    .diagnostic_total
+                    .checked_add(bytes)
+                    .ok_or_else(|| self.invalid("the diagnostic budget is exhausted"))?;
+            }
+            let (unfinished, slots): (u64, u64) = writer.query_row(
+                "SELECT COUNT(*)::UBIGINT, COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
+                 WHERE s.stream_key = r.stream_key AND s.state = 'Live') THEN 1 ELSE 2 END), 0)::UBIGINT
+                 FROM trace_receipts r WHERE terminal IS NULL", [], |row| Ok((row.get(0)?, row.get(1)?))
+            ).context(AnalysisDatabaseSnafu { operation: "read diagnostic reservations" })?;
+            budget.trace_reserve = unfinished
+                .checked_mul(super::quota::TRACE_RESERVE)
+                .ok_or_else(|| self.invalid("the diagnostic reserve is exhausted"))?;
+            budget.trace_slots = usize::try_from(slots)
+                .map_err(|_| self.invalid("the diagnostic slot reserve is exhausted"))?;
+        }
         {
             let mut statement = writer
                 .prepare("SELECT tenant_id, logical_bytes FROM tenant_usage")
@@ -512,11 +553,11 @@ impl RawJournal {
             self.forget_segment(id)?;
         }
         for entry in self.entries.values() {
-            let key = source_key(&entry.identity);
+            let key = entry.identity.key();
             let Some(&floor) = budget.required.get(&key) else {
                 continue;
             };
-            let contiguous = self.sources[&key].receipt.contiguous_cursor;
+            let contiguous = self.sources[&key].receipt.cursor();
             for (index, span) in entry.commit.spans.iter().enumerate() {
                 if span.last <= floor {
                     continue;
@@ -526,10 +567,8 @@ impl RawJournal {
                 } else {
                     0
                 };
-                *budget
-                    .protected
-                    .entry(entry.identity.tenant_id)
-                    .or_default() += u64::from(span.bytes - consumed);
+                *budget.protected.entry(entry.identity.tenant()).or_default() +=
+                    u64::from(span.bytes - consumed);
                 if span.first <= contiguous {
                     budget
                         .oldest
@@ -597,14 +636,13 @@ impl RawJournal {
         let mut binding_revision = 0;
         let mut segments = BTreeMap::new();
         for entry in &pending {
-            let key = source_key(&entry.identity);
+            let key = entry.identity.key();
             sources.entry(key).or_insert(entry.commit.revision);
             segments.insert(entry.reference.id, *entry);
         }
         for (id, entry) in segments {
-            let key = source_key(&entry.identity);
-            let json =
-                serde_json::to_string(&entry.identity).context(JsonSnafu { path: &self.root })?;
+            let key = entry.identity.key();
+            let json = entry.identity.json(&self.root)?;
             let prior: Option<u64> = transaction
                 .query_row(
                     "SELECT committed_end FROM segments WHERE segment_id = ? AND state = 'Live'",
@@ -625,18 +663,19 @@ impl RawJournal {
                     "UPDATE segments SET committed_end = ?, file_name = ?, sealed = ? WHERE segment_id = ?",
                     params![entry.reference.offset, name, !name.ends_with(".open"), id],
                 ).context(AnalysisDatabaseSnafu { operation: "advance projected raw segment" })?;
-                *charges.entry(entry.identity.tenant_id).or_default() +=
+                *charges.entry(entry.identity.tenant()).or_default() +=
                     (entry.reference.offset - prior) as i64;
             } else {
                 transaction
                     .execute(
-                        "INSERT INTO segments VALUES (?, ?, ?, ?, ?, 'records', 'Live', ?, ?, ?)",
+                        "INSERT INTO segments VALUES (?, ?, ?, ?, ?, ?, 'Live', ?, ?, ?)",
                         params![
                             id,
                             key.as_slice(),
-                            entry.identity.tenant_id.as_slice(),
+                            entry.identity.tenant().as_slice(),
                             json,
-                            entry.commit.cpu,
+                            entry.commit.kind.cpu(),
+                            entry.identity.kind(),
                             !name.ends_with(".open"),
                             entry.reference.offset,
                             name
@@ -645,13 +684,51 @@ impl RawJournal {
                     .context(AnalysisDatabaseSnafu {
                         operation: "publish raw segment",
                     })?;
-                *charges.entry(entry.identity.tenant_id).or_default() +=
+                *charges.entry(entry.identity.tenant()).or_default() +=
                     256 + json.len() as i64 + entry.reference.offset as i64;
             }
         }
         for (key, first_revision) in sources {
             let source = &self.sources[&key];
-            let receipt = &source.receipt;
+            let RawReceipt::Evidence(receipt) = &source.receipt else {
+                let entry = self
+                    .entries
+                    .range(..=group_revision)
+                    .rev()
+                    .map(|(_, entry)| entry)
+                    .find(|entry| entry.identity.key() == key)
+                    .ok_or_else(|| self.invalid("the diagnostic projection entry is absent"))?;
+                let commit = self.read_entry(entry)?;
+                let RawReceipt::Diagnostic(receipt) = self.commit_receipt(entry, &commit)? else {
+                    return Err(self.invalid("the diagnostic projection receipt is invalid"));
+                };
+                let terminal = receipt
+                    .terminal
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .context(JsonSnafu { path: &self.root })?;
+                let prior: Option<String> = transaction
+                    .query_row(
+                        "SELECT terminal FROM trace_receipts WHERE stream_key = ?",
+                        params![key.as_slice()],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read diagnostic terminal charge",
+                    })?;
+                if prior.is_none() {
+                    if let Some(terminal) = &terminal {
+                        *charges.entry(receipt.identity.tenant_id).or_default() +=
+                            terminal.len() as i64 - super::quota::TRACE_RESERVE as i64;
+                    }
+                }
+                transaction.execute(
+                    "UPDATE trace_receipts SET last_sequence = ?, output_bytes = ?, terminal = ?, commit_revision = ? WHERE stream_key = ?",
+                    params![receipt.last_sequence, receipt.output_bytes, terminal, receipt.commit_revision, key.as_slice()],
+                ).context(AnalysisDatabaseSnafu { operation: "publish diagnostic receipt" })?;
+                continue;
+            };
             let json =
                 serde_json::to_string(&receipt.identity).context(JsonSnafu { path: &self.root })?;
             let mut contiguous = AnalysisStore::read_receipt_from(
@@ -717,11 +794,20 @@ impl RawJournal {
         if binding_revision != 0 {
             AnalysisStore::record_revision(&transaction, binding_revision, &["source_bindings"])?;
         }
-        AnalysisStore::record_revision(
-            &transaction,
-            group_revision,
-            &["events", "source_receipts"],
-        )?;
+        let evidence = pending
+            .iter()
+            .any(|entry| matches!(entry.identity, RawIdentity::Evidence(_)));
+        let diagnostic = pending
+            .iter()
+            .any(|entry| matches!(entry.identity, RawIdentity::Diagnostic(_)));
+        let mut relations = Vec::new();
+        if evidence {
+            relations.extend(["events", "source_receipts"]);
+        }
+        if diagnostic {
+            relations.extend(["trace_output", "trace_receipts"]);
+        }
+        AnalysisStore::record_revision(&transaction, group_revision, &relations)?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit raw catalogue publication",
         })?;
@@ -767,22 +853,94 @@ impl RawJournal {
             };
             let key = source_key(&receipt.identity);
             if let Some(source) = self.sources.get_mut(&key) {
-                if source.receipt.identity != receipt.identity
-                    || source.receipt.cpu_id != receipt.cpu_id
-                {
+                let RawReceipt::Evidence(saved) = &mut source.receipt else {
+                    return AnalysisStore::reject_path(
+                        &self.root,
+                        "the raw receipt kind conflicts",
+                    );
+                };
+                if saved.identity != receipt.identity || saved.cpu_id != receipt.cpu_id {
                     return AnalysisStore::reject_path(
                         &self.root,
                         "the durable raw receipt conflicts with its segments",
                     );
                 }
-                source.receipt.contiguous_cursor = source
-                    .receipt
-                    .contiguous_cursor
-                    .max(receipt.contiguous_cursor);
-                source.receipt.coverage_revision = receipt.coverage_revision;
-                source.receipt.retained_floor = receipt.retained_floor;
+                saved.contiguous_cursor = saved.contiguous_cursor.max(receipt.contiguous_cursor);
+                saved.coverage_revision = receipt.coverage_revision;
+                saved.retained_floor = receipt.retained_floor;
             } else {
                 self.sources.insert(key, receipt.into());
+            }
+        }
+        let mut statement = writer.prepare("SELECT identity_json, last_sequence, output_bytes, terminal, retained_floor, commit_revision FROM trace_receipts")
+            .context(AnalysisDatabaseSnafu { operation: "prepare diagnostic receipts" })?;
+        let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
+            operation: "read diagnostic receipts",
+        })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "read diagnostic receipt",
+        })? {
+            let json: String = row.get(0).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic identity",
+            })?;
+            let identity: crate::TraceIdentityV1 =
+                serde_json::from_str(&json).context(JsonSnafu { path: &self.root })?;
+            let terminal: Option<String> = row.get(3).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic terminal",
+            })?;
+            let receipt = TraceOutputReceiptV1 {
+                identity: identity.clone(),
+                last_sequence: row.get(1).context(AnalysisDatabaseSnafu {
+                    operation: "read diagnostic sequence",
+                })?,
+                output_bytes: row.get(2).context(AnalysisDatabaseSnafu {
+                    operation: "read diagnostic byte count",
+                })?,
+                terminal: terminal
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .context(JsonSnafu { path: &self.root })?,
+                retained_floor: row.get(4).context(AnalysisDatabaseSnafu {
+                    operation: "read diagnostic retained floor",
+                })?,
+                commit_revision: row.get(5).context(AnalysisDatabaseSnafu {
+                    operation: "read diagnostic revision",
+                })?,
+            };
+            let key = RawIdentity::Diagnostic(identity).key();
+            if let Some(source) = self.sources.get_mut(&key) {
+                let RawReceipt::Diagnostic(saved) = &mut source.receipt else {
+                    return AnalysisStore::reject_path(
+                        &self.root,
+                        "the diagnostic receipt kind conflicts",
+                    );
+                };
+                if saved.identity != receipt.identity
+                    || (saved.commit_revision == receipt.commit_revision
+                        && (saved.last_sequence != receipt.last_sequence
+                            || saved.output_bytes != receipt.output_bytes
+                            || saved.terminal != receipt.terminal))
+                {
+                    return AnalysisStore::reject_path(
+                        &self.root,
+                        "the diagnostic receipt conflicts with its segments",
+                    );
+                }
+                if saved.commit_revision < receipt.commit_revision {
+                    *saved = receipt;
+                } else {
+                    saved.retained_floor = receipt.retained_floor;
+                }
+            } else {
+                self.sources.insert(
+                    key,
+                    RawSource {
+                        receipt: RawReceipt::Diagnostic(receipt),
+                        stream: 0,
+                        sequence: 0,
+                    },
+                );
             }
         }
         self.refresh_receipts()

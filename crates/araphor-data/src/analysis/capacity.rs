@@ -9,6 +9,7 @@ use crate::{IoSnafu, Result, StorageCapacitySnafu};
 
 const WRITE_RESERVE: u64 = 256 * 1024 * 1024;
 pub(super) const MAX_STORAGE_ENTRIES: usize = 4096;
+pub(super) const MAX_DIAGNOSTIC_ENTRIES: usize = MAX_STORAGE_ENTRIES / 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -72,6 +73,14 @@ impl StorageLimitsV1 {
     }
 
     pub(super) fn check_append(&self, usage: StorageUsageV1, bytes: u64) -> Result<()> {
+        self.check_pending(usage, bytes, false)
+    }
+
+    pub(super) fn check_terminal(&self, usage: StorageUsageV1, bytes: u64) -> Result<()> {
+        self.check_pending(usage, bytes, true)
+    }
+
+    fn check_pending(&self, usage: StorageUsageV1, bytes: u64, maintenance: bool) -> Result<()> {
         let projected = usage
             .file_bytes
             .checked_add(bytes)
@@ -88,7 +97,13 @@ impl StorageLimitsV1 {
                 }
                 .build()
             })?;
-        self.check(projected, false)
+        if maintenance && projected.file_bytes > self.disk_max_bytes {
+            return StorageCapacitySnafu {
+                resource: "data files",
+            }
+            .fail();
+        }
+        self.check(projected, maintenance)
     }
 
     pub(super) fn check_copy(&self, available: u64, bytes: u64) -> Result<()> {
@@ -134,6 +149,50 @@ mod tests {
         EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, RetentionLimitsV1,
         ValidatedEvidenceBatchV1,
     };
+
+    #[test]
+    fn observability_terminal_reserve() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let limits = StorageLimitsV1::default();
+        let usage = StorageUsageV1 {
+            file_bytes: limits.disk_max_bytes - 1024,
+            allocated_bytes: 0,
+            available_bytes: limits.maintenance_bytes() + 1024,
+        };
+        assert!(limits.check_append(usage, 1024).is_err());
+        limits.check_terminal(usage, 1024)?;
+        assert!(limits.check_terminal(usage, 1025).is_err());
+        assert!(limits
+            .check_terminal(
+                StorageUsageV1 {
+                    available_bytes: usage.available_bytes - 1,
+                    ..usage
+                },
+                1024
+            )
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_entry_partition() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("data"))?;
+        let baseline = store.storage_with_reserve(1, 0)?;
+        assert_eq!(
+            store
+                .storage_with_reserve(1, MAX_DIAGNOSTIC_ENTRIES)?
+                .file_bytes,
+            baseline.file_bytes
+        );
+        assert!(matches!(
+            store.storage_with_reserve(0, MAX_DIAGNOSTIC_ENTRIES + 1),
+            Err(crate::Error::StorageCapacity {
+                resource: "diagnostic storage entries",
+                ..
+            })
+        ));
+        Ok(())
+    }
 
     #[test]
     fn analysis_store_copy_limits() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -616,7 +675,21 @@ impl AnalysisStore {
         self.storage_with_entries(0)
     }
 
-    pub(super) fn storage_with_entries(&self, mut entries: usize) -> Result<StorageUsageV1> {
+    pub(super) fn storage_with_entries(&self, entries: usize) -> Result<StorageUsageV1> {
+        self.storage_with_reserve(entries, 0)
+    }
+
+    pub(super) fn storage_with_reserve(
+        &self,
+        mut entries: usize,
+        mut diagnostics: usize,
+    ) -> Result<StorageUsageV1> {
+        if diagnostics > MAX_DIAGNOSTIC_ENTRIES {
+            return StorageCapacitySnafu {
+                resource: "diagnostic storage entries",
+            }
+            .fail();
+        }
         let mut usage = StorageUsageV1 {
             available_bytes: StorageUsageV1::free_bytes(&self.root)?,
             ..Default::default()
@@ -625,16 +698,31 @@ impl AnalysisStore {
         while let Some(directory) = pending.pop() {
             for entry in fs::read_dir(&directory).context(IoSnafu { path: &directory })? {
                 let entry = entry.context(IoSnafu { path: &directory })?;
-                entries += 1;
-                if entries > MAX_STORAGE_ENTRIES {
-                    return self.reject("the data directory exceeds its entry bound");
-                }
                 let path = entry.path();
                 let metadata = match fs::symlink_metadata(&path) {
                     Ok(metadata) => metadata,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(source) => return Err(source).context(IoSnafu { path }),
                 };
+                if metadata.is_file()
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.split('.').nth(1) == Some("d"))
+                {
+                    diagnostics = diagnostics.saturating_add(1);
+                } else {
+                    entries = entries.saturating_add(1);
+                }
+                if entries > MAX_STORAGE_ENTRIES {
+                    return self.reject("the data directory exceeds its entry bound");
+                }
+                if diagnostics > MAX_DIAGNOSTIC_ENTRIES {
+                    return StorageCapacitySnafu {
+                        resource: "diagnostic storage entries",
+                    }
+                    .fail();
+                }
                 if metadata.is_dir() {
                     pending.push(path);
                 } else if !metadata.is_file() {

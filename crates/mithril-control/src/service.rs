@@ -1762,16 +1762,10 @@ impl ControlPlane {
         if self.trace_signer.is_none() {
             return Err(Status::failed_precondition("diagnostics are disabled"));
         }
-        let store = self.decommission_store()?;
-        if !store
-            .discovery_recovered
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Err(Status::unavailable(
-                "diagnostics wait for Discovery artifact recovery",
-            ));
-        }
-        Ok(crate::TraceOwner::new(store.clone()))
+        let store = self
+            .analysis_store()
+            .ok_or_else(|| Status::unavailable("diagnostic data storage is unavailable"))?;
+        Ok(crate::TraceOwner::new(store))
     }
 
     pub fn accept_trace(
@@ -1779,13 +1773,18 @@ impl ControlPlane {
         request: crate::TraceRequestV1,
         grant: crate::TraceExecutionGrantV1,
         approval: Option<crate::TraceApprovalV1>,
-    ) -> Result<crate::DiscoveryHeadV1, Status> {
+    ) -> Result<araphor_data::TraceStateV1, Status> {
         let owner = self.trace_owner()?;
         // Retried acceptance uses its frozen inputs even if the live inventory changed.
-        if owner
-            .request_head(request.tenant_id, request.request_id)
-            .is_err()
-        {
+        let absent = match owner.request_state(request.tenant_id, request.request_id) {
+            Ok(_) => false,
+            Err(crate::Error::Observability {
+                code: crate::TraceErrorCodeV1::Missing,
+                ..
+            }) => true,
+            Err(error) => return Err(trace_status(error)),
+        };
+        if absent {
             let inventory = self.workload_inventory();
             let state = self.lock_state()?;
             for target in &request.targets {
@@ -1926,7 +1925,7 @@ impl ControlPlane {
         let mut reply = crate::TraceExchangeReplyV1::default();
         if let Some(upload) = exchange.output {
             // The current enrolled node can return its retained output from an earlier boot.
-            let head = owner
+            let receipt = owner
                 .append(
                     tenant,
                     upload.request_id,
@@ -1936,12 +1935,10 @@ impl ControlPlane {
                     upload.batch.clone(),
                 )
                 .map_err(trace_status)?;
-            let (revision, _) = crate::TraceRevisionV1::read(self.decommission_store()?, &head)
-                .map_err(trace_status)?;
             reply.acknowledgement = Some(crate::TraceAcknowledgementV1 {
                 execution_id: upload.batch.execution_id,
-                last_sequence: revision.last_sequence,
-                terminal: revision.terminal,
+                last_sequence: receipt.last_sequence,
+                terminal: receipt.terminal,
             });
         }
         if let Some(resolved) = exchange.resolved {
@@ -2025,11 +2022,25 @@ impl ControlPlane {
 
 fn trace_status(error: crate::Error) -> Status {
     let code = match &error {
-        crate::Error::DataStore { source, .. }
-            if matches!(source.as_ref(), araphor_data::Error::TraceInvalid { .. }) =>
-        {
-            tonic::Code::InvalidArgument
-        }
+        crate::Error::DataStore { source, .. } => match source.as_ref() {
+            araphor_data::Error::TraceInvalid { .. } => tonic::Code::InvalidArgument,
+            araphor_data::Error::AnalysisConflict { .. } => tonic::Code::AlreadyExists,
+            araphor_data::Error::RetainedRangeExpired { .. } => tonic::Code::OutOfRange,
+            araphor_data::Error::StorageCapacity { .. }
+            | araphor_data::Error::ProtectedInputCapacity { .. }
+            | araphor_data::Error::AnalysisBusy { .. } => tonic::Code::ResourceExhausted,
+            araphor_data::Error::AnalysisReadCancelled { .. } => tonic::Code::Cancelled,
+            araphor_data::Error::AnalysisReadDeadline { .. } => tonic::Code::DeadlineExceeded,
+            araphor_data::Error::AnalysisState { .. } | araphor_data::Error::Json { .. } => {
+                tonic::Code::DataLoss
+            }
+            araphor_data::Error::RetentionUnavailable { .. }
+            | araphor_data::Error::AnalysisDatabase { .. }
+            | araphor_data::Error::Io { .. } => tonic::Code::Unavailable,
+            _ => tonic::Code::Internal,
+        },
+        crate::Error::TraceEncoding { .. } => tonic::Code::Internal,
+        crate::Error::TraceDecoding { .. } => tonic::Code::DataLoss,
         crate::Error::Observability { code, .. } => match code {
             crate::TraceErrorCodeV1::Denied => tonic::Code::PermissionDenied,
             crate::TraceErrorCodeV1::Conflict => tonic::Code::AlreadyExists,
@@ -2916,13 +2927,61 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+    #[test]
+    fn observability_recovery_storage_status() {
+        let errors = [
+            (
+                araphor_data::Error::TraceInvalid {
+                    reason: "invalid frame",
+                    location: snafu::Location::default(),
+                },
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                araphor_data::Error::AnalysisConflict {
+                    location: snafu::Location::default(),
+                },
+                tonic::Code::AlreadyExists,
+            ),
+            (
+                araphor_data::Error::StorageCapacity {
+                    resource: "diagnostic bytes",
+                    location: snafu::Location::default(),
+                },
+                tonic::Code::ResourceExhausted,
+            ),
+            (
+                araphor_data::Error::RetainedRangeExpired {
+                    first_cursor: 1,
+                    last_cursor: 2,
+                    location: snafu::Location::default(),
+                },
+                tonic::Code::OutOfRange,
+            ),
+            (
+                araphor_data::Error::RetentionUnavailable {
+                    location: snafu::Location::default(),
+                },
+                tonic::Code::Unavailable,
+            ),
+            (
+                araphor_data::Error::Io {
+                    path: "diagnostic.segment".into(),
+                    source: std::io::Error::from(std::io::ErrorKind::StorageFull),
+                    location: snafu::Location::default(),
+                },
+                tonic::Code::Unavailable,
+            ),
+        ];
+        for (error, expected) in errors {
+            assert_eq!(super::trace_status(error.into()).code(), expected);
+        }
+    }
+
     #[tokio::test]
     async fn observability_recovery_session_dispatch_ack_and_revocation() -> TestResult {
         use crate::observability::owner::tests::{grant, request};
-        use crate::{
-            DiscoveryOwner, TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1,
-            TraceUploadV1,
-        };
+        use crate::{TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceUploadV1};
         let directory = TempDir::new()?;
         let store = crate::ControlStore::open(directory.path())?;
         let key = SigningKey::from_bytes(&[23; 32]);
@@ -2947,8 +3006,8 @@ mod tests {
             store.clone(),
         )?
         .with_trace_signer("trace-key".into(), 1, key.clone())?;
-        assert!(control.trace_owner().is_err());
-        let _discovery = DiscoveryOwner::open(store.clone())?;
+        assert!(control.trace_owner().is_ok());
+        assert!(!directory.path().join("discovery-index.sqlite").exists());
         let context = NodeSessionContext {
             node_id: "node-a".into(),
             node_boot_id: vec![2; 16],
@@ -3030,7 +3089,7 @@ mod tests {
             reply,
             control.exchange_trace("node-a", &context, exchange.clone())?
         );
-        let mut changed = exchange;
+        let mut changed = exchange.clone();
         changed
             .output
             .as_mut()
@@ -3042,14 +3101,21 @@ mod tests {
             .cancel([1; 16], request.request_id, "operator", true)?;
         assert_eq!(
             control
-                .exchange_trace("node-a", &context, TraceExchangeV1::default())?
+                .exchange_trace(
+                    "node-a",
+                    &context,
+                    TraceExchangeV1 {
+                        retained: vec![id],
+                        ..TraceExchangeV1::default()
+                    }
+                )?
                 .cancel,
             vec![id]
         );
         use crate::node_diagnostics_server::NodeDiagnostics as _;
         let unauthenticated = control
             .exchange(Request::new(crate::NodeDiagnosticRequest {
-                session: Some(context),
+                session: Some(context.clone()),
                 payload_json: b"{}".to_vec(),
             }))
             .await;
@@ -3060,6 +3126,14 @@ mod tests {
                 .code(),
             tonic::Code::Unauthenticated
         );
+        assert!(store.discovery_heads([1; 16])?.is_empty());
+        assert!(!directory.path().join("discovery-index.sqlite").exists());
+        let mut unavailable = control;
+        unavailable.evidence = None;
+        let error = unavailable
+            .exchange_trace("node-a", &context, exchange)
+            .expect_err("an unavailable data owner cannot acknowledge output");
+        assert_eq!(error.code(), tonic::Code::Unavailable);
         Ok(())
     }
 

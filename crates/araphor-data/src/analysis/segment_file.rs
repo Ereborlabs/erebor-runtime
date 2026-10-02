@@ -16,6 +16,65 @@ pub struct SegmentFile {
 }
 
 impl SegmentFile {
+    pub(super) fn encode_raw(identity: &super::raw::RawIdentity) -> Result<Vec<u8>> {
+        let identity = match identity {
+            super::raw::RawIdentity::Evidence(identity) => return Self::encode_identity(identity),
+            super::raw::RawIdentity::Diagnostic(identity) => identity,
+        };
+        identity.validate()?;
+        let json = serde_json::to_vec(identity).context(crate::JsonSnafu {
+            path: Path::new("<diagnostic-identity>"),
+        })?;
+        if json.len() > 4096 {
+            return Self::invalid(
+                Path::new("<diagnostic-identity>"),
+                "the diagnostic header is too large",
+            );
+        }
+        let mut bytes = Vec::with_capacity(json.len() + 16);
+        bytes.extend_from_slice(b"ATRACE1\0");
+        bytes.extend_from_slice(&(json.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&json);
+        bytes.extend_from_slice(&crc32c::crc32c(&bytes).to_be_bytes());
+        Ok(bytes)
+    }
+
+    pub(super) fn decode_raw(
+        kind: &str,
+        bytes: &[u8],
+        path: &Path,
+    ) -> Result<(super::raw::RawIdentity, usize)> {
+        if kind == "records" {
+            return Self::decode_identity(bytes, path)
+                .map(|(identity, size)| (identity.into(), size));
+        }
+        if kind != "diagnostic" || bytes.len() < 16 || &bytes[..8] != b"ATRACE1\0" {
+            return Self::invalid(path, "the diagnostic segment header is invalid");
+        }
+        let size = u32::from_be_bytes(bytes[8..12].try_into().unwrap_or_default()) as usize;
+        if size > 4096 || bytes.len() < size + 16 {
+            return Self::invalid(path, "the diagnostic segment header is incomplete");
+        }
+        let end = size + 12;
+        let checksum = u32::from_be_bytes(bytes[end..end + 4].try_into().unwrap_or_default());
+        if crc32c::crc32c(&bytes[..end]) != checksum {
+            return Self::invalid(path, "the diagnostic segment header checksum is invalid");
+        }
+        let identity: crate::TraceIdentityV1 =
+            serde_json::from_slice(&bytes[12..end]).context(crate::JsonSnafu { path })?;
+        identity.validate().map_err(|_| {
+            AnalysisStateSnafu {
+                path,
+                reason: "the stored diagnostic identity is invalid",
+            }
+            .build()
+        })?;
+        if serde_json::to_vec(&identity).context(crate::JsonSnafu { path })? != bytes[12..end] {
+            return Self::invalid(path, "the diagnostic segment header is not canonical");
+        }
+        Ok((identity.into(), end + 4))
+    }
+
     pub fn encode_identity(identity: &crate::EvidenceIntakeIdentityV1) -> Result<Vec<u8>> {
         let node_id_bytes = identity.node_id.as_bytes();
         let node_id_len = u16::try_from(node_id_bytes.len()).map_err(|error| {

@@ -209,7 +209,7 @@ impl DataStoreQualification {
             body: b"quota recovery".to_vec(),
             created_utc_ns: START,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: identity.clone(),
+                identity: identity.clone().into(),
                 cursor: accepted,
                 expires_utc_ns: START + 96 * HOUR,
             }],

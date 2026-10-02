@@ -216,7 +216,7 @@ mod tests {
             created_utc_ns: 2,
             context_refs: vec![],
             witnesses: vec![AnalysisWitnessV1 {
-                identity: input.scope.identity.clone(),
+                identity: input.scope.identity.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 100,
             }],

@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
-use super::{source_key, AnalysisRecordV1, AnalysisStore};
-use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, Result};
+use super::{AnalysisRecordV1, AnalysisStore};
+#[cfg(test)]
+use crate::EvidenceIntakeIdentityV1;
+use crate::{AnalysisDatabaseSnafu, IoSnafu, Result};
 
 pub(super) struct SegmentRange {
     pub(super) segment_id: u64,
@@ -75,6 +77,7 @@ impl AnalysisStore {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn raw_ranges(
         &self,
         writer: &Connection,
@@ -88,7 +91,7 @@ impl AnalysisStore {
             .raw
             .lock()
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
-        raw.select_ranges(identity, first, last, revision, None, limit)
+        raw.select_ranges(&identity.clone().into(), first, last, revision, None, limit)
     }
 
     pub(super) fn remove_segment(
@@ -116,7 +119,7 @@ impl AnalysisStore {
                 let expired: bool = writer.query_row(
                     "SELECT EXISTS(SELECT 1 FROM expired_ranges WHERE segment_id = ? AND stream_key = ?
                         AND tenant_id = ? AND first_cursor <= ? AND last_cursor >= ?)",
-                    params![segment_id, source_key(&entry.identity).as_slice(), entry.identity.tenant_id.as_slice(),
+                    params![segment_id, entry.identity.key().as_slice(), entry.identity.tenant().as_slice(),
                         span.first, span.last], |row| row.get(0)
                 ).context(AnalysisDatabaseSnafu { operation: "check segment expiry coverage" })?;
                 if !expired {
@@ -323,7 +326,7 @@ mod tests {
             body: b"finding".to_vec(),
             created_utc_ns: 101,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: identity.clone(),
+                identity: identity.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 300,
             }],
@@ -392,7 +395,7 @@ mod tests {
             body: b"finding".to_vec(),
             created_utc_ns: 101,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: identity.clone(),
+                identity: identity.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 300,
             }],

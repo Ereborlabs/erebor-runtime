@@ -694,7 +694,7 @@ impl QueryFollowQualification {
             body: b"query witness".to_vec(),
             created_utc_ns: 3 * MINUTE,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: source.clone(),
+                identity: source.clone().into(),
                 cursor: 1,
                 expires_utc_ns: expires,
             }],

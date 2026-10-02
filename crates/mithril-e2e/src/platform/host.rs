@@ -93,10 +93,7 @@ impl Host {
             .and_then(|participant| participant.target.clone())
             .ok_or_else(|| format!("failure target resolution failed: {targets:?}"))?;
         let owner = mithril_control::TraceOwner::new(
-            control
-                .policy_desired_state()
-                .ok_or("missing policy store")?
-                .store(),
+            control.analysis_store().ok_or("missing analysis store")?,
         );
         let mut records = Vec::new();
         for case in [
@@ -351,10 +348,7 @@ impl Host {
             .and_then(|participant| participant.target.clone())
             .ok_or_else(|| format!("target resolution failed: {targets:?}"))?;
         let owner = mithril_control::TraceOwner::new(
-            control
-                .policy_desired_state()
-                .ok_or("missing policy store owner")?
-                .store(),
+            control.analysis_store().ok_or("missing analysis store")?,
         );
         let mut records = Vec::new();
         let mut pairs = Vec::new();

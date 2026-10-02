@@ -116,7 +116,7 @@ fn query_scope_pin_deletion() -> TestResult {
         body: b"witness".to_vec(),
         created_utc_ns: 300,
         witnesses: vec![AnalysisWitnessV1 {
-            identity: fixture.source.clone(),
+            identity: fixture.source.clone().into(),
             cursor: 1,
             expires_utc_ns: expires,
         }],
@@ -197,7 +197,7 @@ fn query_scope_pin_race() -> TestResult {
             body: b"witness".to_vec(),
             created_utc_ns: 200,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: fixture.source.clone(),
+                identity: fixture.source.clone().into(),
                 cursor: 1,
                 expires_utc_ns: expires,
             }],

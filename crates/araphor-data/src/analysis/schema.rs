@@ -43,21 +43,26 @@ impl AnalysisStore {
         Self::validate_sources(writer, root)?;
         Self::validate_contexts(writer, root)?;
         Self::validate_traces(writer, root)?;
+        Self::validate_trace_receipts(writer, root)?;
         let checks = [
             ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) <> 32"),
             ("invalid segment identity or state", "SELECT 1 FROM segments e
-                LEFT JOIN source_receipts s USING (stream_key)
+                LEFT JOIN (SELECT stream_key, tenant_id, identity_json, cpu_id, 'records' AS kind FROM source_receipts
+                    UNION ALL SELECT stream_key, tenant_id, identity_json, NULL, 'diagnostic' FROM trace_receipts) s USING (stream_key)
                 WHERE e.segment_id = 0 OR e.segment_id >= (SELECT next_segment_id FROM store_meta)
-                OR e.state NOT IN ('Live', 'Deleting') OR e.stream_kind <> 'records'
+                OR e.state NOT IN ('Live', 'Deleting') OR e.stream_kind <> s.kind
                 OR e.committed_end < 70 OR e.committed_end > 16777216
                 OR s.stream_key IS NULL OR e.tenant_id <> s.tenant_id
-                OR e.cpu_id <> s.cpu_id OR e.identity_json <> s.identity_json"),
+                OR e.cpu_id IS DISTINCT FROM s.cpu_id OR e.identity_json <> s.identity_json"),
             ("invalid coverage source or digest", "SELECT 1 FROM coverage c LEFT JOIN source_receipts s USING (stream_key)
                 WHERE s.stream_key IS NULL OR c.tenant_id <> s.tenant_id OR c.revision = 0
                 OR c.revision > s.coverage_revision OR sha256(c.report) <> lower(hex(c.report_sha256))"),
             ("invalid coverage receipt", "SELECT 1 FROM source_receipts s WHERE s.coverage_revision <>
                 COALESCE((SELECT MAX(c.revision) FROM coverage c WHERE c.stream_key = s.stream_key), 0)"),
-            ("invalid expiry range", "SELECT 1 FROM expired_ranges x LEFT JOIN source_receipts s USING (stream_key)
+            ("invalid expiry range", "SELECT 1 FROM expired_ranges x LEFT JOIN (
+                SELECT stream_key, tenant_id, contiguous_cursor FROM source_receipts UNION ALL
+                SELECT stream_key, tenant_id, last_sequence + CASE WHEN terminal IS NULL THEN 0 ELSE 1 END FROM trace_receipts
+                ) s USING (stream_key)
                 WHERE s.stream_key IS NULL OR x.tenant_id <> s.tenant_id OR x.first_cursor = 0 OR x.segment_id = 0
                 OR x.segment_id >= (SELECT next_segment_id FROM store_meta)
                 OR x.last_cursor < x.first_cursor OR x.last_cursor > s.contiguous_cursor
@@ -301,12 +306,133 @@ impl AnalysisStore {
         Ok(())
     }
 
+    fn validate_trace_receipts(writer: &Connection, root: &Path) -> Result<()> {
+        let invalid: bool = writer.query_row(
+            "SELECT (SELECT COUNT(*) FROM trace_receipts) > 1024 OR EXISTS (
+             SELECT 1 FROM trace_receipts WHERE octet_length(stream_key) <> 32 OR octet_length(tenant_id) <> 16
+             OR octet_length(encode(identity_json)) > 4096 OR octet_length(encode(terminal)) > 4096
+             OR last_sequence > 4096 OR output_bytes > 16777216 OR output_bytes < last_sequence
+             OR retained_floor > last_sequence + CASE WHEN terminal IS NULL THEN 0 ELSE 1 END
+             OR commit_revision > (SELECT commit_revision FROM store_meta)
+             OR ((last_sequence > 0 OR terminal IS NOT NULL) AND commit_revision = 0))", [], |row| row.get(0)
+        ).context(AnalysisDatabaseSnafu { operation: "validate diagnostic receipt bounds" })?;
+        if invalid {
+            return Self::reject_path(root, "the stored diagnostic receipt bounds are invalid");
+        }
+        let mut statement = writer.prepare("SELECT stream_key, tenant_id, identity_json, last_sequence, output_bytes, terminal FROM trace_receipts")
+            .context(AnalysisDatabaseSnafu { operation: "prepare diagnostic receipt validation" })?;
+        let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
+            operation: "read diagnostic receipt validation",
+        })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "read diagnostic validation row",
+        })? {
+            let key: Vec<u8> = row.get(0).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic source key",
+            })?;
+            let tenant: Vec<u8> = row.get(1).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic source tenant",
+            })?;
+            let json: String = row.get(2).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic source identity",
+            })?;
+            let identity: crate::TraceIdentityV1 = serde_json::from_str(&json).map_err(|_| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the stored diagnostic identity is invalid",
+                }
+                .build()
+            })?;
+            let source = super::raw::RawIdentity::Diagnostic(identity.clone());
+            if !source.valid() || key != source.key() || tenant != identity.tenant_id {
+                return Self::reject_path(root, "the diagnostic receipt identity differs");
+            }
+            let (_, intent) =
+                Self::read_trace_intent(writer, root, identity.tenant_id, identity.request_id)?
+                    .ok_or_else(|| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "the diagnostic intent is absent",
+                        }
+                        .build()
+                    })?;
+            if !intent
+                .bindings
+                .iter()
+                .any(|binding| binding.identity == identity)
+            {
+                return Self::reject_path(root, "the diagnostic receipt has no admitted binding");
+            }
+            let last: u64 = row.get(3).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic last sequence",
+            })?;
+            let bytes: u64 = row.get(4).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic output bytes",
+            })?;
+            let terminal: Option<String> = row.get(5).context(AnalysisDatabaseSnafu {
+                operation: "read diagnostic lifecycle",
+            })?;
+            if let Some(json) = terminal {
+                let terminal: crate::TraceTerminalV1 =
+                    serde_json::from_str(&json).map_err(|_| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "the stored diagnostic terminal is invalid",
+                        }
+                        .build()
+                    })?;
+                if terminal.validate().is_err()
+                    || terminal.execution_id != identity.execution_id
+                    || terminal.last_sequence != last
+                    || terminal.output_bytes != bytes
+                    || serde_json::to_string(&terminal).context(JsonSnafu { path: root })? != json
+                {
+                    return Self::reject_path(
+                        root,
+                        "the diagnostic terminal differs from its receipt",
+                    );
+                }
+            } else if last == 0 && bytes != 0 {
+                return Self::reject_path(root, "the empty diagnostic receipt has output bytes");
+            }
+        }
+        let mut statement =
+            writer
+                .prepare("SELECT bindings FROM traces")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare admitted diagnostic bindings",
+                })?;
+        let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
+            operation: "read admitted diagnostic bindings",
+        })?;
+        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "read admitted binding row",
+        })? {
+            let json: String = row.get(0).context(AnalysisDatabaseSnafu {
+                operation: "read stored diagnostic bindings",
+            })?;
+            let bindings: Vec<super::TraceBindingV1> =
+                serde_json::from_str(&json).context(JsonSnafu { path: root })?;
+            for binding in bindings {
+                let source = super::raw::RawIdentity::Diagnostic(binding.identity);
+                let present: bool = writer.query_row("SELECT EXISTS(SELECT 1 FROM trace_receipts WHERE stream_key = ? AND identity_json = ?)",
+                    params![source.key().as_slice(), source.json(root)?], |row| row.get(0))
+                    .context(AnalysisDatabaseSnafu { operation: "validate admitted diagnostic reservation" })?;
+                if !present {
+                    return Self::reject_path(root, "the admitted diagnostic receipt is absent");
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_tables(writer: &Connection) -> Result<()> {
         let projections = [
             "tenant_id, logical_bytes, coverage_count, context_count, result_count FROM tenant_usage",
             "singleton, store_uuid, schema_version, recovery_epoch, commit_revision FROM store_meta",
             "relation_name, last_changed_revision FROM relation_revisions",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor FROM source_receipts",
+            "stream_key, identity_json, tenant_id, last_sequence, output_bytes, terminal, retained_floor, commit_revision FROM trace_receipts",
             "epoch_key, tenant_id, node_boot_id, label_epoch FROM source_bindings",
             "next_segment_id FROM store_meta",
             "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end FROM segments",
@@ -353,7 +479,7 @@ impl AnalysisStore {
         Ok(raw
             .sources
             .values()
-            .map(|source| &source.receipt.identity)
+            .filter_map(|source| source.receipt.evidence().map(|receipt| &receipt.identity))
             .find(|identity| {
                 identity.tenant_id == tenant_id
                     && identity.node_id == node_id
@@ -597,7 +723,7 @@ mod tests {
                 body: b"result".to_vec(),
                 created_utc_ns: 2,
                 witnesses: vec![crate::AnalysisWitnessV1 {
-                    identity,
+                    identity: identity.into(),
                     cursor: 1,
                     expires_utc_ns: 3,
                 }],

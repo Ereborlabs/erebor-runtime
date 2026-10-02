@@ -1,7 +1,7 @@
 use duckdb::params;
 use snafu::ResultExt as _;
 
-use super::{source_key, AnalysisStore, StorePositionV1};
+use super::{raw::RawIdentity, AnalysisStore, StorePositionV1};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
 const SWEEP_SOURCES: usize = 16;
@@ -63,7 +63,10 @@ impl<'a> EvidenceRetentionOwner<'a> {
             let reader = writer.get()?;
             let mut statement = reader
                 .prepare(
-                    "SELECT stream_key, identity_json FROM source_receipts
+                    "SELECT stream_key, identity_json, kind FROM (
+                     SELECT stream_key, identity_json, 'records' AS kind FROM source_receipts
+                     UNION ALL
+                     SELECT stream_key, identity_json, 'diagnostic' AS kind FROM trace_receipts)
                      WHERE CAST(? AS BLOB) IS NULL OR stream_key > ?
                      ORDER BY stream_key LIMIT ?",
                 )
@@ -77,7 +80,13 @@ impl<'a> EvidenceRetentionOwner<'a> {
                         after.as_ref().map(|key| key.as_slice()),
                         SWEEP_SOURCES as u32
                     ],
-                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, Vec<u8>>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "read retention source page",
@@ -92,19 +101,17 @@ impl<'a> EvidenceRetentionOwner<'a> {
             checked_sources: sources.len() as u32,
             removed_records: 0,
         };
-        for (key, json) in &sources {
-            let identity: EvidenceIntakeIdentityV1 =
-                serde_json::from_str(json).context(crate::JsonSnafu {
-                    path: &self.store.root,
-                })?;
-            if !identity.valid() || source_key(&identity).as_slice() != key {
+        for (key, json, kind) in &sources {
+            let identity = RawIdentity::parse(kind, json, &self.store.root)?;
+            if !identity.valid() || identity.key().as_slice() != key {
                 return self
                     .store
                     .reject("the retention source identity is invalid");
             }
-            result.removed_records += self.retain(&identity, now_utc_ns)?.removed_records;
+            let stream_key = identity.key();
+            result.removed_records += self.retain_raw(identity, now_utc_ns)?.removed_records;
             if sources.len() == SWEEP_SOURCES {
-                result.next_source = Some(source_key(&identity));
+                result.next_source = Some(stream_key);
             }
         }
         if result.removed_records > 0 || !self.store.retention_healthy() {
@@ -118,10 +125,23 @@ impl<'a> EvidenceRetentionOwner<'a> {
         identity: &EvidenceIntakeIdentityV1,
         now_utc_ns: u64,
     ) -> Result<RetentionResultV1> {
+        self.retain_raw(identity.clone().into(), now_utc_ns)
+    }
+
+    pub fn retain_trace(
+        &self,
+        identity: &crate::TraceIdentityV1,
+        now_utc_ns: u64,
+    ) -> Result<RetentionResultV1> {
+        self.retain_raw(identity.clone().into(), now_utc_ns)
+    }
+
+    fn retain_raw(&self, identity: RawIdentity, now_utc_ns: u64) -> Result<RetentionResultV1> {
         if !identity.valid() || now_utc_ns == 0 {
             return self.store.reject("the retention source or time is invalid");
         }
-        let key = source_key(identity);
+        let key = identity.key();
+        let tenant = identity.tenant();
         let mut writer_guard = self.store.maintenance_writer()?;
         let _snapshot = self.store.maintenance.write().map_err(|_| {
             self.store
@@ -129,20 +149,27 @@ impl<'a> EvidenceRetentionOwner<'a> {
         })?;
         let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin evidence retention",
+            operation: "begin raw retention",
         })?;
-        let receipt =
-            AnalysisStore::read_receipt_from(&transaction, &self.store.root, identity, &key)?
-                .ok_or_else(|| self.store.state_error("the retention source is absent"))?;
+        let mut raw = self
+            .store
+            .raw
+            .lock()
+            .map_err(|_| self.store.state_error("the raw owner lock is poisoned"))?;
+        if !raw.sources.contains_key(&key) {
+            raw.restore_receipts(&transaction)?;
+        }
+        let receipt = raw
+            .sources
+            .get(&key)
+            .map(|source| source.receipt.clone())
+            .filter(|receipt| receipt.matches(&identity))
+            .ok_or_else(|| self.store.state_error("the retention source is absent"))?;
         let consumed: u64 = transaction
             .query_row(
                 "SELECT COALESCE(MIN(consumed_cursor), ?) FROM processor_progress
              WHERE stream_key = ? AND tenant_id = ? AND class = 'required' AND NOT retired",
-                params![
-                    receipt.contiguous_cursor,
-                    key.as_slice(),
-                    identity.tenant_id.as_slice()
-                ],
+                params![receipt.cursor(), key.as_slice(), tenant.as_slice()],
                 |row| row.get(0),
             )
             .context(AnalysisDatabaseSnafu {
@@ -152,7 +179,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             .query_row(
                 "SELECT COALESCE(SUM(committed_end), 0)::UBIGINT FROM segments
              WHERE stream_key = ? AND tenant_id = ? AND state = 'Live'",
-                params![key.as_slice(), identity.tenant_id.as_slice()],
+                params![key.as_slice(), tenant.as_slice()],
                 |row| row.get(0),
             )
             .context(AnalysisDatabaseSnafu {
@@ -162,15 +189,13 @@ impl<'a> EvidenceRetentionOwner<'a> {
             .query_row(
                 "SELECT COALESCE(SUM(committed_end), 0)::UBIGINT FROM segments
              WHERE tenant_id = ? AND state = 'Live'",
-                params![identity.tenant_id.as_slice()],
+                params![tenant.as_slice()],
                 |row| row.get(0),
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "count tenant segment bytes",
             })?;
-        let pressure = self
-            .store
-            .logical_pressure(&transaction, identity.tenant_id)?;
+        let pressure = self.store.logical_pressure(&transaction, tenant)?;
         let meta = AnalysisStore::read_meta_from(&transaction, &self.store.root)?;
         // Read current pins. Cached intake totals cannot authorize deletion.
         let pins = {
@@ -184,7 +209,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                 })?;
             statement
                 .query_map(
-                    params![key.as_slice(), identity.tenant_id.as_slice(), now_utc_ns],
+                    params![key.as_slice(), tenant.as_slice(), now_utc_ns],
                     |row| row.get::<_, u64>(0),
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -195,16 +220,11 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     operation: "decode retention pins",
                 })?
         };
-        let mut raw = self
-            .store
-            .raw
-            .lock()
-            .map_err(|_| self.store.state_error("the raw owner lock is poisoned"))?;
         let mut candidates = std::collections::BTreeMap::<u64, (u64, u64, u64, u64)>::new();
         for entry in raw
             .entries
             .values()
-            .filter(|entry| entry.identity == *identity)
+            .filter(|entry| entry.identity == identity)
         {
             let candidate = candidates
                 .entry(entry.reference.id)
@@ -219,7 +239,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
         let selected = candidates
             .into_iter()
             .filter(|(id, (_, last, intake, _))| {
-                *last <= consumed.min(receipt.contiguous_cursor)
+                *last <= consumed.min(receipt.cursor())
                     && (*intake <= now_utc_ns.saturating_sub(self.store.retention.raw_max_age_ns)
                         || tenant_bytes > self.store.retention.raw_max_bytes
                         || pressure)
@@ -231,7 +251,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             return Ok(RetentionResultV1 {
                 removed_records: 0,
                 retained_bytes,
-                retained_floor: receipt.retained_floor,
+                retained_floor: receipt.floor(),
                 commit_revision: meta.commit_revision,
             });
         };
@@ -302,7 +322,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                 Ok::<_, crate::Error>(Some(floor.map_or(position, |prior| prior.max(position))))
             })?
             .ok_or_else(|| self.store.state_error("the expired position is absent"))?;
-        let previous_floor = AnalysisStore::replay_floor_from(&transaction, identity.tenant_id)?;
+        let previous_floor = AnalysisStore::replay_floor_from(&transaction, tenant)?;
         let floor_changed = previous_floor.is_none_or(|prior| replay_floor > prior);
         raw.segments.seal_all()?;
         raw.project_paths(&transaction)?;
@@ -317,7 +337,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     ON CONFLICT (tenant_id) DO UPDATE SET
                         commit_revision = excluded.commit_revision, ordinal = excluded.ordinal",
                     params![
-                        identity.tenant_id.as_slice(),
+                        tenant.as_slice(),
                         replay_floor.commit_revision,
                         replay_floor.ordinal
                     ],
@@ -333,7 +353,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     params![
                         segment_id,
                         key.as_slice(),
-                        identity.tenant_id.as_slice(),
+                        tenant.as_slice(),
                         first,
                         last,
                         revision
@@ -348,7 +368,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             .query_row(
                 "SELECT COALESCE(SUM(256 + octet_length(encode(ref_id))), 0)::BIGINT
                 FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
-                params![key.as_slice(), identity.tenant_id.as_slice(), now_utc_ns],
+                params![key.as_slice(), tenant.as_slice(), now_utc_ns],
                 |row| row.get(0),
             )
             .context(AnalysisDatabaseSnafu {
@@ -356,34 +376,38 @@ impl<'a> EvidenceRetentionOwner<'a> {
             })?;
         transaction.execute(
             "DELETE FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
-            params![key.as_slice(), identity.tenant_id.as_slice(), now_utc_ns],
+            params![key.as_slice(), tenant.as_slice(), now_utc_ns],
         ).context(AnalysisDatabaseSnafu { operation: "remove expired witness references" })?;
         let floor_charge = if previous_floor.is_none() { 256 } else { 0 };
         super::quota::UsageChange::from(256 * expired as i64 + floor_charge - released)
-            .apply(&transaction, &identity.tenant_id)?;
+            .apply(&transaction, &tenant)?;
         let next_retained = raw
             .entries
             .values()
-            .filter(|entry| entry.identity == *identity && entry.reference.id != segment_id)
+            .filter(|entry| entry.identity == identity && entry.reference.id != segment_id)
             .flat_map(|entry| &entry.commit.spans)
-            .filter(|span| span.first <= receipt.contiguous_cursor)
+            .filter(|span| span.first <= receipt.cursor())
             .map(|span| span.first)
             .min();
-        let retained_floor = next_retained.map_or(receipt.contiguous_cursor, |cursor| cursor - 1);
-        let mut relations = vec!["events", "expired_ranges", "evidence_refs"];
+        let retained_floor = next_retained.map_or(receipt.cursor(), |cursor| cursor - 1);
+        let (relation, receipts) = match identity {
+            RawIdentity::Evidence(_) => ("events", "source_receipts"),
+            RawIdentity::Diagnostic(_) => ("trace_output", "trace_receipts"),
+        };
+        let mut relations = vec![relation, "expired_ranges", "evidence_refs"];
         if floor_changed {
             relations.push("replay_floors");
         }
-        if retained_floor > receipt.retained_floor {
+        if retained_floor > receipt.floor() {
             transaction
                 .execute(
-                    "UPDATE source_receipts SET retained_floor = ? WHERE stream_key = ?",
+                    &format!("UPDATE {receipts} SET retained_floor = ? WHERE stream_key = ?"),
                     params![retained_floor, key.as_slice()],
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "advance retained segment floor",
                 })?;
-            relations.push("source_receipts");
+            relations.push(receipts);
         }
         AnalysisStore::record_revision(&transaction, revision, &relations)?;
         #[cfg(test)]
@@ -398,7 +422,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             operation: "commit segment deletion",
         })?;
         if let Some(source) = raw.sources.get_mut(&key) {
-            source.receipt.retained_floor = retained_floor;
+            source.receipt.set_floor(retained_floor);
         }
         #[cfg(test)]
         self.store.crash_at("retention.after");
@@ -422,6 +446,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
 #[cfg(test)]
 mod tests {
 
+    use super::super::source_key;
     use super::*;
     use crate::{
         AnalysisResultCommitV1, AnalysisWitnessV1, EvidenceStoreOutcomeV1, ProcessorClassV1,
@@ -448,6 +473,93 @@ mod tests {
             framed_records: prost::bytes::Bytes::from_static(bytes),
             frame_ends: (1..=bytes.len()).collect(),
         }
+    }
+
+    #[test]
+    fn observability_retention_sweep() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use super::super::raw::tests::{trace_intent, trace_terminal};
+        use crate::{AnalysisReadControl, TraceBatchV1, TraceFrameKindV1, TraceFrameV1};
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("data");
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 50,
+            raw_max_bytes: 1024 * 1024,
+        };
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let evidence = identity(1);
+        store.accept_validated_batch(evidence.clone(), batch(1, b"a"))?;
+        let intent = trace_intent()?;
+        let identity = &intent.bindings[0].identity;
+        store.accept_trace(&intent)?;
+        let batch = TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![TraceFrameV1 {
+                execution_id: identity.execution_id,
+                sequence: 1,
+                kind: TraceFrameKindV1::Data,
+                bytes: b"raw".to_vec(),
+            }],
+            terminal: Some(trace_terminal(1, 3)),
+        };
+        let mut expected = store.append_trace(identity, &batch, 100)?;
+        store.checkpoint()?;
+        let mut empty = intent.clone();
+        empty.request_id = [5; 16];
+        empty.bindings[0].identity.request_id = empty.request_id;
+        empty.bindings[0].identity.execution_id = [6; 16];
+        store.accept_trace(&empty)?;
+        let owner = EvidenceRetentionOwner::new(&store);
+        let result = owner.sweep(None, 201)?;
+        assert_eq!(result.checked_sources, 3);
+        assert_eq!(result.removed_records, 3);
+        assert_eq!(result.next_source, None);
+        assert!(store.retention_healthy());
+        expected.retained_floor = 2;
+        assert_eq!(store.trace_receipt(identity)?, Some(expected.clone()));
+        assert!(matches!(
+            store.read_trace(identity, 1, &AnalysisReadControl::default()),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        assert!(matches!(
+            store.append_trace(identity, &batch, 202),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        assert_eq!(owner.retain_trace(identity, 202)?.removed_records, 0);
+        let empty = &empty.bindings[0].identity;
+        assert_eq!(owner.retain_trace(empty, 202)?.removed_records, 0);
+        assert_eq!(
+            store
+                .trace_receipt(empty)?
+                .ok_or("empty receipt absent")?
+                .last_sequence,
+            0
+        );
+        assert_eq!(
+            store
+                .source_receipt(&evidence)?
+                .ok_or("evidence receipt absent")?
+                .retained_floor,
+            1
+        );
+        drop(store);
+        let reopened = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        assert_eq!(reopened.trace_receipt(identity)?, Some(expected));
+        assert!(matches!(
+            reopened.read_trace(identity, 2, &AnalysisReadControl::default()),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        assert!(reopened
+            .read_trace(identity, 3, &AnalysisReadControl::default())?
+            .frames
+            .is_empty());
+        assert_eq!(
+            EvidenceRetentionOwner::new(&reopened)
+                .sweep(None, 203)?
+                .removed_records,
+            0
+        );
+        Ok(())
     }
 
     #[test]
@@ -631,7 +743,7 @@ mod tests {
             body: b"review".to_vec(),
             created_utc_ns: 100,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: source.clone(),
+                identity: source.clone().into(),
                 cursor: 1,
                 expires_utc_ns: expires,
             }],
@@ -744,7 +856,7 @@ mod tests {
             body: b"checked".to_vec(),
             created_utc_ns: 101,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: source.clone(),
+                identity: source.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 200,
             }],
@@ -1178,7 +1290,7 @@ mod tests {
             body: b"finding".to_vec(),
             created_utc_ns: 150,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: source.clone(),
+                identity: source.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 300,
             }],
@@ -1194,7 +1306,7 @@ mod tests {
             body: b"checked".to_vec(),
             created_utc_ns: 150,
             witnesses: vec![AnalysisWitnessV1 {
-                identity: source.clone(),
+                identity: source.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 200,
             }],
@@ -1331,7 +1443,7 @@ mod tests {
                     body: b"review".to_vec(),
                     created_utc_ns: intake,
                     witnesses: vec![AnalysisWitnessV1 {
-                        identity: source.clone(),
+                        identity: source.clone().into(),
                         cursor: ROWS,
                         expires_utc_ns: 10_000,
                     }],

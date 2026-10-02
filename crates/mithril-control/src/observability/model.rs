@@ -170,4 +170,58 @@ mod tests {
         assert!(matches!(error, crate::Error::DataStore { source, .. }
             if matches!(*source, araphor_data::Error::TraceInvalid { .. })));
     }
+
+    #[test]
+    fn observability_contract_storage_errors() {
+        use erebor_runtime_error::{ErrorExt as _, RetryHint, StatusCode};
+
+        let errors = [
+            (
+                araphor_data::Error::AnalysisConflict {
+                    location: snafu::Location::default(),
+                },
+                StatusCode::AlreadyExists,
+                RetryHint::NonRetryable,
+            ),
+            (
+                araphor_data::Error::RetainedRangeExpired {
+                    first_cursor: 1,
+                    last_cursor: 2,
+                    location: snafu::Location::default(),
+                },
+                StatusCode::NotFound,
+                RetryHint::NonRetryable,
+            ),
+            (
+                araphor_data::Error::StorageCapacity {
+                    resource: "diagnostic bytes",
+                    location: snafu::Location::default(),
+                },
+                StatusCode::Unavailable,
+                RetryHint::Retryable,
+            ),
+            (
+                araphor_data::Error::ProtectedInputCapacity {
+                    resource: "reserved bytes",
+                    location: snafu::Location::default(),
+                },
+                StatusCode::Unavailable,
+                RetryHint::Retryable,
+            ),
+            (
+                araphor_data::Error::AnalysisBusy {
+                    resource: "writer",
+                    location: snafu::Location::default(),
+                },
+                StatusCode::Unavailable,
+                RetryHint::Retryable,
+            ),
+        ];
+        for (source, status, retry) in errors {
+            let error = crate::Error::from(source);
+            assert_eq!(error.status_code(), status);
+            assert_eq!(error.retry_hint(), retry);
+            assert!(std::error::Error::source(&error).is_some());
+        }
+    }
 }
