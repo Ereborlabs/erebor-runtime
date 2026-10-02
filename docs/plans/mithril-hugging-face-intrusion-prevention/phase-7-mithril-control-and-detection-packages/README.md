@@ -156,6 +156,12 @@ passed. Read its [final result](phase-7-3-query-and-follow.md#additional-correct
 for commands, counts, and proof limits. Public SQL and process isolation still
 belong to Observability 3. This closure does not start another phase.
 
+Observability 1 is **Done** for bounded backend qualification at source
+`74c81c39`. Its [result](../../araphor-observability/phase-1-contracts-and-backend.md#implementation-result)
+records the pinned platform, lightweight and physical proof, and final
+workspace gate. Observability 2 is next; no later phase has started.
+Production enablement still requires capture integration and interference proof.
+
 Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 →
 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 if selected → 7.10.
 Independent work may use the entry gates in the table, not skip them.

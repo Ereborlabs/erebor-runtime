@@ -1797,6 +1797,43 @@ This route follows the [backend plan](../../araphor-observability/phase-1-contra
 -> [DiagnosticFrame](../../../../crates/erebor-interceptor/src/diagnostic.rs) diagnostics identify unsupported probes or unresolved runtime requirements.<br>
 -> [DiagnosticBackend::command](../../../../crates/erebor-interceptor/src/diagnostic.rs) check does not invoke bpftrace --dry-run or claim an attachment proof.
 
+The [qualification CLI](../../../../crates/mithril-e2e/src/bin/mithril_observability_test.rs)
+selects `backend-lifecycle` before physical qualification.
+[ObservabilityQualification::backend_lifecycle](../../../../crates/mithril-e2e/src/observability/lifecycle.rs)
+passes external-process doubles to the feature-gated
+[DiagnosticBackend::start_fixture](../../../../crates/erebor-interceptor/src/diagnostic.rs).
+Both entry paths use `DiagnosticCapture::spawn` and `SupervisedChild::run`.
+Only the real `start` path selects the pinned executable and privileged
+isolation. The fixtures do not attach BPF programs. Both paths return `DiagnosticResult`;
+the lightweight receipt leaves kernel cleanup and enforcement proof unknown.
+
+[CaseResult::verify](../../../../crates/mithril-e2e/src/observability.rs)
+requires exact stderr readiness, observed programs, and the expected terminal
+outcome for each qualified capture. Compiler-only success requires no BPF
+resource IDs in either the child inventory or global samples.
+`hash_entries` records kernel `max_entries` for diagnostic hash maps. The
+reviewed recipes require observed capacity at or below 4,096 keys. Global
+snapshots record link IDs even when the backend uses perf-event attachment
+and creates no BPF link. An empty link set is not evidence of no attachment.
+
+`parent_fixture` publishes its readiness record only after the exact marker.
+`parent_death` requires that record and a live diagnostic program before it
+kills the parent. It checks program/map/link removal and the unchanged
+enforcement manifest. The missing-BTF case identifies its actual boundary:
+`KernelHostOwner::preflight`, not the bpftrace parser.
+
+[guest.sh](../../../../crates/mithril-e2e/harness/observability/guest.sh)
+records the executable, BTF, kernel, linked libraries, exact packages, package
+notices and referenced common licenses. A missing dependency notice stops
+qualification. `provenance-id.sha256` identifies this recorded dependency set;
+it is not a container-image digest.
+
+At source `74c81c39`, focused checks, the final lightweight command and paired
+physical verification passed. The final workspace procedure also exited 0.
+No code or verification script changed after that run. Read the
+[backend result](../../araphor-observability/phase-1-contracts-and-backend.md#implementation-result)
+for current commands, receipts and proof limits.
+
 ### Owned capture
 
 This route follows the [owned-capture plan](../../araphor-observability/phase-2-owned-capture.md).
@@ -2259,14 +2296,14 @@ Its shared-host interference run
 measured intake p95 +16.9% and rollout p95 +7.7%. The owner remains disabled by
 default. The result is not a no-interference guarantee.
 
-The [backend result](../../araphor-observability/phase-1-contracts-and-backend.md)
-records 16 physical cases on the pinned build. The
-[owned-capture result](../../araphor-observability/phase-2-owned-capture.md)
-records the passing quiet five-pair repeat, its earlier failed overhead run,
-failure cases, disk-full case, and proof archive hashes. Zero measured loss
-deltas do not prove uninterrupted coverage; the logs also retain readiness
-gaps. These are prior automated physical results, not runs performed while
-writing this guide.
+The [backend result](../../araphor-observability/phase-1-contracts-and-backend.md#final-backend-proof)
+records the current 16 physical cases, missing-BTF host preflight, and
+parent-death cleanup at source `74c81c39`. The earlier owned-capture measurements
+do not qualify the shared storage contract. The
+[owned-capture plan](../../araphor-observability/phase-2-owned-capture.md)
+keeps that integration and its physical proof open. Zero measured loss deltas
+in an earlier run do not prove uninterrupted coverage or qualify this source.
+No new performance experiment ran for the current backend closure.
 
 **Not done:** complete Node-owned capture across real Pod replacement, and the
 combined physical Node crash-before/after-spawn recovery cases. Separate backend

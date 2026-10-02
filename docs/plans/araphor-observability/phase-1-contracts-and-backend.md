@@ -30,8 +30,26 @@ Caller submits source for a read-only check
   -> check does not invoke bpftrace --dry-run or claim an attachment proof
 ```
 
-Status: **Not done** for release qualification. Reuse the existing diagnostic
-owner and cases; rerun their proof on the implementing revision.
+Status: **Done** for bounded backend qualification on the pinned build and
+platform below. Production enablement still requires the later lifecycle,
+interference, and shared-recovery gates.
+
+### Current implementation work
+
+The current work closes this phase only. Reuse `DiagnosticBackend`,
+`ObservabilityQualification`, and the existing physical harness. Add the
+unprivileged `backend-lifecycle` selection with an external-process double.
+Use the same production supervisor and result schema. A double does not prove
+kernel attachment or resource cleanup.
+
+Add capture-mode readiness and deadline checks. Require the physical verifier
+to reject unsuccessful capture and unsupported-hook cases with the wrong
+outcome. Record diagnostic link identities beside program and map identities.
+Pass the selected executable to the parent-death child; do not replace it with
+a fixed system path. Run lightweight proof before the paired physical proof.
+Do not add or run performance experiments without separate user approval.
+Keep required unapproved measurements open. Do not change trace storage or
+start client delivery in this phase.
 
 ## Scope, owners, and changes
 
@@ -78,6 +96,7 @@ Add `observability_backend_` tests. Proposed commands after implementation:
 ```sh
 cargo test -p erebor-interceptor observability_backend_ -- --nocapture
 cargo test -p mithril-e2e observability_backend_ -- --nocapture
+cargo run -p mithril-e2e --bin mithril-observability-test -- --case backend-lifecycle --output-directory /tmp/araphor-backend-lifecycle
 bash .github/scripts/verify-rust-ci.sh
 ```
 
@@ -105,3 +124,120 @@ contains program/link identities. A stub cannot pass the physical gate.
 Require qualified attachment readiness, bounded output, lease expiry,
 parent-death cleanup, and unchanged enforcement resources before owned capture.
 A successful compiler run or process spawn does not prove attachment coverage.
+
+## Implementation result
+
+Status: **Done** for this phase at source `74c81c39`. Focused checks, paired
+backend qualification, and the final workspace procedure passed. No later
+phase has started.
+
+- `0706cffb` adds the feature-gated process-double entry and capture-mode
+  component proof. Real execution retains digest checks, checked-inode exec,
+  fixed arguments, namespaces, capability removal in compile mode, and the
+  existing supervisor. Sixteen focused component tests passed; one subprocess
+  helper stays ignored as a top-level test and runs through its parent test.
+- `bbba9023` adds the lightweight selection, twelve lifecycle cases and
+  parent-death proof. It also requires exact readiness and failure outcomes
+  in the physical verifier. Parent-death execution uses the selected binary.
+- `97d66dee` records live hash-map capacities and rejects missing or excessive
+  recipe capacity. Nine focused end-to-end/verifier tests and two Control
+  contract tests passed. The CLI argument check passed separately.
+- `0bf8b2d3` rejects compiler-owned program/map IDs even when global polling
+  misses those IDs. Its focused regression passed. Duplicate verifier checks
+  were removed after Ponytail review.
+- `74c81c39` retains dependency versions, notices, common-license texts and
+  hashed provenance. The first physical run passed all sixteen backend cases,
+  missing-BTF host preflight, and parent-death cleanup. The final run repeats
+  that proof with the stricter compiler-only verifier.
+
+The initial lightweight histogram fixture emitted invalid JSON because of
+shell quoting. The fixture now uses a raw Rust string. One build attempt ran
+before a verifier edit finished and failed compilation. The CLI test first
+expected a default-mode requirement to fail during parsing; it now checks
+the actual rejection before execution. These failures are not backend passes.
+The first full workspace run was stopped after review required the final
+compiler-only check. Its partial results do not replace the final run.
+
+All retained logs use `/tmp/araphor-backend-proof.lhnEPItv/`. The focused logs
+are `component-2.log`, `bounds.log`, `cli-test-2.log`, and `compile-proof.log`.
+The first physical receipts are under `physical/`.
+
+The final `bash .github/scripts/verify-rust-ci.sh` run exited 0 after the last
+code and harness commit, `74c81c39`. Its log is `workspace-final.log`.
+Formatting, workspace check, Clippy with warnings denied, and workspace tests
+passed. The related library test counts are:
+
+| Crate | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| `erebor-interceptor` | 39 | 0 | 1 |
+| `araphor-data` | 141 | 0 | 5 |
+| `mithril-control` | 176 | 0 | 2 |
+| `mithril-e2e` | 131 | 0 | 407 |
+| `mithril-node` | 266 | 0 | 1 |
+
+Ignored tests are not passes. The backend subprocess helpers run through their
+parent tests. The separate physical command below supplies backend kernel
+proof; the workspace procedure alone does not supply that proof.
+
+### Final backend proof
+
+The final binary passed `backend-lifecycle` before the physical run. Its receipt
+is `lightweight-final/result.json`: twelve scenarios and a separate parent-death
+check. The receipt states `physical: false`. It uses the production supervisor
+but cannot prove BPF attachment or kernel cleanup.
+
+The paired physical run passed all sixteen cases, missing-BTF host preflight,
+and parent-death cleanup. Its receipts are under `physical-final/`; the command
+log is `physical-final.log`. The owned guest is
+`mithril-runtime-qualification-202610012201`, UUID
+`140989e4-293d-41c7-9f69-8e68bdfef868`. The qualified platform is Ubuntu x86_64,
+kernel `6.8.0-142-generic`, and bpftrace package `0.20.2-1ubuntu4.3`.
+
+Exact SHA-256 identities:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Qualification binary | `e4636413498d101c248ef9ce143d7755e8854474da7148f56e0c9bf6f3b8aa3a` |
+| bpftrace executable | `d2846f3400bb129b1a569aae64adf548de99ff41f247823ff8caf1fbde40ff1e` |
+| Runtime BTF | `3802b509af01c3d187fa1bef9469e311612b184efa439d7366201fd5e9753cba` |
+| Dependency provenance manifest | `c0b8bb4a4036bdb1739a499d90d333da24010b6d0cef95e4316f26a726b8f4ba` |
+
+All sixteen cases restored the BPF resource inventory and preserved the
+enforcement manifest. Compile-only execution recorded no program or map IDs
+in either inventory. Histogram and both reviewed recipe maps had a hash-map
+capacity of 4,096 entries. Parent death removed diagnostic program 9880 and
+maps 8303/8304.
+The observed link sets are empty for this build's perf-event attachments.
+An unsampled map-memory value stays null; no zero-memory claim follows.
+
+The command sequence used these six build settings:
+
+```sh
+export CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target
+export CXXFLAGS='-O2 -g0'
+export CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1
+cargo build --locked -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-features --bin mithril-observability-test
+/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/mithril-observability-test --case backend-lifecycle --output-directory /tmp/araphor-backend-proof.lhnEPItv/lightweight-final
+bash .github/scripts/verify-rust-ci.sh
+```
+
+The physical command ran through SSH in the owned guest after lightweight
+qualification passed:
+
+```sh
+sudo -n bash /mnt/mithril-source/worktrees/mithril-ui/crates/mithril-e2e/harness/observability/guest.sh /mnt/mithril-source/target/debug/mithril-observability-test /tmp/araphor-observability-lhnEPItv-final
+```
+
+The copied provenance files passed `sha256sum --check provenance.sha256`.
+Existing target contracts require authenticated inventory and exact live
+binding, Node boot, CRI container identity and cgroup lifetime. Missing or
+unbound target identity remains Unsupported. No PID-only target or fabricated
+policy was added.
+
+This result qualifies the bounded backend on the stated build and platform.
+It does not qualify diagnostic/enforcement interference, acceptable production
+overhead, Pod replacement, shared trace storage, public APIs, or a script
+sandbox. RSS, map memory and kernel runtime counters are recorded observations,
+not a performance guarantee. No new performance experiment ran. Diagnostics
+remain disabled by default; production enablement retains the later lifecycle,
+interference and shared-recovery gates.
