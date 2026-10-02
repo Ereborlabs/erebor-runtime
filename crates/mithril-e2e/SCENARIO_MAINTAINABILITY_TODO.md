@@ -1402,7 +1402,22 @@ acknowledgement, or decommission operations directly.
     All 19 related Control/TLS tests, strict E2E Clippy, and harness checks
     pass. No fixture or production operation changes. Remove 31 Rust lines net.
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
-  - Replace the 196-line legacy function with one standard protocol test.
+  - [x] Replace its two protocol behaviors with small standard tests in
+    `control_tls/partition.rs`. Keep policy replacement and durable evidence
+    replay in one test. Keep the final-priority-release race in a separate
+    real mTLS test. Both tests must block Node-to-Control traffic, require the
+    first session to close, and reconnect to the same running Control.
+    Reuse `MtlsFixture`, `OutagePolicyFixture`, and `TcpBlackholeOwner`.
+    Add no scenario or platform API. Keep each test body below 100 lines.
+    Preserve the 500 ms race limit, exact acknowledgements, rescue diagnostic,
+    and normal shutdown. Keep the old function until both replacements pass.
+    The bodies have 88 and 97 lines. Both focused tests pass in 25.24 seconds;
+    all 21 related Control/TLS tests pass in 25.38 seconds. Strict crate Clippy,
+    formatting, and VM harness checks pass. No fixture, platform, or production
+    source changes. These are mTLS protocol cases, not container scenarios.
+    Run `cargo test -p mithril-e2e --lib control_tls::partition::`.
+  - Previous one-test design: replace the 196-line legacy function with one
+    standard protocol test.
     Reuse the TLS, policy, TCP blackhole, WAL, and trust owners. Keep the
     first Active policy, Node-to-Control packet loss, replacement policy,
     forced disconnect, reconnect, retained evidence acknowledgement, and

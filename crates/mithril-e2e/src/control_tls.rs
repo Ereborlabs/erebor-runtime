@@ -39,6 +39,7 @@ mod decommission;
 mod decommission_order;
 mod gap;
 mod intake_budget;
+mod partition;
 mod readiness;
 mod registration;
 mod rejection;
