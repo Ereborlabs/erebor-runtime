@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use super::{IdentityTestRunner, IDENTITY_FIXTURES, REQUIRED_IDENTITY_MAPS};
 
 #[test]
-fn production_object_and_identity_fixture_allocation_are_exact() -> crate::Result<()> {
+fn object_allocations_are_exact() -> crate::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let temporary = tempfile::tempdir().map_err(|error| {
         super::invalid_state(format!("create identity test directory: {error}"))

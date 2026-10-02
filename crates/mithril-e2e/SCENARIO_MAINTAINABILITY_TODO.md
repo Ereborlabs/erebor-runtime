@@ -686,21 +686,12 @@ Runner retirement is a separate, open check. In particular:
   on a 65.77-second rerun. Keep this item open: the cause of delayed target
   activation under the full lifecycle is not known.
 
-The diff from `95775f48` adds or relocates these private test functions with
-more than five name components:
-
-- `production_object_and_identity_fixture_allocation_are_exact`
-
-The same diff adds or relocates these local variables with more than three
-name components:
-
-- `allowed_before_target_install`
-- `denied_after_target_install`
-- `allowed_after_target_clear`
-
-Public production fields and public result-schema fields are excluded from
-this audit. Shorten or delete every listed private identifier as its owning
-behavior is replaced. Do not add a new violation in an intermediate commit.
+The four private naming violations recorded in the diff from `95775f48` are
+removed. The verification test is `object_allocations_are_exact`. The legacy
+kernel probe uses `allowed_before`, `denied_after`, and `allowed_after`.
+Public result fields retain their original names. No assertion, operation,
+or result schema changes. These name changes do not retire either runner.
+The focused verification test, formatting, and strict crate Clippy pass.
 
 ## Physical harness migration audit
 

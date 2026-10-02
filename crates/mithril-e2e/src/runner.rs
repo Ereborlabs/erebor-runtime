@@ -335,30 +335,30 @@ impl KernelQualificationRunner {
         let object_layout = loader.inspect()?;
         let attachment = loader.attach_with_pin_root(fixture.pin_root.path())?;
 
-        let allowed_before_target_install = File::open(&fixture.target_path).is_ok();
+        let allowed_before = File::open(&fixture.target_path).is_ok();
         ensure!(
-            allowed_before_target_install,
+            allowed_before,
             InvalidInputSnafu {
                 path: &fixture.target_path,
                 reason: "the file-open control failed before the deny target was installed",
             }
         );
         BpfQualificationLoader::update_file_open_target(&attachment, fixture.target_inode)?;
-        let denied_after_target_install = matches!(
+        let denied_after = matches!(
             File::open(&fixture.target_path),
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
         );
         ensure!(
-            denied_after_target_install,
+            denied_after,
             InvalidInputSnafu {
                 path: &fixture.target_path,
                 reason: "the attached file_open hook did not return EACCES for its target",
             }
         );
         BpfQualificationLoader::update_file_open_target(&attachment, 0)?;
-        let allowed_after_target_clear = File::open(&fixture.target_path).is_ok();
+        let allowed_after = File::open(&fixture.target_path).is_ok();
         ensure!(
-            allowed_after_target_clear,
+            allowed_after,
             InvalidInputSnafu {
                 path: &fixture.target_path,
                 reason: "the file-open control did not recover after clearing the deny target",
@@ -387,9 +387,9 @@ impl KernelQualificationRunner {
             links,
             target: fixture.target_path.clone(),
             target_inode: fixture.target_inode,
-            allowed_before_target_install,
-            denied_after_target_install,
-            allowed_after_target_clear,
+            allowed_before_target_install: allowed_before,
+            denied_after_target_install: denied_after,
+            allowed_after_target_clear: allowed_after,
         };
         fixture.cleanup()?;
         let evidence = serde_json::to_vec(&file_open).context(JsonSnafu {
