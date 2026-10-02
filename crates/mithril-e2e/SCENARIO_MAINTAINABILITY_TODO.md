@@ -5666,11 +5666,22 @@ test does not close a row when its physical condition or an assertion changed.
     the original `ALLOW_CRI_SANDBOX` log proof. Runtime state and cgroup
     cleanup passed. All eight retained-gate owner tests, VM harness checks,
     and final Rust CI passed. See `/tmp/mithril-runtime-sandbox-ci-20261002.log`.
-  - [ ] Replace the forged sandbox command in a separate small direct-runc
+  - [x] Replace the forged sandbox command in a separate small direct-runc
     test. Keep the sandbox annotations but run a different actor command with
     its writable result mount. Require failed start, `DENY_NODE_UNAVAILABLE`,
     no actor marker, empty runtime state, and cgroup cleanup. Retire only
     these two old cases after their focused verification and commits.
+    The 63-line [forged_sandbox_never_starts](src/identity/scenarios/runtime_forged.rs)
+    passed in 7.21 seconds. It reuses the same Python actor and OCI input as
+    the inert case. The test changes only the process command and writable
+    result mount. No actor marker, runtime state, or cgroup remained. VM
+    harness checks and final Rust CI passed. See
+    `/tmp/mithril-runtime-forged-ci-20261002.log`.
+  - [ ] Make the retained-upgrade launcher run the three standard runtime-gate
+    cases in one compatible lifecycle. Include the shared pause actor in its
+    inputs. Then remove the two old sandbox actions, their result fields,
+    fake pause script, config helper, and log helper. Keep the ten other
+    runtime-gate cases. Qualify the group and complete reduced probe first.
   - [x] Replace the hostile-container case with one standard direct-runc test
     below 100 lines. Use the shared process owner and checked OCI and Python
     inputs. Keep the host PID namespace, root user, `CAP_SYS_ADMIN`, writable
