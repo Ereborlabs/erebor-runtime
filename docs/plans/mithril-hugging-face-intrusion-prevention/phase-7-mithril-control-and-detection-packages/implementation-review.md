@@ -1829,8 +1829,11 @@ qualification. `provenance-id.sha256` identifies this recorded dependency set;
 it is not a container-image digest.
 
 At source `74c81c39`, focused checks, the final lightweight command and paired
-physical verification passed. The final workspace procedure also exited 0.
-No code or verification script changed after that run. Read the
+physical commands exited successfully. The final workspace procedure also
+exited 0. Later review found two insufficient physical pass conditions:
+partial-attach counts loaded programs, and unsupported-hook accepts a generic
+error caused by a read-only filesystem. Backend qualification is **Not done**
+until both conditions have direct proof. Read the
 [backend result](../../araphor-observability/phase-1-contracts-and-backend.md#implementation-result)
 for current commands, receipts and proof limits.
 

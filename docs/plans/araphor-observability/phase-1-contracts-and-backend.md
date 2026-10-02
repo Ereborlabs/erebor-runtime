@@ -30,9 +30,10 @@ Caller submits source for a read-only check
   -> check does not invoke bpftrace --dry-run or claim an attachment proof
 ```
 
-Status: **Done** for bounded backend qualification on the pinned build and
-platform below. Production enablement still requires the later lifecycle,
-interference, and shared-recovery gates.
+Status: **Not done**. The partial-attach and unsupported-hook checks need
+stronger proof. Do not start owned capture until both checks pass on the
+implementing revision. Production enablement also requires the later
+lifecycle, interference, and shared-recovery gates.
 
 ### Current implementation work
 
@@ -90,6 +91,10 @@ forced kill, parent death, compile timeout, and deadline. Prove no active
 diagnostic attachment after cleanup. Verify against an enforcement baseline
 before and after every failure. No test may remove another owner's resources.
 Record why a selected hook is valid; do not assume kprobes are portable.
+Partial attachment requires proof that a requested probe attached before a
+later attachment failed. Loaded program IDs do not supply this proof.
+Missing-hook proof must reject permission and read-only-filesystem failures
+even when the output also contains a generic attachment error.
 
 Add `observability_backend_` tests. Proposed commands after implementation:
 
@@ -127,9 +132,12 @@ A successful compiler run or process spawn does not prove attachment coverage.
 
 ## Implementation result
 
-Status: **Done** for this phase at source `74c81c39`. Focused checks, paired
-backend qualification, and the final workspace procedure passed. No later
-phase has started.
+Status: **Not done** after review of source `74c81c39`. The commands below
+exited successfully, but two physical pass conditions were insufficient.
+The partial-attach check counted loaded programs without proving attachment.
+The unsupported-hook receipt also contains a read-only-filesystem error.
+These receipts prove resource cleanup, not the two required failure cases.
+No later phase has started.
 
 - `0706cffb` adds the feature-gated process-double entry and capture-mode
   component proof. Real execution retains digest checks, checked-inode exec,
@@ -234,7 +242,8 @@ binding, Node boot, CRI container identity and cgroup lifetime. Missing or
 unbound target identity remains Unsupported. No PID-only target or fabricated
 policy was added.
 
-This result qualifies the bounded backend on the stated build and platform.
+This result does not close backend qualification until the two checks above
+have direct physical proof on the corrected source.
 It does not qualify diagnostic/enforcement interference, acceptable production
 overhead, Pod replacement, shared trace storage, public APIs, or a script
 sandbox. RSS, map memory and kernel runtime counters are recorded observations,
