@@ -437,7 +437,8 @@ mod tests {
     use crate::{
         AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
         AnalysisResultCommitV1, AnalysisWitnessV1, ContextSensitivityV1, EvidenceIntakeIdentityV1,
-        ProcessorClassV1, ProcessorScopeV1, StorageLimitsV1, ValidatedEvidenceBatchV1,
+        ProcessorClassV1, ProcessorScopeV1, StorageLimitsV1, TraceBatchV1, TraceFrameKindV1,
+        TraceFrameV1, ValidatedEvidenceBatchV1,
     };
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -456,6 +457,153 @@ mod tests {
             sensitivity: ContextSensitivityV1::Tenant,
             body: vec![1],
         }
+    }
+
+    #[test]
+    fn observability_terminal_pressure() -> TestResult {
+        use super::super::raw::tests::{trace_intent, trace_terminal};
+
+        for global in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let limits = StorageLimitsV1 {
+                tenant_max_bytes: 1024 * 1024,
+                logical_max_bytes: if global { 1024 * 1024 } else { 2 * 1024 * 1024 },
+                ..Default::default()
+            };
+            let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+            let intent = trace_intent()?;
+            let identity = &intent.bindings[0].identity;
+            store.accept_trace(&intent)?;
+            let tenants = if global { 2 } else { 1 };
+            for tenant in 1..=tenants {
+                let evidence = EvidenceIntakeIdentityV1 {
+                    tenant_id: [tenant; 16],
+                    node_id: "n".into(),
+                    node_boot_id: [2; 16],
+                    label_epoch: 1,
+                    source_id: [3; 16],
+                    source_epoch: 1,
+                };
+                store.accept_validated_batch(
+                    evidence.clone(),
+                    ValidatedEvidenceBatchV1 {
+                        cpu_id: 0,
+                        first_cursor: 1,
+                        last_cursor: 1,
+                        intake_utc_ns: 100,
+                        framed_records: b"frame".to_vec().into(),
+                        frame_ends: vec![5],
+                    },
+                )?;
+                let scope = ProcessorScopeV1 {
+                    processor_id: "p".into(),
+                    method_version: 1,
+                    identity: evidence,
+                };
+                store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
+                store.commit_result(&AnalysisResultCommitV1 {
+                    scope,
+                    expected_cursor: 0,
+                    consumed_cursor: 1,
+                    coverage_revision: 0,
+                    context_revision: 0,
+                    result_id: format!("pressure-{tenant}"),
+                    body: vec![1; 800 * 1024 / usize::from(tenants)],
+                    created_utc_ns: 101,
+                    witnesses: vec![],
+                    context_refs: vec![],
+                })?;
+            }
+            {
+                let reader = store.reader()?;
+                let total: u64 = reader.get()?.query_row(
+                    "SELECT SUM(logical_bytes)::UBIGINT FROM tenant_usage",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let scoped: u64 = reader.get()?.query_row(
+                    "SELECT logical_bytes FROM tenant_usage WHERE tenant_id = ?",
+                    params![identity.tenant_id.as_slice()],
+                    |row| row.get(0),
+                )?;
+                assert!(total < limits.logical_max_bytes && scoped < limits.tenant_max_bytes);
+                assert_eq!(total > limits.logical_max_bytes * 3 / 4, global);
+                assert_eq!(scoped > limits.tenant_max_bytes * 3 / 4, !global);
+            }
+            let before = store.trace_receipt(identity)?.ok_or("receipt absent")?;
+            let revision = store.meta()?;
+            let resource = if global {
+                "global logical bytes"
+            } else {
+                "tenant logical bytes"
+            };
+            let frame = TraceFrameV1 {
+                execution_id: identity.execution_id,
+                sequence: 1,
+                kind: TraceFrameKindV1::Data,
+                bytes: vec![1],
+            };
+            for terminal in [None, Some(trace_terminal(1, 1))] {
+                assert!(matches!(
+                    store.append_trace(identity, &TraceBatchV1 {
+                        execution_id: identity.execution_id,
+                        frames: vec![frame.clone()],
+                        terminal,
+                    }, 102),
+                    Err(crate::Error::StorageCapacity { resource: found, .. }) if found == resource
+                ));
+                assert_eq!(store.trace_receipt(identity)?, Some(before.clone()));
+                assert_eq!(store.meta()?, revision);
+            }
+            assert_eq!(
+                store
+                    .raw
+                    .lock()
+                    .map_err(|_| "raw poisoned")?
+                    .budget
+                    .trace_reserve,
+                TRACE_RESERVE
+            );
+            let batch = TraceBatchV1 {
+                execution_id: identity.execution_id,
+                frames: vec![],
+                terminal: Some(trace_terminal(0, 0)),
+            };
+            let receipt = store.append_trace(identity, &batch, 103)?;
+            assert_eq!((receipt.last_sequence, receipt.output_bytes), (0, 0));
+            assert_eq!(receipt.terminal, batch.terminal);
+            assert_eq!(store.append_trace(identity, &batch, 104)?, receipt);
+            assert_eq!(
+                store
+                    .raw
+                    .lock()
+                    .map_err(|_| "raw poisoned")?
+                    .budget
+                    .trace_reserve,
+                0
+            );
+            AnalysisStore::validate_usage(store.reader()?.get()?, &root)?;
+            drop(store);
+
+            let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+            assert_eq!(store.trace_receipt(identity)?, Some(receipt.clone()));
+            assert_eq!(store.append_trace(identity, &batch, 105)?, receipt);
+            let output = store.read_trace(identity, 1, &AnalysisReadControl::default())?;
+            assert!(output.frames.is_empty());
+            assert_eq!(output.terminal, batch.terminal);
+            assert_eq!(
+                store
+                    .raw
+                    .lock()
+                    .map_err(|_| "raw poisoned")?
+                    .budget
+                    .trace_reserve,
+                0
+            );
+            AnalysisStore::validate_usage(store.reader()?.get()?, &root)?;
+        }
+        Ok(())
     }
 
     #[test]
