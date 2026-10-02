@@ -2966,7 +2966,11 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host. The 87-line shared test passed both modes in 39.61 seconds
       on 2026-10-02. Output, pin, lease, and cgroup cleanup passed. Strict
       package clippy passed. Shared actor tooling is committed first.
-    - [ ] Pass and commit direct `runc`.
+    - [x] Pass direct `runc`. The unchanged 87-line scenario passed both modes
+      in 47.39 seconds through stock `runc` and the production OCI hook.
+      Host passed the final recursive operation in 40.47 seconds. Both runs
+      removed output, pin, lease, actor cgroup, and Node cgroup. The shared
+      syscall keeps the baseline `AT_RECURSIVE` flag.
     - [ ] Pass and commit real Kubernetes.
     - [ ] Remove the old block, unused helper, CLI path, and result fields only
       after the matching coverage passes. Keep propagation coverage separate.
