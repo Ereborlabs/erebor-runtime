@@ -220,17 +220,18 @@ run_lightweight_upgrade_probe() {
   local remote=$remote_root/runtime-gate-lightweight-$run_id
   local group=/sys/fs/cgroup/$vm-runtime-gate-$run_id
   local pin=/sys/fs/bpf/$vm-runtime-gate-$run_id
-  local test_name=identity::scenarios::runtime_hostile::hostile_runtime_never_starts::runtime_gate_runc
+  local test_name=runtime_gate_runc
   local test_bin
   test_bin=$(cd -- "$repo_root" && cargo test --locked -p mithril-e2e \
     --lib --no-run --message-format=json | jq -r \
     'select(.reason == "compiler-artifact" and .profile.test == true and
       .target.name == "mithril_e2e" and .executable != null) | .executable')
   [[ -x $test_bin ]]
-  "$test_bin" --list --ignored | grep -Fx "$test_name: test" >/dev/null
+  "$test_bin" --list --ignored | grep -E "::${test_name}: test$" >/dev/null
 
   tar -C "$repo_root" -cf "$output_directory/runtime-gate-inputs.tar" \
     crates/mithril-e2e/fixtures/process/runtime_hostile.py \
+    crates/mithril-e2e/fixtures/process/runtime_pause.py \
     crates/mithril-e2e/fixtures/convergence/direct-runc-recovery-v1.json
 
   "$provider" run "$vm" mkdir -p "$remote"
@@ -249,8 +250,8 @@ run_lightweight_upgrade_probe() {
     "MITHRIL_TEST_RUNC=/var/lib/rancher/k3s/data/current/bin/runc" \
     "MITHRIL_TEST_OCI_HOOK=$remote/mithril-oci-hook" \
     "$remote/mithril-e2e-tests" "$test_name" \
-    --exact --ignored --nocapture --test-threads=1 \
-    >"$output_directory/runtime-hostile-runc.txt"
+    --ignored --nocapture --test-threads=1 \
+    >"$output_directory/runtime-gate-runc.txt"
   for path in "$remote/platform" "$pin" "$group" "$group-node"; do
     "$provider" run "$vm" sudo test ! -e "$path"
   done

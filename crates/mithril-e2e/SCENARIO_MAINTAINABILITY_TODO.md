@@ -5677,11 +5677,20 @@ test does not close a row when its physical condition or an assertion changed.
     result mount. No actor marker, runtime state, or cgroup remained. VM
     harness checks and final Rust CI passed. See
     `/tmp/mithril-runtime-forged-ci-20261002.log`.
-  - [ ] Make the retained-upgrade launcher run the three standard runtime-gate
+  - [x] Make the retained-upgrade launcher run the three standard runtime-gate
     cases in one compatible lifecycle. Include the shared pause actor in its
     inputs. Then remove the two old sandbox actions, their result fields,
     fake pause script, config helper, and log helper. Keep the ten other
     runtime-gate cases. Qualify the group and complete reduced probe first.
+    The three standard cases passed together in 2.46 seconds in the retained
+    K3s VM with stock runc 1.4.2. All ten remaining legacy cases passed. The
+    result has 28 fields and reports fixture cleanup. No platform output,
+    pin, actor cgroup, Node cgroup, or temporary launcher directory remained.
+    The deletion removes 85 Rust lines. The launcher now copies only the two
+    required Python actors and the recovery manifest. VM harness checks and
+    final Rust CI passed. See `/tmp/mithril-sandbox-retirement-ci-20261002.log`.
+    Evidence: `target/mithril-sandbox-retirement-20261002T230932Z-2190976`.
+    This result does not qualify the full two-node Kubernetes procedure.
   - [x] Replace the hostile-container case with one standard direct-runc test
     below 100 lines. Use the shared process owner and checked OCI and Python
     inputs. Keep the host PID namespace, root user, `CAP_SYS_ADMIN`, writable
@@ -5720,8 +5729,9 @@ test does not close a row when its physical condition or an assertion changed.
     shell line. The full two-node Kubernetes procedure was not run.
     Evidence: `target/mithril-hostile-retirement-20261002T221222Z-2136229`.
     [run_lightweight_upgrade_probe](harness/vm/two-node-convergence.sh) copies
-    the standard test binary and two required fixture inputs, then invokes
-    the exact Rust case. The old runner still asserts all twelve other cases.
+    the standard test binary and required fixture inputs, then invokes one
+    compatible runtime-gate lifecycle. The old runner asserts the ten cases
+    that do not yet have a standard replacement.
     Shell checks cover the result schema and resource cleanup only.
   - [x] Pass final Rust CI after the deletion and commit the retirement.
     All 25 related effect checks passed. Local VM harness checks and final
