@@ -4458,27 +4458,6 @@ impl EffectTestRunner {
             }
         );
         let mount_seq = observations.mount_change_sequence();
-        let recent_path_tree_effect_count = observations
-            .recent_since(marker)
-            .iter()
-            .map(physical_effect_line)
-            .filter(|line| physical_path_tree_effect_line_matches(line, policy.initial_role_id))
-            .count();
-        let captured_path_tree_effect_count = physical_effect_capture
-            .recent_since(marker)
-            .iter()
-            .map(physical_effect_line)
-            .filter(|line| physical_path_tree_effect_line_matches(line, policy.initial_role_id))
-            .count();
-        ensure!(
-            captured_path_tree_effect_count >= 5,
-            InvalidInputSnafu {
-                path: &kubernetes_subpath_result,
-                reason: format!(
-                    "the direct runc pre-effect capture did not preserve five physical path-tree denials while the recent window churned: recent={recent_path_tree_effect_count}, captured={captured_path_tree_effect_count}"
-                ),
-            }
-        );
         let entry_admission_proofs = host
             .map_keys("entry_admission_rules")
             .context(InterceptorSnafu)?
@@ -5482,47 +5461,6 @@ fn normal_path_tree_denial_matches(
         && event.active_role_id == active_role_id
         && event.admitted_entry_rule_id == admitted_entry_rule_id
         && event.kernel_result == -13
-}
-
-fn physical_effect_line(event: &MithrilEffectObservation) -> String {
-    format!(
-        "active_role_id={} family={} operation={} reason={} exact_object_key_id={} kernel_result={}",
-        event.active_role_id,
-        event.effect_family,
-        event.operation,
-        event.reason,
-        event.exact_object_key_id,
-        event.kernel_result,
-    )
-}
-
-fn physical_path_tree_effect_line_matches(line: &str, active_role_id: u32) -> bool {
-    let mut observed_role = None;
-    let mut family = None;
-    let mut operation = None;
-    let mut reason = None;
-    let mut exact_object_key_id = None;
-    let mut kernel_result = None;
-    for field in line.split_whitespace() {
-        let Some((name, value)) = field.split_once('=') else {
-            continue;
-        };
-        match name {
-            "active_role_id" => observed_role = value.parse::<u32>().ok(),
-            "family" => family = value.parse::<u32>().ok(),
-            "operation" => operation = value.parse::<u32>().ok(),
-            "reason" => reason = Some(value),
-            "exact_object_key_id" => exact_object_key_id = value.parse::<u64>().ok(),
-            "kernel_result" => kernel_result = value.parse::<i32>().ok(),
-            _ => {}
-        }
-    }
-    observed_role == Some(active_role_id)
-        && family == Some(u32::from(KernelEffectFamilyV1::File as u16))
-        && operation == Some(u32::from(KernelEffectOperationV1::OpenRead as u16))
-        && reason == Some("PATH_TREE_POLICY_DENY")
-        && exact_object_key_id == Some(0)
-        && kernel_result == Some(-13)
 }
 
 fn canonical_mount_route_summary(host: &KernelHost) -> Result<String> {

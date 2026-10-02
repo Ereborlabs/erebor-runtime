@@ -6024,7 +6024,7 @@ setup, production actions, assertions, and focused test.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
   exec operation, topology snapshots, bounded queue, and fail-closed results
   as `two-node-convergence.sh`.
-  - [ ] Replace the five-denial capture check with `capture_keeps_path_denials`.
+  - [x] Replace the five-denial capture check with `capture_keeps_path_denials`.
     Use the existing `read_path.py`, signed mount policy, `EffectCheck`, and
     `mount_late` lifecycle. Capture five real `OpenRead` denials through the
     production Node snapshot API. Require `EACCES`, the actor task cookie,
@@ -6053,9 +6053,18 @@ setup, production actions, assertions, and focused test.
       mount order. Both denials and normal namespace cleanup passed. Control,
       Node, BPF, Platform code, and readiness limits did not change for these
       two cases. The existing local VM harness checks passed.
-    - [ ] Remove only the old five-denial count and its string matchers after
-      all three pass. Keep the separate full-interval overlap capture and
-      obsolete-row collection checks. This test does not replace those checks.
+    - [x] Remove only the old five-denial count and its string matchers after
+      all three pass. The deletion removes 62 Rust lines.
+      Keep the separate full-interval overlap capture and obsolete-row
+      collection checks. This test does not replace those checks. The final
+      repository Rust gate passed for this deletion-only source state. It
+      used normal ignored-test exclusions and no extra skips. See
+      `/tmp/mithril-reader-capture-count-final-ci-20261002.log`.
+      The remaining legacy probe failed before the deleted count: no READY
+      snapshot existed at cache generation 23. Its original physical setup,
+      alias traffic, assertions, and cleanup sequence are unchanged. The
+      failure cause is not proved. See
+      `/tmp/mithril-reader-capture-count-retirement-20261002.log`.
     - [ ] Retire the duplicate Rust subPath actions and physical setup after
       the existing Kubernetes subPath test passes again. Keep the original
       older-alias, source, newer-alias mount order in its Pod fixture. Remove
@@ -6063,6 +6072,13 @@ setup, production actions, assertions, and focused test.
       consumer is gone. Keep the bind-alias read that supplies the current
       cache to the separate overlap and obsolete-row checks. Verify the
       complete reduced legacy probe before committing the deletion.
+      Both fixture-deletion drafts are withdrawn. Removing the alias traffic
+      or replacing the host-side nested binds with native OCI sources failed
+      the same READY-cache precondition. The original setup also failed before
+      the retired count. These results do not prove that either draft caused
+      the failure. `FixtureBindMounts` and its cleanup test are restored without
+      changes. Add no warm-up helper or new step to the old runner. Complete
+      the dependent shared cache qualification before deleting this fixture.
   - [x] Make [CacheView](src/physical/mount_cache.rs) comparable with `Eq`
     and `PartialEq`. Read `MountCache::snapshot` in the same file for the
     cache map layout and row selection. The snapshot does not write a map.
