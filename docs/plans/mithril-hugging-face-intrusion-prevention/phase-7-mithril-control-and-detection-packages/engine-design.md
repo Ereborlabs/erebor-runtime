@@ -568,7 +568,9 @@ relations; create later result families only in their owning phase.
 | `profiles`, `behavior_atoms`, `behavior_buckets` | Derived counts, keys, manifests, lifecycle coverage, and method version. Working rows are separate from sealed results. |
 | `relationships`, `findings`, `notifications` | Owner-qualified revisions, references, route attempts, and deadlines. |
 | `assessments`, `requirements`, `proposals`, `reviews`, `publications` | Bounded immutable bodies, parent references, expected revisions, request digests, and owner state. |
-| `traces`, `trace_measurements` | Intent, source/grant/target digests, execution state, output receipts, and reviewed derived measurements. `trace_output` is a segment-backed logical relation. |
+| `traces` | Immutable request source, exact execution bindings, bounded Control authority, and revision-checked cancellation/read revocation. Source bytes occur once per request. |
+| `trace_receipts` | One diagnostic receipt per execution: exact identity, last frame sequence, byte count, bounded terminal summary, retained floor and commit revision. It does not contain raw output frames or offsets. |
+| `trace_output`, `trace_measurements` | Segment-backed raw frames and reviewed derived measurements. Observability 3 registers their scoped query relations; raw frames are not copied into DuckDB. |
 
 Raw batch headers store cursor ranges, event end offsets, CPU, intake time,
 and commit/ordinal positions. The segment owner reconstructs one compact

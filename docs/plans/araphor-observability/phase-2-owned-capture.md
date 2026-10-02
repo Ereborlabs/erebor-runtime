@@ -91,6 +91,34 @@ Control or Node restarts after dispatch
 Status: **Not done** for this storage contract. Physical capture qualification
 also requires the cases below on the implementing revision.
 
+### Storage bounds
+
+AnalysisStore has one raw segment owner for evidence and diagnostic output.
+Diagnostic records use typed frames and a terminal record. A terminal has its
+own stored cursor; an upload ACK reports the last output-frame sequence.
+CRC32C checks raw records. Source and grant digests retain their separate
+authorization purpose. No raw-output hash catalogue or SQL batch-offset table
+is required.
+
+The diagnostic logical-byte partition is one eighth of each global and tenant
+limit. Admission reserves 16 KiB and file-entry capacity for each execution's
+terminal state. A terminal-only commit can use that reservation under ordinary
+quota pressure. It must still preserve the policy reserve and pass physical
+write and sync checks. New output frames do not get that exception.
+
+There are at most 1,024 retained requests and executions globally and 256 of
+each per tenant. These are retained-history limits, not active-execution limits.
+Raw retention does not remove request identities or terminal receipts. At the
+limit, new requests fail with capacity status. Exact retained retries still
+work. Automatic metadata expiry is not implemented; it requires an explicit
+rule for when an old request can no longer be retried. Do not describe these
+bounds as unlimited continuous admission.
+
+Diagnostic segment files have a separate 1,024-entry allowance. They do not
+consume the ordinary 4,096-entry allowance. Actual file bytes remain subject
+to the shared disk limit. Whole-segment witness charges and read leases apply
+to both stream kinds.
+
 ### Verified implementation slices
 
 Source `cdb3cbe7` moves portable source, frame, terminal, measurement and batch
@@ -124,6 +152,42 @@ check. Receipts are `portable-contract-2.log` and `trace-intent.log` under
 `/tmp/araphor-capture-qualification.E0VU3eEo/`. These results do not prove the
 raw-output migration, Control integration, diagnostic reservations, or physical
 lifecycle gates. Those parts remain **Not done**. No performance experiment ran.
+
+Source `13cc6076` adds a test-only exit hook after durable Node intent and
+before backend execution. The child exits with code 73. Reopen preserves the
+execution identity and reports `NodeRestarted`, incomplete output and unknown
+cleanup. An exact duplicate dispatch does not reach the hook again. The Node
+`observability` filter passed seven tests. Two tests remain excluded from
+ordinary execution: the child helper and the physical disk-full case. The
+parent test invokes the child helper explicitly. The receipt is
+`node-intent.log` in the same evidence directory. This proves the pre-spawn
+process boundary, not post-attachment cleanup or physical enforcement recovery.
+
+Source `680dd2c2` connects Control trace methods to shared diagnostic segments.
+The data owner stores frames once. It returns the raw receipt after sync, before
+DuckDB publication. Schema 12 rejects older metadata. Control retains grants,
+target checks and disclosure checks. It no longer writes trace artifacts or
+projects trace rows through DiscoveryIndex. Capture does not start discovery.
+
+The focused `observability` run passed 58 tests: data 18, Control 17, e2e 14,
+CLI parsing 2, and Node 7. Five helper or physical cases were not selected for
+ordinary execution. The e2e owner-upload case checks signed mTLS dispatch,
+lost ACK, exact retry, conflicting output, a post-sync storage error, store
+unreadiness, reopen and replay with discovery disabled. Its injected failure
+is not a physical full-disk result. It does not yet run a Node capture worker.
+
+The same compiled data test binary passed 109 `analysis::` regression tests;
+five existing exclusions were not run. The exact
+`query::input::tests::query_input_catalog_bounds` check also passed. Receipts
+are `shared-capture-3.log`, `shared-analysis.log` and `catalogue-schema.log` in
+the evidence directory above. Use the documented Cargo environment and the
+`observability` filter without `--lib` to include the CLI parser tests.
+
+Remaining work includes diagnostic crash-stage, read-lease and incomplete-backup
+proof, terminal reservations when a segment is pinned or copied for backup,
+the lightweight Node/Interceptor capture path, physical lifecycle cases, and
+final workspace CI. Physical enablement still requires a platform-matched
+interference receipt. That experiment needs separate approval.
 
 ## Acceptance and verification
 
