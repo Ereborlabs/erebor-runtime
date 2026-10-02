@@ -5641,6 +5641,41 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `EffectTestRunner::runc_retained_runtime_gate_probe`: own the bundle
   and marker cleanup. Keep the production OCI hook invocation for hostile,
   CRI, installer, recovery, and host-stock shapes explicit.
+  - [x] Replace the hostile-container case with one standard direct-runc test
+    below 100 lines. Use the shared process owner and checked OCI and Python
+    inputs. Keep the host PID namespace, root user, `CAP_SYS_ADMIN`, writable
+    host-root mount, and unavailable Node endpoint. Run stock runc and the
+    production OCI hook. Require failed start, `DENY_HOSTILE`, no actor marker,
+    empty runtime state, and cgroup cleanup. Add no Platform operation and no
+    legacy fixture code. This case qualifies the retained OCI gate, not a
+    Host process or a Kubernetes Pod. Keep the separate physical Pod case.
+  - [x] Pass the exact direct-runc case, related checks, harness checks, and
+    final Rust CI. The 98-line `hostile_runtime_never_starts` test passed in
+    6.89 seconds in the retained root VM. The production hook returned
+    `DENY_HOSTILE`. Neither actor marker existed. No container record, cgroup,
+    pin, lease, or output directory remained. All 25 related effect checks and
+    local VM harness checks passed. Final Rust CI passed after the last Rust
+    edit. See `/tmp/mithril-runtime-hostile-ci-20261002.log`. The workspace
+    gate uses normal ignored-test exclusions and no added skips.
+    The first two runs stopped at test input checks: the existing cgroup
+    getter supports Host only, and stock runc emits `null` for an empty list.
+    The test uses the launcher cgroup input and serde's optional list. It also
+    rejects runtime stderr and a retained container state directory.
+  - [ ] Commit the replacement before removing its old action, duplicate
+    result fields, and shell predicate. Keep the other twelve retained-gate
+    cases and their security assertions.
+    Review route: [hostile_runtime_never_starts](src/identity/scenarios/runtime_hostile.rs)
+    binds the checked OCI input and keeps the Node endpoint absent.
+      -> [OciBaseSpecOwner](../mithril-node/src/runtime_integration.rs) installs
+      the production hooks in that spec.
+      -> [mithril-oci-hook](../mithril-node/src/bin/mithril_oci_hook.rs) reads
+      actual runc state; the retained gate rejects the hostile host mount.
+      -> [ProcessFixture](src/process.rs) captures exit status and bounded
+      output, then checks process cleanup. The common platform removes resources.
+    Run the exact case in a prepared root VM with the normal platform inputs:
+    `identity::scenarios::runtime_hostile::hostile_runtime_never_starts::runtime_gate_runc
+    --exact --ignored --nocapture --test-threads=1`. This result does not qualify
+    the separate Kubernetes hostile-Pod case or the full physical matrix.
 - [ ] `EffectTestRunner::recovered_container_entry_probe` setup and
   teardown: own containerd, `runc`, trace, pin, lease, cgroup, and fixture
   resources.

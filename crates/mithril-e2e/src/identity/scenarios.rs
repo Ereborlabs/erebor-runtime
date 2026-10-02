@@ -123,6 +123,8 @@ mod runtime_entries;
 #[cfg(test)]
 mod runtime_exec;
 #[cfg(test)]
+mod runtime_hostile;
+#[cfg(test)]
 mod runtime_outage;
 #[cfg(test)]
 mod runtime_prepared;
