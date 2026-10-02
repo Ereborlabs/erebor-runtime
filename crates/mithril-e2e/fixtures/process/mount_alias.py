@@ -47,6 +47,7 @@ libc.prctl.argtypes = [
     ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong
 ]
 AT_FDCWD = -100
+AT_RECURSIVE = 0x8000
 CLONE_NEWNS = 0x00020000
 MS_BIND = 4096
 MS_REC = 16384
@@ -108,7 +109,7 @@ if args == ["external-setattr"]:
         readonly = command == "ro\n"
         attr = MountAttr(int(readonly), int(not readonly), 0, 0)
         check(libc.mount_setattr(
-            AT_FDCWD, target, 0, ctypes.byref(attr), ctypes.sizeof(attr)
+            AT_FDCWD, target, AT_RECURSIVE, ctypes.byref(attr), ctypes.sizeof(attr)
         ))
         actual = bool(os.statvfs(target).f_flag & os.ST_RDONLY)
         if actual != readonly:
