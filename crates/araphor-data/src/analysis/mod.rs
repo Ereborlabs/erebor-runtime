@@ -63,14 +63,15 @@ const ANALYSIS_SCHEMA_VERSION: i64 = 9;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum AnalysisCommitStage {
+    BeforeRotation,
     BeforeAppend,
     AfterSync,
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 struct CommitHook {
     stage: AnalysisCommitStage,
     callback: Box<dyn FnOnce() -> Result<()> + Send>,
@@ -91,7 +92,7 @@ pub struct AnalysisStore {
     revision: watch::Sender<u64>,
     retention_healthy: AtomicBool,
     write_ready: AtomicBool,
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(any(test, feature = "test-fixtures"))]
     commit_hook: Mutex<Option<CommitHook>>,
     retention: RetentionLimitsV1,
     storage: StorageLimitsV1,
@@ -465,7 +466,7 @@ impl AnalysisStore {
             revision,
             retention_healthy: AtomicBool::new(true),
             write_ready: AtomicBool::new(true),
-            #[cfg(feature = "test-fixtures")]
+            #[cfg(any(test, feature = "test-fixtures"))]
             commit_hook: Mutex::new(None),
             retention,
             storage,
@@ -476,7 +477,7 @@ impl AnalysisStore {
         self.retention_healthy.load(Ordering::Acquire)
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn set_commit_hook(
         &self,
         stage: AnalysisCommitStage,
@@ -496,7 +497,7 @@ impl AnalysisStore {
         Ok(())
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn run_commit_hook(&self, stage: AnalysisCommitStage) -> Result<()> {
         let mut slot = self
             .commit_hook

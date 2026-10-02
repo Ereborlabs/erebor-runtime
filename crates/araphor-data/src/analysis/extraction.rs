@@ -236,7 +236,7 @@ impl AnalysisStore {
                 output.charge(size_of::<AnalysisSourceSnapshotV1>() + identity.node_id.len())?;
                 let expired = self.extract_gaps(snapshot, identity, false, control, &mut output)?;
                 let recovery = self.extract_gaps(snapshot, identity, true, control, &mut output)?;
-                self.check_selected_source(snapshot, &receipt, &expired)?;
+                self.check_selected_source(snapshot, &receipt, &expired, control)?;
                 if let Some((first, last)) = selection.time_range() {
                     let mut cursor = 0;
                     while cursor < receipt.contiguous_cursor {
@@ -247,6 +247,7 @@ impl AnalysisStore {
                             cursor,
                             receipt.contiguous_cursor,
                             (first, last),
+                            control,
                         )?;
                         if ranges.is_empty() {
                             break;
@@ -326,12 +327,10 @@ impl AnalysisStore {
         after: u64,
         accepted: u64,
         time: (u64, u64),
+        control: &AnalysisReadControl,
     ) -> Result<Vec<(SegmentRange, u64)>> {
         let revision = Self::read_meta_from(snapshot, &self.root)?.commit_revision;
-        let raw = self
-            .raw
-            .lock()
-            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+        let raw = control.lock(|| self.raw.try_lock())?;
         Ok(raw
             .select_ranges(
                 identity,
@@ -354,14 +353,16 @@ impl AnalysisStore {
         snapshot: &Connection,
         receipt: &AnalysisSourceReceiptV1,
         expired: &[AnalysisGapV1],
+        control: &AnalysisReadControl,
     ) -> Result<()> {
         let identity = &receipt.identity;
         let revision = Self::read_meta_from(snapshot, &self.root)?.commit_revision;
-        let retained = self
-            .raw
-            .lock()
-            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
-            .record_count(source_key(identity), 1, receipt.contiguous_cursor, revision);
+        let retained = control.lock(|| self.raw.try_lock())?.record_count(
+            source_key(identity),
+            1,
+            receipt.contiguous_cursor,
+            revision,
+        );
         let covered = expired.iter().try_fold(retained, |count, gap| {
             gap.last_cursor
                 .checked_sub(gap.first_cursor)
@@ -452,6 +453,188 @@ mod tests {
             framed_records: vec![7; count].into(),
             frame_ends: (1..=count).collect(),
         }
+    }
+
+    #[test]
+    fn analysis_extract_rotation() -> TestResult {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let first = identity(1);
+        let rotating = EvidenceIntakeIdentityV1 {
+            source_epoch: 2,
+            ..first.clone()
+        };
+        store.accept_validated_batch(first.clone(), batch(1, 1, 10))?;
+        let large = ValidatedEvidenceBatchV1 {
+            framed_records: vec![7; crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES].into(),
+            frame_ends: vec![crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES],
+            ..batch(1, 1, 10)
+        };
+        for cursor in 1..=3 {
+            store.accept_validated_batch(
+                rotating.clone(),
+                ValidatedEvidenceBatchV1 {
+                    first_cursor: cursor,
+                    last_cursor: cursor,
+                    ..large.clone()
+                },
+            )?;
+        }
+        let before = store.meta()?;
+        let selection =
+            AnalysisSelectionV1::new(first.tenant_id, vec![first.clone(), rotating.clone()]);
+        let (start, started) = mpsc::channel();
+        let (rotate, rotation) = mpsc::channel();
+        store.set_commit_hook(
+            super::super::AnalysisCommitStage::BeforeRotation,
+            move || {
+                rotate
+                    .send(())
+                    .map_err(|_| crate::AnalysisReadCancelledSnafu.build())
+            },
+        )?;
+        std::thread::scope(|scope| -> TestResult {
+            let store = &store;
+            let rotating = &rotating;
+            let writer = scope.spawn(move || {
+                started
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|_| store.state_error("the reader did not reach its barrier"))?;
+                store.accept_validated_batch(
+                    rotating.clone(),
+                    ValidatedEvidenceBatchV1 {
+                        first_cursor: 4,
+                        last_cursor: 4,
+                        ..large
+                    },
+                )
+            });
+            let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+                let AnalysisInputV1::Event {
+                    identity, record, ..
+                } = input
+                else {
+                    return store.reject("unexpected relation");
+                };
+                if identity == &first {
+                    start
+                        .send(())
+                        .map_err(|_| store.state_error("the writer left its barrier"))?;
+                    rotation
+                        .recv_timeout(Duration::from_secs(2))
+                        .map_err(|_| store.state_error("the writer did not request rotation"))?;
+                }
+                Ok(Some(vec![identity.source_epoch as u8, record.cursor as u8]))
+            });
+            assert_eq!(
+                writer.join().map_err(|_| "writer panicked")??,
+                crate::EvidenceStoreOutcomeV1::Accepted
+            );
+            let output = output?;
+            assert_eq!(output.meta, before);
+            assert_eq!(output.sources[1].receipt.contiguous_cursor, 3);
+            let rows: Vec<_> = output
+                .pages
+                .iter()
+                .flat_map(|page| &page.rows)
+                .map(|row| row.as_ref())
+                .collect();
+            assert_eq!(rows, [&[1, 1], &[2, 1], &[2, 2], &[2, 3]]);
+            Ok(())
+        })?;
+        let later = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+            let AnalysisInputV1::Event {
+                identity, record, ..
+            } = input
+            else {
+                return store.reject("unexpected relation");
+            };
+            Ok(Some(vec![identity.source_epoch as u8, record.cursor as u8]))
+        })?;
+        assert_eq!(later.meta.commit_revision, before.commit_revision + 1);
+        assert_eq!(later.sources[1].receipt.contiguous_cursor, 4);
+        let rows: Vec<_> = later
+            .pages
+            .iter()
+            .flat_map(|page| &page.rows)
+            .map(|row| row.as_ref())
+            .collect();
+        assert_eq!(rows, [&[1, 1], &[2, 1], &[2, 2], &[2, 3], &[2, 4]]);
+        assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 3);
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_extract_lock_waits() -> TestResult {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let identity = identity(1);
+        store.accept_validated_batch(identity.clone(), batch(1, 1, 1))?;
+        let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
+        let reader = store.reader()?;
+        for access in 0..3 {
+            for cancelled in [false, true] {
+                let (ready, held) = mpsc::channel();
+                let (release, released) = mpsc::channel();
+                let (waiting, blocked) = mpsc::channel();
+                let control = AnalysisReadControl::default();
+                *control
+                    .wait_signal
+                    .lock()
+                    .map_err(|_| "wait signal poisoned")? = Some(waiting);
+                std::thread::scope(|scope| -> TestResult {
+                    let store = &store;
+                    let control = &control;
+                    let holder = scope.spawn(move || -> Result<()> {
+                        let _raw = store
+                            .raw
+                            .lock()
+                            .map_err(|_| store.state_error("raw lock poisoned"))?;
+                        ready
+                            .send(())
+                            .map_err(|_| store.state_error("the lock check stopped"))?;
+                        blocked.recv_timeout(Duration::from_secs(2)).map_err(|_| {
+                            store.state_error("the reader did not wait for raw access")
+                        })?;
+                        if cancelled {
+                            control.cancel()?;
+                        }
+                        released.recv_timeout(Duration::from_secs(3)).map_err(|_| {
+                            store.state_error("the reader did not return while raw access was held")
+                        })?;
+                        Ok(())
+                    });
+                    held.recv_timeout(Duration::from_secs(2))?;
+                    let result = match access {
+                        0 => store
+                            .selected_ranges(reader.get()?, &identity, 0, 1, (0, 10), control)
+                            .map(|_| ()),
+                        1 => store.check_selected_source(reader.get()?, &receipt, &[], control),
+                        _ => store.read_coordinator(control).map(|_| ()),
+                    };
+                    let _sent = release.send(());
+                    holder.join().map_err(|_| "lock holder panicked")??;
+                    assert!(match result {
+                        Err(crate::Error::AnalysisReadCancelled { .. }) => cancelled,
+                        Err(crate::Error::AnalysisReadDeadline { .. }) => !cancelled,
+                        _ => false,
+                    });
+                    Ok(())
+                })?;
+            }
+        }
+        drop(reader);
+        store.accept_validated_batch(identity.clone(), batch(2, 1, 2))?;
+        assert_eq!(store.read_page(&identity, 1)?.records.len(), 2);
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
     }
 
     #[test]

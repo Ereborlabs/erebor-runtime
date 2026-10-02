@@ -267,15 +267,22 @@ impl AnalysisStore {
                 .get(&key)
                 .is_some_and(|source| source.stream != 0)
         {
-            Some(
-                self.maintenance
-                    .write()
-                    .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?,
-            )
+            drop(raw);
+            #[cfg(any(test, feature = "test-fixtures"))]
+            self.run_commit_hook(super::AnalysisCommitStage::BeforeRotation)?;
+            let rotation = self
+                .maintenance
+                .write()
+                .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
+            raw = self
+                .raw
+                .lock()
+                .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+            Some(rotation)
         } else {
             None
         };
-        #[cfg(feature = "test-fixtures")]
+        #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(super::AnalysisCommitStage::BeforeAppend)?;
         self.write_ready.store(false, Ordering::Release);
         #[cfg(test)]
@@ -286,7 +293,7 @@ impl AnalysisStore {
             .get(&key)
             .map_or(0, |source| source.receipt.contiguous_cursor);
         raw.append(&identity, commit)?;
-        #[cfg(feature = "test-fixtures")]
+        #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(super::AnalysisCommitStage::AfterSync)?;
         #[cfg(test)]
         self.crash_at("evidence.after");

@@ -198,3 +198,28 @@ schema, operations, read revisions, coverage, checkpoints and configured limits.
 Full public DE-QUERY and DE-DISCLOSE require Observability 3. This phase cannot
 enable client SQL or claim OS worker isolation. A model, discovery profile,
 public API or durable subscription registry is not required.
+
+## Implementation result
+
+Status: **Not done**. Reader/rotation locking is **Done**. The writer keeps
+its coordinator, releases the raw-directory mutex before the rotation wait,
+and acquires that mutex again after segment protection. Directory waits in
+extraction and reader coordination check cancellation and deadlines.
+
+`analysis_extract_rotation` uses channel barriers and the production extractor.
+It checks the original snapshot, rotation completion, and the later commit.
+`analysis_extract_lock_waits` cancels after a blocked lock attempt. The lock
+holder must retain the mutex until the reader returns. The test also checks
+deadlines at all three directory-access sites and subsequent intake.
+
+On base `ce0a9fd8` with this lock correction, the command below passed:
+8 tests, zero failures, and one ignored release-history test. Formatting and
+`git diff --check` passed. No performance case ran. The final workspace gate
+remains required after the last implementation edit.
+
+```sh
+CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 cargo test -p araphor-data analysis_extract_ -- --nocapture
+```
+
+Next: shared evidence definitions and bounded decoding. Position reads,
+QueryOwner, follow, replay floors, windows, and `query-follow` remain Not done.

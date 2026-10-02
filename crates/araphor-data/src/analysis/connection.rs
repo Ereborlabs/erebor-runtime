@@ -261,10 +261,13 @@ impl AnalysisStore {
         if !self.write_ready.load(Ordering::Acquire) {
             return self.reject("the data writer requires catalog recovery before retry");
         }
-        let mut raw = self
-            .raw
-            .lock()
-            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+        let mut raw = match control {
+            Some(control) => control.lock(|| self.raw.try_lock())?,
+            None => self
+                .raw
+                .lock()
+                .map_err(|_| self.state_error("the raw owner lock is poisoned"))?,
+        };
         let writer = connection
             .as_mut()
             .ok_or_else(|| self.state_error("the analysis connections are closed"))?;

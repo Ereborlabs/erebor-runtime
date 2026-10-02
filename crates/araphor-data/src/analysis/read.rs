@@ -15,6 +15,8 @@ pub struct AnalysisReadControl {
     deadline: Instant,
     cancelled: AtomicBool,
     interrupt: Mutex<Option<Arc<duckdb::InterruptHandle>>>,
+    #[cfg(test)]
+    pub(super) wait_signal: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 impl Default for AnalysisReadControl {
@@ -23,6 +25,8 @@ impl Default for AnalysisReadControl {
             deadline: Instant::now() + Duration::from_secs(1),
             cancelled: AtomicBool::new(false),
             interrupt: Mutex::new(None),
+            #[cfg(test)]
+            wait_signal: Mutex::new(None),
         }
     }
 }
@@ -59,7 +63,18 @@ impl AnalysisReadControl {
                     self.check()?;
                     return Ok(guard);
                 }
-                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
+                Err(TryLockError::WouldBlock) => {
+                    #[cfg(test)]
+                    if let Some(signal) = self
+                        .wait_signal
+                        .lock()
+                        .map_err(|_| Self::lock_error())?
+                        .take()
+                    {
+                        let _sent = signal.send(());
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
                 Err(TryLockError::Poisoned(_)) => return Err(Self::lock_error()),
             }
         }
