@@ -37,9 +37,11 @@ mod generation_state;
 #[cfg(test)]
 mod group_boundary;
 #[cfg(test)]
+mod group_recovery;
+#[cfg(test)]
 mod group_roles;
 #[cfg(test)]
-mod group_recovery;
+mod inspection_capture;
 #[cfg(test)]
 mod ioctl_observe;
 #[cfg(test)]

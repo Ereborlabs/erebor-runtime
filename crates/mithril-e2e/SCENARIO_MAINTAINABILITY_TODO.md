@@ -5704,6 +5704,35 @@ test does not close a row when its physical condition or an assertion changed.
       direct `runc` before removing the old action and capture. The current
       shared test checks the production observation API, but does not call the
       CLI. The deployed two-node Kubernetes lane checks the CLI separately.
+      - [x] Add `inspection_keeps_signed_deny`, one standard platform test
+        below 100 lines. Reuse `ready.py`, the entry-isolation policy, the
+        existing process owner, and the real Node observation endpoint.
+        Start the actor before Node. Recover it, run the declared startup
+        entry, and require physical `EACCES` and fresh signed denial evidence.
+        Run the public CLI with one sample. Require the same source ID, task,
+        role, entry rule, family, operation, and kernel result in its output.
+        Add no Platform method or temporary observation server.
+      - [x] Host passed in 49.69 seconds. The 97-line test checks a recovered
+        application, declared startup entry, physical denial, fresh production
+        evidence, and the exact CLI fields. Output, pin, lease, actor cgroup,
+        and Node cgroup cleanup passed. Strict Mithril E2E Clippy passed.
+        No Platform, production, actor, policy, or legacy fixture changed.
+        All 25 related effect checks and the local VM harness checks passed.
+        The final repository Rust CI passed with normal ignored-test
+        exclusions and no extra skips. See
+        `/tmp/mithril-inspection-host-ci-20261002.log`.
+      - [ ] Pass and commit direct runc with the unchanged body.
+      - [ ] Remove only the matched legacy denial action and temporary
+        observation server after both pass. Keep the real Kubernetes CLI lane.
+      Review route:
+      [inspection_keeps_signed_deny](src/identity/scenarios/inspection_capture.rs)
+      recovers the actor and releases the declared startup entry.
+        -> [EffectCheck](src/effect/check.rs) checks the fresh Node denial.
+        -> [mithril-inspect](../mithril-node/src/bin/mithril_inspect.rs) reads
+        the real Node endpoint and prints that result.
+        -> [ProcessFixture](src/process.rs) reaps both processes; the platform
+        removes scenario resources and retains only its lifecycle services.
+      The test writes no BPF map and starts no observation server.
   - [x] Replace the recovered readiness-before-startup identity order. Reuse
     `ready.py` and the entry-isolation policy. Start the actor before Node,
     recover it, run a declared `grep` readiness entry, then run a declared
