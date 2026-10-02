@@ -145,7 +145,6 @@ pub(super) enum PreparedOperation {
     IoctlDerivedPeer,
     IoctlUnsupported,
     UnixStream,
-    SelfProtect { path: PathBuf },
 }
 
 pub(super) use PreparedOperation as HardClosedOperation;
@@ -1698,10 +1697,6 @@ impl PreparedOperations {
                 .unix_stream_target
                 .as_mut()
                 .map_or_else(missing_process_target, UnixStreamTarget::roundtrip),
-            PreparedOperation::SelfProtect { path } => match fs::remove_file(path) {
-                Ok(()) => allowed_outcome(),
-                Err(error) => error_outcome(error),
-            },
         }
     }
 }

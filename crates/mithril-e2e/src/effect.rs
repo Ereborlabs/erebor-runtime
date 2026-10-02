@@ -495,7 +495,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub ptmx_derived_peer_hard_closed: bool,
     pub ptmx_derived_peer_installed_nothing: bool,
     pub zero_device_ioctl_exact_denied: bool,
-    pub managed_link_pin_unlink_denied: bool,
     pub hard_link_alias_denied: bool,
     pub unattached_mount_fd_access_denied: bool,
     pub passed_fd_acquisition_denied: bool,
@@ -1931,33 +1930,6 @@ impl EffectTestRunner {
                 Some(QUALIFIED_TIOCGPTN_IOCTL),
             )?;
         }
-        let protected_link = pin_root.join("links/erebor_identity_file_open");
-        ensure!(
-            protected_link.exists(),
-            InvalidInputSnafu {
-                path: &protected_link,
-                reason: "the self-protection fixture link is not pinned",
-            }
-        );
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::SelfProtect {
-                path: protected_link.clone(),
-            },
-            "UNRESOLVED_OBJECT",
-            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Unlink),
-            "Mithril BPF-link removal",
-        )?;
-        ensure!(
-            protected_link.exists(),
-            InvalidInputSnafu {
-                path: &protected_link,
-                reason: "denied self-protection attack removed the BPF link pin",
-            }
-        );
-
         reconcile_policy_lifecycle(&policy, &mut host)?;
         let original_marker = observations.cursor();
         let original = fixture.open(&paths.secret)?;
@@ -2506,7 +2478,6 @@ impl EffectTestRunner {
             ptmx_derived_peer_hard_closed: protect,
             ptmx_derived_peer_installed_nothing: protect,
             zero_device_ioctl_exact_denied: protect,
-            managed_link_pin_unlink_denied: true,
             hard_link_alias_denied: true,
             unattached_mount_fd_access_denied: protect,
             passed_fd_acquisition_denied: protect,

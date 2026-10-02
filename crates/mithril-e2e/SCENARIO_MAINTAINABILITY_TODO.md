@@ -3633,7 +3633,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace BPF-link pin removal with `link_pin_removal_is_denied`.
+  - [x] Replace BPF-link pin removal with `link_pin_removal_is_denied`.
     Reuse the bind-mount owner from the old runc runner, the file-mutation
     actor, and existing policy fixtures. Mount the real links directory in
     the actor namespace. Check its device and inode before the action.
@@ -3683,6 +3683,10 @@ test does not close a row when its physical condition or an assertion changed.
     32.54 seconds. Output, pins, leases, and cgroups are removed on all three
     platforms. All 91 local library tests, harness checks, formatting, and
     strict Clippy pass. Commit Kubernetes before removing the legacy action.
+    Retire the old physical runner's unlink block, child operation, and result
+    flag after these commits. The shared test retains both modes, the real pin,
+    and exact task attribution. This retirement removes 34 Rust lines.
+    After removal, all 25 related tests, formatting, and strict Clippy pass.
   - [x] Replace the two pre-protection passed-descriptor reads with
     `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
     exact-file policy. A child passes each descriptor through `SCM_RIGHTS`
