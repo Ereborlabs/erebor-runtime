@@ -5728,17 +5728,33 @@ test does not close a row when its physical condition or an assertion changed.
         platform attribute changed after Host commit `a8b8c6b7`.
         The final repository Rust CI passed for that attribute edit. See
         `/tmp/mithril-inspection-runc-ci-20261002.log`.
-      - [ ] Remove only the matched legacy denial action and temporary
-        observation server after both pass. Keep the real Kubernetes CLI lane.
+      - [x] Remove only the matched legacy denial action and temporary
+        observation server after both pass. The deletion removes 82 Rust
+        lines. The complete reduced recovered-container probe passed with
+        its unchanged launcher predicate and cleanup checks. All 25 related
+        effect checks and the local VM harness checks passed. Keep the real
+        Kubernetes CLI lane, task-change retry, role, cutover, and cleanup
+        assertions. The result schema stays at version 1.
+        The final repository Rust CI passed after this deletion, with normal
+        ignored-test exclusions and no extra skips. See
+        `/tmp/mithril-inspection-retirement-ci-20261002.log`.
       Review route:
       [inspection_keeps_signed_deny](src/identity/scenarios/inspection_capture.rs)
       recovers the actor and releases the declared startup entry.
         -> [EffectCheck](src/effect/check.rs) checks the fresh Node denial.
         -> [mithril-inspect](../mithril-node/src/bin/mithril_inspect.rs) reads
         the real Node endpoint and prints that result.
-        -> [ProcessFixture](src/process.rs) reaps both processes; the platform
+        -> [ProcessFixture](src/process.rs) reaps the actor, entry, and CLI;
+        the platform
         removes scenario resources and retains only its lifecycle services.
       The test writes no BPF map and starts no observation server.
+      Run the exact case in the prepared root VM with the existing platform
+      environment inputs and `--exact --ignored --nocapture --test-threads=1`.
+      The prefix is
+      `identity::scenarios::inspection_capture::inspection_keeps_signed_deny`.
+      Select `inspection_recovery_host` or `inspection_recovery_runc` below
+      that prefix. Infrastructure supplies `MITHRIL_BIN_DIRECTORY`; that
+      directory must contain the production `mithril-inspect` executable.
   - [x] Replace the recovered readiness-before-startup identity order. Reuse
     `ready.py` and the entry-isolation policy. Start the actor before Node,
     recover it, run a declared `grep` readiness entry, then run a declared
