@@ -58,18 +58,26 @@ impl QueryClock for Clock {
 }
 
 struct GateClock {
-    first: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
-    now: u64,
+    gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    now: AtomicU64,
+    reads: AtomicU64,
+    pause: u64,
 }
 
 impl GateClock {
     fn new(now: u64) -> (Arc<Self>, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        Self::on_read(now, 0)
+    }
+
+    fn on_read(now: u64, pause: u64) -> (Arc<Self>, mpsc::Receiver<()>, mpsc::Sender<()>) {
         let (entered, entering) = mpsc::channel();
         let (release, released) = mpsc::channel();
         (
             Arc::new(Self {
-                first: Mutex::new(Some((entered, released))),
-                now,
+                gate: Mutex::new(Some((entered, released))),
+                now: AtomicU64::new(now),
+                reads: AtomicU64::new(0),
+                pause,
             }),
             entering,
             release,
@@ -79,12 +87,16 @@ impl GateClock {
 
 impl QueryClock for GateClock {
     fn now_ns(&self) -> araphor_data::Result<u64> {
-        let first = self
-            .first
+        let now = self.now.load(Ordering::SeqCst);
+        if self.reads.fetch_add(1, Ordering::SeqCst) != self.pause {
+            return Ok(now);
+        }
+        let gate = self
+            .gate
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take();
-        if let Some((entered, released)) = first {
+        if let Some((entered, released)) = gate {
             let invalid = || araphor_data::Error::QueryInvalid {
                 field: "qualification clock gate",
                 location: snafu::Location::default(),
@@ -94,7 +106,7 @@ impl QueryClock for GateClock {
                 .recv_timeout(Duration::from_secs(10))
                 .map_err(|_| invalid())?;
         }
-        Ok(self.now)
+        Ok(now)
     }
 }
 
@@ -366,7 +378,9 @@ impl QueryFollowQualification {
     }
 
     async fn windows(&self, root: &Path) -> Result<serde_json::Value> {
-        let store = Arc::new(AnalysisStore::open(root)?);
+        fs::create_dir(root)?;
+        let timer = self.timer_expiry(&root.join("timer")).await?;
+        let store = Arc::new(AnalysisStore::open(root.join("history"))?);
         let source = evidence_source(1, 3);
         for (cursor, minute) in [(1, 601), (2, 604), (3, 607)] {
             commit(
@@ -445,9 +459,49 @@ impl QueryFollowQualification {
             "late input lost its intake or source clock domain",
         )?;
         Ok(json!({"name": "moving-and-fixed-windows", "result": "PASS",
+            "timer_only": timer,
             "at_1008": cycle_receipt(&moving, &first), "quiet_1010": cycle_receipt(&moving, &quiet),
             "fixed": cycle_receipt(&fixed, &buckets), "boundary_1005": cycle_receipt(&fixed, &boundary),
             "late_1020": cycle_receipt(&all, &late_buckets), "source_times": result_receipt(&event_plan, &events)}))
+    }
+
+    async fn timer_expiry(&self, root: &Path) -> Result<serde_json::Value> {
+        let store = Arc::new(AnalysisStore::open(root)?);
+        let source = evidence_source(1, 3);
+        commit(&store, &source, 1, 2_000_000_000, records(1, 1, 7))?;
+        let owner = Arc::new(QueryOwner::new(store.clone(), QueryLimits::default())?);
+        let plan = query_plan(&source, QueryTemplate::MovingCount { seconds: 1 })?;
+        let (clock, sampled, release) = GateClock::on_read(3_000_000_000, 1);
+        let advancing = clock.clone();
+        let advance = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+            sampled
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|error| error.to_string())?;
+            advancing.now.store(4_000_000_000, Ordering::SeqCst);
+            release.send(()).map_err(|error| error.to_string())
+        });
+        let mut stream = owner.follow_clock(plan.clone(), None, clock)?;
+        let initial = self
+            .cycle(&mut stream, true, QueryOperation::Replace)
+            .await?;
+        self.replacement(&owner, &plan, &initial, &[vec![Value::BigInt(1)]])?;
+        let before = store.meta()?;
+        advance.await??;
+        let expired = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.cycle(&mut stream, false, QueryOperation::Replace),
+        )
+        .await??;
+        self.replacement(&owner, &plan, &expired, &[vec![Value::BigInt(0)]])?;
+        self.check(
+            store.meta()? == before
+                && expired.checkpoint.read_revision() == initial.checkpoint.read_revision(),
+            "timer-only expiry changed the store revision",
+        )?;
+        self.cancel(&mut stream, QueryOperation::Replace).await?;
+        Ok(json!({"initial": cycle_receipt(&plan, &initial),
+            "expired": cycle_receipt(&plan, &expired), "clock_notifications": false,
+            "store_unchanged": true, "deadline_ms": 5000, "heartbeat_ms": 15000}))
     }
 
     async fn bounded_window(&self, root: &Path) -> Result<serde_json::Value> {
@@ -504,17 +558,36 @@ impl QueryFollowQualification {
             "replacement omitted matching input",
         )?;
         self.cancel(&mut stream, QueryOperation::Replace).await?;
-        commit(&store, &source, 68, 608 * MINUTE, records(68, 1, 8))?;
-        let output_owner = QueryOwner::new(
+        let output_owner = Arc::new(QueryOwner::new(
             store.clone(),
             QueryLimits {
                 output_rows: 1,
                 ..limits.clone()
             },
-        )?;
+        )?);
         let mut selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
         selection.received_from = Bound::Included(603 * MINUTE);
         let counts = QueryPlan::new(selection, QueryTemplate::OperationCounts)?;
+        let mut output_stream =
+            output_owner.follow_clock(counts.clone(), None, Clock::new(608 * MINUTE))?;
+        let output_before = self
+            .cycle(&mut output_stream, true, QueryOperation::Replace)
+            .await?;
+        self.replacement(
+            &output_owner,
+            &counts,
+            &output_before,
+            &[vec![Value::UInt(7), Value::BigInt(3)]],
+        )?;
+        commit(&store, &source, 68, 608 * MINUTE, records(68, 1, 8))?;
+        let output_error = self
+            .stream_error(
+                &mut output_stream,
+                QueryOperation::Replace,
+                &output_before.checkpoint,
+                QueryErrorCode::ResultTooLarge,
+            )
+            .await?;
         self.check(
             matches!(
                 output_owner.query_at(&counts, 608 * MINUTE),
@@ -528,10 +601,48 @@ impl QueryFollowQualification {
             recovered.rows == [vec![Value::BigInt(5)]],
             "failed evaluation blocked later reads or intake",
         )?;
+        let mut input_stream =
+            owner.follow_clock(counts.clone(), None, Clock::new(608 * MINUTE))?;
+        let input_before = self
+            .cycle(&mut input_stream, true, QueryOperation::Replace)
+            .await?;
+        self.replacement(
+            &owner,
+            &counts,
+            &input_before,
+            &[
+                vec![Value::UInt(7), Value::BigInt(4)],
+                vec![Value::UInt(8), Value::BigInt(1)],
+            ],
+        )?;
+        let mut large = records(70, 1, 7);
+        large[0]
+            .decision_context
+            .as_mut()
+            .ok_or("context absent")?
+            .catalog_json = vec![b' '; limits.scan_bytes];
+        commit(&store, &source, 70, 608 * MINUTE, large)?;
+        let input_error = self
+            .stream_error(
+                &mut input_stream,
+                QueryOperation::Replace,
+                &input_before.checkpoint,
+                QueryErrorCode::InputTooLarge,
+            )
+            .await?;
+        commit(&store, &source, 71, 620 * MINUTE, records(71, 1, 7))?;
+        let subsequent = owner.query_at(&moving, 620 * MINUTE)?;
+        self.check(
+            subsequent.rows == [vec![Value::BigInt(1)]],
+            "input overflow blocked later intake or a bounded query",
+        )?;
         Ok(
             json!({"name": "bounded-window-and-recovery", "result": "PASS", "limits": limits_receipt(&limits),
             "historical_frame_bytes": history_bytes, "initial": cycle_receipt(&moving, &initial),
-            "replacement": cycle_receipt(&moving, &added), "after_error": result_receipt(&moving, &recovered)}),
+            "replacement": cycle_receipt(&moving, &added), "after_error": result_receipt(&moving, &recovered),
+            "output_before": cycle_receipt(&counts, &output_before), "output_error": output_error,
+            "input_before": cycle_receipt(&counts, &input_before), "input_error": input_error,
+            "after_input_error": result_receipt(&moving, &subsequent)}),
         )
     }
 
@@ -726,11 +837,30 @@ impl QueryFollowQualification {
     ) -> Result<serde_json::Value> {
         let mut stream =
             owner.follow_clock(plan.clone(), Some(checkpoint.clone()), Clock::new(now))?;
-        let frame = self.next(&mut stream, plan.operation()).await?;
+        self.stream_error(&mut stream, plan.operation(), checkpoint, expected)
+            .await
+    }
+
+    async fn stream_error(
+        &self,
+        stream: &mut QueryStream,
+        operation: QueryOperation,
+        checkpoint: &QueryCheckpoint,
+        expected: QueryErrorCode,
+    ) -> Result<serde_json::Value> {
+        let frame = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let frame = self.next(stream, operation).await?;
+                if !matches!(frame.payload, QueryPayload::Health { .. }) {
+                    return Result::<QueryFrame>::Ok(frame);
+                }
+            }
+        })
+        .await??;
         self.check(
             matches!(&frame.payload, QueryPayload::Error { code, last_checkpoint, .. }
                 if *code == expected && last_checkpoint.as_ref() == Some(checkpoint)),
-            "checkpoint failure did not emit its expected query error",
+            "query failure did not preserve its checkpoint or emitted a partial result",
         )?;
         self.check(
             tokio::time::timeout(Duration::from_secs(10), stream.next())
