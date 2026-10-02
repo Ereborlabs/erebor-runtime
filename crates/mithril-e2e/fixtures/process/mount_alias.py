@@ -43,6 +43,9 @@ libc.mount_setattr.argtypes = [
     ctypes.c_size_t,
 ]
 libc.mount_setattr.restype = ctypes.c_int
+libc.prctl.argtypes = [
+    ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong
+]
 AT_FDCWD = -100
 CLONE_NEWNS = 0x00020000
 MS_BIND = 4096
@@ -73,9 +76,48 @@ def move_tree(tree, target):
         os.close(tree)
 
 
+def read_file(path):
+    try:
+        with open(path, encoding="utf-8") as source:
+            return {"errno": 0, "value": source.read()}
+    except OSError as error:
+        return {"errno": error.errno, "value": None}
+
+
 args = sys.argv[2:]
+if args == ["external-setattr"]:
+    pid = int(sys.argv[1])
+    namespace = os.open(f"/proc/{pid}/ns/mnt", os.O_RDONLY)
+    root = os.open(f"/proc/{pid}/root", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        libc.setns.argtypes = [ctypes.c_int, ctypes.c_int]
+        check(libc.setns(namespace, CLONE_NEWNS))
+        os.fchdir(root)
+        os.chroot(".")
+        os.chdir("/")
+    finally:
+        os.close(root)
+        os.close(namespace)
+    target = b"/work/mount/allowed-alias"
+    print("native-fixture-ready", flush=True)
+    for command in sys.stdin:
+        if command == "stop\n":
+            sys.exit(0)
+        if command not in ("ro\n", "rw\n"):
+            sys.exit(2)
+        readonly = command == "ro\n"
+        attr = MountAttr(int(readonly), int(not readonly), 0, 0)
+        check(libc.mount_setattr(
+            AT_FDCWD, target, 0, ctypes.byref(attr), ctypes.sizeof(attr)
+        ))
+        actual = bool(os.statvfs(target).f_flag & os.ST_RDONLY)
+        if actual != readonly:
+            raise RuntimeError(f"mount read-only state is {actual}; expected {readonly}")
+        name = ctypes.create_string_buffer(f"mnt-{command.strip()}-{int(actual)}".encode())
+        check(libc.prctl(15, name, 0, 0, 0))
+    sys.exit(0)
 if args not in (
-    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"], ["reconfigure"]
+    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"], ["reconfigure"], ["cache"]
 ):
     sys.exit(2)
 mode = args[0] if args else "early"
@@ -143,6 +185,59 @@ if mode == "race":
         thread.start()
 print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
+if mode == "cache":
+    peer, request, reply = None, None, None
+    while command != "stop\n":
+        if command == "peer\n" and peer is None:
+            rx, tx = os.pipe()
+            rd, wr = os.pipe()
+            peer = os.fork()
+            if peer == 0:
+                os.close(tx)
+                os.close(rd)
+                check(libc.unshare(CLONE_NEWNS))
+                with os.fdopen(rx) as commands, os.fdopen(wr, "w") as replies:
+                    replies.write("ready\n")
+                    replies.flush()
+                    for phase in commands:
+                        if phase == "stop\n":
+                            break
+                        if phase not in ("b\n", "ro\n", "rw\n"):
+                            sys.exit(2)
+                        replies.write(json.dumps(read_file(os.path.join(allowed, "open"))) + "\n")
+                        replies.flush()
+                sys.exit(0)
+            os.close(rx)
+            os.close(wr)
+            request = os.fdopen(tx, "w")
+            reply = os.fdopen(rd)
+            if reply.readline() != "ready\n":
+                raise RuntimeError("mount peer did not become ready")
+            check(libc.prctl(15, ctypes.create_string_buffer(b"cache-peer-up"), 0, 0, 0))
+            command = sys.stdin.readline()
+            continue
+        if command not in ("b\n", "ro\n", "rw\n", "pb\n", "pro\n", "prw\n"):
+            sys.exit(2)
+        if command.startswith("p"):
+            request.write(command[1:])
+            request.flush()
+            result = json.loads(reply.readline())
+        else:
+            result = read_file(os.path.join(allowed, "open"))
+        with open(result_path, "w", encoding="utf-8") as output:
+            json.dump(result, output)
+        name = ctypes.create_string_buffer(f"cache-{command.strip()}-{result['errno']}".encode())
+        check(libc.prctl(15, name, 0, 0, 0))
+        command = sys.stdin.readline()
+    if peer is not None:
+        request.write("stop\n")
+        request.flush()
+        request.close()
+        reply.close()
+        _, status = os.waitpid(peer, 0)
+        if status:
+            raise RuntimeError(f"mount peer failed: {status}")
+    sys.exit(0)
 if mode == "reconfigure":
     FSPICK_CLOEXEC = 1
     FSCONFIG_SET_STRING = 1
@@ -152,9 +247,6 @@ if mode == "reconfigure":
         ctypes.c_int, ctypes.c_uint, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int
     ]
     libc.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
-    libc.prctl.argtypes = [
-        ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong
-    ]
     while command != "stop\n":
         code = 0
         if command == "mount\n":
