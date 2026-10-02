@@ -2025,6 +2025,11 @@ impl ControlPlane {
 
 fn trace_status(error: crate::Error) -> Status {
     let code = match &error {
+        crate::Error::DataStore { source, .. }
+            if matches!(source.as_ref(), araphor_data::Error::TraceInvalid { .. }) =>
+        {
+            tonic::Code::InvalidArgument
+        }
         crate::Error::Observability { code, .. } => match code {
             crate::TraceErrorCodeV1::Denied => tonic::Code::PermissionDenied,
             crate::TraceErrorCodeV1::Conflict => tonic::Code::AlreadyExists,

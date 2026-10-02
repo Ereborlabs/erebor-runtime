@@ -466,7 +466,10 @@ impl NodeTraceOwner {
         };
         let terminal: TraceTerminalV1 =
             serde_json::from_slice(&bytes[..end]).context(JsonSnafu { path: &path })?;
-        terminal.validate().context(TraceSnafu)?;
+        terminal
+            .validate()
+            .map_err(mithril_control::Error::from)
+            .context(TraceSnafu)?;
         ensure!(
             terminal.execution_id == id,
             IdentityStateSnafu {
@@ -897,7 +900,10 @@ impl TraceSpool {
     }
 
     fn append(&mut self, frame: &TraceFrameV1) -> Result<()> {
-        frame.validate().context(TraceSnafu)?;
+        frame
+            .validate()
+            .map_err(mithril_control::Error::from)
+            .context(TraceSnafu)?;
         ensure!(
             frame.sequence == self.sequence + 1
                 && frame.sequence <= 4096
@@ -929,7 +935,10 @@ impl TraceSpool {
     }
 
     fn complete(&mut self, terminal: &TraceTerminalV1) -> Result<()> {
-        terminal.validate().context(TraceSnafu)?;
+        terminal
+            .validate()
+            .map_err(mithril_control::Error::from)
+            .context(TraceSnafu)?;
         let path = self.root.join("terminal.pending");
         let mut bytes = serde_json::to_vec(terminal).context(JsonSnafu { path: &path })?;
         bytes.push(b'\n');
@@ -976,7 +985,10 @@ impl TraceSpool {
             }
             let frame: TraceFrameV1 =
                 serde_json::from_slice(&line).context(JsonSnafu { path: &path })?;
-            frame.validate().context(TraceSnafu)?;
+            frame
+                .validate()
+                .map_err(mithril_control::Error::from)
+                .context(TraceSnafu)?;
             ensure!(
                 frame.sequence == sequence + 1
                     && frame.sequence <= 4096

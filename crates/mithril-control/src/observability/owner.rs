@@ -4,7 +4,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
     error::ObservabilitySnafu, ControlStore, DiscoveryArtifactRefV1, DiscoveryArtifactV1,
-    DiscoveryDigestV1, DiscoveryHeadKeyV1, DiscoveryHeadV1, Result, TraceFrameV1, TraceRecipeV1,
+    DiscoveryDigestV1, DiscoveryHeadKeyV1, DiscoveryHeadV1, Result, TraceBatchV1, TraceRecipeV1,
     TraceRequestV1, TraceTerminalV1, MAX_TRACE_OUTPUT_BYTES,
 };
 
@@ -71,14 +71,6 @@ pub struct TraceAcceptedV1 {
     pub accepted_unix_ns: u64,
     pub deadline_unix_ns: u64,
     pub recipe: Option<TraceRecipeV1>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TraceBatchV1 {
-    pub execution_id: [u8; 16],
-    pub frames: Vec<TraceFrameV1>,
-    pub terminal: Option<TraceTerminalV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -588,38 +580,6 @@ impl TraceAcceptedV1 {
     }
 }
 
-impl TraceBatchV1 {
-    pub fn validate(&self) -> Result<()> {
-        use TraceErrorCodeV1 as Code;
-        Code::Invalid.require(
-            self.execution_id != [0; 16]
-                && self.frames.len() <= 200
-                && (!self.frames.is_empty() || self.terminal.is_some()),
-            "trace batch is empty or too large",
-        )?;
-        let mut bytes = 0;
-        for (index, frame) in self.frames.iter().enumerate() {
-            frame.validate()?;
-            bytes += frame.bytes.len();
-            Code::Invalid.require(
-                frame.execution_id == self.execution_id
-                    && frame.sequence <= 4096
-                    && (index == 0 || self.frames[index - 1].sequence + 1 == frame.sequence),
-                "trace batch identity or sequence changed",
-            )?;
-        }
-        Code::Invalid.require(bytes <= 1024 * 1024, "trace batch exceeds 1 MiB")?;
-        if let Some(terminal) = &self.terminal {
-            terminal.validate()?;
-            Code::Invalid.require(
-                terminal.execution_id == self.execution_id,
-                "trace terminal names another execution",
-            )?;
-        }
-        Ok(())
-    }
-}
-
 impl TraceRevisionV1 {
     pub fn key(
         tenant_id: [u8; 16],
@@ -738,7 +698,8 @@ impl TraceRevisionV1 {
 pub(crate) mod tests {
     use super::*;
     use crate::{
-        ContainerKindV1, TraceFrameKindV1, TraceSourceV1, TraceTargetV1, WorkloadTargetFactV1,
+        ContainerKindV1, TraceFrameKindV1, TraceFrameV1, TraceSourceV1, TraceTargetV1,
+        WorkloadTargetFactV1,
     };
 
     pub(crate) fn request() -> Result<TraceRequestV1> {

@@ -903,7 +903,7 @@ impl PolicyRolloutOwner {
                         "the requested exception validity exceeds the signed time range",
                     )
                 })?;
-                Ok((source.requested_uses, valid_until))
+                Ok::<_, crate::Error>((source.requested_uses, valid_until))
             },
             |previous| Ok((previous.maximum_uses, previous.valid_until_utc_ns)),
         )?;

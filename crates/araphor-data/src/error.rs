@@ -6,6 +6,12 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Trace contract is invalid: {reason}"))]
+    TraceInvalid {
+        reason: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Query {field} is invalid"))]
     QueryInvalid {
         field: &'static str,
@@ -138,7 +144,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::QueryInvalid { .. }
+            Self::TraceInvalid { .. }
+            | Self::QueryInvalid { .. }
             | Self::QueryLimit { .. }
             | Self::AnalysisInputTooLarge { .. } => StatusCode::InvalidArguments,
             Self::QueryUnsupported { .. } => StatusCode::Unsupported,

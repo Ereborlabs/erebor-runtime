@@ -6,6 +6,7 @@ mod analysis;
 mod error;
 mod evidence;
 mod query;
+mod trace;
 
 pub(crate) use error::*;
 pub use error::{Error, Result};
@@ -19,6 +20,11 @@ pub use query::{
     QueryErrorCode, QueryFrame, QueryLimits, QueryMetadata, QueryOperation, QueryOwner,
     QueryPayload, QueryPlan, QueryResult, QueryStream, QueryTemplate, QueryTerminalReason,
     SystemQueryClock, QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
+};
+pub use trace::{
+    TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
+    TraceMeasurementV1, TraceSourceV1, TraceTerminalReasonV1, TraceTerminalV1,
+    MAX_TRACE_FRAME_BYTES, MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
 };
 
 pub use analysis::{

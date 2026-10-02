@@ -3,13 +3,14 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
-use snafu::{Location, Snafu};
+use snafu::{IntoError as _, Location, Snafu};
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
     #[snafu(display("Araphor data store failed: {source}"))]
     DataStore {
+        #[snafu(source(from(araphor_data::Error, Box::new)))]
         source: Box<araphor_data::Error>,
         #[snafu(implicit)]
         location: Location,
@@ -145,9 +146,20 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl From<araphor_data::Error> for Error {
+    fn from(source: araphor_data::Error) -> Self {
+        DataStoreSnafu.into_error(source)
+    }
+}
+
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::DataStore { source, .. }
+                if matches!(source.as_ref(), araphor_data::Error::TraceInvalid { .. }) =>
+            {
+                StatusCode::InvalidArguments
+            }
             Self::Observability { code, .. } => match code {
                 crate::TraceErrorCodeV1::Denied => StatusCode::PermissionDenied,
                 crate::TraceErrorCodeV1::Conflict => StatusCode::AlreadyExists,

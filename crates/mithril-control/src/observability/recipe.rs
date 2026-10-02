@@ -1,20 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DiscoveryDigestV1, Result, TraceFrameKindV1, TraceFrameV1, TraceSourceV1};
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TraceMeasurementV1 {
-    pub execution_id: [u8; 16],
-    pub sequence: u64,
-    pub ordinal: u16,
-    pub syscall_id: Option<u32>,
-    pub errno: i64,
-    pub count: u64,
-    pub cumulative: bool,
-    pub atomic_snapshot: bool,
-    pub unit: String,
-}
+use crate::{
+    DiscoveryDigestV1, Result, TraceFrameKindV1, TraceFrameV1, TraceMeasurementV1, TraceSourceV1,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TraceRecipeV1 {

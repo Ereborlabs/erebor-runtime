@@ -1,41 +1,12 @@
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use crate::{error::InvalidConfigurationSnafu, DiscoveryDigestV1, Result, WorkloadTargetFactV1};
 
-pub const MAX_TRACE_SOURCE_BYTES: usize = 64 * 1024;
-pub const MAX_TRACE_FRAME_BYTES: usize = 1024 * 1024;
-pub const MAX_TRACE_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
-pub const MAX_TRACE_TARGETS: usize = 16;
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TraceSourceV1 {
-    pub bytes: Vec<u8>,
-    pub sha256: [u8; 32],
-}
-
-impl TraceSourceV1 {
-    pub fn new(bytes: Vec<u8>) -> Result<Self> {
-        let source = Self {
-            sha256: Sha256::digest(&bytes).into(),
-            bytes,
-        };
-        source.validate()?;
-        Ok(source)
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        TraceRequestV1::require(
-            !self.bytes.is_empty()
-                && self.bytes.len() <= MAX_TRACE_SOURCE_BYTES
-                && !self.bytes.contains(&0)
-                && std::str::from_utf8(&self.bytes).is_ok()
-                && self.sha256 == <[u8; 32]>::from(Sha256::digest(&self.bytes)),
-            "trace source is empty, invalid, too large, or changed",
-        )
-    }
-}
+pub use araphor_data::{
+    TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
+    TraceMeasurementV1, TraceSourceV1, TraceTerminalReasonV1, TraceTerminalV1,
+    MAX_TRACE_FRAME_BYTES, MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -165,123 +136,38 @@ impl TraceRequestV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum TraceFrameKindV1 {
-    Metadata,
-    Data,
-    Diagnostic,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TraceFrameV1 {
-    pub execution_id: [u8; 16],
-    pub sequence: u64,
-    pub kind: TraceFrameKindV1,
-    pub bytes: Vec<u8>,
-}
-
-impl TraceFrameV1 {
-    pub fn validate(&self) -> Result<()> {
-        TraceRequestV1::require(
-            self.execution_id != [0; 16]
-                && self.sequence != 0
-                && !self.bytes.is_empty()
-                && self.bytes.len() <= MAX_TRACE_FRAME_BYTES,
-            "trace output identity, sequence, or frame size is invalid",
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum TraceTerminalReasonV1 {
-    Completed,
-    Cancelled,
-    Deadline,
-    PreparationFailed,
-    TargetChanged,
-    OutputLimit,
-    ConsumerSlow,
-    NodeRestarted,
-    StorageFailure,
-    BackendFailed,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum TraceCleanupV1 {
-    Verified,
-    Failed,
-    Unknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TraceTerminalV1 {
-    pub execution_id: [u8; 16],
-    pub reason: TraceTerminalReasonV1,
-    pub last_sequence: u64,
-    pub output_bytes: u64,
-    pub output_incomplete: bool,
-    pub kernel_lost_events: Option<u64>,
-    pub ready_at_unix_ns: Option<u64>,
-    pub exit_code: Option<i32>,
-    pub forced_kill: bool,
-    pub cleanup: TraceCleanupV1,
-}
-
-impl TraceTerminalV1 {
-    pub fn validate(&self) -> Result<()> {
-        TraceRequestV1::require(
-            self.execution_id != [0; 16]
-                && self.last_sequence <= 4096
-                && self.output_bytes >= self.last_sequence
-                && self.output_bytes <= MAX_TRACE_OUTPUT_BYTES
-                && !(self.forced_kill && !self.output_incomplete),
-            "trace terminal identity, output size, or loss state is invalid",
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn observability_backend_source_pins_exact_bytes() -> Result<()> {
-        let mut source = TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
-        source.bytes.push(b' ');
-        assert!(source.validate().is_err());
-        assert!(TraceSourceV1::new(vec![b'x'; MAX_TRACE_SOURCE_BYTES + 1]).is_err());
-        assert!(TraceSourceV1::new(vec![0xff]).is_err());
-        assert!(TraceSourceV1::new(vec![0]).is_err());
-        Ok(())
+    fn observability_contract_shared_types() {
+        macro_rules! same_type {
+            ($($name:ident),+ $(,)?) => {
+                $(assert_eq!(std::any::TypeId::of::<$name>(), std::any::TypeId::of::<araphor_data::$name>());)+
+            };
+        }
+        same_type!(
+            TraceSourceV1,
+            TraceFrameKindV1,
+            TraceFrameV1,
+            TraceTerminalReasonV1,
+            TraceCleanupV1,
+            TraceTerminalV1,
+            TraceBatchV1,
+            TraceMeasurementV1,
+            TraceIdentityV1,
+        );
     }
 
     #[test]
-    fn observability_backend_output_limits_and_unknown_loss() -> Result<()> {
-        let mut terminal = TraceTerminalV1 {
-            execution_id: [1; 16],
-            reason: TraceTerminalReasonV1::Completed,
-            last_sequence: 0,
-            output_bytes: 0,
-            output_incomplete: false,
-            kernel_lost_events: None,
-            ready_at_unix_ns: None,
-            exit_code: Some(0),
-            forced_kill: false,
-            cleanup: TraceCleanupV1::Unknown,
-        };
-        terminal.validate()?;
-        terminal.forced_kill = true;
-        assert!(terminal.validate().is_err());
-        assert!(TraceFrameV1 {
-            execution_id: [1; 16],
-            sequence: 0,
-            kind: TraceFrameKindV1::Data,
-            bytes: vec![1]
-        }
-        .validate()
-        .is_err());
-        Ok(())
+    fn observability_contract_error_class() {
+        use erebor_runtime_error::{ErrorExt as _, StatusCode};
+
+        let source = TraceSourceV1::new(Vec::new()).expect_err("empty source must fail");
+        let error = crate::Error::from(source);
+        assert_eq!(error.status_code(), StatusCode::InvalidArguments);
+        assert!(matches!(error, crate::Error::DataStore { source, .. }
+            if matches!(*source, araphor_data::Error::TraceInvalid { .. })));
     }
 }
