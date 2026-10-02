@@ -13,19 +13,15 @@ use kube::client::Body as KubeBody;
 use kube::Client;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, CapabilityRecord, ContainerKindV1,
-    ControlStore, EvidenceIntakeIdentityV1, EvidenceIntakeOwner, KubernetesWorkloadIdentityV1,
-    NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
-    PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    ControlStore, KubernetesWorkloadIdentityV1, NodeRegistration, PolicyActivationAcknowledgement,
+    PolicyBundleV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
+    PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1, RegistryDigestsV1,
+    WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
-use mithril_node::{
-    EvidenceIdV1, EvidenceWalLimits, NodeControlConnector, NodeControlMessage,
-    PolicyControlPacingOwner, TrustCache,
-};
+use mithril_node::{NodeControlConnector, PolicyControlPacingOwner, TrustCache};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{oneshot, watch};
 use tower::service_fn;
-use zerocopy::IntoBytes as _;
 
 use crate::control_fixture::{Certificates, MtlsFixture};
 
@@ -42,6 +38,7 @@ mod readiness;
 mod registration;
 mod rejection;
 mod replay;
+mod restart;
 mod retained;
 mod retention;
 mod storage;
@@ -368,248 +365,6 @@ impl OutagePolicyFixture {
         );
         registration
     }
-}
-
-#[tokio::test]
-async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence(
-) -> Result<(), Box<dyn StdError>> {
-    let tls = MtlsFixture::new(false)?;
-    let intake_path = tls.path().join("control-evidence");
-    let node_boot_id = [7; 16];
-
-    let store = ControlStore::open(&intake_path)?;
-    let restart_store = store.clone();
-    let fixture = OutagePolicyFixture::new(store.clone());
-    let first_resource = fixture.resource(1)?;
-    let workload_inventory = fixture.inventory(&first_resource)?;
-    let control = tls
-        .control_with_store(store, 1)?
-        .with_policy_desired_state(fixture.owner.clone());
-
-    let first_server = tls.start(control.clone()).await?;
-    let old_connector = tls.connector(&first_server, "node-a", node_boot_id);
-    let mut trust = TrustCache::load(&tls.path().join("trust"))?;
-    let mut old_connection = match old_connector
-        .connect(
-            OutagePolicyFixture::registration(node_boot_id, false),
-            false,
-            &mut trust,
-        )
-        .await
-    {
-        Ok(connection) => connection,
-        Err(source) => {
-            let server_result = first_server.shutdown().await;
-            return Err(format!(
-                "initial Control connection failed: {source}; server result: {server_result:?}"
-            )
-            .into());
-        }
-    };
-    old_connection.report_readiness(true, true).await?;
-    control.bind_kubernetes_node_session("worker-a", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")?;
-    assert!(control.replace_kubernetes_workload_inventory(workload_inventory.clone())?);
-    let first = fixture.owner.reconcile(
-        &first_resource,
-        OUTAGE_NAMESPACE_UID,
-        &workload_inventory,
-        OUTAGE_NOW,
-    )?;
-    let first_bundle = first
-        .bundles
-        .first()
-        .ok_or("missing initial policy bundle")?;
-    let first_inventory = old_connection.policy_inventory(None, Vec::new()).await?;
-    assert!(first_inventory.desired_inventory_complete);
-    assert!(first_inventory.candidate_available);
-    assert_eq!(
-        first_inventory.candidate_content_id,
-        first_bundle.candidate.candidate_content_id
-    );
-    assert_eq!(first_inventory.bundle_digest, first_bundle.bundle_digest);
-    let accepted = old_connection
-        .acknowledge_policy(OutagePolicyFixture::active_acknowledgement(
-            first_bundle,
-            1,
-            OUTAGE_NOW + 1,
-        ))
-        .await?;
-    assert_eq!(accepted.rollout_state, "ACTIVE");
-    let active_first = fixture.owner.reconcile(
-        &first_resource,
-        OUTAGE_NAMESPACE_UID,
-        &workload_inventory,
-        OUTAGE_NOW + 2,
-    )?;
-    assert_eq!(active_first.status.rollout.active, 1);
-    let first_candidate_id = first_bundle.candidate.candidate_content_id.clone();
-    let first_bundle_digest = first_bundle.bundle_digest.clone();
-    drop(old_connection);
-    first_server.shutdown().await?;
-    drop(control);
-    drop(fixture);
-
-    let observations = tls.wal(EvidenceWalLimits::default())?;
-    observations.record_bytes(
-        erebor_interceptor_abi::EffectObservationV1 {
-            observed_boottime_ns: 1,
-            source_sequence: 1,
-            source_cpu_id: 0,
-            task_cookie: 7,
-            reason: 9,
-            physical_result: 1,
-            effect_family: 1,
-            operation: 1,
-            ..erebor_interceptor_abi::EffectObservationV1::default()
-        }
-        .as_bytes(),
-    );
-    let retained = observations
-        .next_evidence_batch()
-        .ok_or("missing retained evidence batch")?;
-    let source_id = batch_source_id(&retained)?;
-
-    let store = restart_store;
-    let fixture = OutagePolicyFixture::new(store.clone());
-    let second_resource = fixture.resource(2)?;
-    let second = fixture.owner.reconcile(
-        &second_resource,
-        OUTAGE_NAMESPACE_UID,
-        &workload_inventory,
-        OUTAGE_NOW + 3,
-    )?;
-    let second_bundle = second
-        .bundles
-        .first()
-        .ok_or("missing replacement policy bundle")?
-        .clone();
-    assert_ne!(
-        second_bundle.candidate.candidate_content_id,
-        first_candidate_id
-    );
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = tls
-        .control_with_store(store, 1)?
-        .with_policy_desired_state(fixture.owner.clone());
-    assert!(control.replace_kubernetes_workload_inventory(workload_inventory.clone())?);
-    let second_server = tls.start(control.clone()).await?;
-    let connector = tls.connector(&second_server, "node-a", node_boot_id);
-    let mut connection = match connector
-        .connect(
-            OutagePolicyFixture::registration(node_boot_id, true),
-            true,
-            &mut trust,
-        )
-        .await
-    {
-        Ok(connection) => connection,
-        Err(source) => {
-            let server_result = second_server.shutdown().await;
-            return Err(format!(
-                "recovered Control connection failed: {source}; server result: {server_result:?}"
-            )
-            .into());
-        }
-    };
-    connection.report_readiness(true, true).await?;
-    control.bind_kubernetes_node_session("worker-a", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")?;
-    let coverage = observations
-        .coverage_snapshot()
-        .ok_or("missing retained evidence coverage")?;
-    let current = coverage
-        .current_intervals()
-        .into_iter()
-        .next()
-        .ok_or("missing current evidence interval")?;
-    connection.send_evidence_batch(retained.clone()).await?;
-    let expected_coverage = connection.send_coverage_report(&coverage, &current).await?;
-    let inventory = connection
-        .policy_inventory(Some(&first_candidate_id), vec![first_bundle_digest.clone()])
-        .await?;
-    assert!(inventory.desired_inventory_complete);
-    assert!(inventory.candidate_available);
-    assert_eq!(
-        inventory.candidate_content_id,
-        second_bundle.candidate.candidate_content_id
-    );
-    assert_eq!(inventory.bundle_digest, second_bundle.bundle_digest);
-
-    let mut delivered_bytes = Vec::with_capacity(usize::try_from(inventory.bundle_bytes)?);
-    for chunk_index in 0..inventory.chunk_count {
-        let chunk = connection
-            .fetch_policy_chunk(
-                inventory.candidate_content_id.clone(),
-                inventory.bundle_digest.clone(),
-                chunk_index,
-            )
-            .await?;
-        assert_eq!(chunk.chunk_index, chunk_index);
-        assert_eq!(chunk.chunk_count, inventory.chunk_count);
-        delivered_bytes.extend_from_slice(&chunk.payload);
-    }
-    let delivered: PolicyBundleV1 = serde_json::from_slice(&delivered_bytes)?;
-    assert_eq!(delivered, second_bundle);
-    let accepted = connection
-        .acknowledge_policy(OutagePolicyFixture::active_acknowledgement(
-            &delivered,
-            2,
-            OUTAGE_NOW + 4,
-        ))
-        .await?;
-    assert_eq!(accepted.rollout_state, "ACTIVE");
-    let recovered = fixture.owner.reconcile(
-        &second_resource,
-        OUTAGE_NAMESPACE_UID,
-        &workload_inventory,
-        OUTAGE_NOW + 5,
-    )?;
-    assert_eq!(recovered.status.rollout.desired, 1);
-    assert_eq!(recovered.status.rollout.active, 1);
-    assert_eq!(recovered.status.rollout.updating, 0);
-    assert_eq!(recovered.status.rollout.failed, 0);
-
-    let mut evidence_acknowledged = false;
-    let mut coverage_acknowledged = false;
-    for _ in 0..2 {
-        match connection.next_message().await? {
-            NodeControlMessage::EvidenceAck(ack) => {
-                observations.acknowledge_evidence(ack)?;
-                evidence_acknowledged = true;
-            }
-            NodeControlMessage::CoverageAck(ack) => {
-                assert_eq!(ack, expected_coverage);
-                coverage_acknowledged = true;
-            }
-            NodeControlMessage::Administrative(_) => {
-                return Err("Control returned an unrelated administrative request".into());
-            }
-            NodeControlMessage::Decommission(_) => {
-                return Err("Control returned an unrelated decommission command".into());
-            }
-        }
-    }
-    assert!(evidence_acknowledged && coverage_acknowledged);
-    assert!(observations.next_evidence_batch().is_none());
-
-    let original_identity = EvidenceIntakeIdentityV1 {
-        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-        node_id: "node-a".to_owned(),
-        node_boot_id,
-        label_epoch: 1,
-        source_id,
-        source_epoch: 1,
-    };
-    assert_eq!(control.registered_nonce_count(), 1);
-    assert_eq!(
-        intake
-            .store()
-            .accepted_evidence_records(&original_identity)?,
-        retained.decode_records()?
-    );
-
-    drop(connection);
-    second_server.shutdown().await?;
-    Ok(())
 }
 
 fn batch_source_id(batch: &mithril_node::EvidenceBatchV1) -> Result<[u8; 16], Box<dyn StdError>> {

@@ -1393,7 +1393,7 @@ acknowledgement, or decommission operations directly.
     conditions, response checks, and server shutdown calls remain visible.
     Exact WAL-batch equality and complete accepted-record equality are added.
     No fixture, Platform, or production source changed.
-- [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
+- [x] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
   - [x] Preserve the connection-failure diagnostic in the existing
     `ControlServerFixture::connect` operation. Use the production
     `NodeControlConnector`. Return the server and ready connection on success.
@@ -1402,7 +1402,7 @@ acknowledgement, or decommission operations directly.
     denial and zero registered nonces. It also requires successful cleanup in
     the returned diagnostic. All 20 Control/TLS tests pass in 26.12 seconds;
     three release-budget tests remain ignored. Commit this fixture first.
-  - [ ] Replace the duplicated Control lifetimes with an explicit restart
+  - [x] Replace the duplicated Control lifetimes with an explicit restart
     loop in a small standard Rust test. Reuse `MtlsFixture` and
     `OutagePolicyFixture`. Keep the first ACTIVE acknowledgement, retained
     Node WAL, second candidate, complete chunk transfer, rollout counts,
@@ -1410,6 +1410,33 @@ acknowledgement, or decommission operations directly.
     and normal shutdown. Add no production or Platform API. Run the focused
     protocol test, the complete Control/TLS family, harness checks, strict
     Clippy, and the final Rust CI gate before retiring the old function.
+    `restart_converges_with_replay` has 99 lines, including its imports.
+    Before: the old 241-line function repeats server, connector, policy, and
+    acknowledgement setup. After: one two-start loop keeps both Control
+    lifetimes, ACTIVE acknowledgements, and the outage visible. It also
+    reopens the retained Node WAL. No assertion moves into a helper. The
+    complete delivered bundle, chunk indices, rollout counts, exact stored
+    records, coverage acknowledgement, and final WAL drain remain explicit.
+    The comparison with `95775f48` keeps all meaningful assertions. The new
+    test also checks both bundle transfers and the evidence cursor.
+    The final Rust CI gate passes after the last source edit. The VM harness
+    checks pass. No production or Platform source changes. This is mTLS
+    protocol qualification, not physical Kubernetes qualification. The
+    physical matrix was not rerun for this protocol-only change.
+    Run the focused test with `cargo test -p mithril-e2e --lib
+    control_tls::restart::restart_converges_with_replay -- --exact --nocapture`.
+    Source review route:
+    [restart test](src/control_tls/restart.rs) starts each Control lifetime.
+    -> [ControlServerFixture](src/control_fixture.rs) owns the server and
+    reports connection failure with normal server cleanup.
+    -> [NodeControlConnector](../mithril-node/src/control.rs) registers the
+    Node client, transfers policy chunks, and sends evidence and coverage.
+    -> [ControlStore](../mithril-control/src/store.rs) retains policy status
+    and exact accepted evidence across the server restart. The test owns the
+    store, trust cache, and Node WAL. It closes each connection before server
+    shutdown. The old function and its sole-use imports are removed.
+    Gate log: `/tmp/mithril-control-restart-ci-final-20261002.log`.
+  - Earlier setup evidence, before the complete replacement:
   - Reuse `MtlsFixture` for both Control instances, connectors, trust input,
     and the durable Node WAL. Remove duplicate setup. Keep both policy
     generations, retained evidence, coverage, and all assertions in the test.
