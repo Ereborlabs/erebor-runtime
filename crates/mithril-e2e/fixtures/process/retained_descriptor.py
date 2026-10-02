@@ -2,6 +2,7 @@ import ctypes
 import errno
 import mmap
 import os
+import socket
 import sys
 
 
@@ -43,12 +44,42 @@ os.makedirs("/tmp", exist_ok=True)
 for path, content in [(secret_path, b"secret\n"), (allowed_path, b"allowed\n")]:
     with open(path, "wb") as output:
         output.write(content)
-secret = os.open(secret_path, os.O_RDONLY)
-allowed = os.open(allowed_path, os.O_RDONLY)
+if sys.argv[-1] == "passed":
+    receiver, sender = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    with receiver, sender:
+        receiver.settimeout(5)
+        sender.settimeout(5)
+        child = os.fork()
+        if child == 0:
+            receiver.close()
+            for path in (secret_path, allowed_path):
+                with open(path, "rb") as source:
+                    socket.send_fds(sender, [b"1"], [source.fileno()])
+            os._exit(0)
+        sender.close()
+        files = []
+        for path in (secret_path, allowed_path):
+            payload, files_in, flags, _ = socket.recv_fds(receiver, 1, 1)
+            if payload != b"1" or flags & socket.MSG_CTRUNC or len(files_in) != 1:
+                raise RuntimeError("incomplete SCM_RIGHTS file transfer")
+            received = os.fstat(files_in[0])
+            original = os.stat(path)
+            if (received.st_dev, received.st_ino) != (original.st_dev, original.st_ino):
+                raise RuntimeError("SCM_RIGHTS delivered a different file")
+            files.extend(files_in)
+        _, status = os.waitpid(child, 0)
+        if os.waitstatus_to_exitcode(status) != 0:
+            raise RuntimeError("SCM_RIGHTS sender failed")
+        secret, allowed = files
+else:
+    secret = os.open(secret_path, os.O_RDONLY)
+    allowed = os.open(allowed_path, os.O_RDONLY)
 
 
 def read(descriptor):
-    os.read(descriptor, 1)
+    byte = os.read(descriptor, 1)
+    if descriptor == allowed and byte != b"a":
+        raise RuntimeError("the control read returned the wrong byte")
 
 
 def map_read(descriptor):
@@ -72,3 +103,5 @@ if libc.prctl(PR_SET_NAME, ctypes.addressof(name), 0, 0, 0) != 0:
 released = sys.stdin.buffer.readline() == b"release\n"
 if results != expected or not released:
     sys.exit(3)
+os.close(secret)
+os.close(allowed)

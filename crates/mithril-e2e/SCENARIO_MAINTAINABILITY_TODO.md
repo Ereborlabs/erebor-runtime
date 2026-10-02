@@ -3633,6 +3633,14 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the two pre-protection passed-descriptor reads with
+    `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
+    exact-file policy. A child passes each descriptor through `SCM_RIGHTS`
+    before Node starts. After recovery, require secret Read `EACCES`, benign
+    byte receipt, fresh exact-policy Deny and Allow evidence, distinct object
+    selectors, and normal cleanup. Keep the test below 100 lines. Pass and
+    commit Host, runc, then Kubernetes before deleting the matching old
+    actions. This does not replace the later descriptor-acquisition pair.
   - [ ] Replace both exact-file `io_uring` reads with a small shared test.
     Reuse the descriptor policy, Python process owner, and effect observer.
     Keep the retained descriptors, disabled restricted ring, asynchronous
