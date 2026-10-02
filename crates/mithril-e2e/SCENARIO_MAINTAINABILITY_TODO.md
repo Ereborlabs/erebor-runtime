@@ -5993,6 +5993,15 @@ setup, production actions, assertions, and focused test.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
   exec operation, topology snapshots, bounded queue, and fail-closed results
   as `two-node-convergence.sh`.
+  - [x] Make [CacheView](src/physical/mount_cache.rs) comparable with `Eq`
+    and `PartialEq`. Read `MountCache::snapshot` in the same file for the
+    cache map layout and row selection. The snapshot does not write a map.
+    Keep the actor namespace, mutation epoch, generation, READY keys, and
+    mountinfo digest. A READY row must have a positive mount count, as in the
+    original runtime probe. Existing rebuild, mount-attribute, and propagation
+    callers passed on Host, runc, and Kubernetes in the physical matrix.
+    The final repository Rust CI gate passed on 2026-10-02. This tooling does
+    not prove concurrent exec, Node collection, or scenario retirement.
   - [x] Replace the 70,000-read queue burst with `reader_burst_keeps_events`.
     Use the deployed Node observation path. Require the public attempted count,
     a later application child exec, a drained evidence backlog, and unchanged

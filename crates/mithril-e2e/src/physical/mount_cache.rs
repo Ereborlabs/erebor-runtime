@@ -7,6 +7,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::error::IoSnafu;
 use crate::platform::{Platform, TestResult};
+use crate::DigestV1;
 
 // These layouts match the named cache structures in identity_maps.h.
 #[repr(C)]
@@ -36,13 +37,13 @@ struct CacheState {
 
 const READY: u32 = 1;
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CacheView {
     pub(crate) namespace: u64,
     pub(crate) epoch: u64,
     pub(crate) generation: u64,
     pub(crate) keys: BTreeSet<Vec<u8>>,
-    pub(crate) mountinfo: Vec<u8>,
+    pub(crate) mountinfo: DigestV1,
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -108,10 +109,11 @@ impl MountCache {
         for bytes in self.states.keys() {
             let key = CacheKey::read_from_bytes(&bytes)
                 .map_err(|error| format!("{}: cache key ABI: {error}", self.path.display()))?;
-            if key.epoch == epoch
-                && key.generation == generation
-                && self.state(&bytes)?.ready == READY
-            {
+            if key.epoch != epoch || key.generation != generation {
+                continue;
+            }
+            let state = self.state(&bytes)?;
+            if state.ready == READY && state.count > 0 {
                 keys.insert(bytes);
             }
         }
@@ -124,7 +126,7 @@ impl MountCache {
             epoch,
             generation,
             keys,
-            mountinfo: fs::read(&mountinfo).context(IoSnafu { path: &mountinfo })?,
+            mountinfo: DigestV1::of(fs::read(&mountinfo).context(IoSnafu { path: &mountinfo })?),
         })
     }
 
