@@ -3833,6 +3833,10 @@ test does not close a row when its physical condition or an assertion changed.
           final Rust CI pass. See `/tmp/mithril-cold-recovery-{light,kube,ci}-20261001.log`.
           The continuation now has 129 passing Kubernetes cases of 143.
           Run only the remaining 14 cases. Do not restart passed groups.
+          All 14 remaining cases pass with cleanup. The registered matrix
+          now passes all 152 Host, 143 runc, and 143 Kubernetes cases across
+          the continuation logs. See `/tmp/mithril-matrix-kube-last-20261002.log`.
+          New leaf scenarios require their focused checks, not another matrix.
           The continuation logs are
           `/tmp/mithril-group-recovery-matrix-{final,remaining}-20261001.log`.
           It contains 152 Host, 143 runc, and 143 Kubernetes cases. Only the
