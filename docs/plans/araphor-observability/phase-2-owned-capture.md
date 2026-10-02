@@ -356,6 +356,19 @@ The physical experiment writes its qualified configuration only after the
 measured pairs pass validation. These component results do not qualify physical
 capture or interference.
 
+Source `3248d2a0` keeps the Node error size bounded with a boxed shared error.
+Workspace checking and Clippy with warnings denied passed. The final workspace
+run in `crate-workspace-final-3.log` passed 167 Data tests and 22 shared
+observability tests. That run then failed the Interceptor parent-death check
+with `No such file or directory`. The shared `target` directory disappeared
+during the run. The child test uses the current test executable, which was no
+longer present. This is not a complete workspace pass.
+
+The replacement workspace run uses
+`CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/worktrees/mithril-ui/target`.
+It uses the same Cargo environment and verification script above. Its receipt
+is `crate-workspace-final-4.log`. The interference experiment has not run.
+
 Remaining work is execution of the physical lifecycle gates below.
 Physical enablement requires a platform-matched interference receipt. The
 user approved the experiment below. Keep the phase **Not done** and keep
