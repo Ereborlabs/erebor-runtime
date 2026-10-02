@@ -3666,6 +3666,23 @@ test does not close a row when its physical condition or an assertion changed.
     root for inode checks. The unchanged security assertions pass on Host in
     49.07 seconds and runc in 55.81 seconds. The test has 89 lines. Privileged
     mount cleanup and strict Clippy pass. Kubernetes remains open.
+    Kubernetes passed the Protect pin check, then denied the second cold
+    actor start with `DENY_NODE_UNAVAILABLE`. The existing lightweight runc
+    outage test reproduces that retained-gate condition and passes. Create
+    both one-action actors before policy protection. Keep one container and
+    Node for both modes. Replace only the policy between real unlink attempts.
+    Reuse the unchanged Python actor and hold the mount handles. Keep all
+    denial, attribution, inode, recovery, and cleanup assertions. Do not add
+    a repeat protocol or another setup owner for this retirement.
+    The final 93-line test passes Protect and Observe on Host in 42.45 seconds
+    and direct runc in 50.51 seconds. The Python actor is unchanged. Hold both
+    actors before policy protection; publish the running-container observation
+    once. Kubernetes passes both modes in 90.61 seconds. Host checks pre-exec identity
+    only for a protected actor, not merely because Node is running. Keep the
+    existing protected-actor check; its focused entry-role case passes in
+    32.54 seconds. Output, pins, leases, and cgroups are removed on all three
+    platforms. All 91 local library tests, harness checks, formatting, and
+    strict Clippy pass. Commit Kubernetes before removing the legacy action.
   - [x] Replace the two pre-protection passed-descriptor reads with
     `passed_files_keep_authority`. Reuse `retained_descriptor.py` and its
     exact-file policy. A child passes each descriptor through `SCM_RIGHTS`

@@ -7,7 +7,7 @@ use super::check::EffectCheck;
 use crate::physical::FixtureBindMounts;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = bpf_recovery]
 fn link_pin_removal_is_denied<P: Platform>() -> TestResult<()> {
     let source: Policy =
