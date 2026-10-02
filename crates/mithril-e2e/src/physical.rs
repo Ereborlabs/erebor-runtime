@@ -1,5 +1,4 @@
 use std::fs;
-use std::os::fd::{AsFd as _, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,161 +21,33 @@ const STABLE_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Default)]
 pub(crate) struct FixtureBindMounts {
     targets: Vec<PathBuf>,
-    namespace: Option<(fs::File, fs::File)>,
 }
 
 impl FixtureBindMounts {
-    #[cfg(test)]
-    pub(crate) fn in_actor(pid: u32) -> Result<Self> {
-        let namespace = PathBuf::from(format!("/proc/{pid}/ns/mnt"));
-        let root = PathBuf::from(format!("/proc/{pid}/root"));
-        Ok(Self {
-            targets: Vec::new(),
-            namespace: Some((
-                fs::File::open(&namespace).context(IoSnafu { path: &namespace })?,
-                fs::File::open(&root).context(IoSnafu { path: &root })?,
-            )),
-        })
-    }
-
     pub(crate) fn bind(&mut self, source: &Path, target: &Path) -> Result<()> {
-        if self.namespace.is_some() {
-            use rustix::mount::{move_mount, open_tree, MoveMountFlags, OpenTreeFlags};
-
-            let tree = open_tree(
-                rustix::fs::CWD,
-                source,
-                OpenTreeFlags::OPEN_TREE_CLONE | OpenTreeFlags::OPEN_TREE_CLOEXEC,
-            )
+        fs::create_dir_all(target).context(IoSnafu { path: target })?;
+        rustix::mount::mount_bind(source, target)
             .map_err(std::io::Error::from)
-            .context(IoSnafu { path: source })?;
-            let destination = self.target(target)?;
-            self.in_namespace(target, move || {
-                move_mount(
-                    tree,
-                    "",
-                    destination,
-                    "",
-                    MoveMountFlags::MOVE_MOUNT_F_EMPTY_PATH
-                        | MoveMountFlags::MOVE_MOUNT_T_EMPTY_PATH,
-                )
-            })?;
-        } else {
-            fs::create_dir_all(target).context(IoSnafu { path: target })?;
-            rustix::mount::mount_bind(source, target)
-                .map_err(std::io::Error::from)
-                .context(IoSnafu { path: target })?;
-        }
+            .context(IoSnafu { path: target })?;
         self.targets.push(target.to_owned());
         Ok(())
     }
 
     pub(crate) fn cleanup(&mut self) -> Result<()> {
         while let Some(target) = self.targets.last() {
-            self.unmount(target, rustix::mount::UnmountFlags::empty())?;
+            rustix::mount::unmount(target, rustix::mount::UnmountFlags::empty())
+                .map_err(std::io::Error::from)
+                .context(IoSnafu { path: target })?;
             self.targets.pop();
         }
         Ok(())
-    }
-
-    pub(crate) fn target(&self, target: &Path) -> Result<OwnedFd> {
-        let (_, root) = self.namespace.as_ref().ok_or_else(|| {
-            InvalidInputSnafu {
-                path: target,
-                reason: "the actor mount namespace is not held",
-            }
-            .build()
-        })?;
-        let path = target.strip_prefix("/").map_err(|error| {
-            InvalidInputSnafu {
-                path: target,
-                reason: error.to_string(),
-            }
-            .build()
-        })?;
-        rustix::fs::openat(
-            root,
-            path,
-            rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(std::io::Error::from)
-        .context(IoSnafu { path: target })
-    }
-
-    fn unmount(&self, target: &Path, flags: rustix::mount::UnmountFlags) -> Result<()> {
-        if let Some((_, root)) = self.namespace.as_ref() {
-            let root = root.try_clone().context(IoSnafu { path: target })?;
-            let path = target
-                .strip_prefix("/")
-                .map_err(|error| {
-                    InvalidInputSnafu {
-                        path: target,
-                        reason: error.to_string(),
-                    }
-                    .build()
-                })?
-                .to_owned();
-            self.in_namespace(target, move || {
-                rustix::process::fchdir(root)?;
-                rustix::mount::unmount(path, flags)
-            })
-        } else {
-            rustix::mount::unmount(target, flags)
-                .map_err(std::io::Error::from)
-                .context(IoSnafu { path: target })
-        }
-    }
-
-    #[allow(unsafe_code)]
-    fn in_namespace(
-        &self,
-        target: &Path,
-        action: impl FnOnce() -> rustix::io::Result<()> + Send + 'static,
-    ) -> Result<()> {
-        let namespace = self
-            .namespace
-            .as_ref()
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: target,
-                    reason: "the mount namespace is not held",
-                }
-                .build()
-            })?
-            .0
-            .try_clone()
-            .context(IoSnafu { path: target })?;
-        thread::Builder::new()
-            .name("fixture-mount".into())
-            .spawn(move || {
-                use rustix::thread::{
-                    move_into_link_name_space, unshare_unsafe, LinkNameSpaceType, UnshareFlags,
-                };
-
-                // SAFETY: Only this helper's filesystem context changes. FDs stay shared.
-                unsafe { unshare_unsafe(UnshareFlags::FS) }?;
-                move_into_link_name_space(namespace.as_fd(), Some(LinkNameSpaceType::Mount))?;
-                action()
-            })
-            .context(IoSnafu { path: target })?
-            .join()
-            .map_err(|_| {
-                InvalidInputSnafu {
-                    path: target,
-                    reason: "the mount helper panicked",
-                }
-                .build()
-            })?
-            .map_err(std::io::Error::from)
-            .context(IoSnafu { path: target })
     }
 }
 
 impl Drop for FixtureBindMounts {
     fn drop(&mut self) {
         while let Some(target) = self.targets.pop() {
-            let _result = self.unmount(&target, rustix::mount::UnmountFlags::DETACH);
+            let _result = rustix::mount::unmount(&target, rustix::mount::UnmountFlags::DETACH);
         }
     }
 }
@@ -491,25 +362,19 @@ mod tests {
         std::fs::create_dir_all(&target).context(IoSnafu { path: &target })?;
         let file = source.join("file");
         std::fs::write(&file, b"mounted").context(IoSnafu { path: &file })?;
-        for actor in [false, true] {
-            let mut mounts = if actor {
-                FixtureBindMounts::in_actor(std::process::id())?
-            } else {
-                FixtureBindMounts::default()
-            };
-            mounts.bind(&source, &target)?;
-            let held = std::fs::File::open(&target).context(IoSnafu { path: &target })?;
-            assert!(target.join("file").exists());
-            assert!(mounts.cleanup().is_err());
-            assert_eq!(mounts.targets.as_slice(), std::slice::from_ref(&target));
-            drop(held);
-            mounts.cleanup()?;
-            mounts.cleanup()?;
-            assert!(!target.join("file").exists());
-            mounts.bind(&source, &target)?;
-            drop(mounts);
-            assert!(!target.join("file").exists());
-        }
+        let mut mounts = FixtureBindMounts::default();
+        mounts.bind(&source, &target)?;
+        let held = std::fs::File::open(&target).context(IoSnafu { path: &target })?;
+        assert!(target.join("file").exists());
+        assert!(mounts.cleanup().is_err());
+        assert_eq!(mounts.targets.as_slice(), std::slice::from_ref(&target));
+        drop(held);
+        mounts.cleanup()?;
+        mounts.cleanup()?;
+        assert!(!target.join("file").exists());
+        mounts.bind(&source, &target)?;
+        drop(mounts);
+        assert!(!target.join("file").exists());
         Ok(())
     }
 

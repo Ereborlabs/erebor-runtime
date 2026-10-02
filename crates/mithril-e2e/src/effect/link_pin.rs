@@ -1,11 +1,12 @@
-use std::{fs, os::unix::fs::MetadataExt as _, path::Path, time::Duration};
+use std::{fs, os::unix::fs::MetadataExt as _, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 use mithril_control::WorkloadProtectionPolicy as Policy;
+use rustix::fs::{statat, AtFlags};
 
 use super::check::EffectCheck;
-use crate::physical::FixtureBindMounts;
-use crate::platform::{platform_test, Platform, TestResult};
+use crate::platform::{platform_test, Platform, TestResult, PROCESS_FIXTURES};
+use crate::process::ProcessFixture;
 
 #[platform_test(host, runc, kubernetes)]
 #[lifecycle = bpf_recovery]
@@ -25,27 +26,34 @@ fn link_pin_removal_is_denied<P: Platform>() -> TestResult<()> {
         "unlink",
         "/work/protected/erebor_identity_file_open",
     ];
-    let mut actors = Vec::new();
-    for _ in 0..2 {
-        let mut actor = env.add_actor("python", &args)?;
+    let mut actors = [
+        env.add_actor("python", &args)?,
+        env.add_actor("python", &args)?,
+    ];
+    for actor in &mut actors {
         actor.ready()?;
         env.place(actor.id())?;
-        actors.push(actor);
     }
-    let mut mounts = FixtureBindMounts::in_actor(init.id())?;
     let links = env.maps().0.join("links");
     let pin = links.join("erebor_identity_file_open");
     let original = fs::metadata(&pin)?;
-    mounts.bind(&links, Path::new("/work/protected"))?;
-    let target = Path::new("/work/protected/erebor_identity_file_open");
-    let mounted = fs::File::from(mounts.target(target)?).metadata()?;
-    assert_eq!(mounted.dev(), original.dev());
-    assert_eq!(mounted.ino(), original.ino());
+    let root = fs::File::open(format!("/proc/{}/root", init.id()))?;
+    let script = env.source().join(PROCESS_FIXTURES).join("link_pin.py");
+    let pid = init.id().to_string();
+    let mut helper = ProcessFixture::python(&script, [pid.as_ref(), links.as_os_str()])?;
+    let target = "work/protected/erebor_identity_file_open";
+    let mounted = statat(&root, target, AtFlags::empty())?;
+    assert_eq!(
+        (mounted.st_dev, mounted.st_ino),
+        (original.dev(), original.ino())
+    );
     env.install_policy("python_policy.json")?;
     env.sync_policy()?;
     env.node_ready()?;
     env.running(init.id())?;
     env.recovered(init.id(), "link removal workload")?;
+    let wait = Duration::from_secs(5);
+    let denied_name = format!("effect-{}", libc::EACCES);
     for (mut actor, policy) in actors
         .into_iter()
         .zip(["python_policy.json", "exec_observe_policy.json"])
@@ -62,12 +70,7 @@ fn link_pin_removal_is_denied<P: Platform>() -> TestResult<()> {
         let effects = EffectCheck::new(&env, task)?;
 
         actor.send(b"unlink\n")?;
-        actor.wait_name(
-            pid,
-            &format!("effect-{}", libc::EACCES),
-            "BPF link removal denial",
-            Duration::from_secs(5),
-        )?;
+        actor.wait_name(pid, &denied_name, "BPF unlink denial", wait)?;
         let denied = effects.wait(
             &env,
             "UNRESOLVED_OBJECT",
@@ -79,15 +82,18 @@ fn link_pin_removal_is_denied<P: Platform>() -> TestResult<()> {
         assert_eq!(denied.exact_object_key_id, 0);
         assert_eq!(denied.composite_atom_id, 0);
         assert_eq!(fs::metadata(&pin)?.ino(), original.ino());
+        let mounted = statat(&root, target, AtFlags::empty())?;
         assert_eq!(
-            fs::File::from(mounts.target(target)?).metadata()?.ino(),
-            original.ino()
+            (mounted.st_dev, mounted.st_ino),
+            (original.dev(), original.ino())
         );
         actor.send(b"release\n")?;
         actor.wait_gone(pid, "link removal actor exit")?;
         actor.stop()?;
     }
-    mounts.cleanup()?;
+    helper.stop()?;
+    let status = helper.wait_exit("BPF link mount cleanup", wait)?;
+    assert!(status.success(), "{status}; stderr: {:?}", helper.stderr()?);
     init.stop()?;
     env.stop()
 }

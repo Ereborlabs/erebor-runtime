@@ -3836,10 +3836,39 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [x] Replace BPF-link pin removal with `link_pin_removal_is_denied`.
-    Reuse the bind-mount owner from the old runc runner, the file-mutation
-    actor, and existing policy fixtures. Mount the real links directory in
-    the actor namespace. Check its device and inode before the action.
+  - [x] Complete BPF-link pin removal without the old mount fixture.
+    [link_pin_removal_is_denied](src/effect/link_pin.rs) uses the common
+    `ProcessFixture` and [link_pin.py](fixtures/process/link_pin.py) for mount
+    setup. The 99-line Rust test keeps both policy modes, exact task evidence,
+    recovered unknown roots, zero admission rule IDs, and the real pin.
+    The test holds the actor root before protection. Linux `statat` checks
+    the mounted pin's device and inode before and after each denied unlink.
+    `ProcessFixture::stop` closes Python input. Python unmounts the directory
+    before it exits.
+    The test checks the cleanup exit status and reports captured stderr.
+    No Platform API, production operation, policy, or timeout changed.
+    After all three replacement cases passed, the change removed the namespace
+    handles, helper thread, actor-mount methods, and namespace-only check from
+    [physical.rs](src/physical.rs). This deletion removes 135 net Rust lines.
+    Keep the host-local mount owner for the old subPath case until its shared
+    replacement passes. Do not extend that owner. The final exact cases passed
+    on Host in 47.33 seconds, runc in 65.38 seconds, and Kubernetes in 124.66
+    seconds on 2026-10-02. Each case removed its owned resources. The remaining
+    host-local mount cleanup regression passed in 0.03 seconds. Local VM
+    harness checks and the related local physical checks passed. Formatting,
+    workspace check, and strict Clippy passed. The default Rust CI test step
+    stopped at the unchanged CLI `start_builds_surface_launch_plan` test with
+    a JSON trailing-characters error. That exact test passed alone without a
+    code change. The CLI helper's timestamp-and-PID filename can collide, but
+    the cause of this run is not proved. No CLI change is part of this work.
+    The full gate with `RUST_TEST_THREADS=1` passed. No test was skipped.
+    The four related CLI tests also passed with distinct paths under tracing.
+    This result does not prove or fix the earlier default-CI failure.
+    The prior implementation and verification record follows.
+    The interim implementation reused the bind-mount owner from the old runc
+    runner, the file-mutation actor, and existing policy fixtures. Mount the
+    real links directory in the actor namespace. Check its device and inode
+    before the action.
     Require `EACCES`, attributed `UNRESOLVED_OBJECT` File/Unlink evidence,
     and the retained real pin in both Protect and Observe modes. Keep the
     standard test below 100 lines. Add no Platform or production API.
