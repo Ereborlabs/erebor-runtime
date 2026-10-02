@@ -92,6 +92,8 @@ mod network_unsupported;
 #[cfg(test)]
 mod node_restart;
 #[cfg(test)]
+mod passed_descriptor;
+#[cfg(test)]
 mod prestop_dd;
 #[cfg(test)]
 mod prestop_path;

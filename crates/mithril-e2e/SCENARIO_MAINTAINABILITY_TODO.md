@@ -3641,6 +3641,10 @@ test does not close a row when its physical condition or an assertion changed.
     selectors, and normal cleanup. Keep the test below 100 lines. Pass and
     commit Host, runc, then Kubernetes before deleting the matching old
     actions. This does not replace the later descriptor-acquisition pair.
+    Host passes in 34.40 seconds with the 75-line test. The existing retained
+    descriptor case passes in 34.44 seconds. Initial recovery uses the open
+    bootstrap policy; the exact policy then replaces it before either read.
+    Related effect tests, harness checks, formatting, and strict Clippy pass.
   - [ ] Replace both exact-file `io_uring` reads with a small shared test.
     Reuse the descriptor policy, Python process owner, and effect observer.
     Keep the retained descriptors, disabled restricted ring, asynchronous
