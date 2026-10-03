@@ -105,6 +105,8 @@ mod path_wildcards;
 #[cfg(test)]
 mod policy_replace;
 #[cfg(test)]
+mod post_cutover_exit;
+#[cfg(test)]
 mod poststart_hook_exec;
 #[cfg(test)]
 mod probe_entries;

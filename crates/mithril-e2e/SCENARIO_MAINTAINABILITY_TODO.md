@@ -6099,6 +6099,34 @@ test does not close a row when its physical condition or an assertion changed.
   production recovery operation and oracles as the Kubernetes lane. Remove
   the old process-wide iterator pause. A direct `sudo` monitor mirrors its
   `SIGSTOP` and cannot report completion without an external continue.
+  - [ ] Replace post-cutover external-tree exit with one small standard
+    platform test. Reuse `recovery_tree.py` and `actor_policy.json`. Fork the
+    application and external trees before Node starts. Require complete
+    recovery of four tasks: two application tasks, two external tasks, and
+    no invalid task. Release only the external tree. Require the surviving
+    binding to stay `active_recovered` with the same prepared application
+    anchor, application entry ID, and admitted rule. Then release the
+    application. Use existing Platform operations and process cleanup only.
+    Give this actor-before-Node case its own pristine lifecycle. Pass and
+    commit Host, then runc, then Kubernetes before removing their matched
+    legacy readback, result field, and shell assertions. Keep task-change
+    retry and the old observer until their own replacements pass.
+    - [x] Host passed in 39.48 seconds in the retained root VM. The complete
+      source file has 89 lines. Output, pin, lease, actor cgroup, and Node
+      cgroup cleanup passed. VM harness checks and final Rust CI passed. See
+      `/tmp/mithril-post-cutover-host-ci-20261003.log`.
+    - [ ] Pass and commit direct runc with the unchanged body.
+    - [ ] Pass and commit Kubernetes with the unchanged body.
+    Review route: [external_exit_preserves_recovery](src/identity/scenarios/post_cutover_exit.rs)
+      starts both [recovery_tree.py](fixtures/process/recovery_tree.py) trees
+      -> the production Node recovers four live tasks
+      -> [ProcessFixture](src/process.rs) stops the external tree
+      -> the test reads a fresh application snapshot and checks the binding.
+    The application stops only after this readback. No actor, policy,
+    Platform, production, or legacy source changed. The exact Host case is
+    `identity::scenarios::post_cutover_exit::external_exit_preserves_recovery::recovery_exit_host`.
+    Run it in the prepared root VM with the normal Platform inputs and
+    `--exact --ignored --nocapture --test-threads=1`.
 - [ ] Recovered-container application, external, and declared-probe entries:
   keep each stock runtime action and exact role, rule, and denial assertion.
   - [x] Replace the recovered-container unmatched `mkdir` exec. Keep the
