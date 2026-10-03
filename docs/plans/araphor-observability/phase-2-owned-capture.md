@@ -608,12 +608,32 @@ VM, five pairs, workload, ten-minute bound and all pass/fail checks. This run
 has not been approved or executed. Later physical gates still require a real
 qualified configuration; do not create one from the failed measurements.
 
-The later Host failure, restart and storage cases still use the unresolved
-proc-file fixture. Before qualification, use the declared denied file and
-require fresh `EXACT_POLICY_DENY` evidence for each physical denial. EACCES
-and an unchanged program digest are not sufficient. Keep the intentional
-`managed_proc_read_is_denied` case unchanged; that case tests `UNRESOLVED_OBJECT`.
-No later physical lifecycle gate passed at this source. Status: **Not done**.
+The later Host failure, restart and storage cases now use the same declared
+denied file. Start their actors after policy activation. Before each read,
+read the current Task and its entry rule. Require a fresh `EXACT_POLICY_DENY`
+event with that Task, role, rule, profile generation and `OpenRead` result.
+Save the exact witness in the existing JSON receipt. EACCES alone does not
+prove the policy decision. Keep `managed_proc_read_is_denied` unchanged; that
+case tests `UNRESOLVED_OBJECT`.
+
+Compare enforcement health across each same-lifetime fault window. Before
+Node shutdown, save the boundary snapshot. After restart, wait at most 20
+seconds for healthy current coverage. Reject new classification, loss, error
+and delay gaps, including recovered history. Preserve the expected
+`UNCLEAN_RESTART` and `READER_STOPPED` gaps. Do not count them as healthy
+coverage. Save both boundary snapshots and verify the program digest.
+The restart case checks its first denial after the initial Node-process
+handoff, then checks the second denial after the deliberate process kill.
+The admission RPC health response does not prove healthy event coverage.
+Retirement reads the replacement Task and checks the changed target identity.
+
+The two focused component checks passed. The old proc-file target fails the
+explicit-target assertion; the corrected target passes. Read
+`capture-lifecycle-fixture-red.log`, `capture-lifecycle-fixture-green.log` and
+`capture-lifecycle-guard.log` in the evidence directory above. These checks
+do not execute a trace or qualify a physical lifecycle case. All fault holds,
+deadlines, quotas, replay checks and cleanup checks stay in place.
+No later physical lifecycle gate passed. Status: **Not done**.
 
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:

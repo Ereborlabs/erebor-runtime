@@ -2819,17 +2819,49 @@ Read `capture-vm153-pairs-admitted.json` and
 The unoptimized fixture uses DEBUG logging. Production uses release binaries
 and INFO logging. The current receipt does not isolate either factor's effect.
 
-The later Host failure, restart and storage cases remain unqualified. They
-still count a proc-file EACCES denial without exact policy-deny evidence.
-Correct those fixtures before claiming prevention proof. No failed measurement
-may supply their required qualified configuration. Production diagnostics
-remain disabled. No additional performance experiment is approved by this
-record.
+The later Host failure, restart and storage cases remain unqualified. Their
+corrected source now requires the declared file and fresh exact policy-deny
+evidence. No failed measurement may supply their required qualified
+configuration. Production diagnostics remain disabled. No additional
+performance experiment is approved by this record.
 
 The final workspace procedure passed at source `2da84412` after the actor-order
 edit. Formatting, workspace checking, strict Clippy and all selected workspace
 tests passed. Data passed 167 tests, shared observability 22, Interceptor 39,
 Control 170, Mithril e2e 135 and Node 262. Read
 `capture-actor-order-workspace-final.log` in the same evidence directory.
-No Rust source changed after that run. This result does not qualify latency
-or the remaining physical lifecycle gates.
+No Rust source changed between that run and its record. The subsequent
+lifecycle-fixture change requires a new final workspace run. The earlier
+result does not qualify latency or the remaining physical lifecycle gates.
+
+### Owned-capture lifecycle evidence
+
+Read the corrected fault path in this order:
+
+[proc_read.py](../../../../crates/mithril-e2e/fixtures/process/proc_read.py) accepts an optional exact file path. Its default proc-file behavior stays unchanged.
+-> [policy_replace_policy.json](../../../../crates/mithril-e2e/fixtures/process/policy_replace_policy.json) denies `OpenRead` on `/fixtures/policy_replace.py` for the worker role.
+-> [Host::capture_denial](../../../../crates/mithril-e2e/src/platform/host.rs) reads the current Task and entry rule before each trigger.
+-> [EffectCheck::wait](../../../../crates/mithril-e2e/src/effect/check.rs) requires a new effect with the Task, role, rule, operation, reason and kernel result.
+-> [Host::capture_health](../../../../crates/mithril-e2e/src/platform/host.rs) rejects new faults against the same-lifetime baseline.
+
+`capture_denial` also checks the current profile generation and writes the
+exact event fields into the existing receipt. Storage and restart actors
+start after policy activation. These cases do not count a generic EACCES
+result as proof of the installed policy.
+
+Review `capture_recovery` and `capture_boundary` before the restart cases.
+They wait for healthy current coverage and reject fault counters and new
+history gaps. Only the expected `UNCLEAN_RESTART` and `READER_STOPPED` reasons
+are permitted at these lifecycle boundaries. The gaps remain in the receipt.
+Read [Shared::diagnostic_process](../../../../crates/mithril-e2e/src/platform/shared.rs)
+for the initial graceful handoff and independent recovered child. Its health
+RPC proves listener availability, not healthy coverage. The test reads a fresh
+snapshot after the prior process stops; it does not require changed boot or
+source epochs. The two denials occur before and after the actual child kill.
+
+The explicit-target fixture check and extended coverage guard each passed
+one selected component test. Restoring the old target causes the fixture
+check to fail; restoring the new target makes it pass. Read
+`capture-lifecycle-fixture-red.log`, `capture-lifecycle-fixture-green.log` and
+`capture-lifecycle-guard.log` in the evidence directory above. No physical
+capture ran for these checks. The physical gates remain **Not done**.

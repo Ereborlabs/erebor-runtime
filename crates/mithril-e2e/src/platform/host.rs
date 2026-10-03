@@ -69,36 +69,57 @@ impl Host {
         env.shared.enable_diagnostic_partition()?;
         let policy = serde_json::from_slice(&fs::read(super::policy_path(
             env.source(),
-            "python_policy.json",
+            "policy_replace_policy.json",
         )?)?)?;
         let labels = super::policy_labels(&policy)?;
         let mut init = env.start_actor("ready.py", &[], &labels)?;
         env.place(init.id())?;
         fs::create_dir(env.work().join("second"))?;
         fs::create_dir(env.work().join("third"))?;
-        let mut first = env.add_actor("python", &["/fixtures/proc_read.py", "/work"])?;
-        first.ready()?;
-        env.place(first.id())?;
-        let mut second = env.add_actor("python", &["/fixtures/proc_read.py", "/work/second"])?;
-        second.ready()?;
-        env.place(second.id())?;
-        let mut third = env.add_actor("python", &["/fixtures/proc_read.py", "/work/third"])?;
-        third.ready()?;
-        env.place(third.id())?;
-        env.install_policy("python_policy.json")?;
+        env.install_policy("policy_replace_policy.json")?;
         env.start_node()?;
         env.sync_policy()?;
         env.node_ready()?;
         env.running(init.id())?;
         env.recovered(init.id(), "diagnostic storage workload")?;
-        fs::write(env.work().join("act"), b"act")?;
-        first.wait_name(
-            first.id(),
-            &format!("proc-read-{}", libc::EACCES),
-            "denial before the storage fault",
-            Duration::from_secs(5),
+        let mut first = env.add_actor(
+            "python",
+            &[
+                "/fixtures/proc_read.py",
+                "/work",
+                "/fixtures/policy_replace.py",
+            ],
         )?;
+        first.ready()?;
+        env.place(first.id())?;
+        let mut second = env.add_actor(
+            "python",
+            &[
+                "/fixtures/proc_read.py",
+                "/work/second",
+                "/fixtures/policy_replace.py",
+            ],
+        )?;
+        second.ready()?;
+        env.place(second.id())?;
+        let mut third = env.add_actor(
+            "python",
+            &[
+                "/fixtures/proc_read.py",
+                "/work/third",
+                "/fixtures/policy_replace.py",
+            ],
+        )?;
+        third.ready()?;
+        env.place(third.id())?;
         let initial = env.snapshot()?;
+        let first_work = env.work().to_owned();
+        let mut denials = vec![env.capture_denial(
+            &mut first,
+            &first_work,
+            &initial,
+            "denial before the storage fault",
+        )?];
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -292,14 +313,12 @@ impl Host {
         assert_eq!(rustix::fs::statvfs(&disk)?.f_bavail, 0);
         assert!(!data.storage_health()?.write_ready);
         assert!(!spool.join("terminal.json").exists());
-        fs::write(env.work().join("second/act"), b"act")?;
-        second.wait_name(
-            second.id(),
-            &format!("proc-read-{}", libc::EACCES),
+        denials.push(env.capture_denial(
+            &mut second,
+            &first_work.join("second"),
+            &initial,
             "denial while the store is full",
-            Duration::from_secs(5),
-        )?;
-        assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
+        )?);
         let deadline = Instant::now() + Duration::from_secs(30);
         let terminal: TraceTerminalV1 = loop {
             match fs::read(spool.join("terminal.json")) {
@@ -334,6 +353,8 @@ impl Host {
             68 * 1024 * 1024
         );
         assert!(!spool.join("ack.json").exists());
+        let stopped = env.snapshot()?;
+        Self::capture_health(&initial, &stopped)?;
         drop(connection);
         env.shared.stop_node()?;
         drop(owner);
@@ -362,6 +383,7 @@ impl Host {
         );
         env.start_node()?;
         env.node_ready()?;
+        let resumed = env.capture_recovery(&stopped)?;
         let deadline = Instant::now() + Duration::from_secs(50);
         while !spool.join("ack.json").exists() {
             if Instant::now() >= deadline {
@@ -419,14 +441,12 @@ impl Host {
         assert_eq!(acknowledgement.execution_id, id);
         assert_eq!(acknowledgement.last_sequence, terminal.last_sequence);
         assert_eq!(acknowledgement.terminal.as_ref(), Some(&terminal));
-        fs::write(env.work().join("third/act"), b"act")?;
-        third.wait_name(
-            third.id(),
-            &format!("proc-read-{}", libc::EACCES),
+        denials.push(env.capture_denial(
+            &mut third,
+            &first_work.join("third"),
+            &resumed,
             "denial after storage recovery",
-            Duration::from_secs(5),
-        )?;
-        assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
+        )?);
         fs::write(
             &proof,
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -436,7 +456,10 @@ impl Host {
                 "raw_receipt_before_replay": recovered_receipt.last_sequence,
                 "frames": output, "terminal": terminal, "acknowledgement": acknowledgement,
                 "attached_unix_ns": attached, "dispatch_delay_seconds": 20,
-                "frame_upload_ack_on_failure": false, "physical_denials": 3,
+                "frame_upload_ack_on_failure": false, "physical_denials": denials.len(),
+                "denial_events": denials,
+                "enforcement_before_restart": Self::capture_evidence(&stopped),
+                "enforcement_after_restart": Self::capture_evidence(&resumed),
                 "spool_max_bytes": 68 * 1024 * 1024, "discovery_enabled": false
             }))?,
         )?;
@@ -485,32 +508,40 @@ impl Host {
         env.start_control()?;
         let policy = serde_json::from_slice(&fs::read(super::policy_path(
             env.source(),
-            "python_policy.json",
+            "policy_replace_policy.json",
         )?)?)?;
         let labels = super::policy_labels(&policy)?;
         let mut init = env.start_actor("ready.py", &[], &labels)?;
         env.place(init.id())?;
         fs::create_dir(env.work().join("second"))?;
-        let mut first = env.add_actor("python", &["/fixtures/proc_read.py", "/work"])?;
-        first.ready()?;
-        env.place(first.id())?;
-        let mut second = env.add_actor("python", &["/fixtures/proc_read.py", "/work/second"])?;
-        second.ready()?;
-        env.place(second.id())?;
-        env.install_policy("python_policy.json")?;
+        env.install_policy("policy_replace_policy.json")?;
         env.start_node()?;
         env.sync_policy()?;
         env.node_ready()?;
         env.running(init.id())?;
         env.recovered(init.id(), "diagnostic restart workload")?;
-        fs::write(env.work().join("act"), b"act")?;
-        first.wait_name(
-            first.id(),
-            &format!("proc-read-{}", libc::EACCES),
-            "denial before Node restart",
-            Duration::from_secs(5),
+        let mut first = env.add_actor(
+            "python",
+            &[
+                "/fixtures/proc_read.py",
+                "/work",
+                "/fixtures/policy_replace.py",
+            ],
         )?;
+        first.ready()?;
+        env.place(first.id())?;
+        let mut second = env.add_actor(
+            "python",
+            &[
+                "/fixtures/proc_read.py",
+                "/work/second",
+                "/fixtures/policy_replace.py",
+            ],
+        )?;
+        second.ready()?;
+        env.place(second.id())?;
         let initial = env.snapshot()?;
+        Self::capture_health(&initial, &initial)?;
         let (control, fact) = env.shared.diagnostic_context()?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -545,6 +576,14 @@ impl Host {
             .and_then(|item| item.target.clone())
             .ok_or("the diagnostic restart target is unavailable")?;
         let mut node = env.shared.diagnostic_process()?;
+        let started = env.capture_recovery(&initial)?;
+        let first_work = env.work().to_owned();
+        let mut denials = vec![env.capture_denial(
+            &mut first,
+            &first_work,
+            &started,
+            "denial before Node restart",
+        )?];
         let baseline = ResourceSnapshot::read()?;
         let request = TraceRequestV1 {
             tenant_id: tenant,
@@ -625,6 +664,8 @@ impl Host {
                 "the attach marker has no observed BPF programs"
             );
         }
+        let stopped = env.snapshot()?;
+        Self::capture_health(&started, &stopped)?;
         let pid = Pid::from_raw(i32::try_from(node.id())?).ok_or("invalid diagnostic Node PID")?;
         let handle = pidfd_open(pid, PidfdFlags::empty())?;
         pidfd_send_signal(&handle, Signal::KILL)?;
@@ -650,6 +691,7 @@ impl Host {
         // Do not let fixture cleanup supply the parent-death result.
         node.stop()?;
         let mut recovered = env.shared.diagnostic_process()?;
+        let resumed = env.capture_recovery(&stopped)?;
         let deadline = Instant::now() + Duration::from_secs(20);
         while !spool.join("ack.json").exists() {
             recovered.ensure_running("recovered diagnostic acknowledgement")?;
@@ -691,21 +733,24 @@ impl Host {
                 .count(),
             usize::from(mode == "after")
         );
-        fs::write(env.work().join("second/act"), b"act")?;
-        second.wait_name(
-            second.id(),
-            &format!("proc-read-{}", libc::EACCES),
+        denials.push(env.capture_denial(
+            &mut second,
+            &first_work.join("second"),
+            &resumed,
             "denial after Node restart",
-            Duration::from_secs(5),
-        )?;
-        assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
+        )?);
         fs::write(
             &proof,
             serde_json::to_vec_pretty(&serde_json::json!({
                 "case": "node-restart", "stage": mode, "accepted": accepted,
                 "frames": frames, "terminal": terminal, "observed_programs": programs,
                 "observed_maps": maps, "observed_links": links,
-                "cleanup_observed_before_fixture_stop": true, "physical_denials": 2
+                "cleanup_observed_before_fixture_stop": true, "physical_denials": denials.len(),
+                "denial_events": denials,
+                "enforcement_before_handoff": Self::capture_evidence(&initial),
+                "enforcement_after_handoff": Self::capture_evidence(&started),
+                "enforcement_before_restart": Self::capture_evidence(&stopped),
+                "enforcement_after_restart": Self::capture_evidence(&resumed)
             }))?,
         )?;
         fs::write(env.work().join("release"), b"release")?;
@@ -724,6 +769,7 @@ impl Host {
         env.stop()
     }
 
+    #[cfg(test)]
     fn qualify_diagnostic_failures() -> TestResult<()> {
         use mithril_control::{
             DiscoveryDigestV1, TraceApprovalV1, TraceCleanupV1, TraceExecutionGrantV1,
@@ -744,18 +790,19 @@ impl Host {
         env.shared.enable_diagnostic_partition()?;
         let policy = serde_json::from_slice(&fs::read(super::policy_path(
             env.source(),
-            "python_policy.json",
+            "policy_replace_policy.json",
         )?)?)?;
         let labels = super::policy_labels(&policy)?;
         let mut init = env.start_actor("ready.py", &[], &labels)?;
         env.place(init.id())?;
-        env.install_policy("python_policy.json")?;
+        env.install_policy("policy_replace_policy.json")?;
         env.start_node()?;
         env.sync_policy()?;
         env.node_ready()?;
         env.running(init.id())?;
         env.recovered(init.id(), "diagnostic failure workload")?;
         let initial = env.snapshot()?;
+        Self::capture_health(&initial, &initial)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -804,9 +851,18 @@ impl Host {
             let mut work = env.work().join(case);
             fs::create_dir(&work)?;
             let command = format!("/work/{case}");
-            let mut probe = env.add_actor("python", &["/fixtures/proc_read.py", &command])?;
+            let mut probe = env.add_actor(
+                "python",
+                &[
+                    "/fixtures/proc_read.py",
+                    &command,
+                    "/fixtures/policy_replace.py",
+                ],
+            )?;
             probe.ready()?;
             env.place(probe.id())?;
+            let mut denials = Vec::new();
+            let mut coverage = initial.clone();
             let request_id = *uuid::Uuid::new_v4().as_bytes();
             let mut request = TraceRequestV1 {
                 tenant_id: tenant,
@@ -889,13 +945,13 @@ impl Host {
                         .is_err());
                 }
                 "retirement" => {
-                    fs::write(work.join("act"), b"act")?;
-                    probe.wait_name(
-                        probe.id(),
-                        &format!("proc-read-{}", libc::EACCES),
+                    denials.push(env.capture_denial(
+                        &mut probe,
+                        &work,
+                        &coverage,
                         "diagnostic retirement denial",
-                        Duration::from_secs(5),
-                    )?;
+                    )?);
+                    coverage = env.snapshot()?;
                     fs::write(work.join("release"), b"release")?;
                     probe.stop()?;
                     init.stop()?;
@@ -969,17 +1025,24 @@ impl Host {
                 env.place(init.id())?;
                 work = env.work().join(case);
                 fs::create_dir(&work)?;
-                probe = env.add_actor("python", &["/fixtures/proc_read.py", &command])?;
+                probe = env.add_actor(
+                    "python",
+                    &[
+                        "/fixtures/proc_read.py",
+                        &command,
+                        "/fixtures/policy_replace.py",
+                    ],
+                )?;
                 probe.ready()?;
                 env.place(probe.id())?;
+                coverage = env.capture_recovery(&coverage)?;
             }
-            fs::write(work.join("act"), b"act")?;
-            probe.wait_name(
-                probe.id(),
-                &format!("proc-read-{}", libc::EACCES),
+            denials.push(env.capture_denial(
+                &mut probe,
+                &work,
+                &coverage,
                 "diagnostic failure denial",
-                Duration::from_secs(5),
-            )?;
+            )?);
             let (_, protected) = env.shared.diagnostic_context()?;
             if case == "retirement" {
                 assert_ne!(protected.pod_uid, target.fact.pod_uid);
@@ -1057,7 +1120,9 @@ impl Host {
                 }),
                 "terminal_ack_absent_before_repair": case == "partition",
                 "exact_spool_replay": case == "partition",
-                "physical_denials": 1 + usize::from(case == "retirement"),
+                "physical_denials": denials.len(), "denial_events": denials,
+                "enforcement_before": Self::capture_evidence(&coverage),
+                "enforcement_after": Self::capture_evidence(&env.snapshot()?),
                 "retired_denial_pid": (case == "retirement").then_some(original_pid),
                 "physical_denial_target": protected,
                 "physical_denial_pid": probe.id(), "physical_denial_errno": libc::EACCES,
@@ -1069,6 +1134,149 @@ impl Host {
         fs::write(env.work().join("release"), b"release")?;
         init.stop()?;
         env.stop()
+    }
+
+    #[cfg(test)]
+    fn capture_denial(
+        &mut self,
+        actor: &mut ProcessFixture,
+        work: &Path,
+        baseline: &MithrilObservationSnapshot,
+        name: &str,
+    ) -> TestResult<serde_json::Value> {
+        use crate::effect::EffectCheck;
+        use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
+
+        let task = self.task(actor.id(), name)?;
+        assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
+        assert_eq!(
+            task.entry_rule(self)?.target_role_id,
+            task.snapshot.active_role_id
+        );
+        let generation = task.snapshot.profile_generation_ref_id;
+        let check = EffectCheck::new(self, task)?;
+        Self::capture_health(baseline, &self.snapshot()?)?;
+        fs::write(work.join("act"), b"act")?;
+        actor.wait_name(
+            actor.id(),
+            &format!("proc-read-{}", libc::EACCES),
+            name,
+            Duration::from_secs(5),
+        )?;
+        let event = check.wait(
+            self,
+            "EXACT_POLICY_DENY",
+            KernelEffectFamilyV1::File,
+            KernelEffectOperationV1::OpenRead,
+            -libc::EACCES,
+            name,
+        )?;
+        assert_eq!(event.profile_generation_ref_id, generation);
+        Self::capture_health(baseline, &self.snapshot()?)?;
+        Ok(serde_json::json!({
+            "source_cpu_id": event.source_cpu_id, "source_sequence": event.source_sequence,
+            "task_cookie": event.task_cookie, "reason": event.reason,
+            "effect_family": event.effect_family, "operation": event.operation,
+            "kernel_result": event.kernel_result, "active_role_id": event.active_role_id,
+            "admitted_entry_rule_id": event.admitted_entry_rule_id,
+            "profile_generation_ref_id": event.profile_generation_ref_id,
+            "composite_atom_id": event.composite_atom_id,
+            "exact_object_key_id": event.exact_object_key_id,
+        }))
+    }
+
+    #[cfg(test)]
+    fn capture_evidence(snapshot: &MithrilObservationSnapshot) -> serde_json::Value {
+        let intervals = snapshot
+            .coverage_intervals
+            .iter()
+            .map(|interval| {
+                serde_json::json!({
+                    "interval_id": interval.interval_id, "source_id": interval.source_id,
+                    "source_epoch": interval.source_epoch, "cpu_id": interval.cpu_id,
+                    "revision": interval.revision, "state": interval.state,
+                    "gap_reasons": interval.gap_reasons,
+                    "classifier_miss_count": interval.classifier_miss_count,
+                    "unresolved": interval.unresolved, "lost": interval.lost,
+                    "negative_claim_eligible": interval.negative_claim_eligible,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "node_boot_id": snapshot.node_boot_id, "label_epoch": snapshot.label_epoch,
+            "program_digest": snapshot.program_digest, "kernel_ready": snapshot.kernel_ready,
+            "effect_health_available": snapshot.effect_health_available,
+            "negative_claim_eligible": snapshot.negative_claim_eligible,
+            "lost_effects": snapshot.lost_effects, "unresolved_effects": snapshot.unresolved_effects,
+            "decoder_errors": snapshot.decoder_errors, "evidence_errors": snapshot.evidence_errors,
+            "wal_capacity_blocked": snapshot.wal_capacity_blocked,
+            "reader_queue_dropped_events": snapshot.reader_queue_dropped_events,
+            "coverage_intervals": intervals,
+        })
+    }
+
+    #[cfg(test)]
+    fn capture_boundary(
+        before: &MithrilObservationSnapshot,
+        after: &MithrilObservationSnapshot,
+    ) -> TestResult<()> {
+        if before.program_digest != after.program_digest {
+            return Err("capture recovery changed the enforcement program".into());
+        }
+        if after.lost_effects != 0
+            || after.unresolved_effects != 0
+            || after.decoder_errors != 0
+            || after.evidence_errors != 0
+            || after.wal_capacity_blocked != 0
+            || after.reader_queue_dropped_events != 0
+        {
+            return Err("capture recovery contains enforcement loss or errors".into());
+        }
+        for interval in &after.coverage_intervals {
+            if interval.classifier_miss_count != 0 || interval.unresolved != 0 || interval.lost != 0
+            {
+                return Err("capture recovery contains classification or coverage loss".into());
+            }
+            let prior = before
+                .coverage_intervals
+                .iter()
+                .find(|prior| prior.interval_id == interval.interval_id);
+            if interval.gap_reasons.iter().any(|reason| {
+                !matches!(reason.as_str(), "UNCLEAN_RESTART" | "READER_STOPPED")
+                    && !prior.is_some_and(|prior| prior.gap_reasons.contains(reason))
+            }) {
+                return Err("capture recovery introduced an unexpected coverage gap".into());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn capture_recovery(
+        &self,
+        before: &MithrilObservationSnapshot,
+    ) -> TestResult<MithrilObservationSnapshot> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let current = match self.snapshot() {
+                Ok(current) => current,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            Self::capture_boundary(before, &current)?;
+            if Self::capture_health(&current, &current).is_ok() {
+                return Ok(current);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(
+                    "capture recovery did not establish healthy enforcement coverage".into(),
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[cfg(test)]
@@ -1666,6 +1874,35 @@ fn capture_rejects_coverage_faults() -> TestResult<()> {
     Host::capture_health(&baseline, &after)?;
     after.reader_queue_dropped_events = 1;
     assert!(Host::capture_health(&baseline, &after).is_err());
+
+    after = before.clone();
+    after.coverage_intervals.push(MithrilCoverageInterval {
+        interval_id: "restart-gap".into(),
+        revision: 2,
+        state: "CLOSED".into(),
+        gap_reasons: vec!["UNCLEAN_RESTART".into(), "READER_STOPPED".into()],
+        ..before.coverage_intervals[0].clone()
+    });
+    Host::capture_boundary(&before, &after)?;
+    assert!(Host::capture_health(&before, &after).is_err());
+    for reason in [
+        "CLASSIFIER_MISS",
+        "READER_DELAY",
+        "WAL_CAPACITY",
+        "DECODER_ERROR",
+    ] {
+        after.coverage_intervals[1].gap_reasons.push(reason.into());
+        assert!(Host::capture_boundary(&before, &after).is_err());
+        after.coverage_intervals[1].gap_reasons.pop();
+    }
+    after.coverage_intervals[1].classifier_miss_count = 1;
+    assert!(Host::capture_boundary(&before, &after).is_err());
+    after.coverage_intervals[1].classifier_miss_count = 0;
+    after.unresolved_effects = 1;
+    assert!(Host::capture_boundary(&before, &after).is_err());
+    after.unresolved_effects = 0;
+    after.program_digest = "changed".into();
+    assert!(Host::capture_boundary(&before, &after).is_err());
     Ok(())
 }
 

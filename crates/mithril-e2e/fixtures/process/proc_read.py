@@ -8,6 +8,7 @@ PR_SET_NAME = 15
 libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 work = sys.argv[1]
+target = sys.argv[2] if len(sys.argv) > 2 else "/proc/self/environ"
 
 
 def wait(name):
@@ -18,7 +19,7 @@ def wait(name):
 print("native-fixture-ready", flush=True)
 wait("act")
 try:
-    descriptor = os.open("/proc/self/environ", os.O_RDONLY)
+    descriptor = os.open(target, os.O_RDONLY)
 except OSError as failure:
     error = failure.errno
 else:

@@ -2056,6 +2056,75 @@ assert len(names) == 10 and all(name.startswith(f'tr{i}:') for i, name in enumer
     }
 
     #[test]
+    fn observability_target_proc_read() -> ProofResult<()> {
+        let status = Command::new("python3")
+            .arg("-c")
+            .arg(
+                r#"
+import builtins, contextlib, ctypes, errno, io, json, os, pathlib, sys, time, types
+source = pathlib.Path(sys.argv[1]).read_text()
+policy = json.loads(pathlib.Path(sys.argv[2]).read_text())
+role = next(role for role in policy['spec']['roles'] if role['name'] == 'worker')
+declared, = [rule['path'] for rule in role['files']
+             if rule['action'] == 'Deny' and 'OpenRead' in rule['operations']
+             and not rule['recursive']]
+attempts = []
+names = []
+waits = []
+sleeps = []
+def named(operation, value, *args):
+    assert operation == 15 and args == (0, 0, 0), (operation, args)
+    names.append(ctypes.string_at(value).decode())
+    return 0
+ctypes.CDLL = lambda *args, **kwargs: types.SimpleNamespace(prctl=named)
+def forbidden(*args, **kwargs):
+    raise AssertionError('unexpected native operation')
+def open_read(path, flags):
+    assert path == expected and flags == os.O_RDONLY, (path, expected, flags)
+    attempts.append(path)
+    raise PermissionError(errno.EACCES, 'fixture file operation')
+def exists(path):
+    waits.append(path)
+    return next(checks)
+builtins.open = forbidden
+os.open = open_read
+os.close = os.rename = os.write = forbidden
+os.path.exists = exists
+time.sleep = lambda delay: sleeps.append(delay)
+time.time = time.monotonic = time.perf_counter = forbidden
+time.monotonic_ns = time.perf_counter_ns = forbidden
+for extra, expected in [((), '/proc/self/environ'), ((declared,), declared)]:
+    attempts.clear()
+    names.clear()
+    waits.clear()
+    sleeps.clear()
+    checks = iter([False, True, False, True])
+    sys.argv = ['proc_read.py', '/work', *extra]
+    with contextlib.redirect_stdout(io.StringIO()) as output:
+        try:
+            exec(compile(source, 'proc_read.py', 'exec'))
+        except SystemExit as stop:
+            assert stop.code == errno.EACCES, stop.code
+        else:
+            raise AssertionError('the fixture did not exit')
+    assert output.getvalue() == 'native-fixture-ready\n', output.getvalue()
+    assert attempts == [expected], attempts
+    assert names == [f'proc-read-{errno.EACCES}'], names
+    assert waits == ['/work/act'] * 2 + ['/work/release'] * 2, waits
+    assert sleeps == [0.01, 0.01], sleeps
+"#,
+            )
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/process/proc_read.py"))
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("fixtures/process/policy_replace_policy.json"),
+            )
+            .status()?;
+        assert!(status.success());
+        Ok(())
+    }
+
+    #[test]
     fn observability_target_accepts_the_k3s_systemd_cgroup_layout() {
         assert!(kubernetes_cgroup_path(Path::new(
             "/sys/fs/cgroup/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod123.slice/cri-containerd-456.scope"
