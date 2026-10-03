@@ -2825,3 +2825,11 @@ Correct those fixtures before claiming prevention proof. No failed measurement
 may supply their required qualified configuration. Production diagnostics
 remain disabled. No additional performance experiment is approved by this
 record.
+
+The final workspace procedure passed at source `2da84412` after the actor-order
+edit. Formatting, workspace checking, strict Clippy and all selected workspace
+tests passed. Data passed 167 tests, shared observability 22, Interceptor 39,
+Control 170, Mithril e2e 135 and Node 262. Read
+`capture-actor-order-workspace-final.log` in the same evidence directory.
+No Rust source changed after that run. This result does not qualify latency
+or the remaining physical lifecycle gates.

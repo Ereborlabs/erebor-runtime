@@ -563,6 +563,15 @@ rule, production owner or experiment limit changes.
 The two focused checks passed after that change. Each ran one selected test.
 Read `capture-actor-order-focused.log` and `capture-actor-order-guard.log`.
 
+The final workspace procedure passed at source `2da84412`, after the last Rust
+edit. Formatting, workspace checking, strict Clippy and all selected workspace
+tests passed. Main library results were Data 167 passed (5 ignored), shared
+observability 22 passed (2 ignored), Interceptor 39 passed (1 ignored), Control
+170 passed (2 ignored), e2e 135 passed (412 ignored), and Node 262 passed
+(none ignored). Read `capture-actor-order-workspace-final.log` in the evidence
+directory above. Use the worktree-local verification command above. This
+workspace result does not change the failed physical latency result below.
+
 ### Corrected five-pair result
 
 The owned VM ran all five pairs at source `2da84412`. All ten runs retained
