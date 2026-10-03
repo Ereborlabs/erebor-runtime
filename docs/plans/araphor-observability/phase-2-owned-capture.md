@@ -991,6 +991,44 @@ unknown. Read `compare-current.json` and `compare-current-test.log` in
 `/tmp/araphor-fault-admission.rz3Qj3lL`. Four pairs fail the no-increase gate.
 No qualified configuration is published. Performance parity is **Not done**.
 
+### Resource scan buffer
+
+Source `3da357fa` gives each diagnostic supervisor one reusable read buffer.
+The supervisor clears the buffer before each status or descriptor read.
+Every read still opens the current file. The 10-ms scan cadence, 256-entry
+limit, 16-KiB descriptor bound, peak memory check, program/map ID collection
+and cleanup checks stay unchanged. No descriptor cache or new owner is added.
+
+The focused backend selection passed 29 tests: Data 2, Interceptor 17 and
+e2e 10. Two subprocess helpers stayed ignored. The new
+`observability_backend_resource_buffer` test uses real `/proc` descriptor
+data and temporary filesystem inputs. It checks fresh reads, allocation
+reuse, stale text removal, read-error recovery, invalid UTF-8 recovery and
+the descriptor input bound. Read `resource-buffer-focused.log` in
+`/tmp/araphor-fault-admission.rz3Qj3lL`. The final workspace procedure has not
+run on this source. The next comparison uses output
+`/tmp/araphor-observability-153-compare-20261003-buffer` with the unchanged
+workload and strict no-increase gate. No latency improvement is claimed.
+
+The buffer comparison takes 282.24 seconds and returns 101. All ten runs
+retain 1,000 exact denial witnesses with zero enforcement-event loss and
+unresolved effects. Native cleanup and unchanged enforcement resources pass
+in all five runs. Araphor has `Deadline` and `Verified` cleanup in all five
+runs. Trace kernel loss stays unknown.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 249,340 | 272,362 | +23,022 | +9.233176% |
+| 2 | 243,434 | 92,794 | -150,640 | -61.881249% |
+| 3 | 213,660 | 299,159 | +85,499 | +40.016381% |
+| 4 | 248,106 | 208,108 | -39,998 | -16.121335% |
+| 5 | 210,080 | 176,239 | -33,841 | -16.108625% |
+
+Read `compare-buffer.json` and `compare-buffer-test.log` in the evidence
+directory above. Two pairs fail. Do not infer a causal speedup from the
+changed pair count. No qualified configuration is published. Performance
+parity remains **Not done**.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node

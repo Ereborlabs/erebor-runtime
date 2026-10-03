@@ -3061,3 +3061,31 @@ is published. Read the
 [five-pair result](../../araphor-observability/phase-2-owned-capture.md#repeated-plain-bpftrace-comparison)
 and `compare-current-test.log` in the evidence directory above. No causal
 latency explanation or performance parity is claimed.
+
+### Diagnostic resource scan buffer
+
+[SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) creates one read buffer for its supervision loop.
+-> [SupervisedChild::record_resources](../../../../crates/erebor-interceptor/src/diagnostic.rs) clears the buffer and reads current process status.
+-> [SupervisedChild::read_resource](../../../../crates/erebor-interceptor/src/diagnostic.rs) clears the same buffer and reads each current descriptor within the existing 16-KiB bound.
+-> [SupervisedChild::record_resources](../../../../crates/erebor-interceptor/src/diagnostic.rs) keeps the peak memory value and collects program/map IDs.
+
+The buffer belongs to one supervisor invocation. The invocation drops the
+buffer when supervision ends. Fresh file opens, the 10-ms cadence, the
+256-entry limit, quota checks, output draining and cleanup remain unchanged.
+The private bounded-read helper uses the standard `Read` trait. A failed
+read does not parse partial or stale text. No descriptor lifetime changes.
+
+Source `3da357fa` passed 29 focused backend tests. The new
+`observability_backend_resource_buffer` test checks real descriptor input,
+freshness, allocation reuse, read errors, invalid UTF-8 and the input bound.
+Read `resource-buffer-focused.log` in the evidence directory above. Final
+workspace verification has not run on this source. Performance parity is
+not proven by allocation reuse.
+
+The buffer comparison takes 282.24 seconds and returns 101. Two of five
+pairs have higher Araphor p99. All ten runs have 1,000 exact denial witnesses,
+zero enforcement-event loss and zero unresolved effects. Native and Araphor
+cleanup checks pass. Read the
+[buffer result](../../araphor-observability/phase-2-owned-capture.md#resource-scan-buffer)
+and `compare-buffer-test.log` in the evidence directory above. No causal
+speedup, qualified configuration or performance parity is claimed.
