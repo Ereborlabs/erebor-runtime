@@ -5811,7 +5811,7 @@ test does not close a row when its physical condition or an assertion changed.
     VM harness checks and final Rust CI passed. See
     `/tmp/mithril-control-version-retirement-ci-20261003.log`. The legacy file
     remains on the retirement list at 5,449 lines. No production code changed.
-  - [ ] Replace version-changed Node recovery with the shared Python actor.
+  - [x] Replace version-changed Node recovery with the shared Python actor.
     Copy the actor into the test directory. Bind that copy in both the OCI
     config and native manifest before changing its bytes. Keep all 38 arguments,
     root user, administrative capability, host PID namespace, writable root,
@@ -5819,6 +5819,22 @@ test does not close a row when its physical condition or an assertion changed.
     successful physical start, exact argv and marker output, and complete cleanup.
     Add no Platform method. Commit before removing the old action, result fields,
     and unused legacy Node recovery inputs.
+    The 76-line [node_version_can_start](src/identity/scenarios/runtime_recovery.rs)
+    passed in the retained lightweight VM in 8.01 seconds. All nine standard
+    cases passed through the retained launcher in 5.26 seconds. All five
+    legacy cases and cleanup passed. Evidence:
+    `target/mithril-node-version-20261003T031114Z-2497625`. All eight production
+    gate tests, VM harness checks, and final Rust CI passed. See
+    `/tmp/mithril-node-version-ci-20261003.log`.
+    The existing input owner binds the copied actor before the byte change.
+    The public hook checks exact argv, source, destination, and mount mode.
+    The process owner reports the physical result. The platform removes the
+    copied actor, OCI input, state, markers, and cgroup. No production code changed.
+  - [ ] Remove only the old Node version action and its two result fields after
+    the replacement commit. Remove its unused recovery config, argument list,
+    and generated manifest entry. Keep the installer cases and their shell
+    interpreter, stock-spec case, diagnostics, and cleanup. Qualify all nine
+    standard gate cases and the complete reduced legacy probe before committing.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The
