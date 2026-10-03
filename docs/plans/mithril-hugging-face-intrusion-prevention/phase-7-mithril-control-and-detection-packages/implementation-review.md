@@ -3233,5 +3233,19 @@ Read `Host::qualify_diagnostic_failures` and `Host::qualify_storage` for the
 new physical cleanup assertions. Both use `ResourceSnapshot` to retain
 baseline BPF IDs, observe diagnostic IDs and require their removal before
 Node shutdown. A terminal cleanup field alone cannot satisfy these checks.
-The physical routes and final workspace CI remain **Not done** for the
-current test changes. No production source, dependency or runner is added.
+Final workspace CI passes on `ee5f068d`: formatting, check, strict Clippy and
+all workspace tests. Read `workspace-fault-final.log` in
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. No production source, dependency or
+runner is added. The physical routes remain **Not done**.
+
+The current combined Host fault run returns 101 after 110.43 seconds at
+`partition: attachment absent: []`. Its exact lightweight companion first
+passes in 24.88 seconds. No later physical case is qualified by that run.
+Read `failures-current/test.log` and `failures-current/lightweight.log` in
+the same evidence directory. Follow `TcpBlackholeOwner::relay` in
+`crates/mithril-e2e/src/control_tls.rs`: the external fixture discards
+already-acknowledged TCP input while blocked. The old reconnect test closes
+the original session before repair. It does not prove active-TLS repair.
+Add that exact lightweight condition before correcting the fixture. The
+latency comparison does not use this proxy; do not assign its p99 increase
+to this failure.

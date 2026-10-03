@@ -1234,8 +1234,25 @@ before dispatch and after attachment. Each case must restore that inventory
 before Node shutdown. Baseline enforcement IDs must remain. The native
 full-store case has the same independent cleanup check before Node shutdown.
 Both use the existing `ResourceSnapshot` owner. No production owner changes.
-Paired physical results and final workspace verification remain **Not done**
-for these test changes. Performance parity remains **Not done**.
+The final `bash .github/scripts/verify-rust-ci.sh` run passes on `ee5f068d`.
+Formatting, workspace check, strict Clippy and all workspace tests pass.
+Data passes 167 tests, Observability 23, Interceptor 40, Control 170,
+Mithril e2e 145 and Node 262. Read `workspace-fault-final.log` in
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. Ignored physical tests are not passes.
+Paired physical results and performance parity remain **Not done**.
+
+The combined physical fault route on VM `192.168.122.153` returns 101 on
+`ee5f068d` with `mithril_e2e-1adb172a9b31c9af`. Owned upload first passes in
+24.88 seconds. The physical test fails after 110.43 seconds with
+`partition: attachment absent: []`. Later fault cases are not reached.
+The command is `owned.sh BIN ARCHIVE OUTPUT 1 --test-admission`; output is
+`/tmp/araphor-owned-failures-20261003-ee5f068d` in the guest. Read the copied
+logs in `/tmp/araphor-owned-lifecycle.DlPg5O1y/failures-current`.
+Source review finds that the external TCP proxy discards TLS bytes while
+blocked. Its endpoint has already acknowledged those bytes. Repair cannot
+restore them on that connection. Add a lightweight active-TLS repair case
+before correcting the fixture or repeating the physical run. This proxy is
+not used by the latency comparison. No performance cause is inferred.
 
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
