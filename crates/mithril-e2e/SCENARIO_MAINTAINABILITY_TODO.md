@@ -5941,13 +5941,32 @@ test does not close a row when its physical condition or an assertion changed.
     Rust CI passed. See `/tmp/mithril-installer-forged-retirement-ci-20261003.log`.
     The legacy file remains on the retirement list at 5,079 lines. The separate
     CRI shell cases and public hook input validation remain unchanged.
-  - [ ] Replace the final host stock-spec case with a small standard Rust test.
+  - [x] Replace the final host stock-spec case with a small standard Rust test.
     Keep nsenter as the native entry, host PID and mount-namespace transition,
     real K3s `ctr oci spec`, stock mounts, limits, masked and read-only paths,
     all three capability sets, writable result mount, JSON output, and cleanup.
     Use existing `OciBundle` paths and `ProcessFixture` execution. Keep hooks
     absent. Do not replace generation with runtime integration installation.
     Add no Platform API. Verify and commit before removing the old probe.
+    The 99-line [host_stock_spec_can_run](src/identity/scenarios/runtime_installer.rs)
+    passed in 0.68 seconds. All thirteen standard gate cases passed in
+    7.96 seconds. The remaining legacy stock-spec case and cleanup passed.
+    Evidence: `target/mithril-host-stock-group-20261003T045248Z-2599715`.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-host-stock-ci-20261003.log`.
+    Review route: the test asks stock runc to generate its OCI specification
+      -> the test binds [runtime_host_stock.json](fixtures/process/runtime_host_stock.json)
+      without replacing stock security fields
+      -> [ProcessFixture](src/process.rs) runs native nsenter and captures
+      real K3s JSON output; the platform removes the bundle, state, and cgroup.
+    No production, Platform, or launcher source changed. This is direct-runc
+    qualification in the retained K3s VM, not Kubernetes Pod qualification.
+  - [ ] Remove the final legacy retained-gate fixture, result types, probe,
+    exports, CLI command, and lightweight launcher invocation after the
+    stock-spec replacement commit. Keep the shared library dependency parser
+    and the separate CRI and Kubernetes cases. Make the thin launcher run only
+    the thirteen standard Rust cases and verify their normal cleanup. Run VM
+    harness checks and final Rust CI before the separate retirement commit.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

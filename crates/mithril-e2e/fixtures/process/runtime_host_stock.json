@@ -1,0 +1,18 @@
+{
+  "process": {
+    "terminal": false,
+    "args": [
+      "/usr/bin/nsenter", "--target", "1", "--mount", "--",
+      "/usr/local/bin/k3s", "ctr", "oci", "spec"
+    ],
+    "env": ["PATH=/bin"],
+    "cwd": "/",
+    "capabilities": {
+      "bounding": ["CAP_SYS_ADMIN", "CAP_SYS_CHROOT", "CAP_SYS_PTRACE"],
+      "effective": ["CAP_SYS_ADMIN", "CAP_SYS_CHROOT", "CAP_SYS_PTRACE"],
+      "permitted": ["CAP_SYS_ADMIN", "CAP_SYS_CHROOT", "CAP_SYS_PTRACE"]
+    },
+    "noNewPrivileges": false
+  },
+  "root": { "path": "rootfs", "readonly": false }
+}

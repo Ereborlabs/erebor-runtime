@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::{env, fs, path::Path, process::Command, time::Duration};
 
 use serde_json::{json, Value};
@@ -262,6 +263,108 @@ fn forged_installer_never_starts<P: Platform>() -> TestResult<()> {
     assert!(!bundle.state.join(&bundle.id).try_exists()?);
     env.stop()?;
     assert!(!local.try_exists()?, "{local:?}");
+    assert!(!bundle.bundle.try_exists()?, "{:?}", bundle.bundle);
+    assert!(!bundle.state.try_exists()?, "{:?}", bundle.state);
+    assert!(!bundle.markers.try_exists()?, "{:?}", bundle.markers);
+    assert!(!bundle.group.try_exists()?, "{:?}", bundle.group);
+    Ok(())
+}
+
+#[platform_test(runc)]
+#[lifecycle = runtime_gate]
+fn host_stock_spec_can_run<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("runtime-host-stock")?;
+    let bundle = OciBundle::new(&env, "host-stock-spec")?;
+    let runtime = env::var_os("MITHRIL_TEST_RUNC").ok_or("runc is missing")?;
+    let input: Value = serde_json::from_str(include_str!(
+        "../../../fixtures/process/runtime_host_stock.json"
+    ))?;
+    let args: Vec<String> = serde_json::from_value(input["process"]["args"].clone())?;
+    assert_eq!(args.len(), 9);
+    let nsenter = Path::new(&args[0]);
+    let k3s = Path::new(&args[5]);
+    for path in [Path::new(&runtime), nsenter, k3s] {
+        assert!(path.is_absolute() && path.is_file(), "{path:?}");
+    }
+    fs::set_permissions(&bundle.markers, fs::Permissions::from_mode(0o777))?;
+    let libraries = Command::new("ldd").arg(nsenter).output()?;
+    assert!(libraries.status.success(), "{libraries:?}");
+    let libraries = String::from_utf8(libraries.stdout)?;
+    let sources = std::iter::once(args[0].as_str()).chain(libraries.lines().filter_map(|line| {
+        line.split_ascii_whitespace()
+            .find(|word| word.starts_with('/'))
+    }));
+    for source in sources {
+        let source = Path::new(source);
+        let target = bundle.bundle.join("rootfs").join(source.strip_prefix("/")?);
+        fs::create_dir_all(target.parent().ok_or("binary parent is missing")?)?;
+        fs::copy(source, target)?;
+    }
+
+    let generated = Command::new(&runtime)
+        .args(["spec", "--bundle"])
+        .arg(&bundle.bundle)
+        .output()?;
+    assert!(generated.status.success(), "{generated:?}");
+    let path = bundle.bundle.join("config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    for section in ["process", "root"] {
+        for (key, value) in input[section].as_object().ok_or("OCI input is missing")? {
+            config[section][key.as_str()] = value.clone();
+        }
+    }
+    config["linux"]["cgroupsPath"] =
+        json!(Path::new("/").join(bundle.group.strip_prefix("/sys/fs/cgroup")?));
+    let pid = config["linux"]["namespaces"]
+        .as_array_mut()
+        .ok_or("namespaces are missing")?
+        .iter_mut()
+        .find(|namespace| namespace["type"] == "pid")
+        .ok_or("PID namespace is missing")?;
+    pid["path"] = json!("/proc/1/ns/pid");
+    config["annotations"] = json!({
+        "io.kubernetes.cri.container-type": "container",
+        "io.kubernetes.cri.container-id": bundle.id
+    });
+    let object = config.as_object_mut().ok_or("OCI config is missing")?;
+    object.remove("hooks");
+    config["mounts"]
+        .as_array_mut()
+        .ok_or("mounts are missing")?
+        .push(json!({
+            "destination": "/result", "type": "bind", "source": bundle.markers,
+            "options": ["rbind", "rw"]
+        }));
+    fs::write(&path, serde_json::to_vec(&config)?)?;
+
+    let mut command = Command::new(&runtime);
+    command
+        .arg("--root")
+        .arg(&bundle.state)
+        .args(["run", "--bundle"])
+        .arg(&bundle.bundle)
+        .arg(&bundle.id);
+    let mut actor = ProcessFixture::spawn(&mut command, &bundle.bundle)?;
+    actor.set_group(&bundle.group);
+    let status = actor
+        .wait_exit("host stock spec", Duration::from_secs(5))
+        .map_err(|error| format!("{error}; stderr: {:?}", actor.stderr()))?;
+    let stderr = actor.stderr()?;
+    let stdout = actor.stdout(status)?;
+    actor.stop()?;
+    assert!(status.success(), "{status}; {stderr}");
+    let result: Value = serde_json::from_slice(&stdout)?;
+    assert!(result.get("ociVersion").is_some(), "{result}");
+    let _cleanup = Command::new(&runtime)
+        .arg("--root")
+        .arg(&bundle.state)
+        .args(["delete", "--force"])
+        .arg(&bundle.id)
+        .output()?;
+    let containers = bundle.containers()?;
+    assert!(containers.is_empty(), "{containers:?}");
+    assert!(!bundle.state.join(&bundle.id).try_exists()?);
+    env.stop()?;
     assert!(!bundle.bundle.try_exists()?, "{:?}", bundle.bundle);
     assert!(!bundle.state.try_exists()?, "{:?}", bundle.state);
     assert!(!bundle.markers.try_exists()?, "{:?}", bundle.markers);
