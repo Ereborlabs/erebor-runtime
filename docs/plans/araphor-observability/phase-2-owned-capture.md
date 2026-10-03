@@ -1201,6 +1201,28 @@ Native uses `-e` and output files. Araphor uses the checked executable through
 its held descriptor, stdin source and supervised pipes. These differences
 do not change the approved script, but their costs are not isolated.
 
+### Approved attribution profile
+
+The user approves a separate profile with five plain/Araphor pairs, 5,000
+denied opens per run, 1-ms pacing and 30-second captures. Expected run time
+is approximately ten minutes. Keep the backend, source, target checks,
+debug build and logging unchanged. The outer limit is twenty minutes.
+Use a temporary fixture, not a production code change.
+
+Record each operation's monotonic start, end and thread CPU time. The wall
+interval includes two CPU-clock reads. Preserve ordered samples and record
+that added cost. Retain each run before the fixture removes its work directory.
+Sample CPU stacks at 49 Hz for the harness and its descendants. Record
+scheduler transitions and sync/futex entry and exit separately, without
+stack capture for unrelated processes. Use the monotonic clock in both files.
+Each profile file has a 2-GiB limit and private file permissions.
+
+Correlate slow operations with scheduler transitions. Treat runnable
+preemption separately from blocked time. A syscall's elapsed time alone
+does not prove storage or lock waiting. Report every pair and missing records.
+Profiled results cannot qualify performance or change the no-increase gate.
+Release performance remains unqualified. No profile result is recorded yet.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node
@@ -1375,6 +1397,18 @@ kernel loss stays unknown. The harness removes only its temporary full-store
 mount. Read `storage.json`, `test.log`, `lightweight.log` and
 `lightweight-tls.log` in `storage-current` under the evidence directory above.
 Pod replacement and performance parity remain **Not done**.
+
+The first Pod route returns 101 on `d486e637`, with the same VM and libtest
+binary. `pods.sh BIN --test-admission BUNDLE OUTPUT` uses the full worktree
+as `MITHRIL_TEST_ROOT`, the prepared Node/Control images and the pinned actor.
+Owned upload first passes in 25.52 seconds. The physical case fails in
+80.61 seconds with `the task Node exceeds the production recovery mount or
+argument bound`. Capture does not start. No Pod capture or cleanup pass follows
+from this result. Read `lightweight.log` and `test.log` in `pods-first` under
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+Fixture teardown removes its workloads. The guarded VM helper then removes
+the harness-owned K3s cluster. The service is inactive and its CRI socket is
+absent. Images and result logs remain available. Production limits do not change.
 
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses

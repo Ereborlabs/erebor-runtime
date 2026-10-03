@@ -3344,3 +3344,13 @@ and paired logs in `storage-current` under the evidence directory above.
 Native full-store qualification is **Done** for this source and platform.
 Pod replacement and performance parity remain **Not done**. Diagnostics
 stay disabled. Final CI still covers the last code revision, `d486e637`.
+
+The first [Kubernetes::qualify_pods](../../../../crates/mithril-e2e/src/platform/kubernetes.rs)
+run returns 101 on the same source and VM. Owned upload passes in 25.52
+seconds. The physical case fails in 80.61 seconds before capture, because
+the installer input exceeds its recovery mount or argument bound. Read
+`pods-first/lightweight.log` and `pods-first/test.log` in the evidence
+directory above. Fixture teardown and guarded K3s removal finish. Production
+limits do not change. This result does not qualify Pod capture. The approved
+attribution profile is separate from performance qualification; read its
+[scope](../../araphor-observability/phase-2-owned-capture.md#approved-attribution-profile).
