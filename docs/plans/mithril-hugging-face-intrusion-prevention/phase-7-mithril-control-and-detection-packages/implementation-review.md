@@ -2747,5 +2747,5 @@ Node, which passed 262 tests. The new Node configuration check passed. Read
 `crate-workspace-final-6.log` in the same evidence directory. The approved
 physical attempt stopped before measurements because its reserve was too
 small. The corrected fixture uses 272 MiB and saves that same configuration.
-Rerun approval remains open. No measured pair or physical capture pass is
-claimed for this correction.
+The unchanged experiment uses the original approval. No measured pair or
+physical capture pass is claimed for this correction.

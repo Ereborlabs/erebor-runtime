@@ -422,8 +422,9 @@ workspace tests passed. Main library results were Data 167 passed (5 ignored),
 shared observability 22 passed (2 ignored), Interceptor 39 passed (1 ignored),
 Control 170 passed (2 ignored), e2e 134 passed (412 ignored), and Node 262 passed
 (none ignored). The receipt is `crate-workspace-final-6.log`. Use the same
-worktree-local command above. Rerun approval was requested; no second
-experiment has run. These results do not qualify the physical capture gates.
+worktree-local command above. The unchanged experiment uses the original
+approval below. No second experiment has run. These results do not qualify
+the physical capture gates.
 
 Remaining work is execution of the physical lifecycle gates below.
 Physical enablement requires a platform-matched interference receipt. The
