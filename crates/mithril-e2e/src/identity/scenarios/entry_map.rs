@@ -6,7 +6,7 @@ use zerocopy::TryFromBytes as _;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn signed_entries_are_complete<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("entry-map")?;

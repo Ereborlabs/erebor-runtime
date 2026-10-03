@@ -6340,7 +6340,11 @@ setup, production actions, assertions, and focused test.
     Stock runc and the production OCI hook started the actor. Output, pin,
     lease, actor cgroup, and Node cgroup cleanup passed. Final Rust CI passed.
     See `/tmp/mithril-entry-map-runc-ci-20261003.log`.
-  - [ ] Pass and commit Kubernetes.
+  - [x] Kubernetes passed the unchanged 69-line test in 81.57 seconds.
+    Real Control, Node, policy CRDs, and actor admission installed seven
+    rules. Normal teardown and owned-directory cleanup passed. Final Rust
+    CI passed. See `/tmp/mithril-entry-map-kube-20261003.log` and
+    `/tmp/mithril-entry-map-kube-ci-20261003.log`.
   - [ ] Remove only the matching initial map readback after qualification.
     Keep the policy-replacement readback until its own replacement passes.
     Verify the reduced old probe, harness checks, and final Rust CI before
