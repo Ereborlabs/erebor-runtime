@@ -3270,4 +3270,8 @@ ended. Retirement is not reached. Read `failures-relay/test.log`,
 the same evidence directory. The combined route remains **Not done**.
 The next lightweight condition must emit oversized output without waiting
 for prefix ACK. Preserve the physical source and independent inventory
-checks. Final workspace CI is running on this source; no pass is claimed.
+checks. Final workspace CI passes on `9e4f08dc`: formatting, workspace check,
+strict Clippy and all workspace tests return zero. Mithril e2e passes 146
+tests with 413 ignored. Read `workspace-relay-final.log` in the same evidence
+directory. This pass does not cover the next immediate-overflow or observer
+changes, and it does not meet the performance gate.

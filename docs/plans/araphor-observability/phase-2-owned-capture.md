@@ -1280,7 +1280,12 @@ Read the copied logs and partial `capture-pairs.json` in
 Before a correction, add the exact immediate-output-overflow condition to
 the lightweight case. Its current backend waits for prefix ACK before
 overflow. Do not slow the physical source or remove the inventory check.
-Final workspace CI is running on `9e4f08dc`; no result is claimed yet.
+Final workspace CI passes on `9e4f08dc`. Formatting, workspace check, strict
+Clippy and all workspace tests return zero. Data passes 167 tests,
+Observability 23, Interceptor 40, Control 170, Mithril e2e 146 and Node 262.
+Read `workspace-relay-final.log` in the same evidence directory. This source
+includes the TLS repair regression. Ignored physical tests are not passes.
+The next immediate-overflow and observer changes require new verification.
 
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
