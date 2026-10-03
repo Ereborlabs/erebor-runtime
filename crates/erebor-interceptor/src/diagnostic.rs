@@ -1,6 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -372,6 +372,7 @@ impl Drop for DiagnosticCapture {
 struct SupervisedChild {
     child: Child,
     reaped: bool,
+    fdinfo: BTreeMap<u32, File>,
 }
 
 impl SupervisedChild {
@@ -392,6 +393,7 @@ impl SupervisedChild {
         let mut owner = Self {
             child,
             reaped: false,
+            fdinfo: BTreeMap::new(),
         };
         signals
             .process_id
@@ -553,6 +555,7 @@ impl SupervisedChild {
             }
         }
         owner.signal(Signal::KILL)?;
+        owner.fdinfo.clear();
         result.exit_code = owner
             .child
             .wait()
@@ -584,7 +587,7 @@ impl SupervisedChild {
         Ok(result)
     }
 
-    fn record_resources(&self, result: &mut DiagnosticResult, text: &mut String) {
+    fn record_resources(&mut self, result: &mut DiagnosticResult, text: &mut String) {
         text.clear();
         if File::open(format!("/proc/{}/status", self.child.id()))
             .and_then(|mut file| file.read_to_string(text))
@@ -599,15 +602,35 @@ impl SupervisedChild {
             }
         }
         let Ok(entries) = fs::read_dir(format!("/proc/{}/fdinfo", self.child.id())) else {
+            self.fdinfo.clear();
             return;
         };
-        for entry in entries.take(256).flatten() {
-            let Ok(file) = File::open(entry.path()) else {
-                continue;
+        let paths: BTreeMap<u32, PathBuf> = entries
+            .take(256)
+            .flatten()
+            .filter_map(|entry| {
+                let fd = entry.file_name().to_str()?.parse().ok()?;
+                Some((fd, entry.path()))
+            })
+            .collect();
+        self.fdinfo.retain(|fd, _| paths.contains_key(fd));
+        for (fd, path) in paths {
+            let file = match self.fdinfo.entry(fd) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let Ok(file) = File::open(path) else {
+                        continue;
+                    };
+                    entry.insert(file)
+                }
             };
-            if Self::read_resource(file, text).is_err() {
-                continue;
-            }
+            let count = match Self::read_resource(file, text) {
+                Ok(count) => count,
+                Err(_) => {
+                    self.fdinfo.remove(&fd);
+                    continue;
+                }
+            };
             for line in text.lines() {
                 if let Some(id) = line
                     .strip_prefix("prog_id:")
@@ -622,11 +645,15 @@ impl SupervisedChild {
                     result.map_ids.insert(id);
                 }
             }
+            if count == 16 * 1024 {
+                self.fdinfo.remove(&fd);
+            }
         }
     }
 
-    fn read_resource(reader: impl Read, text: &mut String) -> std::io::Result<usize> {
+    fn read_resource(mut reader: impl Read + Seek, text: &mut String) -> std::io::Result<usize> {
         text.clear();
+        reader.rewind()?;
         reader.take(16 * 1024).read_to_string(text)
     }
 
@@ -690,6 +717,7 @@ impl SupervisedChild {
 
 impl Drop for SupervisedChild {
     fn drop(&mut self) {
+        self.fdinfo.clear();
         if !self.reaped {
             let _signal = self.signal(Signal::KILL);
             let _wait = self.child.wait();
@@ -721,17 +749,18 @@ mod tests {
         fs::write(&path, b"fixture")?;
         let mut held = File::open(&path)?;
         let native = PathBuf::from(format!("/proc/self/fdinfo/{}", held.as_raw_fd()));
+        let mut resource = File::open(&native)?;
         let expected = fs::read_to_string(&native)?;
         let mut text = String::with_capacity(16 * 1024);
         text.push_str("prog_id:\t111\nmap_id:\t222\n");
         let capacity = text.capacity();
         let allocation = text.as_ptr();
-        SupervisedChild::read_resource(File::open(&native)?, &mut text)?;
+        SupervisedChild::read_resource(&mut resource, &mut text)?;
         assert_eq!(text, expected);
         assert_eq!(text.capacity(), capacity);
         assert_eq!(text.as_ptr(), allocation);
         held.read_exact(&mut [0; 1])?;
-        SupervisedChild::read_resource(File::open(&native)?, &mut text)?;
+        SupervisedChild::read_resource(&mut resource, &mut text)?;
         assert_eq!(text, fs::read_to_string(&native)?);
         assert_ne!(text, expected);
         assert_eq!(text.as_ptr(), allocation);
@@ -752,6 +781,105 @@ mod tests {
         );
         assert_eq!(text.len(), 16 * 1024);
         assert!(!text.contains("prog_id:"));
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_resource_handles(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::io::{BufRead as _, BufReader};
+
+        let directory = tempfile::tempdir()?;
+        let first = directory.path().join("first");
+        let replacement = directory.path().join("replacement");
+        fs::write(&first, b"first")?;
+        fs::write(&replacement, b"replacement")?;
+        let mut command = Command::new("/bin/bash");
+        command
+            .args([
+                "-c",
+                r#"exec 3< "$1"
+for ((fd = 10; fd < 310; fd++)); do eval "exec $fd</dev/null"; done
+printf 'ready\n'
+read -r gate
+dd bs=1 count=1 <&3 >/dev/null 2>&1
+printf 'moved\n'
+read -r gate
+exec 3< "$2"
+for ((fd = 10; fd < 310; fd++)); do eval "exec $fd<&-"; done
+printf 'reused\n'
+read -r gate
+exec 3<&-
+printf 'closed\n'
+read -r gate"#,
+                "fdinfo",
+            ])
+            .arg(&first)
+            .arg(&replacement);
+        DiagnosticBackend::set_child_io(&mut command);
+        let mut owner = SupervisedChild {
+            child: command.spawn()?,
+            reaped: false,
+            fdinfo: BTreeMap::new(),
+        };
+        let mut input = owner.child.stdin.take().ok_or("input pipe absent")?;
+        let mut output = BufReader::new(owner.child.stdout.take().ok_or("output pipe absent")?);
+        let mut phase = String::new();
+        output.read_line(&mut phase)?;
+        assert_eq!(phase, "ready\n");
+        let mut result = DiagnosticResult {
+            process_id: owner.child.id(),
+            stop: DiagnosticStop::Exited,
+            exit_code: None,
+            forced_kill: false,
+            output_incomplete: false,
+            emitted_frames: 0,
+            retained_bytes: 0,
+            elapsed_ms: 0,
+            attach_notification_ms: None,
+            program_ids: BTreeSet::new(),
+            map_ids: BTreeSet::new(),
+            cleanup_verified: None,
+            peak_rss_kib: None,
+        };
+        let mut text = String::with_capacity(16 * 1024);
+        owner.record_resources(&mut result, &mut text);
+        assert_eq!(owner.fdinfo.len(), 256);
+        let held = owner.fdinfo.get(&3).ok_or("fdinfo absent")?.as_raw_fd();
+        let path = PathBuf::from(format!("/proc/{}/fdinfo/3", owner.child.id()));
+        let mut native = File::open(&path)?;
+        SupervisedChild::read_resource(&mut native, &mut text)?;
+        let initial = text.clone();
+        for expected in ["moved\n", "reused\n"] {
+            input.write_all(b"next\n")?;
+            phase.clear();
+            output.read_line(&mut phase)?;
+            assert_eq!(phase, expected);
+            owner.record_resources(&mut result, &mut text);
+            assert!(owner.fdinfo.len() <= 256);
+            let resource = owner.fdinfo.get_mut(&3).ok_or("fdinfo absent")?;
+            assert_eq!(resource.as_raw_fd(), held);
+            SupervisedChild::read_resource(resource, &mut text)?;
+            assert_eq!(text, fs::read_to_string(&path)?);
+            assert_ne!(text, initial);
+        }
+        assert!(owner.fdinfo.len() < 256);
+        owner.fdinfo.insert(3, File::open(directory.path())?);
+        owner.record_resources(&mut result, &mut text);
+        assert!(!owner.fdinfo.contains_key(&3));
+        owner.record_resources(&mut result, &mut text);
+        assert!(owner.fdinfo.contains_key(&3));
+        input.write_all(b"next\n")?;
+        phase.clear();
+        output.read_line(&mut phase)?;
+        assert_eq!(phase, "closed\n");
+        owner.record_resources(&mut result, &mut text);
+        assert!(!owner.fdinfo.contains_key(&3));
+        text.push_str("prog_id:\t111\nmap_id:\t222\n");
+        assert!(SupervisedChild::read_resource(&mut native, &mut text).is_err());
+        assert!(text.is_empty());
+        assert!(result.program_ids.is_empty());
+        assert!(result.map_ids.is_empty());
         Ok(())
     }
 
