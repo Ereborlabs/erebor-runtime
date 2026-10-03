@@ -2017,10 +2017,30 @@ impl Kubernetes {
         if command != &["/usr/local/bin/mithril-oci-hook", "install"] {
             return Err("the task Node has an unexpected runtime-gate installer".into());
         }
-        let mut args = installer
+        let mut input = installer
             .args
-            .clone()
-            .ok_or("the runtime-gate installer has no arguments")?;
+            .as_ref()
+            .ok_or("the runtime-gate installer has no arguments")?
+            .iter();
+        let mut args = Vec::with_capacity(input.len() + mounts.len());
+        while let Some(arg) = input.next() {
+            // The retained gate requires separate identity options and values.
+            if matches!(
+                arg.as_str(),
+                "--node-read-only-mount"
+                    | "--node-read-write-mount"
+                    | "--runtime-cli-arg"
+                    | "--runtime-service"
+            ) {
+                let value = input
+                    .next()
+                    .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                    .ok_or("the runtime-gate installer list option has no value")?;
+                args.push(format!("{arg}={value}"));
+            } else {
+                args.push(arg.clone());
+            }
+        }
         for mount in mounts {
             let source = mount
                 .source
@@ -2837,6 +2857,232 @@ impl PodCapture {
             _ = tokio::time::sleep(Duration::from_secs(900)) => Err("the Control fixture exceeded its lifetime".into()),
         }
     }
+}
+
+#[test]
+fn observability_runtime_mount_args() -> TestResult<()> {
+    let chart_pairs = [
+        ("--owner", "mithril-pid-test/mithril"),
+        ("--hook-host-directory", "/usr/libexec/oci/hooks.d"),
+        (
+            "--containerd-host-directory",
+            "/var/lib/rancher/k3s/agent/etc/containerd",
+        ),
+        ("--containerd-drop-in-directory", "config-v3.toml.d"),
+        ("--runtime-cli-host-path", "/usr/local/bin/k3s"),
+        ("--runtime-cli-arg", "ctr"),
+        ("--runtime-cli-arg", "oci"),
+        ("--runtime-cli-arg", "spec"),
+        ("--runtime-service", "k3s"),
+        ("--socket", "/run/mithril/mithril-pid-test.sock"),
+        ("--timeout-ms", "4000"),
+        ("--runtime-timeout-seconds", "5"),
+        (
+            "--log-filter",
+            "info,mithril_node::node=debug,mithril_node::policy=debug",
+        ),
+        ("--decommission-state-directory", "/var/lib/mithril"),
+        ("--control-read-only-mount", "/etc/mithril"),
+        ("--control-read-write-mount", "/var/lib/mithril-control"),
+        ("--control-read-only-mount", "/etc/mithril/admission-tls"),
+        (
+            "--node-read-only-mount",
+            "/qualification/node.json=/etc/mithril/node.json",
+        ),
+        (
+            "--node-read-only-mount",
+            "/qualification/identity=/etc/mithril/identity",
+        ),
+        ("--node-read-only-mount", "/sys/kernel/btf=/sys/kernel/btf"),
+        (
+            "--node-read-only-mount",
+            "/sys/kernel/tracing=/sys/kernel/tracing",
+        ),
+        ("--node-read-only-mount", "/sys/fs/cgroup=/sys/fs/cgroup"),
+        (
+            "--node-read-only-mount",
+            "/run/k3s/containerd=/run/k3s/containerd",
+        ),
+        ("--node-read-write-mount", "/sys/fs/bpf=/sys/fs/bpf"),
+        (
+            "--node-read-write-mount",
+            "/qualification/node=/var/lib/mithril",
+        ),
+        ("--node-read-write-mount", "/run/mithril=/run/mithril"),
+        (
+            "--node-read-write-mount",
+            "/run/erebor-interceptor=/run/erebor-interceptor",
+        ),
+        (
+            "--node-read-write-mount",
+            "/usr/libexec/oci/hooks.d=/host-hook-bin",
+        ),
+        (
+            "--node-read-write-mount",
+            "/var/lib/rancher/k3s/agent/etc/containerd=/host-containerd",
+        ),
+    ];
+    let chart_args = chart_pairs
+        .iter()
+        .flat_map(|(option, value)| [(*option).to_owned(), (*value).to_owned()])
+        .collect::<Vec<_>>();
+    let fixture = |args: &[String]| {
+        serde_json::from_value::<DaemonSet>(json!({
+            "spec": {"selector": {}, "template": {"spec": {
+                "containers": [], "initContainers": [{
+                    "name": "install-runtime-gate",
+                    "command": ["/usr/local/bin/mithril-oci-hook", "install"],
+                    "args": args,
+                }]
+            }}}
+        }))
+    };
+    let backend_mounts = [
+        RuntimeRecoveryMountInputV1 {
+            source: "/qualification-input/runtime".into(),
+            destination: "/qualification/runtime".into(),
+            read_only: true,
+        },
+        RuntimeRecoveryMountInputV1 {
+            source: "/qualification-input/runtime/bpftrace".into(),
+            destination: "/usr/bin/bpftrace".into(),
+            read_only: true,
+        },
+    ];
+    let libraries = (0..19)
+        .map(|index| RuntimeRecoveryMountInputV1 {
+            source: format!("/qualification-input/runtime/lib/libtest-{index}.so.1").into(),
+            destination: format!("/usr/lib/x86_64-linux-gnu/libtest-{index}.so.1").into(),
+            read_only: true,
+        })
+        .collect::<Vec<_>>();
+    let initial = Kubernetes::capture_installer(&fixture(&chart_args)?, &backend_mounts)?;
+    let full = Kubernetes::capture_installer(&fixture(&initial)?, &libraries[..18])?;
+    assert_eq!(full.len() + 2, 64);
+    assert_eq!(
+        full.iter()
+            .filter(|arg| arg.starts_with("--node-read-only-mount=")
+                || arg.starts_with("--node-read-write-mount="))
+            .count(),
+        32
+    );
+    assert_eq!(&full[..initial.len()], initial);
+    assert_eq!(Kubernetes::capture_installer(&fixture(&full)?, &[])?, full);
+    assert!(Kubernetes::capture_installer(&fixture(&initial)?, &libraries).is_err());
+    let mut extra_arg = full.clone();
+    extra_arg.push("--runtime-service=k3s".to_owned());
+    assert!(Kubernetes::capture_installer(&fixture(&extra_arg)?, &[]).is_err());
+
+    let base_args = [
+        "--owner",
+        "mithril-pid-test/mithril",
+        "--hook-host-directory",
+        "/usr/libexec/oci/hooks.d",
+        "--containerd-host-directory",
+        "/var/lib/rancher/k3s/agent/etc/containerd",
+        "--containerd-drop-in-directory",
+        "config-v3.toml.d",
+        "--runtime-cli-host-path",
+        "/usr/local/bin/k3s",
+        "--runtime-cli-arg=ctr",
+        "--runtime-cli-arg=oci",
+        "--runtime-cli-arg=spec",
+        "--runtime-service=k3s",
+        "--socket",
+        "/run/mithril/mithril-pid-test.sock",
+        "--timeout-ms",
+        "4000",
+        "--runtime-timeout-seconds",
+        "5",
+        "--log-filter",
+        "info,mithril_node::node=debug,mithril_node::policy=debug",
+        "--decommission-state-directory",
+        "/var/lib/mithril",
+        "--control-read-only-mount",
+        "/etc/mithril",
+        "--control-read-write-mount",
+        "/var/lib/mithril-control",
+        "--control-read-only-mount",
+        "/etc/mithril/admission-tls",
+        "--node-read-only-mount=/qualification/node.json=/etc/mithril/node.json",
+        "--node-read-only-mount=/qualification/identity=/etc/mithril/identity",
+        "--node-read-only-mount=/sys/kernel/btf=/sys/kernel/btf",
+        "--node-read-only-mount=/sys/kernel/tracing=/sys/kernel/tracing",
+        "--node-read-only-mount=/sys/fs/cgroup=/sys/fs/cgroup",
+        "--node-read-only-mount=/run/k3s/containerd=/run/k3s/containerd",
+        "--node-read-write-mount=/sys/fs/bpf=/sys/fs/bpf",
+        "--node-read-write-mount=/qualification/node=/var/lib/mithril",
+        "--node-read-write-mount=/run/mithril=/run/mithril",
+        "--node-read-write-mount=/run/erebor-interceptor=/run/erebor-interceptor",
+        "--node-read-write-mount=/usr/libexec/oci/hooks.d=/host-hook-bin",
+        "--node-read-write-mount=/var/lib/rancher/k3s/agent/etc/containerd=/host-containerd",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let mut expected = base_args.clone();
+    expected.extend([
+        "--node-read-only-mount=/qualification-input/runtime=/qualification/runtime".to_owned(),
+        "--node-read-only-mount=/qualification-input/runtime/bpftrace=/usr/bin/bpftrace".to_owned(),
+    ]);
+    assert_eq!(initial, expected);
+    let mut repeated = chart_args.clone();
+    repeated.extend(
+        [
+            "--runtime-cli-arg",
+            "ctr",
+            "--runtime-cli-arg=--address=/run/k3s/containerd/containerd.sock",
+            "--runtime-service",
+            "k3s",
+            "--runtime-service=k3s",
+        ]
+        .map(str::to_owned),
+    );
+    let mut expected = base_args;
+    expected.extend([
+        "--runtime-cli-arg=ctr".to_owned(),
+        "--runtime-cli-arg=--address=/run/k3s/containerd/containerd.sock".to_owned(),
+        "--runtime-service=k3s".to_owned(),
+        "--runtime-service=k3s".to_owned(),
+    ]);
+    assert_eq!(
+        Kubernetes::capture_installer(&fixture(&repeated)?, &[])?,
+        expected
+    );
+
+    for option in [
+        "--node-read-only-mount",
+        "--node-read-write-mount",
+        "--runtime-cli-arg",
+        "--runtime-service",
+    ] {
+        for value in [None, Some(""), Some("--socket"), Some("-x")] {
+            let mut invalid = chart_args.clone();
+            invalid.push(option.to_owned());
+            invalid.extend(value.map(str::to_owned));
+            assert!(
+                Kubernetes::capture_installer(&fixture(&invalid)?, &[]).is_err(),
+                "{option}: {value:?}"
+            );
+        }
+    }
+    let option = "--node-read-only-mount";
+    let value = format!(
+        "/bundle/{}=/runtime",
+        "a".repeat(4096 - option.len() - 1 - "/bundle/=/runtime".len())
+    );
+    let mut bounded = chart_args;
+    bounded.extend([option.to_owned(), value]);
+    let compact = Kubernetes::capture_installer(&fixture(&bounded)?, &[])?;
+    assert_eq!(
+        compact.last().ok_or("the compact mount is absent")?.len(),
+        4096
+    );
+    bounded
+        .last_mut()
+        .ok_or("the mount value is absent")?
+        .push('a');
+    assert!(Kubernetes::capture_installer(&fixture(&bounded)?, &[]).is_err());
+    Ok(())
 }
 
 #[test]

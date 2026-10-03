@@ -3375,3 +3375,20 @@ commands, parser corrections, symbol-resolution limits and receipts in the
 The experiment is **Done**; performance parity and Pod capture remain
 **Not done**. No production code changes or qualified configuration follow
 from these profiles. Diagnostics stay disabled.
+
+For the Pod fixture correction, start at
+[`Kubernetes::capture_installer`](../../../../crates/mithril-e2e/src/platform/kubernetes.rs).
+It combines only four repeated list options as `--option=value`. Read the
+same-file `observability_runtime_mount_args` regression next. It preserves
+the four separate recovery identity options, argument order, repeated values
+and already-combined inputs. It accepts exactly 32 mounts and 64 command and
+argument entries. Excess inputs and a combined value above 4,096 bytes fail.
+No production recovery limit, Helm chart, capture owner or backend changes.
+
+The new regression fails before this change with the original recovery-bound
+error, then passes with the library-name regression. Read `pod-args-red.log`
+and `pod-args-green.log` under `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+Ponytail review finds no unnecessary owner, dependency or parser.
+Read the [fixture proof](../../araphor-observability/phase-2-owned-capture.md#pod-fixture-input-correction)
+before the paired Pod result. The correction is **Done**. The new paired
+Pod and final workspace CI runs are not yet qualification results.

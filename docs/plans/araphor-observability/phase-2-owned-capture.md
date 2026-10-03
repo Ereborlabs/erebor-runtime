@@ -1505,6 +1505,34 @@ Fixture teardown removes its workloads. The guarded VM helper then removes
 the harness-owned K3s cluster. The service is inactive and its CRI socket is
 absent. Images and result logs remain available. Production limits do not change.
 
+### Pod fixture input correction
+
+`Kubernetes::capture_installer` converts four repeated list options to the
+CLI form `--option=value`: Node read-only mounts, Node read-write mounts,
+runtime CLI arguments and runtime services. It keeps argument order and
+repeated values. It leaves existing combined arguments unchanged. The
+recovery identity options `--owner`, `--hook-host-directory`,
+`--containerd-host-directory` and `--socket` retain separate values.
+The Helm chart and production recovery owner do not change.
+
+The representative K3s chart input has 60 command and argument entries.
+Compaction reduces this count to 44. Two backend mounts and 18 library mounts
+then fit exactly within 64 entries and 32 Node mounts. Reject a nineteenth
+library mount, an extra argument at this boundary, a missing or empty list
+value, and a combined argument that exceeds 4,096 bytes. Do not raise a limit.
+
+The exact test `platform::kubernetes::observability_runtime_mount_args` first
+fails with the same recovery-bound error before the implementation change.
+After the change, this test and `observability_runtime_library_names` pass.
+Use the documented worktree Cargo environment and run
+`cargo test -p mithril-e2e --lib platform::kubernetes::observability_runtime_ -- --nocapture`.
+Read `pod-args-red.log` and `pod-args-green.log` under
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. Both tests take less than 0.01 seconds
+after compilation. Ponytail review finds no new owner, parser or dependency.
+The fixture correction is **Done**. Paired Pod qualification and final
+workspace CI remain **Not done** until their new runs finish. Performance
+parity remains **Not done**. Diagnostics stay disabled.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current
