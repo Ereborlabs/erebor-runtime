@@ -6321,6 +6321,35 @@ setup, production actions, assertions, and focused test.
 - [ ] Fixture construction: create the rootfs, runtime paths, bind mounts,
   output files, containerd owner, `runc` owner, pin root, lease, and cleanup
   in a fixture. Do not install policy or reconcile bindings in this fixture.
+- [ ] Signed admission-map publication: replace the initial seven-rule
+  readback with `signed_entries_are_complete`, a standard platform test below
+  100 lines. Reuse `ready.py` and the existing fatal-executable fixture.
+  Add one checked policy with the original six ordinary entries and one
+  terminal entry. Keep the already qualified runtime policy unchanged.
+  Read only the running actor's installed generation. Require seven rules,
+  seven distinct nonzero admission IDs, nonzero target roles and process
+  vectors, zero reserved and exact-object fields, and default executable
+  objects. Require six ordinary rows and one terminal-role row.
+  - [x] Host passed in 28.50 seconds in the retained root VM. The complete
+    source has 69 lines. Output, pin, lease, actor cgroup, and Node cgroup
+    cleanup passed. The first inputs lacked required schema fields and used
+    duplicate execution-rule names; only the new fixture was corrected.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-entry-map-host-ci-20261003.log`.
+  - [ ] Pass and commit direct runc, then Kubernetes.
+  - [ ] Remove only the matching initial map readback after qualification.
+    Keep the policy-replacement readback until its own replacement passes.
+    Verify the reduced old probe, harness checks, and final Rust CI before
+    the retirement commit.
+  Review route: [signed_entries_are_complete](src/identity/scenarios/entry_map.rs)
+    supplies [entry_map_policy.json](fixtures/process/entry_map_policy.json)
+    -> the production Control and Node install its signed generation
+    -> the shared actor starts through production admission
+    -> the test checks the actor's installed admission rules and stops it.
+  Run the exact generated `identity_host`, `identity_runc`, or
+  `identity_kubernetes` case with the prepared Platform inputs and
+  `--exact --ignored --nocapture --test-threads=1`. An attribute lists a
+  platform only after that platform passes.
 - [x] Unprotected control and prepared-container start: keep the stock runtime
   calls and `PREPARED` assertions in the scenario.
   `unprotected_actor_runs` owns stock startup without policy on Host, direct

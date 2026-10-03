@@ -1,0 +1,73 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "entry-map",
+    "namespace": "default",
+    "uid": "10000000-0000-4000-8000-0000000000fe",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {"app.kubernetes.io/name": "pid-reuse"},
+      "matchExpressions": []
+    },
+    "mode": "Protect",
+    "containers": [{
+      "names": ["worker"],
+      "kinds": ["Application"],
+      "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      "applicationEntry": {"executionRule": "application-entry", "role": "application"},
+      "additionalEntries": [
+        {"name": "poststart", "kind": "PostStart", "executionRule": "poststart-entry", "role": "poststart"},
+        {"name": "prestop", "kind": "PreStop", "executionRule": "prestop-entry", "role": "prestop"},
+        {"name": "startup", "kind": "StartupProbe", "executionRule": "startup-entry", "role": "startup"},
+        {"name": "readiness", "kind": "ReadinessProbe", "executionRule": "readiness-entry", "role": "readiness"},
+        {"name": "liveness", "kind": "LivenessProbe", "executionRule": "liveness-entry", "role": "liveness"},
+        {"name": "termination-failure", "kind": "PreStop", "executionRule": "terminal-entry", "role": "termination-failure"}
+      ],
+      "administrativeEntry": {"role": "restricted"},
+      "externalRole": "restricted"
+    }],
+    "roles": [
+      {
+        "name": "application",
+        "files": [], "network": {"destinations": []}, "processControl": [], "unixStreams": [],
+        "execution": [{"name": "application-entry", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}]
+      },
+      {
+        "name": "poststart",
+        "files": [], "network": {"destinations": []}, "processControl": [], "unixStreams": [],
+        "execution": [{"name": "poststart-entry", "path": "/usr/bin/cp", "recursive": false, "operations": ["Execute"], "action": "Allow"}]
+      },
+      {
+        "name": "prestop",
+        "files": [], "network": {"destinations": []}, "processControl": [], "unixStreams": [],
+        "execution": [{"name": "prestop-entry", "path": "/usr/bin/dd", "recursive": false, "operations": ["Execute"], "action": "Allow"}]
+      },
+      {
+        "name": "startup",
+        "files": [], "network": {"destinations": []}, "processControl": [], "unixStreams": [],
+        "execution": [{"name": "startup-entry", "path": "/usr/bin/cat", "recursive": false, "operations": ["Execute"], "action": "Allow"}]
+      },
+      {
+        "name": "readiness",
+        "files": [], "network": {"destinations": []}, "processControl": [], "unixStreams": [],
+        "execution": [{"name": "readiness-entry", "path": "/usr/bin/grep", "recursive": false, "operations": ["Execute"], "action": "Allow"}]
+      },
+      {
+        "name": "liveness",
+        "files": [], "network": {"destinations": []}, "processControl": [], "unixStreams": [],
+        "execution": [{"name": "liveness-entry", "path": "/usr/bin/wc", "recursive": false, "operations": ["Execute"], "action": "Allow"}]
+      },
+      {
+        "name": "termination-failure",
+        "files": [], "network": {"destinations": []}, "processControl": [], "unixStreams": [],
+        "execution": [{"name": "terminal-entry", "path": "/work/bin/post-ponr-execfail", "recursive": false, "operations": ["Execute"], "action": "Allow"}]
+      },
+      {"name": "restricted", "files": [], "execution": [], "network": {"destinations": []}, "processControl": [], "unixStreams": []}
+    ],
+    "exceptionGrants": []
+  }
+}

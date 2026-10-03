@@ -21,6 +21,8 @@ mod dynamic_loader;
 #[cfg(test)]
 mod entry_isolation;
 #[cfg(test)]
+mod entry_map;
+#[cfg(test)]
 mod ephemeral_container;
 #[cfg(test)]
 mod evidence_gap;
