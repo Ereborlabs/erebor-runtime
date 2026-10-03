@@ -6099,7 +6099,7 @@ test does not close a row when its physical condition or an assertion changed.
   production recovery operation and oracles as the Kubernetes lane. Remove
   the old process-wide iterator pause. A direct `sudo` monitor mirrors its
   `SIGSTOP` and cannot report completion without an external continue.
-  - [ ] Replace post-cutover external-tree exit with one small standard
+  - [x] Replace post-cutover external-tree exit with one small standard
     platform test. Reuse `recovery_tree.py` and `actor_policy.json`. Fork the
     application and external trees before Node starts. Require complete
     recovery of four tasks: two application tasks, two external tasks, and
@@ -6121,7 +6121,21 @@ test does not close a row when its physical condition or an assertion changed.
       Only the platform attribute changed after Host commit `995ee7eb`.
       Final Rust CI passed. See
       `/tmp/mithril-post-cutover-runc-ci-20261003.log`.
-    - [ ] Pass and commit Kubernetes with the unchanged body.
+    - [x] Kubernetes passed the unchanged 89-line source in 73.30 seconds.
+      Real Control, Node, policy CRDs, and runtime exec performed recovery.
+      Normal lifecycle cleanup passed. See
+      `/tmp/mithril-post-cutover-kube-20261003.log`. Final Rust CI passed. See
+      `/tmp/mithril-post-cutover-kube-final-ci-20261003.log`.
+      The first diagnostic launcher required removal of the infrastructure
+      output parent. Kubernetes owns only its scenario child. The existing
+      lightweight directory test now requires child removal and parent
+      retention; it passed before the launcher correction and Kubernetes
+      rerun. No scenario body, production operation, or readiness limit changed.
+    - [ ] Remove only the matched old post-exit binding readback, result
+      field, and Kubernetes shell snapshot assertion after the replacement
+      commit. Keep external release and wait as cleanup. Keep task-change
+      retry, iterator cutover, other results, and their observer. Verify the
+      reduced probe and launcher before the separate retirement commit.
     Review route: [external_exit_preserves_recovery](src/identity/scenarios/post_cutover_exit.rs)
       starts both [recovery_tree.py](fixtures/process/recovery_tree.py) trees
       -> the production Node recovers four live tasks

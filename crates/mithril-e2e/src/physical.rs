@@ -391,6 +391,8 @@ mod tests {
         assert!(path.is_dir());
         directory.cleanup()?;
         ProbeDirectory::new(&path).cleanup()?;
+        assert!(!path.exists());
+        assert!(parent.path().is_dir());
 
         let result = wait_for(
             &path,
