@@ -1194,6 +1194,13 @@ intents. Acknowledged Node output is truncated, and recovery is guarded;
 do not claim continuous full-spool recovery. No production change follows
 from these hypotheses alone.
 
+The archived 5,000-operation actor matches the checked source. Native output
+receipts repeat the same backend and script digests. Both code paths select
+that executable and recipe; Araphor receipts do not repeat those digests.
+Native uses `-e` and output files. Araphor uses the checked executable through
+its held descriptor, stdin source and supervised pipes. These differences
+do not change the approved script, but their costs are not isolated.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node

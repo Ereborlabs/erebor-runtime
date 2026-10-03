@@ -3180,6 +3180,13 @@ times. The current receipts cannot identify which operation overlaps a
 disk sync, lock wait or supervision check. Do not infer a cause from whole-run
 log counts or capture-process elapsed time.
 
+The archived actor matches the checked 5,000-operation fixture. Native
+receipts repeat the backend and script digests; Araphor receipts do not.
+Both code paths select the same executable and recipe. `PlainCapture::command`
+uses `-e` and output files. `DiagnosticBackend::command` uses the checked
+executable descriptor, stdin source and supervised pipes. Their costs remain
+unisolated. Do not describe the full launch and output paths as identical.
+
 For the paired lightweight Node restart case, read
 [ObservabilityQualification::restart_case](../../../../crates/mithril-e2e/src/observability/lifecycle.rs).
 Control accepts and signs the frozen request. `restart_child` calls the
