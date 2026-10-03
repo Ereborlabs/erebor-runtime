@@ -5844,13 +5844,39 @@ test does not close a row when its physical condition or an assertion changed.
     VM harness checks and final Rust CI passed. See
     `/tmp/mithril-node-version-retirement-ci-20261003.log`. The legacy file
     remains on the retirement list at 5,373 lines. No production code changed.
-  - [ ] Replace exact installer startup with one small standard direct-runc test.
+  - [x] Replace exact installer startup with one small standard direct-runc test.
     Keep the installed executable path, `install` command, all 12 arguments,
     root user, administrative capability, host PID namespace, writable root,
     writable result and host directories, and read-only actual K3s executable.
     Use the shared Python actor and native inputs. Require successful physical
     start, exact argv, installer marker, and complete cleanup. Add no Platform
     method or legacy fixture code. Commit before removing its old action.
+    The 81-line [exact_installer_can_start](src/identity/scenarios/runtime_installer.rs)
+    passed in 0.93 seconds. Its file has 88 lines. All ten standard gate cases
+    passed in 5.93 seconds. All four legacy cases and cleanup passed. Evidence:
+    `target/mithril-installer-group-20261003T033250Z-2517493`. All eight
+    production gate tests, VM harness checks, and final Rust CI passed. See
+    `/tmp/mithril-installer-exact-ci-20261003.log`.
+    The retained K3s VM supplies stock runc and the real K3s executable. The
+    standard Rust test does not create a Pod or call Kubernetes APIs. The other
+    lightweight VM lacks K3s. No substitute executable was used.
+    Review route: the test binds [runtime_owner.py](fixtures/process/runtime_owner.py)
+      -> [OciBundle](src/physical/oci_bundle.rs) installs the public production hooks
+      -> [RetainedRuntimeGate](../mithril-node/src/runtime_gate.rs) checks installer authority
+      -> stock runc executes the actor; [ProcessFixture](src/process.rs) reports
+      the physical result; the platform removes paths and the actor cgroup.
+    No production or Platform code changed. No launcher source changed.
+  - [ ] Remove the old exact installer action and its two result fields after
+    the replacement commit. Remove the unused exact-config branch and fixture
+    argument field. Keep canonical arguments in the manifest input. Keep the
+    changed and forged installer cases, their config and logs, stock-spec case,
+    and cleanup. Qualify all ten standard cases and the complete reduced probe.
+  - [ ] Replace changed installer startup with the same shared actor and
+    canonical manifest. Change the copied executable bytes, use all 26 upgraded
+    arguments, and mount actual K3s read-only at `/host-runtime-cli`. Keep the
+    retained `/host-k3s` declaration unchanged. Require physical success, exact
+    argv and marker, `ALLOW_MITHRIL_INSTALLER` from the public hook, and cleanup.
+    Add no Platform method or legacy fixture code. Commit before removal.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

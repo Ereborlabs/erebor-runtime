@@ -52,6 +52,28 @@
         { "source": "MITHRIL_WORK/host-hook", "destination": "/host-hook-bin", "readOnly": false },
         { "source": "MITHRIL_WORK/host-containerd", "destination": "/host-containerd", "readOnly": false }
       ]
+    },
+    {
+      "executable": "/usr/local/bin/mithril-oci-hook",
+      "args": [
+        "/usr/local/bin/mithril-oci-hook",
+        "install",
+        "--owner",
+        "mithril-system/mithril",
+        "--hook-host-directory",
+        "/usr/libexec/oci/hooks.d",
+        "--containerd-host-directory",
+        "/var/lib/rancher/k3s/agent/etc/containerd",
+        "--k3s-host-path",
+        "/usr/local/bin/k3s",
+        "--socket",
+        "/run/mithril/runtime-admission.sock"
+      ],
+      "requiredMounts": [
+        { "source": "MITHRIL_WORK/host-hook", "destination": "/host-hook-bin", "readOnly": false },
+        { "source": "MITHRIL_WORK/host-containerd", "destination": "/host-containerd", "readOnly": false },
+        { "source": "/usr/local/bin/k3s", "destination": "/host-k3s", "readOnly": true }
+      ]
     }
   ],
   "controlEntries": [

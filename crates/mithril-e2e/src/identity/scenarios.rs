@@ -131,6 +131,8 @@ mod runtime_forged;
 #[cfg(test)]
 mod runtime_hostile;
 #[cfg(test)]
+mod runtime_installer;
+#[cfg(test)]
 mod runtime_outage;
 #[cfg(test)]
 mod runtime_prepared;
