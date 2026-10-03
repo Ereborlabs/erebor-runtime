@@ -8,7 +8,7 @@ use zerocopy::TryFromBytes as _;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn replacement_keeps_signed_entries<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("entry-replace")?;

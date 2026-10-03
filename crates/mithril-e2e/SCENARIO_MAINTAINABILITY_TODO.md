@@ -6387,7 +6387,12 @@ setup, production actions, assertions, and focused test.
     teardown, and owned directory cleanup passed. Formatting, compilation,
     and strict package clippy passed. See
     `/tmp/mithril-entry-replace-runc-20261003.log`.
-  - [ ] Kubernetes qualification and commit.
+  - [x] Kubernetes passed the unchanged test in 113.15 seconds. Real Control,
+    Node, policy CRDs, and actor admission installed both replacement
+    generations and seven final signed entries. Normal teardown and owned
+    directory cleanup passed. The retained cluster resumed with short
+    connection and HTTP 503 errors before it became ready. No timeout or
+    assertion changed. See `/tmp/mithril-entry-replace-kube-20261003.log`.
   - [ ] Remove only the matching old replacement readback and unused imports.
   Review route: [replacement_keeps_signed_entries](src/identity/scenarios/entry_replace.rs)
     -> [entry_map_policy.json](fixtures/process/entry_map_policy.json)
