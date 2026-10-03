@@ -2873,3 +2873,46 @@ passed 167 tests, shared observability 22, Interceptor 39, Control 170, e2e
 136 and Node 262. Read `capture-lifecycle-workspace-final.log` in the evidence
 directory above. The ignored physical cases remain unqualified. This proof
 does not cover the subsequent plain-bpftrace comparison change.
+
+### Plain-bpftrace comparison
+
+This review route covers source `58a9a171`. Plain bpftrace is the baseline
+for Araphor-added cost. Both paths use the reviewed script and matching
+backend settings. Equal source does not prove equal compiled BPF bytes or
+equal measured latency.
+
+[Host::qualify_diagnostics](../../../../crates/mithril-e2e/src/platform/host.rs) resolves one admitted actor and the reviewed cgroup-filtered recipe.
+-> [PlainCapture::start](../../../../crates/mithril-e2e/src/observability/plain.rs) starts plain bpftrace directly with the reviewed source and backend environment.
+-> [PlainCapture::poll](../../../../crates/mithril-e2e/src/observability/plain.rs) checks the exact attachment notification and ends collection after five seconds.
+-> [observability.py](../../../../crates/mithril-e2e/fixtures/process/observability.py) measures 1,000 denied opens and publishes p99.
+-> [Host::capture_health](../../../../crates/mithril-e2e/src/platform/host.rs) rejects evidence loss and coverage faults.
+-> [PlainCapture::finish](../../../../crates/mithril-e2e/src/observability/plain.rs) saves output and the child result.
+-> [ResourceSnapshot::read](../../../../crates/mithril-e2e/src/observability.rs) checks diagnostic removal and retained enforcement resources.
+
+`PlainCapture` is a test-only owner. The plain path does not use the
+diagnostic supervisor, trace upload or trace storage. The Araphor path keeps
+the existing Control admission, Node lifetime, Interceptor supervision and
+Data storage owners. Both measurement paths require the actual attachment
+notification, the same denied-file actor and fresh exact policy-deny
+witnesses. An attachment banner or generic EACCES does not pass these checks.
+
+The direct-command and attachment-marker unit tests both passed. Read
+`capture-plain-component.log` in the evidence directory above. The native
+physical experiment completed five captures and ten measured runs in 255.16
+seconds. The Araphor experiment completed five captures and ten measured
+runs in 293.65 seconds. Every run retained 1,000 exact policy-deny witnesses,
+healthy coverage and zero enforcement-event loss. All captures passed output
+and cleanup checks. Trace kernel-loss counters remain unknown.
+
+Both experiments fail the existing final trace-off latency validation and
+write no qualified configuration. They ran separately, not as direct
+interleaved plain/Araphor pairs. The native trace-on median p99 is 191,167 ns;
+the Araphor median is 142,793 ns. These samples do not prove a speed
+improvement, equal performance or a stable Araphor-added cost. Read the
+[complete comparison result](../../araphor-observability/phase-2-owned-capture.md#plain-and-owned-capture-result)
+for all values, commands and receipts. The physical lifecycle gates remain
+**Not done**. The final workspace procedure passed at source `58a9a171`.
+Formatting, workspace checking, strict Clippy and the selected workspace
+suite passed. Data passed 167 tests, shared observability 22, Interceptor 39,
+Control 170, e2e 138 and Node 262. Read `capture-plain-workspace-final.log`.
+This proof does not cover the subsequent capture optimization.

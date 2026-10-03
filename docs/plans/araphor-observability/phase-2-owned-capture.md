@@ -108,6 +108,15 @@ Control or Node restarts after dispatch
    second database is required. Retention and read-grant checks belong to the
    shared data boundary. Reserve terminal-state capacity before spawn.
 
+Use the committed Node spool cursor to skip reads with no new durable frames.
+Run inactive-spool recovery at startup and after intent or worker changes,
+not on every unchanged upload poll. Mark recovery pending before intent
+creation, which can fail after its final rename. Keep recovery pending after
+a failed write, worker join or directory sync. Clear recovery pending only
+after successful recovery. Keep target, lease, cancellation, authorization,
+quota, sync-before-ACK and cleanup checks unchanged. Do not change the
+bpftrace source or collection settings to improve a measurement.
+
 Status: **Not done** for complete capture qualification. The storage checks
 below do not replace physical capture checks on the implementing revision.
 
@@ -647,6 +656,98 @@ Interceptor 39, Control 170, e2e 136 and Node 262. Read
 `capture-lifecycle-workspace-final.log` in the evidence directory above.
 Ignored physical cases remain unqualified. This result covers the lifecycle
 fixture correction, not the subsequent plain-bpftrace comparison change.
+
+### Plain and owned capture result
+
+The user specifies plain bpftrace as the baseline for Araphor-added cost.
+Both paths must use the same backend, script, probes, target filter and
+collection settings. Do not attribute the native probe cost to Araphor.
+The trace-off comparisons below measure total capture interference. They
+do not measure Araphor-added cost against plain bpftrace.
+
+Source `58a9a171` ran both approved experiments on the same owned VM. Both
+used the same unoptimized test binary, DEBUG logging, fixture archive and
+bpftrace executable. Each path ran five trace-off/trace-on pairs. Each run
+attempted 1,000 denied opens at 1 ms intervals. Each capture used the reviewed
+`FailedOpens` source, its resolved cgroup filter and a five-second collection
+window after the actual attachment notification. Each experiment created
+its own admitted actor and cgroup. The native command uses inline source;
+the Araphor backend reads source from standard input. The source bytes and
+backend environment match. Compiled BPF byte equality was not measured.
+
+Run the existing owned harness with these inputs:
+
+```sh
+sudo -n env RUST_LOG=debug MITHRIL_TRACE_MODE=plain \
+  timeout --signal=TERM --kill-after=10s 590s bash \
+  /mnt/mithril-source/worktrees/mithril-ui/crates/mithril-e2e/harness/observability/owned.sh \
+  /mnt/mithril-source/worktrees/mithril-ui/target/debug/deps/mithril_e2e-69abcc1defdc24e3 \
+  /var/tmp/araphor-capture-inputs.VMoOpWq2/fixtures-classified.tar.gz \
+  /tmp/araphor-observability-153-plain-20261003 1000
+```
+
+The second command changes `MITHRIL_TRACE_MODE` to `araphor` and uses the
+fresh output path `/tmp/araphor-observability-153-araphor-20261003`. All other
+inputs stay unchanged. The experiments ran in sequence, without a concurrent
+Cargo build or workspace test run.
+
+Each table row is a trace-off/trace-on pair inside its experiment. The two
+experiments are not direct interleaved plain/Araphor pairs.
+
+| Pair | Plain off p99, ns | Plain on p99, ns | Change | Araphor off p99, ns | Araphor on p99, ns | Change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 200,637 | 200,832 | +0.10% | 181,217 | 255,642 | +41.07% |
+| 2 | 203,656 | 176,584 | -13.29% | 382,265 | 313,917 | -17.88% |
+| 3 | 180,821 | 207,631 | +14.83% | 111,090 | 142,793 | +28.54% |
+| 4 | 245,231 | 173,544 | -29.23% | 213,667 | 117,336 | -45.08% |
+| 5 | 194,396 | 191,167 | -1.66% | 143,171 | 127,466 | -10.97% |
+
+With plain trace-on as the baseline, the median of five p99 values is
+191,167 ns. The Araphor median is 142,793 ns. Native trace-on values range
+from 173,544 to 207,631 ns. Araphor values range from 117,336 to 313,917 ns.
+These separate samples do not prove equal performance or a stable
+Araphor-added cost. Do not report the lower Araphor median as a proven speed
+improvement. A direct paired comparison remains unmeasured.
+
+All twenty runs retained 1,000 fresh exact policy-deny witnesses per run.
+Each run reports healthy coverage, zero unresolved effects and zero
+enforcement-event loss. All five native captures measured 1,000 EACCES opens,
+exited with code zero, removed their observed diagnostic resources and kept
+the enforcement resources. Native collection times were 5,003, 5,006, 5,003,
+5,005 and 5,002 ms. All five Araphor terminals report `Deadline`, complete
+output, exit code zero, no forced kill and `Verified` cleanup. Araphor output
+also measures at least 1,000 EACCES opens. Trace kernel-loss counters remain
+unknown; zero enforcement-event loss does not establish zero trace loss.
+
+The native test reports 255.16 seconds. The Araphor test reports 293.65
+seconds. Both launchers return 101 at final configuration validation. Native
+pair 3 and Araphor pairs 1 and 3 exceed the existing 10% trace-off limit.
+Neither run writes a qualified configuration. Read
+`capture-vm153-plain-20261003.json`,
+`capture-vm153-plain-20261003-test.log`,
+`capture-vm153-araphor-20261003.json` and
+`capture-vm153-araphor-20261003-test.log` in the evidence directory above.
+Diagnostics stay disabled. Status: **Not done**.
+
+The direct-command and attachment-marker component checks each passed one
+test at this source. Read `capture-plain-component.log`. These checks do not
+replace the physical results above. The final workspace procedure passed at
+source `58a9a171`. Formatting, workspace checking, strict Clippy and the full
+selected workspace suite passed. Data passed 167 tests, shared observability
+22, Interceptor 39, Control 170, e2e 138 and Node 262. Read
+`capture-plain-workspace-final.log`. This pass covers the comparison helper,
+not the subsequent capture optimization.
+
+The user approved a direct baseline experiment after optimization. Run five
+alternating plain-bpftrace/Araphor pairs on the same VM and admitted cgroup.
+Keep the binary, script, filters, backend environment, DEBUG logging and
+five-second collection window identical. Each run attempts 1,000 denied
+opens at 1 ms intervals. Limit the complete experiment to ten minutes.
+Use plain capture as each pair's baseline. Araphor p99 must not exceed that
+baseline by more than 5%. Every run must retain all exact denial witnesses,
+healthy coverage, zero enforcement-event loss and verified cleanup.
+Record each pair and each failure. This added-cost comparison does not
+replace the deployment interference gate or create a qualified configuration.
 
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
