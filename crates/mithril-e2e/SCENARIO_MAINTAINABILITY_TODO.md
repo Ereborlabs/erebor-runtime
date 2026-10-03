@@ -6131,18 +6131,25 @@ test does not close a row when its physical condition or an assertion changed.
       lightweight directory test now requires child removal and parent
       retention; it passed before the launcher correction and Kubernetes
       rerun. No scenario body, production operation, or readiness limit changed.
-    - [ ] Remove only the matched old post-exit binding readback, result
+    - [x] Remove only the matched old post-exit binding readback, result
       field, and Kubernetes shell snapshot assertion after the replacement
       commit. Keep external release and wait as cleanup. Keep task-change
-      retry, iterator cutover, other results, and their observer. Verify the
-      reduced probe and launcher before the separate retirement commit.
+      retry, iterator cutover, other results, and their observer. The rebuilt
+      reduced probe passed in the retained root VM. Its remaining launcher
+      predicate and pin, lease, cgroup, and fixture cleanup checks passed.
+      This change removes 26 Rust lines and nine shell lines. The known
+      stopped sudo monitor required a continue after the probe exited.
+      Shell syntax, VM harness checks, and final Rust CI passed. See
+      `/tmp/mithril-post-cutover-retirement-probe-20261003.log` and
+      `/tmp/mithril-post-cutover-retirement-ci-20261003.log`. The full
+      two-node Kubernetes launcher was not run for this matched deletion.
     Review route: [external_exit_preserves_recovery](src/identity/scenarios/post_cutover_exit.rs)
       starts both [recovery_tree.py](fixtures/process/recovery_tree.py) trees
       -> the production Node recovers four live tasks
       -> [ProcessFixture](src/process.rs) stops the external tree
       -> the test reads a fresh application snapshot and checks the binding.
     The application stops only after this readback. No actor, policy,
-    Platform, production, or legacy source changed. The exact Host case is
+    Platform, or production source changed. The exact Host case is
     `identity::scenarios::post_cutover_exit::external_exit_preserves_recovery::recovery_exit_host`.
     Run it in the prepared root VM with the normal Platform inputs and
     `--exact --ignored --nocapture --test-threads=1`.

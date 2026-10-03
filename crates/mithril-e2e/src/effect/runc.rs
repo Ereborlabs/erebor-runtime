@@ -189,7 +189,6 @@ pub struct RecoveredContainerEntryProbeV1 {
     pub recovering_before_iterator: bool,
     pub active_recovered_before_ptrace: bool,
     pub recovery_task_change_retried: bool,
-    pub post_cutover_exit_preserved_activation: bool,
     pub recovered_application_role_id: u32,
     pub recovered_application_rule_id: u32,
     pub recovered_application_task_count: u64,
@@ -1764,30 +1763,6 @@ impl EffectTestRunner {
         external_child.wait().context(IoSnafu {
             path: &external_stderr,
         })?;
-        let after_exit = host
-            .lookup_map("execution_set_bindings", &binding_key)
-            .context(InterceptorSnafu)?
-            .context(InvalidInputSnafu {
-                path: pin_root,
-                reason: "the active binding disappeared after external exit",
-            })?;
-        let after_exit =
-            ExecutionSetBindingStateV1::try_read_from_bytes(&after_exit).map_err(|error| {
-                InvalidInputSnafu {
-                    path: pin_root,
-                    reason: format!("the post-cutover binding is invalid: {error}"),
-                }
-                .build()
-            })?;
-        ensure!(
-            after_exit.lifecycle_state == BindingLifecycleStateV1::ActiveRecovered
-                && after_exit.prepared_container_entry_instance_id
-                    == recovery.application_entry_instance_id,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "external exit changed the recovered application anchor"
-            }
-        );
         container.cleanup()?;
         bindings
             .retire_binding_id_for_test(&host, &recovered_binding_id)
@@ -1823,7 +1798,6 @@ impl EffectTestRunner {
             recovering_before_iterator,
             active_recovered_before_ptrace,
             recovery_task_change_retried: true,
-            post_cutover_exit_preserved_activation: true,
             recovered_application_role_id: recovered_initial.active_role_id,
             recovered_application_rule_id: recovered_initial.admitted_entry_rule_id,
             recovered_application_task_count: recovery.validation_application_task_count,

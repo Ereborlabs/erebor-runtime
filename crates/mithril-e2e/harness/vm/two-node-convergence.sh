@@ -2541,14 +2541,6 @@ if [[ $recovered_entry_only == true ]]; then
     --release-path /var/lib/mithril-convergence/markers/recovered-entry.external-stop \
     --output "$remote_a/recovered-exit-after.json" --after-cutover
   wait "$recovered_external_command_pid"
-  "$provider" get "$vm_a" "$remote_a/recovered-exit-after.json" \
-    "$output_directory/recovered-exit-after.json"
-  recovered_after_exit=$(runtime_task_snapshot "$node_a_name" "$recovered_host_pid")
-  jq -e --argjson before "$recovered_initial_snapshot" '
-    .runtime_binding.lifecycle_state == "active_recovered" and
-    .entry_instance_id == $before.entry_instance_id and
-    .admitted_entry_rule_id == $before.admitted_entry_rule_id
-  ' <<<"$recovered_after_exit" >/dev/null
 
   jq -n \
     --arg node "$node_a_name" \
@@ -2569,7 +2561,6 @@ if [[ $recovered_entry_only == true ]]; then
       recovering_before_iterator: true,
       active_recovered_before_ptrace: true,
       recovery_task_change_retried: true,
-      post_cutover_exit_preserved_activation: true,
       recovered_application_role_id: $recovered_application_role_id,
       recovered_application_rule_id: $recovered_application_rule_id,
       recovered_application_task_count: $recovered_application_task_count,
