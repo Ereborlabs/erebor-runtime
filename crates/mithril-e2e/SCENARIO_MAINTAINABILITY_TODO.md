@@ -5897,11 +5897,25 @@ test does not close a row when its physical condition or an assertion changed.
       marker, runtime inventory, and cleanup through `ProcessFixture` and Platform.
     No production, Platform, or launcher source changed. This is direct-runc
     qualification in the retained K3s VM, not Kubernetes Pod qualification.
-  - [ ] Remove the old changed installer action and its three result fields
+  - [x] Remove the old changed installer action and its three result fields
     after the replacement commit. Remove its two unused log methods and Write
     import. Keep forged denial, canonical manifest, upgraded argv, stock spec,
     diagnostics, and cleanup. Qualify all eleven standard cases and the two
     remaining legacy cases before the separate retirement commit.
+    Commit `c12d053b` contains the replacement. The deletion removes 99 net
+    Rust lines. All eleven standard cases passed in 7.21 seconds. Both legacy
+    cases and cleanup passed. Every remaining result boolean is true. Evidence:
+    `target/mithril-installer-changed-retirement-20261003T041315Z-2559660`.
+    The CLI executable was rebuilt before transfer to the VM. VM harness checks
+    and final Rust CI passed. See
+    `/tmp/mithril-installer-changed-retirement-ci-20261003.log`.
+    The legacy file remains on the retirement list at 5,247 lines.
+  - [ ] Replace forged installer denial with the shared actor, checked upgraded
+    argv, and canonical manifest. Change only the owner argument to
+    `attacker/other`. Require failed physical start, `DENY_NODE_UNAVAILABLE`,
+    no installer approval, no actor output or marker, empty runtime inventory,
+    and cleanup. Keep the function below 100 lines. Add no Platform method or
+    legacy fixture code. Commit the replacement before removing the old action.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

@@ -3,7 +3,7 @@ mod process;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::io::{BufRead as _, BufReader, Write as _};
+use std::io::{BufRead as _, BufReader};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -230,9 +230,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
 pub struct RuncRetainedRuntimeGateProbeV1 {
     pub schema_version: u32,
     pub runc_version: String,
-    pub changed_installer_allowed: bool,
-    pub changed_installer_process_started: bool,
-    pub changed_installer_decision_logged: bool,
     pub forged_installer_denied: bool,
     pub forged_installer_process_never_started: bool,
     pub forged_installer_decision_logged: bool,
@@ -789,23 +786,6 @@ impl RetainedRuntimeGateRuncFixture {
         Ok(())
     }
 
-    fn run_changed_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        let executable = self.bundle.join("rootfs/usr/local/bin/mithril-oci-hook");
-        let original = fs::read(&executable).context(IoSnafu { path: &executable })?;
-        fs::OpenOptions::new()
-            .append(true)
-            .open(&executable)
-            .and_then(|mut file| file.write_all(b"# upgraded Mithril installer\n"))
-            .context(IoSnafu { path: &executable })?;
-        let marker = self.marker_directory.join("installer");
-        if marker.exists() {
-            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
-        }
-        let result = self.run_case("changed-installer", self.installer_config()?);
-        fs::write(&executable, original).context(IoSnafu { path: &executable })?;
-        result
-    }
-
     fn run_forged_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
         let mut config = self.installer_config()?;
         config["process"]["args"][3] = json!("attacker/other");
@@ -960,74 +940,6 @@ impl RetainedRuntimeGateRuncFixture {
             true,
         )?;
         Ok(config)
-    }
-
-    fn changed_installer_log(&self) -> Result<String> {
-        self.decision_log(self.installer_config()?, b"changed-installer-log")
-    }
-
-    fn decision_log(&self, config: serde_json::Value, identity: &[u8]) -> Result<String> {
-        let config_path = self.bundle.join("config.json");
-        fs::write(
-            &config_path,
-            serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
-        )
-        .context(IoSnafu { path: &config_path })?;
-        let state = serde_json::to_vec(&json!({
-            "id": format!("{:064x}", Sha256::digest(identity)),
-            "pid": 1,
-            "bundle": self.bundle,
-            "annotations": {}
-        }))
-        .context(JsonSnafu { path: &config_path })?;
-        let mut child = Command::new(&self.hook_path)
-            .args([
-                "run",
-                "--stage",
-                "stage-runtime-facts",
-                "--socket",
-                self.fixture_root
-                    .join("absent-runtime-admission.sock")
-                    .to_string_lossy()
-                    .as_ref(),
-                "--recovery-manifest",
-                self.manifest.to_string_lossy().as_ref(),
-                "--timeout-ms",
-                "100",
-            ])
-            .env("RUST_LOG", "info")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context(IoSnafu {
-                path: &self.hook_path,
-            })?;
-        child
-            .stdin
-            .take()
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: &self.hook_path,
-                    reason: "the direct hook log probe has no stdin",
-                }
-                .build()
-            })?
-            .write_all(&state)
-            .context(IoSnafu {
-                path: &self.hook_path,
-            })?;
-        let output = child.wait_with_output().context(IoSnafu {
-            path: &self.hook_path,
-        })?;
-        ensure!(
-            output.status.success() && output.stdout.is_empty(),
-            CommandSnafu {
-                program: self.hook_path.display().to_string(),
-                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            }
-        );
-        Ok(String::from_utf8_lossy(&output.stderr).into_owned())
     }
 
     fn add_bind_mount(
@@ -1510,11 +1422,8 @@ impl EffectTestRunner {
             k3s_path,
             nsenter_path,
         )?;
-        let changed_installer = fixture.run_changed_installer()?;
-        let changed_installer_process_started = fixture.marker_exists("installer");
         let forged_installer = fixture.run_forged_installer()?;
         let host_stock_spec = fixture.run_host_stock_spec()?;
-        let installer_log = fixture.changed_installer_log()?;
         let host_stock_spec_generated = host_stock_spec.success
             && serde_json::from_str::<serde_json::Value>(&host_stock_spec.stdout)
                 .ok()
@@ -1524,10 +1433,6 @@ impl EffectTestRunner {
         let result = RuncRetainedRuntimeGateProbeV1 {
             schema_version: 5,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
-            changed_installer_allowed: changed_installer.success,
-            changed_installer_process_started,
-            changed_installer_decision_logged: installer_log
-                .contains("decision=ALLOW_MITHRIL_INSTALLER"),
             forged_installer_denied: !forged_installer.success,
             forged_installer_process_never_started: !fixture.marker_exists("installer"),
             forged_installer_decision_logged: forged_installer
@@ -1537,18 +1442,14 @@ impl EffectTestRunner {
             fixture_root_removed: false,
         };
         ensure!(
-            result.changed_installer_allowed
-                && result.changed_installer_process_started
-                && result.changed_installer_decision_logged
-                && result.forged_installer_denied
+            result.forged_installer_denied
                 && result.forged_installer_process_never_started
                 && result.forged_installer_decision_logged
                 && result.host_stock_spec_generated,
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; changed_installer={:?}; forged_installer={:?}; stock_spec={:?}",
-                    changed_installer.stderr.trim(),
+                    "the direct runc retained-gate oracle failed: result={result:?}; forged_installer={:?}; stock_spec={:?}",
                     forged_installer.stderr.trim(),
                     host_stock_spec.stderr.trim(),
                 ),
