@@ -230,9 +230,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
 pub struct RuncRetainedRuntimeGateProbeV1 {
     pub schema_version: u32,
     pub runc_version: String,
-    pub changed_control_recovery_denied: bool,
-    pub changed_control_recovery_process_never_started: bool,
-    pub changed_control_recovery_decision_logged: bool,
     pub exact_installer_allowed: bool,
     pub exact_installer_process_started: bool,
     pub changed_installer_allowed: bool,
@@ -848,16 +845,6 @@ impl RetainedRuntimeGateRuncFixture {
             fs::copy(source, &target).context(IoSnafu { path: source })?;
         }
         Ok(())
-    }
-
-    fn run_changed_control_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        let marker = self.marker_directory.join("control");
-        if marker.exists() {
-            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
-        }
-        let mut config = self.exact_control_recovery_config()?;
-        config["process"]["capabilities"]["effective"] = json!(["CAP_SYS_ADMIN"]);
-        self.run_case("changed-control-recovery", config)
     }
 
     fn run_exact_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
@@ -1687,8 +1674,6 @@ impl EffectTestRunner {
             k3s_path,
             nsenter_path,
         )?;
-        let changed_control_recovery = fixture.run_changed_control_recovery()?;
-        let changed_control_recovery_process_never_started = !fixture.marker_exists("control");
         let version_changed_control_recovery = fixture.run_version_changed_control_recovery()?;
         let version_changed_control_recovery_process_started = fixture.marker_exists("control");
         let installer = fixture.run_exact_installer()?;
@@ -1709,11 +1694,6 @@ impl EffectTestRunner {
         let result = RuncRetainedRuntimeGateProbeV1 {
             schema_version: 5,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
-            changed_control_recovery_denied: !changed_control_recovery.success,
-            changed_control_recovery_process_never_started,
-            changed_control_recovery_decision_logged: changed_control_recovery
-                .stderr
-                .contains("decision=DENY_NODE_UNAVAILABLE"),
             version_changed_control_recovery_allowed: version_changed_control_recovery.success,
             version_changed_control_recovery_process_started,
             exact_installer_allowed: installer.success,
@@ -1733,10 +1713,7 @@ impl EffectTestRunner {
             fixture_root_removed: false,
         };
         ensure!(
-            result.changed_control_recovery_denied
-                && result.changed_control_recovery_process_never_started
-                && result.changed_control_recovery_decision_logged
-                && result.version_changed_control_recovery_allowed
+            result.version_changed_control_recovery_allowed
                 && result.version_changed_control_recovery_process_started
                 && result.exact_installer_allowed
                 && result.exact_installer_process_started
@@ -1752,8 +1729,7 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; changed_control_recovery={:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; stock_spec={:?}",
-                    changed_control_recovery.stderr.trim(),
+                    "the direct runc retained-gate oracle failed: result={result:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; stock_spec={:?}",
                     version_changed_control_recovery.stderr.trim(),
                     installer.stderr.trim(),
                     changed_installer.stderr.trim(),

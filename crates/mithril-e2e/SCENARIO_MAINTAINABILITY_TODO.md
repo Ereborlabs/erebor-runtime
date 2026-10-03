@@ -5765,14 +5765,22 @@ test does not close a row when its physical condition or an assertion changed.
     `target/mithril-control-capability-20261003T023746Z-2453292`. All eight
     production gate tests, VM harness checks, and final Rust CI passed. See
     `/tmp/mithril-control-capability-ci-20261003.log`.
+    Commit `e5a1e00b` contains the replacement.
     The physical denial log is mandatory. The shared actor, OCI input, manifest,
     and positive test remain unchanged. No production or Platform code changed.
     Review route: the new function changes one capability set, then uses the
     existing `OciBundle`, production hook, process owner, and platform cleanup.
-  - [ ] Remove only the old changed Control action, probe call, marker local,
+  - [x] Remove only the old changed Control action, probe call, marker local,
     three result fields, and duplicate assertions after the replacement commit.
     Keep the version-change action, Control config, arguments, and manifest.
     Qualify all seven standard cases and the complete reduced legacy probe.
+    The deletion removes 26 Rust lines and adds two lines. All seven standard
+    cases passed through the retained launcher in 7.89 seconds. All six
+    remaining legacy cases and cleanup passed. Evidence:
+    `target/mithril-control-caps-retirement-20261003T024508Z-2463603`.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-control-caps-retirement-ci-20261003.log`. The legacy file remains
+    on the retirement list at 5,531 lines. No production or Platform code changed.
   - [ ] Replace version-changed Control recovery with the same Python actor
     copied into the test directory. Append one newline byte to that copy.
     Require different bytes, exact command and security shape, successful
