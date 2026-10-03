@@ -2722,3 +2722,20 @@ No additional global-quota run is required for closure. The 8-GiB capacity
 and original latency target remain unqualified. The failed
 preliminary kernel-cache check remains unresolved. This result does not
 qualify that behavior or implement public SQL, follow, or remote placement.
+
+## Shared capture verification
+
+The final workspace procedure passed at `c9e6b802`, after the last Rust edit.
+Formatting, workspace checking, strict Clippy and all selected workspace tests
+passed. Data passed 167 tests; shared observability passed 22; Interceptor
+passed 39; Control passed 170; Mithril e2e passed 134; Node passed 261.
+The owned-capture chain, native target lease, fixed digest and runtime library
+name checks passed. The receipt is `crate-workspace-final-5.log` under
+`/tmp/araphor-capture-qualification.E0VU3eEo/`. The build uses the worktree's
+`target` directory, not the primary checkout's cache.
+
+Ignored physical entry points remain unqualified. The prepared backend bundle
+and native loader checks do not execute a trace. Read the
+[owned-capture result](../../araphor-observability/phase-2-owned-capture.md#verified-implementation-slices)
+for the remaining physical gates and the approved interference experiment.
+Deployment diagnostics remain disabled.

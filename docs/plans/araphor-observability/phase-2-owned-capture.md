@@ -108,8 +108,8 @@ Control or Node restarts after dispatch
    second database is required. Retention and read-grant checks belong to the
    shared data boundary. Reserve terminal-state capacity before spawn.
 
-Status: **Not done** for this storage contract. Physical capture qualification
-also requires the cases below on the implementing revision.
+Status: **Not done** for complete capture qualification. The storage checks
+below do not replace physical capture checks on the implementing revision.
 
 ### Storage bounds
 
@@ -366,8 +366,41 @@ longer present. This is not a complete workspace pass.
 
 The replacement workspace run uses
 `CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/worktrees/mithril-ui/target`.
-It uses the same Cargo environment and verification script above. Its receipt
-is `crate-workspace-final-4.log`. The interference experiment has not run.
+It uses the same Cargo environment and verification script above. The run in
+`crate-workspace-final-4.log` completed native compilation and workspace
+checking. That run stopped before the full test suite to include the bundle
+correction below. The final run uses the same worktree-local cache. Its receipt
+is `crate-workspace-final-5.log`. The interference experiment has not run.
+
+Source `c9e6b802` permits the literal `+` in native library names. The actual
+bpftrace dependency is `libstdc++.so.6`. The bundle still rejects path
+separators, shell metacharacters, whitespace, symlinks and replacement system
+libraries. The exact `platform::kubernetes::observability_runtime_library_names`
+check passed. Its receipt is `capture-bundle-names.log` in the evidence directory.
+
+The backend bundle is prepared on the owned VM at
+`/var/tmp/araphor-capture-inputs.VMoOpWq2/backend-runtime.olmFu3lr`.
+All 20 checksum entries passed. Native loader checks resolve the 19 bundled
+libraries and the new test executable. These checks do not execute a trace or
+qualify capture.
+
+The final workspace procedure passed at source `c9e6b802`, after the last Rust
+edit. Formatting, workspace checking, Clippy with warnings denied and all
+selected workspace tests passed. Main library results were Data 167 passed
+(5 ignored), shared observability 22 passed (2 ignored), Interceptor 39 passed
+(1 ignored), Control 170 passed (2 ignored), e2e 134 passed (412 ignored), and
+Node 261 passed (none ignored). The owned-capture chain and bundle-name check
+passed. Ignored physical cases remain unqualified.
+
+Run from `worktrees/mithril-ui`. The receipt is `crate-workspace-final-5.log`
+in the evidence directory above:
+
+```sh
+CARGO_TARGET_DIR=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/worktrees/mithril-ui/target \
+CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
+CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 \
+bash .github/scripts/verify-rust-ci.sh
+```
 
 Remaining work is execution of the physical lifecycle gates below.
 Physical enablement requires a platform-matched interference receipt. The
