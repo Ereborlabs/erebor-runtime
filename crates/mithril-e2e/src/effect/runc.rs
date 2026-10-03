@@ -230,9 +230,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
 pub struct RuncRetainedRuntimeGateProbeV1 {
     pub schema_version: u32,
     pub runc_version: String,
-    pub exact_recovery_allowed: bool,
-    pub exact_recovery_process_started: bool,
-    pub exact_recovery_decision_logged: bool,
     pub exact_control_recovery_allowed: bool,
     pub exact_control_recovery_process_started: bool,
     pub exact_control_recovery_decision_logged: bool,
@@ -859,10 +856,6 @@ impl RetainedRuntimeGateRuncFixture {
         Ok(())
     }
 
-    fn run_exact_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        self.run_case("exact-recovery", self.exact_recovery_config()?)
-    }
-
     fn run_exact_control_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
         self.run_case(
             "exact-control-recovery",
@@ -1167,10 +1160,6 @@ impl RetainedRuntimeGateRuncFixture {
             true,
         )?;
         Ok(config)
-    }
-
-    fn exact_recovery_log(&self) -> Result<String> {
-        self.decision_log(self.exact_recovery_config()?, b"exact-recovery-log")
     }
 
     fn exact_control_recovery_log(&self) -> Result<String> {
@@ -1728,8 +1717,6 @@ impl EffectTestRunner {
             k3s_path,
             nsenter_path,
         )?;
-        let recovery = fixture.run_exact_recovery()?;
-        let exact_recovery_process_started = fixture.marker_exists("recovery");
         let control_recovery = fixture.run_exact_control_recovery()?;
         let exact_control_recovery_process_started = fixture.marker_exists("control");
         let changed_control_recovery = fixture.run_changed_control_recovery()?;
@@ -1745,7 +1732,6 @@ impl EffectTestRunner {
         let version_changed_node_recovery_process_started = fixture.marker_exists("recovery");
         let changed = fixture.run_changed_recovery()?;
         let host_stock_spec = fixture.run_host_stock_spec()?;
-        let recovery_log = fixture.exact_recovery_log()?;
         let control_recovery_log = fixture.exact_control_recovery_log()?;
         let installer_log = fixture.changed_installer_log()?;
         let host_stock_spec_generated = host_stock_spec.success
@@ -1757,9 +1743,6 @@ impl EffectTestRunner {
         let result = RuncRetainedRuntimeGateProbeV1 {
             schema_version: 5,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
-            exact_recovery_allowed: recovery.success,
-            exact_recovery_process_started,
-            exact_recovery_decision_logged: recovery_log.contains("decision=ALLOW_EXACT_RECOVERY"),
             exact_control_recovery_allowed: control_recovery.success,
             exact_control_recovery_process_started,
             exact_control_recovery_decision_logged: control_recovery_log
@@ -1791,10 +1774,7 @@ impl EffectTestRunner {
             fixture_root_removed: false,
         };
         ensure!(
-            result.exact_recovery_allowed
-                && result.exact_recovery_process_started
-                && result.exact_recovery_decision_logged
-                && result.exact_control_recovery_allowed
+            result.exact_control_recovery_allowed
                 && result.exact_control_recovery_process_started
                 && result.exact_control_recovery_decision_logged
                 && result.changed_control_recovery_denied
@@ -1819,8 +1799,7 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; recovery={:?}; control_recovery={:?}; changed_control_recovery={:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; changed_recovery={:?}; stock_spec={:?}",
-                    recovery.stderr.trim(),
+                    "the direct runc retained-gate oracle failed: result={result:?}; control_recovery={:?}; changed_control_recovery={:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; changed_recovery={:?}; stock_spec={:?}",
                     control_recovery.stderr.trim(),
                     changed_control_recovery.stderr.trim(),
                     version_changed_control_recovery.stderr.trim(),

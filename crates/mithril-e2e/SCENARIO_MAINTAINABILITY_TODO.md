@@ -5658,6 +5658,41 @@ test does not close a row when its physical condition or an assertion changed.
     cgroup, and temporary-file cleanup. Commit the replacement before removing
     its old action and result fields. Keep changed-command and changed-version
     cases until their own replacements pass.
+    The 86-line [exact_recovery_can_start](src/identity/scenarios/runtime_recovery.rs)
+    passed in 13.48 seconds in the retained lightweight VM. It checks the full
+    38-argument round trip and exact marker text. All eight production gate
+    tests passed. The four standard gate cases then passed in 6.30 seconds
+    through the retained launcher; all ten legacy cases and cleanup passed.
+    The generated `target` directory was removed before CI could launch its
+    next test executable. Its physical evidence directory was also removed.
+    Source files did not change. The restored final Rust CI run passed. See
+    `/tmp/mithril-runtime-recovery-restored-ci-20261003.log`. Normal ignored
+    physical cases remain excluded; no new skip was added. No production or
+    Platform code changed. Commit `02da02fc` contains the replacement.
+    Review route: [OciBundle](src/physical/oci_bundle.rs) binds the native inputs
+      -> [OciBaseSpecOwner](../mithril-node/src/runtime_integration.rs) installs
+      the production hooks
+      -> stock runc invokes [mithril-oci-hook](../mithril-node/src/bin/mithril_oci_hook.rs)
+      and the checked Python actor
+      -> [ProcessFixture](src/process.rs) reports bounded exit and output;
+      the shared platform removes the test paths and cgroup.
+  - [x] Remove only the old exact recovery action, decision-log wrapper, three
+    result fields, and duplicate assertions after the replacement commit.
+    Keep `exact_recovery_config` and `recovery_args` for the version-change
+    case. Qualify the four standard cases and complete reduced legacy probe.
+    The deletion removes 23 Rust lines and adds two lines. The four standard
+    cases passed in 3.47 seconds through the retained launcher. All nine
+    remaining legacy cases and cleanup passed. All result booleans are true.
+    Evidence: `target/mithril-recovery-retirement-20261003T015137Z-2395438`.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-recovery-retirement-ci-20261003.log`. The legacy file remains
+    on the retirement list at 5,604 lines. No production code changed.
+  - [ ] Replace the changed recovery-command denial with the same checked
+    actor, manifest, and OCI input. Keep the changed command and the absent
+    `/host-hook-bin` and `/host-containerd` mounts. Require failed start,
+    `DENY_NODE_UNAVAILABLE`, no marker or output, empty runtime state, and
+    cgroup cleanup. Add no Platform method. Commit before removing this old
+    action and its three result fields.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The
