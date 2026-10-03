@@ -2806,3 +2806,22 @@ The subsequent change moves the existing actor creation after policy
 activation and initial recovery. Review [Host::start_entry](../../../../crates/mithril-e2e/src/platform/host.rs)
 and [running_task_uses_new_policy](../../../../crates/mithril-e2e/src/identity/scenarios/policy_replace.rs)
 for the existing declared-entry path. The entry-rule check stays in place.
+
+At `2da84412`, the corrected fixture completed all five physical pairs. Each
+of ten runs retained 1,000 fresh exact policy-deny events with healthy coverage
+and zero enforcement-event loss. Every trace terminal reported `Deadline`,
+complete output and verified cleanup. Unknown trace kernel-loss counters stay
+unknown. Four latency pairs exceeded 10%; the largest measured increase was
+537.63%. Validation returned 101 and wrote no qualified configuration.
+Read `capture-vm153-pairs-admitted.json` and
+`capture-vm153-pairs-admitted-test.log`, and the
+[five-pair result](../../araphor-observability/phase-2-owned-capture.md#corrected-five-pair-result).
+The unoptimized fixture uses DEBUG logging. Production uses release binaries
+and INFO logging. The current receipt does not isolate either factor's effect.
+
+The later Host failure, restart and storage cases remain unqualified. They
+still count a proc-file EACCES denial without exact policy-deny evidence.
+Correct those fixtures before claiming prevention proof. No failed measurement
+may supply their required qualified configuration. Production diagnostics
+remain disabled. No additional performance experiment is approved by this
+record.

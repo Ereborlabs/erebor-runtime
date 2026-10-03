@@ -560,6 +560,52 @@ and initial recovery. It uses the existing declared Python entry. Keep the
 entry-rule check and all measurement checks. No actor source, cadence, policy
 rule, production owner or experiment limit changes.
 
+The two focused checks passed after that change. Each ran one selected test.
+Read `capture-actor-order-focused.log` and `capture-actor-order-guard.log`.
+
+### Corrected five-pair result
+
+The owned VM ran all five pairs at source `2da84412`. All ten runs retained
+1,000 fresh exact policy-deny records. The admission-rule ID was 1, the role ID
+was 3 and the profile generation was 1. Each run had healthy coverage, zero
+unresolved effects and zero enforcement-event loss. All five trace terminals
+reported `Deadline`, complete output and `Verified` cleanup. Trace kernel-loss
+counters remain unknown; this result does not convert them to zero.
+
+| Pair | Trace-off p99, ns | Trace-on p99, ns | Change | 10% gate |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 96,809 | 304,636 | +214.68% | Fail |
+| 2 | 300,123 | 189,412 | -36.89% | Pass |
+| 3 | 175,560 | 215,218 | +22.59% | Fail |
+| 4 | 218,032 | 305,135 | +39.95% | Fail |
+| 5 | 90,385 | 576,320 | +537.63% | Fail |
+
+The test reports 291.05 seconds and returns 101. Configuration validation
+rejects the failed pairs. No qualified configuration was written. Run the
+same VM command above with output `/tmp/araphor-observability-153-pairs-admitted`
+and archive `/var/tmp/araphor-capture-inputs.VMoOpWq2/fixtures-classified.tar.gz`.
+Receipts are `capture-vm153-pairs-admitted.json` and
+`capture-vm153-pairs-admitted-test.log` in the evidence directory above.
+
+The fixture uses the unoptimized test binary and defaults to DEBUG logging.
+Production images use release binaries and default to INFO logging. The
+trace-off values also vary. These facts do not establish the cause of latency
+changes. Do not report the largest measured change as an intrinsic bpftrace
+cost. The approved latency gate failed. Diagnostics stay disabled.
+
+A further performance experiment requires user approval. One proposed run
+changes only the existing `RUST_LOG=info` setting. It keeps the same binary,
+VM, five pairs, workload, ten-minute bound and all pass/fail checks. This run
+has not been approved or executed. Later physical gates still require a real
+qualified configuration; do not create one from the failed measurements.
+
+The later Host failure, restart and storage cases still use the unresolved
+proc-file fixture. Before qualification, use the declared denied file and
+require fresh `EXACT_POLICY_DENY` evidence for each physical denial. EACCES
+and an unchanged program digest are not sufficient. Keep the intentional
+`managed_proc_read_is_denied` case unchanged; that case tests `UNRESOLVED_OBJECT`.
+No later physical lifecycle gate passed at this source. Status: **Not done**.
+
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
 
