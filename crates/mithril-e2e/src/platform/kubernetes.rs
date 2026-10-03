@@ -1902,6 +1902,20 @@ impl Kubernetes {
         Ok(())
     }
 
+    fn capture_library(name: &str) -> bool {
+        name.contains(".so")
+            && name.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+')
+            })
+            && ![
+                "libc.so.6",
+                "libm.so.6",
+                "libgcc_s.so.1",
+                "ld-linux-x86-64.so.2",
+            ]
+            .contains(&name)
+    }
+
     fn capture_bundle() -> TestResult<(PathBuf, Vec<String>)> {
         let directory = fs::canonicalize(KubernetesState::required("MITHRIL_TRACE_RUNTIME")?)?;
         if std::env::consts::ARCH != "x86_64"
@@ -1920,19 +1934,7 @@ impl Kubernetes {
                 .file_name()
                 .into_string()
                 .map_err(|_| "a runtime library name is not UTF-8")?;
-            if !entry.file_type()?.is_file()
-                || !name.contains(".so")
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-                || [
-                    "libc.so.6",
-                    "libm.so.6",
-                    "libgcc_s.so.1",
-                    "ld-linux-x86-64.so.2",
-                ]
-                .contains(&name.as_str())
-            {
+            if !entry.file_type()?.is_file() || !Self::capture_library(&name) {
                 return Err(
                     format!("the runtime bundle has an unsupported library: {name}").into(),
                 );
@@ -2817,6 +2819,28 @@ impl PodCapture {
             },
             _ = tokio::time::sleep(Duration::from_secs(900)) => Err("the Control fixture exceeded its lifetime".into()),
         }
+    }
+}
+
+#[test]
+fn observability_runtime_library_names() {
+    for name in ["libstdc++.so.6", "libLLVM-18.so.1", "libbpf.so.1"] {
+        assert!(Kubernetes::capture_library(name), "{name}");
+    }
+    for name in [
+        "../libstdc++.so.6",
+        "libstdc++.so.6/child",
+        "libstdc++.so.6;command",
+        "libstdc++.so.6\n",
+        "libstdc++.so.6 ",
+        "$(command).so",
+        "bpftrace",
+        "libc.so.6",
+        "libm.so.6",
+        "libgcc_s.so.1",
+        "ld-linux-x86-64.so.2",
+    ] {
+        assert!(!Kubernetes::capture_library(name), "{name}");
     }
 }
 
