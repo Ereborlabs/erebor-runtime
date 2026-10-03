@@ -1162,7 +1162,8 @@ Araphor also syncs local frames and commits uploaded output through Data's
 shared writer/raw locks. That raw path calls `syncfs` on its filesystem.
 [Linux documents the filesystem-wide scope](https://man7.org/linux/man-pages/man2/sync.2.html).
 Do not remove required checks or durable commit to make a measurement pass.
-The log has ten evidence-production intervals, each with 10,000 records.
+The earlier 10,000-operation log has ten evidence-production intervals.
+Each interval has 10,000 records.
 Health-sampling deferrals total 377 plain and 460 Araphor. Reader pending peaks
 are 9 and 8. These counts show no queue exhaustion and do not isolate a cause.
 Do not blame post-capture retained reads or full catalogue projection for
@@ -1173,6 +1174,17 @@ Target validation opens the pinned binding map on each 10-ms turn. Backend
 inspection opens current process status and file-descriptor records on its
 own 10-ms turn. Diagnostic commits share the raw-store locks with enforcement
 uploads. These facts identify possible extra work, not a measured cause.
+
+The fixture measures each Python `os.open` call and its error handling. The
+1-ms sleep follows the timed operation. The fixture sorts 5,000 durations
+and publishes only p99 through the task name. It does not retain individual
+durations or operation timestamps. Host does not record trigger or result
+publication times. Native collection times do not measure the actor loop.
+The current receipts cannot correlate a slow operation with a map read,
+disk sync, lock wait or scheduling delay. Backend compilation and final
+retained-data extraction occur outside the timed operations. A release
+comparison with the same logging and safety checks would isolate build mode.
+This comparison requires approval. No measured cause or fix is claimed.
 The Node RPC wait continues runtime admission; do not claim admission stops
 for the full diagnostic RPC. Plain always precedes Araphor within a pair.
 Sampling starts after each path observes attachment; Araphor also waits for
@@ -1233,7 +1245,42 @@ diagnostic BPF resources, `NodeRestarted`, unknown cleanup and incomplete
 output. Two physical policy denials and recovered enforcement health pass.
 Read `restart-before.json` and the logs in
 `/tmp/araphor-owned-lifecycle.DlPg5O1y`. That run precedes the exact paired
-lightweight route above. The current paired physical routes remain **Not done**.
+lightweight route above.
+
+The current paired routes pass on source `af4b91fe`. They use VM
+`mithril-runtime-qualification-20261002163710`, address `192.168.122.153`,
+and libtest binary `mithril_e2e-69abcc1defdc24e3`. The command is
+`owned.sh BIN ARCHIVE OUTPUT 1 --test-admission MODE`. The archive at
+`/var/tmp/araphor-owned-fault-inputs.qiLXnxP9/fixtures-current.tar.gz` has
+SHA-256 `e45a80566a94034b43e44f23272e59a93cc5c60d9d0c0886a5cf4331da733929`.
+Both harness commands return zero. Both run owned upload and the exact
+lightweight restart case before the physical case.
+
+| Mode | Owned upload, s | Lightweight restart, s | Physical case, s | Retained output |
+| --- | ---: | ---: | ---: | --- |
+| `restart-before` | 17.99 | 1.25 | 61.12 | No frames |
+| `restart-after` | 17.56 | 1.24 | 59.44 | Two frames, 85 bytes |
+
+Both receipts retain `NodeRestarted`, unknown cleanup, incomplete output,
+and unknown trace kernel loss. The after-attachment receipt records programs
+2061 and 2062, maps 1433 to 1435, and no links. An independent inventory
+requires these diagnostic resources to disappear after SIGKILL and before
+fixture shutdown. The recovery checks preserve the accepted request and
+retained prefix. The lightweight case returns the same ACK on replay.
+The physical cases receive the recovered ACK and retain one original
+attachment notification. Recovery does not start another backend.
+Two exact physical policy denials pass in each case. Recovered enforcement
+health is ready, with zero reported loss, unresolved effects, decoder errors,
+evidence errors, queue drops, and WAL capacity failures. Restart gaps remain
+in the recorded coverage history. These results do not prove continuous
+coverage across Node death.
+
+Read `restart.json`, `test.log`, `lightweight.log` and
+`lightweight-restart.log` in the `restart-before-paired` and
+`restart-after-paired` directories under
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. Node restart qualification is **Done**
+for this platform and source. Performance, Pod replacement, the combined
+capture-failure route and native full-store qualification remain **Not done**.
 
 1. Start a reviewed capture against a protected Kubernetes Pod. Replace that
    Pod with the same name. Require the original execution to end with

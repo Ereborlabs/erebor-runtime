@@ -3158,7 +3158,7 @@ paths use the same backend, but only Araphor adds the Rust supervision loops.
 Do not infer release overhead from those numbers. Build mode, the two 10-ms
 checking loops and output durability are investigation candidates, not proven
 causes. The user has been asked to approve release comparison and two boundary
-usage snapshots. Final workspace verification remains pending.
+usage snapshots. The final workspace verification result is recorded below.
 
 For the map-read path, follow
 [TraceTargetLeaseV1::validate](../../../../crates/araphor-observability/src/target.rs)
@@ -3170,6 +3170,15 @@ separately reads process status and current file-descriptor records.
 diagnostic exchange, but its Control RPC wait continues runtime admission.
 Shared raw-store locks can delay uploads. These source facts do not prove
 which path caused the measured protected-open latency.
+
+Read [the latency fixture](../../../../crates/mithril-e2e/fixtures/process/observability.py)
+and [Host::qualify_diagnostics](../../../../crates/mithril-e2e/src/platform/host.rs)
+for the measurement boundary. The fixture times the Python open call and
+error handling, then sleeps. It sorts durations and retains only p99.
+Neither owner retains individual operation timestamps or trigger-to-result
+times. The current receipts cannot identify which operation overlaps a
+disk sync, lock wait or supervision check. Do not infer a cause from whole-run
+log counts or capture-process elapsed time.
 
 For the paired lightweight Node restart case, read
 [ObservabilityQualification::restart_case](../../../../crates/mithril-e2e/src/observability/lifecycle.rs).
@@ -3188,5 +3197,21 @@ Rust and harness edits. Formatting, workspace check, strict Clippy and full
 workspace tests pass. Mithril e2e passes 145 tests, including the new restart
 case, with 413 ignored. Read `workspace-restart-final.log` in
 `/tmp/araphor-owned-lifecycle.DlPg5O1y`. This run covers `e078b77f` plus the
-restart test and harness changes. The current paired physical routes remain
-pending. This workspace pass does not meet the performance gate.
+restart test and harness changes. This workspace pass does not meet the
+performance gate.
+
+Both current paired physical restart routes pass on `af4b91fe` with
+`mithril_e2e-69abcc1defdc24e3` on VM `192.168.122.153`. The before route takes
+61.12 seconds and retains no output. The after route takes 59.44 seconds and
+retains two frames with 85 bytes. Both first pass the exact lightweight
+restart case. Read [the command and receipts](../../araphor-observability/phase-2-owned-capture.md#physical-lifecycle-gates).
+[Host::qualify_restart](../../../../crates/mithril-e2e/src/platform/host.rs)
+sends SIGKILL to the Node process and requires diagnostic BPF resources to
+disappear before fixture cleanup. Reopen preserves accepted identity and
+output. The lightweight case returns the same ACK on replay. The physical
+cases receive the recovered ACK and retain one original attachment
+notification. Recovery does not start another backend. The terminal
+retains unknown cleanup and incomplete output. Two exact physical denials
+and recovered enforcement health pass in each route. Historical restart
+coverage gaps remain. These receipts do not meet the performance gate or
+qualify the other physical failure routes.
