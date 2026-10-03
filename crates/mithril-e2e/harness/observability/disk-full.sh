@@ -30,6 +30,8 @@ fi
 export MITHRIL_TRACE_PROOF="$output/storage.json"
 "$test_binary" observability::tests::observability_owned_upload \
   --exact --nocapture >"$output/lightweight.log" 2>&1
+"$test_binary" control_tls::observability_partition_tls_repair \
+  --exact --nocapture >"$output/lightweight-tls.log" 2>&1
 disk=$(mktemp -d /tmp/araphor-observability-disk-XXXXXXXX)
 mounted=false
 cleanup() {

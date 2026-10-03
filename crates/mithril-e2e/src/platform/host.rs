@@ -850,6 +850,8 @@ impl Host {
             TraceFrameKindV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1, TraceSourceV1,
             TraceTerminalReasonV1, TraceTerminalV1,
         };
+        use std::io;
+        use std::sync::mpsc;
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
         let (test, config) = Self::capture_admission()?;
         let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
@@ -919,220 +921,12 @@ impl Host {
             "output-limit",
             "retirement",
         ] {
-            env.node_ready()?;
-            let mut work = env.work().join(case);
-            fs::create_dir(&work)?;
-            let command = format!("/work/{case}");
-            let mut probe = env.add_actor(
-                "python",
-                &[
-                    "/fixtures/proc_read.py",
-                    &command,
-                    "/fixtures/policy_replace.py",
-                ],
-            )?;
-            probe.ready()?;
-            env.place(probe.id())?;
-            let mut denials = Vec::new();
-            let mut coverage = initial.clone();
-            let request_id = *uuid::Uuid::new_v4().as_bytes();
-            let mut request = TraceRequestV1 {
-                tenant_id: tenant,
-                request_id,
-                source: TraceRecipeV1::FailedOpens.manifest()?.source,
-                targets: vec![target.clone()],
-                unresolved: Vec::new(),
-                collection_seconds: 30,
-            };
-            let mut execution_grant = grant.clone();
-            let approval = if matches!(case, "map-exhaustion" | "output-limit") {
-                request.source = TraceSourceV1::new(if case == "map-exhaustion" {
-                    b"BEGIN { $i = 0; while ($i < 8192) { @full[$i] = 1; $i++; } } interval:s:2 { exit(); }".to_vec()
-                } else {
-                    b"interval:hz:10000 { printf(\"bounded diagnostic output\\n\"); }".to_vec()
-                })?;
-                execution_grant.host_diagnostic = true;
-                access.host_sensitive = true;
-                Some(TraceApprovalV1 {
-                    approval_id: [8; 16],
-                    request_digest: request.digest()?,
-                    grant_digest: DiscoveryDigestV1::of(&execution_grant)?,
-                    valid_until_unix_ns: execution_grant.valid_until_unix_ns,
-                })
-            } else {
-                None
-            };
-            if case == "partition" {
-                env.shared.partition_diagnostics(true)?;
-            }
-            let resources = ResourceSnapshot::read()?;
-            control.accept_trace(request, execution_grant, approval)?;
-            let (_, accepted) = owner.read(tenant, request_id, &access, now()?)?;
-            let id = accepted.execution_id(0)?;
-            let spool = env.shared.diagnostic_spool(id);
-            let mut release_at = None;
-            if case == "partition" {
-                let deadline = Instant::now() + Duration::from_secs(25);
-                while Instant::now() < deadline {
-                    assert!(
-                        !spool.exists(),
-                        "partition dispatched before transport repair"
-                    );
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                assert!(
-                    !spool.exists(),
-                    "partition dispatched during the initial hold"
-                );
-                release_at = Some((Instant::now(), now()?));
-                env.shared.partition_diagnostics(false)?;
-            }
-            let mut frames = Vec::new();
-            let mut after = 0;
-            let deadline = Instant::now() + Duration::from_secs(15);
-            loop {
-                for batch in owner.output(tenant, request_id, 0, &access, now()?, after)? {
-                    for frame in batch.frames {
-                        after = frame.sequence;
-                        frames.push(frame);
-                    }
-                }
-                if frames.iter().any(|frame: &mithril_control::TraceFrameV1| {
-                    frame.kind == TraceFrameKindV1::Diagnostic
-                        && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
-                }) {
-                    break;
-                }
-                if Instant::now() >= deadline {
-                    return Err(format!("{case}: attachment absent: {frames:?}").into());
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            let attached = ResourceSnapshot::read()?;
-            assert!(resources.programs.is_subset(&attached.programs));
-            assert!(resources.maps.is_subset(&attached.maps));
-            assert!(resources.links.is_subset(&attached.links));
-            let programs = attached
-                .programs
-                .difference(&resources.programs)
-                .copied()
-                .collect::<Vec<_>>();
-            let maps = attached
-                .maps
-                .difference(&resources.maps)
-                .copied()
-                .collect::<Vec<_>>();
-            let links = attached
-                .links
-                .difference(&resources.links)
-                .copied()
-                .collect::<Vec<_>>();
-            assert!(
-                !programs.is_empty(),
-                "{case}: attachment has no observed diagnostic BPF programs"
-            );
-            let original_pid = probe.id();
-            match case {
-                "partition" => env.shared.partition_diagnostics(true)?,
-                "revocation" => {
-                    owner.cancel(tenant, request_id, "qualification", true)?;
-                    assert!(owner
-                        .output(tenant, request_id, 0, &access, now()?, after)
-                        .is_err());
-                }
-                "retirement" => {
-                    denials.push(env.capture_denial(
-                        &mut probe,
-                        &work,
-                        &coverage,
-                        "diagnostic retirement denial",
-                    )?);
-                    coverage = env.snapshot()?;
-                    fs::write(work.join("release"), b"release")?;
-                    probe.stop()?;
-                    init.stop()?;
-                    env.shared.retire_diagnostic_runtime()?;
-                }
-                _ => {}
-            }
-            let deadline = Instant::now()
-                + Duration::from_nanos(accepted.deadline_unix_ns.saturating_sub(now()?))
-                + Duration::from_secs(7);
-            let terminal: TraceTerminalV1 = loop {
-                match fs::read(spool.join("terminal.json")) {
-                    Ok(bytes) => {
-                        if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
-                            break serde_json::from_slice(&bytes[..end])?;
-                        }
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
-                if Instant::now() >= deadline {
-                    return Err(format!("{case}: local terminal absent").into());
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            };
-            let expected = match case {
-                "partition" => TraceTerminalReasonV1::Deadline,
-                "revocation" => TraceTerminalReasonV1::Cancelled,
-                "retirement" => TraceTerminalReasonV1::TargetChanged,
-                _ => TraceTerminalReasonV1::Completed,
-            };
-            if case == "output-limit" {
-                assert!(matches!(
-                    terminal.reason,
-                    TraceTerminalReasonV1::ConsumerSlow | TraceTerminalReasonV1::OutputLimit
-                ));
-                assert!(terminal.output_incomplete);
-            } else {
-                assert_eq!(terminal.reason, expected);
-            }
-            assert_eq!(terminal.cleanup, TraceCleanupV1::Verified);
-            assert_eq!(terminal.execution_id, id);
-            assert!(terminal.kernel_lost_events.is_none());
-            let terminal_at = now()?;
-            let cleanup_limit = Instant::now() + Duration::from_secs(10);
-            loop {
-                let current = ResourceSnapshot::read()?;
-                assert!(resources.programs.is_subset(&current.programs));
-                assert!(resources.maps.is_subset(&current.maps));
-                assert!(resources.links.is_subset(&current.links));
-                if current == resources {
-                    break;
-                }
-                if Instant::now() >= cleanup_limit {
-                    return Err(format!("{case}: diagnostic resources survived local stop").into());
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            let pending = if let Some((released, stamp)) = release_at {
-                assert!(stamp > accepted.accepted_unix_ns + 15_000_000_000);
-                assert!(terminal_at >= accepted.deadline_unix_ns);
-                assert!(
-                    Instant::now()
-                        < released
-                            + Duration::from_secs(accepted.request.collection_seconds.into()),
-                    "partition reached the backend collection timeout"
-                );
-                assert!(terminal.output_incomplete);
-                assert!(!spool.join("ack.json").exists());
-                assert!(owner
-                    .output(tenant, request_id, 0, &access, now()?, after)?
-                    .is_empty());
-                let pending = Self::capture_frames(&spool)?;
-                assert!(pending.starts_with(&frames));
-                assert_eq!(pending.len() as u64, terminal.last_sequence);
-                Some(pending)
-            } else {
-                None
-            };
-            if case == "retirement" {
-                init = env.start_actor("ready.py", &[], &labels)?;
-                env.place(init.id())?;
-                work = env.work().join(case);
+            std::thread::scope(|scope| -> TestResult<()> {
+                env.node_ready()?;
+                let mut work = env.work().join(case);
                 fs::create_dir(&work)?;
-                probe = env.add_actor(
+                let command = format!("/work/{case}");
+                let mut probe = env.add_actor(
                     "python",
                     &[
                         "/fixtures/proc_read.py",
@@ -1142,82 +936,326 @@ impl Host {
                 )?;
                 probe.ready()?;
                 env.place(probe.id())?;
-                coverage = env.capture_recovery(&coverage)?;
-            }
-            denials.push(env.capture_denial(
-                &mut probe,
-                &work,
-                &coverage,
-                "diagnostic failure denial",
-            )?);
-            let (_, protected) = env.shared.diagnostic_context()?;
-            if case == "retirement" {
-                assert_ne!(protected.pod_uid, target.fact.pod_uid);
-                assert_ne!(protected.container_id, target.fact.container_id);
-            }
-            if case == "partition" {
-                assert!(!spool.join("ack.json").exists());
-                env.shared.partition_diagnostics(false)?;
-            }
-            let deadline = Instant::now() + Duration::from_secs(50);
-            while !spool.join("ack.json").exists() {
-                if Instant::now() >= deadline {
-                    return Err(format!("{case}: terminal was not acknowledged").into());
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            let ack: TraceTerminalV1 = serde_json::from_slice(&fs::read(spool.join("ack.json"))?)?;
-            assert_eq!(ack, terminal);
-            if case != "revocation" {
-                let mut replay = Vec::new();
-                let mut cursor = 0;
-                let mut retained = None;
-                while retained.is_none() {
-                    let batches = owner.output(tenant, request_id, 0, &access, now()?, cursor)?;
-                    assert!(!batches.is_empty(), "the retained terminal is absent");
-                    for batch in batches {
-                        for frame in batch.frames {
-                            assert_eq!(frame.execution_id, id);
-                            assert_eq!(frame.sequence, cursor + 1);
-                            cursor = frame.sequence;
-                            replay.push(frame);
-                        }
-                        retained = batch.terminal.or(retained);
-                    }
-                }
-                assert_eq!(retained, Some(terminal.clone()));
-                assert!(replay.starts_with(&frames));
-                assert_eq!(cursor, terminal.last_sequence);
-                if let Some(pending) = pending {
-                    assert_eq!(replay, pending);
-                }
-                assert_eq!(
-                    replay
-                        .iter()
-                        .filter(|frame| {
-                            frame.kind == TraceFrameKindV1::Diagnostic
-                                && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
-                        })
-                        .count(),
-                    1
-                );
-                let (_, retained) = owner.read(tenant, request_id, &access, now()?)?;
-                assert_eq!(retained, accepted);
-                frames = replay;
-            }
-            if case == "map-exhaustion" {
-                let size = frames
-                    .iter()
-                    .filter_map(|frame| {
-                        serde_json::from_slice::<serde_json::Value>(&frame.bytes).ok()
+                let mut denials = Vec::new();
+                let mut coverage = initial.clone();
+                let request_id = *uuid::Uuid::new_v4().as_bytes();
+                let mut request = TraceRequestV1 {
+                    tenant_id: tenant,
+                    request_id,
+                    source: TraceRecipeV1::FailedOpens.manifest()?.source,
+                    targets: vec![target.clone()],
+                    unresolved: Vec::new(),
+                    collection_seconds: 30,
+                };
+                let mut execution_grant = grant.clone();
+                let approval = if matches!(case, "map-exhaustion" | "output-limit") {
+                    request.source = TraceSourceV1::new(if case == "map-exhaustion" {
+                        b"BEGIN { $i = 0; while ($i < 8192) { @full[$i] = 1; $i++; } } interval:s:2 { exit(); }".to_vec()
+                    } else {
+                        b"interval:hz:10000 { printf(\"bounded diagnostic output\\n\"); }".to_vec()
+                    })?;
+                    execution_grant.host_diagnostic = true;
+                    access.host_sensitive = true;
+                    Some(TraceApprovalV1 {
+                        approval_id: [8; 16],
+                        request_digest: request.digest()?,
+                        grant_digest: DiscoveryDigestV1::of(&execution_grant)?,
+                        valid_until_unix_ns: execution_grant.valid_until_unix_ns,
                     })
-                    .filter_map(|value| value["data"]["@full"].as_object().map(|map| map.len()))
-                    .max();
-                assert_eq!(size, Some(4096));
-                assert!(accepted.recipe.is_none());
-            }
-            assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
-            records.push(serde_json::json!({
+                } else {
+                    None
+                };
+                if case == "partition" {
+                    env.shared.partition_diagnostics(true)?;
+                }
+                let resources = ResourceSnapshot::read()?;
+                let mut release_at = None;
+                let mut frames = Vec::new();
+                let mut after = 0;
+                let original_pid = probe.id();
+                let (stop, input) = mpsc::sync_channel::<()>(0);
+                let baseline = resources.clone();
+                let limit = Instant::now() + Duration::from_secs(25 + 15 + 30 + 7);
+                let worker = scope.spawn(move || -> io::Result<ResourceSnapshot> {
+                    let mut observed = ResourceSnapshot {
+                        programs: Default::default(),
+                        maps: Default::default(),
+                        links: Default::default(),
+                    };
+                    loop {
+                        if Instant::now() >= limit {
+                            return Err(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                format!("{case}: resource observation exceeded its bound"),
+                            ));
+                        }
+                        let current = ResourceSnapshot::read()
+                            .map_err(|error| io::Error::other(error.to_string()))?;
+                        if !baseline.programs.is_subset(&current.programs)
+                            || !baseline.maps.is_subset(&current.maps)
+                            || !baseline.links.is_subset(&current.links)
+                        {
+                            return Err(io::Error::other(format!(
+                                "{case}: enforcement resources disappeared"
+                            )));
+                        }
+                        observed
+                            .programs
+                            .extend(current.programs.difference(&baseline.programs).copied());
+                        observed
+                            .maps
+                            .extend(current.maps.difference(&baseline.maps).copied());
+                        observed
+                            .links
+                            .extend(current.links.difference(&baseline.links).copied());
+                        match input.recv_timeout(Duration::from_millis(20)) {
+                            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                return Ok(observed)
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        }
+                    }
+                });
+                control.accept_trace(request, execution_grant, approval)?;
+                let (_, accepted) = owner.read(tenant, request_id, &access, now()?)?;
+                let id = accepted.execution_id(0)?;
+                let spool = env.shared.diagnostic_spool(id);
+                if case == "partition" {
+                    let deadline = Instant::now() + Duration::from_secs(25);
+                    while Instant::now() < deadline {
+                        assert!(
+                            !spool.exists(),
+                            "partition dispatched before transport repair"
+                        );
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    assert!(
+                        !spool.exists(),
+                        "partition dispatched during the initial hold"
+                    );
+                    release_at = Some((Instant::now(), now()?));
+                    env.shared.partition_diagnostics(false)?;
+                }
+                let deadline = Instant::now() + Duration::from_secs(15);
+                loop {
+                    for batch in owner.output(tenant, request_id, 0, &access, now()?, after)? {
+                        for frame in batch.frames {
+                            after = frame.sequence;
+                            frames.push(frame);
+                        }
+                    }
+                    if frames.iter().any(|frame: &mithril_control::TraceFrameV1| {
+                        frame.kind == TraceFrameKindV1::Diagnostic
+                            && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
+                    }) {
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(format!("{case}: attachment absent: {frames:?}").into());
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                match case {
+                    "partition" => env.shared.partition_diagnostics(true)?,
+                    "revocation" => {
+                        owner.cancel(tenant, request_id, "qualification", true)?;
+                        assert!(owner
+                            .output(tenant, request_id, 0, &access, now()?, after)
+                            .is_err());
+                    }
+                    "retirement" => {
+                        denials.push(env.capture_denial(
+                            &mut probe,
+                            &work,
+                            &coverage,
+                            "diagnostic retirement denial",
+                        )?);
+                        coverage = env.snapshot()?;
+                        fs::write(work.join("release"), b"release")?;
+                        probe.stop()?;
+                        init.stop()?;
+                        env.shared.retire_diagnostic_runtime()?;
+                    }
+                    _ => {}
+                }
+                let deadline = Instant::now()
+                    + Duration::from_nanos(accepted.deadline_unix_ns.saturating_sub(now()?))
+                    + Duration::from_secs(7);
+                let terminal: TraceTerminalV1 = loop {
+                    match fs::read(spool.join("terminal.json")) {
+                        Ok(bytes) => {
+                            if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+                                break serde_json::from_slice(&bytes[..end])?;
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(format!("{case}: local terminal absent").into());
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                };
+                let expected = match case {
+                    "partition" => TraceTerminalReasonV1::Deadline,
+                    "revocation" => TraceTerminalReasonV1::Cancelled,
+                    "retirement" => TraceTerminalReasonV1::TargetChanged,
+                    _ => TraceTerminalReasonV1::Completed,
+                };
+                if case == "output-limit" {
+                    assert!(matches!(
+                        terminal.reason,
+                        TraceTerminalReasonV1::ConsumerSlow | TraceTerminalReasonV1::OutputLimit
+                    ));
+                    assert!(terminal.output_incomplete);
+                } else {
+                    assert_eq!(terminal.reason, expected);
+                }
+                assert_eq!(terminal.cleanup, TraceCleanupV1::Verified);
+                assert_eq!(terminal.execution_id, id);
+                assert!(terminal.kernel_lost_events.is_none());
+                let terminal_at = now()?;
+                drop(stop);
+                let observed = worker.join().map_err(|_| {
+                    io::Error::other(format!("{case}: resource observer panicked"))
+                })??;
+                let programs = observed.programs.into_iter().collect::<Vec<_>>();
+                let maps = observed.maps.into_iter().collect::<Vec<_>>();
+                let links = observed.links.into_iter().collect::<Vec<_>>();
+                assert!(
+                    !programs.is_empty(),
+                    "{case}: attachment has no observed diagnostic BPF programs"
+                );
+                let cleanup_limit = Instant::now() + Duration::from_secs(10);
+                loop {
+                    let current = ResourceSnapshot::read()?;
+                    assert!(resources.programs.is_subset(&current.programs));
+                    assert!(resources.maps.is_subset(&current.maps));
+                    assert!(resources.links.is_subset(&current.links));
+                    if current == resources {
+                        break;
+                    }
+                    if Instant::now() >= cleanup_limit {
+                        return Err(
+                            format!("{case}: diagnostic resources survived local stop").into()
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let pending = if let Some((released, stamp)) = release_at {
+                    assert!(stamp > accepted.accepted_unix_ns + 15_000_000_000);
+                    assert!(terminal_at >= accepted.deadline_unix_ns);
+                    assert!(
+                        Instant::now()
+                            < released
+                                + Duration::from_secs(accepted.request.collection_seconds.into()),
+                        "partition reached the backend collection timeout"
+                    );
+                    assert!(terminal.output_incomplete);
+                    assert!(!spool.join("ack.json").exists());
+                    assert!(owner
+                        .output(tenant, request_id, 0, &access, now()?, after)?
+                        .is_empty());
+                    let pending = Self::capture_frames(&spool)?;
+                    assert!(pending.starts_with(&frames));
+                    assert_eq!(pending.len() as u64, terminal.last_sequence);
+                    Some(pending)
+                } else {
+                    None
+                };
+                if case == "retirement" {
+                    init = env.start_actor("ready.py", &[], &labels)?;
+                    env.place(init.id())?;
+                    work = env.work().join(case);
+                    fs::create_dir(&work)?;
+                    probe = env.add_actor(
+                        "python",
+                        &[
+                            "/fixtures/proc_read.py",
+                            &command,
+                            "/fixtures/policy_replace.py",
+                        ],
+                    )?;
+                    probe.ready()?;
+                    env.place(probe.id())?;
+                    coverage = env.capture_recovery(&coverage)?;
+                }
+                denials.push(env.capture_denial(
+                    &mut probe,
+                    &work,
+                    &coverage,
+                    "diagnostic failure denial",
+                )?);
+                let (_, protected) = env.shared.diagnostic_context()?;
+                if case == "retirement" {
+                    assert_ne!(protected.pod_uid, target.fact.pod_uid);
+                    assert_ne!(protected.container_id, target.fact.container_id);
+                }
+                if case == "partition" {
+                    assert!(!spool.join("ack.json").exists());
+                    env.shared.partition_diagnostics(false)?;
+                }
+                let deadline = Instant::now() + Duration::from_secs(50);
+                while !spool.join("ack.json").exists() {
+                    if Instant::now() >= deadline {
+                        return Err(format!("{case}: terminal was not acknowledged").into());
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let ack: TraceTerminalV1 =
+                    serde_json::from_slice(&fs::read(spool.join("ack.json"))?)?;
+                assert_eq!(ack, terminal);
+                if case != "revocation" {
+                    let mut replay = Vec::new();
+                    let mut cursor = 0;
+                    let mut retained = None;
+                    while retained.is_none() {
+                        let batches =
+                            owner.output(tenant, request_id, 0, &access, now()?, cursor)?;
+                        assert!(!batches.is_empty(), "the retained terminal is absent");
+                        for batch in batches {
+                            for frame in batch.frames {
+                                assert_eq!(frame.execution_id, id);
+                                assert_eq!(frame.sequence, cursor + 1);
+                                cursor = frame.sequence;
+                                replay.push(frame);
+                            }
+                            retained = batch.terminal.or(retained);
+                        }
+                    }
+                    assert_eq!(retained, Some(terminal.clone()));
+                    assert!(replay.starts_with(&frames));
+                    assert_eq!(cursor, terminal.last_sequence);
+                    if let Some(pending) = pending {
+                        assert_eq!(replay, pending);
+                    }
+                    assert_eq!(
+                        replay
+                            .iter()
+                            .filter(|frame| {
+                                frame.kind == TraceFrameKindV1::Diagnostic
+                                    && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
+                            })
+                            .count(),
+                        1
+                    );
+                    let (_, retained) = owner.read(tenant, request_id, &access, now()?)?;
+                    assert_eq!(retained, accepted);
+                    frames = replay;
+                }
+                if case == "map-exhaustion" {
+                    let size = frames
+                        .iter()
+                        .filter_map(|frame| {
+                            serde_json::from_slice::<serde_json::Value>(&frame.bytes).ok()
+                        })
+                        .filter_map(|value| value["data"]["@full"].as_object().map(|map| map.len()))
+                        .max();
+                    assert_eq!(size, Some(4096));
+                    assert!(accepted.recipe.is_none());
+                }
+                assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
+                records.push(serde_json::json!({
                 "diagnostic_admission": if test { "synthetic-test-only" } else { "qualified-config" },
                 "performance_qualified": false, "performance_claim": false,
                 "case": case, "accepted": accepted, "frames": frames, "terminal": terminal,
@@ -1239,9 +1277,11 @@ impl Host {
                 "physical_denial_target": protected,
                 "physical_denial_pid": probe.id(), "physical_denial_errno": libc::EACCES,
             }));
-            fs::write(&proof, serde_json::to_vec_pretty(&records)?)?;
-            fs::write(work.join("release"), b"release")?;
-            probe.stop()?;
+                fs::write(&proof, serde_json::to_vec_pretty(&records)?)?;
+                fs::write(work.join("release"), b"release")?;
+                probe.stop()?;
+                Ok(())
+            })?;
         }
         fs::write(env.work().join("release"), b"release")?;
         init.stop()?;

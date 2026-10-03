@@ -47,6 +47,10 @@ if (($# >= 5)); then
   "$test_binary" observability::tests::observability_owned_upload \
     --exact --nocapture >"$output/lightweight.log" 2>&1
 fi
+if (($# == 5)); then
+  "$test_binary" control_tls::observability_partition_tls_repair \
+    --exact --nocapture >"$output/lightweight-tls.log" 2>&1
+fi
 if (($# == 6)); then
   "$test_binary" observability::lifecycle::tests::observability_owned_restart \
     --exact --nocapture >"$output/lightweight-restart.log" 2>&1

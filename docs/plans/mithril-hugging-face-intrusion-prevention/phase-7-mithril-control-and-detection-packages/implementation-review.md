@@ -3293,3 +3293,17 @@ The exact `observability_owned_upload` test passes all eleven cases in
 24.70 seconds on `9427c92d` plus this test change. Read
 `owned-eleven-focused.log` in `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
 Formatting passes. Final workspace CI and physical observer proof remain due.
+
+[Host::qualify_diagnostic_failures](../../../../crates/mithril-e2e/src/platform/host.rs)
+now starts an ID-only resource observer before dispatch. Each 20-ms sample
+checks baseline IDs and retains new IDs. A scoped thread and stop channel
+bound its lifetime. The observer joins after local terminal state and before
+the final exact inventory comparison. The real attach notification and
+nonempty new program IDs remain required. A missed lifetime is a failure.
+The fault and full-disk harnesses first run the exact TLS repair regression.
+The performance route and production owners do not change.
+The eleven-case owner proof passes in 24.68 seconds on `b9b01888` plus the
+observer and harness change. The TLS repair regression, formatting and both
+harness syntax checks pass. Read `observer-owner-focused.log` and
+`observer-tls-focused.log` in `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+Final workspace CI and physical qualification remain due.

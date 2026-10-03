@@ -1305,6 +1305,21 @@ The exact test passes in 24.70 seconds on `9427c92d` plus this test change.
 Read `owned-eleven-focused.log` in the same evidence directory. Formatting
 passes. Final workspace CI and the corrected physical observer remain due.
 
+`Host::qualify_diagnostic_failures` now samples BPF resource IDs before
+dispatch through local terminal state. The scoped thread uses the existing
+20-ms interval and a 77-second bound from the case's current time limits.
+Each sample checks baseline IDs. The observer joins before the final exact
+inventory comparison. A real retained attach notification and nonempty new
+program IDs remain required. A missed short lifetime fails qualification.
+The source, output limits and production owners do not change.
+The existing fault and full-disk harnesses now run the exact lightweight
+TLS repair case before their physical case. The performance route does not
+change. The final observer source passes the eleven-case owner test in
+24.68 seconds and the TLS repair test. Read `observer-owner-focused.log` and
+`observer-tls-focused.log` in the same evidence directory. Formatting and
+both harness syntax checks pass. Final workspace CI and physical proof remain
+due on `b9b01888` plus this observer and harness change.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current
