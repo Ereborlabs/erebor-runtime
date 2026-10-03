@@ -72,6 +72,7 @@ impl Host {
 
     #[cfg(test)]
     fn qualify_storage() -> TestResult<()> {
+        use crate::observability::ResourceSnapshot;
         use araphor_data::AnalysisCommitStage;
         use mithril_control::{
             TraceBatchV1, TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1,
@@ -244,6 +245,7 @@ impl Host {
         let live = env.snapshot()?;
         let (connector, registration) = env.shared.diagnostic_connector(&live)?;
         env.shared.partition_diagnostics(true)?;
+        let baseline = ResourceSnapshot::read()?;
         fs::write(env.shared.output().join("trace-store.release"), b"release")?;
         let deadline = Instant::now() + Duration::from_secs(15);
         let frames = loop {
@@ -264,6 +266,29 @@ impl Host {
         assert!(accepted.deadline_unix_ns < attached + 30_000_000_000);
         assert!(!spool.join("terminal.json").exists());
         assert_eq!(data.trace_receipt(&identity)?, before);
+        let resources = ResourceSnapshot::read()?;
+        assert!(baseline.programs.is_subset(&resources.programs));
+        assert!(baseline.maps.is_subset(&resources.maps));
+        assert!(baseline.links.is_subset(&resources.links));
+        let programs = resources
+            .programs
+            .difference(&baseline.programs)
+            .copied()
+            .collect::<Vec<_>>();
+        let maps = resources
+            .maps
+            .difference(&baseline.maps)
+            .copied()
+            .collect::<Vec<_>>();
+        let links = resources
+            .links
+            .difference(&baseline.links)
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(
+            !programs.is_empty(),
+            "the attach marker has no observed diagnostic BPF programs"
+        );
         let frame = frames.first().ok_or("the Node output is empty")?.clone();
         frame.validate()?;
         assert_eq!(frame.execution_id, id);
@@ -368,6 +393,20 @@ impl Host {
         assert_eq!(terminal.cleanup, TraceCleanupV1::Verified);
         assert_eq!(terminal.execution_id, id);
         assert!(terminal.output_incomplete && terminal.kernel_lost_events.is_none());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let current = ResourceSnapshot::read()?;
+            assert!(baseline.programs.is_subset(&current.programs));
+            assert!(baseline.maps.is_subset(&current.maps));
+            assert!(baseline.links.is_subset(&current.links));
+            if current == baseline {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err("diagnostic resources survived local expiry".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let frames = Self::capture_frames(&spool)?;
         for (index, frame) in frames.iter().enumerate() {
             frame.validate()?;
@@ -487,6 +526,9 @@ impl Host {
                 "raw_receipt_before_replay": recovered_receipt.last_sequence,
                 "frames": output, "terminal": terminal, "acknowledgement": acknowledgement,
                 "attached_unix_ns": attached, "dispatch_delay_seconds": 20,
+                "observed_programs": programs, "observed_maps": maps, "observed_links": links,
+                "cleanup_observed_before_node_stop": true,
+                "enforcement_resources_unchanged": true,
                 "frame_upload_ack_on_failure": false, "physical_denials": denials.len(),
                 "denial_events": denials,
                 "enforcement_before_restart": Self::capture_evidence(&stopped),
@@ -802,6 +844,7 @@ impl Host {
 
     #[cfg(test)]
     fn qualify_diagnostic_failures() -> TestResult<()> {
+        use crate::observability::ResourceSnapshot;
         use mithril_control::{
             DiscoveryDigestV1, TraceApprovalV1, TraceCleanupV1, TraceExecutionGrantV1,
             TraceFrameKindV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1, TraceSourceV1,
@@ -922,6 +965,7 @@ impl Host {
             if case == "partition" {
                 env.shared.partition_diagnostics(true)?;
             }
+            let resources = ResourceSnapshot::read()?;
             control.accept_trace(request, execution_grant, approval)?;
             let (_, accepted) = owner.read(tenant, request_id, &access, now()?)?;
             let id = accepted.execution_id(0)?;
@@ -964,6 +1008,29 @@ impl Host {
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
+            let attached = ResourceSnapshot::read()?;
+            assert!(resources.programs.is_subset(&attached.programs));
+            assert!(resources.maps.is_subset(&attached.maps));
+            assert!(resources.links.is_subset(&attached.links));
+            let programs = attached
+                .programs
+                .difference(&resources.programs)
+                .copied()
+                .collect::<Vec<_>>();
+            let maps = attached
+                .maps
+                .difference(&resources.maps)
+                .copied()
+                .collect::<Vec<_>>();
+            let links = attached
+                .links
+                .difference(&resources.links)
+                .copied()
+                .collect::<Vec<_>>();
+            assert!(
+                !programs.is_empty(),
+                "{case}: attachment has no observed diagnostic BPF programs"
+            );
             let original_pid = probe.id();
             match case {
                 "partition" => env.shared.partition_diagnostics(true)?,
@@ -1025,6 +1092,20 @@ impl Host {
             assert_eq!(terminal.execution_id, id);
             assert!(terminal.kernel_lost_events.is_none());
             let terminal_at = now()?;
+            let cleanup_limit = Instant::now() + Duration::from_secs(10);
+            loop {
+                let current = ResourceSnapshot::read()?;
+                assert!(resources.programs.is_subset(&current.programs));
+                assert!(resources.maps.is_subset(&current.maps));
+                assert!(resources.links.is_subset(&current.links));
+                if current == resources {
+                    break;
+                }
+                if Instant::now() >= cleanup_limit {
+                    return Err(format!("{case}: diagnostic resources survived local stop").into());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let pending = if let Some((released, stamp)) = release_at {
                 assert!(stamp > accepted.accepted_unix_ns + 15_000_000_000);
                 assert!(terminal_at >= accepted.deadline_unix_ns);
@@ -1141,6 +1222,9 @@ impl Host {
                 "performance_qualified": false, "performance_claim": false,
                 "case": case, "accepted": accepted, "frames": frames, "terminal": terminal,
                 "acknowledgement": ack,
+                "observed_programs": programs, "observed_maps": maps, "observed_links": links,
+                "cleanup_observed_before_node_stop": true,
+                "enforcement_resources_unchanged": true,
                 "transport_released_unix_ns": release_at.map(|(_, stamp)| stamp),
                 "terminal_observed_unix_ns": terminal_at,
                 "backend_collection_floor_unix_ns": release_at.map(|(_, stamp)| {

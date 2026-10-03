@@ -1217,6 +1217,26 @@ in the existing test output. Do not create a separate review-report family.
 
 ## Physical lifecycle gates
 
+The current `observability::tests::observability_owned_upload` case passes
+ten Node-owner cases in 24.18 seconds. Run
+`cargo test -p mithril-e2e --all-features --lib observability::tests::observability_owned_upload -- --exact --nocapture`.
+Read `owned-ten-cases-final.log` in `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+The added cases cover revoked reads with terminal upload, a supplied 4096-key
+map result, supervised output overflow, binding removal with a new lifetime,
+and native segment creation failure before sync. The native case changes the
+configured evidence-directory input. It gets `ENOTDIR`, no ACK and no sync.
+Retry sees an unready writer. Reopen has zero progress and accepts exact replay.
+The map fixture does not prove kernel saturation. Attach notifications are
+simulated. These cases do not prove physical BPF cleanup or enforcement.
+
+`Host::qualify_diagnostic_failures` now observes BPF program, map and link IDs
+before dispatch and after attachment. Each case must restore that inventory
+before Node shutdown. Baseline enforcement IDs must remain. The native
+full-store case has the same independent cleanup check before Node shutdown.
+Both use the existing `ResourceSnapshot` owner. No production owner changes.
+Paired physical results and final workspace verification remain **Not done**
+for these test changes. Performance parity remains **Not done**.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current

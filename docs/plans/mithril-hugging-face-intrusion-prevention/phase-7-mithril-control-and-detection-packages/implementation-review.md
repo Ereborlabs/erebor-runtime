@@ -3215,3 +3215,23 @@ retains unknown cleanup and incomplete output. Two exact physical denials
 and recovered enforcement health pass in each route. Historical restart
 coverage gaps remain. These receipts do not meet the performance gate or
 qualify the other physical failure routes.
+
+The current `ObservabilityQualification::owned_node` proof has ten cases.
+The exact `observability_owned_upload` regression passes in 24.18 seconds.
+Read `owned-ten-cases-final.log` in `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+The new cases call the existing Control, Node, Data and Interceptor owners.
+Revocation denies reads but still accepts terminal upload and exact ACK replay.
+The map result is an external 4096-key input, not kernel saturation proof.
+The supervisor stops oversized output. A removed binding stops the old
+execution; a new target has a separate signed request, lease and execution.
+The native pre-sync case uses `ControlConfig::evidence_directory` for its
+segment path. The input hook returns success; real file creation returns
+`ENOTDIR`. No sync or ACK occurs. Retry returns `DataLoss`, and reopen has
+zero progress before exact upload replay. This is not an ENOSPC test.
+
+Read `Host::qualify_diagnostic_failures` and `Host::qualify_storage` for the
+new physical cleanup assertions. Both use `ResourceSnapshot` to retain
+baseline BPF IDs, observe diagnostic IDs and require their removal before
+Node shutdown. A terminal cleanup field alone cannot satisfy these checks.
+The physical routes and final workspace CI remain **Not done** for the
+current test changes. No production source, dependency or runner is added.
