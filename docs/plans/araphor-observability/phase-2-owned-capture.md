@@ -1554,7 +1554,7 @@ Resume resource scans during shutdown.
 
 | Role | Kernel type | Kernel name | Key/value bytes | Capacity |
 | --- | --- | --- | --- | ---: |
-| Open-exit probe | Tracepoint | `tracepoint_sysc` | Not applicable | Not applicable |
+| Open-exit probe | Tracepoint | `sys_exit_openat` | Not applicable | Not applicable |
 | Print interval | Perf event | `1` | Not applicable | Not applicable |
 | Error count | Per-CPU hash | `AT_errors` | 8/8 | 4096 |
 | Output buffer | Ring buffer | `ringbuf` | 0/0 | 32768 |
@@ -1563,6 +1563,10 @@ Resume resource scans during shutdown.
 Map flags are zero. Program names in this table are kernel names, not longer
 names from debug information. A different supported backend can retain
 continuous scanning; the static path is not required for capture correctness.
+Use the name from `bpf_prog_info.name`. The reviewed backend removes the
+prefix through the last colon before `bpf_prog_load`. The kernel name is
+`sys_exit_openat`. The full BTF function name is not this field. Read
+[the backend naming code](https://github.com/bpftrace/bpftrace/blob/v0.20.2/src/attached_probe.cpp#L679).
 
 For a verified static inventory, remove repeated collection-time resource
 reads. The reviewed script and backend create no later BPF resources.
@@ -1623,6 +1627,30 @@ Read `comparison-rerun/capture-pairs.json` and `comparison-rerun/test.log`
 under `/tmp/araphor-static-inventory.GOQgpiAI`. The guest output is
 `/tmp/araphor-observability-153-static-rerun-20261003-5000`.
 Use the existing CPU and scheduler attribution before another change.
+
+The next instrumented pair on `6005773e` records plain p99 321,849 ns and
+Araphor p99 389,701 ns: +67,852 ns, or +21.081936%. Both runs retain 5,000
+exact denials, zero reported enforcement loss and verified cleanup. These
+timings do not qualify parity. The exact p99 calls include 280,292 ns and
+321,543 ns of runnable wait. All 22 calls at p99 and five ranks on each side
+have no same-CPU trace-supervisor or trace-worker overlap. Shared Node and
+kernel work accounts for their wait. This does not exclude indirect trace
+load. The supervisor still makes 13,536 matched preads in the Araphor actor
+window, including zero-duration records. The static path does not activate.
+Read `analysis.json`, `cpu-analysis.json` and retained actor records in
+`/tmp/araphor-static-profile.IT3ct7mZ`. Retain the CPU recorder's 2,304-event
+ordering warning and the 51 plain/two Araphor CPU-greater-than-wall records.
+
+A native check of the exact backend and source finds kernel program names
+`sys_exit_openat` and `1`. Both post-marker snapshots have valid records,
+two unique programs and three maps with the required layouts. The child
+exits zero; all five IDs disappear. Read `snapshot.json` in
+`/tmp/araphor-native-fdinfo.PpH66zk2`. The native name corrects the private
+role check and table above. The regression rejects both misleading BTF-name
+forms. All 23 focused backend tests pass in 31.61 seconds. Owned upload passes
+in 24.84 seconds. Independent review finds no must-fix issue. Physical
+activation, the unchanged five-pair
+comparison and final workspace CI after this correction remain **Not done**.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new

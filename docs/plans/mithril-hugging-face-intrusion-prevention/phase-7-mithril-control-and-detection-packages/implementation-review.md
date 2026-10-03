@@ -3457,6 +3457,13 @@ not qualify p99 parity. The unprofiled comparison and final CI remain open.
 -> [StaticResources::verify](../../../../crates/erebor-interceptor/src/diagnostic.rs) opens each current object by ID and checks the two program roles and three map layouts through libbpf-rs.
 -> [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) stops repeated resource reads only after complete verification and closes cached proc handles.
 
+`program_role` requires the native `bpf_prog_info.name`, `sys_exit_openat`,
+for the Tracepoint program. `ProgramHandle` reads this field. Do not derive
+it by truncating the BTF function name displayed by bpftool. The reviewed
+[backend naming code](https://github.com/bpftrace/bpftrace/blob/v0.20.2/src/attached_probe.cpp#L679)
+keeps the suffix after the last colon. `observability_backend_static_roles`
+accepts the native name and rejects both the truncated and full BTF names.
+
 [StaticResources::verify](../../../../crates/erebor-interceptor/src/diagnostic.rs) finds an incomplete snapshot, unexpected role or metadata-query failure.
 -> [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) retains continuous scanning; the consumed profile cannot enable a later static transition.
 
@@ -3494,3 +3501,11 @@ ignored. Owned upload passes in 25.21 seconds. Read the logs in
 `/tmp/araphor-static-inventory.GOQgpiAI`. Independent review finds no must-fix
 issue. This record covers the static-inventory change after `833e9606`, not a
 completed performance or deployment qualification.
+
+The native-name correction passes all 23 focused backend tests in 31.61
+seconds and owned upload in 24.84 seconds. Independent safety and Ponytail
+review find no must-fix issue. Read `name-fix/backend-tests.log` and
+`name-fix/owned-upload.log` in the same evidence directory. The native
+snapshot and ranked scheduler evidence are in the linked measured results.
+Physical activation, unchanged performance parity and final workspace CI
+after the correction remain **Not done**.

@@ -442,7 +442,7 @@ impl StaticResources {
 
     fn program_role(kind: libbpf_rs::ProgramType, name: &OsStr) -> u8 {
         match (kind, name.to_str()) {
-            (libbpf_rs::ProgramType::Tracepoint, Some("tracepoint_sysc")) => 1,
+            (libbpf_rs::ProgramType::Tracepoint, Some("sys_exit_openat")) => 1,
             (libbpf_rs::ProgramType::PerfEvent, Some("1")) => 2,
             _ => 0,
         }
@@ -1121,10 +1121,16 @@ mod tests {
         assert_eq!(
             StaticResources::program_role(
                 libbpf_rs::ProgramType::Tracepoint,
-                OsStr::new("tracepoint_sysc")
+                OsStr::new("sys_exit_openat")
             ),
             1
         );
+        for name in ["tracepoint_sysc", "tracepoint_syscalls_sys_exit_openat"] {
+            assert_eq!(
+                StaticResources::program_role(libbpf_rs::ProgramType::Tracepoint, OsStr::new(name)),
+                0
+            );
+        }
         assert_eq!(
             StaticResources::program_role(libbpf_rs::ProgramType::PerfEvent, OsStr::new("1")),
             2
