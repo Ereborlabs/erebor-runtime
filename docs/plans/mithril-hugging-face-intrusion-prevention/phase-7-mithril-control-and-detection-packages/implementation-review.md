@@ -2797,3 +2797,12 @@ Formatting, workspace checking and strict Clippy also passed. Read
 `capture-classified-workspace-final.log` in the same evidence directory.
 The local Kubernetes helper build passed in `capture-kube-helper.log`.
 These results do not qualify the ignored physical cases.
+
+The corrected physical attempt at `0a759cf6` failed its entry-rule check before
+the first timed run. The actor started before policy activation and recovered
+with admission-rule ID zero. Read `capture-vm153-pairs-classified-test.log`.
+No measured pair or qualified configuration was written.
+The subsequent change moves the existing actor creation after policy
+activation and initial recovery. Review [Host::start_entry](../../../../crates/mithril-e2e/src/platform/host.rs)
+and [running_task_uses_new_policy](../../../../crates/mithril-e2e/src/identity/scenarios/policy_replace.rs)
+for the existing declared-entry path. The entry-rule check stays in place.

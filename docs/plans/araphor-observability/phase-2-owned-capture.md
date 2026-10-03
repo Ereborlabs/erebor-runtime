@@ -548,6 +548,18 @@ environment with `cargo build --workspace --all-features --bin mithril-kube-exec
 The receipt is `capture-kube-helper.log`. No production runtime source changed
 after the image builds above.
 
+The corrected physical attempt at `0a759cf6` rejected setup before any timed
+run. The timed actor started before Node and policy activation. Recovery gave
+that actor admission-rule ID zero. The entry-rule check returned
+`missing admission rule 0 in generation 1`. The test reports 69.86 seconds;
+the launcher returns 101. No measured result or qualified configuration was
+written. Read `capture-vm153-pairs-classified-test.log` in the evidence directory.
+
+The subsequent fixture change starts that same actor after policy activation
+and initial recovery. It uses the existing declared Python entry. Keep the
+entry-rule check and all measurement checks. No actor source, cadence, policy
+rule, production owner or experiment limit changes.
+
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
 

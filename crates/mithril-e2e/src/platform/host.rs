@@ -1204,15 +1204,15 @@ impl Host {
         let labels = super::policy_labels(&policy)?;
         let mut init = env.start_actor("ready.py", &[], &labels)?;
         env.place(init.id())?;
-        let mut actor = env.add_actor("python", &["/fixtures/observability.py", "/work"])?;
-        actor.ready()?;
-        env.place(actor.id())?;
         env.install_policy("policy_replace_policy.json")?;
         env.start_node()?;
         env.sync_policy()?;
         env.node_ready()?;
         env.running(init.id())?;
         env.recovered(init.id(), "trace workload")?;
+        let mut actor = env.add_actor("python", &["/fixtures/observability.py", "/work"])?;
+        actor.ready()?;
+        env.place(actor.id())?;
         let task = env.task(actor.id(), "trace measurement identity")?;
         assert_eq!(
             task.entry_rule(&env)?.target_role_id,
