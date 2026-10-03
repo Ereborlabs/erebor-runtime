@@ -3143,7 +3143,15 @@ selects nearest-rank p99 at index 4,949. Do not mix profiled and unprofiled
 results. Source and receipt review comes before a production fix.
 The count changes pass the same eight focused tests and formatting. The
 current contract test requires 50,000 total operations and p99 value 4,950.
-No 5,000-operation timing result is claimed yet.
+Harness source `444283cc` completes the same 5,000-operation comparison in
+580.81 seconds and returns 101. All ten runs retain exactly 5,000 denials and
+pass coverage, zero enforcement-loss, output and cleanup checks. Araphor p99
+is higher in all five pairs. Read the
+[five measurements](../../araphor-observability/phase-2-owned-capture.md#approved-difference-investigation),
+`compare-5000.json` and `compare-5000-test.log` in
+`/tmp/araphor-capture-10k.CTkeIuTc`. Trace kernel loss remains unknown. The
+lower count does not remove the difference. No production optimization or
+qualified configuration follows from this run.
 
 The current measurements use unoptimized Rust and packaged bpftrace. Both
 paths use the same backend, but only Araphor adds the Rust supervision loops.
@@ -3151,3 +3159,14 @@ Do not infer release overhead from those numbers. Build mode, the two 10-ms
 checking loops and output durability are investigation candidates, not proven
 causes. The user has been asked to approve release comparison and two boundary
 usage snapshots. Final workspace verification remains pending.
+
+For the map-read path, follow
+[TraceTargetLeaseV1::validate](../../../../crates/araphor-observability/src/target.rs)
+to [KernelStateReader::lookup](../../../../crates/erebor-interceptor/src/host.rs).
+Each turn opens the pinned map before reading the current binding.
+[SupervisedChild::record_resources](../../../../crates/erebor-interceptor/src/diagnostic.rs)
+separately reads process status and current file-descriptor records.
+[NodeRun::run](../../../../crates/mithril-node/src/node/run.rs) waits for the
+diagnostic exchange, but its Control RPC wait continues runtime admission.
+Shared raw-store locks can delay uploads. These source facts do not prove
+which path caused the measured protected-open latency.

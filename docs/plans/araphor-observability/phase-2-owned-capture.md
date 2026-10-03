@@ -1125,7 +1125,29 @@ in the same evidence directory. The archive is `fixtures-5000.tar.gz`.
 Its guest copy at
 `/var/tmp/araphor-capture-inputs.VMoOpWq2/fixtures-5000-20261003.tar.gz` has SHA-256
 `e03a6bd8b320a4ce4655b7dedba001f94e6050263d87997e358ad106941d05ba`.
-No 5,000-operation timing result is claimed yet.
+Harness source `444283cc` completes the 5,000-operation comparison in 580.81
+seconds and returns 101. It uses the same debug libtest binary, backend,
+DEBUG logging and compare route as the 10,000-operation run. The output is
+`/tmp/araphor-observability-153-compare-20261003-5000`. No Cargo, CI, profiling
+or guest polling runs during measurement.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 162,497 | 248,633 | +86,136 | +53.007748% |
+| 2 | 122,616 | 234,571 | +111,955 | +91.305376% |
+| 3 | 216,900 | 220,529 | +3,629 | +1.673121% |
+| 4 | 144,037 | 258,159 | +114,122 | +79.231031% |
+| 5 | 215,677 | 290,707 | +75,030 | +34.788132% |
+
+All ten runs retain exactly 5,000 denial witnesses. Enforcement-event loss
+and unresolved effects are zero. All ten permit negative claims. Native
+collection takes 30,001 to 30,008 ms; cleanup and unchanged enforcement
+resources pass. All Araphor terminals have `Deadline`, complete output and
+`Verified` cleanup. Trace kernel loss remains unknown. All five pairs fail.
+Read `compare-5000.json` and `compare-5000-test.log` in
+`/tmp/araphor-capture-10k.CTkeIuTc`. The results were also reported in the user
+thread. The lower count does not remove the latency difference. No qualified
+configuration is published.
 
 The existing comparisons use unoptimized Rust libtest code and stock packaged
 bpftrace. Both paths use that bpftrace binary, but only Araphor adds the Rust
@@ -1146,6 +1168,19 @@ are 9 and 8. These counts show no queue exhaustion and do not isolate a cause.
 Do not blame post-capture retained reads or full catalogue projection for
 the measured difference. Those reads occur outside measurement; trace intent
 reads use the existing raw coordinator.
+
+Target validation opens the pinned binding map on each 10-ms turn. Backend
+inspection opens current process status and file-descriptor records on its
+own 10-ms turn. Diagnostic commits share the raw-store locks with enforcement
+uploads. These facts identify possible extra work, not a measured cause.
+The Node RPC wait continues runtime admission; do not claim admission stops
+for the full diagnostic RPC. Plain always precedes Araphor within a pair.
+Sampling starts after each path observes attachment; Araphor also waits for
+durable output visibility. The experiment does not equalize scheduler phase.
+Control scans retained intents every 500 ms. Later plain runs also have those
+intents. Acknowledged Node output is truncated, and recovery is guarded;
+do not claim continuous full-spool recovery. No production change follows
+from these hypotheses alone.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
