@@ -5879,12 +5879,29 @@ test does not close a row when its physical condition or an assertion changed.
     VM harness checks and final Rust CI passed. See
     `/tmp/mithril-installer-retirement-ci-20261003.log`. The legacy file remains
     on the retirement list at 5,346 lines. No production or Platform code changed.
-  - [ ] Replace changed installer startup with the same shared actor and
+  - [x] Replace changed installer startup with the same shared actor and
     canonical manifest. Change the copied executable bytes, use all 26 upgraded
     arguments, and mount actual K3s read-only at `/host-runtime-cli`. Keep the
     retained `/host-k3s` declaration unchanged. Require physical success, exact
     argv and marker, `ALLOW_MITHRIL_INSTALLER` from the public hook, and cleanup.
     Add no Platform method or legacy fixture code. Commit before removal.
+    The 99-line function passed in 0.78 seconds. All eleven standard gate cases
+    passed in 6.48 seconds. All three legacy cases and cleanup passed. Evidence:
+    `target/mithril-installer-changed-group-20261003T040515Z-2550294`.
+    Formatting, all eight production gate tests, VM harness checks, and final
+    Rust CI passed. See `/tmp/mithril-installer-changed-ci-20261003.log`.
+    Review route: [changed_installer_can_start](src/identity/scenarios/runtime_installer.rs)
+      -> [OciBundle](src/physical/oci_bundle.rs) calls the public spec owner
+      -> stock runc runs [runtime_owner.py](fixtures/process/runtime_owner.py)
+      -> the public hook reports installer approval; the test checks argv,
+      marker, runtime inventory, and cleanup through `ProcessFixture` and Platform.
+    No production, Platform, or launcher source changed. This is direct-runc
+    qualification in the retained K3s VM, not Kubernetes Pod qualification.
+  - [ ] Remove the old changed installer action and its three result fields
+    after the replacement commit. Remove its two unused log methods and Write
+    import. Keep forged denial, canonical manifest, upgraded argv, stock spec,
+    diagnostics, and cleanup. Qualify all eleven standard cases and the two
+    remaining legacy cases before the separate retirement commit.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The
