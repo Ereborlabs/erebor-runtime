@@ -1205,6 +1205,36 @@ in the existing test output. Do not create a separate review-report family.
 
 ## Physical lifecycle gates
 
+The paired lightweight restart case is
+`observability::lifecycle::tests::observability_owned_restart`. It uses
+production Control dispatch, NodeTraceOwner, the shared spool and current
+mTLS transport. An external backend simulates attachment. The test kills
+the Node owner process before execution and after two durable output frames.
+Reopen preserves the accepted request and returns `NodeRestarted`, unknown
+cleanup and incomplete output. Current-session replay returns the same ACK.
+Retry does not start another backend. ACK removes local frame bytes; Control
+still retains the exact prefix. Discovery analysis stays disabled.
+The focused case passes in 0.97 seconds. `owned.sh` runs this exact case before
+either physical restart route, after the existing owned-upload case.
+The final `bash .github/scripts/verify-rust-ci.sh` run returns zero after the
+last Rust and harness edits. Formatting, workspace check, strict Clippy and
+all workspace tests pass. Data passes 167 tests, Observability 23,
+Interceptor 40, Control 170, Mithril e2e 145 and Node 262. The e2e suite has
+413 ignored tests; ignored physical cases are not passes. This run covers
+`e078b77f` plus the restart test and harness changes. Read
+`workspace-restart-final.log` in `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+Ponytail review keeps the existing owners and external process seam. No
+production owner or dependency is added. The test does not prove BPF cleanup,
+enforcement recovery or performance.
+
+The earlier physical before-execution run at `444283cc` returns zero.
+Its physical test takes 59.06 seconds. The receipt has no frames or observed
+diagnostic BPF resources, `NodeRestarted`, unknown cleanup and incomplete
+output. Two physical policy denials and recovered enforcement health pass.
+Read `restart-before.json` and the logs in
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. That run precedes the exact paired
+lightweight route above. The current paired physical routes remain **Not done**.
+
 1. Start a reviewed capture against a protected Kubernetes Pod. Replace that
    Pod with the same name. Require the original execution to end with
    `TargetChanged`. Require no output from the replacement under the original

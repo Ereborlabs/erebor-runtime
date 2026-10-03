@@ -47,6 +47,10 @@ if (($# >= 5)); then
   "$test_binary" observability::tests::observability_owned_upload \
     --exact --nocapture >"$output/lightweight.log" 2>&1
 fi
+if (($# == 6)); then
+  "$test_binary" observability::lifecycle::tests::observability_owned_restart \
+    --exact --nocapture >"$output/lightweight-restart.log" 2>&1
+fi
 "$test_binary" "$test_name" --ignored --exact --nocapture \
   >"$output/test.log" 2>&1
 [[ -s $MITHRIL_TRACE_PROOF ]]

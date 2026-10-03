@@ -3170,3 +3170,23 @@ separately reads process status and current file-descriptor records.
 diagnostic exchange, but its Control RPC wait continues runtime admission.
 Shared raw-store locks can delay uploads. These source facts do not prove
 which path caused the measured protected-open latency.
+
+For the paired lightweight Node restart case, read
+[ObservabilityQualification::restart_case](../../../../crates/mithril-e2e/src/observability/lifecycle.rs).
+Control accepts and signs the frozen request. `restart_child` calls the
+production Node owner and reaches the durable-intent or durable-output
+barrier. The parent sends SIGKILL to that owner process. `restart_node` opens
+the same state and checks the retained prefix and uncertain terminal.
+New mTLS sessions upload and replay the same result. ACK clears local output;
+the Data owner retains the exact output. The test calls production owners,
+not private spool operations. The external backend simulates attachment.
+The focused `observability_owned_restart` case passes in 0.97 seconds.
+[owned.sh](../../../../crates/mithril-e2e/harness/observability/owned.sh) now
+runs that exact case before either physical restart route.
+The final `bash .github/scripts/verify-rust-ci.sh` run returns zero after all
+Rust and harness edits. Formatting, workspace check, strict Clippy and full
+workspace tests pass. Mithril e2e passes 145 tests, including the new restart
+case, with 413 ignored. Read `workspace-restart-final.log` in
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. This run covers `e078b77f` plus the
+restart test and harness changes. The current paired physical routes remain
+pending. This workspace pass does not meet the performance gate.
