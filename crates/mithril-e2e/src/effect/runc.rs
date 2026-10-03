@@ -230,8 +230,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
 pub struct RuncRetainedRuntimeGateProbeV1 {
     pub schema_version: u32,
     pub runc_version: String,
-    pub exact_installer_allowed: bool,
-    pub exact_installer_process_started: bool,
     pub changed_installer_allowed: bool,
     pub changed_installer_process_started: bool,
     pub changed_installer_decision_logged: bool,
@@ -615,7 +613,6 @@ struct RetainedRuntimeGateRuncFixture {
     hook_path: PathBuf,
     k3s_path: PathBuf,
     output_directory: PathBuf,
-    installer_args: Vec<String>,
     stock_config: serde_json::Value,
 }
 
@@ -744,7 +741,6 @@ impl RetainedRuntimeGateRuncFixture {
             hook_path: hook_path.to_path_buf(),
             k3s_path: k3s_path.to_path_buf(),
             output_directory: output_directory.to_path_buf(),
-            installer_args,
             stock_config,
         })
     }
@@ -793,10 +789,6 @@ impl RetainedRuntimeGateRuncFixture {
         Ok(())
     }
 
-    fn run_exact_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        self.run_case("exact-installer", self.installer_config(false)?)
-    }
-
     fn run_changed_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
         let executable = self.bundle.join("rootfs/usr/local/bin/mithril-oci-hook");
         let original = fs::read(&executable).context(IoSnafu { path: &executable })?;
@@ -809,13 +801,13 @@ impl RetainedRuntimeGateRuncFixture {
         if marker.exists() {
             fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
         }
-        let result = self.run_case("changed-installer", self.installer_config(true)?);
+        let result = self.run_case("changed-installer", self.installer_config()?);
         fs::write(&executable, original).context(IoSnafu { path: &executable })?;
         result
     }
 
     fn run_forged_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        let mut config = self.installer_config(true)?;
+        let mut config = self.installer_config()?;
         config["process"]["args"][3] = json!("attacker/other");
         let marker = self.marker_directory.join("installer");
         if marker.exists() {
@@ -919,44 +911,36 @@ impl RetainedRuntimeGateRuncFixture {
         Ok(config)
     }
 
-    fn installer_config(&self, upgraded: bool) -> Result<serde_json::Value> {
-        let mut config = self.stock_config(if upgraded {
-            "changed-installer"
-        } else {
-            "exact-installer"
-        })?;
-        config["process"]["args"] = if upgraded {
-            json!([
-                "/usr/local/bin/mithril-oci-hook",
-                "install",
-                "--owner",
-                "mithril-system/mithril",
-                "--hook-host-directory",
-                "/usr/libexec/oci/hooks.d",
-                "--containerd-host-directory",
-                "/var/lib/rancher/k3s/agent/etc/containerd",
-                "--containerd-drop-in-directory",
-                "config-v3.toml.d",
-                "--runtime-cli-host-path",
-                "/usr/local/bin/k3s",
-                "--runtime-cli-arg",
-                "ctr",
-                "--runtime-cli-arg",
-                "oci",
-                "--runtime-cli-arg",
-                "spec",
-                "--runtime-service",
-                "k3s",
-                "--runtime-service",
-                "k3s-agent",
-                "--socket",
-                "/run/mithril/runtime-admission.sock",
-                "--decommission-state-directory",
-                "/var/lib/mithril"
-            ])
-        } else {
-            json!(self.installer_args)
-        };
+    fn installer_config(&self) -> Result<serde_json::Value> {
+        let mut config = self.stock_config("changed-installer")?;
+        config["process"]["args"] = json!([
+            "/usr/local/bin/mithril-oci-hook",
+            "install",
+            "--owner",
+            "mithril-system/mithril",
+            "--hook-host-directory",
+            "/usr/libexec/oci/hooks.d",
+            "--containerd-host-directory",
+            "/var/lib/rancher/k3s/agent/etc/containerd",
+            "--containerd-drop-in-directory",
+            "config-v3.toml.d",
+            "--runtime-cli-host-path",
+            "/usr/local/bin/k3s",
+            "--runtime-cli-arg",
+            "ctr",
+            "--runtime-cli-arg",
+            "oci",
+            "--runtime-cli-arg",
+            "spec",
+            "--runtime-service",
+            "k3s",
+            "--runtime-service",
+            "k3s-agent",
+            "--socket",
+            "/run/mithril/runtime-admission.sock",
+            "--decommission-state-directory",
+            "/var/lib/mithril"
+        ]);
         self.add_bind_mount(
             &mut config,
             &self.fixture_root.join("host-hook"),
@@ -972,18 +956,14 @@ impl RetainedRuntimeGateRuncFixture {
         self.add_bind_mount(
             &mut config,
             &self.k3s_path,
-            if upgraded {
-                Path::new("/host-runtime-cli")
-            } else {
-                Path::new("/host-k3s")
-            },
+            Path::new("/host-runtime-cli"),
             true,
         )?;
         Ok(config)
     }
 
     fn changed_installer_log(&self) -> Result<String> {
-        self.decision_log(self.installer_config(true)?, b"changed-installer-log")
+        self.decision_log(self.installer_config()?, b"changed-installer-log")
     }
 
     fn decision_log(&self, config: serde_json::Value, identity: &[u8]) -> Result<String> {
@@ -1530,8 +1510,6 @@ impl EffectTestRunner {
             k3s_path,
             nsenter_path,
         )?;
-        let installer = fixture.run_exact_installer()?;
-        let exact_installer_process_started = fixture.marker_exists("installer");
         let changed_installer = fixture.run_changed_installer()?;
         let changed_installer_process_started = fixture.marker_exists("installer");
         let forged_installer = fixture.run_forged_installer()?;
@@ -1546,8 +1524,6 @@ impl EffectTestRunner {
         let result = RuncRetainedRuntimeGateProbeV1 {
             schema_version: 5,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
-            exact_installer_allowed: installer.success,
-            exact_installer_process_started,
             changed_installer_allowed: changed_installer.success,
             changed_installer_process_started,
             changed_installer_decision_logged: installer_log
@@ -1561,9 +1537,7 @@ impl EffectTestRunner {
             fixture_root_removed: false,
         };
         ensure!(
-            result.exact_installer_allowed
-                && result.exact_installer_process_started
-                && result.changed_installer_allowed
+            result.changed_installer_allowed
                 && result.changed_installer_process_started
                 && result.changed_installer_decision_logged
                 && result.forged_installer_denied
@@ -1573,8 +1547,7 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; stock_spec={:?}",
-                    installer.stderr.trim(),
+                    "the direct runc retained-gate oracle failed: result={result:?}; changed_installer={:?}; forged_installer={:?}; stock_spec={:?}",
                     changed_installer.stderr.trim(),
                     forged_installer.stderr.trim(),
                     host_stock_spec.stderr.trim(),

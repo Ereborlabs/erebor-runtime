@@ -5866,11 +5866,19 @@ test does not close a row when its physical condition or an assertion changed.
       -> stock runc executes the actor; [ProcessFixture](src/process.rs) reports
       the physical result; the platform removes paths and the actor cgroup.
     No production or Platform code changed. No launcher source changed.
-  - [ ] Remove the old exact installer action and its two result fields after
+  - [x] Remove the old exact installer action and its two result fields after
     the replacement commit. Remove the unused exact-config branch and fixture
     argument field. Keep canonical arguments in the manifest input. Keep the
     changed and forged installer cases, their config and logs, stock-spec case,
     and cleanup. Qualify all ten standard cases and the complete reduced probe.
+    Commit `08d49949` contains the replacement. The deletion removes 27 net
+    Rust lines. The remaining config keeps the same 26 arguments and mounts.
+    All ten standard cases passed in 7.18 seconds. All three legacy cases and
+    cleanup passed. All result booleans are true. Evidence:
+    `target/mithril-installer-retirement-20261003T034302Z-2528731`.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-installer-retirement-ci-20261003.log`. The legacy file remains
+    on the retirement list at 5,346 lines. No production or Platform code changed.
   - [ ] Replace changed installer startup with the same shared actor and
     canonical manifest. Change the copied executable bytes, use all 26 upgraded
     arguments, and mount actual K3s read-only at `/host-runtime-cli`. Keep the
