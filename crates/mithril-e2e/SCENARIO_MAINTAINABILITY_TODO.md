@@ -5721,6 +5721,35 @@ test does not close a row when its physical condition or an assertion changed.
     Node endpoint. Require physical marker write, exact argv output,
     `ALLOW_EXACT_RECOVERY`, and cleanup. Keep the old action until the
     replacement passes and is committed. Add no Platform method.
+    The 86-line [control_recovery_can_start](src/identity/scenarios/runtime_control.rs)
+    passed in the retained lightweight VM in 7.76 seconds. All six standard
+    gate cases passed through the retained launcher in 4.84 seconds. All eight
+    legacy cases and cleanup passed. Evidence:
+    `target/mithril-control-recovery-20261003T022058Z-2428320`. All eight
+    production gate tests, VM harness checks, and final Rust CI passed. See
+    `/tmp/mithril-runtime-control-ci-20261003.log`.
+    The checked input preserves the non-root user, empty capabilities, private
+    PID namespace, and read-only root. The marker directory keeps the baseline
+    mode 0777. No production or Platform code changed.
+    Review route: [control_recovery_can_start](src/identity/scenarios/runtime_control.rs)
+      -> [OciBundle](src/physical/oci_bundle.rs) binds the native Control entry
+      and installs hooks through the production spec owner
+      -> [RuntimeControlRecoveryEntryV1](../mithril-node/src/runtime_gate.rs)
+      checks the exact command, user, capabilities, root, namespace, and mounts
+      -> stock runc runs [runtime_owner.py](fixtures/process/runtime_owner.py)
+      -> [ProcessFixture](src/process.rs) reports exit and output; the platform
+      removes runtime state, temporary paths, and the actor cgroup.
+  - [ ] Remove only the old exact Control recovery action, decision-log wrapper,
+    probe calls, three result fields, and duplicate assertions after the
+    replacement commit. Keep the Control config, argument list, manifest,
+    changed-capability check, and version-change check. Qualify all six standard
+    cases and the complete reduced legacy probe before committing the deletion.
+  - [ ] Replace changed Control recovery with the same actor and native inputs.
+    Change only the effective capability set to `CAP_SYS_ADMIN`. Keep all other
+    capability sets empty, as in the baseline. Require `DENY_NODE_UNAVAILABLE`
+    from the physical hook, unsuccessful exit, no marker or output, no allow
+    decision, and complete cleanup. Exit failure alone is not sufficient.
+    Commit the replacement before removing the matched old action and fields.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

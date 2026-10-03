@@ -53,5 +53,20 @@
         { "source": "MITHRIL_WORK/host-containerd", "destination": "/host-containerd", "readOnly": false }
       ]
     }
+  ],
+  "controlEntries": [
+    {
+      "executable": "/owner",
+      "args": ["/owner", "/result/control", "CONTROL_RECOVERY_ALLOWED"],
+      "uid": 65532,
+      "gid": 65532,
+      "requiredMounts": [
+        { "destination": "/usr", "readOnly": true },
+        { "destination": "/lib", "readOnly": true },
+        { "destination": "/lib64", "readOnly": true },
+        { "destination": "/owner", "readOnly": true },
+        { "destination": "/result", "readOnly": false }
+      ]
+    }
   ]
 }

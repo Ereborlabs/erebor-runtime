@@ -119,6 +119,8 @@ mod retained_host;
 #[cfg(test)]
 mod runtime_changed;
 #[cfg(test)]
+mod runtime_control;
+#[cfg(test)]
 mod runtime_effects;
 #[cfg(test)]
 mod runtime_entries;
