@@ -2740,3 +2740,12 @@ and native loader checks do not execute a trace. Read the
 [owned-capture result](../../araphor-observability/phase-2-owned-capture.md#verified-implementation-slices)
 for the remaining physical gates and the approved interference experiment.
 Deployment diagnostics remain disabled.
+
+The final workspace procedure also passed at `2f87a2b3`, after the capture
+fixture reserve correction. The library counts above remain unchanged except
+Node, which passed 262 tests. The new Node configuration check passed. Read
+`crate-workspace-final-6.log` in the same evidence directory. The approved
+physical attempt stopped before measurements because its reserve was too
+small. The corrected fixture uses 272 MiB and saves that same configuration.
+Rerun approval remains open. No measured pair or physical capture pass is
+claimed for this correction.

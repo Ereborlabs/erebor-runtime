@@ -402,6 +402,29 @@ CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 \
 bash .github/scripts/verify-rust-ci.sh
 ```
 
+The approved experiment at source `c9e6b802` stopped at Node configuration
+validation. The fixture reserved 256 MiB. Its evidence WAL limit was also
+256 MiB. Node requires 272 MiB to include 16 MiB for metadata. No measured pair,
+trace output or qualified configuration was written. The launch returned 101.
+The test log records 1.75 seconds. The receipt is
+`capture-vm153-pairs-preflight.log` in the evidence directory above.
+
+Source `2f87a2b3` sets the fixture reserve to 272 MiB. One configuration supplies
+the active run and the saved measured qualification. The production check,
+WAL limit, spool bounds and measurement limits do not change. The exact
+`config::tests::observability_target_wal_reserve` check passed before the
+fixture correction. It rejects 256 MiB and 272 MiB minus one byte; 272 MiB
+passes. Its receipt is `capture-reserve-focused.log`.
+
+The final workspace procedure passed at source `2f87a2b3`, after the fixture
+correction. Formatting, workspace checking, strict Clippy and all selected
+workspace tests passed. Main library results were Data 167 passed (5 ignored),
+shared observability 22 passed (2 ignored), Interceptor 39 passed (1 ignored),
+Control 170 passed (2 ignored), e2e 134 passed (412 ignored), and Node 262 passed
+(none ignored). The receipt is `crate-workspace-final-6.log`. Use the same
+worktree-local command above. Rerun approval was requested; no second
+experiment has run. These results do not qualify the physical capture gates.
+
 Remaining work is execution of the physical lifecycle gates below.
 Physical enablement requires a platform-matched interference receipt. The
 user approved the experiment below. Keep the phase **Not done** and keep
