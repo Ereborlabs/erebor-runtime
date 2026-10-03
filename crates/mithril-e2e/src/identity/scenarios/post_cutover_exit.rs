@@ -4,7 +4,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = recovery_exit]
 fn external_exit_preserves_recovery<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("post-cutover-exit")?;

@@ -6115,7 +6115,12 @@ test does not close a row when its physical condition or an assertion changed.
       source file has 89 lines. Output, pin, lease, actor cgroup, and Node
       cgroup cleanup passed. VM harness checks and final Rust CI passed. See
       `/tmp/mithril-post-cutover-host-ci-20261003.log`.
-    - [ ] Pass and commit direct runc with the unchanged body.
+    - [x] Direct runc passed the unchanged 89-line source in 41.87 seconds.
+      Stock runc and the production OCI hook ran the two process trees.
+      Output, pin, lease, actor cgroup, and Node cgroup cleanup passed.
+      Only the platform attribute changed after Host commit `995ee7eb`.
+      Final Rust CI passed. See
+      `/tmp/mithril-post-cutover-runc-ci-20261003.log`.
     - [ ] Pass and commit Kubernetes with the unchanged body.
     Review route: [external_exit_preserves_recovery](src/identity/scenarios/post_cutover_exit.rs)
       starts both [recovery_tree.py](fixtures/process/recovery_tree.py) trees
