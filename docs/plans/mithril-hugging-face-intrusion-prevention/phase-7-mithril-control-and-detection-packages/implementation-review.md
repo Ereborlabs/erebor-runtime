@@ -3418,10 +3418,22 @@ owner holds at most 256 proc fdinfo handles. Each turn opens the directory
 again, selects numeric FDs, prunes absent handles and builds paths only for
 new entries. Positioned reads use one 16-KiB buffer. They start at zero,
 continue short reads, retry interruption and reject errors before parsing.
-The recorded ID unions, status read, 10-ms turns and cleanup stay unchanged.
+The recorded ID unions, 10-ms turns and cleanup stay unchanged.
 `observability_backend_resource_reads` uses the standard `FileExt` seam to
 check interruption, short reads and a permission error after a prefix.
 Read the [measurements and proof](../../araphor-observability/phase-2-owned-capture.md#resource-scan-measurements-and-optimization).
 The backend and owned-upload tests pass. The handle-cache comparison fails
 three of five pairs. Profiled results cannot qualify performance. The current
 optimization needs its unprofiled comparison and final CI; neither is claimed.
+
+Read [`SupervisedChild::reap`](../../../../crates/erebor-interceptor/src/diagnostic.rs)
+next. The owner closes cached handles, waits for the exact child with `wait4`,
+retries interruption and sets its reaped state before result conversion.
+Drop does not signal the PID after this transition. Reaping supplies the
+conservative child-lifetime peak in `peak_rss_kib`; the supervisor no longer
+reads status each turn. Linux includes pre-exec memory and waited descendants
+in this value. No live memory limit uses this field.
+Read same-file `observability_backend_peak_memory`. This test checks memory
+used before an exec, cancellation and child removal. All 19 backend tests and
+owned upload pass. The 199-Hz profile supports removing status reads, but does
+not qualify p99 parity. The unprofiled comparison and final CI remain open.

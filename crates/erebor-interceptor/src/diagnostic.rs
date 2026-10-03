@@ -3,9 +3,9 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileExt;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
@@ -558,15 +558,12 @@ impl SupervisedChild {
         }
         owner.signal(Signal::KILL)?;
         owner.fdinfo.clear();
-        result.exit_code = owner
-            .child
-            .wait()
-            .context(IoSnafu {
-                action: "reap diagnostic",
-                path,
-            })?
-            .code();
-        owner.reaped = true;
+        let (status, rss) = owner.reap().context(IoSnafu {
+            action: "reap diagnostic",
+            path,
+        })?;
+        result.exit_code = status.code();
+        result.peak_rss_kib = rss;
         if result.exit_code.is_none() {
             result.output_incomplete = true;
         }
@@ -595,19 +592,6 @@ impl SupervisedChild {
         text: &mut String,
         bytes: &mut [u8; 16 * 1024],
     ) {
-        text.clear();
-        if File::open(format!("/proc/{}/status", self.child.id()))
-            .and_then(|mut file| file.read_to_string(text))
-            .is_ok()
-        {
-            if let Some(rss) = text.lines().find_map(|line| {
-                line.strip_prefix("VmHWM:")
-                    .and_then(|value| value.split_whitespace().next())
-                    .and_then(|value| value.parse::<u64>().ok())
-            }) {
-                result.peak_rss_kib = Some(result.peak_rss_kib.unwrap_or(0).max(rss));
-            }
-        }
         let Ok(entries) = fs::read_dir(format!("/proc/{}/fdinfo", self.child.id())) else {
             self.fdinfo.clear();
             return;
@@ -690,6 +674,37 @@ impl SupervisedChild {
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         text.push_str(current);
         Ok(count)
+    }
+
+    #[allow(unsafe_code)]
+    fn reap(&mut self) -> std::io::Result<(ExitStatus, Option<u64>)> {
+        if self.reaped {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "diagnostic child is already reaped",
+            ));
+        }
+        let mut status = 0;
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        loop {
+            // SAFETY: The PID is the owned, unreaped child. Both output pointers are valid.
+            let pid =
+                unsafe { libc::wait4(self.child.id() as i32, &mut status, 0, usage.as_mut_ptr()) };
+            if pid < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            self.reaped = true;
+            // SAFETY: Successful wait4 initialized the usage value for this child.
+            let usage = unsafe { usage.assume_init() };
+            return Ok((
+                ExitStatus::from_raw(status),
+                usage.ru_maxrss.try_into().ok(),
+            ));
+        }
     }
 
     fn emit(
@@ -880,6 +895,33 @@ mod tests {
         );
         assert!(text.is_empty());
         assert_eq!(reader.calls.get(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_peak_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let capture = capture(
+            r#"cat >/dev/null; exec /bin/bash -c 'printf -v blob "%8388608s" x
+while IFS= read -r line; do
+  if [[ $line == VmHWM:* ]]; then printf "%s\n" "$line"; break; fi
+done </proc/self/status
+exec sleep 60'"#,
+        )?;
+        let frame = capture.frames().recv_timeout(Duration::from_secs(2))?;
+        let text = std::str::from_utf8(&frame.bytes)?;
+        let rss: u64 = text
+            .strip_prefix("VmHWM:")
+            .ok_or("RSS absent")?
+            .split_whitespace()
+            .next()
+            .ok_or("RSS count absent")?
+            .parse()?;
+        assert!(rss >= 8 * 1024);
+        capture.cancel();
+        let result = capture.finish()?;
+        assert_eq!(result.stop, DiagnosticStop::Cancelled);
+        assert!(result.peak_rss_kib.is_some_and(|peak| peak >= rss));
+        assert!(!Path::new(&format!("/proc/{}", result.process_id)).exists());
         Ok(())
     }
 

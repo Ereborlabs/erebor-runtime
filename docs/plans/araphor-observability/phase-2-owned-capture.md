@@ -1321,8 +1321,9 @@ still pass the unchanged no-increase gate. Diagnostics stay disabled.
 ### Approved handle reuse and comparison
 
 The user approves a bounded resource-scan change and an unprofiled comparison.
-Keep the status read, a fresh fdinfo directory open, and resource inspection
-on each 10-ms supervision turn. Retain at most 256 fdinfo file handles for the
+Keep a fresh fdinfo directory open and resource inspection on each 10-ms
+supervision turn. Record conservative peak memory when the child is reaped.
+Retain at most 256 fdinfo file handles for the
 current selected entries. Remove handles for absent entries before opening
 new ones. Read current contents from offset zero, with the same 16-KiB
 limit. Continue positive short reads at the next offset until EOF or the limit.
@@ -1392,7 +1393,7 @@ builds a path only when a cached handle is absent. One 16-KiB byte buffer
 serves all fresh fdinfo reads. `FileExt::read_at` starts at zero and continues
 short reads at increasing offsets. Retry interruption at the same offset.
 Reject other errors and invalid UTF-8 before copying or parsing text. Keep
-the fresh directory open, status read, 10-ms turns, ID unions and eviction.
+the fresh directory open, 10-ms turns, ID unions and eviction.
 Linux [sequence reads](https://github.com/torvalds/linux/blob/v6.8/fs/seq_file.c)
 reset at offset zero. [Positioned reads](https://github.com/torvalds/linux/blob/v6.8/fs/read_write.c)
 still call the read permission check.
@@ -1430,6 +1431,43 @@ Read `offset-5000/capture-pairs.json` and `offset-5000/test.log` in
 `/tmp/araphor-fdinfo-profile.bc4UoneF`. All five pairs fail. The code removes
 measured repeated work, but these results do not prove a p99 improvement.
 Performance parity and final CI for this code remain **Not done**.
+
+The next profile uses a 199-Hz CPU recorder and the same scheduler recorder.
+Of 131 supervisor CPU samples, 57 include fdinfo reads, 18 include directory
+work and 16 include status reads. Of the sampled leaf functions, 97 are kernel
+functions and 20 are Rust functions. These samples do not identify UTF-8
+conversion or text copying as the active cost. Do not select a copy-removal
+change from these samples.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 269,288 | 278,030 | +8,742 | +3.25 |
+| 2 | 233,627 | 232,006 | -1,621 | -0.69 |
+| 3 | 241,574 | 248,185 | +6,611 | +2.74 |
+| 4 | 239,415 | 234,492 | -4,923 | -2.06 |
+| 5 | 196,712 | 282,993 | +86,281 | +43.86 |
+
+This profile does not qualify performance. Three pairs fail the comparison.
+All five pairs have equal program types, names, tags, translated sizes, JIT
+sizes and map layouts. Equal tags do not prove equal translated or JIT bytes.
+Read `program-comparison.json`, `diagnostic-stacks.json` and the recorder
+analysis in `/tmp/araphor-offset-profile.bxGhTwug`. Guest recorder files are
+in `/var/tmp/araphor-attribution-offset.GygAmvw0`.
+
+`SupervisedChild::reap` replaces repeated status reads with one `wait4` call
+for the exact owned child. Retry interruption. Set the reaped state before
+converting the result, so Drop does not signal a reused PID. The kernel memory
+value includes the pre-exec address-space peak and waited descendants.
+Report `peak_rss_kib` as a conservative child-lifetime observation, not the
+backend's post-exec RSS. No live memory limit consumes this field. Keep the
+resource inventory, 10-ms turns, target checks, output limits and cleanup.
+
+All 19 backend tests pass; one privileged case is ignored. The memory test
+checks that the reported peak includes memory used before an exec and that
+the child is reaped after cancellation. Owned upload passes in 24.74 seconds.
+Read `resource-reap-green.log` and `reap-owned-green.log` in the local profile
+directory. The unprofiled comparison and final CI remain **Not done**.
+Diagnostics stay disabled.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
