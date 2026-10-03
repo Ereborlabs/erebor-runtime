@@ -2882,8 +2882,8 @@ backend settings. Equal source does not prove equal compiled BPF bytes or
 equal measured latency.
 
 [Host::qualify_diagnostics](../../../../crates/mithril-e2e/src/platform/host.rs) resolves one admitted actor and the reviewed cgroup-filtered recipe.
--> [PlainCapture::start](../../../../crates/mithril-e2e/src/observability/plain.rs) starts plain bpftrace directly with the reviewed source and backend environment.
--> [PlainCapture::poll](../../../../crates/mithril-e2e/src/observability/plain.rs) checks the exact attachment notification and ends collection after five seconds.
+-> [PlainCapture::start](../../../../crates/mithril-e2e/src/observability/plain.rs) starts plain bpftrace directly and waits for the exact attachment notification.
+-> [PlainCapture::poll](../../../../crates/mithril-e2e/src/observability/plain.rs) checks bounded output and ends collection after five seconds.
 -> [observability.py](../../../../crates/mithril-e2e/fixtures/process/observability.py) measures 1,000 denied opens and publishes p99.
 -> [Host::capture_health](../../../../crates/mithril-e2e/src/platform/host.rs) rejects evidence loss and coverage faults.
 -> [PlainCapture::finish](../../../../crates/mithril-e2e/src/observability/plain.rs) saves output and the child result.
@@ -2916,3 +2916,65 @@ Formatting, workspace checking, strict Clippy and the selected workspace
 suite passed. Data passed 167 tests, shared observability 22, Interceptor 39,
 Control 170, e2e 138 and Node 262. Read `capture-plain-workspace-final.log`.
 This proof does not cover the subsequent capture optimization.
+
+### Diagnostic spool work
+
+The optimization keeps the existing owners and bpftrace program. Read the
+Node spool path in this order:
+
+[NodeTraceOwner::admit](../../../../crates/araphor-observability/src/capture.rs) marks recovery pending before durable intent creation.
+-> [NodeTraceOwner::capture](../../../../crates/araphor-observability/src/capture.rs) keeps target, lease, cancellation and backend checks unchanged.
+-> [TraceSpool::append](../../../../crates/araphor-observability/src/capture.rs) syncs each frame before it publishes the committed sequence.
+-> [NodeTraceOwner::frames](../../../../crates/araphor-observability/src/capture.rs) skips an active spool read only when its committed sequence is not newer than the caller cursor.
+-> [NodeChassis::poll_diagnostics](../../../../crates/mithril-node/src/node.rs) keeps retained-record, upload and acknowledgement checks unchanged.
+
+[NodeTraceOwner::reap](../../../../crates/araphor-observability/src/capture.rs) marks recovery pending before it joins a finished worker.
+-> [NodeTraceOwner::recover_inactive](../../../../crates/araphor-observability/src/capture.rs) repairs inactive output and syncs execution directories and their parent.
+-> [NodeTraceOwner::recover_inactive](../../../../crates/araphor-observability/src/capture.rs) clears the pending flag only after all recovery operations succeed.
+
+The pending flag belongs to the Node trace owner. Startup sets the flag.
+Intent creation can fail after its final rename. Worker joins, terminal
+writes and directory syncs can also fail. These failures leave recovery
+pending. A later poll retries recovery without starting another backend.
+An unchanged poll does not repeat inactive-intent parsing and directory
+syncs. The owner still checks retained dispatches and terminal uploads.
+The active frame shortcut uses the existing sync-before-publication cursor.
+Inactive reads and reads of new committed frames keep their parser checks.
+No offset cache, index, polling timer or raw-storage format changes.
+
+The focused recovery selection passed 13 tests across Data, shared
+observability, Control and e2e. One physical disk-full test stayed ignored.
+The new `observability_recovery_retries_transitions` test uses actual temporary
+filesystem faults for admission and worker terminal writes. The extended
+multi-page test checks unchanged-poll skip, failed repair and successful
+retry. The extended synced-prefix test checks idle reads with corrupt
+uncommitted output and preserves the parser error on a data read.
+These tests do not inject parent-sync or thread-spawn failure. Their ordering
+is source-reviewed, not a claimed physical fault result.
+
+The direct routing check and `observability_owned_upload` each passed one
+test. Read `capture-spool-recovery-focused.log`,
+`capture-compare-route-focused.log` and `capture-spool-owned-focused.log` in
+the evidence directory above. These results cover source `b4890649`.
+
+The approved direct experiment ran five plain/Araphor pairs on one frozen
+actor and cgroup. All ten runs have capture enabled. Each run retains 1,000
+fresh exact denial witnesses with healthy coverage and zero enforcement-
+event loss. All ten captures pass output and cleanup checks. Trace kernel-
+loss counters remain unknown. The test reports 283.51 seconds and returns
+101 at final validation against an agent-selected 5% setting. The user
+approved the experiment, not that allowance. Araphor is slower in pairs
+1, 4 and 5. The requirement is parity with plain bpftrace, without an added
+performance cost. Do not use 5% as an acceptance requirement.
+Compare mode writes no qualified configuration, including when it passes.
+Read the [direct baseline result](../../araphor-observability/phase-2-owned-capture.md#capture-optimization-and-direct-baseline-result)
+for the command, all five measurements and receipt names. The result does
+not prove equal performance or isolate a latency cause. The source changes
+remove known repeated work; measured parity remains **Not done**.
+The final workspace procedure passed on the code committed as `b4890649`.
+Formatting, workspace checking, strict Clippy and all selected workspace
+tests passed. Data passed 167 tests, shared observability 23, Interceptor
+39, Control 170, e2e 139 and Node 262. Read
+`capture-spool-workspace-final.log`. The e2e suite kept 412 physical and
+environment-dependent tests ignored. This is correctness proof for the
+executed cases, not performance parity or physical lifecycle qualification.

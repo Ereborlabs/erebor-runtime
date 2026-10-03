@@ -744,10 +744,83 @@ Keep the binary, script, filters, backend environment, DEBUG logging and
 five-second collection window identical. Each run attempts 1,000 denied
 opens at 1 ms intervals. Limit the complete experiment to ten minutes.
 Use plain capture as each pair's baseline. Araphor p99 must not exceed that
-baseline by more than 5%. Every run must retain all exact denial witnesses,
+baseline. Keep the same capture behavior. The user did not approve a 5%
+allowance. Every run must retain all exact denial witnesses,
 healthy coverage, zero enforcement-event loss and verified cleanup.
 Record each pair and each failure. This added-cost comparison does not
 replace the deployment interference gate or create a qualified configuration.
+
+### Capture optimization and direct baseline result
+
+Source `b4890649` implements both Node spool changes.
+`recovery_pending` starts true and is set before intent creation and worker
+joins. Recovery syncs each execution directory and the diagnostics parent
+before it clears the flag. A failure leaves recovery pending. An unchanged
+poll skips recovery work; retained dispatch and upload validation still run.
+An active spool with no newer committed frames returns no frames without
+reading its output file. Other reads keep the existing parser. No bpftrace
+source, probe, target check, timer, quota, storage format or ACK rule changes.
+
+The focused recovery selection passed 13 tests. The direct routing check
+and lightweight owned-upload case each passed one test. Read
+`capture-spool-recovery-focused.log`, `capture-compare-route-focused.log` and
+`capture-spool-owned-focused.log` in the evidence directory above. Tests
+cover actual temporary terminal-write failures, retry, retained prefixes,
+duplicate admission and corrupt uncommitted output. Parent-sync and thread-
+spawn failures were source-reviewed; these tests do not inject those faults.
+
+The approved direct experiment used `MITHRIL_TRACE_MODE=compare`. It ran
+the same owned harness command above with output
+`/tmp/araphor-observability-153-compare-20261003` and limit argument `500`.
+All other inputs stay unchanged. The 590-second timeout stays in place.
+The experiment ran without a concurrent Cargo build or workspace test run.
+The agent selected `500` basis points, or 5%, as a test setting. The user
+approved the experiment, not that allowance. Keep this setting in the
+execution record. Do not use it as the acceptance requirement. Plain
+bpftrace is the baseline; Araphor must have the same behavior without an
+added performance cost.
+
+Every run has capture enabled. Each pair runs plain bpftrace first and
+Araphor second. All ten runs use cgroup 38,231, Task cookie 14, role 3,
+admission rule 1 and profile generation 1. The source and backend settings
+stay unchanged. Compare mode cannot write a qualified configuration.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Araphor change |
+| --- | ---: | ---: | ---: |
+| 1 | 139,006 | 291,406 | +109.64% |
+| 2 | 298,993 | 253,795 | -15.12% |
+| 3 | 246,367 | 105,536 | -57.16% |
+| 4 | 127,748 | 272,899 | +113.62% |
+| 5 | 101,912 | 306,880 | +201.12% |
+
+Every run retains 1,000 fresh exact policy-deny witnesses. The complete
+receipt has 10,000 distinct witness coordinates, healthy coverage, zero
+unresolved effects and zero enforcement-event loss. Every capture measures
+1,000 EACCES opens and passes cleanup. Native collection times are 5,006,
+5,001, 5,006, 5,000 and 5,009 ms. All children exit with code zero without
+a forced kill. Araphor terminals report `Deadline`, complete output and
+`Verified` cleanup. Trace kernel-loss counters remain unknown.
+
+The test reports 283.51 seconds and the launcher returns 101 at final
+configuration validation against the agent-selected 5% setting. Araphor
+is slower in pairs 1, 4 and 5. Read
+`capture-vm153-compare-20261003.json` and
+`capture-vm153-compare-20261003-test.log` in the evidence directory above.
+Both paths have substantial run-to-run variation. These results do not
+identify its cause, prove equal performance or prove an improvement from
+the two code changes. The changes remove known repeated work. They do not
+establish performance parity. Do not add an allowance or change
+logging, source, safety checks or workload to report a pass.
+
+The final workspace procedure passed on the code committed as `b4890649`.
+Formatting, workspace checking, strict Clippy and all selected workspace
+tests passed. Data passed 167 tests, shared observability 23, Interceptor
+39, Control 170, e2e 139 and Node 262. Read
+`capture-spool-workspace-final.log`. The e2e suite kept 412 physical and
+environment-dependent tests ignored. This pass proves correctness for the
+executed cases. It does not prove performance parity or physical lifecycle
+qualification.
+Diagnostics stay disabled. Physical lifecycle gates remain **Not done**.
 
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
