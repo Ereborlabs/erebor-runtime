@@ -1324,16 +1324,17 @@ The user approves a bounded resource-scan change and an unprofiled comparison.
 Keep the status read, a fresh fdinfo directory open, and resource inspection
 on each 10-ms supervision turn. Retain at most 256 fdinfo file handles for the
 current selected entries. Remove handles for absent entries before opening
-new ones. Seek to offset zero and read current contents, with the same 16-KiB
-limit. Do not reuse parsed text or resource IDs as current evidence.
-Discard handles on directory, seek or read failure, and on a limit-sized read.
+new ones. Read current contents from offset zero, with the same 16-KiB
+limit. Continue positive short reads at the next offset until EOF or the limit.
+Do not reuse parsed text or resource IDs as current evidence.
+Discard handles on directory or read failure, and on a limit-sized read.
 Close all handles before child reap and on owner drop. Keep the recorded ID
 unions and cleanup verification.
 
 Linux 6.8 [fdinfo reads](https://github.com/torvalds/linux/blob/v6.8/fs/proc/fd.c)
 look up the current child FD when the sequence is regenerated. The proc handle
 does not retain that child FD. [Sequence reset](https://github.com/torvalds/linux/blob/v6.8/fs/seq_file.c)
-permits a fresh read after seek to zero. Require tests for current contents,
+permits a fresh read from offset zero. Require tests for current contents,
 closed or reused FDs and bounded handle ownership before measurement.
 Keep fresh directory authorization and read authorization. Reuse removes
 repeated per-file open checks and open-time evidence; it does not execute
@@ -1349,6 +1350,64 @@ is 20 minutes. Calculate nearest-rank p99 at zero-based index 4,949. Report
 both p99 values and the signed difference for every pair. Keep the requirement
 for no Araphor p99 increase in every pair. Do not add a percentage allowance.
 This approval is not a performance result or deployment qualification.
+
+### Resource scan measurements and optimization
+
+The user approves further measured optimization and test runs to meet the
+plain-bpftrace baseline. Do not weaken authorization, target checks, evidence
+durability, resource ownership, deadlines, output limits or cleanup. Keep the
+no-increase requirement for every pair. Do not add a percentage allowance.
+
+The handle-cache source `94bf4428` completes the unprofiled comparison in
+581.19 seconds. The five pairs below use the unchanged 5,000-open fixture,
+stock backend, source, environment and owned VM. No Cargo, CI, profiler or
+guest polling runs during this comparison.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 143,808 | 221,803 | +77,995 | +54.24 |
+| 2 | 246,326 | 182,055 | -64,271 | -26.09 |
+| 3 | 156,994 | 417,242 | +260,248 | +165.77 |
+| 4 | 310,050 | 166,551 | -143,499 | -46.28 |
+| 5 | 109,956 | 243,701 | +133,745 | +121.64 |
+
+All ten runs have 5,000 exact denials, zero effect loss and zero unresolved
+effects. Independent cleanup passes; enforcement resources stay unchanged.
+Trace kernel loss remains unknown. Three pairs fail the comparison gate.
+Read `capture-pairs.json` and `test.log` in the guest output
+`/tmp/araphor-observability-153-fdinfo-20261003-5000`.
+
+The separate post-cache profile uses the same approved CPU and scheduler
+recorders and instrumented fixture. Its guest directory is
+`/var/tmp/araphor-attribution-fdinfo.TxsIsNAf`; local analysis is in
+`/tmp/araphor-fdinfo-profile.bc4UoneF`. The scheduler export reports no lost
+records or ordering violations. The CPU recorder reports 2,155 out-of-order
+events. Of 43 supervisor CPU samples, 35 include resource inspection.
+Recorded stacks include repeated path construction and file rewinds.
+The profile does not prove a p99 improvement. Its pair differences are
+-20.69%, -4.37%, +1.79%, +2.12% and +0.67%; three pairs still fail.
+
+`SupervisedChild` now selects numeric FDs in a fixed 256-entry buffer. It
+builds a path only when a cached handle is absent. One 16-KiB byte buffer
+serves all fresh fdinfo reads. `FileExt::read_at` starts at zero and continues
+short reads at increasing offsets. Retry interruption at the same offset.
+Reject other errors and invalid UTF-8 before copying or parsing text. Keep
+the fresh directory open, status read, 10-ms turns, ID unions and eviction.
+Linux [sequence reads](https://github.com/torvalds/linux/blob/v6.8/fs/seq_file.c)
+reset at offset zero. [Positioned reads](https://github.com/torvalds/linux/blob/v6.8/fs/read_write.c)
+still call the read permission check.
+
+The offset regression fails before this change and passes after it. All 17
+backend tests pass in 31.53 seconds. After the final reader type change, the
+three resource tests pass in 0.04 seconds. They check interrupted and short
+reads, errors after a prefix, current contents, unchanged file position,
+invalid UTF-8, limits, closed and reused FDs, and bounded handle ownership.
+Owned upload passes in 24.87 seconds. Read `resource-offset-red.log`,
+`resource-offset-green.log`, `resource-partial-green.log` and
+`resource-owned-green.log` in the local analysis directory. Independent
+Ponytail review finds no unnecessary owner or dependency. The implementation
+slice is **Done**. Its unprofiled comparison and final CI are **Not done**.
+Performance parity remains **Not done**. Diagnostics stay disabled.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new

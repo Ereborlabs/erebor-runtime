@@ -1,7 +1,8 @@
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -444,8 +445,9 @@ impl SupervisedChild {
         let mut eof = [false, false];
         let mut status = None;
         let mut resource_text = String::with_capacity(16 * 1024);
+        let mut resource_bytes = [0; 16 * 1024];
         loop {
-            owner.record_resources(&mut result, &mut resource_text);
+            owner.record_resources(&mut result, &mut resource_text, &mut resource_bytes);
             if let Some(writer) = &mut input {
                 match writer.write(&source[input_offset..]) {
                     Ok(count) => input_offset += count,
@@ -587,7 +589,12 @@ impl SupervisedChild {
         Ok(result)
     }
 
-    fn record_resources(&mut self, result: &mut DiagnosticResult, text: &mut String) {
+    fn record_resources(
+        &mut self,
+        result: &mut DiagnosticResult,
+        text: &mut String,
+        bytes: &mut [u8; 16 * 1024],
+    ) {
         text.clear();
         if File::open(format!("/proc/{}/status", self.child.id()))
             .and_then(|mut file| file.read_to_string(text))
@@ -605,26 +612,38 @@ impl SupervisedChild {
             self.fdinfo.clear();
             return;
         };
-        let paths: BTreeMap<u32, PathBuf> = entries
-            .take(256)
-            .flatten()
-            .filter_map(|entry| {
-                let fd = entry.file_name().to_str()?.parse().ok()?;
-                Some((fd, entry.path()))
-            })
-            .collect();
-        self.fdinfo.retain(|fd, _| paths.contains_key(fd));
-        for (fd, path) in paths {
+        let mut fds = [0_u32; 256];
+        let mut count = 0;
+        for entry in entries.take(fds.len()).flatten() {
+            if let Some(fd) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok())
+            {
+                fds[count] = fd;
+                count += 1;
+            }
+        }
+        let fds = &mut fds[..count];
+        fds.sort_unstable();
+        self.fdinfo.retain(|fd, _| fds.binary_search(fd).is_ok());
+        let mut previous = None;
+        for &fd in fds.iter() {
+            if previous == Some(fd) {
+                continue;
+            }
+            previous = Some(fd);
             let file = match self.fdinfo.entry(fd) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
-                    let Ok(file) = File::open(path) else {
+                    let Ok(file) = File::open(format!("/proc/{}/fdinfo/{fd}", self.child.id()))
+                    else {
                         continue;
                     };
                     entry.insert(file)
                 }
             };
-            let count = match Self::read_resource(file, text) {
+            let count = match Self::read_resource(file, text, bytes) {
                 Ok(count) => count,
                 Err(_) => {
                     self.fdinfo.remove(&fd);
@@ -651,10 +670,26 @@ impl SupervisedChild {
         }
     }
 
-    fn read_resource(mut reader: impl Read + Seek, text: &mut String) -> std::io::Result<usize> {
+    fn read_resource(
+        reader: &impl FileExt,
+        text: &mut String,
+        bytes: &mut [u8; 16 * 1024],
+    ) -> std::io::Result<usize> {
         text.clear();
-        reader.rewind()?;
-        reader.take(16 * 1024).read_to_string(text)
+        let mut count = 0;
+        let limit = bytes.len();
+        while count < limit {
+            match reader.read_at(&mut bytes[count..limit], count as u64) {
+                Ok(0) => break,
+                Ok(read) => count += read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        let current = std::str::from_utf8(&bytes[..count])
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        text.push_str(current);
+        Ok(count)
     }
 
     fn emit(
@@ -728,6 +763,7 @@ impl Drop for SupervisedChild {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Seek;
 
     fn capture(script: &str) -> Result<DiagnosticCapture> {
         let mut command = Command::new("/bin/sh");
@@ -752,35 +788,98 @@ mod tests {
         let mut resource = File::open(&native)?;
         let expected = fs::read_to_string(&native)?;
         let mut text = String::with_capacity(16 * 1024);
+        let mut bytes = [0; 16 * 1024];
         text.push_str("prog_id:\t111\nmap_id:\t222\n");
         let capacity = text.capacity();
         let allocation = text.as_ptr();
-        SupervisedChild::read_resource(&mut resource, &mut text)?;
+        SupervisedChild::read_resource(&resource, &mut text, &mut bytes)?;
         assert_eq!(text, expected);
         assert_eq!(text.capacity(), capacity);
         assert_eq!(text.as_ptr(), allocation);
         held.read_exact(&mut [0; 1])?;
-        SupervisedChild::read_resource(&mut resource, &mut text)?;
+        resource.seek(std::io::SeekFrom::Start(9))?;
+        SupervisedChild::read_resource(&resource, &mut text, &mut bytes)?;
         assert_eq!(text, fs::read_to_string(&native)?);
         assert_ne!(text, expected);
         assert_eq!(text.as_ptr(), allocation);
-        assert!(SupervisedChild::read_resource(File::open(directory.path())?, &mut text).is_err());
+        assert_eq!(resource.stream_position()?, 9);
+        assert!(SupervisedChild::read_resource(
+            &File::open(directory.path())?,
+            &mut text,
+            &mut bytes
+        )
+        .is_err());
         assert!(text.is_empty());
         fs::write(&path, [0xff])?;
-        assert!(SupervisedChild::read_resource(File::open(&path)?, &mut text).is_err());
+        assert!(
+            SupervisedChild::read_resource(&File::open(&path)?, &mut text, &mut bytes).is_err()
+        );
         fs::write(&path, b"map_id:\t23\n")?;
-        SupervisedChild::read_resource(File::open(&path)?, &mut text)?;
+        SupervisedChild::read_resource(&File::open(&path)?, &mut text, &mut bytes)?;
         assert_eq!(text, "map_id:\t23\n");
         assert_eq!(text.as_ptr(), allocation);
         let mut bounded = vec![b' '; 16 * 1024];
         bounded.extend_from_slice(b"\nprog_id:\t99\n");
         fs::write(&path, bounded)?;
         assert_eq!(
-            SupervisedChild::read_resource(File::open(&path)?, &mut text)?,
+            SupervisedChild::read_resource(&File::open(&path)?, &mut text, &mut bytes)?,
             16 * 1024
         );
         assert_eq!(text.len(), 16 * 1024);
         assert!(!text.contains("prog_id:"));
+        Ok(())
+    }
+
+    #[test]
+    fn observability_backend_resource_reads() -> std::io::Result<()> {
+        struct ShortRead {
+            calls: std::cell::Cell<usize>,
+            fail: bool,
+        }
+
+        impl FileExt for ShortRead {
+            fn read_at(&self, bytes: &mut [u8], offset: u64) -> std::io::Result<usize> {
+                let call = self.calls.get();
+                self.calls.set(call + 1);
+                if call == 0 {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                if self.fail && offset > 0 {
+                    return Err(std::io::ErrorKind::PermissionDenied.into());
+                }
+                let source = b"pos:\t1\nprog_id:\t23\nmap_id:\t45\n";
+                let start = usize::try_from(offset).unwrap();
+                let count = (source.len() - start).min(bytes.len()).min(3);
+                bytes[..count].copy_from_slice(&source[start..start + count]);
+                Ok(count)
+            }
+
+            fn write_at(&self, _bytes: &[u8], _offset: u64) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::Unsupported.into())
+            }
+        }
+
+        let mut text = String::from("prog_id:\t111\nmap_id:\t222\n");
+        let mut bytes = [0; 16 * 1024];
+        let reader = ShortRead {
+            calls: std::cell::Cell::new(0),
+            fail: false,
+        };
+        SupervisedChild::read_resource(&reader, &mut text, &mut bytes)?;
+        assert_eq!(text, "pos:\t1\nprog_id:\t23\nmap_id:\t45\n");
+        assert!(reader.calls.get() > 3);
+        let reader = ShortRead {
+            calls: std::cell::Cell::new(0),
+            fail: true,
+        };
+        assert_eq!(
+            SupervisedChild::read_resource(&reader, &mut text, &mut bytes)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(text.is_empty());
+        assert_eq!(reader.calls.get(), 3);
         Ok(())
     }
 
@@ -843,40 +942,41 @@ read -r gate"#,
             peak_rss_kib: None,
         };
         let mut text = String::with_capacity(16 * 1024);
-        owner.record_resources(&mut result, &mut text);
+        let mut bytes = [0; 16 * 1024];
+        owner.record_resources(&mut result, &mut text, &mut bytes);
         assert_eq!(owner.fdinfo.len(), 256);
         let held = owner.fdinfo.get(&3).ok_or("fdinfo absent")?.as_raw_fd();
         let path = PathBuf::from(format!("/proc/{}/fdinfo/3", owner.child.id()));
-        let mut native = File::open(&path)?;
-        SupervisedChild::read_resource(&mut native, &mut text)?;
+        let native = File::open(&path)?;
+        SupervisedChild::read_resource(&native, &mut text, &mut bytes)?;
         let initial = text.clone();
         for expected in ["moved\n", "reused\n"] {
             input.write_all(b"next\n")?;
             phase.clear();
             output.read_line(&mut phase)?;
             assert_eq!(phase, expected);
-            owner.record_resources(&mut result, &mut text);
+            owner.record_resources(&mut result, &mut text, &mut bytes);
             assert!(owner.fdinfo.len() <= 256);
             let resource = owner.fdinfo.get_mut(&3).ok_or("fdinfo absent")?;
             assert_eq!(resource.as_raw_fd(), held);
-            SupervisedChild::read_resource(resource, &mut text)?;
+            SupervisedChild::read_resource(resource, &mut text, &mut bytes)?;
             assert_eq!(text, fs::read_to_string(&path)?);
             assert_ne!(text, initial);
         }
         assert!(owner.fdinfo.len() < 256);
         owner.fdinfo.insert(3, File::open(directory.path())?);
-        owner.record_resources(&mut result, &mut text);
+        owner.record_resources(&mut result, &mut text, &mut bytes);
         assert!(!owner.fdinfo.contains_key(&3));
-        owner.record_resources(&mut result, &mut text);
+        owner.record_resources(&mut result, &mut text, &mut bytes);
         assert!(owner.fdinfo.contains_key(&3));
         input.write_all(b"next\n")?;
         phase.clear();
         output.read_line(&mut phase)?;
         assert_eq!(phase, "closed\n");
-        owner.record_resources(&mut result, &mut text);
+        owner.record_resources(&mut result, &mut text, &mut bytes);
         assert!(!owner.fdinfo.contains_key(&3));
         text.push_str("prog_id:\t111\nmap_id:\t222\n");
-        assert!(SupervisedChild::read_resource(&mut native, &mut text).is_err());
+        assert!(SupervisedChild::read_resource(&native, &mut text, &mut bytes).is_err());
         assert!(text.is_empty());
         assert!(result.program_ids.is_empty());
         assert!(result.map_ids.is_empty());

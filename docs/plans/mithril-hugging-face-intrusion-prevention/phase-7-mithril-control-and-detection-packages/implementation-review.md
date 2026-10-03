@@ -3410,3 +3410,18 @@ timeout, then passes in 0.02 seconds. Read `pod-exit-red.log` and
 `pod-exit-green.log`. Independent target, policy and BPF checks do not change.
 The transport correction is **Done**; paired physical qualification and
 final CI for this correction remain **Not done**.
+
+For resource-scan optimization, read
+[`SupervisedChild::record_resources`](../../../../crates/erebor-interceptor/src/diagnostic.rs)
+and `read_resource`, then the three same-file resource tests. The existing
+owner holds at most 256 proc fdinfo handles. Each turn opens the directory
+again, selects numeric FDs, prunes absent handles and builds paths only for
+new entries. Positioned reads use one 16-KiB buffer. They start at zero,
+continue short reads, retry interruption and reject errors before parsing.
+The recorded ID unions, status read, 10-ms turns and cleanup stay unchanged.
+`observability_backend_resource_reads` uses the standard `FileExt` seam to
+check interruption, short reads and a permission error after a prefix.
+Read the [measurements and proof](../../araphor-observability/phase-2-owned-capture.md#resource-scan-measurements-and-optimization).
+The backend and owned-upload tests pass. The handle-cache comparison fails
+three of five pairs. Profiled results cannot qualify performance. The current
+optimization needs its unprofiled comparison and final CI; neither is claimed.
