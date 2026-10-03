@@ -230,9 +230,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
 pub struct RuncRetainedRuntimeGateProbeV1 {
     pub schema_version: u32,
     pub runc_version: String,
-    pub forged_installer_denied: bool,
-    pub forged_installer_process_never_started: bool,
-    pub forged_installer_decision_logged: bool,
     pub host_stock_spec_generated: bool,
     pub fixture_root_removed: bool,
 }
@@ -605,9 +602,7 @@ struct RetainedRuntimeGateRuncFixture {
     fixture_root: PathBuf,
     bundle: PathBuf,
     marker_directory: PathBuf,
-    manifest: PathBuf,
     runc_path: PathBuf,
-    hook_path: PathBuf,
     k3s_path: PathBuf,
     output_directory: PathBuf,
     stock_config: serde_json::Value,
@@ -623,7 +618,6 @@ impl RetainedRuntimeGateRuncFixture {
     fn create(
         output_directory: &Path,
         runc_path: &Path,
-        hook_path: &Path,
         k3s_path: &Path,
         nsenter_path: &Path,
     ) -> Result<Self> {
@@ -647,7 +641,6 @@ impl RetainedRuntimeGateRuncFixture {
                 path: &marker_directory,
             },
         )?;
-        Self::copy_executable(&rootfs, Path::new("/bin/sh"), Path::new("/bin/sh"))?;
         Self::copy_executable(&rootfs, nsenter_path, nsenter_path)?;
         run_checked(
             Command::new(runc_path).args(["spec", "--bundle", bundle.to_string_lossy().as_ref()]),
@@ -659,83 +652,11 @@ impl RetainedRuntimeGateRuncFixture {
         )
         .context(JsonSnafu { path: &config_path })?;
 
-        let installer = rootfs.join("usr/local/bin/mithril-oci-hook");
-        fs::create_dir_all(installer.parent().ok_or_else(|| {
-            InvalidInputSnafu {
-                path: &installer,
-                reason: "the installer fixture path has no parent",
-            }
-            .build()
-        })?)
-        .context(IoSnafu { path: &installer })?;
-        fs::write(
-            &installer,
-            b"#!/bin/sh\nprintf INSTALLER_ALLOWED >/result/installer\n",
-        )
-        .context(IoSnafu { path: &installer })?;
-        fs::set_permissions(&installer, fs::Permissions::from_mode(0o755))
-            .context(IoSnafu { path: &installer })?;
-        let host_hook_directory = fixture_root.join("host-hook");
-        let host_containerd_directory = fixture_root.join("host-containerd");
-        fs::create_dir(&host_hook_directory).context(IoSnafu {
-            path: &host_hook_directory,
-        })?;
-        fs::create_dir(&host_containerd_directory).context(IoSnafu {
-            path: &host_containerd_directory,
-        })?;
-        let installer_args = vec![
-            "/usr/local/bin/mithril-oci-hook".to_owned(),
-            "install".to_owned(),
-            "--owner".to_owned(),
-            "mithril-system/mithril".to_owned(),
-            "--hook-host-directory".to_owned(),
-            "/usr/libexec/oci/hooks.d".to_owned(),
-            "--containerd-host-directory".to_owned(),
-            "/var/lib/rancher/k3s/agent/etc/containerd".to_owned(),
-            "--k3s-host-path".to_owned(),
-            "/usr/local/bin/k3s".to_owned(),
-            "--socket".to_owned(),
-            "/run/mithril/runtime-admission.sock".to_owned(),
-        ];
-        let manifest = fixture_root.join("mithril-recovery.json");
-        fs::write(
-            &manifest,
-            serde_json::to_vec_pretty(&json!({
-                "version": 1,
-                "entries": [
-                    {
-                        "executable": "/usr/local/bin/mithril-oci-hook",
-                        "args": installer_args,
-                        "requiredMounts": [
-                            {
-                                "source": host_hook_directory,
-                                "destination": "/host-hook-bin",
-                                "readOnly": false
-                            },
-                            {
-                                "source": host_containerd_directory,
-                                "destination": "/host-containerd",
-                                "readOnly": false
-                            },
-                            {
-                                "source": k3s_path,
-                                "destination": "/host-k3s",
-                                "readOnly": true
-                            }
-                        ]
-                    }
-                ]
-            }))
-            .context(JsonSnafu { path: &manifest })?,
-        )
-        .context(IoSnafu { path: &manifest })?;
         Ok(Self {
             fixture_root,
             bundle,
             marker_directory,
-            manifest,
             runc_path: runc_path.to_path_buf(),
-            hook_path: hook_path.to_path_buf(),
             k3s_path: k3s_path.to_path_buf(),
             output_directory: output_directory.to_path_buf(),
             stock_config,
@@ -784,16 +705,6 @@ impl RetainedRuntimeGateRuncFixture {
             fs::copy(source, &target).context(IoSnafu { path: source })?;
         }
         Ok(())
-    }
-
-    fn run_forged_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        let mut config = self.installer_config()?;
-        config["process"]["args"][3] = json!("attacker/other");
-        let marker = self.marker_directory.join("installer");
-        if marker.exists() {
-            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
-        }
-        self.run_case("forged-installer", config)
     }
 
     fn run_host_stock_spec(&self) -> Result<RetainedRuntimeGateCaseResult> {
@@ -869,75 +780,11 @@ impl RetainedRuntimeGateRuncFixture {
             "io.kubernetes.cri.container-type": "container",
             "io.kubernetes.cri.container-id": format!("{:064x}", Sha256::digest(case.as_bytes()))
         });
-        config["hooks"] = json!({
-            "createRuntime": [{
-                "path": self.hook_path,
-                "args": [
-                    "mithril-oci-hook", "run", "--stage", "stage-runtime-facts",
-                    "--socket", self.fixture_root.join("absent-runtime-admission.sock"),
-                    "--recovery-manifest", self.manifest,
-                    "--timeout-ms", "100"
-                ],
-                "env": ["RUST_LOG=debug"],
-                "timeout": 2
-            }]
-        });
         self.add_bind_mount(
             &mut config,
             &self.marker_directory,
             Path::new("/result"),
             false,
-        )?;
-        Ok(config)
-    }
-
-    fn installer_config(&self) -> Result<serde_json::Value> {
-        let mut config = self.stock_config("changed-installer")?;
-        config["process"]["args"] = json!([
-            "/usr/local/bin/mithril-oci-hook",
-            "install",
-            "--owner",
-            "mithril-system/mithril",
-            "--hook-host-directory",
-            "/usr/libexec/oci/hooks.d",
-            "--containerd-host-directory",
-            "/var/lib/rancher/k3s/agent/etc/containerd",
-            "--containerd-drop-in-directory",
-            "config-v3.toml.d",
-            "--runtime-cli-host-path",
-            "/usr/local/bin/k3s",
-            "--runtime-cli-arg",
-            "ctr",
-            "--runtime-cli-arg",
-            "oci",
-            "--runtime-cli-arg",
-            "spec",
-            "--runtime-service",
-            "k3s",
-            "--runtime-service",
-            "k3s-agent",
-            "--socket",
-            "/run/mithril/runtime-admission.sock",
-            "--decommission-state-directory",
-            "/var/lib/mithril"
-        ]);
-        self.add_bind_mount(
-            &mut config,
-            &self.fixture_root.join("host-hook"),
-            Path::new("/host-hook-bin"),
-            false,
-        )?;
-        self.add_bind_mount(
-            &mut config,
-            &self.fixture_root.join("host-containerd"),
-            Path::new("/host-containerd"),
-            false,
-        )?;
-        self.add_bind_mount(
-            &mut config,
-            &self.k3s_path,
-            Path::new("/host-runtime-cli"),
-            true,
         )?;
         Ok(config)
     }
@@ -1005,10 +852,6 @@ impl RetainedRuntimeGateRuncFixture {
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
-    }
-
-    fn marker_exists(&self, name: &str) -> bool {
-        self.marker_directory.join(name).is_file()
     }
 
     fn cleanup(&self) -> Result<()> {
@@ -1418,11 +1261,9 @@ impl EffectTestRunner {
         let fixture = RetainedRuntimeGateRuncFixture::create(
             output_directory,
             runc_path,
-            hook_path,
             k3s_path,
             nsenter_path,
         )?;
-        let forged_installer = fixture.run_forged_installer()?;
         let host_stock_spec = fixture.run_host_stock_spec()?;
         let host_stock_spec_generated = host_stock_spec.success
             && serde_json::from_str::<serde_json::Value>(&host_stock_spec.stdout)
@@ -1433,24 +1274,15 @@ impl EffectTestRunner {
         let result = RuncRetainedRuntimeGateProbeV1 {
             schema_version: 5,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
-            forged_installer_denied: !forged_installer.success,
-            forged_installer_process_never_started: !fixture.marker_exists("installer"),
-            forged_installer_decision_logged: forged_installer
-                .stderr
-                .contains("decision=DENY_NODE_UNAVAILABLE"),
             host_stock_spec_generated,
             fixture_root_removed: false,
         };
         ensure!(
-            result.forged_installer_denied
-                && result.forged_installer_process_never_started
-                && result.forged_installer_decision_logged
-                && result.host_stock_spec_generated,
+            result.host_stock_spec_generated,
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; forged_installer={:?}; stock_spec={:?}",
-                    forged_installer.stderr.trim(),
+                    "the direct runc retained-gate oracle failed: result={result:?}; stock_spec={:?}",
                     host_stock_spec.stderr.trim(),
                 ),
             }

@@ -5927,12 +5927,27 @@ test does not close a row when its physical condition or an assertion changed.
       forged owner; stock runc does not start the shared actor.
     No production, Platform, launcher, or fixture input changed. This is
     direct-runc qualification. Keep the separate CRI installer probes.
-  - [ ] Remove the old forged installer action and its three result fields
+  - [x] Remove the old forged installer action and its three result fields
     after the replacement commit. Delete installer-only manifest creation,
     fake actor, shell copy, hook fields and construction, config, and marker
     check. Keep stock-spec security, nsenter dependencies, writable result
     mount, diagnostics, and cleanup. Qualify all twelve standard cases and the
     sole remaining legacy case before the separate retirement commit.
+    Commit `b25887d8` contains the replacement. The deletion removes 168 net
+    Rust lines. All twelve standard cases passed in 8.61 seconds. The remaining
+    stock-spec case and cleanup passed. Evidence:
+    `target/mithril-installer-forged-retirement-20261003T043232Z-2581705`.
+    The CLI executable was rebuilt before transfer. VM harness checks and final
+    Rust CI passed. See `/tmp/mithril-installer-forged-retirement-ci-20261003.log`.
+    The legacy file remains on the retirement list at 5,079 lines. The separate
+    CRI shell cases and public hook input validation remain unchanged.
+  - [ ] Replace the final host stock-spec case with a small standard Rust test.
+    Keep nsenter as the native entry, host PID and mount-namespace transition,
+    real K3s `ctr oci spec`, stock mounts, limits, masked and read-only paths,
+    all three capability sets, writable result mount, JSON output, and cleanup.
+    Use existing `OciBundle` paths and `ProcessFixture` execution. Keep hooks
+    absent. Do not replace generation with runtime integration installation.
+    Add no Platform API. Verify and commit before removing the old probe.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The
