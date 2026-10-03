@@ -16,10 +16,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ed25519_dalek::SigningKey;
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner, KernelStateReader};
 use erebor_interceptor_abi::{
-    BindingLifecycleStateV1, CanonicalMountRootKeyV1, CanonicalMountRootV1,
-    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1,
-    ExecutionSetBindingStateV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-    RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1,
+    BindingLifecycleStateV1, CanonicalMountRootKeyV1, CanonicalMountRootV1, EntryAdmissionRuleV1,
+    ExactFileObjectKeyV1, ExecutionSetBindingStateV1, Id128V1, KernelEffectFamilyV1,
+    KernelEffectOperationV1, RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1,
 };
 use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use k8s_cri::v1::ContainerState;
@@ -3361,7 +3360,6 @@ impl EffectTestRunner {
             }
         );
         let mount_seq = observations.mount_change_sequence();
-        let termination_role_id = policy.role_ids["termination-failure"];
 
         let mut replacement_binding = binding.clone();
         replacement_binding.active_profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
@@ -3396,65 +3394,6 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: pin_root,
                 reason: "the running application lost identity after the policy update",
-            }
-        );
-        let replacement_entry_rules = host
-            .map_keys("entry_admission_rules")
-            .context(InterceptorSnafu)?
-            .into_iter()
-            .map(|key| {
-                let parsed_key =
-                    EntryAdmissionRuleKeyV1::try_read_from_bytes(&key).map_err(|error| {
-                        InvalidInputSnafu {
-                            path: pin_root,
-                            reason: format!(
-                                "a replacement entry admission key has invalid ABI: {error}"
-                            ),
-                        }
-                        .build()
-                    })?;
-                let value = host
-                    .lookup_map("entry_admission_rules", &key)
-                    .context(InterceptorSnafu)?
-                    .ok_or_else(|| {
-                        InvalidInputSnafu {
-                            path: pin_root,
-                            reason:
-                                "a replacement entry admission rule disappeared before readback",
-                        }
-                        .build()
-                    })?;
-                let rule = EntryAdmissionRuleV1::try_read_from_bytes(&value).map_err(|error| {
-                    InvalidInputSnafu {
-                        path: pin_root,
-                        reason: format!(
-                            "a replacement entry admission rule has invalid ABI: {error}"
-                        ),
-                    }
-                    .build()
-                })?;
-                Ok((parsed_key, rule))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let replacement_signed_entry_rule_ids = replacement_entry_rules
-            .iter()
-            .filter(|(key, _)| key.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID)
-            .map(|(_, rule)| rule.admitted_entry_rule_id)
-            .collect::<BTreeSet<_>>();
-        let replacement_terminal_entry_rule_ids = replacement_entry_rules
-            .iter()
-            .filter(|(key, rule)| {
-                key.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
-                    && rule.target_role_id == termination_role_id
-            })
-            .map(|(_, rule)| rule.admitted_entry_rule_id)
-            .collect::<BTreeSet<_>>();
-        ensure!(
-            replacement_signed_entry_rule_ids.len() == 7
-                && replacement_terminal_entry_rule_ids.len() == 1,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "policy replacement did not install seven signed declared entries",
             }
         );
         let deadline = Instant::now() + WAIT_LIMIT;

@@ -6364,7 +6364,7 @@ setup, production actions, assertions, and focused test.
   `identity_kubernetes` case with the prepared Platform inputs and
   `--exact --ignored --nocapture --test-threads=1`. An attribute lists a
   platform only after that platform passes.
-- [ ] Replace the signed admission-map readback after generation replacement
+- [x] Replace the signed admission-map readback after generation replacement
   with `entry_replace::replacement_keeps_signed_entries`. Reuse both existing
   seven-entry policies and the fatal-executable input. Keep one actor live.
   Install the entry-map policy, install the runtime-entries policy, then
@@ -6393,7 +6393,14 @@ setup, production actions, assertions, and focused test.
     directory cleanup passed. The retained cluster resumed with short
     connection and HTTP 503 errors before it became ready. No timeout or
     assertion changed. See `/tmp/mithril-entry-replace-kube-20261003.log`.
-  - [ ] Remove only the matching old replacement readback and unused imports.
+  - [x] Remove only the matching old replacement readback, its unused role
+    variable, and its unused key import. This deletes 61 net Rust lines.
+    Keep generation installation, the running actor identity check, and all
+    later mount, cache, and restart checks. The shared test retains key and
+    value ABI checks, seven distinct signed IDs, and the terminal-role check.
+    It also requires nonzero IDs and stable actor identity across both updates.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-entry-replace-retirement-ci-20261003.log`.
   Review route: [replacement_keeps_signed_entries](src/identity/scenarios/entry_replace.rs)
     -> [entry_map_policy.json](fixtures/process/entry_map_policy.json)
     -> [runtime_entries_policy.json](fixtures/process/runtime_entries_policy.json)
