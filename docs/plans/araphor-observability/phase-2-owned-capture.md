@@ -1588,6 +1588,16 @@ review find no must-fix issue. This implementation slice is **Done**. Physical
 activation, its unchanged unprofiled comparison and final workspace CI remain
 **Not done**. Performance parity is **Not done**. Diagnostics stay disabled.
 
+The first unprofiled comparison of `6005773e` starts at 19:45 UTC on
+2026-10-03. It uses the unchanged full ten-run binary and archive. The SSH
+command ends with status 255 after the VM stops responding. Libvirt reports
+`paused (user)` and no block-device error. The host has 62 GB free. The guest
+output is `/tmp/araphor-observability-153-static-20261003-5000`; the host launch
+log is `comparison-launch.log` in the local test directory above.
+This run is interrupted. No five-pair result is available, and no parity
+result is claimed. Confirm authority to resume the externally paused VM
+before recovery. Discard this run for timing qualification after recovery.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node
