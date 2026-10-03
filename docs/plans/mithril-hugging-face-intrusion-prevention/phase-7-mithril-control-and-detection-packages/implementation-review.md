@@ -2747,5 +2747,28 @@ Node, which passed 262 tests. The new Node configuration check passed. Read
 `crate-workspace-final-6.log` in the same evidence directory. The approved
 physical attempt stopped before measurements because its reserve was too
 small. The corrected fixture uses 272 MiB and saves that same configuration.
-The unchanged experiment uses the original approval. No measured pair or
-physical capture pass is claimed for this correction.
+The unchanged experiment uses the original approval. Read the later physical
+attempt below. The reserve correction alone is not a physical capture pass.
+
+Both production images built from Rust source `2f87a2b3`. Native loader checks
+passed for all five packaged binaries. Read `capture-node-image.log` and
+`capture-control-image.log` in the same evidence directory. No image or loader
+check establishes a capture pass.
+
+The owned physical attempt recorded three individual runs and one complete
+pair. The pair has p99 values of 308,718 ns without tracing and 354,362 ns with
+tracing: a 14.785% increase, above the approved 10% limit. The test then failed
+Node readiness before the second trace-on run. No qualified configuration was
+written. The launcher returned 1. Read `capture-vm153-pairs-fixed-test.log`,
+`capture-vm153-pairs-fixed.json` and `capture-vm153-pairs-fixed-coverage.json`.
+
+Review [Host::qualify_diagnostics](../../../../crates/mithril-e2e/src/platform/host.rs),
+[observability.py](../../../../crates/mithril-e2e/fixtures/process/observability.py)
+and [python_policy.json](../../../../crates/mithril-e2e/fixtures/process/python_policy.json).
+The actor opens `/proc/self/environ` under a policy without file rules.
+Recorded drop counters are zero, but coverage has classifier-miss and
+unresolved-effect gaps. Review
+[CoverageHealthOwner::sample_health](../../../../crates/mithril-node/src/observation/coverage.rs)
+and [NodeChassis::check_evidence](../../../../crates/mithril-node/src/node.rs)
+for the gap and readiness checks. Do not remove those checks to obtain a pass.
+The physical gates and production enablement remain unqualified.

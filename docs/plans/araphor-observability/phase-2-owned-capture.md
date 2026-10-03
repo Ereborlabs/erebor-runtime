@@ -423,8 +423,55 @@ shared observability 22 passed (2 ignored), Interceptor 39 passed (1 ignored),
 Control 170 passed (2 ignored), e2e 134 passed (412 ignored), and Node 262 passed
 (none ignored). The receipt is `crate-workspace-final-6.log`. Use the same
 worktree-local command above. The unchanged experiment uses the original
-approval below. No second experiment has run. These results do not qualify
-the physical capture gates.
+approval below. Read its physical result below. These workspace results do
+not qualify the physical capture gates.
+
+### Current production images and physical attempt
+
+The production Dockerfile built both images from Rust source `2f87a2b3`.
+The Node build resumed its existing process and returned zero. The Control
+build reused the same release stage and returned zero. Native loader checks
+passed for all five packaged binaries in read-only containers without network
+access. These image checks do not qualify diagnostic execution.
+
+| Image tag | Image ID |
+| --- | --- |
+| `mithril-node:araphor-owned-capture-20261002` | `sha256:5e2dc4f64bb3a9b5efadf9fdb95acf0199310a7a20bf62d64b3296024d917130` |
+| `mithril-control:araphor-owned-capture-20261002` | `sha256:1135207618c4f2b9f45714127fdf0b2e3e66492300d19bb6bdae9b543f6627f8` |
+
+Read `capture-node-image.log` and `capture-control-image.log` in the evidence
+directory above. Existing image tags remain unchanged.
+
+The approved physical attempt used the same workload and limits. It recorded
+three individual runs, not five complete pairs. Each recorded run reports
+1,000 EACCES denials and zero drop or write-error counters. The first complete
+pair has p99 values of 308,718 ns without tracing and 354,362 ns with tracing.
+The increase is 14.785%, which exceeds the approved 10% limit. The next
+trace-off run has p99 of 323,644 ns. The first trace terminal records `Deadline`,
+complete output and verified cleanup.
+
+The test failed before the second trace-on run. Node readiness timed out with
+`admission_ready=false`. Saved coverage contains `CLASSIFIER_MISS` and
+`UNRESOLVED_EFFECT`. The fixture opens `/proc/self/environ`; its policy has no
+file rules. Zero drop counters do not establish healthy evidence coverage.
+The test reports 147.95 seconds. The launcher returns 1. No qualified
+configuration was written. Do not use this partial receipt to enable capture.
+
+Run command on the owned VM:
+
+```sh
+sudo -n timeout --signal=TERM --kill-after=10s 590s bash \
+  /mnt/mithril-source/worktrees/mithril-ui/crates/mithril-e2e/harness/observability/owned.sh \
+  /mnt/mithril-source/worktrees/mithril-ui/target/debug/deps/mithril_e2e-69abcc1defdc24e3 \
+  /var/tmp/araphor-capture-inputs.VMoOpWq2/fixtures.tar.gz \
+  /tmp/araphor-observability-153-pairs-fixed 1000
+```
+
+Receipts are `capture-vm153-pairs-fixed-test.log`,
+`capture-vm153-pairs-fixed.json` and `capture-vm153-pairs-fixed-coverage.json`
+in the evidence directory above. The workload and readiness failure require
+review before another measured run. Keep the production readiness checks and
+the approved limit unchanged. Status remains **Not done**.
 
 Remaining work is execution of the physical lifecycle gates below.
 Physical enablement requires a platform-matched interference receipt. The
