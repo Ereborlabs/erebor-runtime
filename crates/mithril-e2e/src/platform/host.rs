@@ -1109,12 +1109,13 @@ impl Host {
             ],
         };
         let mut env = Self::setup("observability-owned-capture")?;
-        env.shared.configure_diagnostics(NodeTraceConfigV1 {
+        let mut config = NodeTraceConfigV1 {
             executable: executable.clone(),
             executable_sha256: digest,
-            storage_reserve_bytes: 256 * 1024 * 1024,
+            storage_reserve_bytes: 272 * 1024 * 1024,
             qualification: qualification.clone(),
-        })?;
+        };
+        env.shared.configure_diagnostics(config.clone())?;
         env.start_control()?;
         let policy = serde_json::from_slice(&fs::read(super::policy_path(
             env.source(),
@@ -1295,12 +1296,7 @@ impl Host {
         }
         qualification.pairs = pairs;
         qualification.evidence_sha256 = Sha256::digest(fs::read(&proof)?).into();
-        let config = NodeTraceConfigV1 {
-            executable,
-            executable_sha256: digest,
-            storage_reserve_bytes: 256 * 1024 * 1024,
-            qualification,
-        };
+        config.qualification = qualification;
         config.validate()?;
         fs::write(
             proof.with_extension("config.json"),

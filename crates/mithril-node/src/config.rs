@@ -828,6 +828,58 @@ mod tests {
     }
 
     #[test]
+    fn observability_target_wal_reserve() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::{NodeTraceConfigV1, TraceQualificationPairV1, TraceQualificationV1};
+
+        const MIB: u64 = 1024 * 1024;
+        let mut node = config();
+        node.evidence
+            .as_mut()
+            .ok_or("the fixture evidence configuration is absent")?
+            .maximum_retained_bytes = 256 * MIB;
+        node.diagnostics = Some(NodeTraceConfigV1 {
+            executable: PathBuf::from("/usr/bin/bpftrace"),
+            executable_sha256: [1; 32],
+            storage_reserve_bytes: 256 * MIB,
+            qualification: TraceQualificationV1 {
+                evidence_sha256: [2; 32],
+                executable_sha256: [1; 32],
+                kernel_release: "fixture".into(),
+                architecture: std::env::consts::ARCH.into(),
+                logical_cpus: 2,
+                maximum_overhead_basis_points: 1000,
+                pairs: vec![
+                    TraceQualificationPairV1 {
+                        trace_off_p99_ns: 1,
+                        trace_on_p99_ns: 1,
+                        trace_off_lost_events: 0,
+                        trace_on_lost_events: 0,
+                        physical_decisions_equal: true,
+                    };
+                    5
+                ],
+            },
+        });
+        assert!(matches!(
+            node.validate(),
+            Err(crate::Error::InvalidConfiguration { reason, .. })
+                if reason == "diagnostics must reserve the evidence WAL limit and 16 MiB for metadata"
+        ));
+        let diagnostics = node
+            .diagnostics
+            .as_mut()
+            .ok_or("the fixture diagnostics configuration is absent")?;
+        diagnostics.storage_reserve_bytes = 272 * MIB - 1;
+        assert!(node.validate().is_err());
+        node.diagnostics
+            .as_mut()
+            .ok_or("the fixture diagnostics configuration is absent")?
+            .storage_reserve_bytes = 272 * MIB;
+        node.validate()?;
+        Ok(())
+    }
+
+    #[test]
     fn kubernetes_outage_control_clock_skew_defaults_and_is_bounded(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let control: NodeControlConfig = serde_json::from_value(serde_json::json!({
