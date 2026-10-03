@@ -2342,6 +2342,13 @@ impl Kubernetes {
         Ok(())
     }
 
+    fn capture_exit(actor: &mut ProcessFixture, limit: Duration) -> TestResult<()> {
+        actor.close();
+        actor.wait_exit("deleted Pod actor", limit)?;
+        actor.stop()?;
+        Ok(())
+    }
+
     fn delete_capture(&mut self, actor: &mut ProcessFixture) -> TestResult<()> {
         let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
         let original = self
@@ -2378,8 +2385,7 @@ impl Kubernetes {
             },
             || self.diagnostics(),
         )?;
-        actor.wait_exit("deleted Pod actor", STOP_LIMIT)?;
-        actor.stop()?;
+        Self::capture_exit(actor, STOP_LIMIT)?;
         self.actor_id = None;
         self.actor_pid = None;
         self.actor_cgroup = None;
@@ -2857,6 +2863,29 @@ impl PodCapture {
             _ = tokio::time::sleep(Duration::from_secs(900)) => Err("the Control fixture exceeded its lifetime".into()),
         }
     }
+}
+
+#[test]
+fn observability_pod_exec_exit() -> TestResult<()> {
+    let path = Path::new("/bin/cat");
+    let mut command = Command::new(path);
+    let mut remote = ProcessFixture::spawn(&mut command, path)?;
+    let mut actor = ProcessFixture::spawn(&mut command, path)?;
+    let remote_pid = remote.id();
+    actor.set_actor(remote_pid)?;
+    remote.close();
+    assert!(remote
+        .wait_exit("remote Pod actor", Duration::from_secs(2))?
+        .success());
+    remote.stop()?;
+    assert!(!Path::new(&format!("/proc/{remote_pid}")).exists());
+    actor.ensure_running("local exec transport with open stdin")?;
+    Kubernetes::capture_exit(&mut actor, Duration::from_secs(2))?;
+    assert!(actor
+        .try_wait()?
+        .ok_or("the local exec transport has no exit status")?
+        .success());
+    Ok(())
 }
 
 #[test]

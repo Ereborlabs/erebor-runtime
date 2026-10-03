@@ -1565,6 +1565,32 @@ The fixture correction is **Done**. Paired Pod qualification and final
 workspace CI remain **Not done** until their new runs finish. Performance
 parity remains **Not done**. Diagnostics stay disabled.
 
+Workspace CI returns zero on `717363cb`. Formatting, workspace check, strict
+Clippy and all workspace tests pass. Data passes 167 tests, Observability 23,
+Interceptor 40, Control 170, Mithril e2e 147 and Node 262. The e2e suite has
+413 ignored tests. Read `workspace-pod-args-final.log` in the same evidence
+directory. This run does not cover later source edits.
+
+The paired Pod rerun first passes owned upload in 25.57 seconds. The physical
+case fails after 250.66 seconds. The installer now succeeds and Node becomes
+ready. The initial capture and exact denial pass. Kubernetes confirms deletion
+of the original Pod, but the local exec transport still has open stdin.
+Waiting for that transport before closing stdin reaches the 120-second
+`deleted Pod actor` timeout. Read `pods-args/lightweight.log` and
+`pods-args/test.log` in the evidence directory. This result does not qualify
+Pod replacement.
+
+`Kubernetes::capture_exit` now closes the transport input after confirmed Pod
+deletion and before waiting for exit. It calls the existing ProcessFixture
+owner. That owner also requires the recorded remote process to be absent.
+Acceptance does not force-kill either process. Exact UID deletion, target
+retirement, policy checks and independent BPF cleanup remain unchanged.
+`platform::kubernetes::observability_pod_exec_exit` first reproduces the same
+timeout with external process doubles. After the fix, it passes in 0.02 seconds.
+Read `pod-exit-red.log` and `pod-exit-green.log` in the evidence directory.
+The transport correction is **Done**. Its paired physical result and final
+workspace CI remain **Not done**.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current

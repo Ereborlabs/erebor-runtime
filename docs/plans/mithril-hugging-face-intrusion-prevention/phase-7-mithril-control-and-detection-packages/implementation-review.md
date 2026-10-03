@@ -3392,3 +3392,21 @@ Ponytail review finds no unnecessary owner, dependency or parser.
 Read the [fixture proof](../../araphor-observability/phase-2-owned-capture.md#pod-fixture-input-correction)
 before the paired Pod result. The correction is **Done**. The new paired
 Pod and final workspace CI runs are not yet qualification results.
+
+Workspace CI returns zero on `717363cb`: formatting, check, strict Clippy and
+all workspace tests pass. Mithril e2e passes 147 tests with 413 ignored.
+Read `workspace-pod-args-final.log` in the evidence directory above.
+This run does not cover later source edits.
+
+The next paired Pod run passes owned upload in 25.57 seconds. The physical
+case fails in 250.66 seconds after the original Pod is deleted. The local
+exec helper retains an open stdin pipe. The fixture waits for helper exit
+before closing that pipe. Read `pods-args/test.log`; this is not a Pod pass.
+Read same-file `Kubernetes::capture_exit` and `observability_pod_exec_exit`
+next. The fixture now closes input only after confirmed Pod deletion, then
+waits for both the helper and recorded remote process to exit. It does not
+force-kill a process to pass acceptance. The regression first reproduces the
+timeout, then passes in 0.02 seconds. Read `pod-exit-red.log` and
+`pod-exit-green.log`. Independent target, policy and BPF checks do not change.
+The transport correction is **Done**; paired physical qualification and
+final CI for this correction remain **Not done**.
