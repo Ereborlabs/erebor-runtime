@@ -1678,6 +1678,70 @@ impl Shared {
         &self.out
     }
 
+    #[cfg(test)]
+    fn capture_selection(
+        selector: Option<&std::ffi::OsStr>,
+        config: Option<&std::ffi::OsStr>,
+    ) -> TestResult<bool> {
+        match (selector, config) {
+            (Some(selector), None) if selector == "1" => Ok(true),
+            (None, Some(_)) => Ok(false),
+            (Some(_), Some(_)) => {
+                Err("test admission and a qualified configuration are mutually exclusive".into())
+            }
+            (Some(_), None) => Err("MITHRIL_TRACE_TEST_ADMISSION must be exactly 1".into()),
+            (None, None) => Err("select test admission or supply MITHRIL_TRACE_CONFIG".into()),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_admission() -> TestResult<bool> {
+        Self::capture_selection(
+            env::var_os("MITHRIL_TRACE_TEST_ADMISSION").as_deref(),
+            env::var_os("MITHRIL_TRACE_CONFIG").as_deref(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn capture_config(
+        binary: &Path,
+        executable: PathBuf,
+        quota: usize,
+        maximum: u32,
+    ) -> TestResult<mithril_node::NodeTraceConfigV1> {
+        use mithril_node::{NodeTraceConfigV1, TraceQualificationPairV1, TraceQualificationV1};
+        use sha2::{Digest as _, Sha256};
+
+        let digest = Sha256::digest(fs::read(binary)?).into();
+        // Synthetic values admit this test only. They are not qualification evidence.
+        let qualification = TraceQualificationV1 {
+            evidence_sha256: [1; 32],
+            executable_sha256: digest,
+            kernel_release: fs::read_to_string("/proc/sys/kernel/osrelease")?
+                .trim()
+                .into(),
+            architecture: env::consts::ARCH.into(),
+            logical_cpus: quota,
+            maximum_overhead_basis_points: maximum,
+            pairs: vec![
+                TraceQualificationPairV1 {
+                    trace_off_p99_ns: 1,
+                    trace_on_p99_ns: 1,
+                    trace_off_lost_events: 0,
+                    trace_on_lost_events: 0,
+                    physical_decisions_equal: true,
+                };
+                5
+            ],
+        };
+        Ok(NodeTraceConfigV1 {
+            executable,
+            executable_sha256: digest,
+            storage_reserve_bytes: 272 * 1024 * 1024,
+            qualification,
+        })
+    }
+
     pub(super) fn configure_diagnostics(
         &mut self,
         config: mithril_node::NodeTraceConfigV1,
@@ -1901,6 +1965,20 @@ mod tests {
     use crate::physical::{wait_for, ProbeFile};
     use crate::platform::{test_lifecycle, CriFixture, Host, TestResult};
     use crate::process::ProcessFixture;
+
+    #[test]
+    fn capture_admission_selection() -> TestResult<()> {
+        let config = OsStr::new("/qualified/config.json");
+        assert!(!Shared::capture_selection(None, Some(config))?);
+        assert!(Shared::capture_selection(Some(OsStr::new("1")), None)?);
+        assert!(Shared::capture_selection(None, None).is_err());
+        assert!(Shared::capture_selection(Some(OsStr::new("1")), Some(config)).is_err());
+        for selector in ["", "0", "true", "1 "] {
+            assert!(Shared::capture_selection(Some(OsStr::new(selector)), None).is_err());
+            assert!(Shared::capture_selection(Some(OsStr::new(selector)), Some(config)).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires its physical test environment"]

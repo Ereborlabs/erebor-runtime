@@ -1982,7 +1982,7 @@ impl Kubernetes {
 
     fn configure_capture(&self, config: &mithril_node::NodeTraceConfigV1) -> TestResult<()> {
         if config.executable != Path::new("/usr/bin/bpftrace") {
-            return Err("the Pod fixture requires the qualified /usr/bin/bpftrace path".into());
+            return Err("the Pod fixture requires the /usr/bin/bpftrace path".into());
         }
         config.validate()?;
         let mut node: Value = serde_json::from_slice(&fs::read(&self.config_path)?)?;
@@ -2368,18 +2368,28 @@ impl Kubernetes {
     }
 
     fn qualify_pods() -> TestResult<()> {
-        let config: mithril_node::NodeTraceConfigV1 = serde_json::from_slice(&fs::read(
-            KubernetesState::required("MITHRIL_TRACE_CONFIG")?,
-        )?)?;
+        let test_admission = super::shared::Shared::test_admission()?;
         let proof = PathBuf::from(KubernetesState::required("MITHRIL_TRACE_PROOF")?);
         if proof.exists() || !proof.is_absolute() {
             return Err("the Pod proof must name a new absolute file".into());
         }
         let (bundle, libraries) = Self::capture_bundle()?;
+        let config = if test_admission {
+            super::shared::Shared::capture_config(
+                &bundle.join("bpftrace"),
+                PathBuf::from("/usr/bin/bpftrace"),
+                std::thread::available_parallelism()?.get(),
+                1,
+            )?
+        } else {
+            serde_json::from_slice(&fs::read(KubernetesState::required(
+                "MITHRIL_TRACE_CONFIG",
+            )?)?)?
+        };
         use sha2::Digest as _;
         let digest: [u8; 32] = sha2::Sha256::digest(fs::read(bundle.join("bpftrace"))?).into();
         if digest != config.executable_sha256 {
-            return Err("the bundled backend differs from its measured qualification".into());
+            return Err("the bundled backend differs from its pinned configuration".into());
         }
         let mut env = Self::setup("observability-pods")?;
         env.configure_capture(&config)?;
@@ -2452,7 +2462,14 @@ impl Kubernetes {
         record["physical"] = json!(true);
         record["physical_denials"] = json!([before, after]);
         record["runtime_preflight"] = preflight;
-        record["qualification"] = serde_json::to_value(config)?;
+        if test_admission {
+            record["diagnostic_admission"] = json!("synthetic-test-only");
+            record["performance_qualified"] = json!(false);
+            record["performance_claim"] = json!(false);
+        } else {
+            record["diagnostic_admission"] = json!("qualified-config");
+            record["qualification"] = serde_json::to_value(config)?;
+        }
         record["enforcement_resources_unchanged"] = json!(true);
         record["cleanup_observed"] = json!(true);
         record["diagnostic_resources"] = json!({"original": active, "replacement": active_after});
@@ -2852,7 +2869,7 @@ async fn observability_pod_child() -> TestResult<()> {
 }
 
 #[test]
-#[ignore = "requires an isolated Kubernetes host, reviewed backend, and measured qualification"]
+#[ignore = "requires an isolated Kubernetes host, reviewed backend, and explicit diagnostic admission"]
 fn observability_pod_replacement() -> TestResult<()> {
     super::test_lifecycle::<Kubernetes, _>("observability-pods", Kubernetes::qualify_pods)
 }

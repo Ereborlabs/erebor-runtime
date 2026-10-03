@@ -25,6 +25,24 @@ pub(crate) struct Host {
 
 impl Host {
     #[cfg(test)]
+    fn capture_admission() -> TestResult<(bool, mithril_node::NodeTraceConfigV1)> {
+        let test = Shared::test_admission()?;
+        let config = if test {
+            let executable = PathBuf::from(std::env::var("MITHRIL_TRACE_EXECUTABLE")?);
+            Shared::capture_config(
+                &executable,
+                executable.clone(),
+                std::thread::available_parallelism()?.get(),
+                1,
+            )?
+        } else {
+            serde_json::from_slice(&fs::read(std::env::var("MITHRIL_TRACE_CONFIG")?)?)?
+        };
+        config.validate()?;
+        Ok((test, config))
+    }
+
+    #[cfg(test)]
     fn capture_frames(spool: &Path) -> TestResult<Vec<mithril_control::TraceFrameV1>> {
         use std::io::Read as _;
 
@@ -78,9 +96,7 @@ impl Host {
         assert_eq!(fs::read_dir(&disk)?.count(), 0);
         let owned = ProbeDirectory::create(&disk.join("capture"))?;
         let path = owned.path().join("analysis");
-        let config: mithril_node::NodeTraceConfigV1 =
-            serde_json::from_slice(&fs::read(std::env::var("MITHRIL_TRACE_CONFIG")?)?)?;
-        config.validate()?;
+        let (test, config) = Self::capture_admission()?;
         let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
         if proof.exists() {
             return Err("the storage proof already exists".into());
@@ -458,6 +474,8 @@ impl Host {
         fs::write(
             &proof,
             serde_json::to_vec_pretty(&serde_json::json!({
+                "diagnostic_admission": if test { "synthetic-test-only" } else { "qualified-config" },
+                "performance_qualified": false, "performance_claim": false,
                 "case": "data-store-full", "accepted": accepted,
                 "append_error": failure, "before_append_ran": true, "after_sync_ran": false,
                 "raw_receipt_before": before.as_ref().map(|receipt| receipt.last_sequence),
@@ -504,9 +522,7 @@ impl Host {
         if !matches!(mode.as_str(), "before" | "after") {
             return Err("the restart stage must be before or after".into());
         }
-        let config: mithril_node::NodeTraceConfigV1 =
-            serde_json::from_slice(&fs::read(std::env::var("MITHRIL_TRACE_CONFIG")?)?)?;
-        config.validate()?;
+        let (test, config) = Self::capture_admission()?;
         let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
         if proof.exists() {
             return Err("the restart proof already exists".into());
@@ -750,6 +766,8 @@ impl Host {
         fs::write(
             &proof,
             serde_json::to_vec_pretty(&serde_json::json!({
+                "diagnostic_admission": if test { "synthetic-test-only" } else { "qualified-config" },
+                "performance_qualified": false, "performance_claim": false,
                 "case": "node-restart", "stage": mode, "accepted": accepted,
                 "frames": frames, "terminal": terminal, "observed_programs": programs,
                 "observed_maps": maps, "observed_links": links,
@@ -785,9 +803,7 @@ impl Host {
             TraceTerminalReasonV1, TraceTerminalV1,
         };
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-        let config: mithril_node::NodeTraceConfigV1 =
-            serde_json::from_slice(&fs::read(std::env::var("MITHRIL_TRACE_CONFIG")?)?)?;
-        config.validate()?;
+        let (test, config) = Self::capture_admission()?;
         let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
         if proof.exists() {
             return Err("the failure proof already exists".into());
@@ -1116,6 +1132,8 @@ impl Host {
             }
             assert_eq!(env.snapshot()?.program_digest, initial.program_digest);
             records.push(serde_json::json!({
+                "diagnostic_admission": if test { "synthetic-test-only" } else { "qualified-config" },
+                "performance_qualified": false, "performance_claim": false,
                 "case": case, "accepted": accepted, "frames": frames, "terminal": terminal,
                 "acknowledgement": ack,
                 "transport_released_unix_ns": release_at.map(|(_, stamp)| stamp),
@@ -1408,7 +1426,7 @@ impl Host {
             TraceExecutionGrantV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1,
             TraceTerminalReasonV1,
         };
-        use mithril_node::{NodeTraceConfigV1, TraceQualificationPairV1, TraceQualificationV1};
+        use mithril_node::TraceQualificationPairV1;
         use sha2::{Digest as _, Sha256};
         use std::collections::{BTreeMap, BTreeSet};
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1420,35 +1438,14 @@ impl Host {
             return Err("the trace proof path already exists".into());
         }
         let limit: u32 = std::env::var("MITHRIL_TRACE_MAX_OVERHEAD_BP")?.parse()?;
-        let digest: [u8; 32] = Sha256::digest(fs::read(&executable)?).into();
-        // Synthetic admission values enable this test only. The result stores measured pairs.
-        let mut qualification = TraceQualificationV1 {
-            evidence_sha256: [1; 32],
-            executable_sha256: digest,
-            kernel_release: fs::read_to_string("/proc/sys/kernel/osrelease")?
-                .trim()
-                .into(),
-            architecture: std::env::consts::ARCH.into(),
-            logical_cpus: std::thread::available_parallelism()?.get(),
-            maximum_overhead_basis_points: limit,
-            pairs: vec![
-                TraceQualificationPairV1 {
-                    trace_off_p99_ns: 1,
-                    trace_on_p99_ns: 1,
-                    trace_off_lost_events: 0,
-                    trace_on_lost_events: 0,
-                    physical_decisions_equal: true
-                };
-                5
-            ],
-        };
+        let mut config = Shared::capture_config(
+            &executable,
+            executable.clone(),
+            std::thread::available_parallelism()?.get(),
+            limit,
+        )?;
+        let mut qualification = config.qualification.clone();
         let mut env = Self::setup("observability-owned-capture")?;
-        let mut config = NodeTraceConfigV1 {
-            executable: executable.clone(),
-            executable_sha256: digest,
-            storage_reserve_bytes: 272 * 1024 * 1024,
-            qualification: qualification.clone(),
-        };
         env.shared.configure_diagnostics(config.clone())?;
         env.start_control()?;
         let policy = serde_json::from_slice(&fs::read(super::policy_path(
