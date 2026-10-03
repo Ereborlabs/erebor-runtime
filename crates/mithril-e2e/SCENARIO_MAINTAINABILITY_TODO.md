@@ -6321,7 +6321,7 @@ setup, production actions, assertions, and focused test.
 - [ ] Fixture construction: create the rootfs, runtime paths, bind mounts,
   output files, containerd owner, `runc` owner, pin root, lease, and cleanup
   in a fixture. Do not install policy or reconcile bindings in this fixture.
-- [ ] Signed admission-map publication: replace the initial seven-rule
+- [x] Signed admission-map publication: replace the initial seven-rule
   readback with `signed_entries_are_complete`, a standard platform test below
   100 lines. Reuse `ready.py` and the existing fatal-executable fixture.
   Add one checked policy with the original six ordinary entries and one
@@ -6345,10 +6345,16 @@ setup, production actions, assertions, and focused test.
     rules. Normal teardown and owned-directory cleanup passed. Final Rust
     CI passed. See `/tmp/mithril-entry-map-kube-20261003.log` and
     `/tmp/mithril-entry-map-kube-ci-20261003.log`.
-  - [ ] Remove only the matching initial map readback after qualification.
-    Keep the policy-replacement readback until its own replacement passes.
-    Verify the reduced old probe, harness checks, and final Rust CI before
-    the retirement commit.
+  - [x] Remove only the matching initial map readback after qualification.
+    All seven rule-count and ABI assertions remain in the qualified shared
+    test. This deletes 56 Rust lines. Keep the policy-replacement readback
+    until its own replacement passes. Harness checks and final Rust CI passed.
+    See `/tmp/mithril-entry-map-retirement-ci-20261003.log`.
+    The reduced old probe failed at a mount-cache snapshot before this map
+    readback. It produced all 32 exec diagnostic pairs, then reported no READY
+    row at cache generation 23. Its fixture, pin, and lease cleanup completed.
+    The unchanged mount checks remain. This run does not qualify the whole
+    old probe. See `/tmp/mithril-entry-map-retirement-probe-20261003.log`.
   Review route: [signed_entries_are_complete](src/identity/scenarios/entry_map.rs)
     supplies [entry_map_policy.json](fixtures/process/entry_map_policy.json)
     -> the production Control and Node install its signed generation

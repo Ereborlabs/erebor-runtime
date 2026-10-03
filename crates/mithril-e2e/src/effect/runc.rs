@@ -3361,63 +3361,7 @@ impl EffectTestRunner {
             }
         );
         let mount_seq = observations.mount_change_sequence();
-        let entry_admission_proofs = host
-            .map_keys("entry_admission_rules")
-            .context(InterceptorSnafu)?
-            .into_iter()
-            .map(|key| {
-                let value = host
-                    .lookup_map("entry_admission_rules", &key)
-                    .context(InterceptorSnafu)?
-                    .ok_or_else(|| {
-                        InvalidInputSnafu {
-                            path: pin_root,
-                            reason: "an entry admission rule disappeared before readback",
-                        }
-                        .build()
-                    })?;
-                EntryAdmissionRuleV1::try_read_from_bytes(&value).map_err(|error| {
-                    InvalidInputSnafu {
-                        path: pin_root,
-                        reason: format!("an entry admission rule has invalid ABI: {error}"),
-                    }
-                    .build()
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let signed_entry_rule_ids = entry_admission_proofs
-            .iter()
-            .map(|rule| rule.admitted_entry_rule_id)
-            .collect::<BTreeSet<_>>();
         let termination_role_id = policy.role_ids["termination-failure"];
-        let ordinary_entry_proofs = entry_admission_proofs
-            .iter()
-            .filter(|rule| rule.target_role_id != termination_role_id)
-            .collect::<Vec<_>>();
-        let terminal_entry_proofs = entry_admission_proofs
-            .iter()
-            .filter(|rule| rule.target_role_id == termination_role_id)
-            .collect::<Vec<_>>();
-        ensure!(
-            entry_admission_proofs.len() == 7
-                && signed_entry_rule_ids.len() == 7
-                && entry_admission_proofs.iter().all(|rule| {
-                    rule.target_role_id != 0
-                        && rule.target_process_state_vector_id != 0
-                        && rule.admitted_entry_rule_id != 0
-                        && rule.reserved == 0
-                        && rule.exact_object_key_id == 0
-                        && rule.executable_object == ExactFileObjectKeyV1::default()
-                })
-                && ordinary_entry_proofs.len() == 6
-                && terminal_entry_proofs.len() == 1,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: format!(
-                    "entry admission did not retain six BusyBox entries and one terminal-exec fixture: {entry_admission_proofs:?}"
-                ),
-            }
-        );
 
         let mut replacement_binding = binding.clone();
         replacement_binding.active_profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
