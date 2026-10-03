@@ -5698,14 +5698,29 @@ test does not close a row when its physical condition or an assertion changed.
     production gate tests and VM harness checks passed. The test preserves
     both baseline rejection conditions. It does not isolate argument and
     mount rejection. The final Rust CI gate passed. See
-    `/tmp/mithril-runtime-changed-ci-20261003.log`. The old action remains
-    until this replacement is committed. No production or Platform code changed.
+    `/tmp/mithril-runtime-changed-ci-20261003.log`. Commit `00f150a9` contains
+    the replacement. No production or Platform code changed.
     The review route uses the same native input binder, production spec
     owner, public hook, and process owner as the exact recovery test above.
-  - [ ] Remove only `run_changed_recovery`, its probe call, three result fields,
+  - [x] Remove only `run_changed_recovery`, its probe call, three result fields,
     and duplicate assertions after the replacement commit. Keep the exact
     recovery config, long argument list, version-change checks, and manifest.
     Qualify the five standard cases and complete reduced legacy probe.
+    The deletion removes 22 Rust lines and adds one line. All five standard
+    cases passed in 2.98 seconds through the retained launcher. All eight
+    remaining legacy cases and cleanup passed. All result booleans are true.
+    Evidence: `target/mithril-changed-retirement-20261003T021148Z-2417848`.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-changed-retirement-ci-20261003.log`. The legacy file remains
+    on the retirement list at 5,583 lines. No production code changed.
+  - [ ] Replace exact Control recovery with one small standard direct-runc
+    test. Reuse `runtime_owner.py` and `OciBundle`. Declare the exact Control
+    command and its mounts in the native recovery manifest. Keep UID, GID,
+    and supplementary GID 65532, no new privileges, empty capabilities,
+    read-only root, private PID namespace, writable result mount, and absent
+    Node endpoint. Require physical marker write, exact argv output,
+    `ALLOW_EXACT_RECOVERY`, and cleanup. Keep the old action until the
+    replacement passes and is committed. Add no Platform method.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

@@ -248,9 +248,6 @@ pub struct RuncRetainedRuntimeGateProbeV1 {
     pub version_changed_node_recovery_process_started: bool,
     pub version_changed_control_recovery_allowed: bool,
     pub version_changed_control_recovery_process_started: bool,
-    pub changed_recovery_denied: bool,
-    pub changed_recovery_process_never_started: bool,
-    pub unavailable_decision_logged: bool,
     pub host_stock_spec_generated: bool,
     pub fixture_root_removed: bool,
 }
@@ -902,16 +899,6 @@ impl RetainedRuntimeGateRuncFixture {
             fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
         }
         self.run_case("forged-installer", config)
-    }
-
-    fn run_changed_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        let mut config = self.stock_config("changed-recovery")?;
-        config["process"]["args"] = json!([
-            "/bin/sh",
-            "-c",
-            "printf CHANGED_RECOVERY_RAN >/result/changed-recovery"
-        ]);
-        self.run_case("changed-recovery", config)
     }
 
     fn run_version_changed_node_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
@@ -1730,7 +1717,6 @@ impl EffectTestRunner {
         let forged_installer = fixture.run_forged_installer()?;
         let version_changed_node_recovery = fixture.run_version_changed_node_recovery()?;
         let version_changed_node_recovery_process_started = fixture.marker_exists("recovery");
-        let changed = fixture.run_changed_recovery()?;
         let host_stock_spec = fixture.run_host_stock_spec()?;
         let control_recovery_log = fixture.exact_control_recovery_log()?;
         let installer_log = fixture.changed_installer_log()?;
@@ -1767,9 +1753,6 @@ impl EffectTestRunner {
                 .contains("decision=DENY_NODE_UNAVAILABLE"),
             version_changed_node_recovery_allowed: version_changed_node_recovery.success,
             version_changed_node_recovery_process_started,
-            changed_recovery_denied: !changed.success,
-            changed_recovery_process_never_started: !fixture.marker_exists("changed-recovery"),
-            unavailable_decision_logged: changed.stderr.contains("decision=DENY_NODE_UNAVAILABLE"),
             host_stock_spec_generated,
             fixture_root_removed: false,
         };
@@ -1792,14 +1775,11 @@ impl EffectTestRunner {
                 && result.forged_installer_decision_logged
                 && result.version_changed_node_recovery_allowed
                 && result.version_changed_node_recovery_process_started
-                && result.changed_recovery_denied
-                && result.changed_recovery_process_never_started
-                && result.unavailable_decision_logged
                 && result.host_stock_spec_generated,
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; control_recovery={:?}; changed_control_recovery={:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; changed_recovery={:?}; stock_spec={:?}",
+                    "the direct runc retained-gate oracle failed: result={result:?}; control_recovery={:?}; changed_control_recovery={:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; stock_spec={:?}",
                     control_recovery.stderr.trim(),
                     changed_control_recovery.stderr.trim(),
                     version_changed_control_recovery.stderr.trim(),
@@ -1807,7 +1787,6 @@ impl EffectTestRunner {
                     changed_installer.stderr.trim(),
                     forged_installer.stderr.trim(),
                     version_changed_node_recovery.stderr.trim(),
-                    changed.stderr.trim(),
                     host_stock_spec.stderr.trim(),
                 ),
             }
