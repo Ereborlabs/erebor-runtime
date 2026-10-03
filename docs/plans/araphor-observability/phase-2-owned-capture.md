@@ -749,6 +749,12 @@ allowance. Every run must retain all exact denial witnesses,
 healthy coverage, zero enforcement-event loss and verified cleanup.
 Record each pair and each failure. This added-cost comparison does not
 replace the deployment interference gate or create a qualified configuration.
+For every comparison, report both measured values and their signed difference
+in the measured units and as a percentage of the plain-bpftrace value.
+Calculate the difference as Araphor minus plain bpftrace. A positive difference
+is an increase; a negative difference means Araphor is faster. Report every
+pair, including increases. No increase is allowed. Do not replace pair results
+with an aggregate that hides an increase.
 
 ### Capture optimization and direct baseline result
 
@@ -785,13 +791,13 @@ Araphor second. All ten runs use cgroup 38,231, Task cookie 14, role 3,
 admission rule 1 and profile generation 1. The source and backend settings
 stay unchanged. Compare mode cannot write a qualified configuration.
 
-| Pair | Plain p99, ns | Araphor p99, ns | Araphor change |
-| --- | ---: | ---: | ---: |
-| 1 | 139,006 | 291,406 | +109.64% |
-| 2 | 298,993 | 253,795 | -15.12% |
-| 3 | 246,367 | 105,536 | -57.16% |
-| 4 | 127,748 | 272,899 | +113.62% |
-| 5 | 101,912 | 306,880 | +201.12% |
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 139,006 | 291,406 | +152,400 | +109.64% |
+| 2 | 298,993 | 253,795 | -45,198 | -15.12% |
+| 3 | 246,367 | 105,536 | -140,831 | -57.16% |
+| 4 | 127,748 | 272,899 | +145,151 | +113.62% |
+| 5 | 101,912 | 306,880 | +204,968 | +201.12% |
 
 Every run retains 1,000 fresh exact policy-deny witnesses. The complete
 receipt has 10,000 distinct witness coordinates, healthy coverage, zero
@@ -821,6 +827,67 @@ environment-dependent tests ignored. This pass proves correctness for the
 executed cases. It does not prove performance parity or physical lifecycle
 qualification.
 Diagnostics stay disabled. Physical lifecycle gates remain **Not done**.
+
+### Direct comparison and spool checks
+
+Source `1e1e3de7` separates direct comparison from deployment
+validation. `Host::capture_parity` compares plain bpftrace with Araphor; both
+paths have tracing enabled. It requires five pairs, positive p99 values, no
+increase over plain bpftrace, zero enforcement-event loss and equal physical
+decisions. The integer comparison decides acceptance. A rounded percentage
+does not decide acceptance. Each completed pair prints both p99 values and
+the signed difference in nanoseconds and percent, before the next pair runs.
+No configured percentage allowance applies to direct comparison.
+Deployment validation and its configuration publication stay unchanged.
+Compare mode cannot publish a qualified deployment configuration.
+
+`Host::capture_frames` reuses the existing storage-case reader for the
+partition case. It reads at most 5 MiB and parses complete JSONL frames before
+the unused NUL-filled tail. Terminal sequence and exact replay checks stay
+unchanged. The new `observability_spool_tail` regression uses two valid frames
+and real 68-MiB file allocation. It checks exact frame readback and unchanged
+file length. This is a storage correctness test, not a performance test.
+
+The final focused selection passed three tests and kept five physical or
+subprocess entry points ignored. Run the worktree-local Cargo environment
+above with `cargo test --workspace --all-features --lib
+platform::host::observability_ -- --nocapture`. Read
+`capture-parity-focused-final.log`. The parity test uses fixed values. No new
+performance comparison or physical lifecycle run occurred.
+
+The current lifecycle input archive is
+`/tmp/araphor-lifecycle-inputs.T6sGiUzw/fixtures-current.tar.gz`, SHA-256
+`e45a80566a94034b43e44f23272e59a93cc5c60d9d0c0886a5cf4331da733929`.
+It contains the seven original member paths from the current worktree plus
+`policy_replace_policy.json` and `policy_replace.py`. Its `proc_read.py` reads
+the supplied target. `tar -dzf` against the worktree passed. The old archive
+is unchanged. Archive preparation does not qualify a physical case.
+
+The final workspace procedure passed on source `1e1e3de7`. Formatting,
+workspace checking, strict Clippy and all selected workspace tests passed.
+Data passed 167 tests, shared observability 23, Interceptor 39, Control 170,
+e2e 141 and Node 262. Read `capture-parity-workspace-final.log`. The e2e suite
+kept 412 physical and environment-dependent tests ignored.
+Physical fault cases still require a matching qualified configuration.
+The inspected receipts contain no such configuration. Do not fabricate one
+from the failed measurements. Status: **Not done**.
+
+### Approved test-only physical admission
+
+The user approved an explicit test-only admission input for the remaining
+physical fault cases. Use the comparison's existing test setup with the real
+backend hash, kernel, architecture and CPU facts. Keep production validation
+unchanged. Do not treat the setup's fixed pairs as measurements. A missing or
+invalid qualified configuration must not select this input automatically.
+
+Run the lightweight owner case before each paired physical case. Require the
+same target, authorization, storage, expiry, enforcement and cleanup checks.
+Mark each test-only result with `diagnostic_admission: synthetic-test-only`,
+`performance_qualified: false` and `performance_claim: false`. Do not publish
+the setup as a qualification receipt or a qualified configuration. Internal
+task-owned Node configuration is input to the real restarted Node process.
+Keep deployment diagnostics disabled and performance qualification **Not done**.
+The approved path is not yet implemented or physically verified.
 
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:

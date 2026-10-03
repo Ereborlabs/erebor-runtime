@@ -2978,3 +2978,45 @@ tests passed. Data passed 167 tests, shared observability 23, Interceptor
 `capture-spool-workspace-final.log`. The e2e suite kept 412 physical and
 environment-dependent tests ignored. This is correctness proof for the
 executed cases, not performance parity or physical lifecycle qualification.
+
+### Direct comparison and bounded spool input
+
+[Host::capture_route](../../../../crates/mithril-e2e/src/platform/host.rs) selects plain bpftrace and Araphor in adjacent capture-enabled runs.
+-> [Host::qualify_diagnostics](../../../../crates/mithril-e2e/src/platform/host.rs) reports each completed pair's plain and Araphor p99 values, signed nanosecond difference and percentage difference.
+-> [Host::capture_parity](../../../../crates/mithril-e2e/src/platform/host.rs) requires five valid pairs with no Araphor increase, no enforcement loss and equal physical decisions.
+
+The integer p99 comparison decides acceptance. Display rounding cannot admit
+an increase. In compare mode, the test uses the existing pair fields for plain
+bpftrace first and Araphor second. Those fields do not describe disabled and
+enabled tracing in that mode. No configured percentage allowance applies. Initial admission,
+backend, target, output, coverage and cleanup checks stay unchanged.
+Non-compare deployment validation stays unchanged. Compare mode cannot
+publish a qualified configuration.
+
+[Host::capture_frames](../../../../crates/mithril-e2e/src/platform/host.rs) reads a bounded complete-frame prefix before the preallocated spool's NUL-filled tail.
+-> [Host::qualify_storage](../../../../crates/mithril-e2e/src/platform/host.rs) keeps attachment, ENOSPC, terminal-sequence and replay checks.
+-> [Host::qualify_diagnostic_failures](../../../../crates/mithril-e2e/src/platform/host.rs) uses the same reader before partition repair and exact replay.
+
+The reader is the existing storage-case parser, not a new public data reader.
+The `observability_spool_tail` test checks real 68-MiB allocation and exact
+readback of two frames. `observability_compare_parity` checks fixed positive,
+equal, lower and higher values, including a one-unit increase near `u64::MAX`.
+It also rejects loss, changed decisions, zero values and wrong pair counts.
+These are correctness tests, not performance measurements.
+
+The focused selection passed three tests. Read
+`capture-parity-focused-final.log` in the evidence directory above. These
+results cover source `1e1e3de7`. The final workspace procedure passed in
+`capture-parity-workspace-final.log`: Data 167, shared observability 23,
+Interceptor 39, Control 170, e2e 141 and Node 262 tests passed. Formatting,
+workspace checking and strict Clippy also passed. The e2e suite kept 412
+physical and environment-dependent tests ignored. No physical lifecycle pass
+or new performance comparison is claimed.
+
+The user approved explicit test-only admission for the remaining physical
+fault cases. The input must keep the real backend and platform checks, with
+unchanged production validation. Fixed setup pairs are not measured results.
+Do not publish them as qualification evidence. Test-only results must state
+that performance is not qualified. This approved path is not yet implemented
+or physically verified. Read the
+[approved scope](../../araphor-observability/phase-2-owned-capture.md#approved-test-only-physical-admission).
