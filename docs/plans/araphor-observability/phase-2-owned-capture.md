@@ -1264,6 +1264,24 @@ affect only the external test fixture. Repeat the paired physical route
 and final workspace CI before qualification. This proxy is not used by the
 latency comparison. No performance cause is inferred.
 
+The repeated combined route on `9e4f08dc` returns 101 after 141.36 seconds.
+Its lightweight companion first passes in 24.92 seconds. The partial receipt
+contains partition, revocation and bounded-map results. Each has one exact
+physical denial and independent BPF cleanup before Node shutdown. The
+partition expires at its signed deadline; revocation returns `Cancelled`;
+the map case returns `Completed`. The next case fails at
+`output-limit: attachment has no observed diagnostic BPF programs`.
+Its inventory is read only after the retained notification arrives. This
+does not establish whether the short capture ended before that read.
+Retirement is not reached. The combined route remains **Not done**.
+Read the copied logs and partial `capture-pairs.json` in
+`/tmp/araphor-owned-lifecycle.DlPg5O1y/failures-relay`. The guest output is
+`/tmp/araphor-owned-failures-20261003-9e4f08dc`.
+Before a correction, add the exact immediate-output-overflow condition to
+the lightweight case. Its current backend waits for prefix ACK before
+overflow. Do not slow the physical source or remove the inventory check.
+Final workspace CI is running on `9e4f08dc`; no result is claimed yet.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current

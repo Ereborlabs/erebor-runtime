@@ -3258,3 +3258,16 @@ and `partition-outage-focused.log` in the same evidence directory.
 Repeat paired physical proof and final workspace CI on this fixture source.
 The latency comparison does not use this proxy; do not assign its p99
 increase to this failure.
+
+The repeated combined Host route on `9e4f08dc` returns 101 in 141.36 seconds.
+The paired lightweight case first passes in 24.92 seconds. Its partial
+receipt records partition, revocation and bounded-map results with one
+physical denial and independent resource cleanup each. The output-limit
+case fails because the inventory after the retained attach notification
+contains no new program IDs. The test does not establish when that capture
+ended. Retirement is not reached. Read `failures-relay/test.log`,
+`failures-relay/lightweight.log` and `failures-relay/capture-pairs.json` in
+the same evidence directory. The combined route remains **Not done**.
+The next lightweight condition must emit oversized output without waiting
+for prefix ACK. Preserve the physical source and independent inventory
+checks. Final workspace CI is running on this source; no pass is claimed.
