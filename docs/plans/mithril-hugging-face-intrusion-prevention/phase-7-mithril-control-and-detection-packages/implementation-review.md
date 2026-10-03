@@ -3246,6 +3246,15 @@ the same evidence directory. Follow `TcpBlackholeOwner::relay` in
 `crates/mithril-e2e/src/control_tls.rs`: the external fixture discards
 already-acknowledged TCP input while blocked. The old reconnect test closes
 the original session before repair. It does not prove active-TLS repair.
-Add that exact lightweight condition before correcting the fixture. The
-latency comparison does not use this proxy; do not assign its p99 increase
-to this failure.
+The added `control_tls::observability_partition_tls_repair` test covers
+active-session repair and ClientHello repair. Its held-input notification
+avoids an unobserved sleep. Both five-second legs first fail in 10.19
+seconds. The relay then retains its one 16-KiB input chunk until repair;
+it does not read another chunk before forwarding it. Control-to-Node copying
+and stop behavior remain. The exact test passes in 0.29 seconds, and the
+existing outage/predecessor-replacement test passes in 26.13 seconds with
+unchanged checks. Read `partition-tls-red.log`, `partition-tls-green.log`
+and `partition-outage-focused.log` in the same evidence directory.
+Repeat paired physical proof and final workspace CI on this fixture source.
+The latency comparison does not use this proxy; do not assign its p99
+increase to this failure.

@@ -1250,9 +1250,19 @@ The command is `owned.sh BIN ARCHIVE OUTPUT 1 --test-admission`; output is
 logs in `/tmp/araphor-owned-lifecycle.DlPg5O1y/failures-current`.
 Source review finds that the external TCP proxy discards TLS bytes while
 blocked. Its endpoint has already acknowledged those bytes. Repair cannot
-restore them on that connection. Add a lightweight active-TLS repair case
-before correcting the fixture or repeating the physical run. This proxy is
-not used by the latency comparison. No performance cause is inferred.
+restore them on that connection. The new lightweight
+`control_tls::observability_partition_tls_repair` case first fails both
+active-session repair and ClientHello repair in 10.19 seconds. Each leg
+has a five-second bound and a held-input notification. The corrected relay
+holds its existing 16-KiB chunk, waits for repair, then forwards it before
+the next read. Control-to-Node forwarding and shutdown do not change.
+The exact regression then passes in 0.29 seconds. The existing outage and
+predecessor-replacement test passes in 26.13 seconds with its old bound and
+checks. Read `partition-tls-red.log`, `partition-tls-green.log` and
+`partition-outage-focused.log` in the same evidence directory. The changes
+affect only the external test fixture. Repeat the paired physical route
+and final workspace CI before qualification. This proxy is not used by the
+latency comparison. No performance cause is inferred.
 
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses

@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fs;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
@@ -17,7 +18,7 @@ use mithril_control::{
 use mithril_node::{NodeControlConnector, PolicyControlPacingOwner, TrustCache};
 use prost::Message as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{oneshot, watch, Notify};
 use tower::service_fn;
 
 use crate::control_fixture::{
@@ -729,6 +730,113 @@ impl OutagePolicyFixture {
     }
 }
 
+#[tokio::test]
+async fn observability_partition_tls_repair() -> Result<(), Box<dyn StdError>> {
+    let fixture = MtlsFixture::new(false)?;
+    let control = fixture.control(4)?;
+    let server = fixture.start(control.clone()).await?;
+    let proxy = TcpBlackholeOwner::start(server.address()).await?;
+    let connector = NodeControlConnector::new(
+        fixture.node_config(proxy.address()),
+        "node-a".into(),
+        [7; 16],
+    );
+    let mut trust = TrustCache::load(fixture.path())?;
+    let mut node = registration();
+    node.kubernetes_node_name = "worker-a.example".into();
+    let connection = connector.connect(node.clone(), true, &mut trust).await?;
+    control
+        .bind_kubernetes_node_session("worker-a.example", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?;
+    let sessions = control.ready_kubernetes_node_sessions(Duration::from_secs(10));
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(control.registered_nonce_count(), 1);
+    let first_nonce = trust.installed().control_connection_nonce.clone();
+    let mut failures = Vec::new();
+
+    let live = {
+        let held = proxy.held_input.notified();
+        tokio::pin!(held);
+        held.as_mut().enable();
+        proxy.block()?;
+        let call = connection.report_readiness(true, true);
+        tokio::pin!(call);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut call => {
+                    return Err(format!("live readiness completed while blocked: {result:?}").into());
+                }
+                () = &mut held => {}
+            }
+            proxy.unblock()?;
+            call.await?;
+            Ok::<(), Box<dyn StdError>>(())
+        })
+        .await
+    };
+    proxy.unblock()?;
+    if matches!(&live, Ok(Ok(()))) {
+        assert_eq!(control.registered_nonce_count(), 1);
+        assert_eq!(trust.installed().control_connection_nonce, first_nonce);
+        assert_eq!(
+            control.ready_kubernetes_node_sessions(Duration::from_secs(10)),
+            sessions
+        );
+    } else {
+        failures.push(format!("live readiness repair: {live:?}"));
+    }
+    drop(connection);
+    proxy.stop().await?;
+
+    let proxy = TcpBlackholeOwner::start(server.address()).await?;
+    let connector = NodeControlConnector::new(
+        fixture.node_config(proxy.address()),
+        "node-a".into(),
+        [7; 16],
+    );
+    let fresh = {
+        let held = proxy.held_input.notified();
+        tokio::pin!(held);
+        held.as_mut().enable();
+        proxy.block()?;
+        let call = connector.connect(node, true, &mut trust);
+        tokio::pin!(call);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut call => {
+                    return Err(format!("fresh connection completed while blocked: {}", result.is_ok()).into());
+                }
+                () = &mut held => {}
+            }
+            proxy.unblock()?;
+            Ok::<_, Box<dyn StdError>>(call.await?)
+        })
+        .await
+    };
+    proxy.unblock()?;
+    match fresh {
+        Ok(Ok(connection)) => {
+            assert_eq!(trust.installed().generation, 4);
+            assert_ne!(trust.installed().control_connection_nonce, first_nonce);
+            assert_eq!(control.registered_nonce_count(), 2);
+            control.bind_kubernetes_node_session(
+                "worker-a.example",
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            )?;
+            assert_eq!(
+                control.ready_kubernetes_node_sessions(Duration::from_secs(10)),
+                sessions
+            );
+            drop(connection);
+        }
+        Ok(Err(error)) => failures.push(format!("fresh TLS repair: {error}")),
+        Err(error) => failures.push(format!("fresh TLS repair: {error}")),
+    }
+    proxy.stop().await?;
+    server.shutdown().await?;
+    assert!(failures.is_empty(), "TLS repair failed: {failures:?}");
+    Ok(())
+}
+
 fn batch_source_id(batch: &mithril_node::EvidenceBatchV1) -> Result<[u8; 16], Box<dyn StdError>> {
     let wire: mithril_control::EvidenceBatch = batch.clone().into();
     wire.source_id
@@ -774,6 +882,7 @@ fn capabilities() -> Vec<CapabilityRecord> {
 pub(crate) struct TcpBlackholeOwner {
     address: SocketAddr,
     blocked: watch::Sender<bool>,
+    held_input: Arc<Notify>,
     shutdown: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<std::io::Result<()>>,
 }
@@ -783,6 +892,8 @@ impl TcpBlackholeOwner {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let (blocked, blocked_input) = watch::channel(false);
+        let held_input = Arc::new(Notify::new());
+        let relay_input = held_input.clone();
         let (shutdown, mut shutdown_input) = oneshot::channel();
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
@@ -793,8 +904,9 @@ impl TcpBlackholeOwner {
                         let (downstream, _peer) = accepted?;
                         let upstream = tokio::net::TcpStream::connect(upstream).await?;
                         let blocked = blocked_input.clone();
+                        let held_input = relay_input.clone();
                         connections.spawn(async move {
-                            Self::relay(downstream, upstream, blocked).await
+                            Self::relay(downstream, upstream, blocked, held_input).await
                         });
                     }
                 }
@@ -806,6 +918,7 @@ impl TcpBlackholeOwner {
         Ok(Self {
             address,
             blocked,
+            held_input,
             shutdown,
             task,
         })
@@ -832,7 +945,8 @@ impl TcpBlackholeOwner {
     async fn relay(
         downstream: tokio::net::TcpStream,
         upstream: tokio::net::TcpStream,
-        blocked: watch::Receiver<bool>,
+        mut blocked: watch::Receiver<bool>,
+        held_input: Arc<Notify>,
     ) -> std::io::Result<()> {
         let (mut downstream_read, mut downstream_write) = downstream.into_split();
         let (mut upstream_read, mut upstream_write) = upstream.into_split();
@@ -843,10 +957,12 @@ impl TcpBlackholeOwner {
                 if count == 0 {
                     return Ok::<(), std::io::Error>(());
                 }
-                // This matches the K8s test rule: packets from Node to Control disappear.
-                if !*blocked.borrow() {
-                    upstream_write.write_all(&bytes[..count]).await?;
+                // Hold one input chunk until Node-to-Control transport is restored.
+                while *blocked.borrow_and_update() {
+                    held_input.notify_waiters();
+                    blocked.changed().await.map_err(std::io::Error::other)?;
                 }
+                upstream_write.write_all(&bytes[..count]).await?;
             }
         };
         let control_to_client = tokio::io::copy(&mut upstream_read, &mut downstream_write);
