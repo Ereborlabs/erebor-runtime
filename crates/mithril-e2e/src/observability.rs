@@ -708,6 +708,7 @@ impl ObservabilityQualification {
                 ("output-limit", TraceTerminalReasonV1::OutputLimit, 16),
                 ("retirement", TraceTerminalReasonV1::TargetChanged, 17),
                 ("store-native-append", TraceTerminalReasonV1::Deadline, 19),
+                ("output-before-upload", TraceTerminalReasonV1::OutputLimit, 20),
             ] {
                 let mut request = request.clone();
                 let mut grant = grant.clone();
@@ -715,7 +716,8 @@ impl ObservabilityQualification {
                 let native_append = name == "store-native-append";
                 let zero_progress = before_append || native_append;
                 let local_expiry = matches!(name, "partition-expiry" | "store-failure" | "store-before-append" | "store-native-append");
-                let host_source = matches!(name, "map-exhaustion" | "output-limit");
+                let early_output = name == "output-before-upload";
+                let host_source = matches!(name, "map-exhaustion" | "output-limit" | "output-before-upload");
                 let revoked = name == "revocation";
                 let expected_frames = if name == "map-exhaustion" { 3 } else { 2 };
                 let mut fault_codes = Vec::new();
@@ -771,6 +773,7 @@ impl ObservabilityQualification {
                 let script = match name {
                     "map-exhaustion" => "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; while [ ! -e \"$2\" ]; do sleep 0.01; done; cat \"$3\"",
                     "output-limit" => "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; while [ ! -e \"$2\" ]; do sleep 0.01; done; head -c 1048577 /dev/zero",
+                    "output-before-upload" => "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; head -c 1048577 /dev/zero",
                     _ => "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; exec sleep 60",
                 };
                 let command = move || {
@@ -832,11 +835,15 @@ impl ObservabilityQualification {
                 }
                 let ready_limit = Instant::now() + Duration::from_secs(3);
                 loop {
+                    if early_output {
+                        node.reap()?;
+                    }
                     let frames = node.frames(id, 0)?;
                     if frames.iter().any(|frame| frame.kind == TraceFrameKindV1::Diagnostic
                         && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n")
                         && frames.iter().any(|frame| frame.kind == TraceFrameKindV1::Data
                             && frame.bytes == b"node-owned output\n")
+                        && (!early_output || node.terminal(id)?.is_some())
                     {
                         break;
                     }
@@ -846,7 +853,7 @@ impl ObservabilityQualification {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 node.reap()?;
-                if launches.load(Ordering::Acquire) != 1 || node.terminal(id)?.is_some() {
+                if launches.load(Ordering::Acquire) != 1 || (!early_output && node.terminal(id)?.is_some()) {
                     return Err("Node capture respawned or stopped before the case input".into());
                 }
                 let pid: u32 = fs::read_to_string(&pid_path)?.parse()?;
@@ -1004,7 +1011,7 @@ impl ObservabilityQualification {
                     failed = Some(batch);
                 } else if name == "retirement" {
                     generation.store(0, Ordering::Release);
-                } else if host_source {
+                } else if host_source && !early_output {
                     fs::write(&finish_path, b"finish")?;
                 }
                 drop(connection);
@@ -1030,6 +1037,26 @@ impl ObservabilityQualification {
                 if batch.frames.len() != expected_frames || batch.terminal.as_ref() != Some(&terminal) {
                     return Err("Node capture lost output or its terminal".into());
                 }
+                let pre_upload = if early_output {
+                    let (_, intent) = data.trace_intent(request.tenant_id, request.request_id)?
+                        .ok_or("missing pre-upload diagnostic intent")?;
+                    let binding = intent.bindings.iter().find(|binding| binding.identity.execution_id == id)
+                        .ok_or("missing pre-upload diagnostic binding")?;
+                    let receipt = data.trace_receipt(&binding.identity)?
+                        .ok_or("missing pre-upload diagnostic receipt")?;
+                    if prefix_ack.is_some() || receipt.last_sequence != 0 || receipt.output_bytes != 0
+                        || receipt.commit_revision != 0 || receipt.terminal.is_some()
+                        || !owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?.is_empty()
+                        || dispatch.accepted.request != request || dispatch.accepted.grant != grant
+                        || dispatch.accepted.recipe.is_some() || dispatch.accepted.approval.is_none()
+                    {
+                        return Err("immediate output failure uploaded a prefix or changed its frozen inputs".into());
+                    }
+                    Some(serde_json::json!({
+                        "last_sequence": receipt.last_sequence, "output_bytes": receipt.output_bytes,
+                        "commit_revision": receipt.commit_revision, "terminal": receipt.terminal,
+                    }))
+                } else { None };
                 if name == "map-exhaustion" {
                     let output: serde_json::Value = serde_json::from_slice(&batch.frames[2].bytes)?;
                     if output["data"]["@full"].as_object().map(|map| map.len()) != Some(4096)
@@ -1296,6 +1323,7 @@ impl ObservabilityQualification {
                     "collection_seconds": request.collection_seconds,
                     "expired_dispatch_rejected": local_expiry,
                     "initial_acknowledgement": prefix_ack,
+                    "terminal_before_upload": early_output.then_some(true), "pre_upload_receipt": pre_upload,
                     "read_revoked": revoked, "retained_read_denied": revoked,
                     "durable_frame_count": page.frames.len(),
                     "map_capacity": (name == "map-exhaustion").then(|| serde_json::json!({
@@ -1340,7 +1368,7 @@ impl ObservabilityQualification {
             }
             Ok::<_, Box<dyn std::error::Error>>(serde_json::json!({
                 "scope": "node-owner-chain", "result": "PASS", "cases": records,
-                "proof_boundary": "Production Control, Node spool and Interceptor supervision use external process, binding-state and admission-clock inputs. Partition and storage cases use five seconds left on the signed lease and a 30-second backend collection limit. BeforeAppend injects StorageFull before the raw write and leaves the writer ready. NativeAppend changes the external segment-directory input and returns success; real segment creation fails ENOTDIR before sync and leaves the writer unready. This is not ENOSPC. Both reopen with no prefix and a zero-progress terminal reservation. AfterSync injects StorageFull after a real segment sync and leaves the writer unready. Reopen recovers the synced prefix. Revocation denies reads but permits exact terminal upload and ACK replay. The supplied map result has 4096 keys; this does not prove kernel saturation. The supervisor stops oversized external output. Binding removal stops the original capture; a new lifetime has a separate request and execution. Attach notifications are simulated. Node reopen follows a retained terminal, not a process crash. NodeChassis retry scheduling, physical disk-full, BPF cleanup, enforcement, and performance are not tested. Physical limits remain unknown.",
+                "proof_boundary": "Production Control, Node spool and Interceptor supervision use external process, binding-state and admission-clock inputs. Partition and storage cases use five seconds left on the signed lease and a 30-second backend collection limit. BeforeAppend injects StorageFull before the raw write and leaves the writer ready. NativeAppend changes the external segment-directory input and returns success; real segment creation fails ENOTDIR before sync and leaves the writer unready. This is not ENOSPC. Both reopen with no prefix and a zero-progress terminal reservation. AfterSync injects StorageFull after a real segment sync and leaves the writer unready. Reopen recovers the synced prefix. Revocation denies reads but permits exact terminal upload and ACK replay. The supplied map result has 4096 keys; this does not prove kernel saturation. The supervisor stops oversized external output. One output case reaches its terminal before any Control upload. Binding removal stops the original capture; a new lifetime has a separate request and execution. Attach notifications are simulated. Node reopen follows a retained terminal, not a process crash. NodeChassis retry scheduling, physical disk-full, BPF cleanup, enforcement, and performance are not tested. Physical limits remain unknown.",
                 "discovery_index_present": false, "physical": false, "performance_claim": false,
             }))
         }).await;
@@ -1966,7 +1994,7 @@ mod tests {
         assert_eq!(node["performance_claim"], false);
         assert_eq!(node["discovery_index_present"], false);
         let cases = node["cases"].as_array().ok_or("missing Node cases")?;
-        assert_eq!(cases.len(), 10);
+        assert_eq!(cases.len(), 11);
         for (case, reason) in cases[..5].iter().zip([
             "TargetChanged",
             "Cancelled",
@@ -2175,6 +2203,45 @@ mod tests {
         assert_eq!(native["storage"]["write_ready"], true);
         assert_eq!(
             native["retained"][0]["frames"].as_array().map(Vec::len),
+            Some(2)
+        );
+        let early = &cases[10];
+        assert_eq!(early["name"], "output-before-upload");
+        assert_eq!(early["launch_count"], 1);
+        assert_eq!(early["process_reaped"], true);
+        assert_eq!(early["terminal_reopen"], true);
+        assert_eq!(early["terminal_before_upload"], true);
+        assert!(early["initial_acknowledgement"].is_null());
+        assert_eq!(early["pre_upload_receipt"]["last_sequence"], 0);
+        assert_eq!(early["pre_upload_receipt"]["output_bytes"], 0);
+        assert_eq!(early["pre_upload_receipt"]["commit_revision"], 0);
+        assert!(early["pre_upload_receipt"]["terminal"].is_null());
+        assert_eq!(
+            early["accepted"]["request"]["request_id"],
+            serde_json::json!(vec![20; 16])
+        );
+        assert_eq!(
+            early["accepted"]["request"]["source"],
+            limited["accepted"]["request"]["source"]
+        );
+        assert_eq!(early["accepted"]["grant"]["host_diagnostic"], true);
+        assert!(early["accepted"]["recipe"].is_null());
+        assert!(!early["accepted"]["approval"].is_null());
+        assert_eq!(early["acknowledgement"], early["replay_ack"]);
+        assert_eq!(early["acknowledgement"]["last_sequence"], 2);
+        assert_eq!(
+            early["acknowledgement"]["terminal"]["reason"],
+            "OutputLimit"
+        );
+        assert_eq!(early["acknowledgement"]["terminal"]["cleanup"], "Unknown");
+        assert_eq!(
+            early["acknowledgement"]["terminal"]["output_incomplete"],
+            true
+        );
+        assert!(early["acknowledgement"]["terminal"]["kernel_lost_events"].is_null());
+        assert_eq!(early["durable_frame_count"], 2);
+        assert_eq!(
+            early["retained"][0]["frames"].as_array().map(Vec::len),
             Some(2)
         );
         assert!(owner.owned_capture().is_err());

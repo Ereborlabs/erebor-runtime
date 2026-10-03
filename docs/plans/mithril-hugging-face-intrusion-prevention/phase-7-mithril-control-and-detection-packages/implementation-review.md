@@ -3275,3 +3275,14 @@ strict Clippy and all workspace tests return zero. Mithril e2e passes 146
 tests with 413 ignored. Read `workspace-relay-final.log` in the same evidence
 directory. This pass does not cover the next immediate-overflow or observer
 changes, and it does not meet the performance gate.
+
+`ObservabilityQualification::owned_node` now includes `output-before-upload`.
+The external backend emits 1,048,577 bytes without a prefix-ACK barrier.
+The production Node owner reaches `OutputLimit` before the first upload.
+Control has zero output progress and no terminal. Reopen, current mTLS upload,
+exact ACK replay and one-launch checks use the existing path. Cleanup stays
+unknown; attachment is simulated. No physical BPF result follows.
+The exact `observability_owned_upload` test passes all eleven cases in
+24.70 seconds on `9427c92d` plus this test change. Read
+`owned-eleven-focused.log` in `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+Formatting passes. Final workspace CI and physical observer proof remain due.

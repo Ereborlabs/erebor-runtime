@@ -1287,6 +1287,17 @@ Read `workspace-relay-final.log` in the same evidence directory. This source
 includes the TLS repair regression. Ignored physical tests are not passes.
 The next immediate-overflow and observer changes require new verification.
 
+The lightweight `observability_owned_upload` case now has eleven cases.
+`output-before-upload` emits 1,048,577 bytes after its simulated attach
+notification, without waiting for a prefix ACK. The local owner reaches
+`OutputLimit` before the first upload. Control has zero output progress and
+no terminal. Reopen preserves the exact request, grant and bounded prefix.
+Current mTLS upload and replay return the same ACK without another launch.
+Cleanup stays unknown. This is not physical BPF proof.
+The exact test passes in 24.70 seconds on `9427c92d` plus this test change.
+Read `owned-eleven-focused.log` in the same evidence directory. Formatting
+passes. Final workspace CI and the corrected physical observer remain due.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current
