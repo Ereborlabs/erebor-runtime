@@ -13,6 +13,11 @@ use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
 use serde::{Deserialize, Serialize};
 
 mod lifecycle;
+#[cfg(test)]
+mod plain;
+
+#[cfg(test)]
+pub(crate) use plain::PlainCapture;
 
 type ProofResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 

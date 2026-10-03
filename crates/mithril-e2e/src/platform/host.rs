@@ -1359,6 +1359,7 @@ impl Host {
 
     #[cfg(test)]
     fn qualify_diagnostics() -> TestResult<()> {
+        use crate::observability::{PlainCapture, ResourceSnapshot};
         use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
         use mithril_control::{
             TraceExecutionGrantV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1,
@@ -1369,6 +1370,10 @@ impl Host {
         use std::collections::{BTreeMap, BTreeSet};
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
         let executable = PathBuf::from(std::env::var("MITHRIL_TRACE_EXECUTABLE")?);
+        let mode = std::env::var("MITHRIL_TRACE_MODE").unwrap_or_else(|_| "araphor".into());
+        if !matches!(mode.as_str(), "plain" | "araphor") {
+            return Err("the trace mode must be plain or araphor".into());
+        }
         let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
         if proof.exists() {
             return Err("the trace proof path already exists".into());
@@ -1473,7 +1478,22 @@ impl Host {
             let request_id = *uuid::Uuid::new_v4().as_bytes();
             let mut frames = Vec::new();
             let mut after = 0;
-            if on {
+            let mut native = None;
+            let mut native_result = None;
+            let resources = (on && mode == "plain")
+                .then(ResourceSnapshot::read)
+                .transpose()?;
+            let mut attached = None;
+            if on && mode == "plain" {
+                let output = env.shared.output().join(format!("plain-{run}"));
+                native = Some(PlainCapture::start(
+                    &executable,
+                    &TraceRecipeV1::FailedOpens.manifest()?.source.bytes,
+                    target.cgroup_id,
+                    &output,
+                )?);
+                attached = Some(ResourceSnapshot::read()?);
+            } else if on {
                 env.node_ready()?;
                 control.accept_trace(
                     TraceRequestV1 {
@@ -1528,6 +1548,9 @@ impl Host {
             let path = PathBuf::from(format!("/proc/{}/comm", actor.id()));
             let deadline = Instant::now() + Duration::from_secs(15);
             let p99: u64 = loop {
+                if let Some(native) = native.as_mut() {
+                    native.poll()?;
+                }
                 actor.ensure_running("trace latency samples")?;
                 let value = fs::read_to_string(&path)?;
                 if let Some(value) = value.trim().strip_prefix(&format!("tr{run}:")) {
@@ -1542,6 +1565,9 @@ impl Host {
             let deadline = Instant::now() + Duration::from_secs(30);
             let mut denials = BTreeSet::new();
             let after_health = loop {
+                if let Some(native) = native.as_mut() {
+                    native.poll()?;
+                }
                 let snapshot = env.snapshot()?;
                 for event in &snapshot.recent_effects {
                     if event.source_sequence
@@ -1576,10 +1602,69 @@ impl Host {
                 }
                 std::thread::sleep(Duration::from_millis(10));
             };
-            env.node_ready()?;
+            if native.is_none() {
+                env.node_ready()?;
+            }
             let loss = after_health.lost_effects - before.lost_effects;
             let mut terminal = None;
-            if on {
+            if let Some(native) = native.as_mut() {
+                let mut result = native.finish()?;
+                assert!(result["collection_ms"]
+                    .as_u64()
+                    .is_some_and(|duration| (5000..=5100).contains(&duration)));
+                let stdout = result["stdout"].as_str().ok_or("native output is absent")?;
+                let count = stdout
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .filter(|row| row["type"] == "map")
+                    .filter_map(|row| row["data"]["@errors"]["-13"].as_u64())
+                    .max();
+                assert!(count.is_some_and(|count| count >= 1000));
+                let resources = resources.as_ref().ok_or("native baseline is absent")?;
+                let attached = attached.as_ref().ok_or("native attachment is absent")?;
+                let programs = attached
+                    .programs
+                    .difference(&resources.programs)
+                    .copied()
+                    .collect::<Vec<_>>();
+                let maps = attached
+                    .maps
+                    .difference(&resources.maps)
+                    .copied()
+                    .collect::<Vec<_>>();
+                let links = attached
+                    .links
+                    .difference(&resources.links)
+                    .copied()
+                    .collect::<Vec<_>>();
+                assert!(
+                    !programs.is_empty(),
+                    "native attachment has no observed programs"
+                );
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    let current = ResourceSnapshot::read()?;
+                    assert!(resources.programs.is_subset(&current.programs));
+                    assert!(resources.maps.is_subset(&current.maps));
+                    assert!(resources.links.is_subset(&current.links));
+                    if programs.iter().all(|id| !current.programs.contains(id))
+                        && maps.iter().all(|id| !current.maps.contains(id))
+                        && links.iter().all(|id| !current.links.contains(id))
+                    {
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        return Err("plain bpftrace left attached resources".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                result["observed_programs"] = serde_json::to_value(programs)?;
+                result["observed_maps"] = serde_json::to_value(maps)?;
+                result["observed_links"] = serde_json::to_value(links)?;
+                result["cleanup_verified"] = true.into();
+                result["enforcement_resources_unchanged"] = true.into();
+                native_result = Some(result);
+            } else if on {
                 let deadline = Instant::now() + Duration::from_secs(20);
                 while terminal.is_none() {
                     for batch in owner.output(tenant, request_id, 0, &access, now()?, after)? {
@@ -1609,6 +1694,8 @@ impl Host {
                 {
                     return Err("capture did not measure the enforced denials".into());
                 }
+            }
+            if on {
                 pairs.push(TraceQualificationPairV1 {
                     trace_off_p99_ns: off.0,
                     trace_on_p99_ns: p99,
@@ -1623,6 +1710,7 @@ impl Host {
             env.node_ready()?;
             records.push(
                 serde_json::json!({"run":run,"trace_on":on,"request_id":request_id,
+                "capture_path":mode,"plain_bpftrace":native_result,
                 "result":result,"frames":frames,"terminal":terminal,"loss":loss,
                 "exact_denials":denials,"task_cookie":task.snapshot.task_cookie,
                 "active_role_id":task.snapshot.active_role_id,
@@ -1637,10 +1725,12 @@ impl Host {
         qualification.evidence_sha256 = Sha256::digest(fs::read(&proof)?).into();
         config.qualification = qualification;
         config.validate()?;
-        fs::write(
-            proof.with_extension("config.json"),
-            serde_json::to_vec_pretty(&config)?,
-        )?;
+        if mode == "araphor" {
+            fs::write(
+                proof.with_extension("config.json"),
+                serde_json::to_vec_pretty(&config)?,
+            )?;
+        }
         fs::write(env.work().join("release"), b"release")?;
         actor.stop()?;
         init.stop()?;
