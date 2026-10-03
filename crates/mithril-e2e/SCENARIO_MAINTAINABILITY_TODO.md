@@ -5678,8 +5678,9 @@ test does not close a row when its physical condition or an assertion changed.
       the shared platform removes the test paths and cgroup.
   - [x] Remove only the old exact recovery action, decision-log wrapper, three
     result fields, and duplicate assertions after the replacement commit.
-    Keep `exact_recovery_config` and `recovery_args` for the version-change
-    case. Qualify the four standard cases and complete reduced legacy probe.
+    The fixture kept `exact_recovery_config` and `recovery_args` for the
+    version-change case. The Node version retirement below removes these
+    unused inputs. Qualify the four standard cases and complete reduced probe.
     The deletion removes 23 Rust lines and adds two lines. The four standard
     cases passed in 3.47 seconds through the retained launcher. All nine
     remaining legacy cases and cleanup passed. All result booleans are true.
@@ -5830,11 +5831,26 @@ test does not close a row when its physical condition or an assertion changed.
     The public hook checks exact argv, source, destination, and mount mode.
     The process owner reports the physical result. The platform removes the
     copied actor, OCI input, state, markers, and cgroup. No production code changed.
-  - [ ] Remove only the old Node version action and its two result fields after
+  - [x] Remove only the old Node version action and its two result fields after
     the replacement commit. Remove its unused recovery config, argument list,
     and generated manifest entry. Keep the installer cases and their shell
     interpreter, stock-spec case, diagnostics, and cleanup. Qualify all nine
     standard gate cases and the complete reduced legacy probe before committing.
+    Commit `b071843e` contains the replacement. The deletion removes 77 Rust
+    lines and adds one line. All nine standard cases passed in 6.36 seconds.
+    All four remaining legacy cases and cleanup passed. All result booleans
+    are true. Evidence:
+    `target/mithril-node-version-retirement-20261003T031835Z-2507754`.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-node-version-retirement-ci-20261003.log`. The legacy file
+    remains on the retirement list at 5,373 lines. No production code changed.
+  - [ ] Replace exact installer startup with one small standard direct-runc test.
+    Keep the installed executable path, `install` command, all 12 arguments,
+    root user, administrative capability, host PID namespace, writable root,
+    writable result and host directories, and read-only actual K3s executable.
+    Use the shared Python actor and native inputs. Require successful physical
+    start, exact argv, installer marker, and complete cleanup. Add no Platform
+    method or legacy fixture code. Commit before removing its old action.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

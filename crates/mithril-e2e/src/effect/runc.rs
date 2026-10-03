@@ -238,8 +238,6 @@ pub struct RuncRetainedRuntimeGateProbeV1 {
     pub forged_installer_denied: bool,
     pub forged_installer_process_never_started: bool,
     pub forged_installer_decision_logged: bool,
-    pub version_changed_node_recovery_allowed: bool,
-    pub version_changed_node_recovery_process_started: bool,
     pub host_stock_spec_generated: bool,
     pub fixture_root_removed: bool,
 }
@@ -617,7 +615,6 @@ struct RetainedRuntimeGateRuncFixture {
     hook_path: PathBuf,
     k3s_path: PathBuf,
     output_directory: PathBuf,
-    recovery_args: Vec<String>,
     installer_args: Vec<String>,
     stock_config: serde_json::Value,
 }
@@ -692,12 +689,6 @@ impl RetainedRuntimeGateRuncFixture {
         fs::create_dir(&host_containerd_directory).context(IoSnafu {
             path: &host_containerd_directory,
         })?;
-        let mut recovery_args = vec![
-            "/bin/sh".to_owned(),
-            "-c".to_owned(),
-            "printf RECOVERY_ALLOWED >/result/recovery".to_owned(),
-        ];
-        recovery_args.extend((0..35).map(|index| format!("recovery-argument-{index}")));
         let installer_args = vec![
             "/usr/local/bin/mithril-oci-hook".to_owned(),
             "install".to_owned(),
@@ -718,27 +709,6 @@ impl RetainedRuntimeGateRuncFixture {
             serde_json::to_vec_pretty(&json!({
                 "version": 1,
                 "entries": [
-                    {
-                        "executable": "/bin/sh",
-                        "args": recovery_args,
-                        "requiredMounts": [
-                            {
-                                "source": marker_directory,
-                                "destination": "/result",
-                                "readOnly": false
-                            },
-                            {
-                                "source": host_hook_directory,
-                                "destination": "/host-hook-bin",
-                                "readOnly": false
-                            },
-                            {
-                                "source": host_containerd_directory,
-                                "destination": "/host-containerd",
-                                "readOnly": false
-                            }
-                        ]
-                    },
                     {
                         "executable": "/usr/local/bin/mithril-oci-hook",
                         "args": installer_args,
@@ -774,7 +744,6 @@ impl RetainedRuntimeGateRuncFixture {
             hook_path: hook_path.to_path_buf(),
             k3s_path: k3s_path.to_path_buf(),
             output_directory: output_directory.to_path_buf(),
-            recovery_args,
             installer_args,
             stock_config,
         })
@@ -853,26 +822,6 @@ impl RetainedRuntimeGateRuncFixture {
             fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
         }
         self.run_case("forged-installer", config)
-    }
-
-    fn run_version_changed_node_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        let executable = self.bundle.join("rootfs/bin/sh");
-        let original = fs::read(&executable).context(IoSnafu { path: &executable })?;
-        fs::OpenOptions::new()
-            .append(true)
-            .open(&executable)
-            .and_then(|mut file| file.write_all(b"\n# version-changed node recovery\n"))
-            .context(IoSnafu { path: &executable })?;
-        let marker = self.marker_directory.join("recovery");
-        if marker.exists() {
-            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
-        }
-        let result = self.run_case(
-            "version-changed-node-recovery",
-            self.exact_recovery_config()?,
-        );
-        fs::write(&executable, original).context(IoSnafu { path: &executable })?;
-        result
     }
 
     fn run_host_stock_spec(&self) -> Result<RetainedRuntimeGateCaseResult> {
@@ -965,24 +914,6 @@ impl RetainedRuntimeGateRuncFixture {
             &mut config,
             &self.marker_directory,
             Path::new("/result"),
-            false,
-        )?;
-        Ok(config)
-    }
-
-    fn exact_recovery_config(&self) -> Result<serde_json::Value> {
-        let mut config = self.stock_config("exact-recovery")?;
-        config["process"]["args"] = json!(self.recovery_args);
-        self.add_bind_mount(
-            &mut config,
-            &self.fixture_root.join("host-hook"),
-            Path::new("/host-hook-bin"),
-            false,
-        )?;
-        self.add_bind_mount(
-            &mut config,
-            &self.fixture_root.join("host-containerd"),
-            Path::new("/host-containerd"),
             false,
         )?;
         Ok(config)
@@ -1604,8 +1535,6 @@ impl EffectTestRunner {
         let changed_installer = fixture.run_changed_installer()?;
         let changed_installer_process_started = fixture.marker_exists("installer");
         let forged_installer = fixture.run_forged_installer()?;
-        let version_changed_node_recovery = fixture.run_version_changed_node_recovery()?;
-        let version_changed_node_recovery_process_started = fixture.marker_exists("recovery");
         let host_stock_spec = fixture.run_host_stock_spec()?;
         let installer_log = fixture.changed_installer_log()?;
         let host_stock_spec_generated = host_stock_spec.success
@@ -1628,8 +1557,6 @@ impl EffectTestRunner {
             forged_installer_decision_logged: forged_installer
                 .stderr
                 .contains("decision=DENY_NODE_UNAVAILABLE"),
-            version_changed_node_recovery_allowed: version_changed_node_recovery.success,
-            version_changed_node_recovery_process_started,
             host_stock_spec_generated,
             fixture_root_removed: false,
         };
@@ -1642,17 +1569,14 @@ impl EffectTestRunner {
                 && result.forged_installer_denied
                 && result.forged_installer_process_never_started
                 && result.forged_installer_decision_logged
-                && result.version_changed_node_recovery_allowed
-                && result.version_changed_node_recovery_process_started
                 && result.host_stock_spec_generated,
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; stock_spec={:?}",
+                    "the direct runc retained-gate oracle failed: result={result:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; stock_spec={:?}",
                     installer.stderr.trim(),
                     changed_installer.stderr.trim(),
                     forged_installer.stderr.trim(),
-                    version_changed_node_recovery.stderr.trim(),
                     host_stock_spec.stderr.trim(),
                 ),
             }
