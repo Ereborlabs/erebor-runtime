@@ -25,6 +25,29 @@ pub(crate) struct Host {
 
 impl Host {
     #[cfg(test)]
+    fn capture_frames(spool: &Path) -> TestResult<Vec<mithril_control::TraceFrameV1>> {
+        use std::io::Read as _;
+
+        let mut bytes = Vec::new();
+        File::open(spool.join("output.jsonl"))?
+            .take(5 * 1024 * 1024)
+            .read_to_end(&mut bytes)?;
+        assert!(
+            bytes.contains(&0),
+            "the fixture output exceeds its read bound"
+        );
+        bytes
+            .split_inclusive(|byte| *byte == b'\n')
+            .take_while(|line| line.first() != Some(&0) && line.last() == Some(&b'\n'))
+            .map(|line| {
+                Ok(serde_json::from_slice::<mithril_control::TraceFrameV1>(
+                    line,
+                )?)
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
     fn qualify_storage() -> TestResult<()> {
         use araphor_data::AnalysisCommitStage;
         use mithril_control::{
@@ -32,7 +55,7 @@ impl Host {
             TraceOwner, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1, TraceTerminalReasonV1,
             TraceTerminalV1, TraceUploadV1,
         };
-        use std::io::{Read as _, Write as _};
+        use std::io::Write as _;
         use std::sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -201,24 +224,9 @@ impl Host {
         let (connector, registration) = env.shared.diagnostic_connector(&live)?;
         env.shared.partition_diagnostics(true)?;
         fs::write(env.shared.output().join("trace-store.release"), b"release")?;
-        let retained = || -> TestResult<Vec<TraceFrameV1>> {
-            let mut bytes = Vec::new();
-            File::open(spool.join("output.jsonl"))?
-                .take(5 * 1024 * 1024)
-                .read_to_end(&mut bytes)?;
-            assert!(
-                bytes.contains(&0),
-                "the fixture output exceeds its read bound"
-            );
-            bytes
-                .split_inclusive(|byte| *byte == b'\n')
-                .take_while(|line| line.first() != Some(&0) && line.last() == Some(&b'\n'))
-                .map(|line| Ok(serde_json::from_slice::<TraceFrameV1>(line)?))
-                .collect()
-        };
         let deadline = Instant::now() + Duration::from_secs(15);
         let frames = loop {
-            let frames = retained()?;
+            let frames = Self::capture_frames(&spool)?;
             if frames.iter().any(|frame| {
                 frame.kind == TraceFrameKindV1::Diagnostic
                     && frame.bytes == b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n"
@@ -339,7 +347,7 @@ impl Host {
         assert_eq!(terminal.cleanup, TraceCleanupV1::Verified);
         assert_eq!(terminal.execution_id, id);
         assert!(terminal.output_incomplete && terminal.kernel_lost_events.is_none());
-        let frames = retained()?;
+        let frames = Self::capture_frames(&spool)?;
         for (index, frame) in frames.iter().enumerate() {
             frame.validate()?;
             assert_eq!(frame.execution_id, id);
@@ -1010,10 +1018,7 @@ impl Host {
                 assert!(owner
                     .output(tenant, request_id, 0, &access, now()?, after)?
                     .is_empty());
-                let pending = fs::read_to_string(spool.join("output.jsonl"))?
-                    .lines()
-                    .map(serde_json::from_str::<mithril_control::TraceFrameV1>)
-                    .collect::<Result<Vec<_>, _>>()?;
+                let pending = Self::capture_frames(&spool)?;
                 assert!(pending.starts_with(&frames));
                 assert_eq!(pending.len() as u64, terminal.last_sequence);
                 Some(pending)
@@ -1377,6 +1382,25 @@ impl Host {
     }
 
     #[cfg(test)]
+    fn capture_parity(pairs: &[mithril_node::TraceQualificationPairV1]) -> TestResult<()> {
+        if pairs.len() != 5
+            || !pairs.iter().all(|pair| {
+                pair.trace_off_p99_ns > 0
+                    && pair.trace_on_p99_ns > 0
+                    && pair.trace_on_p99_ns <= pair.trace_off_p99_ns
+                    && pair.trace_off_lost_events == 0
+                    && pair.trace_on_lost_events == 0
+                    && pair.physical_decisions_equal
+            })
+        {
+            return Err(
+                "Araphor must not increase plain-bpftrace p99 or change enforcement".into(),
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     fn qualify_diagnostics() -> TestResult<()> {
         use crate::observability::{PlainCapture, ResourceSnapshot};
         use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
@@ -1720,6 +1744,15 @@ impl Host {
                     trace_on_lost_events: loss,
                     physical_decisions_equal: true,
                 });
+                if mode == "compare" {
+                    let plain = off.0;
+                    let difference = i128::from(p99) - i128::from(plain);
+                    println!(
+                        "plain/Araphor pair {}: plain_p99_ns={plain} araphor_p99_ns={p99} difference_ns={difference} difference_percent={:.6}",
+                        pairs.len(),
+                        difference as f64 * 100.0 / plain as f64,
+                    );
+                }
             } else {
                 off = (p99, loss);
             }
@@ -1743,7 +1776,11 @@ impl Host {
         qualification.pairs = pairs;
         qualification.evidence_sha256 = Sha256::digest(fs::read(&proof)?).into();
         config.qualification = qualification;
-        config.validate()?;
+        if mode == "compare" {
+            Self::capture_parity(&config.qualification.pairs)?;
+        } else {
+            config.validate()?;
+        }
         if mode == "araphor" {
             fs::write(
                 proof.with_extension("config.json"),
@@ -1932,6 +1969,47 @@ impl Host {
 }
 
 #[test]
+fn observability_spool_tail() -> TestResult<()> {
+    use mithril_control::{TraceFrameKindV1, TraceFrameV1};
+    use std::io::Write as _;
+    use std::os::unix::fs::MetadataExt as _;
+
+    let directory = tempfile::tempdir()?;
+    let mut file = File::create(directory.path().join("output.jsonl"))?;
+    rustix::fs::fallocate(
+        &file,
+        rustix::fs::FallocateFlags::empty(),
+        0,
+        68 * 1024 * 1024,
+    )?;
+    let frames = vec![
+        TraceFrameV1 {
+            execution_id: [7; 16],
+            sequence: 1,
+            kind: TraceFrameKindV1::Diagnostic,
+            bytes: b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n".to_vec(),
+        },
+        TraceFrameV1 {
+            execution_id: [7; 16],
+            sequence: 2,
+            kind: TraceFrameKindV1::Data,
+            bytes: b"failed opens: 1000\n".to_vec(),
+        },
+    ];
+    for frame in &frames {
+        frame.validate()?;
+        file.write_all(&serde_json::to_vec(frame)?)?;
+        file.write_all(b"\n")?;
+    }
+    file.sync_all()?;
+    assert_eq!(file.metadata()?.len(), 68 * 1024 * 1024);
+    assert!(file.metadata()?.blocks() * 512 >= 68 * 1024 * 1024);
+    assert_eq!(Host::capture_frames(directory.path())?, frames);
+    assert_eq!(file.metadata()?.len(), 68 * 1024 * 1024);
+    Ok(())
+}
+
+#[test]
 fn capture_rejects_coverage_faults() -> TestResult<()> {
     use erebor_runtime_ipc::v1::MithrilCoverageInterval;
 
@@ -2028,6 +2106,49 @@ fn observability_compare_routes() -> TestResult<()> {
         }
     }
     assert!(Host::capture_route("unknown", 0).is_err());
+    Ok(())
+}
+
+#[test]
+fn observability_compare_parity() -> TestResult<()> {
+    let mut pairs = vec![
+        mithril_node::TraceQualificationPairV1 {
+            trace_off_p99_ns: 100,
+            trace_on_p99_ns: 100,
+            trace_off_lost_events: 0,
+            trace_on_lost_events: 0,
+            physical_decisions_equal: true,
+        };
+        5
+    ];
+    Host::capture_parity(&pairs)?;
+    pairs[0].trace_on_p99_ns = 99;
+    Host::capture_parity(&pairs)?;
+    pairs[4].trace_on_p99_ns = 101;
+    assert!(Host::capture_parity(&pairs).is_err());
+    pairs[4].trace_off_p99_ns = u64::MAX - 1;
+    pairs[4].trace_on_p99_ns = u64::MAX;
+    assert!(Host::capture_parity(&pairs).is_err());
+    pairs[4].trace_on_p99_ns = u64::MAX - 1;
+    Host::capture_parity(&pairs)?;
+    pairs[0].trace_off_lost_events = 1;
+    assert!(Host::capture_parity(&pairs).is_err());
+    pairs[0].trace_off_lost_events = 0;
+    pairs[0].trace_on_lost_events = 1;
+    assert!(Host::capture_parity(&pairs).is_err());
+    pairs[0].trace_on_lost_events = 0;
+    pairs[0].physical_decisions_equal = false;
+    assert!(Host::capture_parity(&pairs).is_err());
+    pairs[0].physical_decisions_equal = true;
+    pairs[0].trace_off_p99_ns = 0;
+    assert!(Host::capture_parity(&pairs).is_err());
+    pairs[0].trace_off_p99_ns = 100;
+    pairs[0].trace_on_p99_ns = 0;
+    assert!(Host::capture_parity(&pairs).is_err());
+    pairs[0].trace_on_p99_ns = 100;
+    assert!(Host::capture_parity(&pairs[..4]).is_err());
+    pairs.push(pairs[0].clone());
+    assert!(Host::capture_parity(&pairs).is_err());
     Ok(())
 }
 
