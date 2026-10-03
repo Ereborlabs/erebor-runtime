@@ -110,18 +110,6 @@ enum Command {
         #[arg(long)]
         containerd_path: PathBuf,
     },
-    RuncRetainedRuntimeGateProbe {
-        #[arg(long)]
-        output_directory: PathBuf,
-        #[arg(long)]
-        runc_path: PathBuf,
-        #[arg(long)]
-        hook_path: PathBuf,
-        #[arg(long, default_value = "/usr/local/bin/k3s")]
-        k3s_path: PathBuf,
-        #[arg(long, default_value = "/usr/bin/nsenter")]
-        nsenter_path: PathBuf,
-    },
     #[command(hide = true)]
     Child {
         #[arg(long)]
@@ -939,28 +927,6 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 &container_id,
                 &sandbox_id,
             )),
-        Command::RuncRetainedRuntimeGateProbe {
-            output_directory,
-            runc_path,
-            hook_path,
-            k3s_path,
-            nsenter_path,
-        } => {
-            let runner = EffectTestRunner::new(cli.repo_root);
-            let result = runner.runc_retained_runtime_gate_probe(
-                &output_directory,
-                &runc_path,
-                &hook_path,
-                &k3s_path,
-                &nsenter_path,
-            )?;
-            runner.write_json(
-                &output_directory.join("runc-retained-runtime-gate-probe.json"),
-                &result,
-            )?;
-            println!("Mithril direct runc retained runtime-gate probe passed");
-            Ok(())
-        }
         Command::Child {
             fixture_root,
             mailbox_path,

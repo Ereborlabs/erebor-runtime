@@ -239,8 +239,6 @@ run_lightweight_upgrade_probe() {
   "$provider" put "$vm" "$test_bin" "$remote/mithril-e2e-tests"
   "$provider" put "$vm" "$output_directory/runtime-gate-inputs.tar" "$remote/inputs.tar"
   "$provider" run "$vm" tar -xf "$remote/inputs.tar" -C "$remote"
-  "$provider" put "$vm" "$repo_root/target/debug/mithril-effect-test" \
-    "$remote/mithril-effect-test"
   "$provider" put "$vm" "$hook" "$remote/mithril-oci-hook"
   "$provider" run "$vm" sudo env \
     "MITHRIL_TEST_ROOT=$remote" \
@@ -256,25 +254,13 @@ run_lightweight_upgrade_probe() {
   for path in "$remote/platform" "$pin" "$group" "$group-node"; do
     "$provider" run "$vm" sudo test ! -e "$path"
   done
-  "$provider" run "$vm" sudo "$remote/mithril-effect-test" \
-    --repo-root "$remote" runc-retained-runtime-gate-probe \
-    --output-directory "$remote/evidence" \
-    --runc-path /var/lib/rancher/k3s/data/current/bin/runc \
-    --hook-path "$remote/mithril-oci-hook"
-  "$provider" get "$vm" \
-    "$remote/evidence/runc-retained-runtime-gate-probe.json" \
-    "$output_directory/runc-retained-runtime-gate-probe.json"
-  # The Rust runner checks each retained result before it returns.
-  jq -e '.schema_version == 5 and .fixture_root_removed == true' \
-    "$output_directory/runc-retained-runtime-gate-probe.json" >/dev/null
   "$provider" run "$vm" sudo rm -rf -- "$remote"
 }
 
 if [[ $lightweight_only == true ]]; then
   echo "Building the lightweight retained-upgrade probe"
-  (cd -- "$repo_root" && cargo build --locked \
-    -p mithril-e2e --bin mithril-effect-test && \
-    cargo rustc --locked -p mithril-node --bin mithril-oci-hook -- \
+  (cd -- "$repo_root" && cargo rustc --locked \
+    -p mithril-node --bin mithril-oci-hook -- \
       -C target-feature=+crt-static)
   "$provider" wait "$vm_a"
   remote_a=/var/tmp/$vm_a

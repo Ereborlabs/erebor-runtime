@@ -5638,7 +5638,7 @@ test does not close a row when its physical condition or an assertion changed.
 
 ### Direct runtime
 
-- [ ] `EffectTestRunner::runc_retained_runtime_gate_probe`: own the bundle
+- [x] `EffectTestRunner::runc_retained_runtime_gate_probe`: own the bundle
   and marker cleanup. Keep the production OCI hook invocation for hostile,
   CRI, installer, recovery, and host-stock shapes explicit.
   - [x] Share native recovery-manifest path binding on `OciBundle` before
@@ -5961,12 +5961,26 @@ test does not close a row when its physical condition or an assertion changed.
       real K3s JSON output; the platform removes the bundle, state, and cgroup.
     No production, Platform, or launcher source changed. This is direct-runc
     qualification in the retained K3s VM, not Kubernetes Pod qualification.
-  - [ ] Remove the final legacy retained-gate fixture, result types, probe,
+  - [x] Remove the final legacy retained-gate fixture, result types, probe,
     exports, CLI command, and lightweight launcher invocation after the
     stock-spec replacement commit. Keep the shared library dependency parser
     and the separate CRI and Kubernetes cases. Make the thin launcher run only
     the thirteen standard Rust cases and verify their normal cleanup. Run VM
     harness checks and final Rust CI before the separate retirement commit.
+    Commit `23643235` contains the stock-spec replacement. The deletion
+    removes 336 lines from `effect/runc.rs` and 387 net lines across the
+    fixture, exports, CLI, and launcher. No live retired command or result
+    consumer remains. The shared dependency parser retains its other caller.
+    All thirteen standard cases passed through the reduced launcher in
+    8.81 seconds. Resource absence checks passed. Evidence:
+    `target/mithril-runtime-gate-retirement-20261003T050701Z-2611940`.
+    The rebuilt CLI no longer lists the old command. Shell syntax, VM harness
+    checks, and final Rust CI passed. See
+    `/tmp/mithril-runtime-gate-retirement-ci-20261003.log`.
+    The old file remains on the retirement list at 4,743 lines. Keep its
+    independent recovered-entry, runtime-entry, and CRI operations until
+    their replacements pass. This result does not qualify the full two-node
+    Kubernetes procedure.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

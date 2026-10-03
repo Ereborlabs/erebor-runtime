@@ -199,9 +199,7 @@ pub use network::{
     NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
 };
 pub use network_peer::NetworkPeerServer;
-pub use runc::{
-    RecoveredContainerEntryProbeV1, RuncEntryRoleRuntimeProbeV1, RuncRetainedRuntimeGateProbeV1,
-};
+pub use runc::{RecoveredContainerEntryProbeV1, RuncEntryRoleRuntimeProbeV1};
 
 pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
 const NEXT_PROFILE_GENERATION_REF_ID: u64 = 2;

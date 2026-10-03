@@ -34,8 +34,7 @@ pub use effect::{
     LocalEnforcementFixtureResultV1, NetworkFixtureResultV1, NetworkPeerServer,
     NetworkPeerServerResultV1, NetworkPeerTargetV1, NetworkPhysicalProbeBundleV2,
     NetworkTestRunner, RecoveredContainerEntryProbeV1, RuncEntryRoleRuntimeProbeV1,
-    RuncRetainedRuntimeGateProbeV1, NETWORK_PEER_DENIED_PORT, NETWORK_PEER_TCP_PORT,
-    NETWORK_PEER_UDP_PORT,
+    NETWORK_PEER_DENIED_PORT, NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
 };
 pub use error::{Error, Result};
 pub use fixture::FixtureBaselineRecordV1;
