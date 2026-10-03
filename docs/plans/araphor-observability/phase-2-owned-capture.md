@@ -887,7 +887,51 @@ Mark each test-only result with `diagnostic_admission: synthetic-test-only`,
 the setup as a qualification receipt or a qualified configuration. Internal
 task-owned Node configuration is input to the real restarted Node process.
 Keep deployment diagnostics disabled and performance qualification **Not done**.
-The approved path is not yet implemented or physically verified.
+Source `4273cda8` implements this path in the existing
+Host, Shared and Kubernetes test owners. Each fault harness accepts
+`--test-admission` in its qualified-configuration argument position. The
+selector is `MITHRIL_TRACE_TEST_ADMISSION=1`. Missing, invalid and conflicting
+inputs fail. Shared builds the existing fixture configuration with the actual
+backend hash and platform facts. The positive limit field is `1`, as required
+by the unchanged validator. This field is test input, not a performance
+allowance. Plain-bpftrace comparison still requires no Araphor p99 increase.
+
+Use these existing entry points:
+
+```text
+owned.sh BIN ARCHIVE OUTPUT LIMIT --test-admission [restart-before|restart-after]
+disk-full.sh BIN ARCHIVE OUTPUT --test-admission
+pods.sh BIN --test-admission BUNDLE OUTPUT
+```
+
+The lightweight `observability_owned_upload` case passed one test.
+`capture_admission_selection` passed one test. The Host regression selection
+passed three tests and kept five physical cases ignored. All three shell
+syntax checks passed. All three scripts reject missing arguments with exit
+code 2. Read `owned-upload.log`, `admission-selection.log` and
+`host-regressions.log` in `/tmp/araphor-fault-admission.rz3Qj3lL`.
+The final workspace procedure passed on source `4273cda8`. Formatting,
+workspace checking and strict Clippy passed. Data passed 167 tests, shared
+observability 23, Interceptor 39, Control 170, e2e 142 and Node 262. The e2e
+suite kept 412 physical and environment-dependent tests ignored. Read
+`workspace-final.log` in that directory. This result is not physical fault
+or performance qualification.
+
+The user approved the nine-file test archive transfer, including the tracked
+test signing key. The archive copy succeeded from
+`/tmp/araphor-lifecycle-inputs.T6sGiUzw/fixtures-current.tar.gz` to
+`192.168.122.153:/var/tmp/araphor-owned-fault-inputs.qiLXnxP9/fixtures-current.tar.gz`.
+The guest hash is
+`e45a80566a94034b43e44f23272e59a93cc5c60d9d0c0886a5cf4331da733929`.
+No physical fault pass or qualification receipt is claimed. Status: **Not done**.
+
+The user also approved repeated plain-bpftrace versus Araphor comparisons,
+with optimization between runs. Reuse the approved workload, platform and
+five alternating capture-enabled pairs. Keep the existing ten-minute bound
+per comparison. Report each pair's p99 values and signed nanosecond and
+percentage differences. Require no Araphor increase. Keep capture, isolation,
+loss, target, enforcement and cleanup checks unchanged. Do not run a comparison
+while Cargo or workspace CI runs. A failed comparison is not qualification.
 
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
@@ -913,7 +957,8 @@ physical pass:
   no terminal ACK before repair, and exact local-output replay after repair.
   Each induced failure has a physical denial check. Retirement checks a new
   admitted lifetime; it does not wait for recovery state.
-- The Node-process restart harness requires a matching qualified configuration.
+- The Node-process restart harness requires a matching qualified configuration
+  or the explicitly selected test-only input.
   Its before-attachment and after-attachment cases have not run on the current
   capture source. A prior backend result is not an owned-capture result.
 

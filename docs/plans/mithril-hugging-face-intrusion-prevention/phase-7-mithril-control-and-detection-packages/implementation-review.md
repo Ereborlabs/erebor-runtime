@@ -3017,6 +3017,38 @@ The user approved explicit test-only admission for the remaining physical
 fault cases. The input must keep the real backend and platform checks, with
 unchanged production validation. Fixed setup pairs are not measured results.
 Do not publish them as qualification evidence. Test-only results must state
-that performance is not qualified. This approved path is not yet implemented
-or physically verified. Read the
+that performance is not qualified. Read the
 [approved scope](../../araphor-observability/phase-2-owned-capture.md#approved-test-only-physical-admission).
+
+### Explicit physical test admission
+
+[owned.sh](../../../../crates/mithril-e2e/harness/observability/owned.sh) selects a configuration file or the explicit `--test-admission` input and runs the lightweight owner case.
+-> [Shared::test_admission](../../../../crates/mithril-e2e/src/platform/shared.rs) rejects missing, invalid and conflicting selectors.
+-> [Shared::capture_config](../../../../crates/mithril-e2e/src/platform/shared.rs) builds the existing fixture configuration from the actual backend hash and platform facts.
+-> [Host::capture_admission](../../../../crates/mithril-e2e/src/platform/host.rs) applies unchanged production validation before storage, restart and partition fixtures.
+-> [Host::qualify_restart](../../../../crates/mithril-e2e/src/platform/host.rs) starts and kills a separate Node process with internal task-owned configuration.
+-> [observability_restart_child](../../../../crates/mithril-e2e/src/platform/host.rs) loads that configuration and calls production Node startup.
+
+[pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh) selects explicit test admission and runs the lightweight owner case.
+-> [Kubernetes::qualify_pods](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) pins the bundled backend and applies full Node configuration validation.
+-> [Kubernetes::qualify_pods](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) omits qualification from a test-only result and marks performance unqualified.
+
+The helper and selector belong to the existing test owner. Both are compiled
+only for tests. A missing qualification file is not a fallback trigger.
+Internal Node configuration contains fixture pairs, not measured values.
+The physical result does not publish those pairs as qualification evidence.
+The production validator, read-only mounts, target checks, quotas and fault
+bodies stay unchanged. The positive setup limit is the minimum valid input,
+not permission for an increase in the plain/Araphor comparison.
+
+The source state is `4273cda8`. The lightweight
+owner case, selector test and three Host regressions passed. Three shell
+syntax checks passed. The final workspace procedure passed: Data 167, shared
+observability 23, Interceptor 39, Control 170, e2e 142 and Node 262. Formatting,
+workspace checking and strict Clippy passed. The e2e suite kept 412 physical
+and environment-dependent tests ignored. Read
+`/tmp/araphor-fault-admission.rz3Qj3lL/workspace-final.log`. The user approved the
+test fixture transfer. The copy succeeded and its guest hash matches the
+recorded archive hash. The user also approved repeated comparisons against
+plain bpftrace, with no Araphor increase. Keep comparisons separate from Cargo
+and CI. No physical fault pass or performance qualification is claimed.
