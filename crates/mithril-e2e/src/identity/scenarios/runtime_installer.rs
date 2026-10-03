@@ -191,3 +191,80 @@ fn changed_installer_can_start<P: Platform>() -> TestResult<()> {
     assert!(!bundle.group.try_exists()?, "{:?}", bundle.group);
     Ok(())
 }
+
+#[platform_test(runc)]
+#[lifecycle = runtime_gate]
+fn forged_installer_never_starts<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("runtime-installer-forged")?;
+    let bundle = OciBundle::new(&env, "forged-installer")?;
+    for name in ["host-hook", "host-containerd"] {
+        fs::create_dir(bundle.markers.join(name))?;
+    }
+    let local = env.work().join("installer-local");
+    fs::create_dir_all(local.join("bin"))?;
+    fs::copy(
+        actor_script(env.source(), "runtime_owner.py")?,
+        local.join("bin/mithril-oci-hook"),
+    )?;
+    let input = include_str!("../../../fixtures/process/runtime_recovery_manifest.json");
+    let entry: Value = serde_json::from_str(input)?;
+    let runtime = entry["entries"][1]["requiredMounts"][2]["source"]
+        .as_str()
+        .ok_or("K3s input is missing")?;
+    assert!(Path::new(runtime).is_file(), "{runtime}");
+    let manifest = bundle.manifest(input)?;
+    let mut spec: Value = serde_json::from_str(include_str!(
+        "../../../fixtures/process/runtime_recovery.json"
+    ))?;
+    let mut args: Vec<String> = serde_json::from_str(include_str!(
+        "../../../fixtures/process/runtime_installer_changed_args.json"
+    ))?;
+    assert_eq!(args.len(), 26);
+    assert_eq!(args[3], "mithril-system/mithril");
+    args[3] = "attacker/other".to_owned();
+    spec["process"]["args"] = json!(&args);
+    let mounts = spec["mounts"]
+        .as_array_mut()
+        .ok_or("OCI mounts are missing")?;
+    let owner = mounts
+        .iter_mut()
+        .find(|mount| mount["destination"] == "/owner")
+        .ok_or("installer actor mount is missing")?;
+    owner["destination"] = json!("/usr/local");
+    owner["source"] = json!(&local);
+    mounts.push(json!({
+        "destination": "/host-runtime-cli", "type": "bind", "source": runtime,
+        "options": ["bind", "ro"]
+    }));
+    let marker = bundle.markers.join("installer");
+    assert!(!marker.try_exists()?);
+
+    let mut actor = bundle.spawn(&serde_json::to_string(&spec)?, &manifest)?;
+    let status = actor
+        .wait_exit("forged installer admission", Duration::from_secs(5))
+        .map_err(|error| format!("{error}; stderr: {:?}", actor.stderr()))?;
+    let stderr = actor.stderr()?;
+    let stdout = actor.stdout(status)?;
+    actor.stop()?;
+    assert!(!status.success(), "{status}; {stderr}");
+    assert!(
+        stderr.contains("decision=DENY_NODE_UNAVAILABLE"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("decision=ALLOW_MITHRIL_INSTALLER"),
+        "{stderr}"
+    );
+    assert!(stdout.is_empty(), "unexpected actor output: {stdout:?}");
+    assert!(!marker.try_exists()?, "the forged installer ran");
+    let containers = bundle.containers()?;
+    assert!(containers.is_empty(), "{containers:?}");
+    assert!(!bundle.state.join(&bundle.id).try_exists()?);
+    env.stop()?;
+    assert!(!local.try_exists()?, "{local:?}");
+    assert!(!bundle.bundle.try_exists()?, "{:?}", bundle.bundle);
+    assert!(!bundle.state.try_exists()?, "{:?}", bundle.state);
+    assert!(!bundle.markers.try_exists()?, "{:?}", bundle.markers);
+    assert!(!bundle.group.try_exists()?, "{:?}", bundle.group);
+    Ok(())
+}

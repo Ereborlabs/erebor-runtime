@@ -5910,12 +5910,29 @@ test does not close a row when its physical condition or an assertion changed.
     and final Rust CI passed. See
     `/tmp/mithril-installer-changed-retirement-ci-20261003.log`.
     The legacy file remains on the retirement list at 5,247 lines.
-  - [ ] Replace forged installer denial with the shared actor, checked upgraded
+  - [x] Replace forged installer denial with the shared actor, checked upgraded
     argv, and canonical manifest. Change only the owner argument to
     `attacker/other`. Require failed physical start, `DENY_NODE_UNAVAILABLE`,
     no installer approval, no actor output or marker, empty runtime inventory,
     and cleanup. Keep the function below 100 lines. Add no Platform method or
     legacy fixture code. Commit the replacement before removing the old action.
+    The 74-line function passed in 0.73 seconds. All twelve standard gate cases
+    passed in 8.07 seconds. Both legacy cases and cleanup passed. Evidence:
+    `target/mithril-installer-forged-group-20261003T042253Z-2568035`.
+    Formatting, VM harness checks, and final Rust CI passed. See
+    `/tmp/mithril-installer-forged-ci-20261003.log`.
+    Review route: [forged_installer_never_starts](src/identity/scenarios/runtime_installer.rs)
+      -> [OciBundle](src/physical/oci_bundle.rs) calls the public spec owner
+      -> [RetainedRuntimeGate](../mithril-node/src/runtime_gate.rs) rejects the
+      forged owner; stock runc does not start the shared actor.
+    No production, Platform, launcher, or fixture input changed. This is
+    direct-runc qualification. Keep the separate CRI installer probes.
+  - [ ] Remove the old forged installer action and its three result fields
+    after the replacement commit. Delete installer-only manifest creation,
+    fake actor, shell copy, hook fields and construction, config, and marker
+    check. Keep stock-spec security, nsenter dependencies, writable result
+    mount, diagnostics, and cleanup. Qualify all twelve standard cases and the
+    sole remaining legacy case before the separate retirement commit.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The
