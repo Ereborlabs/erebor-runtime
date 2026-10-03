@@ -123,6 +123,7 @@ pub struct NodeTraceOwner {
     backend: TraceBackend,
     reader: KernelStateReader,
     active: BTreeMap<[u8; 16], ActiveTrace>,
+    recovery_pending: bool,
     #[cfg(any(test, feature = "test-support"))]
     intent_hook: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -225,7 +226,7 @@ impl NodeTraceOwner {
             .try_lock()
             .map_err(|error| std::io::Error::other(error.to_string()))
             .context(IoSnafu { path: &path })?;
-        let owner = Self {
+        let mut owner = Self {
             root,
             tenant_id,
             node_id,
@@ -235,6 +236,7 @@ impl NodeTraceOwner {
             backend,
             reader,
             active: BTreeMap::new(),
+            recovery_pending: true,
             #[cfg(any(test, feature = "test-support"))]
             intent_hook: None,
         };
@@ -264,7 +266,10 @@ impl NodeTraceOwner {
         Ok(())
     }
 
-    fn recover_inactive(&self) -> Result<()> {
+    fn recover_inactive(&mut self) -> Result<()> {
+        if !self.recovery_pending {
+            return Ok(());
+        }
         for (id, dispatch) in self.retained()? {
             if !self.active.contains_key(&id) && self.terminal(id)?.is_none() {
                 let mut last_sequence = 0;
@@ -303,6 +308,10 @@ impl NodeTraceOwner {
                     .context(IoSnafu { path: &root })?;
             }
         }
+        File::open(&self.root)
+            .and_then(|file| file.sync_all())
+            .context(IoSnafu { path: &self.root })?;
+        self.recovery_pending = false;
         Ok(())
     }
 
@@ -427,6 +436,7 @@ impl NodeTraceOwner {
                 reason: "diagnostic allocation would consume the evidence reserve"
             }
         );
+        self.recovery_pending = true;
         let mut spool = match TraceSpool::create(self.path(id), &dispatch) {
             Ok(spool) => spool,
             Err(error) => {
@@ -494,6 +504,7 @@ impl NodeTraceOwner {
             .collect();
         for id in finished {
             if let Some(active) = self.active.remove(&id) {
+                self.recovery_pending = true;
                 active.worker.join().map_err(|_| {
                     IdentityStateSnafu {
                         reason: "diagnostic storage worker panicked",
@@ -507,7 +518,11 @@ impl NodeTraceOwner {
 
     pub fn frames(&self, id: [u8; 16], after: u64) -> Result<Vec<TraceFrameV1>> {
         let through = if let Some(active) = self.active.get(&id) {
-            active.committed.load(Ordering::Acquire)
+            let through = active.committed.load(Ordering::Acquire);
+            if through <= after {
+                return Ok(Vec::new());
+            }
+            through
         } else {
             self.terminal(id)?
                 .map_or(4096, |terminal| terminal.last_sequence)
@@ -1293,6 +1308,25 @@ mod tests {
         assert_eq!(owner.frames(id, 200)?.len(), 200);
         assert_eq!(owner.frames(id, 400)?.len(), 1);
         assert!(owner.active.is_empty());
+        assert!(!owner.recovery_pending);
+        let terminal_path = owner.path(id).join("terminal.json");
+        let saved = directory.path().join("saved-terminal.json");
+        fs::rename(&terminal_path, &saved)?;
+        fs::create_dir(&terminal_path)?;
+        owner.reap()?;
+        owner.reap()?;
+        assert!(!owner.recovery_pending);
+        owner.recovery_pending = true;
+        assert!(matches!(
+            owner.reap(),
+            Err(crate::Error::IdentityState { .. })
+        ));
+        assert!(owner.recovery_pending);
+        fs::remove_dir(&terminal_path)?;
+        fs::rename(&saved, &terminal_path)?;
+        owner.reap()?;
+        assert!(!owner.recovery_pending);
+        assert_eq!(owner.terminal(id)?, Some(terminal.clone()));
         assert!(NodeTraceOwner::open(
             directory.path(),
             [1; 16],
@@ -1329,6 +1363,100 @@ mod tests {
         assert!(owner.retained()?.is_empty());
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
         assert!(owner.admit(dispatch, None, &key, 2).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_recovery_retries_transitions(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for worker_failure in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let mut owner = NodeTraceOwner::open(
+                directory.path(),
+                [1; 16],
+                "node-a".into(),
+                [2; 16],
+                config(),
+                KernelStateReader::new(directory.path()),
+            )?;
+            assert!(!owner.recovery_pending);
+            let dispatch = dispatch()?;
+            let id = dispatch.accepted.execution_id(0)?;
+            let fault = owner.path(id).join("terminal.json");
+            let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
+            let failed = if worker_failure {
+                let mut spool = TraceSpool::create(owner.path(id), &dispatch)?;
+                spool.append(&TraceFrameV1 {
+                    execution_id: id,
+                    sequence: 1,
+                    kind: TraceFrameKindV1::Data,
+                    bytes: b"first".to_vec(),
+                })?;
+                let committed = spool.committed.clone();
+                let terminal = TraceTerminalV1 {
+                    execution_id: id,
+                    reason: TraceTerminalReasonV1::StorageFailure,
+                    last_sequence: 1,
+                    output_bytes: 5,
+                    output_incomplete: true,
+                    kernel_lost_events: None,
+                    ready_at_unix_ns: None,
+                    exit_code: None,
+                    forced_kill: false,
+                    cleanup: TraceCleanupV1::Unknown,
+                };
+                fs::create_dir(&fault)?;
+                let worker = std::thread::spawn(move || spool.complete(&terminal));
+                while !worker.is_finished() {
+                    std::thread::yield_now();
+                }
+                owner.active.insert(
+                    id,
+                    ActiveTrace {
+                        cancel: Arc::new(AtomicBool::new(false)),
+                        committed,
+                        worker,
+                    },
+                );
+                owner.reap()
+            } else {
+                let path = fault.clone();
+                let (send, receive) = std::sync::mpsc::channel();
+                owner.set_intent_hook(move || {
+                    let _ = send.send(fs::create_dir(path));
+                })?;
+                let result = owner.admit(dispatch.clone(), None, &key, 2);
+                receive.try_recv()??;
+                result.map(|_| ())
+            };
+            assert!(matches!(failed,
+                Err(crate::Error::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::IsADirectory));
+            assert!(owner.recovery_pending);
+            assert!(owner.active.is_empty());
+            assert!(matches!(
+                owner.reap(),
+                Err(crate::Error::IdentityState { .. })
+            ));
+            assert!(owner.recovery_pending);
+            fs::remove_dir(&fault)?;
+            owner.reap()?;
+            assert!(!owner.recovery_pending);
+            let terminal = owner.terminal(id)?.ok_or("missing repaired terminal")?;
+            assert_eq!(terminal.reason, TraceTerminalReasonV1::NodeRestarted);
+            assert_eq!(terminal.last_sequence, u64::from(worker_failure));
+            assert_eq!(terminal.output_bytes, u64::from(worker_failure) * 5);
+            assert!(terminal.output_incomplete);
+            assert_eq!(terminal.cleanup, TraceCleanupV1::Unknown);
+            assert_eq!(owner.retained()?, vec![(id, dispatch.clone())]);
+            owner.set_intent_hook(|| {})?;
+            assert_eq!(owner.admit(dispatch, None, &key, 3)?, id);
+            assert!(owner.intent_hook.is_some());
+            owner.reap()?;
+            assert!(!owner.recovery_pending);
+            assert!(owner.active.is_empty());
+            assert_eq!(owner.terminal(id)?, Some(terminal));
+        }
         Ok(())
     }
 
@@ -1371,6 +1499,15 @@ mod tests {
             },
         );
         assert_eq!(owner.frames(id, 0)?, vec![frame]);
+        spool.output.seek(SeekFrom::Start(spool.offset))?;
+        spool.output.write_all(b"!")?;
+        assert!(owner.frames(id, 1)?.is_empty());
+        assert!(matches!(
+            owner.frames(id, 0),
+            Err(crate::Error::Json { .. })
+        ));
+        spool.output.seek(SeekFrom::Start(spool.offset))?;
+        spool.output.write_all(&bytes[..1])?;
         let terminal = TraceTerminalV1 {
             execution_id: id,
             reason: TraceTerminalReasonV1::StorageFailure,

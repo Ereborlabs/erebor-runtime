@@ -1358,6 +1358,25 @@ impl Host {
     }
 
     #[cfg(test)]
+    fn capture_route(mode: &str, run: usize) -> TestResult<(bool, bool, &str)> {
+        if !matches!(mode, "plain" | "araphor" | "compare") {
+            return Err("the trace mode must be plain, araphor or compare".into());
+        }
+        let on = run % 2 == 1;
+        let capture = on || mode == "compare";
+        let path = if mode == "compare" {
+            if on {
+                "araphor"
+            } else {
+                "plain"
+            }
+        } else {
+            mode
+        };
+        Ok((on, capture, path))
+    }
+
+    #[cfg(test)]
     fn qualify_diagnostics() -> TestResult<()> {
         use crate::observability::{PlainCapture, ResourceSnapshot};
         use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
@@ -1371,9 +1390,7 @@ impl Host {
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
         let executable = PathBuf::from(std::env::var("MITHRIL_TRACE_EXECUTABLE")?);
         let mode = std::env::var("MITHRIL_TRACE_MODE").unwrap_or_else(|_| "araphor".into());
-        if !matches!(mode.as_str(), "plain" | "araphor") {
-            return Err("the trace mode must be plain or araphor".into());
-        }
+        Self::capture_route(&mode, 0)?;
         let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
         if proof.exists() {
             return Err("the trace proof path already exists".into());
@@ -1474,17 +1491,17 @@ impl Host {
         Self::capture_health(&baseline, &baseline)?;
         for run in 0..10 {
             env.node_ready()?;
-            let on = run % 2 == 1;
+            let (on, capture, capture_path) = Self::capture_route(&mode, run)?;
             let request_id = *uuid::Uuid::new_v4().as_bytes();
             let mut frames = Vec::new();
             let mut after = 0;
             let mut native = None;
             let mut native_result = None;
-            let resources = (on && mode == "plain")
+            let resources = (capture && capture_path == "plain")
                 .then(ResourceSnapshot::read)
                 .transpose()?;
             let mut attached = None;
-            if on && mode == "plain" {
+            if capture && capture_path == "plain" {
                 let output = env.shared.output().join(format!("plain-{run}"));
                 native = Some(PlainCapture::start(
                     &executable,
@@ -1493,7 +1510,7 @@ impl Host {
                     &output,
                 )?);
                 attached = Some(ResourceSnapshot::read()?);
-            } else if on {
+            } else if capture {
                 env.node_ready()?;
                 control.accept_trace(
                     TraceRequestV1 {
@@ -1664,7 +1681,7 @@ impl Host {
                 result["cleanup_verified"] = true.into();
                 result["enforcement_resources_unchanged"] = true.into();
                 native_result = Some(result);
-            } else if on {
+            } else if capture {
                 let deadline = Instant::now() + Duration::from_secs(20);
                 while terminal.is_none() {
                     for batch in owner.output(tenant, request_id, 0, &access, now()?, after)? {
@@ -1709,8 +1726,10 @@ impl Host {
             Self::capture_health(&baseline, &env.snapshot()?)?;
             env.node_ready()?;
             records.push(
-                serde_json::json!({"run":run,"trace_on":on,"request_id":request_id,
-                "capture_path":mode,"plain_bpftrace":native_result,
+                serde_json::json!({"run":run,"trace_on":capture,"request_id":request_id,
+                "capture_path":capture_path,"direct_comparison":mode == "compare",
+                "cgroup_id":target.cgroup_id,
+                "plain_bpftrace":native_result,
                 "result":result,"frames":frames,"terminal":terminal,"loss":loss,
                 "exact_denials":denials,"task_cookie":task.snapshot.task_cookie,
                 "active_role_id":task.snapshot.active_role_id,
@@ -1993,6 +2012,22 @@ fn capture_rejects_coverage_faults() -> TestResult<()> {
     after.unresolved_effects = 0;
     after.program_digest = "changed".into();
     assert!(Host::capture_boundary(&before, &after).is_err());
+    Ok(())
+}
+
+#[test]
+fn observability_compare_routes() -> TestResult<()> {
+    for run in 0..10 {
+        let on = run % 2 == 1;
+        assert_eq!(
+            Host::capture_route("compare", run)?,
+            (on, true, if on { "araphor" } else { "plain" })
+        );
+        for mode in ["plain", "araphor"] {
+            assert_eq!(Host::capture_route(mode, run)?, (on, on, mode));
+        }
+    }
+    assert!(Host::capture_route("unknown", 0).is_err());
     Ok(())
 }
 
