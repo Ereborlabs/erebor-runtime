@@ -1,4 +1,5 @@
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -132,11 +133,13 @@ impl DiagnosticBackend {
             }
             .fail();
         }
+        let resources = StaticResources::select(self.sha256, source, mode);
         let source = source.to_vec();
         let path = self.executable.clone();
         DiagnosticCapture::spawn(&self.executable, move |signals, send| {
             let command = Self::command(&executable, cgroup_id, mode);
-            SupervisedChild::run(command, &path, source, mode, collection, signals, send)
+            SupervisedChild::spawn(command, &path, resources)?
+                .run(&path, source, mode, collection, signals, send)
         })
     }
 
@@ -151,8 +154,7 @@ impl DiagnosticBackend {
         let run_path = path.clone();
         Self::set_child_io(&mut command);
         DiagnosticCapture::spawn(&path, move |signals, send| {
-            SupervisedChild::run(
-                command,
+            SupervisedChild::spawn(command, &run_path, None)?.run(
                 &run_path,
                 b"fixture".to_vec(),
                 mode,
@@ -370,15 +372,168 @@ impl Drop for DiagnosticCapture {
     }
 }
 
+#[derive(Default)]
+struct StaticResources {
+    programs: BTreeSet<u32>,
+    maps: BTreeSet<u32>,
+    incomplete: bool,
+}
+
+impl StaticResources {
+    const BACKEND: [u8; 32] = [
+        0xd2, 0x84, 0x6f, 0x34, 0x00, 0xbb, 0x12, 0x9b, 0x1a, 0x56, 0x9a, 0xae, 0x64, 0xad, 0xf5,
+        0x48, 0xde, 0x99, 0xff, 0x41, 0xf2, 0x47, 0x82, 0x3f, 0xf8, 0xca, 0xf1, 0xfb, 0xde, 0x40,
+        0xff, 0x1e,
+    ];
+    const SOURCE: [u8; 32] = [
+        0xbf, 0xa0, 0x51, 0x9b, 0xa1, 0x0b, 0x4e, 0xba, 0x25, 0x59, 0x61, 0x28, 0x5b, 0x1d, 0x2b,
+        0x46, 0xe1, 0xea, 0x3d, 0xdb, 0x55, 0x79, 0x3a, 0xc2, 0x72, 0x0e, 0xe4, 0x3f, 0xa4, 0x30,
+        0x8a, 0x6e,
+    ];
+
+    fn select(backend: [u8; 32], source: &[u8], mode: DiagnosticMode) -> Option<Self> {
+        (mode == DiagnosticMode::Capture
+            && backend == Self::BACKEND
+            && <[u8; 32]>::from(Sha256::digest(source)) == Self::SOURCE)
+            .then(Self::default)
+    }
+
+    fn record(&mut self, text: &str) {
+        let mut fields = [None; 4];
+        let mut base = 0;
+        for line in text.lines() {
+            if let Some((field, value)) = line.split_once(':') {
+                let value = value.trim();
+                let (bit, valid) = match field {
+                    "pos" => (1, value.parse::<i64>().is_ok()),
+                    "flags" => (2, u32::from_str_radix(value, 8).is_ok()),
+                    "mnt_id" => (4, value.parse::<u32>().is_ok()),
+                    "ino" => (8, value.parse::<u64>().is_ok()),
+                    _ => (0, true),
+                };
+                self.incomplete |= !valid || base & bit != 0;
+                base |= bit;
+            }
+            for (index, prefix) in ["prog_type:", "prog_id:", "map_type:", "map_id:"]
+                .into_iter()
+                .enumerate()
+            {
+                if let Some(value) = line.strip_prefix(prefix) {
+                    match value.trim().parse::<u32>() {
+                        Ok(value) if value != 0 => {
+                            self.incomplete |= fields[index].replace(value).is_some();
+                        }
+                        _ => self.incomplete = true,
+                    }
+                }
+            }
+        }
+        self.incomplete |= base != 15
+            || fields[0].is_some() != fields[1].is_some()
+            || fields[2].is_some() != fields[3].is_some()
+            || (fields[0].is_some() && fields[2].is_some());
+        if let Some(id) = fields[1] {
+            self.incomplete |= !self.programs.insert(id);
+        }
+        if let Some(id) = fields[3] {
+            self.incomplete |= !self.maps.insert(id);
+        }
+    }
+
+    fn program_role(kind: libbpf_rs::ProgramType, name: &OsStr) -> u8 {
+        match (kind, name.to_str()) {
+            (libbpf_rs::ProgramType::Tracepoint, Some("tracepoint_sysc")) => 1,
+            (libbpf_rs::ProgramType::PerfEvent, Some("1")) => 2,
+            _ => 0,
+        }
+    }
+
+    fn map_role(info: &libbpf_rs::MapInfo) -> u8 {
+        let Ok(name) = info.name() else {
+            return 0;
+        };
+        if info.info.map_flags != 0 || info.info.map_extra != 0 {
+            return 0;
+        }
+        match (
+            info.map_type(),
+            name,
+            info.info.key_size,
+            info.info.value_size,
+            info.info.max_entries,
+        ) {
+            (libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 8, 4096) => 1,
+            (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 32768) => 2,
+            (libbpf_rs::MapType::Array, "ringbuf_loss_co", 4, 8, 1) => 4,
+            _ => 0,
+        }
+    }
+
+    fn complete(&self, programs: u8, maps: u8) -> bool {
+        !self.incomplete
+            && self.programs.len() == 2
+            && self.maps.len() == 3
+            && programs == 3
+            && maps == 7
+    }
+
+    fn verify(&self) -> bool {
+        use libbpf_rs::MapCore as _;
+
+        if self.incomplete || self.programs.len() != 2 || self.maps.len() != 3 {
+            return false;
+        }
+        let mut programs = 0;
+        for &id in &self.programs {
+            let Ok(program) = libbpf_rs::ProgramHandle::from_prog_id(id) else {
+                return false;
+            };
+            programs |= Self::program_role(program.prog_type(), program.name());
+        }
+        let mut maps = 0;
+        for &id in &self.maps {
+            let Ok(map) = libbpf_rs::MapHandle::from_map_id(id) else {
+                return false;
+            };
+            let Ok(info) = map.info() else {
+                return false;
+            };
+            maps |= Self::map_role(&info);
+        }
+        self.complete(programs, maps)
+    }
+}
+
 struct SupervisedChild {
     child: Child,
     reaped: bool,
     fdinfo: BTreeMap<u32, File>,
+    start: Instant,
+    resources: Option<StaticResources>,
 }
 
 impl SupervisedChild {
-    fn run(
+    fn spawn(
         mut command: Command,
+        path: &Path,
+        resources: Option<StaticResources>,
+    ) -> Result<Self> {
+        let start = Instant::now();
+        let child = command.spawn().context(IoSnafu {
+            action: "spawn diagnostic",
+            path,
+        })?;
+        Ok(Self {
+            child,
+            reaped: false,
+            fdinfo: BTreeMap::new(),
+            start,
+            resources,
+        })
+    }
+
+    fn run(
+        mut self,
         path: &Path,
         source: Vec<u8>,
         mode: DiagnosticMode,
@@ -386,16 +541,8 @@ impl SupervisedChild {
         signals: Arc<DiagnosticSignals>,
         send: mpsc::SyncSender<DiagnosticFrame>,
     ) -> Result<DiagnosticResult> {
-        let start = Instant::now();
-        let child = command.spawn().context(IoSnafu {
-            action: "spawn diagnostic",
-            path,
-        })?;
-        let mut owner = Self {
-            child,
-            reaped: false,
-            fdinfo: BTreeMap::new(),
-        };
+        let start = self.start;
+        let owner = &mut self;
         signals
             .process_id
             .store(owner.child.id(), Ordering::Release);
@@ -446,8 +593,33 @@ impl SupervisedChild {
         let mut status = None;
         let mut resource_text = String::with_capacity(16 * 1024);
         let mut resource_bytes = [0; 16 * 1024];
+        let mut frozen = false;
         loop {
-            owner.record_resources(&mut result, &mut resource_text, &mut resource_bytes);
+            if closing.is_some() {
+                frozen = false;
+            }
+            if !frozen {
+                let mut current = result
+                    .attach_notification_ms
+                    .and_then(|_| owner.resources.take());
+                owner.record_resources(
+                    &mut result,
+                    &mut resource_text,
+                    &mut resource_bytes,
+                    current.as_mut(),
+                );
+                if let Some(current) = current {
+                    frozen = closing.is_none()
+                        && status.is_none()
+                        && result.stop == DiagnosticStop::Exited
+                        && !signals.cancelled.load(Ordering::Acquire)
+                        && Instant::now() < deadline
+                        && current.verify();
+                    if frozen {
+                        owner.fdinfo.clear();
+                    }
+                }
+            }
             if let Some(writer) = &mut input {
                 match writer.write(&source[input_offset..]) {
                     Ok(count) => input_offset += count,
@@ -522,6 +694,14 @@ impl SupervisedChild {
                 })?;
             }
             if status.is_some() && eof.iter().all(|value| *value) {
+                if frozen {
+                    owner.record_resources(
+                        &mut result,
+                        &mut resource_text,
+                        &mut resource_bytes,
+                        None,
+                    );
+                }
                 break;
             }
             if closing.is_none() {
@@ -591,14 +771,23 @@ impl SupervisedChild {
         result: &mut DiagnosticResult,
         text: &mut String,
         bytes: &mut [u8; 16 * 1024],
+        mut current: Option<&mut StaticResources>,
     ) {
-        let Ok(entries) = fs::read_dir(format!("/proc/{}/fdinfo", self.child.id())) else {
+        let Ok(mut entries) = fs::read_dir(format!("/proc/{}/fdinfo", self.child.id())) else {
             self.fdinfo.clear();
+            if let Some(current) = current {
+                current.incomplete = true;
+            }
             return;
         };
         let mut fds = [0_u32; 256];
         let mut count = 0;
-        for entry in entries.take(fds.len()).flatten() {
+        let mut incomplete = false;
+        for entry in entries.by_ref().take(fds.len()) {
+            let Ok(entry) = entry else {
+                incomplete = true;
+                continue;
+            };
             if let Some(fd) = entry
                 .file_name()
                 .to_str()
@@ -606,7 +795,12 @@ impl SupervisedChild {
             {
                 fds[count] = fd;
                 count += 1;
+            } else {
+                incomplete = true;
             }
+        }
+        if current.is_some() && entries.next().is_some() {
+            incomplete = true;
         }
         let fds = &mut fds[..count];
         fds.sort_unstable();
@@ -614,6 +808,7 @@ impl SupervisedChild {
         let mut previous = None;
         for &fd in fds.iter() {
             if previous == Some(fd) {
+                incomplete = true;
                 continue;
             }
             previous = Some(fd);
@@ -622,6 +817,7 @@ impl SupervisedChild {
                 Entry::Vacant(entry) => {
                     let Ok(file) = File::open(format!("/proc/{}/fdinfo/{fd}", self.child.id()))
                     else {
+                        incomplete = true;
                         continue;
                     };
                     entry.insert(file)
@@ -631,9 +827,16 @@ impl SupervisedChild {
                 Ok(count) => count,
                 Err(_) => {
                     self.fdinfo.remove(&fd);
+                    incomplete = true;
                     continue;
                 }
             };
+            if count == 0 {
+                incomplete = true;
+            }
+            if let Some(current) = current.as_deref_mut() {
+                current.record(text);
+            }
             for line in text.lines() {
                 if let Some(id) = line
                     .strip_prefix("prog_id:")
@@ -650,7 +853,11 @@ impl SupervisedChild {
             }
             if count == 16 * 1024 {
                 self.fdinfo.remove(&fd);
+                incomplete = true;
             }
+        }
+        if let Some(current) = current {
+            current.incomplete |= incomplete;
         }
     }
 
@@ -793,6 +1000,163 @@ mod tests {
     }
 
     #[test]
+    fn observability_backend_static_profile() {
+        let source = include_bytes!("../../mithril-e2e/fixtures/observability/failed-opens.bt");
+        assert!(
+            StaticResources::select(StaticResources::BACKEND, source, DiagnosticMode::Capture)
+                .is_some()
+        );
+        assert!(
+            StaticResources::select(StaticResources::BACKEND, source, DiagnosticMode::Compile)
+                .is_none()
+        );
+        let mut backend = StaticResources::BACKEND;
+        backend[0] ^= 1;
+        assert!(StaticResources::select(backend, source, DiagnosticMode::Capture).is_none());
+        for source in [
+            &b"BEGIN {}"[..],
+            include_bytes!("../../mithril-e2e/fixtures/observability/syscall-errors.bt"),
+        ] {
+            assert!(StaticResources::select(
+                StaticResources::BACKEND,
+                source,
+                DiagnosticMode::Capture
+            )
+            .is_none());
+        }
+        let mut changed = source.to_vec();
+        changed.push(b' ');
+        assert!(StaticResources::select(
+            StaticResources::BACKEND,
+            &changed,
+            DiagnosticMode::Capture
+        )
+        .is_none());
+    }
+
+    fn fdinfo(extra: &str) -> String {
+        format!("pos:\t0\nflags:\t02000002\nmnt_id:\t1\nino:\t2\n{extra}")
+    }
+
+    #[test]
+    fn observability_backend_static_records() {
+        let mut current = StaticResources::default();
+        for record in [
+            "prog_type:\t5\nprog_id:\t1\n",
+            "prog_type:\t7\nprog_id:\t2\n",
+            "map_type:\t5\nmap_id:\t3\n",
+            "map_type:\t27\nmap_id:\t4\n",
+            "map_type:\t2\nmap_id:\t5\n",
+        ] {
+            current.record(&fdinfo(record));
+        }
+        assert!(current.complete(3, 7));
+        assert!(!current.complete(2, 7));
+        assert!(!current.complete(3, 3));
+        current.record(&fdinfo("map_type:\t2\nmap_id:\t5\n"));
+        assert!(!current.complete(3, 7));
+        for text in [
+            String::new(),
+            fdinfo("map_type:\t5\n"),
+            fdinfo("map_id:\t3\n"),
+            fdinfo("prog_type:\t5\n"),
+            fdinfo("prog_id:\t1\n"),
+            fdinfo("map_type:\t5\nmap_id:\t0\n"),
+            fdinfo("map_type:\t5\nmap_id:\tx\n"),
+            fdinfo("map_type:\t5\nmap_id:\t4294967296\n"),
+            fdinfo("prog_type:\t0\nprog_id:\t1\n"),
+            fdinfo("prog_type:\t5\nprog_id:\t1\nprog_id:\t1\n"),
+            fdinfo("prog_type:\t5\nprog_id:\t1\nmap_type:\t5\nmap_id:\t3\n"),
+            fdinfo("pos:\t0\n"),
+            fdinfo("").replace("02000002", "08"),
+            fdinfo("").replace("pos:\t0\n", ""),
+            fdinfo("").replace("ino:\t2", "ino:\t18446744073709551616"),
+        ] {
+            let mut current = StaticResources::default();
+            current.record(&text);
+            assert!(current.incomplete, "{text:?}");
+        }
+        let mut ordinary = StaticResources::default();
+        ordinary.record(&fdinfo(""));
+        assert!(!ordinary.incomplete);
+        assert!(ordinary.programs.is_empty() && ordinary.maps.is_empty());
+        let mut current = StaticResources {
+            programs: BTreeSet::from([1, 2]),
+            maps: BTreeSet::from([3, 4, 5]),
+            incomplete: false,
+        };
+        current.maps.remove(&5);
+        assert!(!current.complete(3, 7));
+        current.maps.extend([5, 6]);
+        assert!(!current.complete(3, 7));
+        current.maps.remove(&6);
+        current.programs.remove(&2);
+        assert!(!current.complete(3, 7));
+        current.programs.extend([2, 7]);
+        assert!(!current.complete(3, 7));
+    }
+
+    fn map_info(
+        kind: libbpf_rs::MapType,
+        name: &str,
+        key: u32,
+        value: u32,
+        maximum: u32,
+    ) -> libbpf_rs::MapInfo {
+        let mut info = libbpf_rs::libbpf_sys::bpf_map_info {
+            type_: kind as u32,
+            key_size: key,
+            value_size: value,
+            max_entries: maximum,
+            ..Default::default()
+        };
+        for (slot, byte) in info.name.iter_mut().zip(name.bytes()) {
+            *slot = byte as _;
+        }
+        libbpf_rs::MapInfo { info }
+    }
+
+    #[test]
+    fn observability_backend_static_roles() {
+        assert_eq!(
+            StaticResources::program_role(
+                libbpf_rs::ProgramType::Tracepoint,
+                OsStr::new("tracepoint_sysc")
+            ),
+            1
+        );
+        assert_eq!(
+            StaticResources::program_role(libbpf_rs::ProgramType::PerfEvent, OsStr::new("1")),
+            2
+        );
+        assert_eq!(
+            StaticResources::program_role(libbpf_rs::ProgramType::Tracepoint, OsStr::new("1")),
+            0
+        );
+        for (kind, name, key, value, maximum, role) in [
+            (libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 8, 4096, 1),
+            (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 32768, 2),
+            (libbpf_rs::MapType::Array, "ringbuf_loss_co", 4, 8, 1, 4),
+            (libbpf_rs::MapType::Hash, "AT_errors", 8, 8, 4096, 0),
+            (libbpf_rs::MapType::PercpuHash, "other", 8, 8, 4096, 0),
+            (libbpf_rs::MapType::PercpuHash, "AT_errors", 4, 8, 4096, 0),
+            (libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 4, 4096, 0),
+            (libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 8, 4095, 0),
+        ] {
+            assert_eq!(
+                StaticResources::map_role(&map_info(kind, name, key, value, maximum)),
+                role
+            );
+        }
+        let mut info = map_info(libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 8, 4096);
+        info.info.map_flags = 1 << 31;
+        assert_eq!(StaticResources::map_role(&info), 0);
+        info.info.map_flags = 0;
+        info.info.map_extra = 1;
+        assert_eq!(StaticResources::map_role(&info), 0);
+    }
+
+    #[test]
     fn observability_backend_resource_buffer() -> std::result::Result<(), Box<dyn std::error::Error>>
     {
         let directory = tempfile::tempdir()?;
@@ -863,7 +1227,9 @@ mod tests {
                     return Err(std::io::ErrorKind::PermissionDenied.into());
                 }
                 let source = b"pos:\t1\nprog_id:\t23\nmap_id:\t45\n";
-                let start = usize::try_from(offset).unwrap();
+                let start = usize::try_from(offset).map_err(|error| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+                })?;
                 let count = (source.len() - start).min(bytes.len()).min(3);
                 bytes[..count].copy_from_slice(&source[start..start + count]);
                 Ok(count)
@@ -887,12 +1253,10 @@ mod tests {
             calls: std::cell::Cell::new(0),
             fail: true,
         };
-        assert_eq!(
-            SupervisedChild::read_resource(&reader, &mut text, &mut bytes)
-                .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
+        assert!(matches!(
+            SupervisedChild::read_resource(&reader, &mut text, &mut bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        ));
         assert!(text.is_empty());
         assert_eq!(reader.calls.get(), 3);
         Ok(())
@@ -962,6 +1326,8 @@ read -r gate"#,
             child: command.spawn()?,
             reaped: false,
             fdinfo: BTreeMap::new(),
+            start: Instant::now(),
+            resources: None,
         };
         let mut input = owner.child.stdin.take().ok_or("input pipe absent")?;
         let mut output = BufReader::new(owner.child.stdout.take().ok_or("output pipe absent")?);
@@ -985,7 +1351,17 @@ read -r gate"#,
         };
         let mut text = String::with_capacity(16 * 1024);
         let mut bytes = [0; 16 * 1024];
-        owner.record_resources(&mut result, &mut text, &mut bytes);
+        result.program_ids.extend([111, 222]);
+        result.map_ids.extend([333, 444, 555]);
+        let mut current = StaticResources::default();
+        owner.record_resources(&mut result, &mut text, &mut bytes, Some(&mut current));
+        assert!(current.incomplete);
+        assert!(current.programs.is_empty() && current.maps.is_empty());
+        assert_eq!(result.program_ids, BTreeSet::from([111, 222]));
+        assert_eq!(result.map_ids, BTreeSet::from([333, 444, 555]));
+        assert!(!current.verify());
+        result.program_ids.clear();
+        result.map_ids.clear();
         assert_eq!(owner.fdinfo.len(), 256);
         let held = owner.fdinfo.get(&3).ok_or("fdinfo absent")?.as_raw_fd();
         let path = PathBuf::from(format!("/proc/{}/fdinfo/3", owner.child.id()));
@@ -997,7 +1373,7 @@ read -r gate"#,
             phase.clear();
             output.read_line(&mut phase)?;
             assert_eq!(phase, expected);
-            owner.record_resources(&mut result, &mut text, &mut bytes);
+            owner.record_resources(&mut result, &mut text, &mut bytes, None);
             assert!(owner.fdinfo.len() <= 256);
             let resource = owner.fdinfo.get_mut(&3).ok_or("fdinfo absent")?;
             assert_eq!(resource.as_raw_fd(), held);
@@ -1007,15 +1383,24 @@ read -r gate"#,
         }
         assert!(owner.fdinfo.len() < 256);
         owner.fdinfo.insert(3, File::open(directory.path())?);
-        owner.record_resources(&mut result, &mut text, &mut bytes);
+        let mut current = StaticResources::default();
+        owner.record_resources(&mut result, &mut text, &mut bytes, Some(&mut current));
+        assert!(current.incomplete);
         assert!(!owner.fdinfo.contains_key(&3));
-        owner.record_resources(&mut result, &mut text, &mut bytes);
+        owner.record_resources(&mut result, &mut text, &mut bytes, None);
         assert!(owner.fdinfo.contains_key(&3));
+        let bounded = directory.path().join("bounded");
+        fs::write(&bounded, vec![b' '; 16 * 1024])?;
+        owner.fdinfo.insert(3, File::open(&bounded)?);
+        let mut current = StaticResources::default();
+        owner.record_resources(&mut result, &mut text, &mut bytes, Some(&mut current));
+        assert!(current.incomplete);
+        assert!(!owner.fdinfo.contains_key(&3));
         input.write_all(b"next\n")?;
         phase.clear();
         output.read_line(&mut phase)?;
         assert_eq!(phase, "closed\n");
-        owner.record_resources(&mut result, &mut text, &mut bytes);
+        owner.record_resources(&mut result, &mut text, &mut bytes, None);
         assert!(!owner.fdinfo.contains_key(&3));
         text.push_str("prog_id:\t111\nmap_id:\t222\n");
         assert!(SupervisedChild::read_resource(&native, &mut text, &mut bytes).is_err());

@@ -3064,6 +3064,10 @@ latency explanation or performance parity is claimed.
 
 ### Diagnostic resource scan buffer
 
+The following route describes source `3da357fa`. Later changes use positioned
+fdinfo reads and obtain peak memory at child reap. Read the current resource
+route below before reviewing a new change.
+
 [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) creates one read buffer for its supervision loop.
 -> [SupervisedChild::record_resources](../../../../crates/erebor-interceptor/src/diagnostic.rs) clears the buffer and reads current process status.
 -> [SupervisedChild::read_resource](../../../../crates/erebor-interceptor/src/diagnostic.rs) clears the same buffer and reads each current descriptor within the existing 16-KiB bound.
@@ -3165,7 +3169,8 @@ For the map-read path, follow
 to [KernelStateReader::lookup](../../../../crates/erebor-interceptor/src/host.rs).
 Each turn opens the pinned map before reading the current binding.
 [SupervisedChild::record_resources](../../../../crates/erebor-interceptor/src/diagnostic.rs)
-separately reads process status and current file-descriptor records.
+separately reads current file-descriptor records. `SupervisedChild::reap`
+obtains the conservative peak-memory observation after capture ends.
 [NodeRun::run](../../../../crates/mithril-node/src/node/run.rs) waits for the
 diagnostic exchange, but its Control RPC wait continues runtime admission.
 Shared raw-store locks can delay uploads. These source facts do not prove
@@ -3411,7 +3416,7 @@ timeout, then passes in 0.02 seconds. Read `pod-exit-red.log` and
 The transport correction is **Done**; paired physical qualification and
 final CI for this correction remain **Not done**.
 
-For resource-scan optimization, read
+For the default resource-scan path, read
 [`SupervisedChild::record_resources`](../../../../crates/erebor-interceptor/src/diagnostic.rs)
 and `read_resource`, then the three same-file resource tests. The existing
 owner holds at most 256 proc fdinfo handles. Each turn opens the directory
@@ -3437,3 +3442,47 @@ Read same-file `observability_backend_peak_memory`. This test checks memory
 used before an exec, cancellation and child removal. All 19 backend tests and
 owned upload pass. The 199-Hz profile supports removing status reads, but does
 not qualify p99 parity. The unprofiled comparison and final CI remain open.
+
+### Reviewed static resource path
+
+[DiagnosticBackend::start](../../../../crates/erebor-interceptor/src/diagnostic.rs) verifies the held executable inode against the configured digest.
+-> [StaticResources::select](../../../../crates/erebor-interceptor/src/diagnostic.rs) selects one private profile for the exact reviewed backend and source in Capture mode.
+-> [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) receives the real stderr attachment marker and uses the next turn for one fresh snapshot.
+-> [SupervisedChild::record_resources](../../../../crates/erebor-interceptor/src/diagnostic.rs) reads current descriptors and records historical IDs separately.
+-> [StaticResources::record](../../../../crates/erebor-interceptor/src/diagnostic.rs) validates each complete descriptor record, including common fields and matched BPF type/ID fields.
+-> [StaticResources::verify](../../../../crates/erebor-interceptor/src/diagnostic.rs) opens each current object by ID and checks the two program roles and three map layouts through libbpf-rs.
+-> [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) stops repeated resource reads only after complete verification and closes cached proc handles.
+
+[StaticResources::verify](../../../../crates/erebor-interceptor/src/diagnostic.rs) finds an incomplete snapshot, unexpected role or metadata-query failure.
+-> [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) retains continuous scanning; the consumed profile cannot enable a later static transition.
+
+[SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) cancels, expires, drains or observes natural exit.
+-> [SupervisedChild::record_resources](../../../../crates/erebor-interceptor/src/diagnostic.rs) resumes resource inspection before shutdown completes.
+-> [SupervisedChild::reap](../../../../crates/erebor-interceptor/src/diagnostic.rs) reaps the owned child after proc handles close.
+-> [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) checks removal of the historical program/map ID unions.
+
+This change stays inside the Interceptor supervisor. It adds no public
+configuration, API, service or durable owner. The private profile uses opaque
+backend and source fingerprints; it does not authorize a trace or select its
+target. Control and Node retain those decisions. Target and grant checks,
+10-ms supervision, deadlines, output bounds and upload durability do not
+change. Metadata-query handles close inside verification. They cannot retain
+BPF resources through cleanup.
+
+Read `observability_backend_static_profile`, `observability_backend_static_records`,
+`observability_backend_static_roles` and the extended
+`observability_backend_resource_handles` in the same source file. The tests
+check exact fingerprints, Compile and changed-source fallback, required
+fields, unknown roles, layout mismatch, scan limits, read errors and separation
+of current IDs from historical IDs. The focused backend selection passes 23
+tests; one subprocess fixture is ignored. These tests do not prove physical
+activation of the static path or performance parity. Read the
+[approved contract and measured results](../../araphor-observability/phase-2-owned-capture.md#approved-static-resource-inventory).
+Physical comparison and final workspace CI remain **Not done**.
+
+Strict package Clippy passes for all features and targets. The final focused
+backend run passes 23 tests in 31.84 seconds, with one subprocess fixture
+ignored. Owned upload passes in 25.21 seconds. Read the logs in
+`/tmp/araphor-static-inventory.GOQgpiAI`. Independent review finds no must-fix
+issue. This record covers the static-inventory change after `833e9606`, not a
+completed performance or deployment qualification.

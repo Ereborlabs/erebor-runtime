@@ -996,7 +996,7 @@ No qualified configuration is published. Performance parity is **Not done**.
 Source `3da357fa` gives each diagnostic supervisor one reusable read buffer.
 The supervisor clears the buffer before each status or descriptor read.
 Every read still opens the current file. The 10-ms scan cadence, 256-entry
-limit, 16-KiB descriptor bound, peak memory check, program/map ID collection
+limit, 16-KiB descriptor bound, peak memory observation, program/map ID collection
 and cleanup checks stay unchanged. No descriptor cache or new owner is added.
 
 The focused backend selection passed 29 tests: Data 2, Interceptor 17 and
@@ -1468,6 +1468,125 @@ the child is reaped after cancellation. Owned upload passes in 24.74 seconds.
 Read `resource-reap-green.log` and `reap-owned-green.log` in the local profile
 directory. The unprofiled comparison and final CI remain **Not done**.
 Diagnostics stay disabled.
+
+### Reap comparison and exact-rank attribution
+
+The unprofiled comparison covers source `833e9606`. It completes in 581.79
+seconds and returns 101. The workload, backend, script, environment and
+five-pair no-increase gate do not change. No profiler, build, CI or guest
+polling runs during the comparison.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 182,218 | 209,377 | +27,159 | +14.90 |
+| 2 | 123,046 | 217,263 | +94,217 | +76.57 |
+| 3 | 152,154 | 217,023 | +64,869 | +42.63 |
+| 4 | 139,813 | 160,000 | +20,187 | +14.44 |
+| 5 | 212,210 | 193,007 | -19,203 | -9.05 |
+
+All ten runs have 5,000 exact denials, zero effect loss and zero unresolved
+effects. Independent cleanup passes; enforcement resources stay unchanged.
+Each Araphor terminal reports `Deadline`, verified cleanup and complete
+output. Trace kernel loss remains unknown. Four pairs fail. Read
+`reap-5000/capture-pairs.json` and `reap-5000/test.log` in
+`/tmp/araphor-offset-profile.bxGhTwug`. Performance parity is **Not done**.
+
+A separate control comparison runs plain bpftrace on both sides. This
+temporary test variant changes only capture-path selection and labels.
+Production source is restored before measurement. The comparison completes
+in 549.12 seconds. Three pairs fail the unchanged no-increase predicate.
+
+| Pair | First plain p99, ns | Second plain p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 312,829 | 213,119 | -99,710 | -31.87 |
+| 2 | 239,029 | 242,151 | +3,122 | +1.31 |
+| 3 | 162,515 | 123,900 | -38,615 | -23.76 |
+| 4 | 241,783 | 249,993 | +8,210 | +3.40 |
+| 5 | 181,405 | 215,511 | +34,106 | +18.80 |
+
+All ten receipts identify plain capture. Denials, loss, unresolved effects,
+cleanup and enforcement-resource checks pass. Read `plain-control` in the
+same local directory. This result shows comparison variability. It does not
+prove Araphor parity or permit a larger acceptance limit.
+
+The next bounded profile covers one plain/Araphor pair on `833e9606` with
+5,000 operations per run. It uses the approved instrumented fixture, a 199-Hz
+CPU recorder and the scheduler recorder. It is not qualification. Plain p99
+is 227,613 ns; Araphor p99 is 273,030 ns, an increase of 45,417 ns or 19.95%.
+At the exact sorted index 4,949, plain waits 190,529 ns and Araphor waits
+233,628 ns. The same shared Node worker occupies both runnable waits.
+Neither exact operation overlaps supervisor execution.
+
+At Araphor sorted rank p99+4, the supervisor occupies the complete 235,339-ns
+runnable wait. Twenty-four resource reads occupy 77,804 ns of that interval.
+Across the Araphor actor window, all 13,440 resource calls pair correctly:
+6,720 positive reads and 6,720 EOF reads, with no errors. Their elapsed time
+totals 51.05 ms, including 18.02 ms for EOF reads. This is wall time, not pure
+CPU time. Resource inspection causes contention near the threshold. The
+profile does not prove that inspection causes the whole p99 difference.
+Positive short reads still require continuation through EOF.
+
+The scheduler export has no lost, unordered or unparsed records. The CPU
+export is ordered but retains the recorder's warning for 2,535 out-of-order
+events. Read `analysis.json`, `cpu-analysis.json`, the actor timing files and
+recorder logs in `/tmp/araphor-reap-attribution.qLHawK0o`. The guest recorder
+directory is `/var/tmp/araphor-attribution-reap.WewrtzIH`.
+
+### Approved static resource inventory
+
+The user approves one narrow exception to continuous resource inspection.
+Only the reviewed backend digest
+`d2846f3400bb129b1a569aae64adf548de99ff41f247823ff8caf1fbde40ff1e`
+and the exact canonical FailedOpens source qualify. The source digest is
+`bfa0519ba10b4eba255961285b1d2b46e1ea3ddb55793ac2720ee43fa4308a6e`.
+The existing fixed environment remains part of this qualification.
+
+After the real stderr attachment marker, take a fresh complete inventory.
+Do not use the historical ID union as the current inventory. Require both
+expected program roles and all three map roles, with the reviewed types,
+names, sizes, capacities and flags. Any directory, entry, read or metadata
+error, truncation, missing role or extra role retains continuous inspection.
+Compile mode, other scripts and other backend digests retain that path.
+Require valid common fdinfo fields for every selected FD. A BPF-typed record
+without its matching nonzero ID is incomplete. Take only one eligible
+snapshot attempt. A failed attempt cannot later enable the static path.
+Resume resource scans during shutdown.
+
+| Role | Kernel type | Kernel name | Key/value bytes | Capacity |
+| --- | --- | --- | --- | ---: |
+| Open-exit probe | Tracepoint | `tracepoint_sysc` | Not applicable | Not applicable |
+| Print interval | Perf event | `1` | Not applicable | Not applicable |
+| Error count | Per-CPU hash | `AT_errors` | 8/8 | 4096 |
+| Output buffer | Ring buffer | `ringbuf` | 0/0 | 32768 |
+| Output loss count | Array | `ringbuf_loss_co` | 4/8 | 1 |
+
+Map flags are zero. Program names in this table are kernel names, not longer
+names from debug information. A different supported backend can retain
+continuous scanning; the static path is not required for capture correctness.
+
+For a verified static inventory, remove repeated collection-time resource
+reads. The reviewed script and backend create no later BPF resources.
+Preserve historical IDs for independent cleanup. Do not retain BPF handles
+that could keep resources alive. Keep the 10-ms supervision turn, current
+target and grant checks, cancellation, deadlines, output bounds, durability
+and cleanup. This exception changes resource-inspection cadence, not the
+capture's authority or enforcement behavior.
+
+`StaticResources::select`, `record` and `verify` implement this contract in
+the existing Interceptor supervisor. The first post-marker attempt uses
+fresh current ID sets. The owner consumes the profile for that attempt, so
+failure keeps ordinary scanning for the rest of the capture. Successful
+verification closes temporary BPF handles and cached proc handles. Closing
+and natural exit resume inspection before cleanup.
+
+The focused backend selection passes 23 tests in 31.84 seconds; one subprocess
+fixture is ignored. Strict package Clippy passes with all targets and
+features. Owned upload passes in 25.21 seconds. Read `backend-tests-final.log`,
+`backend-clippy-final.log` and `owned-upload.log` in
+`/tmp/araphor-static-inventory.GOQgpiAI`. Independent safety and Ponytail
+review find no must-fix issue. This implementation slice is **Done**. Physical
+activation, its unchanged unprofiled comparison and final workspace CI remain
+**Not done**. Performance parity is **Not done**. Diagnostics stay disabled.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
