@@ -3307,3 +3307,24 @@ observer and harness change. The TLS repair regression, formatting and both
 harness syntax checks pass. Read `observer-owner-focused.log` and
 `observer-tls-focused.log` in `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
 Final workspace CI and physical qualification remain due.
+
+Final workspace CI passes on `d486e637`. Formatting, workspace check,
+strict Clippy and all workspace tests return zero. Mithril e2e passes 146
+tests with 413 ignored. Read `workspace-observer-final.log` in the same
+evidence directory. No later Rust or harness edit is included.
+
+The first observer run proves four fault cases. Retirement fails because
+the launch omits the supported `MITHRIL_TEST_OCI_HOOK` input. The extracted
+archive has no hook binary. The verified worktree binary and `run --help`
+preflight pass. The rerun supplies that existing input; no code changes.
+The paired owner proof passes in 26.82 seconds and TLS repair in 0.74 seconds.
+All five physical fault cases pass in 116.95 seconds on `d486e637`, VM
+`192.168.122.153`, with `mithril_e2e-1adb172a9b31c9af`. Partition expires,
+revocation cancels, map exhaustion completes, output overflow returns
+`ConsumerSlow`, and retirement returns `TargetChanged`. The cases have six
+exact policy denials in total. Each retains diagnostic program IDs and
+requires exact baseline restoration before Node shutdown. Enforcement IDs
+remain unchanged. Trace kernel loss stays unknown. Read the command and
+receipts in the [physical lifecycle result](../../araphor-observability/phase-2-owned-capture.md#physical-lifecycle-gates).
+The combined fault route is **Done** for this source and platform. Native
+full-store proof, Pod replacement and performance parity remain **Not done**.

@@ -1320,6 +1320,42 @@ change. The final observer source passes the eleven-case owner test in
 both harness syntax checks pass. Final workspace CI and physical proof remain
 due on `b9b01888` plus this observer and harness change.
 
+Final workspace CI passes on `d486e637`. Formatting, workspace check,
+strict Clippy and all workspace tests return zero. Data passes 167 tests,
+Observability 23, Interceptor 40, Control 170, Mithril e2e 146 and Node 262.
+Read `workspace-observer-final.log` in the same evidence directory.
+Ignored physical tests are not passes.
+
+The first observer run passes partition, revocation, map exhaustion and
+output overflow. Retirement then fails because the launch omits
+`MITHRIL_TEST_OCI_HOOK`. The input archive has no runtime executable.
+The checked worktree binary exists and its `run --help` preflight passes.
+No production or fixture source change follows from this missing input.
+The repeated run sets
+`MITHRIL_TEST_OCI_HOOK=/mnt/mithril-source/worktrees/mithril-ui/target/debug/mithril-oci-hook`.
+It uses `owned.sh BIN ARCHIVE OUTPUT 1 --test-admission`, the same archive,
+VM and libtest binary as the previous run. Its guest output is
+`/tmp/araphor-owned-failures-20261003-d486e637-hook`.
+Owned upload passes in 26.82 seconds and TLS repair in 0.74 seconds.
+All five physical fault cases pass in 116.95 seconds. The command returns zero.
+
+| Case | Terminal reason | Physical denials |
+| --- | --- | ---: |
+| Partition | `Deadline` | 1 |
+| Revocation | `Cancelled` | 1 |
+| Map exhaustion | `Completed` | 1 |
+| Output overflow | `ConsumerSlow` | 1 |
+| Runtime retirement | `TargetChanged` | 2 |
+
+Each case retains nonempty diagnostic program IDs. Independent inventory
+returns to baseline before Node shutdown. Enforcement resource IDs do not
+change. Cleanup is verified; trace kernel loss remains unknown. Output is
+incomplete except for the bounded-map case. Read `capture-pairs.json`,
+`test.log`, `lightweight.log` and `lightweight-tls.log` in `failures-hook`
+under the same evidence directory. The combined fault route is **Done** on
+this source and platform. Pod replacement, native full-store proof and
+performance parity remain **Not done**. Diagnostics stay disabled.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current
