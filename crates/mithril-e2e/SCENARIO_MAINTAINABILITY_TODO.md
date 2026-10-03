@@ -6382,7 +6382,11 @@ setup, production actions, assertions, and focused test.
     `/tmp/mithril-entry-replace-host-final-20261003.log`.
     Final Rust CI and VM harness checks passed. See
     `/tmp/mithril-entry-replace-host-final-ci-20261003.log`.
-  - [ ] Direct runc qualification and commit.
+  - [x] Direct runc passed the unchanged test in 60.54 seconds. Both
+    replacement generations, final signed entries, actor identity, normal
+    teardown, and owned directory cleanup passed. Formatting, compilation,
+    and strict package clippy passed. See
+    `/tmp/mithril-entry-replace-runc-20261003.log`.
   - [ ] Kubernetes qualification and commit.
   - [ ] Remove only the matching old replacement readback and unused imports.
   Review route: [replacement_keeps_signed_entries](src/identity/scenarios/entry_replace.rs)
