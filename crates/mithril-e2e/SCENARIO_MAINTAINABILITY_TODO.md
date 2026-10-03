@@ -6336,7 +6336,11 @@ setup, production actions, assertions, and focused test.
     duplicate execution-rule names; only the new fixture was corrected.
     VM harness checks and final Rust CI passed. See
     `/tmp/mithril-entry-map-host-ci-20261003.log`.
-  - [ ] Pass and commit direct runc, then Kubernetes.
+  - [x] Direct runc passed the unchanged 69-line test in 37.17 seconds.
+    Stock runc and the production OCI hook started the actor. Output, pin,
+    lease, actor cgroup, and Node cgroup cleanup passed. Final Rust CI passed.
+    See `/tmp/mithril-entry-map-runc-ci-20261003.log`.
+  - [ ] Pass and commit Kubernetes.
   - [ ] Remove only the matching initial map readback after qualification.
     Keep the policy-replacement readback until its own replacement passes.
     Verify the reduced old probe, harness checks, and final Rust CI before
