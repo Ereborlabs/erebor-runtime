@@ -5713,7 +5713,7 @@ test does not close a row when its physical condition or an assertion changed.
     VM harness checks and final Rust CI passed. See
     `/tmp/mithril-changed-retirement-ci-20261003.log`. The legacy file remains
     on the retirement list at 5,583 lines. No production code changed.
-  - [ ] Replace exact Control recovery with one small standard direct-runc
+  - [x] Replace exact Control recovery with one small standard direct-runc
     test. Reuse `runtime_owner.py` and `OciBundle`. Declare the exact Control
     command and its mounts in the native recovery manifest. Keep UID, GID,
     and supplementary GID 65532, no new privileges, empty capabilities,
@@ -5728,6 +5728,7 @@ test does not close a row when its physical condition or an assertion changed.
     `target/mithril-control-recovery-20261003T022058Z-2428320`. All eight
     production gate tests, VM harness checks, and final Rust CI passed. See
     `/tmp/mithril-runtime-control-ci-20261003.log`.
+    Commit `5a24548b` contains the replacement.
     The checked input preserves the non-root user, empty capabilities, private
     PID namespace, and read-only root. The marker directory keeps the baseline
     mode 0777. No production or Platform code changed.
@@ -5739,11 +5740,18 @@ test does not close a row when its physical condition or an assertion changed.
       -> stock runc runs [runtime_owner.py](fixtures/process/runtime_owner.py)
       -> [ProcessFixture](src/process.rs) reports exit and output; the platform
       removes runtime state, temporary paths, and the actor cgroup.
-  - [ ] Remove only the old exact Control recovery action, decision-log wrapper,
+  - [x] Remove only the old exact Control recovery action, decision-log wrapper,
     probe calls, three result fields, and duplicate assertions after the
     replacement commit. Keep the Control config, argument list, manifest,
     changed-capability check, and version-change check. Qualify all six standard
     cases and the complete reduced legacy probe before committing the deletion.
+    The deletion removes 30 Rust lines and adds two lines. All six standard
+    cases passed through the retained launcher in 7.86 seconds. All seven
+    remaining legacy cases and cleanup passed. Evidence:
+    `target/mithril-control-retirement-20261003T022742Z-2442569`. VM harness
+    checks and final Rust CI passed. See
+    `/tmp/mithril-control-retirement-ci-20261003.log`. The legacy file remains
+    on the retirement list at 5,555 lines. No production or Platform code changed.
   - [ ] Replace changed Control recovery with the same actor and native inputs.
     Change only the effective capability set to `CAP_SYS_ADMIN`. Keep all other
     capability sets empty, as in the baseline. Require `DENY_NODE_UNAVAILABLE`
