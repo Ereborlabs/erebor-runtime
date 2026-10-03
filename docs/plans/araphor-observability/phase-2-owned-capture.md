@@ -1409,6 +1409,28 @@ Ponytail review finds no unnecessary owner or dependency. The implementation
 slice is **Done**. Its unprofiled comparison and final CI are **Not done**.
 Performance parity remains **Not done**. Diagnostics stay disabled.
 
+The next unprofiled comparison uses `e02924e4`, the same archive and binary
+path, and guest output `/tmp/araphor-observability-153-offset-20261003-5000`.
+The physical case completes in 582.41 seconds and returns 101 at the unchanged
+comparison gate. No Cargo, CI, profiler or guest polling runs during it.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 160,723 | 227,352 | +66,629 | +41.46 |
+| 2 | 211,004 | 236,202 | +25,198 | +11.94 |
+| 3 | 167,357 | 230,584 | +63,227 | +37.78 |
+| 4 | 160,598 | 257,495 | +96,897 | +60.34 |
+| 5 | 137,204 | 208,597 | +71,393 | +52.03 |
+
+All ten runs have 5,000 exact denials, zero effect loss, zero unresolved
+effects and eligible negative claims. Plain capture has verified cleanup and
+unchanged enforcement resources. Each Araphor terminal is `Deadline`, with
+verified cleanup and complete output. Trace kernel loss remains unknown.
+Read `offset-5000/capture-pairs.json` and `offset-5000/test.log` in
+`/tmp/araphor-fdinfo-profile.bc4UoneF`. All five pairs fail. The code removes
+measured repeated work, but these results do not prove a p99 improvement.
+Performance parity and final CI for this code remain **Not done**.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node
