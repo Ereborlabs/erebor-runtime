@@ -1221,7 +1221,102 @@ Correlate slow operations with scheduler transitions. Treat runnable
 preemption separately from blocked time. A syscall's elapsed time alone
 does not prove storage or lock waiting. Report every pair and missing records.
 Profiled results cannot qualify performance or change the no-increase gate.
-Release performance remains unqualified. No profile result is recorded yet.
+Release performance remains unqualified. The CPU recorder's file-size limit
+also applies to its workload children.
+
+### Attribution profile result
+
+The approved run completes in 582.09 seconds on source `d486e637`, VM
+`192.168.122.153`, with `mithril_e2e-1adb172a9b31c9af`. The comparison returns
+101 because each pair exceeds the unchanged no-increase gate. The collector
+returns zero and saves all ten timing files. The scheduler recorder returns
+130 after the runner sends its planned interrupt. No production code changes.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 284,129 | 341,250 | +57,121 | +20.103896% |
+| 2 | 248,212 | 289,093 | +40,881 | +16.470195% |
+| 3 | 245,616 | 251,616 | +6,000 | +2.442838% |
+| 4 | 261,856 | 310,475 | +48,619 | +18.567075% |
+| 5 | 247,894 | 280,155 | +32,261 | +13.014030% |
+
+All ten runs retain exactly 5,000 denials, zero enforcement-event loss and
+zero unresolved effects. Native cleanup and unchanged enforcement resources
+pass. All Araphor terminals have complete output, `Deadline`, `Verified`
+cleanup, exit code zero and no forced kill. Trace kernel loss stays unknown.
+The native receipts repeat the same executable and source digests as the
+unprofiled run. No qualified configuration is published.
+
+For each run, join scheduler intervals to each operation's monotonic start
+and end. Exclude the 1-ms sleeps. Of each run's slowest 50 operations, 49 or
+50 have a scheduler switch. Runnable waiting accounts for 86.06 to 91.06%
+of their summed wall time. These intervals have no observed blocked wait.
+This percentage describes the measured tail, not the difference between
+the two p99 values. Thread CPU p99 is 61,321 to 66,259 ns across all ten runs,
+using the same nearest-rank rule as wall p99. The CPU p99 difference ranges
+from -2.38 to +4.03% across pairs. Runnable waiting dominates the measured
+tail wall time, not execution in the actor thread.
+
+The Araphor supervisor occupies the CPU during some actor runnable waits.
+For example, run 1 operation 4,251 takes 540,568 ns of wall time and 35,630 ns
+of thread CPU time. It has 500,293 ns of runnable waiting. The supervisor
+occupies that CPU throughout this interval. This is a scheduler observation,
+not a measurement of task-exclusive CPU time. Interrupts and guest scheduling
+can occur within a task's interval. Matching switch-out and switch-in CPUs
+does not exclude an intermediate migration.
+
+CPU reports select ten run windows, from the first operation's start to the
+last operation's end. They include the intervals between operations. The
+reports contain 680 plain samples and 748 Araphor samples. The supervisor has 48
+samples; 39 include `SupervisedChild::record_resources` or `read_resource`.
+Some stacks include enforcement BPF hooks during those file reads. The source
+opens `/proc/<child>/status`, scans `/proc/<child>/fdinfo`, and reads up to
+256 entries on every pipe-poll turn. The loop sleeps 10 ms after that work.
+This is a concrete optimization target. It is not proof that this scan causes
+the complete p99 difference. Common Node evidence, coverage and live-manifest
+work also appears in both paths.
+
+The corrected scheduler parser accepts signed PID and TID fields. It parses
+all 4,986,744 records with no lost-record message or timestamp-order error.
+An independent interval join confirms all ten tail totals. The CPU recording
+reports 2,325 out-of-order events and zero lost samples. Initial stack decoding
+stops at a symbol-resolution error. Decoding the measured windows with
+`--no-inline` succeeds. Preserve that limit; do not claim complete symbol
+resolution. Aggregate complete per-operation task counters before selecting
+the leading tasks. Do not attribute migrated waits to one CPU's task list.
+
+The profiles add clock reads, scheduler tracepoints, CPU samples and collector
+work. They also write on the same filesystem used by raw-store `syncfs`.
+These settings can change scheduling and sync cost. Sync/futex elapsed time
+alone does not prove I/O or lock contention. The original unprofiled receipts
+have no operation timestamps, so this profile cannot explain each earlier
+percentage. Both paths have variable scheduler waits. A small paired p99
+difference does not show that wrapper work disappeared.
+
+The source review of [bpftrace v0.20.2](https://github.com/bpftrace/bpftrace/blob/v0.20.2/src/main.cpp#L836-L911)
+finds one parser and compiler path after `-e` or stdin supplies the source.
+Compilation occurs before the measured operations. No separate faster kernel
+path is established for `-e`. The packaged binary's patches and generated
+instruction equality are not checked by this profile.
+
+Read `capture-pairs.json`, `test.log`, `analysis.json`, `analysis-detail.json`,
+`cpu-analysis.json`, `diagnostic-stacks.json`, the actor timing files and
+recorder logs in `/tmp/araphor-capture-profile.GplRU8Gs`. The guest profiles
+are `cpu.data` and `scheduling.data` in
+`/var/tmp/araphor-attribution.xFUECZc1`. The launch is:
+
+```sh
+sudo timeout 1200 bash /var/tmp/araphor-attribution.xFUECZc1/profile.sh \
+  /var/tmp/araphor-attribution.xFUECZc1 \
+  /tmp/araphor-attribution-20261003-5000 \
+  /mnt/mithril-source/worktrees/mithril-ui/target/debug/deps/mithril_e2e-1adb172a9b31c9af \
+  /var/tmp/araphor-attribution.xFUECZc1/fixtures-profile.tar.gz
+```
+
+The diagnostic experiment is **Done**. Performance parity remains **Not done**.
+Optimize measured repeated work without removing target, resource-ownership,
+durability, deadline or cleanup checks. A later unprofiled comparison must
+still pass the unchanged no-increase gate. Diagnostics stay disabled.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new

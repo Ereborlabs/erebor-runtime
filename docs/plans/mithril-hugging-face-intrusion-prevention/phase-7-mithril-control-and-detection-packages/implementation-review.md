@@ -3354,3 +3354,24 @@ directory above. Fixture teardown and guarded K3s removal finish. Production
 limits do not change. This result does not qualify Pod capture. The approved
 attribution profile is separate from performance qualification; read its
 [scope](../../araphor-observability/phase-2-owned-capture.md#approved-attribution-profile).
+
+The approved attribution run completes in 582.09 seconds on `d486e637` and
+returns 101 at the unchanged no-increase comparison gate. All ten runs save
+5,000 timed opens and exact denials. The corrected scheduler analysis and an
+independent interval join agree. Runnable waiting accounts for 86.06 to
+91.06% of summed wall time in each run's slowest 50 operations. This is not
+a decomposition of the paired p99 difference. Of 48 supervisor CPU samples,
+39 include `SupervisedChild::record_resources` or `read_resource`. The
+[resource scan](../../../../crates/erebor-interceptor/src/diagnostic.rs)
+reads status and up to 256 fdinfo entries each polling turn. Some stacks also
+include enforcement BPF hooks on those reads. Review this repeated work
+before changing unrelated storage or bpftrace compilation.
+
+The temporary fixture and profiles add measurement cost. Profile files also
+share the raw-store `syncfs` filesystem. The original unprofiled percentages
+remain unexplained by operation-level evidence. Read all five pairs, exact
+commands, parser corrections, symbol-resolution limits and receipts in the
+[attribution result](../../araphor-observability/phase-2-owned-capture.md#attribution-profile-result).
+The experiment is **Done**; performance parity and Pod capture remain
+**Not done**. No production code changes or qualified configuration follow
+from these profiles. Diagnostics stay disabled.
