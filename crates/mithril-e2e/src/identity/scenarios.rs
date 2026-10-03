@@ -117,6 +117,8 @@ mod restricted_roots;
 #[cfg(test)]
 mod retained_host;
 #[cfg(test)]
+mod runtime_changed;
+#[cfg(test)]
 mod runtime_effects;
 #[cfg(test)]
 mod runtime_entries;

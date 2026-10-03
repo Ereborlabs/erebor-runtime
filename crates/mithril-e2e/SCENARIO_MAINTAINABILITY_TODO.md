@@ -5687,12 +5687,25 @@ test does not close a row when its physical condition or an assertion changed.
     VM harness checks and final Rust CI passed. See
     `/tmp/mithril-recovery-retirement-ci-20261003.log`. The legacy file remains
     on the retirement list at 5,604 lines. No production code changed.
-  - [ ] Replace the changed recovery-command denial with the same checked
+  - [x] Replace the changed recovery-command denial with the same checked
     actor, manifest, and OCI input. Keep the changed command and the absent
     `/host-hook-bin` and `/host-containerd` mounts. Require failed start,
     `DENY_NODE_UNAVAILABLE`, no marker or output, empty runtime state, and
     cgroup cleanup. Add no Platform method. Commit before removing this old
     action and its three result fields.
+    The 69-line [changed_recovery_never_starts](src/identity/scenarios/runtime_changed.rs)
+    passed in the retained lightweight VM in 11.53 seconds. All eight
+    production gate tests and VM harness checks passed. The test preserves
+    both baseline rejection conditions. It does not isolate argument and
+    mount rejection. The final Rust CI gate passed. See
+    `/tmp/mithril-runtime-changed-ci-20261003.log`. The old action remains
+    until this replacement is committed. No production or Platform code changed.
+    The review route uses the same native input binder, production spec
+    owner, public hook, and process owner as the exact recovery test above.
+  - [ ] Remove only `run_changed_recovery`, its probe call, three result fields,
+    and duplicate assertions after the replacement commit. Keep the exact
+    recovery config, long argument list, version-change checks, and manifest.
+    Qualify the five standard cases and complete reduced legacy probe.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The
