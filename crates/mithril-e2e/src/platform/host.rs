@@ -1072,13 +1072,93 @@ impl Host {
     }
 
     #[cfg(test)]
+    fn capture_health(
+        before: &MithrilObservationSnapshot,
+        after: &MithrilObservationSnapshot,
+    ) -> TestResult<()> {
+        use erebor_runtime_ipc::v1::MithrilCoverageInterval;
+        use std::collections::BTreeMap;
+
+        if [before, after].iter().any(|snapshot| {
+            !snapshot.kernel_ready
+                || !snapshot.effect_health_available
+                || !snapshot.negative_claim_eligible
+                || snapshot.coverage_intervals.is_empty()
+        }) || before.node_boot_id != after.node_boot_id
+            || before.label_epoch != after.label_epoch
+            || before.program_digest != after.program_digest
+        {
+            return Err("capture requires unchanged, healthy enforcement coverage".into());
+        }
+        let faults = [before, after].map(|snapshot| {
+            (
+                snapshot.lost_effects,
+                snapshot.unresolved_effects,
+                snapshot.decoder_errors,
+                snapshot.evidence_errors,
+                snapshot.wal_capacity_blocked,
+                snapshot.reader_queue_dropped_events,
+            )
+        });
+        if faults[0] != faults[1] {
+            return Err("capture changed enforcement loss or error counters".into());
+        }
+        let counters = [before, after].map(|snapshot| {
+            let mut sources: BTreeMap<_, &MithrilCoverageInterval> = BTreeMap::new();
+            for interval in &snapshot.coverage_intervals {
+                let key = (
+                    interval.source_id.as_str(),
+                    interval.source_epoch,
+                    interval.cpu_id,
+                );
+                let prior = sources.entry(key).or_insert(interval);
+                if interval.revision > prior.revision {
+                    *prior = interval;
+                }
+            }
+            sources
+                .into_iter()
+                .map(|(key, interval)| {
+                    (
+                        key,
+                        (
+                            interval.classifier_miss_count,
+                            interval.unresolved,
+                            interval.lost,
+                        ),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        });
+        if counters[0] != counters[1] {
+            return Err("capture changed classification or coverage loss counters".into());
+        }
+        for interval in &after.coverage_intervals {
+            let prior = before
+                .coverage_intervals
+                .iter()
+                .find(|prior| prior.interval_id == interval.interval_id);
+            if interval
+                .gap_reasons
+                .iter()
+                .any(|reason| !prior.is_some_and(|prior| prior.gap_reasons.contains(reason)))
+            {
+                return Err("capture introduced an enforcement coverage gap".into());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     fn qualify_diagnostics() -> TestResult<()> {
+        use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
         use mithril_control::{
             TraceExecutionGrantV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1,
             TraceTerminalReasonV1,
         };
         use mithril_node::{NodeTraceConfigV1, TraceQualificationPairV1, TraceQualificationV1};
         use sha2::{Digest as _, Sha256};
+        use std::collections::{BTreeMap, BTreeSet};
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
         let executable = PathBuf::from(std::env::var("MITHRIL_TRACE_EXECUTABLE")?);
         let proof = PathBuf::from(std::env::var("MITHRIL_TRACE_PROOF")?);
@@ -1119,7 +1199,7 @@ impl Host {
         env.start_control()?;
         let policy = serde_json::from_slice(&fs::read(super::policy_path(
             env.source(),
-            "python_policy.json",
+            "policy_replace_policy.json",
         )?)?)?;
         let labels = super::policy_labels(&policy)?;
         let mut init = env.start_actor("ready.py", &[], &labels)?;
@@ -1127,12 +1207,17 @@ impl Host {
         let mut actor = env.add_actor("python", &["/fixtures/observability.py", "/work"])?;
         actor.ready()?;
         env.place(actor.id())?;
-        env.install_policy("python_policy.json")?;
+        env.install_policy("policy_replace_policy.json")?;
         env.start_node()?;
         env.sync_policy()?;
         env.node_ready()?;
         env.running(init.id())?;
         env.recovered(init.id(), "trace workload")?;
+        let task = env.task(actor.id(), "trace measurement identity")?;
+        assert_eq!(
+            task.entry_rule(&env)?.target_role_id,
+            task.snapshot.active_role_id
+        );
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -1172,7 +1257,10 @@ impl Host {
         let mut records = Vec::new();
         let mut pairs = Vec::new();
         let mut off = (0, 0);
+        let baseline = env.snapshot()?;
+        Self::capture_health(&baseline, &baseline)?;
         for run in 0..10 {
+            env.node_ready()?;
             let on = run % 2 == 1;
             let request_id = *uuid::Uuid::new_v4().as_bytes();
             let mut frames = Vec::new();
@@ -1218,6 +1306,16 @@ impl Host {
                 }
             }
             let before = env.snapshot()?;
+            Self::capture_health(&baseline, &before)?;
+            let mut floors = BTreeMap::<u32, u64>::new();
+            for event in &before.recent_effects {
+                let floor = floors.entry(event.source_cpu_id).or_default();
+                *floor = (*floor).max(event.source_sequence);
+            }
+            for interval in &before.coverage_intervals {
+                let floor = floors.entry(interval.cpu_id).or_default();
+                *floor = (*floor).max(interval.next_sequence);
+            }
             fs::write(env.work().join(format!("trace-run-{run}")), b"run")?;
             let path = PathBuf::from(format!("/proc/{}/comm", actor.id()));
             let deadline = Instant::now() + Duration::from_secs(15);
@@ -1233,20 +1331,45 @@ impl Host {
                 std::thread::sleep(Duration::from_millis(10));
             };
             let result = serde_json::json!({"samples":1000,"denied":1000,"p99_ns":p99});
-            let after_health = env.snapshot()?;
-            let loss = after_health
-                .lost_effects
-                .saturating_sub(before.lost_effects)
-                + after_health
-                    .reader_queue_dropped_events
-                    .saturating_sub(before.reader_queue_dropped_events)
-                + after_health
-                    .evidence_errors
-                    .saturating_sub(before.evidence_errors);
-            if !before.effect_health_available || !after_health.effect_health_available || loss != 0
-            {
-                return Err("trace measurement has missing or lost enforcement evidence".into());
-            }
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let mut denials = BTreeSet::new();
+            let after_health = loop {
+                let snapshot = env.snapshot()?;
+                for event in &snapshot.recent_effects {
+                    if event.source_sequence
+                        > floors.get(&event.source_cpu_id).copied().unwrap_or(0)
+                        && event.profile_generation_ref_id
+                            == task.snapshot.profile_generation_ref_id
+                        && task.matches_effect(
+                            event,
+                            "EXACT_POLICY_DENY",
+                            KernelEffectFamilyV1::File,
+                            KernelEffectOperationV1::OpenRead,
+                            -libc::EACCES,
+                        )
+                    {
+                        denials.insert((event.source_cpu_id, event.source_sequence));
+                    }
+                }
+                if denials.len() > 1000 {
+                    return Err("capture has more than 1,000 current-run policy denials".into());
+                }
+                if denials.len() == 1000 && snapshot.negative_claim_eligible {
+                    Self::capture_health(&baseline, &snapshot)?;
+                    break snapshot;
+                }
+                if Instant::now() >= deadline {
+                    return Err(format!(
+                        "capture retained {} of 1,000 exact policy denials; healthy coverage={}",
+                        denials.len(),
+                        snapshot.negative_claim_eligible
+                    )
+                    .into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            env.node_ready()?;
+            let loss = after_health.lost_effects - before.lost_effects;
             let mut terminal = None;
             if on {
                 let deadline = Instant::now() + Duration::from_secs(20);
@@ -1288,9 +1411,17 @@ impl Host {
             } else {
                 off = (p99, loss);
             }
+            Self::capture_health(&baseline, &env.snapshot()?)?;
+            env.node_ready()?;
             records.push(
                 serde_json::json!({"run":run,"trace_on":on,"request_id":request_id,
-                "result":result,"frames":frames,"terminal":terminal,"loss":loss}),
+                "result":result,"frames":frames,"terminal":terminal,"loss":loss,
+                "exact_denials":denials,"task_cookie":task.snapshot.task_cookie,
+                "active_role_id":task.snapshot.active_role_id,
+                "admitted_entry_rule_id":task.snapshot.admitted_entry_rule_id,
+                "profile_generation_ref_id":task.snapshot.profile_generation_ref_id,
+                "negative_claim_eligible":after_health.negative_claim_eligible,
+                "unresolved_effects":after_health.unresolved_effects}),
             );
             fs::write(&proof, serde_json::to_vec_pretty(&records)?)?;
         }
@@ -1481,6 +1612,61 @@ impl Host {
         self.admitted = false;
         self.shared.stop()
     }
+}
+
+#[test]
+fn capture_rejects_coverage_faults() -> TestResult<()> {
+    use erebor_runtime_ipc::v1::MithrilCoverageInterval;
+
+    let before = MithrilObservationSnapshot {
+        kernel_ready: true,
+        effect_health_available: true,
+        negative_claim_eligible: true,
+        coverage_intervals: vec![MithrilCoverageInterval {
+            interval_id: "healthy".into(),
+            source_id: "source".into(),
+            source_epoch: 1,
+            revision: 1,
+            state: "HEALTHY".into(),
+            negative_claim_eligible: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    Host::capture_health(&before, &before)?;
+
+    let mut after = before.clone();
+    after.coverage_intervals[0].classifier_miss_count = 1;
+    assert!(Host::capture_health(&before, &after).is_err());
+    after = before.clone();
+    after.unresolved_effects = 1;
+    assert!(Host::capture_health(&before, &after).is_err());
+    after = before.clone();
+    after.coverage_intervals.push(MithrilCoverageInterval {
+        interval_id: "recovered-gap".into(),
+        revision: 2,
+        state: "CLOSED".into(),
+        gap_reasons: vec!["READER_DELAY".into()],
+        ..before.coverage_intervals[0].clone()
+    });
+    assert!(Host::capture_health(&before, &after).is_err());
+    after.coverage_intervals[1].gap_reasons.clear();
+    Host::capture_health(&before, &after)?;
+    after.negative_claim_eligible = false;
+    assert!(Host::capture_health(&before, &after).is_err());
+
+    let mut baseline = before.clone();
+    baseline.coverage_intervals[0].classifier_miss_count = 2;
+    after = baseline.clone();
+    after.coverage_intervals.push(MithrilCoverageInterval {
+        interval_id: "next".into(),
+        revision: 2,
+        ..baseline.coverage_intervals[0].clone()
+    });
+    Host::capture_health(&baseline, &after)?;
+    after.reader_queue_dropped_events = 1;
+    assert!(Host::capture_health(&baseline, &after).is_err());
+    Ok(())
 }
 
 #[test]

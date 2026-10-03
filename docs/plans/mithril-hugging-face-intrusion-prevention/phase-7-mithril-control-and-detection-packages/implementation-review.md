@@ -2772,3 +2772,20 @@ unresolved-effect gaps. Review
 and [NodeChassis::check_evidence](../../../../crates/mithril-node/src/node.rs)
 for the gap and readiness checks. Do not remove those checks to obtain a pass.
 The physical gates and production enablement remain unqualified.
+
+The corrected measurement path reuses the declared denied file. Review this
+path before the approved physical experiment:
+
+[observability.py](../../../../crates/mithril-e2e/fixtures/process/observability.py) Actor attempts 1,000 opens of `/fixtures/policy_replace.py` per run and publishes p99.
+-> [policy_replace_policy.json](../../../../crates/mithril-e2e/fixtures/process/policy_replace_policy.json) The existing worker rule denies `OpenRead` on that exact file.
+-> [Host::qualify_diagnostics](../../../../crates/mithril-e2e/src/platform/host.rs) The fixture requires 1,000 fresh policy-deny records for the actor's admitted identity after each timed run.
+-> [Host::capture_health](../../../../crates/mithril-e2e/src/platform/host.rs) The fixture rejects new classification, unresolved, loss and coverage faults against the initial pre-attachment snapshot.
+
+The guard uses the latest cumulative counters per source and CPU. A recovered
+gap still fails. Readiness, five pairs, actor cadence and the 10% limit stay
+unchanged. The exact fixture and coverage checks each passed one test.
+The old actor fails the fixture check; the restored actor passes. Read
+`capture-classified-fixture-focused.log`, `capture-coverage-guard-final.log`,
+`capture-classified-fixture-red.log` and `capture-classified-fixture-green.log`
+in the evidence directory above. These results cover the corrected working
+tree based on `70b7bc03`. They do not qualify physical latency or capture.

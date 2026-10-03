@@ -15,7 +15,7 @@ for run in range(10):
     for _ in range(1000):
         start = time.perf_counter_ns()
         try:
-            fd = os.open("/proc/self/environ", os.O_RDONLY)
+            fd = os.open("/fixtures/policy_replace.py", os.O_RDONLY)
         except OSError as error:
             denied += error.errno == errno.EACCES
         else:

@@ -493,6 +493,47 @@ results and the matching Node configuration. Do not substitute synthetic
 measurements. A pass on this VM does not enable production diagnostics or
 qualify another platform.
 
+The user also approved a corrected workload, provided that the experiment is
+not weakened. Use `policy_replace_policy.json` and its explicit `OpenRead`
+denial for `/fixtures/policy_replace.py`. Keep the five pairs, 1,000 opens,
+cadence, ten-minute bound and 10% limit unchanged. Require exact policy-deny
+evidence for the measured actor. Reject new classification errors, unresolved
+effects or coverage gaps. Keep production readiness checks unchanged. Run the
+fixture consistency check before the physical experiment.
+
+The corrected fixture uses the existing policy and target file. No production
+owner or policy rule changes. `Host::qualify_diagnostics` requires a healthy
+snapshot before the first attachment. It compares all later snapshots with
+that snapshot. For each run, it requires 1,000 fresh, distinct `OpenRead`
+events with `EXACT_POLICY_DENY`, `-EACCES` and the measured actor's admitted
+identity. It checks these records after the actor publishes latency. It does
+not add work inside the actor's timed opens.
+
+`Host::capture_health` rejects changed boot, label or program identity, new
+loss/error counters and new coverage gap reasons. It compares the latest
+revision for each source and CPU. It does not add repeated cumulative counters
+from interval history. A gap that later recovers still fails the experiment.
+Node readiness remains required before and after each run.
+
+Both exact component checks passed with the workspace feature set:
+
+```sh
+cargo test --workspace --all-targets --all-features \
+  observability::tests::observability_target_latency_fixture_needs_no_protected_file_writes \
+  -- --exact --nocapture
+cargo test --workspace --all-targets --all-features \
+  platform::host::capture_rejects_coverage_faults -- --exact --nocapture
+```
+
+Use the worktree-local Cargo environment above. Each command ran one selected
+test. Receipts are `capture-classified-fixture-focused.log` and
+`capture-coverage-guard-final.log` in the evidence directory above. The fixture
+check mocks its clock; it is not a performance measurement. A temporary actor
+reversion failed the same compiled fixture check. Restoring the corrected
+actor passed. Read `capture-classified-fixture-red.log` and
+`capture-classified-fixture-green.log`. The actor reversion is not retained.
+The corrected physical experiment and final workspace gate remain required.
+
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
 

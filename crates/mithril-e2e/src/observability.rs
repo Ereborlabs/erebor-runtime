@@ -2012,9 +2012,15 @@ mod tests {
             .arg("-c")
             .arg(
                 r#"
-import builtins, ctypes, errno, os, pathlib, sys, time
+import builtins, ctypes, errno, json, os, pathlib, sys, time
 source = pathlib.Path(sys.argv[1]).read_text()
+policy = json.loads(pathlib.Path(sys.argv[2]).read_text())
+role = next(role for role in policy['spec']['roles'] if role['name'] == 'worker')
+target, = [rule['path'] for rule in role['files']
+           if rule['action'] == 'Deny' and 'OpenRead' in rule['operations']
+           and not rule['recursive']]
 names = []
+attempts = []
 class Libc:
     def prctl(self, operation, value, *args):
         names.append(ctypes.string_at(value).decode())
@@ -2022,17 +2028,28 @@ class Libc:
 ctypes.CDLL = lambda *args, **kwargs: Libc()
 def denied(*args, **kwargs):
     raise PermissionError(errno.EACCES, 'protected file operation')
+def open_read(path, flags):
+    assert path == target and flags == os.O_RDONLY, (path, flags)
+    attempts.append(path)
+    raise PermissionError(errno.EACCES, 'classified file operation')
 builtins.open = denied
-os.open = denied
+os.open = open_read
 os.rename = denied
 os.path.exists = lambda path: True
 time.sleep = lambda delay: None
+ticks = iter(range(20_000))
+time.perf_counter_ns = lambda: next(ticks)
 sys.argv = ['observability.py', '/work']
 exec(compile(source, 'observability.py', 'exec'))
+assert len(attempts) == 10_000, len(attempts)
 assert len(names) == 10 and all(name.startswith(f'tr{i}:') for i, name in enumerate(names)), names
 "#,
             )
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/process/observability.py"))
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("fixtures/process/policy_replace_policy.json"),
+            )
             .status()?;
         assert!(status.success());
         Ok(())
