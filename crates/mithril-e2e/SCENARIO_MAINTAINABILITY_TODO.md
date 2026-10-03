@@ -5799,10 +5799,26 @@ test does not close a row when its physical condition or an assertion changed.
     native-input owner, production hook, process owner, and platform cleanup
     preserve exact argv, security settings, physical output, and cleanup.
     No production or Platform code changed.
-  - [ ] Remove the old Control version action and its two result fields after
+  - [x] Remove the old Control version action and its two result fields after
     the replacement commit. Remove the unused legacy Control config, arguments,
     and manifest entry. Keep Node version, installer, and stock-spec checks.
     Qualify all eight standard cases and the complete reduced legacy probe.
+    Commit `6b6b605f` contains the replacement. The deletion removes 84 Rust
+    lines and adds two lines. All eight standard cases passed in 6.12 seconds.
+    All five remaining legacy cases and cleanup passed. All result booleans
+    are true. Evidence:
+    `target/mithril-control-version-retirement-20261003T030402Z-2487250`.
+    VM harness checks and final Rust CI passed. See
+    `/tmp/mithril-control-version-retirement-ci-20261003.log`. The legacy file
+    remains on the retirement list at 5,449 lines. No production code changed.
+  - [ ] Replace version-changed Node recovery with the shared Python actor.
+    Copy the actor into the test directory. Bind that copy in both the OCI
+    config and native manifest before changing its bytes. Keep all 38 arguments,
+    root user, administrative capability, host PID namespace, writable root,
+    three writable mounts, and absent Node endpoint. Require different bytes,
+    successful physical start, exact argv and marker output, and complete cleanup.
+    Add no Platform method. Commit before removing the old action, result fields,
+    and unused legacy Node recovery inputs.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The

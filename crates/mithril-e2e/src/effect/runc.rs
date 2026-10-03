@@ -240,8 +240,6 @@ pub struct RuncRetainedRuntimeGateProbeV1 {
     pub forged_installer_decision_logged: bool,
     pub version_changed_node_recovery_allowed: bool,
     pub version_changed_node_recovery_process_started: bool,
-    pub version_changed_control_recovery_allowed: bool,
-    pub version_changed_control_recovery_process_started: bool,
     pub host_stock_spec_generated: bool,
     pub fixture_root_removed: bool,
 }
@@ -620,7 +618,6 @@ struct RetainedRuntimeGateRuncFixture {
     k3s_path: PathBuf,
     output_directory: PathBuf,
     recovery_args: Vec<String>,
-    control_args: Vec<String>,
     installer_args: Vec<String>,
     stock_config: serde_json::Value,
 }
@@ -701,11 +698,6 @@ impl RetainedRuntimeGateRuncFixture {
             "printf RECOVERY_ALLOWED >/result/recovery".to_owned(),
         ];
         recovery_args.extend((0..35).map(|index| format!("recovery-argument-{index}")));
-        let control_args = vec![
-            "/bin/sh".to_owned(),
-            "-c".to_owned(),
-            "printf CONTROL_RECOVERY_ALLOWED >/result/control".to_owned(),
-        ];
         let installer_args = vec![
             "/usr/local/bin/mithril-oci-hook".to_owned(),
             "install".to_owned(),
@@ -768,20 +760,6 @@ impl RetainedRuntimeGateRuncFixture {
                             }
                         ]
                     }
-                ],
-                "controlEntries": [
-                    {
-                        "executable": "/bin/sh",
-                        "args": control_args,
-                        "uid": 65532,
-                        "gid": 65532,
-                        "requiredMounts": [
-                            {
-                                "destination": "/result",
-                                "readOnly": false
-                            }
-                        ]
-                    }
                 ]
             }))
             .context(JsonSnafu { path: &manifest })?,
@@ -797,7 +775,6 @@ impl RetainedRuntimeGateRuncFixture {
             k3s_path: k3s_path.to_path_buf(),
             output_directory: output_directory.to_path_buf(),
             recovery_args,
-            control_args,
             installer_args,
             stock_config,
         })
@@ -893,26 +870,6 @@ impl RetainedRuntimeGateRuncFixture {
         let result = self.run_case(
             "version-changed-node-recovery",
             self.exact_recovery_config()?,
-        );
-        fs::write(&executable, original).context(IoSnafu { path: &executable })?;
-        result
-    }
-
-    fn run_version_changed_control_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
-        let executable = self.bundle.join("rootfs/bin/sh");
-        let original = fs::read(&executable).context(IoSnafu { path: &executable })?;
-        fs::OpenOptions::new()
-            .append(true)
-            .open(&executable)
-            .and_then(|mut file| file.write_all(b"\n# version-changed control recovery\n"))
-            .context(IoSnafu { path: &executable })?;
-        let marker = self.marker_directory.join("control");
-        if marker.exists() {
-            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
-        }
-        let result = self.run_case(
-            "version-changed-control-recovery",
-            self.exact_control_recovery_config()?,
         );
         fs::write(&executable, original).context(IoSnafu { path: &executable })?;
         result
@@ -1028,38 +985,6 @@ impl RetainedRuntimeGateRuncFixture {
             Path::new("/host-containerd"),
             false,
         )?;
-        Ok(config)
-    }
-
-    fn exact_control_recovery_config(&self) -> Result<serde_json::Value> {
-        let mut config = self.stock_config("exact-control-recovery")?;
-        config["process"]["args"] = json!(self.control_args);
-        config["process"]["user"] = json!({"uid": 65532, "gid": 65532, "additionalGids": [65532]});
-        config["process"]["noNewPrivileges"] = json!(true);
-        config["process"]["capabilities"] = json!({
-            "bounding": [],
-            "effective": [],
-            "permitted": [],
-            "inheritable": [],
-            "ambient": []
-        });
-        config["root"]["readonly"] = json!(true);
-        config["linux"]["namespaces"]
-            .as_array_mut()
-            .and_then(|namespaces| {
-                namespaces
-                    .iter_mut()
-                    .find(|namespace| namespace["type"] == "pid")
-            })
-            .and_then(serde_json::Value::as_object_mut)
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: self.bundle.join("config.json"),
-                    reason: "the control recovery fixture has no PID namespace",
-                }
-                .build()
-            })?
-            .remove("path");
         Ok(config)
     }
 
@@ -1674,8 +1599,6 @@ impl EffectTestRunner {
             k3s_path,
             nsenter_path,
         )?;
-        let version_changed_control_recovery = fixture.run_version_changed_control_recovery()?;
-        let version_changed_control_recovery_process_started = fixture.marker_exists("control");
         let installer = fixture.run_exact_installer()?;
         let exact_installer_process_started = fixture.marker_exists("installer");
         let changed_installer = fixture.run_changed_installer()?;
@@ -1694,8 +1617,6 @@ impl EffectTestRunner {
         let result = RuncRetainedRuntimeGateProbeV1 {
             schema_version: 5,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
-            version_changed_control_recovery_allowed: version_changed_control_recovery.success,
-            version_changed_control_recovery_process_started,
             exact_installer_allowed: installer.success,
             exact_installer_process_started,
             changed_installer_allowed: changed_installer.success,
@@ -1713,9 +1634,7 @@ impl EffectTestRunner {
             fixture_root_removed: false,
         };
         ensure!(
-            result.version_changed_control_recovery_allowed
-                && result.version_changed_control_recovery_process_started
-                && result.exact_installer_allowed
+            result.exact_installer_allowed
                 && result.exact_installer_process_started
                 && result.changed_installer_allowed
                 && result.changed_installer_process_started
@@ -1729,8 +1648,7 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: result={result:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; stock_spec={:?}",
-                    version_changed_control_recovery.stderr.trim(),
+                    "the direct runc retained-gate oracle failed: result={result:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; stock_spec={:?}",
                     installer.stderr.trim(),
                     changed_installer.stderr.trim(),
                     forged_installer.stderr.trim(),
