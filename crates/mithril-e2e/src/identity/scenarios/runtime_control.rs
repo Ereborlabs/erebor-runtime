@@ -1,7 +1,7 @@
 use std::{env, fs, os::unix::fs::PermissionsExt as _, process::Command, time::Duration};
 
 use crate::physical::oci_bundle::OciBundle;
-use crate::platform::{platform_test, Platform, TestResult};
+use crate::platform::{actor_script, platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
 #[platform_test(runc)]
@@ -135,6 +135,77 @@ fn changed_control_never_starts<P: Platform>() -> TestResult<()> {
     );
     env.stop()?;
     for path in [
+        &bundle.bundle,
+        &bundle.state,
+        &bundle.markers,
+        &bundle.group,
+    ] {
+        assert!(!path.try_exists()?, "runtime test path remains: {path:?}");
+    }
+    Ok(())
+}
+
+#[platform_test(runc)]
+#[lifecycle = runtime_gate]
+fn control_version_can_start<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("runtime-control-version")?;
+    let bundle = OciBundle::new(&env, "control-version")?;
+    fs::set_permissions(&bundle.markers, fs::Permissions::from_mode(0o777))?;
+    let source = actor_script(env.source(), "runtime_owner.py")?;
+    let executable = env.work().join("runtime_owner.py");
+    fs::copy(&source, &executable)?;
+    let original = fs::read(&executable)?;
+    let mut changed = original.clone();
+    changed.push(b'\n');
+    fs::write(&executable, &changed)?;
+    assert_ne!(fs::read(&executable)?, original);
+
+    let input = include_str!("../../../fixtures/process/runtime_recovery_manifest.json");
+    let manifest = bundle.manifest(input)?;
+    let entry: serde_json::Value = serde_json::from_str(input)?;
+    let args = entry["controlEntries"][0]["args"]
+        .as_array()
+        .ok_or("Control recovery argv is missing")?;
+    let mut spec: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/process/runtime_control.json"
+    ))?;
+    spec["process"]["args"] = serde_json::Value::Array(args.clone());
+    let owner = spec["mounts"]
+        .as_array_mut()
+        .ok_or("OCI mounts are missing")?
+        .iter_mut()
+        .find(|mount| mount["destination"] == "/owner")
+        .ok_or("Control actor mount is missing")?;
+    owner["source"] = serde_json::json!(&executable);
+    assert!(!bundle.markers.join("control").try_exists()?);
+    let mut actor = bundle.spawn(&serde_json::to_string(&spec)?, &manifest)?;
+    let status = actor
+        .wait_exit("Control version start", Duration::from_secs(5))
+        .map_err(|error| format!("{error}; stderr: {:?}", actor.stderr()))?;
+    let stderr = actor.stderr()?;
+    let stdout = actor.stdout(status)?;
+    actor.stop()?;
+    assert!(status.success(), "{status}; {stderr}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&stdout)?,
+        spec["process"]["args"]
+    );
+    assert_eq!(
+        fs::read_to_string(bundle.markers.join("control"))?,
+        "CONTROL_RECOVERY_ALLOWED"
+    );
+    let containers = bundle.containers()?;
+    assert!(
+        containers.is_empty(),
+        "runtime containers remain: {containers:?}"
+    );
+    assert!(
+        !bundle.state.join(&bundle.id).try_exists()?,
+        "runtime state remains"
+    );
+    env.stop()?;
+    for path in [
+        &executable,
         &bundle.bundle,
         &bundle.state,
         &bundle.markers,

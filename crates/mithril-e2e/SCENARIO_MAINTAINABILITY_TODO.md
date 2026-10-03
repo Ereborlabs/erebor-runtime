@@ -5781,13 +5781,28 @@ test does not close a row when its physical condition or an assertion changed.
     VM harness checks and final Rust CI passed. See
     `/tmp/mithril-control-caps-retirement-ci-20261003.log`. The legacy file remains
     on the retirement list at 5,531 lines. No production or Platform code changed.
-  - [ ] Replace version-changed Control recovery with the same Python actor
+  - [x] Replace version-changed Control recovery with the same Python actor
     copied into the test directory. Append one newline byte to that copy.
     Require different bytes, exact command and security shape, successful
     physical start, exact argv and marker output, and complete cleanup. Change
     only the actor bind source to the temporary copy. Keep its destination and
     read-only options. Do not modify repository inputs or embed program source.
     Add no Platform method. Commit before removing its old action and fields.
+    The 68-line [control_version_can_start](src/identity/scenarios/runtime_control.rs)
+    passed in the retained lightweight VM in 8.50 seconds. All eight standard
+    gate cases passed through the retained launcher in 4.90 seconds. All six
+    legacy cases and cleanup passed. Evidence:
+    `target/mithril-control-version-20261003T025512Z-2473733`. All eight
+    production gate tests, VM harness checks, and final Rust CI passed. See
+    `/tmp/mithril-control-version-ci-20261003.log`.
+    The test changes the copied actor, not the repository input. The existing
+    native-input owner, production hook, process owner, and platform cleanup
+    preserve exact argv, security settings, physical output, and cleanup.
+    No production or Platform code changed.
+  - [ ] Remove the old Control version action and its two result fields after
+    the replacement commit. Remove the unused legacy Control config, arguments,
+    and manifest entry. Keep Node version, installer, and stock-spec checks.
+    Qualify all eight standard cases and the complete reduced legacy probe.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The
