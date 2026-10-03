@@ -927,8 +927,8 @@ No physical fault pass or qualification receipt is claimed. Status: **Not done**
 
 The user also approved repeated plain-bpftrace versus Araphor comparisons,
 with optimization between runs. Reuse the approved workload, platform and
-five alternating capture-enabled pairs. Keep the existing ten-minute bound
-per comparison. Report each pair's p99 values and signed nanosecond and
+five alternating capture-enabled pairs. Use the time bound approved for each
+workload. Report each pair's p99 values and signed nanosecond and
 percentage differences. Require no Araphor increase. Keep capture, isolation,
 loss, target, enforcement and cleanup checks unchanged. Do not run a comparison
 while Cargo or workspace CI runs. A failed comparison is not qualification.
@@ -1028,6 +1028,60 @@ Read `compare-buffer.json` and `compare-buffer-test.log` in the evidence
 directory above. Two pairs fail. Do not infer a causal speedup from the
 changed pair count. No qualified configuration is published. Performance
 parity remains **Not done**.
+
+### Approved larger-sample comparison
+
+The user approved 10,000 denied opens in each run. Use five plain-bpftrace
+and Araphor pairs, for 100,000 total operations. Keep the 1-ms delay between
+operations. Both paths use 30-second collection limits. The outer timeout
+is 20 minutes.
+Pause further production optimization until this comparison completes.
+
+Calculate p99 by nearest rank: sort 10,000 measured durations and select
+rank 9,900, at zero-based index 9,899. There are 100 observations above this
+rank. The previous 1,000-operation runs select rank 990, with about ten
+observations above it. More samples reduce the effect of individual tail
+observations. They do not prove equal scheduling conditions or confidence
+in the difference between two runs.
+
+Read retained evidence after each measured workload through the existing
+bounded AnalysisStore pages. Require all 10,000 fresh exact denial witnesses,
+unchanged coverage health and cleanup checks. Do not increase the recent-event
+snapshot limit. Do not poll retained evidence during the timed workload.
+Keep the same backend, source, target, environment and tracing configuration.
+Report every pair's two p99 values and signed differences. The gate still
+requires no Araphor p99 increase in every pair. No percentage allowance applies.
+This approval is not a performance pass. Result: **Not done**.
+
+The eight-file archive is
+`/tmp/araphor-capture-10k.CTkeIuTc/fixtures-10k.tar.gz`. Its copy at
+`192.168.122.153:/var/tmp/araphor-capture-inputs.VMoOpWq2/fixtures-10k-20261003.tar.gz`
+has the same SHA-256:
+`cc79eda7def7b90bd72d97d40e9a0ef52427c23a36b86998e0a29e63b9aaac6c`.
+The archive matches the worktree files. The stock backend hash stays
+`d2846f3400bb129b1a569aae64adf548de99ff41f247823ff8caf1fbde40ff1e`.
+
+The harness changes are test-only. Host requires sample completion before a
+30-second cutoff set before capture preparation. Native collection and Araphor
+collection still start at their attachment markers. The accepted Araphor lease
+stays collection plus 15 seconds. Do not claim identical observed attachment
+windows. Both captures finish before retained-evidence extraction.
+`Host::capture_denials` reads bounded source and record pages. It checks tenant,
+node, boot, label, source and epoch identities. It checks task, profile, role,
+entry rule, reason, operation and EACCES. It uses the original kernel sequence
+for freshness and exact witness identity. The storage cursor only advances
+page reads. Reused cursors prevent repeated historical reads between runs.
+
+Eight focused tests passed: four Host tests, the fixture contract test and
+three native-capture tests. Five physical Host cases stayed ignored.
+The real-store regression checks 10,000 fresh witnesses across page boundaries,
+foreign-source exclusion, changed task context, stale sequences, CRC failure,
+cursor reuse and extra-denial rejection. The first run rejected invalid
+foreign test identities that reused a source epoch with a different boot or
+label. The corrected fixture uses independent source identities. No production
+change was required. Read `host-focused-final.log`, `fixture-focused.log` and
+`plain-focused.log` in `/tmp/araphor-capture-10k.CTkeIuTc`.
+Formatting passes. Final workspace verification has not run on this source.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new

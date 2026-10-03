@@ -25,6 +25,11 @@ pub(crate) struct Host {
 
 impl Host {
     #[cfg(test)]
+    const CAPTURE_COUNT: usize = 10_000;
+    #[cfg(test)]
+    const CAPTURE_SECONDS: u16 = 30;
+
+    #[cfg(test)]
     fn capture_admission() -> TestResult<(bool, mithril_node::NodeTraceConfigV1)> {
         let test = Shared::test_admission()?;
         let config = if test {
@@ -1419,16 +1424,166 @@ impl Host {
     }
 
     #[cfg(test)]
+    fn capture_witness(
+        receipt: &araphor_data::AnalysisSourceReceiptV1,
+        record: &araphor_data::AnalysisRecordV1,
+        task: &Task,
+        floors: &std::collections::BTreeMap<u32, u64>,
+    ) -> TestResult<Option<(u32, u64)>> {
+        use erebor_interceptor_abi::{
+            EffectObservationReasonV1, KernelEffectFamilyV1, KernelEffectOperationV1,
+        };
+
+        let decoded = araphor_data::EvidenceRecord::try_from(record.framed_record.as_slice())?;
+        let identity = &receipt.identity;
+        let observation = mithril_control::ObservationEnvelopeV1::from_wire_record(
+            identity.tenant_id.into(),
+            identity.node_boot_id.into(),
+            identity.source_id.into(),
+            identity.source_epoch,
+            record.cursor,
+            receipt.cpu_id,
+            &decoded,
+        )?;
+        let Some(context) = observation.decision_context.as_ref() else {
+            return Ok(None);
+        };
+        let effect = &observation.effect;
+        Ok(
+            (context.original_kernel_sequence > floors.get(&receipt.cpu_id).copied().unwrap_or(0)
+                && observation.profile_generation_ref_id
+                    == Some(task.snapshot.profile_generation_ref_id)
+                && effect.task_cookie == task.snapshot.task_cookie
+                && effect.reason == EffectObservationReasonV1::ExactPolicyDeny as u8
+                && effect.effect_family == KernelEffectFamilyV1::File as u16
+                && effect.operation == KernelEffectOperationV1::OpenRead as u16
+                && context.role_id == task.snapshot.active_role_id
+                && context.entry_rule_id == task.snapshot.admitted_entry_rule_id
+                && effect.kernel_result == -libc::EACCES)
+                .then_some((receipt.cpu_id, context.original_kernel_sequence)),
+        )
+    }
+
+    #[cfg(test)]
+    fn capture_denials(
+        data: &araphor_data::AnalysisStore,
+        node: &str,
+        before: &MithrilObservationSnapshot,
+        task: &Task,
+        expected: usize,
+        cursors: &mut std::collections::BTreeMap<araphor_data::EvidenceIntakeIdentityV1, u64>,
+    ) -> TestResult<std::collections::BTreeSet<(u32, u64)>> {
+        use araphor_data::AnalysisReadControl;
+        use std::collections::{BTreeMap, BTreeSet};
+        use std::time::Instant;
+
+        let tenant = *uuid::Uuid::parse_str(super::shared::TENANT_ID)?.as_bytes();
+        let boot = *uuid::Uuid::parse_str(&before.node_boot_id)?.as_bytes();
+        let mut floors = BTreeMap::<u32, u64>::new();
+        for event in &before.recent_effects {
+            let floor = floors.entry(event.source_cpu_id).or_default();
+            *floor = (*floor).max(event.source_sequence);
+        }
+        for interval in &before.coverage_intervals {
+            let floor = floors.entry(interval.cpu_id).or_default();
+            *floor = (*floor).max(interval.next_sequence);
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+        let mut denials = BTreeSet::new();
+        loop {
+            let mut after = None;
+            loop {
+                let sources = data.source_page(tenant, after.as_ref())?;
+                if Instant::now() >= deadline {
+                    return Err("the retained witness source list exceeded its deadline".into());
+                }
+                if sources.is_empty() {
+                    break;
+                }
+                after = sources.last().cloned();
+                for identity in sources {
+                    if identity.node_id == node
+                        && identity.node_boot_id == boot
+                        && identity.label_epoch == before.label_epoch
+                    {
+                        cursors.entry(identity).or_insert(1);
+                    }
+                }
+            }
+            for (identity, cursor) in cursors.iter_mut() {
+                if identity.tenant_id != tenant
+                    || identity.node_id != node
+                    || identity.node_boot_id != boot
+                    || identity.label_epoch != before.label_epoch
+                {
+                    return Err("the retained witness source identity changed".into());
+                }
+                let receipt = data
+                    .source_receipt(identity)?
+                    .ok_or("the retained witness source is absent")?;
+                let interval = before
+                    .coverage_intervals
+                    .iter()
+                    .filter(|interval| interval.cpu_id == receipt.cpu_id)
+                    .max_by_key(|interval| interval.revision)
+                    .ok_or("the retained witness CPU has no coverage source")?;
+                if identity.source_id != *uuid::Uuid::parse_str(&interval.source_id)?.as_bytes()
+                    || identity.source_epoch != interval.source_epoch
+                {
+                    return Err("the retained witness source or epoch changed".into());
+                }
+                while *cursor <= receipt.contiguous_cursor {
+                    let page = data.read_page_cancel(identity, *cursor, &control)?;
+                    if page.records.is_empty() {
+                        return Err("the retained witness page made no progress".into());
+                    }
+                    for record in page.records {
+                        if record.cursor != *cursor {
+                            return Err("the retained witness page has a cursor gap".into());
+                        }
+                        if Self::capture_witness(&receipt, &record, task, &floors)?
+                            .is_some_and(|witness| !denials.insert(witness))
+                        {
+                            return Err("capture retained a duplicate kernel witness".into());
+                        }
+                        *cursor = record
+                            .cursor
+                            .checked_add(1)
+                            .ok_or("the witness cursor overflowed")?;
+                    }
+                    if denials.len() > expected {
+                        return Err(format!(
+                            "capture has more than {expected} current-run policy denials"
+                        )
+                        .into());
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "capture retained {} of {expected} exact policy denials",
+                    denials.len()
+                )
+                .into());
+            }
+            if denials.len() == expected {
+                return Ok(denials);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(test)]
     fn qualify_diagnostics() -> TestResult<()> {
         use crate::observability::{PlainCapture, ResourceSnapshot};
-        use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
         use mithril_control::{
             TraceExecutionGrantV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1,
             TraceTerminalReasonV1,
         };
         use mithril_node::TraceQualificationPairV1;
         use sha2::{Digest as _, Sha256};
-        use std::collections::{BTreeMap, BTreeSet};
+        use std::collections::BTreeMap;
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
         let executable = PathBuf::from(std::env::var("MITHRIL_TRACE_EXECUTABLE")?);
         let mode = std::env::var("MITHRIL_TRACE_MODE").unwrap_or_else(|_| "araphor".into());
@@ -1487,7 +1642,7 @@ impl Host {
             node_ids: [fact.node_id.clone()].into(),
             recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
             host_diagnostic: false,
-            valid_until_unix_ns: now()? + 600_000_000_000,
+            valid_until_unix_ns: now()? + 1_200_000_000_000,
         };
         let access = TraceReadAccessV1 {
             tenant_id: tenant,
@@ -1497,16 +1652,19 @@ impl Host {
             valid_until_unix_ns: grant.valid_until_unix_ns,
             revoked: false,
         };
+        let node = fact.node_id.clone();
         let targets = runtime.block_on(control.resolve_trace_targets(vec![fact], &grant))?;
         let target = targets
             .first()
             .and_then(|participant| participant.target.clone())
             .ok_or_else(|| format!("target resolution failed: {targets:?}"))?;
-        let owner = mithril_control::TraceOwner::new(
-            control.analysis_store().ok_or("missing analysis store")?,
-        );
+        let data = control.analysis_store().ok_or("missing analysis store")?;
+        let owner = mithril_control::TraceOwner::new(data.clone());
         let mut records = Vec::new();
         let mut pairs = Vec::new();
+        let mut cursors = BTreeMap::new();
+        let collection = Duration::from_secs(u64::from(Self::CAPTURE_SECONDS));
+        let collection_ms = u64::from(Self::CAPTURE_SECONDS) * 1000;
         let mut off = (0, 0);
         let baseline = env.snapshot()?;
         Self::capture_health(&baseline, &baseline)?;
@@ -1522,6 +1680,7 @@ impl Host {
                 .then(ResourceSnapshot::read)
                 .transpose()?;
             let mut attached = None;
+            let collection_end = Instant::now() + collection;
             if capture && capture_path == "plain" {
                 let output = env.shared.output().join(format!("plain-{run}"));
                 native = Some(PlainCapture::start(
@@ -1529,6 +1688,7 @@ impl Host {
                     &TraceRecipeV1::FailedOpens.manifest()?.source.bytes,
                     target.cgroup_id,
                     &output,
+                    collection,
                 )?);
                 attached = Some(ResourceSnapshot::read()?);
             } else if capture {
@@ -1540,7 +1700,7 @@ impl Host {
                         source: TraceRecipeV1::FailedOpens.manifest()?.source,
                         targets: vec![target.clone()],
                         unresolved: Vec::new(),
-                        collection_seconds: 5,
+                        collection_seconds: Self::CAPTURE_SECONDS,
                     },
                     grant.clone(),
                     None,
@@ -1573,83 +1733,36 @@ impl Host {
             }
             let before = env.snapshot()?;
             Self::capture_health(&baseline, &before)?;
-            let mut floors = BTreeMap::<u32, u64>::new();
-            for event in &before.recent_effects {
-                let floor = floors.entry(event.source_cpu_id).or_default();
-                *floor = (*floor).max(event.source_sequence);
-            }
-            for interval in &before.coverage_intervals {
-                let floor = floors.entry(interval.cpu_id).or_default();
-                *floor = (*floor).max(interval.next_sequence);
-            }
             fs::write(env.work().join(format!("trace-run-{run}")), b"run")?;
             let path = PathBuf::from(format!("/proc/{}/comm", actor.id()));
-            let deadline = Instant::now() + Duration::from_secs(15);
             let p99: u64 = loop {
                 if let Some(native) = native.as_mut() {
-                    native.poll()?;
+                    if native.poll()? {
+                        return Err("native capture ended before all latency samples".into());
+                    }
                 }
                 actor.ensure_running("trace latency samples")?;
                 let value = fs::read_to_string(&path)?;
                 if let Some(value) = value.trim().strip_prefix(&format!("tr{run}:")) {
+                    if capture && Instant::now() >= collection_end {
+                        return Err("latency samples exceeded the collection window".into());
+                    }
                     break value.parse()?;
                 }
-                if Instant::now() >= deadline {
+                if Instant::now() >= collection_end {
                     return Err("trace latency samples did not finish".into());
                 }
                 std::thread::sleep(Duration::from_millis(10));
             };
-            let result = serde_json::json!({"samples":1000,"denied":1000,"p99_ns":p99});
-            let deadline = Instant::now() + Duration::from_secs(30);
-            let mut denials = BTreeSet::new();
-            let after_health = loop {
-                if let Some(native) = native.as_mut() {
-                    native.poll()?;
-                }
-                let snapshot = env.snapshot()?;
-                for event in &snapshot.recent_effects {
-                    if event.source_sequence
-                        > floors.get(&event.source_cpu_id).copied().unwrap_or(0)
-                        && event.profile_generation_ref_id
-                            == task.snapshot.profile_generation_ref_id
-                        && task.matches_effect(
-                            event,
-                            "EXACT_POLICY_DENY",
-                            KernelEffectFamilyV1::File,
-                            KernelEffectOperationV1::OpenRead,
-                            -libc::EACCES,
-                        )
-                    {
-                        denials.insert((event.source_cpu_id, event.source_sequence));
-                    }
-                }
-                if denials.len() > 1000 {
-                    return Err("capture has more than 1,000 current-run policy denials".into());
-                }
-                if denials.len() == 1000 && snapshot.negative_claim_eligible {
-                    Self::capture_health(&baseline, &snapshot)?;
-                    break snapshot;
-                }
-                if Instant::now() >= deadline {
-                    return Err(format!(
-                        "capture retained {} of 1,000 exact policy denials; healthy coverage={}",
-                        denials.len(),
-                        snapshot.negative_claim_eligible
-                    )
-                    .into());
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            };
-            if native.is_none() {
-                env.node_ready()?;
-            }
-            let loss = after_health.lost_effects - before.lost_effects;
+            let result = serde_json::json!({"samples":Self::CAPTURE_COUNT,"denied":Self::CAPTURE_COUNT,"p99_ns":p99});
             let mut terminal = None;
             if let Some(native) = native.as_mut() {
                 let mut result = native.finish()?;
                 assert!(result["collection_ms"]
                     .as_u64()
-                    .is_some_and(|duration| (5000..=5100).contains(&duration)));
+                    .is_some_and(
+                        |duration| (collection_ms..=collection_ms + 100).contains(&duration)
+                    ));
                 let stdout = result["stdout"].as_str().ok_or("native output is absent")?;
                 let count = stdout
                     .lines()
@@ -1657,7 +1770,7 @@ impl Host {
                     .filter(|row| row["type"] == "map")
                     .filter_map(|row| row["data"]["@errors"]["-13"].as_u64())
                     .max();
-                assert!(count.is_some_and(|count| count >= 1000));
+                assert!(count.is_some_and(|count| count >= Self::CAPTURE_COUNT as u64));
                 let resources = resources.as_ref().ok_or("native baseline is absent")?;
                 let attached = attached.as_ref().ok_or("native attachment is absent")?;
                 let programs = attached
@@ -1703,7 +1816,7 @@ impl Host {
                 result["enforcement_resources_unchanged"] = true.into();
                 native_result = Some(result);
             } else if capture {
-                let deadline = Instant::now() + Duration::from_secs(20);
+                let deadline = Instant::now() + collection + Duration::from_secs(5);
                 while terminal.is_none() {
                     for batch in owner.output(tenant, request_id, 0, &access, now()?, after)? {
                         for frame in batch.frames {
@@ -1728,11 +1841,26 @@ impl Host {
                     .iter()
                     .filter_map(|frame| TraceRecipeV1::FailedOpens.measurements(frame))
                     .flatten()
-                    .any(|row| row.errno == -i64::from(libc::EACCES) && row.count >= 1000)
+                    .any(|row| {
+                        row.errno == -i64::from(libc::EACCES)
+                            && row.count >= Self::CAPTURE_COUNT as u64
+                    })
                 {
                     return Err("capture did not measure the enforced denials".into());
                 }
             }
+            let denials = Self::capture_denials(
+                &data,
+                &node,
+                &before,
+                &task,
+                Self::CAPTURE_COUNT,
+                &mut cursors,
+            )?;
+            let after_health = env.snapshot()?;
+            Self::capture_health(&baseline, &after_health)?;
+            env.node_ready()?;
+            let loss = after_health.lost_effects - before.lost_effects;
             if on {
                 pairs.push(TraceQualificationPairV1 {
                     trace_off_p99_ns: off.0,
@@ -1759,6 +1887,7 @@ impl Host {
                 serde_json::json!({"run":run,"trace_on":capture,"request_id":request_id,
                 "capture_path":capture_path,"direct_comparison":mode == "compare",
                 "cgroup_id":target.cgroup_id,
+                "collection_seconds":Self::CAPTURE_SECONDS,
                 "plain_bpftrace":native_result,
                 "result":result,"frames":frames,"terminal":terminal,"loss":loss,
                 "exact_denials":denials,"task_cookie":task.snapshot.task_cookie,
@@ -1963,6 +2092,242 @@ impl Host {
         self.admitted = false;
         self.shared.stop()
     }
+}
+
+#[test]
+fn observability_retained_denials() -> TestResult<()> {
+    use araphor_data::{
+        AnalysisStore, EvidenceDecisionContext, EvidenceIntakeIdentityV1, EvidenceRecord,
+        EvidenceTemporalCoverage, ValidatedEvidenceBatchV1, MAX_EVIDENCE_BATCH_RECORDS,
+    };
+    use erebor_interceptor_abi::{
+        EffectObservationReasonV1, KernelEffectFamilyV1, KernelEffectOperationV1, TaskCoordinateV1,
+    };
+    use erebor_runtime_ipc::v1::MithrilCoverageInterval;
+    use mithril_node::NativeTaskSnapshotV1;
+    use prost::Message as _;
+    use std::collections::BTreeMap;
+
+    let directory = tempfile::tempdir()?;
+    let data = AnalysisStore::open(directory.path().join("analysis"))?;
+    let identity = EvidenceIntakeIdentityV1 {
+        tenant_id: *uuid::Uuid::parse_str(super::shared::TENANT_ID)?.as_bytes(),
+        node_id: "capture-node".into(),
+        node_boot_id: [2; 16],
+        label_epoch: 1,
+        source_id: [3; 16],
+        source_epoch: 1,
+    };
+    let before = MithrilObservationSnapshot {
+        node_boot_id: uuid::Uuid::from_bytes(identity.node_boot_id).to_string(),
+        label_epoch: identity.label_epoch,
+        coverage_intervals: vec![MithrilCoverageInterval {
+            source_id: uuid::Uuid::from_bytes(identity.source_id).to_string(),
+            source_epoch: identity.source_epoch,
+            cpu_id: 7,
+            revision: 1,
+            next_sequence: 500,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut task = Task {
+        pid: 1,
+        ns_pid: 1,
+        coordinate: TaskCoordinateV1::default(),
+        snapshot: NativeTaskSnapshotV1 {
+            task_cookie: 7,
+            execution_set_id: None,
+            entry_instance_id: String::new(),
+            admitted_entry_rule_id: 1,
+            runtime_binding: None,
+            recovered_container_activation: None,
+            creator_task_cookie: None,
+            root_class: None,
+            installed_role_class: None,
+            real_parent_task_cookie: 0,
+            real_parent_interval_sequence: 0,
+            real_parent_host_tid: 0,
+            real_parent_host_tgid: 0,
+            real_parent_pid_namespace_inode: 0,
+            real_parent_start_boottime_ns: 0,
+            process_state_id: String::new(),
+            active_execution_id: String::new(),
+            image_provenance_id: String::new(),
+            image_candidate_count: 0,
+            process_execution_state: 0,
+            process_state_vector_state: 0,
+            process_state_bits: 0,
+            active_role_id: 3,
+            host_tid: 1,
+            host_tgid: 1,
+            coordinate_state: 0,
+            exec_guard_state: 0,
+            profile_generation_ref_id: 1,
+        },
+    };
+    let mut record = EvidenceRecord {
+        observed_boottime_ns: 1,
+        ingested_utc_ns: 1,
+        coverage_interval_id: vec![4; 16].into(),
+        profile_generation_ref_id: Some(1),
+        task_cookie: task.snapshot.task_cookie,
+        reason: u32::from(EffectObservationReasonV1::ExactPolicyDeny as u8),
+        decision: 2,
+        effect_family: u32::from(KernelEffectFamilyV1::File as u16),
+        operation: u32::from(KernelEffectOperationV1::OpenRead as u16),
+        configured_errno: -libc::EACCES,
+        kernel_result: -libc::EACCES,
+        temporal_coverage: EvidenceTemporalCoverage::Complete as i32,
+        decision_context: Some(EvidenceDecisionContext {
+            schema_version: 1,
+            original_kernel_sequence: 500,
+            profile_generation_ref_id: task.snapshot.profile_generation_ref_id,
+            role_id: task.snapshot.active_role_id,
+            entry_rule_id: task.snapshot.admitted_entry_rule_id,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let frame = |record: &EvidenceRecord| -> TestResult<Vec<u8>> {
+        let payload = record.encode_to_vec();
+        let mut bytes = u32::try_from(payload.len())?.to_be_bytes().to_vec();
+        bytes.extend_from_slice(&payload);
+        bytes.extend_from_slice(&crc32c::crc32c(&bytes).to_be_bytes());
+        Ok(bytes)
+    };
+    let total = Host::CAPTURE_COUNT as u64 + 1;
+    for first in (1..=total).step_by(MAX_EVIDENCE_BATCH_RECORDS) {
+        let last = total.min(first + MAX_EVIDENCE_BATCH_RECORDS as u64 - 1);
+        let mut bytes = Vec::new();
+        let mut ends = Vec::new();
+        for cursor in first..=last {
+            record
+                .decision_context
+                .as_mut()
+                .ok_or("the test decision context is absent")?
+                .original_kernel_sequence = 499 + cursor;
+            bytes.extend_from_slice(&frame(&record)?);
+            ends.push(bytes.len());
+        }
+        data.accept_validated_batch(
+            identity.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 7,
+                first_cursor: first,
+                last_cursor: last,
+                intake_utc_ns: 1,
+                framed_records: bytes.into(),
+                frame_ends: ends,
+            },
+        )?;
+    }
+    for foreign in [
+        EvidenceIntakeIdentityV1 {
+            node_id: "other-node".into(),
+            source_id: [8; 16],
+            ..identity.clone()
+        },
+        EvidenceIntakeIdentityV1 {
+            node_boot_id: [5; 16],
+            source_id: [9; 16],
+            ..identity.clone()
+        },
+        EvidenceIntakeIdentityV1 {
+            label_epoch: 2,
+            source_id: [10; 16],
+            ..identity.clone()
+        },
+        EvidenceIntakeIdentityV1 {
+            tenant_id: [6; 16],
+            source_id: [11; 16],
+            ..identity.clone()
+        },
+    ] {
+        let bytes = frame(&record)?;
+        data.accept_validated_batch(
+            foreign,
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 7,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 1,
+                frame_ends: vec![bytes.len()],
+                framed_records: bytes.into(),
+            },
+        )?;
+    }
+    let mut cursors = BTreeMap::new();
+    let denials = Host::capture_denials(
+        &data,
+        &identity.node_id,
+        &before,
+        &task,
+        Host::CAPTURE_COUNT,
+        &mut cursors,
+    )?;
+    assert_eq!(denials.len(), Host::CAPTURE_COUNT);
+    assert_eq!(denials.first(), Some(&(7, 501)));
+    assert_eq!(denials.last(), Some(&(7, 10_500)));
+    assert_eq!(cursors.len(), 1);
+    assert_eq!(cursors.get(&identity), Some(&(total + 1)));
+    assert!(
+        Host::capture_denials(&data, &identity.node_id, &before, &task, 0, &mut cursors,)?
+            .is_empty()
+    );
+    let receipt = data
+        .source_receipt(&identity)?
+        .ok_or("the test source is absent")?;
+    let page = data.read_page(&identity, 2)?;
+    let retained = page.records.first().ok_or("the test record is absent")?;
+    let floors = [(7, 500)].into();
+    assert_eq!(
+        Host::capture_witness(&receipt, retained, &task, &floors)?,
+        Some((7, 501))
+    );
+    task.snapshot.task_cookie += 1;
+    assert!(Host::capture_witness(&receipt, retained, &task, &floors)?.is_none());
+    task.snapshot.task_cookie -= 1;
+    task.snapshot.active_role_id += 1;
+    assert!(Host::capture_witness(&receipt, retained, &task, &floors)?.is_none());
+    task.snapshot.active_role_id -= 1;
+    task.snapshot.admitted_entry_rule_id += 1;
+    assert!(Host::capture_witness(&receipt, retained, &task, &floors)?.is_none());
+    task.snapshot.admitted_entry_rule_id -= 1;
+    task.snapshot.profile_generation_ref_id += 1;
+    assert!(Host::capture_witness(&receipt, retained, &task, &floors)?.is_none());
+    task.snapshot.profile_generation_ref_id -= 1;
+    assert!(Host::capture_witness(&receipt, retained, &task, &[(7, 501)].into())?.is_none());
+    let mut corrupt = retained.clone();
+    corrupt.framed_record[4] ^= 1;
+    assert!(Host::capture_witness(&receipt, &corrupt, &task, &floors).is_err());
+    record
+        .decision_context
+        .as_mut()
+        .ok_or("the test context is absent")?
+        .original_kernel_sequence += 1;
+    let bytes = frame(&record)?;
+    data.accept_validated_batch(
+        identity.clone(),
+        ValidatedEvidenceBatchV1 {
+            cpu_id: 7,
+            first_cursor: total + 1,
+            last_cursor: total + 1,
+            intake_utc_ns: 1,
+            frame_ends: vec![bytes.len()],
+            framed_records: bytes.into(),
+        },
+    )?;
+    assert!(Host::capture_denials(
+        &data,
+        &identity.node_id,
+        &before,
+        &task,
+        Host::CAPTURE_COUNT,
+        &mut BTreeMap::new(),
+    )
+    .is_err());
+    Ok(())
 }
 
 #[test]

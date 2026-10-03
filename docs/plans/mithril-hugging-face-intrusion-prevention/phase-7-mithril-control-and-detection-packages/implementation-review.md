@@ -3089,3 +3089,41 @@ cleanup checks pass. Read the
 [buffer result](../../araphor-observability/phase-2-owned-capture.md#resource-scan-buffer)
 and `compare-buffer-test.log` in the evidence directory above. No causal
 speedup, qualified configuration or performance parity is claimed.
+
+### Larger-sample direct comparison
+
+The user approved 10,000 denied opens per run, five plain/Araphor pairs,
+unchanged 1-ms pacing, 30-second collection limits and a 20-minute outer limit.
+[observability.py](../../../../crates/mithril-e2e/fixtures/process/observability.py)
+sorts measured durations and selects nearest-rank p99 at index 9,899.
+[PlainCapture::start](../../../../crates/mithril-e2e/src/observability/plain.rs)
+accepts the matched collection duration. Its backend command, environment,
+attachment, output and drain limits stay unchanged.
+
+The fixture contract test uses descending deterministic durations. It checks
+the exact p99 rank, all 100,000 operations, unchanged pacing and no protected
+file writes. These checks are not performance measurements. The larger sample
+has 100 observations above the selected rank, instead of ten. It does not prove
+confidence in a pair's difference or equal scheduling conditions.
+Read the [approved workload](../../araphor-observability/phase-2-owned-capture.md#approved-larger-sample-comparison)
+for the archive and platform facts. The strict no-increase gate stays unchanged.
+No larger-sample measurement or pass is claimed yet.
+
+[Host::qualify_diagnostics](../../../../crates/mithril-e2e/src/platform/host.rs) sets a conservative sample cutoff before capture preparation.
+-> [PlainCapture::finish](../../../../crates/mithril-e2e/src/observability/plain.rs), or the existing Araphor terminal read, completes capture and cleanup.
+-> [Host::capture_denials](../../../../crates/mithril-e2e/src/platform/host.rs) refreshes bounded retained-source pages and advances each source's read cursor.
+-> [Host::capture_witness](../../../../crates/mithril-e2e/src/platform/host.rs) uses the checked frame decoder and canonical observation projection, then checks the frozen task context and original kernel sequence.
+-> [Host::capture_parity](../../../../crates/mithril-e2e/src/platform/host.rs) applies the unchanged integer no-increase gate.
+
+No retained read occurs during measurement. The witness set contains CPU IDs
+and original kernel sequences. Data cursors only select the next read page.
+The reader checks tenant, node, boot, label, source and epoch identities.
+The recent-event limit, production collection semantics and accepted lease
+remain unchanged. No production owner or API is added.
+
+Eight focused tests passed: four Host tests, one fixture contract test and
+three native tests. Read `host-focused-final.log`, `fixture-focused.log` and
+`plain-focused.log` in `/tmp/araphor-capture-10k.CTkeIuTc`. The real-store
+regression checks 10,000 exact witnesses, source and task exclusions, original
+sequence freshness, corrupt frames, cursor reuse and extra-denial rejection.
+Formatting passes. Final workspace verification has not run on this source.

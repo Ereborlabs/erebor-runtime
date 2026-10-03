@@ -15,7 +15,6 @@ use crate::process::ProcessFixture;
 
 const ATTACH_MARKER: &[u8] = b"__BPFTRACE_NOTIFY_PROBES_ATTACHED\n";
 const ATTACH_LIMIT: Duration = Duration::from_secs(15);
-const COLLECTION: Duration = Duration::from_secs(5);
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 const ENVIRONMENT: [(&str, &str); 9] = [
@@ -38,6 +37,7 @@ pub(crate) struct PlainCapture {
     executable_sha256: String,
     source_sha256: String,
     cgroup_id: u64,
+    collection: Duration,
     started: Instant,
     attached: Option<Instant>,
     signalled: Option<Instant>,
@@ -51,6 +51,7 @@ impl PlainCapture {
         source: &[u8],
         cgroup_id: u64,
         output: &Path,
+        collection: Duration,
     ) -> ProofResult<Self> {
         if !executable.is_absolute()
             || !fs::symlink_metadata(executable)?.file_type().is_file()
@@ -60,9 +61,11 @@ impl PlainCapture {
             || source.len() > 64 * 1024
             || source.contains(&0)
             || cgroup_id == 0
+            || collection.is_zero()
+            || collection > Duration::from_secs(300)
         {
             return Err(
-                "plain capture requires an executable, bounded source and exact cgroup".into(),
+                "plain capture requires an executable, bounded source, exact cgroup and collection within 300 seconds".into(),
             );
         }
         let source_text = std::str::from_utf8(source)?;
@@ -97,6 +100,7 @@ impl PlainCapture {
             executable_sha256,
             source_sha256,
             cgroup_id,
+            collection,
             started,
             attached: None,
             signalled: None,
@@ -142,7 +146,7 @@ impl PlainCapture {
         }
         let attached = self.attached.ok_or("plain attachment is absent")?;
         let now = Instant::now();
-        if self.signalled.is_none() && now >= attached + COLLECTION {
+        if self.signalled.is_none() && now >= attached + self.collection {
             if let Err(source) = pidfd_send_signal(&self.pidfd, Signal::INT) {
                 return self.fail(&format!("plain bpftrace SIGINT failed: {source}"));
             }
@@ -280,8 +284,28 @@ mod tests {
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
     use std::path::Path;
+    use std::time::Duration;
 
     use super::{PlainCapture, ATTACH_MARKER, ENVIRONMENT};
+
+    #[test]
+    fn plain_collection_is_bounded() -> super::ProofResult<()> {
+        let directory = tempfile::tempdir()?;
+        let executable = std::env::current_exe()?;
+        let output = directory.path().join("capture");
+        for collection in [Duration::ZERO, Duration::from_secs(301)] {
+            assert!(PlainCapture::start(
+                &executable,
+                b"BEGIN { exit(); }",
+                42,
+                &output,
+                collection,
+            )
+            .is_err());
+            assert!(!output.exists());
+        }
+        Ok(())
+    }
 
     #[test]
     fn plain_command_is_direct() {
