@@ -1652,6 +1652,71 @@ in 24.84 seconds. Independent review finds no must-fix issue. Physical
 activation, the unchanged five-pair
 comparison and final workspace CI after this correction remain **Not done**.
 
+The instrumented pair on `f078ebc4` proves static-path activation. During the
+Araphor actor window, supervisor pread and fdinfo-directory stat counts are
+zero. Supervisor CPU samples fall from 33 to six; resource-inspection samples
+fall from 28 to zero. Target validation retains 571 cycles, with three BPF
+calls and two statx calls per cycle. Both runs retain 5,000 exact denials,
+zero reported enforcement loss and verified cleanup.
+
+Plain p99 is 178,299 ns; Araphor p99 is 243,557 ns. The difference is
++65,258 ns, or +36.600317%. The exact p99 waits are 137,824 ns and 198,625 ns.
+All 22 nearby ranked calls have zero same-CPU supervisor or trace-worker
+overlap. Shared workers account for their wait. No CPU sample occurs inside
+those calls; full-window stacks do not identify an exact function there.
+The CPU recorder reports 2,629 ordering events. Exported loss, ordering and
+parser counts are zero. Scheduler exit 130 follows data finalization; both
+exports return zero. These instrumented timings do not qualify parity.
+Read the retained results in `/tmp/araphor-native-name-profile.QMUvAh09`.
+Its `raw-recordings.tar.gz` contains byte-verified copies of both raw perf
+files removed from the VM. Physical activation is **Done** at `f078ebc4`.
+
+The first unprofiled run at this source stops before latency sampling.
+Profiling files reduce VM free space below the existing filesystem reserve.
+Control refuses intake, and target resolution times out. The reserve remains
+unchanged. Removing the two archived temporary recordings frees 1.19 GiB;
+the VM then has 3.2 GiB free. The unchanged five-pair rerun and final workspace
+CI remain **Not done**. No parity result follows from the stopped setup.
+
+The unprofiled rerun on `f078ebc4` uses the preserved full ten-run binary.
+No build or profiler runs during the comparison. The exact backend, source,
+archive, target and workload remain unchanged.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Araphor minus plain, ns | Difference |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 164,250 | 135,179 | -29,071 | -17.699239% |
+| 2 | 208,894 | 127,911 | -80,983 | -38.767509% |
+| 3 | 255,676 | 179,912 | -75,764 | -29.632817% |
+| 4 | 198,012 | 244,094 | +46,082 | +23.272327% |
+| 5 | 220,627 | 174,783 | -45,844 | -20.778962% |
+
+All ten runs retain 5,000 exact denials, zero reported enforcement loss,
+zero unresolved effects and verified cleanup. Negative-claim eligibility
+remains true. Four pairs are faster, but pair 4 exceeds the unchanged
+zero-increase limit. The command returns 101. Parity remains **Not done**.
+Read `name-fix/comparison-rerun/{capture-pairs.json,test.log}` under
+`/tmp/araphor-static-inventory.GOQgpiAI`. The guest output is
+`/tmp/araphor-observability-153-native-name-rerun-20261003-5000`.
+
+The final workspace gate passes at `f078ebc4` after the last Rust edit.
+Run `.github/scripts/verify-rust-ci.sh` with the existing worktree target,
+`CXXFLAGS='-O2 -g0'`, two build jobs, no incremental build, offline input and
+one test thread. The command returns zero. Read
+`name-fix/workspace-final.log` in the same evidence directory. Final Rust CI
+is **Done**. Performance parity remains **Not done**.
+
+The next diagnostic uses the same 5,000 operations and one plain/Araphor
+pair. Temporary entry and return probes record five functions:
+`verify_live_manifest`, `persist_snapshot`, `project_group`, `refresh_budget`
+and `retain_raw`. The probes use the exact private test executable and
+`nsecs(monotonic)`. Attach all probes before the test starts. Do not change
+the recipe, workload, security checks or tracefs permissions. Keep scheduler
+events; do not add CPU sampling. Match spans by process, thread and function.
+Intersect each span with the same thread's on-CPU intervals during actor
+runnable waits. Do not count nested spans twice or treat wall time as CPU
+time. Report all-operation, tail-50 and p99-nearby results, loss and incomplete
+boundaries. This diagnostic does not qualify performance.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node

@@ -3489,8 +3489,8 @@ of current IDs from historical IDs. The focused backend selection passes 23
 tests; one subprocess fixture is ignored. These tests do not prove physical
 activation of the static path or performance parity. Read the
 [approved contract and measured results](../../araphor-observability/phase-2-owned-capture.md#approved-static-resource-inventory).
-The fresh five-pair comparison runs but fails the zero-increase limit in
-four pairs. Physical activation of the static path remains **Not done**.
+The five-pair comparison on `6005773e` fails the zero-increase limit in
+four pairs. That source does not prove physical activation of the static path.
 Read the linked measured results before the next optimization. Final
 workspace CI passes at `af72dbeb`; read `workspace-final.log` in the evidence
 directory below.
@@ -3507,5 +3507,14 @@ seconds and owned upload in 24.84 seconds. Independent safety and Ponytail
 review find no must-fix issue. Read `name-fix/backend-tests.log` and
 `name-fix/owned-upload.log` in the same evidence directory. The native
 snapshot and ranked scheduler evidence are in the linked measured results.
-Physical activation, unchanged performance parity and final workspace CI
-after the correction remain **Not done**.
+On `f078ebc4`, the next instrumented capture proves zero collection-time
+supervisor resource reads and zero resource-inspection CPU samples. Physical
+activation is **Done**. The unchanged unprofiled rerun has four faster pairs
+and one slower pair: +23.272327% in pair 4. All ten runs retain exact denials,
+zero reported enforcement loss and verified cleanup. Performance parity
+remains **Not done**. Read the linked measurements and
+`name-fix/comparison-rerun/{capture-pairs.json,test.log}`. Final workspace CI
+after the correction passes at `f078ebc4`; the command returns zero. Read
+`name-fix/workspace-final.log`. Final Rust CI is **Done**. The next diagnostic
+records exact function spans and same-thread scheduler overlap. It changes
+no production source and does not qualify performance.
