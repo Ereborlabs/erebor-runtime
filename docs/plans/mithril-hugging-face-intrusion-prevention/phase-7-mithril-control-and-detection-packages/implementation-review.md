@@ -3052,3 +3052,12 @@ test fixture transfer. The copy succeeded and its guest hash matches the
 recorded archive hash. The user also approved repeated comparisons against
 plain bpftrace, with no Araphor increase. Keep comparisons separate from Cargo
 and CI. No physical fault pass or performance qualification is claimed.
+
+The first repeated plain/Araphor comparison covers source `4273cda8`.
+All ten runs retain 1,000 exact denial witnesses, with zero enforcement-event
+loss and unresolved effects. Araphor has higher p99 in four of five pairs.
+The strict gate returns 101 after 287.52 seconds. No qualified configuration
+is published. Read the
+[five-pair result](../../araphor-observability/phase-2-owned-capture.md#repeated-plain-bpftrace-comparison)
+and `compare-current-test.log` in the evidence directory above. No causal
+latency explanation or performance parity is claimed.

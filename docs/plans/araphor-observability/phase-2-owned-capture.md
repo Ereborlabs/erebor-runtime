@@ -964,6 +964,33 @@ physical pass:
 
 ## Acceptance and verification
 
+### Repeated plain-bpftrace comparison
+
+The first approved repeat covers source `4273cda8`. It uses the same owned
+VM, backend, eight-file classified archive, debug logging and workload as the
+direct comparison above. The owned harness has four arguments, output
+`/tmp/araphor-observability-153-compare-20261003-current` and limit input `1`.
+`MITHRIL_TRACE_MODE=compare` selects plain bpftrace and Araphor in alternating
+capture-enabled runs. The positive fixture input is not an overhead allowance.
+The integer gate requires no Araphor p99 increase. No Cargo or CI runs at
+the same time. The 590-second timeout stays unchanged.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 200,863 | 371,215 | +170,352 | +84.810045% |
+| 2 | 181,771 | 315,194 | +133,423 | +73.401698% |
+| 3 | 281,799 | 288,571 | +6,772 | +2.403131% |
+| 4 | 225,278 | 169,199 | -56,079 | -24.893243% |
+| 5 | 191,161 | 278,525 | +87,364 | +45.701791% |
+
+The test takes 287.52 seconds and returns 101. All ten runs retain 1,000
+exact denial witnesses, with zero enforcement-event loss and unresolved
+effects. Coverage permits negative claims in all ten runs. All five Araphor
+terminals have `Deadline` and `Verified` cleanup. Trace kernel loss stays
+unknown. Read `compare-current.json` and `compare-current-test.log` in
+`/tmp/araphor-fault-admission.rz3Qj3lL`. Four pairs fail the no-increase gate.
+No qualified configuration is published. Performance parity is **Not done**.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node
