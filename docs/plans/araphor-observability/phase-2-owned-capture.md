@@ -1585,8 +1585,12 @@ features. Owned upload passes in 25.21 seconds. Read `backend-tests-final.log`,
 `backend-clippy-final.log` and `owned-upload.log` in
 `/tmp/araphor-static-inventory.GOQgpiAI`. Independent safety and Ponytail
 review find no must-fix issue. This implementation slice is **Done**. Physical
-activation, its unchanged unprofiled comparison and final workspace CI remain
-**Not done**. Performance parity is **Not done**. Diagnostics stay disabled.
+activation and its unchanged unprofiled comparison remain **Not done**.
+Final workspace CI passes at `af72dbeb`. The command
+`bash .github/scripts/verify-rust-ci.sh` returns zero. Formatting, workspace
+check, strict Clippy and workspace tests pass. Read `workspace-final.log`
+in the same evidence directory. Performance parity is **Not done**.
+Diagnostics stay disabled.
 
 The first unprofiled comparison of `6005773e` starts at 19:45 UTC on
 2026-10-03. It uses the unchanged full ten-run binary and archive. The SSH
@@ -1595,8 +1599,30 @@ command ends with status 255 after the VM stops responding. Libvirt reports
 output is `/tmp/araphor-observability-153-static-20261003-5000`; the host launch
 log is `comparison-launch.log` in the local test directory above.
 This run is interrupted. No five-pair result is available, and no parity
-result is claimed. Confirm authority to resume the externally paused VM
-before recovery. Discard this run for timing qualification after recovery.
+result is claimed. The user approves VM resume and a fresh comparison.
+Discard this interrupted run for timing qualification after recovery.
+
+The fresh comparison of `6005773e` returns 101 in 591.81 seconds. No build
+or profiler runs during this comparison. The normal ten-run binary, backend,
+source, archive, target and 30-second collection limits are unchanged.
+Each run uses 5,000 denied opens with 1-ms spacing.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Araphor minus plain, ns | Difference |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 171,174 | 151,543 | -19,631 | -11.468447% |
+| 2 | 120,753 | 169,523 | +48,770 | +40.388231% |
+| 3 | 104,714 | 122,446 | +17,732 | +16.933743% |
+| 4 | 140,124 | 321,902 | +181,778 | +129.726528% |
+| 5 | 166,231 | 223,511 | +57,280 | +34.458073% |
+
+All ten runs retain 5,000 exact policy denials. Reported enforcement loss
+and unresolved effects are zero. Cleanup is verified. Enforcement resources
+remain unchanged. Four pairs exceed the zero-increase limit. Parity remains
+**Not done**. The comparison does not prove activation of the static path.
+Read `comparison-rerun/capture-pairs.json` and `comparison-rerun/test.log`
+under `/tmp/araphor-static-inventory.GOQgpiAI`. The guest output is
+`/tmp/araphor-observability-153-static-rerun-20261003-5000`.
+Use the existing CPU and scheduler attribution before another change.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
@@ -1901,8 +1927,10 @@ Read `restart.json`, `test.log`, `lightweight.log` and
 `lightweight-restart.log` in the `restart-before-paired` and
 `restart-after-paired` directories under
 `/tmp/araphor-owned-lifecycle.DlPg5O1y`. Node restart qualification is **Done**
-for this platform and source. Performance, Pod replacement, the combined
-capture-failure route and native full-store qualification remain **Not done**.
+at `af4b91fe` on this platform. The combined capture-failure route and native
+full-store qualification pass at `d486e637`, as recorded above. These earlier
+results do not qualify later changes. Current performance parity and Pod
+replacement remain **Not done**.
 
 1. Start a reviewed capture against a protected Kubernetes Pod. Replace that
    Pod with the same name. Require the original execution to end with

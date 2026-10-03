@@ -1925,7 +1925,7 @@ its complete qualification is still open.
 [TraceOwner](../../../../crates/araphor-observability/src/owner.rs) Control or Node restarts after dispatch.<br>
 -> [NodeTraceOwner::recover_inactive](../../../../crates/araphor-observability/src/capture.rs) The shared local owner recovers the original execution identity.<br>
 -> [NodeTraceOwner::admit](../../../../crates/araphor-observability/src/capture.rs) duplicate dispatch does not spawn again.<br>
--> Partial [NodeTraceOwner::recover_inactive](../../../../crates/araphor-observability/src/capture.rs) uncertain child state is reconciled or terminated, not rerun. Recovery records NodeRestarted and unknown cleanup; combined physical crash proof remains open.
+-> [NodeTraceOwner::recover_inactive](../../../../crates/araphor-observability/src/capture.rs) uncertain child state is reconciled or terminated, not rerun. Recovery records NodeRestarted and unknown cleanup. Paired physical crash-before/after-spawn cases pass at `af4b91fe`; the results do not prove continuous coverage across Node death.
 
 The plan lists acceptance before resolution as a logical operation. Actual
 callers resolve targets before `ControlPlane::accept_trace`. Acceptance checks
@@ -2437,7 +2437,7 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | [pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh), [Kubernetes capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | Lightweight owner proof precedes same-name real Pod replacement through Control, Node and shared data. Checks actual UID, CRI and cgroup lifetimes, physical denial, frozen old output and diagnostic BPF cleanup. Compiled; physical execution is open. |
 | [observability_runtime_library_names](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | The bundle accepts the native `libstdc++.so.6` name. The name check rejects path separators, shell metacharacters, whitespace and replacement system libraries. The bundle also requires regular files and a complete verified checksum manifest. |
 | [Host qualification](../../../../crates/mithril-e2e/src/platform/host.rs), [owned.sh](../../../../crates/mithril-e2e/harness/observability/owned.sh), [process fixture](../../../../crates/mithril-e2e/fixtures/process/observability.py) | Full Node/Control capture, five paired interference runs, and failure cases with physical enforcement checks. |
-| [disk-full.sh](../../../../crates/mithril-e2e/harness/observability/disk-full.sh) | Lightweight owner proof precedes native AnalysisStore ENOSPC during active capture on a separate 1 GiB tmpfs. Requires no ACK, local expiry, bounded output, physical denial, zero committed progress and exact current-session replay. Compiled; physical execution is open. |
+| [disk-full.sh](../../../../crates/mithril-e2e/harness/observability/disk-full.sh) | Lightweight owner proof precedes native AnalysisStore ENOSPC during active capture on a separate 1 GiB tmpfs. Requires no ACK, local expiry, bounded output, physical denial, zero committed progress and exact current-session replay. Physical execution passes at `d486e637` on the owned VM. Read `storage-current/storage.json` under `/tmp/araphor-owned-lifecycle.DlPg5O1y`. |
 
 The source review recorded storage, crash, context and runtime proof.
 Its shared-host interference run
@@ -2453,9 +2453,13 @@ keeps that integration and its physical proof open. Zero measured loss deltas
 in an earlier run do not prove uninterrupted coverage or qualify this source.
 No new performance experiment ran for the current backend closure.
 
-**Not done:** complete Node-owned capture across real Pod replacement, and the
-combined physical Node crash-before/after-spawn recovery cases. Separate backend
-parent-death and spool-recovery tests do not close those combined gates.
+**Not done:** complete Node-owned capture across real Pod replacement and
+current performance parity. Paired physical Node crash-before/after-spawn
+cases pass at `af4b91fe`. Read `restart.json` in `restart-before-paired` and
+`restart-after-paired` under `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+Both receipts preserve `NodeRestarted`, incomplete output and unknown cleanup.
+Independent checks confirm resource removal before fixture shutdown. These
+earlier results do not qualify later changes.
 
 The shared crate's `test-support` feature supplies external process and binding
 inputs and one-use commit callbacks. Normal application builds do not enable
@@ -3478,7 +3482,11 @@ of current IDs from historical IDs. The focused backend selection passes 23
 tests; one subprocess fixture is ignored. These tests do not prove physical
 activation of the static path or performance parity. Read the
 [approved contract and measured results](../../araphor-observability/phase-2-owned-capture.md#approved-static-resource-inventory).
-Physical comparison and final workspace CI remain **Not done**.
+The fresh five-pair comparison runs but fails the zero-increase limit in
+four pairs. Physical activation of the static path remains **Not done**.
+Read the linked measured results before the next optimization. Final
+workspace CI passes at `af72dbeb`; read `workspace-final.log` in the evidence
+directory below.
 
 Strict package Clippy passes for all features and targets. The final focused
 backend run passes 23 tests in 31.84 seconds, with one subprocess fixture
