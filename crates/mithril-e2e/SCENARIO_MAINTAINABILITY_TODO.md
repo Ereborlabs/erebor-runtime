@@ -5752,12 +5752,34 @@ test does not close a row when its physical condition or an assertion changed.
     checks and final Rust CI passed. See
     `/tmp/mithril-control-retirement-ci-20261003.log`. The legacy file remains
     on the retirement list at 5,555 lines. No production or Platform code changed.
-  - [ ] Replace changed Control recovery with the same actor and native inputs.
+  - [x] Replace changed Control recovery with the same actor and native inputs.
     Change only the effective capability set to `CAP_SYS_ADMIN`. Keep all other
     capability sets empty, as in the baseline. Require `DENY_NODE_UNAVAILABLE`
     from the physical hook, unsuccessful exit, no marker or output, no allow
     decision, and complete cleanup. Exit failure alone is not sufficient.
     Commit the replacement before removing the matched old action and fields.
+    The 57-line [changed_control_never_starts](src/identity/scenarios/runtime_control.rs)
+    passed in the retained lightweight VM in 11.53 seconds. All seven standard
+    gate cases passed through the retained launcher in 4.71 seconds. All seven
+    legacy cases and cleanup passed. Evidence:
+    `target/mithril-control-capability-20261003T023746Z-2453292`. All eight
+    production gate tests, VM harness checks, and final Rust CI passed. See
+    `/tmp/mithril-control-capability-ci-20261003.log`.
+    The physical denial log is mandatory. The shared actor, OCI input, manifest,
+    and positive test remain unchanged. No production or Platform code changed.
+    Review route: the new function changes one capability set, then uses the
+    existing `OciBundle`, production hook, process owner, and platform cleanup.
+  - [ ] Remove only the old changed Control action, probe call, marker local,
+    three result fields, and duplicate assertions after the replacement commit.
+    Keep the version-change action, Control config, arguments, and manifest.
+    Qualify all seven standard cases and the complete reduced legacy probe.
+  - [ ] Replace version-changed Control recovery with the same Python actor
+    copied into the test directory. Append one newline byte to that copy.
+    Require different bytes, exact command and security shape, successful
+    physical start, exact argv and marker output, and complete cleanup. Change
+    only the actor bind source to the temporary copy. Keep its destination and
+    read-only options. Do not modify repository inputs or embed program source.
+    Add no Platform method. Commit before removing its old action and fields.
   - [x] Share checked OCI bundle preparation before the next runtime-gate
     migration. Keep production hook installation on `OciBaseSpecOwner` and
     process start, exit, diagnostics, and stop on `ProcessFixture`. The
