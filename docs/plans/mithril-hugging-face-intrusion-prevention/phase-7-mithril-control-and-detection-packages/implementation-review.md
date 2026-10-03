@@ -2823,7 +2823,8 @@ The later Host failure, restart and storage cases remain unqualified. Their
 corrected source now requires the declared file and fresh exact policy-deny
 evidence. No failed measurement may supply their required qualified
 configuration. Production diagnostics remain disabled. No additional
-performance experiment is approved by this record.
+performance experiment is approved by this record. The later user approval
+for a plain-bpftrace comparison is recorded in the capture phase document.
 
 The final workspace procedure passed at source `2da84412` after the actor-order
 edit. Formatting, workspace checking, strict Clippy and all selected workspace
@@ -2865,3 +2866,10 @@ check to fail; restoring the new target makes it pass. Read
 `capture-lifecycle-fixture-red.log`, `capture-lifecycle-fixture-green.log` and
 `capture-lifecycle-guard.log` in the evidence directory above. No physical
 capture ran for these checks. The physical gates remain **Not done**.
+
+The final workspace procedure passed at source `0e81c4c6` after the lifecycle
+fixture edit. Formatting, workspace checking and strict Clippy passed. Data
+passed 167 tests, shared observability 22, Interceptor 39, Control 170, e2e
+136 and Node 262. Read `capture-lifecycle-workspace-final.log` in the evidence
+directory above. The ignored physical cases remain unqualified. This proof
+does not cover the subsequent plain-bpftrace comparison change.

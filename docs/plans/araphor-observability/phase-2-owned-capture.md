@@ -602,11 +602,16 @@ trace-off values also vary. These facts do not establish the cause of latency
 changes. Do not report the largest measured change as an intrinsic bpftrace
 cost. The approved latency gate failed. Diagnostics stay disabled.
 
-A further performance experiment requires user approval. One proposed run
-changes only the existing `RUST_LOG=info` setting. It keeps the same binary,
-VM, five pairs, workload, ten-minute bound and all pass/fail checks. This run
-has not been approved or executed. Later physical gates still require a real
-qualified configuration; do not create one from the failed measurements.
+The user approved a direct plain-bpftrace comparison with Araphor capture.
+Use the existing VM, script, cgroup, DEBUG logging and protected workload.
+Run five trace-off/trace-on pairs for each path. Each run has 1,000 denied
+opens at 1 ms intervals. Limit each five-pair experiment to ten minutes.
+Keep the 10% p99 limit, zero enforcement-event loss, exact denial evidence,
+healthy coverage and cleanup checks. Plain bpftrace does not use the Araphor
+diagnostic supervisor, upload or storage path. Its result cannot qualify an
+Araphor deployment. An INFO-only experiment is not part of this approval.
+Later physical gates still require a real qualified configuration. Do not
+create that configuration from failed measurements.
 
 The later Host failure, restart and storage cases now use the same declared
 denied file. Start their actors after policy activation. Before each read,
@@ -634,6 +639,14 @@ explicit-target assertion; the corrected target passes. Read
 do not execute a trace or qualify a physical lifecycle case. All fault holds,
 deadlines, quotas, replay checks and cleanup checks stay in place.
 No later physical lifecycle gate passed. Status: **Not done**.
+
+The final workspace procedure passed at source `0e81c4c6` after the lifecycle
+fixture edit. Formatting, workspace checking, strict Clippy and all selected
+workspace tests passed. Data passed 167 tests, shared observability 22,
+Interceptor 39, Control 170, e2e 136 and Node 262. Read
+`capture-lifecycle-workspace-final.log` in the evidence directory above.
+Ignored physical cases remain unqualified. This result covers the lifecycle
+fixture correction, not the subsequent plain-bpftrace comparison change.
 
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
