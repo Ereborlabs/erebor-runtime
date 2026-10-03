@@ -1318,6 +1318,38 @@ Optimize measured repeated work without removing target, resource-ownership,
 durability, deadline or cleanup checks. A later unprofiled comparison must
 still pass the unchanged no-increase gate. Diagnostics stay disabled.
 
+### Approved handle reuse and comparison
+
+The user approves a bounded resource-scan change and an unprofiled comparison.
+Keep the status read, a fresh fdinfo directory open, and resource inspection
+on each 10-ms supervision turn. Retain at most 256 fdinfo file handles for the
+current selected entries. Remove handles for absent entries before opening
+new ones. Seek to offset zero and read current contents, with the same 16-KiB
+limit. Do not reuse parsed text or resource IDs as current evidence.
+Discard handles on directory, seek or read failure, and on a limit-sized read.
+Close all handles before child reap and on owner drop. Keep the recorded ID
+unions and cleanup verification.
+
+Linux 6.8 [fdinfo reads](https://github.com/torvalds/linux/blob/v6.8/fs/proc/fd.c)
+look up the current child FD when the sequence is regenerated. The proc handle
+does not retain that child FD. [Sequence reset](https://github.com/torvalds/linux/blob/v6.8/fs/seq_file.c)
+permits a fresh read after seek to zero. Require tests for current contents,
+closed or reused FDs and bounded handle ownership before measurement.
+Keep fresh directory authorization and read authorization. Reuse removes
+repeated per-file open checks and open-time evidence; it does not execute
+the same authorization hooks as reopening every file. Do not claim equivalence
+for arbitrary policies that authorize only file opens. Target, grant, local
+deadline, cancellation, output and independent BPF cleanup checks do not change.
+
+Run five plain-bpftrace and Araphor pairs. Use 5,000 denied opens per run,
+1-ms spacing and the existing 30-second collection limits. Use the unchanged
+actor, stock backend, source, target and environment. Do not run a profiler,
+Cargo, workspace CI or guest polling during measurement. The outer timeout
+is 20 minutes. Calculate nearest-rank p99 at zero-based index 4,949. Report
+both p99 values and the signed difference for every pair. Keep the requirement
+for no Araphor p99 increase in every pair. Do not add a percentage allowance.
+This approval is not a performance result or deployment qualification.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node
