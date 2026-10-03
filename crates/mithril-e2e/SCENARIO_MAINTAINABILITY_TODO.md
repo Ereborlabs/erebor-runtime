@@ -5650,7 +5650,7 @@ test does not close a row when its physical condition or an assertion changed.
     final Rust CI passed. See `/tmp/mithril-oci-manifest-ci-20261002.log`.
     Evidence: `target/mithril-oci-manifest-20261002T233813Z-2211321`.
     No Platform API or production code changed.
-  - [ ] Replace the exact Node recovery-command case with one small standard
+  - [x] Replace the exact Node recovery-command case with one small standard
     direct-runc test. Use a checked Python actor and native manifest. Keep
     the 35 extra arguments, host PID namespace, `CAP_SYS_ADMIN`, and all three
     required writable mounts. Require a successful physical marker write and

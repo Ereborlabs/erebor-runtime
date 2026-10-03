@@ -131,6 +131,8 @@ mod runtime_outage;
 #[cfg(test)]
 mod runtime_prepared;
 #[cfg(test)]
+mod runtime_recovery;
+#[cfg(test)]
 mod runtime_sandbox;
 #[cfg(test)]
 mod subpath_alias;

@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "executable": "/owner",
+      "args": [
+        "/owner",
+        "/result/recovery",
+        "RECOVERY_ALLOWED",
+        "recovery-argument-0",
+        "recovery-argument-1",
+        "recovery-argument-2",
+        "recovery-argument-3",
+        "recovery-argument-4",
+        "recovery-argument-5",
+        "recovery-argument-6",
+        "recovery-argument-7",
+        "recovery-argument-8",
+        "recovery-argument-9",
+        "recovery-argument-10",
+        "recovery-argument-11",
+        "recovery-argument-12",
+        "recovery-argument-13",
+        "recovery-argument-14",
+        "recovery-argument-15",
+        "recovery-argument-16",
+        "recovery-argument-17",
+        "recovery-argument-18",
+        "recovery-argument-19",
+        "recovery-argument-20",
+        "recovery-argument-21",
+        "recovery-argument-22",
+        "recovery-argument-23",
+        "recovery-argument-24",
+        "recovery-argument-25",
+        "recovery-argument-26",
+        "recovery-argument-27",
+        "recovery-argument-28",
+        "recovery-argument-29",
+        "recovery-argument-30",
+        "recovery-argument-31",
+        "recovery-argument-32",
+        "recovery-argument-33",
+        "recovery-argument-34"
+      ],
+      "requiredMounts": [
+        { "source": "/usr", "destination": "/usr", "readOnly": true },
+        { "source": "/lib", "destination": "/lib", "readOnly": true },
+        { "source": "/lib64", "destination": "/lib64", "readOnly": true },
+        { "source": "MITHRIL_FIXTURES/runtime_owner.py", "destination": "/owner", "readOnly": true },
+        { "source": "MITHRIL_WORK", "destination": "/result", "readOnly": false },
+        { "source": "MITHRIL_WORK/host-hook", "destination": "/host-hook-bin", "readOnly": false },
+        { "source": "MITHRIL_WORK/host-containerd", "destination": "/host-containerd", "readOnly": false }
+      ]
+    }
+  ]
+}

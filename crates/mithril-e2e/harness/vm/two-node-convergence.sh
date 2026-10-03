@@ -232,6 +232,7 @@ run_lightweight_upgrade_probe() {
   tar -C "$repo_root" -cf "$output_directory/runtime-gate-inputs.tar" \
     crates/mithril-e2e/fixtures/process/runtime_hostile.py \
     crates/mithril-e2e/fixtures/process/runtime_pause.py \
+    crates/mithril-e2e/fixtures/process/runtime_owner.py \
     crates/mithril-e2e/fixtures/convergence/direct-runc-recovery-v1.json
 
   "$provider" run "$vm" mkdir -p "$remote"

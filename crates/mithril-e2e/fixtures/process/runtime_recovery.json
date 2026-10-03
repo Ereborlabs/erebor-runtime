@@ -1,0 +1,42 @@
+{
+  "ociVersion": "1.0.2",
+  "process": {
+    "terminal": false,
+    "user": { "uid": 0, "gid": 0 },
+    "args": [],
+    "env": ["PATH=/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE=1"],
+    "cwd": "/",
+    "capabilities": {
+      "bounding": ["CAP_SYS_ADMIN"],
+      "effective": ["CAP_SYS_ADMIN"],
+      "permitted": ["CAP_SYS_ADMIN"]
+    },
+    "noNewPrivileges": false
+  },
+  "root": { "path": "rootfs", "readonly": false },
+  "mounts": [
+    { "destination": "/proc", "type": "proc", "source": "proc" },
+    { "destination": "/dev", "type": "tmpfs", "source": "tmpfs" },
+    { "destination": "/usr", "type": "bind", "source": "/usr", "options": ["rbind", "ro"] },
+    { "destination": "/lib", "type": "bind", "source": "/lib", "options": ["rbind", "ro"] },
+    { "destination": "/lib64", "type": "bind", "source": "/lib64", "options": ["rbind", "ro"] },
+    { "destination": "/owner", "type": "bind", "source": "MITHRIL_FIXTURES/runtime_owner.py", "options": ["bind", "ro"] },
+    { "destination": "/result", "type": "bind", "source": "MITHRIL_WORK", "options": ["rbind", "rw"] },
+    { "destination": "/host-hook-bin", "type": "bind", "source": "MITHRIL_WORK/host-hook", "options": ["rbind", "rw"] },
+    { "destination": "/host-containerd", "type": "bind", "source": "MITHRIL_WORK/host-containerd", "options": ["rbind", "rw"] }
+  ],
+  "linux": {
+    "cgroupsPath": "MITHRIL_CGROUP",
+    "namespaces": [
+      { "type": "pid", "path": "/proc/1/ns/pid" },
+      { "type": "network" },
+      { "type": "ipc" },
+      { "type": "uts" },
+      { "type": "mount" }
+    ]
+  },
+  "annotations": {
+    "io.kubernetes.cri.container-type": "container",
+    "io.kubernetes.cri.container-id": "MITHRIL_ID"
+  }
+}
