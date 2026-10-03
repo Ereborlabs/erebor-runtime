@@ -3333,7 +3333,7 @@ full-store proof, Pod replacement and performance parity remain **Not done**.
 passes the real 1-GiB full-store case on `d486e637` and VM `192.168.122.153`.
 The paired owner proof passes in 25.37 seconds and TLS repair in 0.72 seconds.
 The physical case passes in 124.17 seconds. `disk-full.sh` returns zero.
-Real segment creation returns `ENOSPC` before sync, with no ACK and zero
+The real segment write returns `ENOSPC` before sync, with no ACK and zero
 raw output progress. Node retains 27 frames with 1,214 bytes and expires
 locally. Independent inventory verifies cleanup before Node shutdown.
 Enforcement IDs remain unchanged. Reopen retains exact output and accepted
