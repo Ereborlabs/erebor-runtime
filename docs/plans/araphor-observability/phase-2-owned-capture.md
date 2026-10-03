@@ -1058,7 +1058,7 @@ The eight-file archive is
 `192.168.122.153:/var/tmp/araphor-capture-inputs.VMoOpWq2/fixtures-10k-20261003.tar.gz`
 has the same SHA-256:
 `cc79eda7def7b90bd72d97d40e9a0ef52427c23a36b86998e0a29e63b9aaac6c`.
-The archive matches the worktree files. The stock backend hash stays
+The archive matches the files at source `c32fa9a9`. The stock backend hash stays
 `d2846f3400bb129b1a569aae64adf548de99ff41f247823ff8caf1fbde40ff1e`.
 
 The harness changes are test-only. Host requires sample completion before a
@@ -1082,6 +1082,70 @@ label. The corrected fixture uses independent source identities. No production
 change was required. Read `host-focused-final.log`, `fixture-focused.log` and
 `plain-focused.log` in `/tmp/araphor-capture-10k.CTkeIuTc`.
 Formatting passes. Final workspace verification has not run on this source.
+
+The approved comparison covers harness source `c32fa9a9`, with production
+capture unchanged from `3da357fa`. It uses the worktree libtest binary
+`mithril_e2e-1adb172a9b31c9af`, debug logging, compare mode, the archive above,
+output `/tmp/araphor-observability-153-compare-20261003-10000`, and the approved
+1,200-second timeout. The positive fixture limit is `1`, not an allowance.
+No Cargo, CI or guest polling runs during measurement.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 129,404 | 265,619 | +136,215 | +105.263361% |
+| 2 | 160,074 | 267,051 | +106,977 | +66.829716% |
+| 3 | 211,620 | 239,574 | +27,954 | +13.209527% |
+| 4 | 190,280 | 233,557 | +43,277 | +22.743851% |
+| 5 | 191,761 | 241,125 | +49,364 | +25.742461% |
+
+The test takes 583.72 seconds and returns 101. All ten runs retain exactly
+10,000 denial witnesses, with zero enforcement-event loss and unresolved
+effects. All ten permit negative claims. Native collection takes 30,000 to
+30,009 ms; cleanup and unchanged enforcement resources pass. All five Araphor
+terminals have `Deadline`, complete output and `Verified` cleanup. Trace kernel
+loss remains unknown. Read `compare-10000.json` and `compare-10000-test.log`
+in `/tmp/araphor-capture-10k.CTkeIuTc`. All five pairs fail. The previous apparent
+speedups do not repeat. This result does not isolate a latency cause or prove
+statistical confidence. No qualified configuration is published.
+
+### Approved difference investigation
+
+The user requests 5,000 operations per run and investigation of the difference.
+Keep the five pairs, 1-ms pacing, 30-second collection limits, 20-minute outer
+limit and no-increase gate. Calculate nearest-rank p99 at zero-based index
+4,949. Keep exact witness, coverage, loss, output and cleanup checks. Report
+all pair measurements in the user thread. Analyze the existing source and
+receipts before a production change. Profiling must be separate from the
+unprofiled comparison. Obtain approval for any additional performance workload.
+The cause is not proven. Performance parity remains **Not done**.
+
+The 5,000-operation harness passes eight focused tests and formatting. Read
+`host-5000-focused.log`, `fixture-5000-focused.log` and `plain-5000-focused.log`
+in the same evidence directory. The archive is `fixtures-5000.tar.gz`.
+Its guest copy at
+`/var/tmp/araphor-capture-inputs.VMoOpWq2/fixtures-5000-20261003.tar.gz` has SHA-256
+`e03a6bd8b320a4ce4655b7dedba001f94e6050263d87997e358ad106941d05ba`.
+No 5,000-operation timing result is claimed yet.
+
+The existing comparisons use unoptimized Rust libtest code and stock packaged
+bpftrace. Both paths use that bpftrace binary, but only Araphor adds the Rust
+supervision and capture loops. Build mode is a possible cause of excessive
+wrapper cost. It is not isolated by these results. Release performance remains
+unqualified. The user has been asked to select release comparison or debug
+diagnosis, and to approve two process-usage snapshots outside timed operations.
+
+Source review finds two 10-ms Araphor loops: backend resource inspection and
+held target/map checks. Plain polling checks output sizes and child exit.
+Araphor also syncs local frames and commits uploaded output through Data's
+shared writer/raw locks. That raw path calls `syncfs` on its filesystem.
+[Linux documents the filesystem-wide scope](https://man7.org/linux/man-pages/man2/sync.2.html).
+Do not remove required checks or durable commit to make a measurement pass.
+The log has ten evidence-production intervals, each with 10,000 records.
+Health-sampling deferrals total 377 plain and 460 Araphor. Reader pending peaks
+are 9 and 8. These counts show no queue exhaustion and do not isolate a cause.
+Do not blame post-capture retained reads or full catalogue projection for
+the measured difference. Those reads occur outside measurement; trace intent
+reads use the existing raw coordinator.
 
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new

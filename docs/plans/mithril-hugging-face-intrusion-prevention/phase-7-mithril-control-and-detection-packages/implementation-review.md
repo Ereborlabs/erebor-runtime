@@ -3101,7 +3101,7 @@ accepts the matched collection duration. Its backend command, environment,
 attachment, output and drain limits stay unchanged.
 
 The fixture contract test uses descending deterministic durations. It checks
-the exact p99 rank, all 100,000 operations, unchanged pacing and no protected
+the exact p99 rank, all requested operations, unchanged pacing and no protected
 file writes. These checks are not performance measurements. The larger sample
 has 100 observations above the selected rank, instead of ten. It does not prove
 confidence in a pair's difference or equal scheduling conditions.
@@ -3127,3 +3127,27 @@ three native tests. Read `host-focused-final.log`, `fixture-focused.log` and
 regression checks 10,000 exact witnesses, source and task exclusions, original
 sequence freshness, corrupt frames, cursor reuse and extra-denial rejection.
 Formatting passes. Final workspace verification has not run on this source.
+
+Harness source `c32fa9a9` completed the 10,000-operation comparison in 583.72
+seconds and returned 101. All ten runs retained exactly 10,000 denials and
+passed coverage, zero enforcement-loss, output and cleanup checks. Araphor
+p99 is higher in all five pairs. Trace kernel loss remains unknown. Read the
+[five measurements](../../araphor-observability/phase-2-owned-capture.md#approved-larger-sample-comparison)
+and `/tmp/araphor-capture-10k.CTkeIuTc/compare-10000-test.log`.
+The production capture code is unchanged from `3da357fa`. No causal explanation
+or performance qualification is claimed.
+
+The user requests a 5,000-operation comparison and cause investigation.
+Keep the other approved comparison settings and checks unchanged. The fixture
+selects nearest-rank p99 at index 4,949. Do not mix profiled and unprofiled
+results. Source and receipt review comes before a production fix.
+The count changes pass the same eight focused tests and formatting. The
+current contract test requires 50,000 total operations and p99 value 4,950.
+No 5,000-operation timing result is claimed yet.
+
+The current measurements use unoptimized Rust and packaged bpftrace. Both
+paths use the same backend, but only Araphor adds the Rust supervision loops.
+Do not infer release overhead from those numbers. Build mode, the two 10-ms
+checking loops and output durability are investigation candidates, not proven
+causes. The user has been asked to approve release comparison and two boundary
+usage snapshots. Final workspace verification remains pending.

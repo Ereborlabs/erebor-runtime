@@ -25,7 +25,7 @@ pub(crate) struct Host {
 
 impl Host {
     #[cfg(test)]
-    const CAPTURE_COUNT: usize = 10_000;
+    const CAPTURE_COUNT: usize = 5_000;
     #[cfg(test)]
     const CAPTURE_SECONDS: u16 = 30;
 
@@ -2268,7 +2268,7 @@ fn observability_retained_denials() -> TestResult<()> {
     )?;
     assert_eq!(denials.len(), Host::CAPTURE_COUNT);
     assert_eq!(denials.first(), Some(&(7, 501)));
-    assert_eq!(denials.last(), Some(&(7, 10_500)));
+    assert_eq!(denials.last(), Some(&(7, 500 + Host::CAPTURE_COUNT as u64)));
     assert_eq!(cursors.len(), 1);
     assert_eq!(cursors.get(&identity), Some(&(total + 1)));
     assert!(

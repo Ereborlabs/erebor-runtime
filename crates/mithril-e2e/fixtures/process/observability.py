@@ -5,7 +5,7 @@ import sys
 import time
 
 work = sys.argv[1]
-sample_count = 10_000
+sample_count = 5_000
 libc = ctypes.CDLL(None, use_errno=True)
 print("native-fixture-ready", flush=True)
 for run in range(10):

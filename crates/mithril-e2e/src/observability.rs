@@ -2043,14 +2043,14 @@ os.open = open_read
 os.rename = denied
 os.path.exists = lambda path: True
 time.sleep = sleeps.append
-ticks = iter(value for _ in range(10) for sample in range(10_000, 0, -1)
+ticks = iter(value for _ in range(10) for sample in range(5_000, 0, -1)
              for value in (0, sample))
 time.perf_counter_ns = lambda: next(ticks)
 sys.argv = ['observability.py', '/work']
 exec(compile(source, 'observability.py', 'exec'))
-assert len(attempts) == 100_000, len(attempts)
-assert names == [f'tr{i}:9900' for i in range(10)], names
-assert len(sleeps) == 100_000 and all(delay == .001 for delay in sleeps), len(sleeps)
+assert len(attempts) == 50_000, len(attempts)
+assert names == [f'tr{i}:4950' for i in range(10)], names
+assert len(sleeps) == 50_000 and all(delay == .001 for delay in sleeps), len(sleeps)
 "#,
             )
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/process/observability.py"))
