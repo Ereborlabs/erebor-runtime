@@ -3328,3 +3328,19 @@ remain unchanged. Trace kernel loss stays unknown. Read the command and
 receipts in the [physical lifecycle result](../../araphor-observability/phase-2-owned-capture.md#physical-lifecycle-gates).
 The combined fault route is **Done** for this source and platform. Native
 full-store proof, Pod replacement and performance parity remain **Not done**.
+
+[Host::qualify_storage](../../../../crates/mithril-e2e/src/platform/host.rs)
+passes the real 1-GiB full-store case on `d486e637` and VM `192.168.122.153`.
+The paired owner proof passes in 25.37 seconds and TLS repair in 0.72 seconds.
+The physical case passes in 124.17 seconds. `disk-full.sh` returns zero.
+Real segment creation returns `ENOSPC` before sync, with no ACK and zero
+raw output progress. Node retains 27 frames with 1,214 bytes and expires
+locally. Independent inventory verifies cleanup before Node shutdown.
+Enforcement IDs remain unchanged. Reopen retains exact output and accepted
+identity. Current mTLS upload and replay return the same ACK at sequence 27.
+Three exact physical policy denials pass. Discovery stays disabled.
+Output is incomplete; trace kernel loss stays unknown. Read `storage.json`
+and paired logs in `storage-current` under the evidence directory above.
+Native full-store qualification is **Done** for this source and platform.
+Pod replacement and performance parity remain **Not done**. Diagnostics
+stay disabled. Final CI still covers the last code revision, `d486e637`.

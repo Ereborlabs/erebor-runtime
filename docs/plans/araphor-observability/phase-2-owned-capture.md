@@ -1356,6 +1356,26 @@ under the same evidence directory. The combined fault route is **Done** on
 this source and platform. Pod replacement, native full-store proof and
 performance parity remain **Not done**. Diagnostics stay disabled.
 
+Native full-store qualification is **Done** on `d486e637` and the same VM.
+Run `disk-full.sh BIN ARCHIVE OUTPUT --test-admission` with the verified
+worktree hook input above. The harness creates a fresh 1-GiB tmpfs. Its guest
+output is `/tmp/araphor-owned-storage-20261003-d486e637`. The command returns
+zero. Owned upload first passes in 25.37 seconds and TLS repair in 0.72 seconds.
+The physical case passes in 124.17 seconds.
+
+The real segment write fails with `ENOSPC` before sync. Control sends no ACK;
+raw output progress is zero before replay. Discovery stays disabled. Node
+retains 27 frames with 1,214 bytes and reaches its signed local deadline.
+Cleanup is verified before Node shutdown. Independent inventory removes
+programs 2648 and 2649 and maps 1890 to 1892, with no links. Enforcement IDs
+remain unchanged. Store and Node reopen preserve the exact accepted request,
+frames and terminal. Current mTLS replay returns the same ACK at sequence 27.
+Three exact physical policy denials pass. Output is incomplete and trace
+kernel loss stays unknown. The harness removes only its temporary full-store
+mount. Read `storage.json`, `test.log`, `lightweight.log` and
+`lightweight-tls.log` in `storage-current` under the evidence directory above.
+Pod replacement and performance parity remain **Not done**.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current
