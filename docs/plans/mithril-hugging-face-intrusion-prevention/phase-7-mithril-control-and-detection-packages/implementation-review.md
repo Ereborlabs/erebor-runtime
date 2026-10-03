@@ -2789,3 +2789,11 @@ The old actor fails the fixture check; the restored actor passes. Read
 `capture-classified-fixture-red.log` and `capture-classified-fixture-green.log`
 in the evidence directory above. These results cover the corrected working
 tree based on `70b7bc03`. They do not qualify physical latency or capture.
+
+The final workspace procedure passed at `0a759cf6` after the corrected Rust
+fixture edit. Data passed 167 tests, shared observability 22, Interceptor 39,
+Control 170, Mithril e2e 135 and Node 262. Both new fixture checks passed.
+Formatting, workspace checking and strict Clippy also passed. Read
+`capture-classified-workspace-final.log` in the same evidence directory.
+The local Kubernetes helper build passed in `capture-kube-helper.log`.
+These results do not qualify the ignored physical cases.

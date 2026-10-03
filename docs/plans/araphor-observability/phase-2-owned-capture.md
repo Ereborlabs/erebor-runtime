@@ -532,7 +532,21 @@ check mocks its clock; it is not a performance measurement. A temporary actor
 reversion failed the same compiled fixture check. Restoring the corrected
 actor passed. Read `capture-classified-fixture-red.log` and
 `capture-classified-fixture-green.log`. The actor reversion is not retained.
-The corrected physical experiment and final workspace gate remain required.
+The corrected physical experiment remains required.
+
+The final workspace procedure passed at source `0a759cf6`, after the last Rust
+edit. Formatting, workspace checking, strict Clippy and all selected workspace
+tests passed. Main library results were Data 167 passed (5 ignored), shared
+observability 22 passed (2 ignored), Interceptor 39 passed (1 ignored), Control
+170 passed (2 ignored), e2e 135 passed (412 ignored), and Node 262 passed
+(none ignored). Both corrected fixture checks passed in this run. The receipt
+is `capture-classified-workspace-final.log`. Use the worktree-local command
+above. Ignored physical cases remain unqualified.
+
+The worktree-local `mithril-kube-exec` build also passed. Run the same Cargo
+environment with `cargo build --workspace --all-features --bin mithril-kube-exec`.
+The receipt is `capture-kube-helper.log`. No production runtime source changed
+after the image builds above.
 
 The physical harnesses require these checks. Their compiled source is not a
 physical pass:
