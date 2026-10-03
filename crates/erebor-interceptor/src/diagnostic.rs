@@ -441,8 +441,9 @@ impl SupervisedChild {
         let mut buffers = [Vec::new(), Vec::new()];
         let mut eof = [false, false];
         let mut status = None;
+        let mut resource_text = String::with_capacity(16 * 1024);
         loop {
-            owner.record_resources(&mut result);
+            owner.record_resources(&mut result, &mut resource_text);
             if let Some(writer) = &mut input {
                 match writer.write(&source[input_offset..]) {
                     Ok(count) => input_offset += count,
@@ -583,9 +584,13 @@ impl SupervisedChild {
         Ok(result)
     }
 
-    fn record_resources(&self, result: &mut DiagnosticResult) {
-        if let Ok(status) = fs::read_to_string(format!("/proc/{}/status", self.child.id())) {
-            if let Some(rss) = status.lines().find_map(|line| {
+    fn record_resources(&self, result: &mut DiagnosticResult, text: &mut String) {
+        text.clear();
+        if File::open(format!("/proc/{}/status", self.child.id()))
+            .and_then(|mut file| file.read_to_string(text))
+            .is_ok()
+        {
+            if let Some(rss) = text.lines().find_map(|line| {
                 line.strip_prefix("VmHWM:")
                     .and_then(|value| value.split_whitespace().next())
                     .and_then(|value| value.parse::<u64>().ok())
@@ -600,11 +605,10 @@ impl SupervisedChild {
             let Ok(file) = File::open(entry.path()) else {
                 continue;
             };
-            let mut info = String::new();
-            if file.take(16 * 1024).read_to_string(&mut info).is_err() {
+            if Self::read_resource(file, text).is_err() {
                 continue;
             }
-            for line in info.lines() {
+            for line in text.lines() {
                 if let Some(id) = line
                     .strip_prefix("prog_id:")
                     .and_then(|value| value.trim().parse().ok())
@@ -619,6 +623,11 @@ impl SupervisedChild {
                 }
             }
         }
+    }
+
+    fn read_resource(reader: impl Read, text: &mut String) -> std::io::Result<usize> {
+        text.clear();
+        reader.take(16 * 1024).read_to_string(text)
     }
 
     fn emit(
@@ -702,6 +711,48 @@ mod tests {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", script]);
         DiagnosticBackend::start_fixture(command, DiagnosticMode::Capture, collection)
+    }
+
+    #[test]
+    fn observability_backend_resource_buffer() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("resource");
+        fs::write(&path, b"fixture")?;
+        let mut held = File::open(&path)?;
+        let native = PathBuf::from(format!("/proc/self/fdinfo/{}", held.as_raw_fd()));
+        let expected = fs::read_to_string(&native)?;
+        let mut text = String::with_capacity(16 * 1024);
+        text.push_str("prog_id:\t111\nmap_id:\t222\n");
+        let capacity = text.capacity();
+        let allocation = text.as_ptr();
+        SupervisedChild::read_resource(File::open(&native)?, &mut text)?;
+        assert_eq!(text, expected);
+        assert_eq!(text.capacity(), capacity);
+        assert_eq!(text.as_ptr(), allocation);
+        held.read_exact(&mut [0; 1])?;
+        SupervisedChild::read_resource(File::open(&native)?, &mut text)?;
+        assert_eq!(text, fs::read_to_string(&native)?);
+        assert_ne!(text, expected);
+        assert_eq!(text.as_ptr(), allocation);
+        assert!(SupervisedChild::read_resource(File::open(directory.path())?, &mut text).is_err());
+        assert!(text.is_empty());
+        fs::write(&path, [0xff])?;
+        assert!(SupervisedChild::read_resource(File::open(&path)?, &mut text).is_err());
+        fs::write(&path, b"map_id:\t23\n")?;
+        SupervisedChild::read_resource(File::open(&path)?, &mut text)?;
+        assert_eq!(text, "map_id:\t23\n");
+        assert_eq!(text.as_ptr(), allocation);
+        let mut bounded = vec![b' '; 16 * 1024];
+        bounded.extend_from_slice(b"\nprog_id:\t99\n");
+        fs::write(&path, bounded)?;
+        assert_eq!(
+            SupervisedChild::read_resource(File::open(&path)?, &mut text)?,
+            16 * 1024
+        );
+        assert_eq!(text.len(), 16 * 1024);
+        assert!(!text.contains("prog_id:"));
+        Ok(())
     }
 
     #[test]

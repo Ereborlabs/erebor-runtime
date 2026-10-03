@@ -2156,13 +2156,13 @@ fn observability_owned_capture_five_pairs() -> TestResult<()> {
 }
 
 #[test]
-#[ignore = "requires the owned Linux VM and a passing diagnostic qualification record"]
+#[ignore = "requires the owned Linux VM and explicit diagnostic admission"]
 fn observability_owned_capture_failures() -> TestResult<()> {
     super::test_lifecycle::<Host, _>("observability-failures", Host::qualify_diagnostic_failures)
 }
 
 #[test]
-#[ignore = "requires the owned Linux VM, qualified diagnostics, and the task-owned tmpfs"]
+#[ignore = "requires the owned Linux VM, explicit diagnostic admission, and the task-owned tmpfs"]
 fn observability_owned_storage() -> TestResult<()> {
     super::test_lifecycle::<Host, _>("observability-storage", Host::qualify_storage)
 }
@@ -2206,7 +2206,7 @@ fn observability_restart_child() -> TestResult<()> {
 }
 
 #[test]
-#[ignore = "requires the owned Linux VM and a passing diagnostic qualification record"]
+#[ignore = "requires the owned Linux VM and explicit diagnostic admission"]
 fn observability_owned_restart() -> TestResult<()> {
     super::test_lifecycle::<Host, _>("observability-restart", Host::qualify_restart)
 }
