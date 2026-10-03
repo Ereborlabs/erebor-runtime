@@ -23,6 +23,8 @@ mod entry_isolation;
 #[cfg(test)]
 mod entry_map;
 #[cfg(test)]
+mod entry_replace;
+#[cfg(test)]
 mod ephemeral_container;
 #[cfg(test)]
 mod evidence_gap;
