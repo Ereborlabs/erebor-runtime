@@ -129,7 +129,8 @@ mod tests {
             let mut guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
             let writer = guard.as_mut().ok_or("writer closed")?;
             let mut raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
-            assert!(raw.project_group(writer)?);
+            let revision = AnalysisStore::read_meta_from(writer, &root)?.commit_revision;
+            assert_eq!(raw.project_group(writer, revision)?, Some(64));
             assert_eq!(
                 AnalysisStore::read_meta_from(writer, &root)?.commit_revision,
                 64
@@ -146,6 +147,44 @@ mod tests {
         let store = AnalysisStore::open(&root)?;
         assert_eq!(store.meta()?.commit_revision, 65);
         assert_eq!(store.read_page(&identity, 1)?.records.len(), 65);
+        for cursor in 66..=130 {
+            store.accept_validated_batch(
+                identity.clone(),
+                super::super::ValidatedEvidenceBatchV1 {
+                    cpu_id: 0,
+                    first_cursor: cursor,
+                    last_cursor: cursor,
+                    intake_utc_ns: cursor,
+                    framed_records: vec![cursor as u8].into(),
+                    frame_ends: vec![1],
+                },
+            )?;
+        }
+        assert_eq!(store.meta()?.commit_revision, 130);
+        assert_eq!(store.read_page(&identity, 1)?.records.len(), 130);
+        Ok(())
+    }
+
+    #[test]
+    fn projection_checks_empty_metadata() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let mut guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
+        let writer = guard.as_mut().ok_or("writer closed")?;
+        let mut raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
+        assert!(raw.entries.is_empty());
+        writer.execute("UPDATE store_meta SET store_uuid = 'invalid'", [])?;
+        assert!(matches!(
+            raw.project(writer, None),
+            Err(crate::Error::AnalysisState { .. })
+        ));
+        let control = super::super::AnalysisReadControl::default();
+        control.cancel()?;
+        assert!(matches!(
+            raw.project(writer, Some(&control)),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
         Ok(())
     }
 }
@@ -655,18 +694,22 @@ impl RawJournal {
         writer: &mut Connection,
         control: Option<&super::AnalysisReadControl>,
     ) -> Result<()> {
+        if let Some(control) = control {
+            control.check()?;
+        }
+        let mut revision = AnalysisStore::read_meta_from(writer, &self.root)?.commit_revision;
         loop {
+            let Some(next) = self.project_group(writer, revision)? else {
+                return Ok(());
+            };
+            revision = next;
             if let Some(control) = control {
                 control.check()?;
-            }
-            if !self.project_group(writer)? {
-                return Ok(());
             }
         }
     }
 
-    fn project_group(&mut self, writer: &mut Connection) -> Result<bool> {
-        let revision = AnalysisStore::read_meta_from(writer, &self.root)?.commit_revision;
+    fn project_group(&mut self, writer: &mut Connection, revision: u64) -> Result<Option<u64>> {
         let pending: Vec<_> = self
             .entries
             .range((
@@ -689,7 +732,7 @@ impl RawJournal {
             })
             .collect();
         if pending.is_empty() {
-            return Ok(false);
+            return Ok(None);
         }
         let group_revision = pending
             .last()
@@ -879,7 +922,7 @@ impl RawJournal {
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit raw catalogue publication",
         })?;
-        Ok(true)
+        Ok(Some(group_revision))
     }
 
     pub(super) fn restore_receipts(&mut self, writer: &Connection) -> Result<()> {
