@@ -2283,7 +2283,12 @@ impl Kubernetes {
         }}))
     }
 
-    fn capture_cleanup(&self, expected: &crate::observability::ResourceSnapshot) -> TestResult<()> {
+    fn capture_cleanup(
+        &self,
+        expected: &crate::observability::OwnedResources,
+        observed: &crate::observability::ResourceSnapshot,
+    ) -> TestResult<()> {
+        let last = RefCell::new(None);
         wait_stable(
             &self.pin_path,
             "diagnostic BPF cleanup",
@@ -2295,9 +2300,27 @@ impl Kubernetes {
                     .context(IoSnafu {
                         path: &self.pin_path,
                     })?;
-                Ok(actual == *expected)
+                let owned = crate::observability::ResourceSnapshot::owned(&self.pin_path)
+                    .map_err(|error| std::io::Error::other(error.to_string()))
+                    .context(IoSnafu {
+                        path: &self.pin_path,
+                    })?;
+                let complete = actual.cleanup_matches(expected, observed, &owned)
+                    && observed
+                        .absent()
+                        .map_err(|error| std::io::Error::other(error.to_string()))
+                        .context(IoSnafu {
+                            path: &self.pin_path,
+                        })?;
+                *last.borrow_mut() = Some((actual, owned));
+                Ok(complete)
             },
-            || "diagnostic resources remain or enforcement resources changed".to_owned(),
+            || {
+                format!(
+                    "expected={expected:?}, observed={observed:?}, actual={:?}",
+                    last.borrow()
+                )
+            },
         )?;
         Ok(())
     }
@@ -2305,25 +2328,12 @@ impl Kubernetes {
     fn capture_resources(
         &self,
         initial: &crate::observability::ResourceSnapshot,
+        expected: &crate::observability::OwnedResources,
     ) -> TestResult<crate::observability::ResourceSnapshot> {
-        let active = crate::observability::ResourceSnapshot::read()?;
-        if !initial.programs.is_subset(&active.programs)
-            || !initial.maps.is_subset(&active.maps)
-            || !initial.links.is_subset(&active.links)
-            || active.programs == initial.programs
-            || active.maps == initial.maps
-        {
-            return Err("the real capture has no independent diagnostic resources".into());
+        if crate::observability::ResourceSnapshot::owned(&self.pin_path)? != *expected {
+            return Err("the real capture changed enforcement resources".into());
         }
-        Ok(crate::observability::ResourceSnapshot {
-            programs: active
-                .programs
-                .difference(&initial.programs)
-                .copied()
-                .collect(),
-            maps: active.maps.difference(&initial.maps).copied().collect(),
-            links: active.links.difference(&initial.links).copied().collect(),
-        })
+        crate::observability::ResourceSnapshot::failed_opens(initial)
     }
 
     fn capture_identity(&self, accepted: &Value, uid: &str) -> TestResult<()> {
@@ -2428,6 +2438,7 @@ impl Kubernetes {
         env.wait_workload_ready()?;
         env.running(actor.id())?;
         let initial = crate::observability::ResourceSnapshot::read()?;
+        let enforcement = crate::observability::ResourceSnapshot::owned(&env.pin_path)?;
         let original_uid = env
             .pod()?
             .metadata
@@ -2439,15 +2450,16 @@ impl Kubernetes {
         )?;
         let original = env.capture_record("ready-0.json")?;
         env.capture_identity(&original, &original_uid)?;
-        let active = env.capture_resources(&initial)?;
+        let active = env.capture_resources(&initial, &enforcement)?;
         let before = env.capture_denial(&mut actor, "before")?;
         env.delete_capture(&mut actor)?;
         env.capture_record("done-0.json")?;
-        env.capture_cleanup(&initial)?;
+        env.capture_cleanup(&enforcement, &active)?;
 
         let mut actor = env.start_actor("read_path.py", &["after"], &labels)?;
         env.wait_workload_ready()?;
         env.running(actor.id())?;
+        let baseline = crate::observability::ResourceSnapshot::read()?;
         let replacement_uid = env
             .pod()?
             .metadata
@@ -2462,11 +2474,11 @@ impl Kubernetes {
         )?;
         let replacement = env.capture_record("ready-1.json")?;
         env.capture_identity(&replacement, &replacement_uid)?;
-        let active_after = env.capture_resources(&initial)?;
+        let active_after = env.capture_resources(&baseline, &enforcement)?;
         let after = env.capture_denial(&mut actor, "after")?;
         env.capture_input("stop-1.json", &json!({"stop": true}))?;
         let mut record = env.capture_record("result.json")?;
-        env.capture_cleanup(&initial)?;
+        env.capture_cleanup(&enforcement, &active_after)?;
         let pods = Api::<Pod>::namespaced(env.client.clone(), &env.system);
         let control = env
             .runtime
@@ -2497,8 +2509,7 @@ impl Kubernetes {
         record["enforcement_resources_unchanged"] = json!(true);
         record["cleanup_observed"] = json!(true);
         record["diagnostic_resources"] = json!({"original": active, "replacement": active_after});
-        record["resources"] =
-            json!({"initial": initial, "final": crate::observability::ResourceSnapshot::read()?});
+        record["resources"] = json!({"initial": enforcement, "final": crate::observability::ResourceSnapshot::owned(&env.pin_path)?});
         actor.stop()?;
         let finish = env.state_path.with_file_name("capture").join("finish.json");
         let temporary = finish.with_extension("tmp");

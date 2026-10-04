@@ -3442,14 +3442,32 @@ The paired Pod rerun passes owned upload in 26.00 seconds. It passes local
 transport cleanup, then fails in 308.72 seconds at the 180-second diagnostic
 BPF cleanup wait. Read `pods-888df402-failed/test.log`.
 
-Read [ResourceSnapshot::read](../../../../crates/mithril-e2e/src/observability.rs),
-then same-file [Kubernetes::capture_cleanup and capture_resources](../../../../crates/mithril-e2e/src/platform/kubernetes.rs).
-The snapshot contains every kernel BPF object. Cleanup requires the original
-global set to return. Replacement attachment requires the same original set
-to remain present. These checks do not separate task-owned objects from
-unrelated kernel objects. The timeout does not prove a diagnostic leak.
-The failed-wait object IDs were not retained. Collect those IDs before
-teardown before selecting the correction. Pod and performance qualification
+For the scoped cleanup verifier, read
+[ResourceSnapshot::owned](../../../../crates/mithril-e2e/src/observability.rs).<br>
+-> [ResourceSnapshot::program_maps](../../../../crates/mithril-e2e/src/observability.rs) enumerates programs and their map IDs; incomplete queries fail.<br>
+-> [ResourceSnapshot::select_programs](../../../../crates/mithril-e2e/src/observability.rs) includes linked programs, unattached helpers and recovered generations that use private maps.<br>
+-> [Kubernetes::capture_resources](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) checks exact enforcement pins and the reviewed diagnostic program and map layouts.<br>
+-> [Kubernetes::capture_cleanup](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) requires unchanged enforcement resources and direct diagnostic ID absence on two consecutive checks.
+
+The pin record binds each path to its object ID and each link to its program.
+Fresh handles close after inspection. No inventory descriptor keeps an object
+alive between checks. The global inventory is not enforcement ownership.
+The failed-wait repeat retains disappearing and newly created global IDs;
+its diagnostic objects are absent. Read the
+[Pod cleanup result](../../araphor-observability/phase-2-owned-capture.md#pod-fixture-input-correction).
+
+The four same-file `observability_cleanup_scope`, `observability_owned_graph`,
+`observability_program_map_query` and `observability_capture_graph` tests
+exercise this selection and comparison. The focused run passes 17 tests.
+Final workspace CI returns zero on `29696cc2` plus the scoped verifier.
+Read `workspace-pod-scope-final-2.log` under
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`.
+
+The physical Pod body and full receipt check pass, but process teardown
+returns 1. `qualify_pods` publishes `finish.json` before the global teardown
+calls `stop_node`. `PodCapture::run_child` then drops the admission listener.
+The Node selector update cannot pass its fail-closed webhook. This result
+does not qualify the complete Pod route. Pod and performance qualification
 remain **Not done**.
 
 For the default resource-scan path, read

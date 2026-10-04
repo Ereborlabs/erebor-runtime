@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::os::fd::{AsFd as _, FromRawFd as _, OwnedFd};
+use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -236,15 +236,277 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) links: BTreeSet<u64>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct OwnedResources {
+    resources: ResourceSnapshot,
+    pins: BTreeMap<PathBuf, ResourcePin>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+enum ResourcePin {
+    Map(u64),
+    Link { id: u64, program: u64 },
+}
+
 impl ResourceSnapshot {
+    #[cfg(test)]
+    pub(crate) fn cleanup_matches(
+        &self,
+        expected: &OwnedResources,
+        observed: &Self,
+        owned: &OwnedResources,
+    ) -> bool {
+        owned == expected
+            && self.programs.is_disjoint(&observed.programs)
+            && self.maps.is_disjoint(&observed.maps)
+            && self.links.is_disjoint(&observed.links)
+    }
+
+    #[allow(unsafe_code)]
+    fn program_maps() -> ProofResult<BTreeMap<u64, BTreeSet<u64>>> {
+        let mut programs = BTreeMap::new();
+        let mut id = 0;
+        loop {
+            let mut next = 0;
+            // SAFETY: The syscall writes one ID to a valid local value.
+            let result = unsafe { libbpf_rs::libbpf_sys::bpf_prog_get_next_id(id, &mut next) };
+            if result == -libc::ENOENT {
+                return Ok(programs);
+            }
+            if result != 0 {
+                return Err(std::io::Error::from_raw_os_error(-result).into());
+            }
+            if next <= id {
+                return Err("the program inventory did not advance".into());
+            }
+            id = next;
+            let fd = libbpf_rs::Program::fd_from_id(id)?;
+            let mut info = libbpf_rs::libbpf_sys::bpf_prog_info::default();
+            let mut size = u32::try_from(std::mem::size_of_val(&info))?;
+            // SAFETY: The held descriptor and typed output remain valid during the query.
+            let result = unsafe {
+                libbpf_rs::libbpf_sys::bpf_prog_get_info_by_fd(fd.as_raw_fd(), &mut info, &mut size)
+            };
+            if result != 0 {
+                return Err(std::io::Error::from_raw_os_error(-result).into());
+            }
+            if info.id != id {
+                return Err("the held program ID differs from the inventory".into());
+            }
+            let count = usize::try_from(info.nr_map_ids)?;
+            let mut maps = Vec::new();
+            maps.try_reserve_exact(count)?;
+            maps.resize(count, 0_u32);
+            let mut info = libbpf_rs::libbpf_sys::bpf_prog_info {
+                nr_map_ids: u32::try_from(count)?,
+                map_ids: maps.as_mut_ptr() as u64,
+                ..Default::default()
+            };
+            let mut size = u32::try_from(std::mem::size_of_val(&info))?;
+            // SAFETY: The vector has capacity for nr_map_ids entries and the program stays open.
+            let result = unsafe {
+                libbpf_rs::libbpf_sys::bpf_prog_get_info_by_fd(fd.as_raw_fd(), &mut info, &mut size)
+            };
+            if result != 0 {
+                return Err(std::io::Error::from_raw_os_error(-result).into());
+            }
+            programs.insert(u64::from(id), Self::map_entries(id, &info, maps)?);
+        }
+    }
+
+    fn map_entries(
+        id: u32,
+        info: &libbpf_rs::libbpf_sys::bpf_prog_info,
+        maps: Vec<u32>,
+    ) -> ProofResult<BTreeSet<u64>> {
+        if info.id != id || usize::try_from(info.nr_map_ids)? != maps.len() || maps.contains(&0) {
+            return Err("the held program map list is incomplete or changed".into());
+        }
+        Ok(maps.into_iter().map(u64::from).collect())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owned(root: &Path) -> ProofResult<OwnedResources> {
+        use libbpf_rs::MapCore as _;
+
+        let mut owned = Self {
+            programs: BTreeSet::new(),
+            maps: BTreeSet::new(),
+            links: BTreeSet::new(),
+        };
+        let mut pins = BTreeMap::new();
+        for entry in fs::read_dir(root.join("maps"))? {
+            let path = entry?.path();
+            let map = libbpf_rs::MapHandle::from_pinned_path(&path)?;
+            let id = u64::from(map.info()?.info.id);
+            owned.maps.insert(id);
+            pins.insert(path, ResourcePin::Map(id));
+        }
+        for entry in fs::read_dir(root.join("links"))? {
+            let path = entry?.path();
+            let link = libbpf_rs::Link::open(&path)?;
+            let info = link.info()?;
+            owned.links.insert(u64::from(info.id));
+            owned.programs.insert(u64::from(info.prog_id));
+            pins.insert(
+                path,
+                ResourcePin::Link {
+                    id: u64::from(info.id),
+                    program: u64::from(info.prog_id),
+                },
+            );
+        }
+        owned.select_programs(&Self::program_maps()?)?;
+        Ok(OwnedResources {
+            resources: owned,
+            pins,
+        })
+    }
+
+    #[cfg(test)]
+    fn select_programs(&mut self, graph: &BTreeMap<u64, BTreeSet<u64>>) -> ProofResult<()> {
+        let programs = graph
+            .iter()
+            .filter(|(_, maps)| !maps.is_disjoint(&self.maps))
+            .map(|(id, _)| *id)
+            .collect();
+        if self.maps.is_empty() || self.links.is_empty() || !self.programs.is_subset(&programs) {
+            return Err("the pinned enforcement program graph is incomplete".into());
+        }
+        self.programs = programs;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn failed_opens(initial: &Self) -> ProofResult<Self> {
+        use libbpf_rs::MapCore as _;
+
+        let graph = Self::program_maps()?;
+        let mut roles = BTreeMap::new();
+        for (id, maps) in &graph {
+            if initial.programs.contains(id) || maps.is_empty() {
+                continue;
+            }
+            let program = libbpf_rs::ProgramHandle::from_prog_id(u32::try_from(*id)?)?;
+            let role = match (program.prog_type(), program.name().to_str()) {
+                (libbpf_rs::ProgramType::Tracepoint, Some("sys_exit_openat")) => 1,
+                (libbpf_rs::ProgramType::PerfEvent, Some("1")) => 2,
+                _ => 0,
+            };
+            roles.insert(*id, role);
+        }
+        let capture = Self::capture_programs(initial, &graph, &roles)?;
+        let mut roles = 0;
+        for id in &capture.maps {
+            if initial.maps.contains(id) {
+                return Err("the diagnostic graph uses a preexisting map".into());
+            }
+            let map = libbpf_rs::MapHandle::from_map_id(u32::try_from(*id)?)?;
+            let info = map.info()?;
+            let role = match (
+                info.map_type(),
+                info.name()?,
+                info.info.key_size,
+                info.info.value_size,
+                info.info.max_entries,
+            ) {
+                (libbpf_rs::MapType::PercpuHash, "AT_errors", 8, 8, 4096) => 1,
+                (libbpf_rs::MapType::RingBuf, "ringbuf", 0, 0, 32768) => 2,
+                (libbpf_rs::MapType::Array, "ringbuf_loss_co", 4, 8, 1) => 4,
+                _ => 0,
+            };
+            if role == 0
+                || roles & role != 0
+                || info.info.map_flags != 0
+                || info.info.map_extra != 0
+            {
+                return Err("the diagnostic map layouts are unknown or ambiguous".into());
+            }
+            roles |= role;
+        }
+        if roles != 7 {
+            return Err("the reviewed diagnostic map graph is incomplete".into());
+        }
+        Ok(capture)
+    }
+
+    #[cfg(test)]
+    fn capture_programs(
+        initial: &Self,
+        graph: &BTreeMap<u64, BTreeSet<u64>>,
+        roles: &BTreeMap<u64, u8>,
+    ) -> ProofResult<Self> {
+        let mut capture = Self {
+            programs: BTreeSet::new(),
+            maps: BTreeSet::new(),
+            links: BTreeSet::new(),
+        };
+        let mut selected = 0;
+        for (id, maps) in graph {
+            if initial.programs.contains(id) || maps.is_empty() {
+                continue;
+            }
+            let role = *roles
+                .get(id)
+                .ok_or("the diagnostic program metadata is absent")?;
+            if !matches!(role, 1 | 2) || selected & role != 0 {
+                return Err("the diagnostic program roles are unknown or ambiguous".into());
+            }
+            selected |= role;
+            capture.programs.insert(*id);
+            capture.maps.extend(maps);
+        }
+        if selected != 3
+            || capture.programs.len() != 2
+            || capture.maps.len() != 3
+            || !capture.maps.is_disjoint(&initial.maps)
+        {
+            return Err("the reviewed diagnostic program graph is incomplete".into());
+        }
+        Ok(capture)
+    }
+
+    #[cfg(test)]
+    #[allow(unsafe_code)]
+    pub(crate) fn absent(&self) -> ProofResult<bool> {
+        for id in &self.programs {
+            match libbpf_rs::Program::fd_from_id(u32::try_from(*id)?) {
+                Ok(_) => return Ok(false),
+                Err(error) if error.kind() == libbpf_rs::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        for id in &self.maps {
+            match libbpf_rs::MapHandle::from_map_id(u32::try_from(*id)?) {
+                Ok(_) => return Ok(false),
+                Err(error) if error.kind() == libbpf_rs::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        for id in &self.links {
+            // SAFETY: The syscall has no pointer inputs and returns a new descriptor.
+            let fd = unsafe { libbpf_rs::libbpf_sys::bpf_link_get_fd_by_id(u32::try_from(*id)?) };
+            if fd == -libc::ENOENT {
+                continue;
+            }
+            if fd < 0 {
+                return Err(std::io::Error::from_raw_os_error(-fd).into());
+            }
+            // SAFETY: This owner closes the new successful descriptor once.
+            drop(unsafe { OwnedFd::from_raw_fd(fd) });
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     pub(crate) fn read() -> ProofResult<Self> {
         if !rustix::process::geteuid().is_root() {
             return Err("BPF inventory requires root".into());
         }
         Ok(Self {
-            programs: libbpf_rs::query::ProgInfoIter::default()
-                .map(|item| u64::from(item.id))
-                .collect(),
+            programs: Self::program_maps()?.into_keys().collect(),
             maps: libbpf_rs::query::MapInfoIter::default()
                 .map(|item| u64::from(item.id))
                 .collect(),
@@ -2487,6 +2749,161 @@ mod tests {
         record.observed_link_ids.clear();
         record.observed_map_ids.insert(12);
         assert!(record.verify().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_cleanup_scope() {
+        let expected = OwnedResources {
+            resources: ResourceSnapshot {
+                programs: [10, 11].into(),
+                maps: [20].into(),
+                links: [30].into(),
+            },
+            pins: BTreeMap::from([
+                (PathBuf::from("maps/policy"), ResourcePin::Map(20)),
+                (
+                    PathBuf::from("links/open"),
+                    ResourcePin::Link {
+                        id: 30,
+                        program: 10,
+                    },
+                ),
+            ]),
+        };
+        let observed = ResourceSnapshot {
+            programs: [40, 41].into(),
+            maps: [50, 51, 52].into(),
+            links: [60].into(),
+        };
+        let mut live = ResourceSnapshot {
+            programs: [10, 11, 90].into(),
+            maps: [20, 99].into(),
+            links: [30, 98].into(),
+        };
+        assert!(live.cleanup_matches(&expected, &observed, &expected));
+        live.programs.insert(40);
+        assert!(!live.cleanup_matches(&expected, &observed, &expected));
+        live.programs.remove(&40);
+        live.maps.insert(50);
+        assert!(!live.cleanup_matches(&expected, &observed, &expected));
+        live.maps.remove(&50);
+        live.links.insert(60);
+        assert!(!live.cleanup_matches(&expected, &observed, &expected));
+        live.links.remove(&60);
+        let mut owned = expected.clone();
+        owned.resources.programs.remove(&11);
+        assert!(!live.cleanup_matches(&expected, &observed, &owned));
+        owned = expected.clone();
+        owned.resources.maps = [21].into();
+        assert!(!live.cleanup_matches(&expected, &observed, &owned));
+        owned = expected.clone();
+        owned.resources.links = [31].into();
+        assert!(!live.cleanup_matches(&expected, &observed, &owned));
+        owned = expected.clone();
+        owned.resources.programs.insert(12);
+        assert!(!live.cleanup_matches(&expected, &observed, &owned));
+        owned = expected.clone();
+        owned.pins.insert(
+            PathBuf::from("links/open"),
+            ResourcePin::Link {
+                id: 30,
+                program: 11,
+            },
+        );
+        assert!(!live.cleanup_matches(&expected, &observed, &owned));
+        owned = expected.clone();
+        owned.pins.remove(&PathBuf::from("maps/policy"));
+        owned
+            .pins
+            .insert(PathBuf::from("maps/other"), ResourcePin::Map(20));
+        assert!(!live.cleanup_matches(&expected, &observed, &owned));
+    }
+
+    #[test]
+    fn observability_owned_graph() -> ProofResult<()> {
+        let mut owned = ResourceSnapshot {
+            programs: [10].into(),
+            maps: [20].into(),
+            links: [30].into(),
+        };
+        let mut graph = BTreeMap::from([
+            (10, [20].into()),
+            (11, [20].into()),
+            (12, [20].into()),
+            (90, [99].into()),
+        ]);
+        owned.select_programs(&graph)?;
+        assert_eq!(owned.programs, [10, 11, 12].into());
+        graph.remove(&11);
+        assert!(owned.select_programs(&graph).is_err());
+        graph.insert(11, [99].into());
+        assert!(owned.select_programs(&graph).is_err());
+        graph.insert(11, [20].into());
+        owned.select_programs(&graph)?;
+        owned.maps.clear();
+        assert!(owned.select_programs(&graph).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_program_map_query() -> ProofResult<()> {
+        let mut info = libbpf_rs::libbpf_sys::bpf_prog_info {
+            id: 10,
+            nr_map_ids: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            ResourceSnapshot::map_entries(10, &info, vec![20, 21])?,
+            [20, 21].into()
+        );
+        assert!(ResourceSnapshot::map_entries(11, &info, vec![20, 21]).is_err());
+        assert!(ResourceSnapshot::map_entries(10, &info, vec![20]).is_err());
+        assert!(ResourceSnapshot::map_entries(10, &info, vec![20, 0]).is_err());
+        info.nr_map_ids = 0;
+        assert!(ResourceSnapshot::map_entries(10, &info, vec![20, 21]).is_err());
+        assert!(ResourceSnapshot::map_entries(10, &info, Vec::new())?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn observability_capture_graph() -> ProofResult<()> {
+        let initial = ResourceSnapshot {
+            programs: [10].into(),
+            maps: [20].into(),
+            links: [30].into(),
+        };
+        let mut graph = BTreeMap::from([
+            (10, [20].into()),
+            (40, [50, 51, 52].into()),
+            (41, [51].into()),
+            (90, BTreeSet::new()),
+        ]);
+        let roles = BTreeMap::from([(40, 1), (41, 2)]);
+        let capture = ResourceSnapshot::capture_programs(&initial, &graph, &roles)?;
+        assert_eq!(capture.programs, [40, 41].into());
+        assert_eq!(capture.maps, [50, 51, 52].into());
+        graph.remove(&40);
+        assert!(ResourceSnapshot::capture_programs(&initial, &graph, &roles).is_err());
+        graph.insert(40, [50, 51, 52].into());
+        graph.insert(90, [99].into());
+        assert!(ResourceSnapshot::capture_programs(&initial, &graph, &roles).is_err());
+        graph.remove(&90);
+        graph.insert(41, [20].into());
+        assert!(ResourceSnapshot::capture_programs(&initial, &graph, &roles).is_err());
+        graph.insert(41, [51].into());
+        assert!(ResourceSnapshot::capture_programs(
+            &initial,
+            &graph,
+            &BTreeMap::from([(40, 1), (41, 1)])
+        )
+        .is_err());
+        assert!(ResourceSnapshot::capture_programs(
+            &initial,
+            &graph,
+            &BTreeMap::from([(40, 0), (41, 2)])
+        )
+        .is_err());
         Ok(())
     }
 

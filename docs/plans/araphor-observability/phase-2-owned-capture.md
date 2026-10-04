@@ -2087,14 +2087,39 @@ change affects only the test fixture. The physical case passes transport
 cleanup, then returns 101 after 308.72 seconds at the 180-second diagnostic
 BPF cleanup wait. Read `pods-888df402-failed/test.log`.
 
-That wait compares all kernel BPF object IDs with the original global
-snapshot. The replacement attachment check also uses that original snapshot.
-Neither comparison separates task-owned resources from unrelated kernel
-objects. The timeout proves that global equality did not stabilize. It does
-not prove a diagnostic leak. The post-teardown inventory cannot identify the
-failed-wait difference. Retain the expected, actual and observed capture IDs
-before teardown before selecting a correction. Pod qualification remains
-**Not done**. Performance parity remains **Not done**. Diagnostics stay disabled.
+The diagnostic repeat retains IDs before teardown. Programs 6596 and 6597
+and maps 4447 to 4449 disappear during the failed wait. Global maps and links
+match the baseline. Programs 6580, 6584, 6585, 6589 and 6592 disappear;
+programs 6598 and 6602 appear. The live inventory identifies 6580 as
+`sd_devices` and 6584 as a map-free `cgroup_device` program. The other changed
+program types are not retained. Read `pods-inventory-failed/test.log` in
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. Global equality is not diagnostic
+cleanup proof.
+
+The cleanup check now compares exact private pin paths, map IDs, link IDs,
+link-to-program IDs and every program that uses a private enforcement map.
+The program graph includes unattached helpers and recovered generations.
+Program enumeration and metadata queries fail on incomplete results.
+Diagnostic selection checks both reviewed program roles and all three map
+layouts. Direct ID queries require every selected diagnostic object to be
+absent. Two consecutive checks must pass. Unrelated global changes do not
+fail this owned-resource check. Each Pod leg has its own baseline.
+
+The four regressions cover unrelated changes, retained diagnostic objects,
+changed pins or program graphs, incomplete metadata and ambiguous capture
+selection. The old predicate fails the cleanup regression. The final focused
+run passes 17 tests in 24.81 seconds. Read `pod-scope-red.log` and
+`pod-scope-final.log`. Final workspace CI returns zero on `29696cc2` plus
+these Rust changes. The source fingerprint stays unchanged. Read
+`workspace-pod-scope-final-2.log` in the same evidence directory.
+
+The scoped physical repeat passes owned upload in 25.60 seconds and the Pod
+test body in 135.96 seconds. The full receipt check returns zero. Both exact
+policy denials pass. Private enforcement resources remain equal. The command
+still returns 1: publication of `finish.json` stops the finite Control child
+before Node teardown calls the admission listener. Read `pods-scoped` in the
+same evidence directory. The scoped verifier is **Done**. The complete Pod
+route and performance parity remain **Not done**. Diagnostics stay disabled.
 
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
