@@ -3434,6 +3434,24 @@ reviewed correction passes in 2.01 seconds. Read `pod-status-red.log`,
 is **Done**; its new paired physical qualification and final CI remain
 **Not done**.
 
+Final workspace CI returns zero at `888df402` after the last Rust edit.
+Data passes 167 tests, Observability 23, Interceptor 49, Control 170,
+Mithril e2e 148 and Node 262. The Rust and Cargo source fingerprint does
+not change during the run. Read `workspace-pod-status-final.log`.
+The paired Pod rerun passes owned upload in 26.00 seconds. It passes local
+transport cleanup, then fails in 308.72 seconds at the 180-second diagnostic
+BPF cleanup wait. Read `pods-888df402-failed/test.log`.
+
+Read [ResourceSnapshot::read](../../../../crates/mithril-e2e/src/observability.rs),
+then same-file [Kubernetes::capture_cleanup and capture_resources](../../../../crates/mithril-e2e/src/platform/kubernetes.rs).
+The snapshot contains every kernel BPF object. Cleanup requires the original
+global set to return. Replacement attachment requires the same original set
+to remain present. These checks do not separate task-owned objects from
+unrelated kernel objects. The timeout does not prove a diagnostic leak.
+The failed-wait object IDs were not retained. Collect those IDs before
+teardown before selecting the correction. Pod and performance qualification
+remain **Not done**.
+
 For the default resource-scan path, read
 [`SupervisedChild::record_resources`](../../../../crates/erebor-interceptor/src/diagnostic.rs)
 and `read_resource`, then the three same-file resource tests. The existing

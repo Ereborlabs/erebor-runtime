@@ -2072,6 +2072,30 @@ passes in 2.01 seconds. Read `pod-status-red.log`, `pod-status-green.log`
 and `pod-status-reviewed.log`. The fixture correction is **Done**. Its new
 paired physical result and final workspace CI remain **Not done**.
 
+Workspace CI returns zero at `888df402`. Formatting, workspace check, strict
+Clippy and all workspace tests pass after the final Rust edit. Data passes
+167 tests, Observability 23, Interceptor 49, Control 170, Mithril e2e 148
+and Node 262. The Rust and Cargo source fingerprint is unchanged between
+start and completion. Read `workspace-pod-status-final.log` in the same
+evidence directory.
+
+The new paired Pod run passes owned upload in 26.00 seconds. It uses an
+immutable libtest copy with SHA-256
+`89006033c55271973f771ce1e138e8adce6a44b8dcd7b792c5b299c0af8c0dc2`.
+The Node and Control images retain revision `388c298a`; the intervening Rust
+change affects only the test fixture. The physical case passes transport
+cleanup, then returns 101 after 308.72 seconds at the 180-second diagnostic
+BPF cleanup wait. Read `pods-888df402-failed/test.log`.
+
+That wait compares all kernel BPF object IDs with the original global
+snapshot. The replacement attachment check also uses that original snapshot.
+Neither comparison separates task-owned resources from unrelated kernel
+objects. The timeout proves that global equality did not stabilize. It does
+not prove a diagnostic leak. The post-teardown inventory cannot identify the
+failed-wait difference. Retain the expected, actual and observed capture IDs
+before teardown before selecting a correction. Pod qualification remains
+**Not done**. Performance parity remains **Not done**. Diagnostics stay disabled.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current
