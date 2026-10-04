@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::CString;
 use std::fs;
 use std::io;
-use std::os::fd::{AsFd as _, AsRawFd as _};
+use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -12,8 +14,8 @@ use erebor_interceptor_abi::{
 };
 use libbpf_rs::{
     query::{LinkInfoIter, MapInfoIter, ProgInfoIter, ProgInfoQueryOptions},
-    Iter, Link, Map, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
-    ProgramHandle, ProgramInput, ProgramMut, ProgramType, RingBuffer, RingBufferBuilder,
+    Iter, Link, Map, MapCore as _, MapFlags, MapHandle, MapInfo, Object, ObjectBuilder, OpenObject,
+    Program, ProgramHandle, ProgramInput, ProgramMut, ProgramType, RingBuffer, RingBufferBuilder,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -1271,25 +1273,8 @@ impl KernelHost {
                 path: Path::new(&record.name),
                 reason: "live map manifest has no pin path",
             })?;
-            let map = MapHandle::from_pinned_path(path).context(LibbpfSnafu {
-                action: "open live pinned BPF map",
-                path,
-            })?;
-            let info = map.info().context(LibbpfSnafu {
-                action: "read live pinned BPF map",
-                path,
-            })?;
-            ensure!(
-                info.info.id == record.id
-                    && format!("{:?}", map.map_type()) == record.map_type
-                    && map.key_size() == record.key_size
-                    && map.value_size() == record.value_size
-                    && map.max_entries() == record.max_entries,
-                ManifestMismatchSnafu {
-                    path,
-                    reason: "live map ID or layout differs from its manifest".to_owned(),
-                }
-            );
+            let (_fd, info) = Self::pinned_map_info(path)?;
+            Self::verify_map_info(record, path, &info)?;
         }
         for record in &manifest.links {
             let path = record.pin_path.as_deref().context(ManifestMismatchSnafu {
@@ -1321,6 +1306,54 @@ impl KernelHost {
                 }
             );
         }
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn pinned_map_info(path: &Path) -> Result<(OwnedFd, MapInfo)> {
+        let path_c = CString::new(path.as_os_str().as_bytes())
+            .map_err(|source| {
+                libbpf_rs::Error::from(io::Error::new(io::ErrorKind::InvalidInput, source))
+            })
+            .context(LibbpfSnafu {
+                action: "open live pinned BPF map",
+                path,
+            })?;
+        // SAFETY: The C string stays valid during this call.
+        let raw_fd = unsafe { libbpf_rs::libbpf_sys::bpf_obj_get(path_c.as_ptr()) };
+        let fd = if raw_fd < 0 {
+            Err(libbpf_rs::Error::from_raw_os_error(-raw_fd))
+        } else {
+            // SAFETY: The successful call returns a new owned descriptor.
+            Ok(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+        }
+        .context(LibbpfSnafu {
+            action: "open live pinned BPF map",
+            path,
+        })?;
+        let info = MapInfo::new(fd.as_fd()).context(LibbpfSnafu {
+            action: "read live pinned BPF map",
+            path,
+        })?;
+        Ok((fd, info))
+    }
+
+    fn verify_map_info(record: &KernelMapManifestV1, path: &Path, info: &MapInfo) -> Result<()> {
+        info.name().context(LibbpfSnafu {
+            action: "read live pinned BPF map",
+            path,
+        })?;
+        ensure!(
+            info.info.id == record.id
+                && format!("{:?}", info.map_type()) == record.map_type
+                && info.info.key_size == record.key_size
+                && info.info.value_size == record.value_size
+                && info.info.max_entries == record.max_entries,
+            ManifestMismatchSnafu {
+                path,
+                reason: "live map ID or layout differs from its manifest".to_owned(),
+            }
+        );
         Ok(())
     }
 
@@ -1975,7 +2008,12 @@ mod tests {
     }
 
     use snafu::{OptionExt as _, ResultExt as _};
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::path::{Path, PathBuf};
     use std::{fs, io};
+
+    use libbpf_rs::{MapCore as _, MapHandle, MapInfo, MapType};
 
     use super::{
         kernel_program_name, poll_until_complete, KernelHost, KernelHostConfig, KernelHostOwner,
@@ -2095,6 +2133,174 @@ mod tests {
         };
         assert!(KernelHost::verify_manifest_pins(&link_without_pin)
             .is_err_and(|error| error.to_string().contains("no pin path")));
+    }
+
+    #[test]
+    fn pinned_info_rejects_nul() {
+        let path = Path::new("pin\0path");
+        assert!(matches!(
+            KernelHost::pinned_map_info(path),
+            Err(crate::Error::Libbpf { source, path: failed, .. })
+                if source.kind() == libbpf_rs::ErrorKind::InvalidInput && failed == path
+        ));
+    }
+
+    #[test]
+    fn pinned_info_missing_path() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join(OsStr::from_bytes(b"missing-\xff"));
+        assert!(matches!(
+            KernelHost::pinned_map_info(&path),
+            Err(crate::Error::Libbpf { source, path: failed, .. })
+                if failed == path && matches!(
+                    source.kind(),
+                    libbpf_rs::ErrorKind::NotFound | libbpf_rs::ErrorKind::PermissionDenied
+                )
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn map_info_matches_manifest() {
+        let path = Path::new("map");
+        let record = KernelMapManifestV1 {
+            name: "map".to_owned(),
+            map_type: "Hash".to_owned(),
+            id: 7,
+            key_size: 4,
+            value_size: 8,
+            max_entries: 16,
+            pin_path: Some(path.to_path_buf()),
+        };
+        let raw = libbpf_rs::libbpf_sys::bpf_map_info {
+            type_: MapType::Hash as u32,
+            id: record.id,
+            key_size: record.key_size,
+            value_size: record.value_size,
+            max_entries: record.max_entries,
+            ..Default::default()
+        };
+        assert!(KernelHost::verify_map_info(&record, path, &MapInfo { info: raw }).is_ok());
+        for changed in [
+            libbpf_rs::libbpf_sys::bpf_map_info { id: 8, ..raw },
+            libbpf_rs::libbpf_sys::bpf_map_info {
+                type_: MapType::Array as u32,
+                ..raw
+            },
+            libbpf_rs::libbpf_sys::bpf_map_info { key_size: 8, ..raw },
+            libbpf_rs::libbpf_sys::bpf_map_info {
+                value_size: 4,
+                ..raw
+            },
+            libbpf_rs::libbpf_sys::bpf_map_info {
+                max_entries: 1,
+                ..raw
+            },
+        ] {
+            assert!(matches!(
+                KernelHost::verify_map_info(&record, path, &MapInfo { info: changed }),
+                Err(crate::Error::ManifestMismatch { .. })
+            ));
+        }
+        let mut invalid = raw;
+        invalid.name.fill(b'x' as _);
+        assert!(KernelHost::verify_map_info(&record, path, &MapInfo { info: invalid }).is_err());
+        invalid.name[0] = u8::MAX as _;
+        invalid.name[1] = 0;
+        assert!(KernelHost::verify_map_info(&record, path, &MapInfo { info: invalid }).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires BPF privileges and EREBOR_TEST_BPFFS_ROOT"]
+    fn pinned_map_freshness() -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::var_os("EREBOR_TEST_BPFFS_ROOT")
+            .map(PathBuf::from)
+            .ok_or("set EREBOR_TEST_BPFFS_ROOT to an owned bpffs directory")?;
+        let directory = tempfile::Builder::new()
+            .prefix("manifest-query-")
+            .tempdir_in(&root)?;
+        let pin = directory.path().join("map");
+        let rollback = PinRollback {
+            paths: vec![pin.clone()],
+            directories: Vec::new(),
+            committed: false,
+        };
+        let options = libbpf_rs::libbpf_sys::bpf_map_create_opts {
+            sz: size_of::<libbpf_rs::libbpf_sys::bpf_map_create_opts>() as _,
+            ..Default::default()
+        };
+        let mut original = MapHandle::create(MapType::Hash, Some("manifest"), 4, 8, 16, &options)?;
+        original.pin(&pin)?;
+        let (held, info) = KernelHost::pinned_map_info(&pin)?;
+        let record = KernelMapManifestV1 {
+            name: "manifest".to_owned(),
+            map_type: "Hash".to_owned(),
+            id: info.info.id,
+            key_size: 4,
+            value_size: 8,
+            max_entries: 16,
+            pin_path: Some(pin.clone()),
+        };
+        let mut manifest = KernelObjectManifestV1 {
+            schema_version: 1,
+            node_boot_id: "boot".to_owned(),
+            label_epoch: 1,
+            preflight: KernelPreflightV1 {
+                kernel_release: "test".to_owned(),
+                active_lsm_order: "bpf".to_owned(),
+                runtime_btf_sha256: "0".repeat(64),
+                cgroup_v2: true,
+            },
+            object_sha256: "0".repeat(64),
+            maps: vec![record],
+            links: Vec::new(),
+            ready: true,
+        };
+        KernelHost::verify_manifest_pins(&manifest)?;
+        fs::remove_file(&pin)?;
+        assert!(matches!(
+            KernelHost::verify_manifest_pins(&manifest),
+            Err(crate::Error::Libbpf { source, .. })
+                if source.kind() == libbpf_rs::ErrorKind::NotFound
+        ));
+        assert_eq!(original.info()?.info.id, info.info.id);
+
+        let mut replacement =
+            MapHandle::create(MapType::Hash, Some("replacement"), 4, 8, 16, &options)?;
+        replacement.pin(&pin)?;
+        let replacement_id = replacement.info()?.info.id;
+        assert_ne!(replacement_id, manifest.maps[0].id);
+        assert!(matches!(
+            KernelHost::verify_manifest_pins(&manifest),
+            Err(crate::Error::ManifestMismatch { .. })
+        ));
+        manifest.maps[0].id = replacement_id;
+        KernelHost::verify_manifest_pins(&manifest)?;
+        fs::remove_file(&pin)?;
+
+        let mut changed = MapHandle::create(MapType::Hash, Some("changed"), 4, 4, 16, &options)?;
+        changed.pin(&pin)?;
+        let changed_id = changed.info()?.info.id;
+        manifest.maps[0].id = changed_id;
+        assert!(matches!(
+            KernelHost::verify_manifest_pins(&manifest),
+            Err(crate::Error::ManifestMismatch { .. })
+        ));
+
+        let ids = [info.info.id, replacement_id, changed_id];
+        drop(rollback);
+        drop(held);
+        drop(original);
+        drop(replacement);
+        drop(changed);
+        assert!(KernelHost::decommission_readback(
+            || ids.iter().all(|id| {
+                MapHandle::from_map_id(*id)
+                    .is_err_and(|error| error.kind() == libbpf_rs::ErrorKind::NotFound)
+            }),
+            std::time::Duration::from_secs(1)
+        ));
+        Ok(())
     }
 
     #[test]

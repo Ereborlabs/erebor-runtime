@@ -3518,3 +3518,44 @@ after the correction passes at `f078ebc4`; the command returns zero. Read
 `name-fix/workspace-final.log`. Final Rust CI is **Done**. The next diagnostic
 records exact function spans and same-thread scheduler overlap. It changes
 no production source and does not qualify performance.
+
+### Fresh map validation without a duplicate query
+
+[KernelHost::verify_live_manifest](../../../../crates/erebor-interceptor/src/host.rs) checks the current exclusive lease.
+-> [KernelHost::verify_manifest_pins](../../../../crates/erebor-interceptor/src/host.rs) selects each required map pin from the live manifest.
+-> [KernelHost::pinned_map_info](../../../../crates/erebor-interceptor/src/host.rs) opens the current pin through libbpf and immediately owns the new file descriptor.
+-> [KernelHost::pinned_map_info](../../../../crates/erebor-interceptor/src/host.rs) reads metadata once through `MapInfo::new`.
+-> [KernelHost::verify_map_info](../../../../crates/erebor-interceptor/src/host.rs) validates the name encoding and every map ID and layout field.
+-> [KernelHost::verify_manifest_pins](../../../../crates/erebor-interceptor/src/host.rs) releases the map descriptor after validation and keeps the existing link and program checks.
+
+The previous `MapHandle::from_pinned_path` constructor reads metadata before
+the caller's second `map.info()` call. The new method removes only that
+duplicate query. Each pass still opens each pin. No persistent cache, new
+owner, new dependency or changed supervision interval exists. The named
+`_fd` binding remains alive during validation. Error paths release the
+descriptor through `OwnedFd`.
+
+The two native operations are inside a function-scoped unsafe-code exception.
+The C path remains alive during `bpf_obj_get`. A successful return creates
+one owned descriptor; a negative return supplies the errno to the existing
+Libbpf error. The remaining metadata read uses the safe libbpf-rs binding.
+The crate-wide unsafe-code rule remains unchanged.
+
+Read same-file `pinned_info_rejects_nul`, `pinned_info_missing_path` and
+`map_info_matches_manifest`. The library run passes 49 tests and ignores two
+fixtures. The privileged `pinned_map_freshness` test passes separately on the
+owned VM. It proves fresh unlink and replacement detection, layout rejection
+and descriptor release. Independent review finds no must-fix issue. Read the
+[command, source contract and proof](../../araphor-observability/phase-2-owned-capture.md#one-fresh-map-metadata-query).
+This record covers the current map-validation change after `a1274a9c`.
+The final `bash .github/scripts/verify-rust-ci.sh` run returns zero after
+the last Rust test change. Formatting, workspace check, strict Clippy and
+all workspace tests pass. Read
+`/tmp/araphor-function-clean.PpxG5PKs/workspace-recheck.log`.
+Owned upload passes in 24.34 seconds. The unchanged unprofiled comparison
+has four faster pairs
+and one slower pair: +10.295991% in pair 5. All ten runs retain exact denials,
+zero loss, negative-claim eligibility and verified cleanup. Performance parity
+remains **Not done**. The linked proof includes every signed difference and
+the exact binary. The function-span results concern the earlier source, not
+this change.

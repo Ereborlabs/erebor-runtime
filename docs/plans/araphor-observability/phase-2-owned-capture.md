@@ -1717,6 +1717,104 @@ runnable waits. Do not count nested spans twice or treat wall time as CPU
 time. Report all-operation, tail-50 and p99-nearby results, loss and incomplete
 boundaries. This diagnostic does not qualify performance.
 
+Both function diagnostics cover `f078ebc4` and retain 5,000 exact denials per
+run, zero reported enforcement loss and verified cleanup. The first pair
+has plain p99 312,294 ns and Araphor p99 261,190 ns: -51,104 ns, or
+-16.364067%. Executable hashing overlaps the plain actor window. Its thread
+runs for 662.869 ms in that window and accounts for 6.293 ms of same-CPU
+actor wait. This pair has unequal setup work. Do not use it to claim an
+improvement. Read `/tmp/araphor-function-spans.nQE9ewSA`.
+
+The repeat completes hashing before recording and moves process discovery
+after the first actor window. No recorded hash, process-discovery, SSH,
+readlink or stat thread overlaps either actor window. Plain p99 is 257,125
+ns; Araphor p99 is 210,537 ns: -46,588 ns, or -18.118814%. Total call wall
+time is 240.375 ms plain and 241.086 ms Araphor. The slowest 50 calls total
+23.864 ms and 24.965 ms. The lower p99 is not a uniform speed increase.
+
+Coverage persistence overlaps six plain and two Araphor calls among the
+eleven ranks near p99. Its all-call same-CPU wait is 4.247 ms plain and
+4.271 ms Araphor. Manifest verification contributes zero and 1.905 ms.
+Neither wrapper thread overlaps the exact p99 or the Araphor tail-50 calls.
+The Araphor p99 includes 76,622 ns behind a bpftrace thread whose profiler
+ownership is not independently recorded. Probe overhead remains unknown.
+All 9,861 function spans have entry and return records. Loss, ordering and
+parser counts are zero. Retain two boundary syscall records and one
+CPU-greater-than-wall operation per run. Read
+`/tmp/araphor-function-clean.PpxG5PKs/function-analysis.json` and its detail
+file. Both export commands return zero. Function and collector exits are
+zero; scheduler exit 130 follows data finalization. The harness returns 101
+because this diagnostic has one pair, not the required five. These results
+support shared-work timing as a test target; they do not qualify parity.
+
+### One fresh map metadata query
+
+`KernelHost::verify_manifest_pins` previously opened each map through
+`MapHandle::from_pinned_path`, then called `map.info()`. The locked
+libbpf-rs constructor already reads map metadata. These calls read the same
+immutable map metadata twice per verification. The new owner method opens
+the current pin once and reads its metadata once. The method retains the
+owned descriptor until validation completes. Every pass opens the pin again.
+No descriptor or metadata cache persists between passes.
+
+Keep map-name validation and the map ID, type, key size, value size and entry
+limit checks. Keep lease, link and program checks. The native call uses the
+same default options as the previous binding. Convert its negative errno
+return to the existing typed error. Limit the unsafe-code exception to this
+private method. Do not change the crate-wide rule.
+
+The library command `cargo test -p erebor-interceptor --lib` passes 49 tests
+in 31.73 seconds; two privileged or subprocess fixtures remain ignored.
+On VM `192.168.122.153`, the same library binary passes
+`host::tests::pinned_map_freshness --ignored --exact --nocapture` with
+`EREBOR_TEST_BPFFS_ROOT=/sys/fs/bpf`. The test uses a private temporary pin
+directory. It detects an unlinked pin while the old descriptor remains open,
+rejects a same-layout replacement ID, rejects a changed layout, and verifies
+release of all three map IDs. The command returns zero. Independent safety
+and Ponytail review find no must-fix issue. Owned upload passes in 24.34
+seconds. Read `manifest-tests-green.log` and `owned-upload.log` in
+`/tmp/araphor-function-clean.PpxG5PKs`. The final
+`bash .github/scripts/verify-rust-ci.sh` run returns zero after the last
+Rust test change. Formatting, workspace check, strict Clippy and all
+workspace tests pass. Read `workspace-recheck.log` in the same directory.
+
+The unchanged five-pair comparison uses the private full ten-run binary
+`target/araphor-map-query.3YbvWgy6/normal-pairs`, SHA-256
+`ea9de8261399563b8187737537e5a120db94a959ffe7c8eeb718da21671437db`.
+Its production map-validation code includes this change. The later test-only
+assertion correction does not change production code. Keep the 5,000 denied
+opens, 1-ms spacing, 30-second captures, backend and script unchanged.
+
+The first attempt stops before sampling because free space crosses the
+unchanged filesystem reserve. Archive the two earlier static-profile perf
+files and verify both file hashes before removing their VM copies. The
+archive remains in `old-static-raw.tar.gz` in the evidence directory above.
+Free space increases to 3,949,543,424 bytes. The repeat runs without a build,
+profiler or guest status query during sampling. Pause only the owned CI
+process for this comparison; resume CI after capture completes.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Araphor minus plain, ns | Difference |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 254,501 | 200,005 | -54,496 | -21.412882% |
+| 2 | 242,955 | 182,782 | -60,173 | -24.767138% |
+| 3 | 243,173 | 156,816 | -86,357 | -35.512577% |
+| 4 | 277,742 | 169,793 | -107,949 | -38.866646% |
+| 5 | 158,586 | 174,914 | +16,328 | +10.295991% |
+
+All ten runs retain 5,000 exact denials, zero loss, zero unresolved effects,
+negative-claim eligibility and verified cleanup. The command returns 101 in
+581.68 seconds. Pair 5 exceeds the zero-increase limit. Performance parity
+remains **Not done**. Read `map-query-pairs.json` in the evidence directory
+above and guest `test.log` in
+`/tmp/araphor-observability-153-map-query-rerun-20261003-5000`. The smaller
+Araphor range and faster plain result in pair 5 do not establish a cause.
+
+The test logging owner defaults to DEBUG; production defaults to INFO.
+The earlier ordinary log has 726,288 DEBUG lines. Earlier actor-window CPU
+profiles contain logging-family stacks in 47 plain and 44 Araphor samples.
+No p99-adjacent CPU sample attributes the regression to logging. A comparison
+with production INFO logging on both routes awaits separate user approval.
+
 Pass `OBS-TARGET`, `OBS-GRANT`, `OBS-REPLAY`, and `OBS-LOSS`. Cases include
 foreign namespace/tenant, host source under pod grant, changed digest, new
 container under the same pod name, reused PID/cgroup, control partition, Node
