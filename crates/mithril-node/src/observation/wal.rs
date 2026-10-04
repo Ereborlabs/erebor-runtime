@@ -886,7 +886,7 @@ impl EvidenceWalOwner {
             .find(|identity| {
                 self.streams
                     .get(identity)
-                    .is_some_and(|wal| wal.next_batch().is_some())
+                    .is_some_and(|wal| wal.batch_start(0).is_some())
             })
     }
 
@@ -1326,17 +1326,24 @@ impl EvidenceWal {
         batches
     }
 
-    fn batch_from(&self, record_offset: usize) -> Option<EvidenceBatchV1> {
-        let first_cursor = self.records.get(record_offset)?.cursor;
-        if first_cursor
+    fn batch_start(&self, record_offset: usize) -> Option<(u64, EvidenceWalStreamIdentityV1)> {
+        let first = self.records.get(record_offset)?;
+        if first.cursor
             != self
                 .acknowledged
                 .contiguous_cursor
                 .checked_add(record_offset as u64 + 1)?
+            || self.limits.maximum_batch_records == 0
+            || first.frame.len()
+                > mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES.saturating_sub(128)
         {
             return None;
         }
-        let stream_identity = self.stream_identity?;
+        Some((first.cursor, self.stream_identity?))
+    }
+
+    fn batch_from(&self, record_offset: usize) -> Option<EvidenceBatchV1> {
+        let (first_cursor, stream_identity) = self.batch_start(record_offset)?;
         let maximum_frame_bytes =
             mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES.saturating_sub(128);
         let mut framed_records = Vec::new();
@@ -1578,6 +1585,50 @@ mod tests {
             202
         );
         assert_eq!(replay.decode_records()?[1], new_wire);
+        Ok(())
+    }
+
+    #[test]
+    fn wal_batch_start() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut wal = EvidenceWal::open(directory.path(), limits())?;
+        assert!(wal.batch_start(0).is_none());
+        assert!(wal.batch_from(0).is_none());
+        wal.append(&observation(1)?)?;
+        wal.append(&observation(2)?)?;
+        let records = wal.records.clone();
+        let identity = wal.stream_identity;
+        let maximum_bytes = mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES.saturating_sub(128);
+        for (name, cursor, ack, present, record_limit, frame_bytes, offset, expected) in [
+            ("ready", 1, 0, true, 2, None, 0, Some(1)),
+            ("offset", 1, 0, true, 2, None, 1, Some(2)),
+            ("absent", 1, 0, true, 2, None, 2, None),
+            ("gap", 2, 0, true, 2, None, 0, None),
+            ("overflow", 1, u64::MAX, true, 2, None, 0, None),
+            ("identity", 1, 0, false, 2, None, 0, None),
+            ("limit", 1, 0, true, 0, None, 0, None),
+            ("oversize", 1, 0, true, 2, Some(maximum_bytes + 1), 0, None),
+            ("boundary", 1, 0, true, 2, Some(maximum_bytes), 0, Some(1)),
+        ] {
+            wal.records.clone_from(&records);
+            wal.records[0].cursor = cursor;
+            if let Some(bytes) = frame_bytes {
+                wal.records[0].frame.resize(bytes, 0);
+            }
+            wal.acknowledged.contiguous_cursor = ack;
+            wal.stream_identity = present.then_some(identity).flatten();
+            wal.limits.maximum_batch_records = record_limit;
+            assert_eq!(
+                wal.batch_start(offset).map(|(cursor, _)| cursor),
+                expected,
+                "{name}"
+            );
+            assert_eq!(
+                wal.batch_from(offset).map(|batch| batch.first_cursor),
+                expected,
+                "{name}"
+            );
+        }
         Ok(())
     }
 
