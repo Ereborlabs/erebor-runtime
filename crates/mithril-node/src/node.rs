@@ -1366,26 +1366,17 @@ fn sample_effect_health_bytes(
     recover: bool,
     bytes: &[u8],
 ) -> Result<bool> {
-    let coverage = observations.coverage_snapshot();
-    if recover
-        && coverage
-            .as_ref()
-            .is_some_and(|snapshot| !snapshot.current_intervals().is_empty())
-        && !coverage.is_some_and(|snapshot| snapshot.supports_negative_claim())
-    {
+    let coverage = observations.coverage_ready();
+    if recover && coverage == Some(false) {
         if observations.recover_coverage_after_prior_probe(bytes)?
-            && observations
-                .coverage_snapshot()
-                .is_some_and(|snapshot| snapshot.supports_negative_claim())
+            && observations.coverage_ready() == Some(true)
         {
             return Ok(true);
         }
         return Ok(false);
     }
     observations.sample_coverage_health(bytes)?;
-    Ok(observations
-        .coverage_snapshot()
-        .is_some_and(|snapshot| snapshot.supports_negative_claim()))
+    Ok(observations.coverage_ready() == Some(true))
 }
 
 fn confirm_effect_health(
@@ -1423,10 +1414,8 @@ fn sample_ready_bytes(
     recover: bool,
     probe: &[u8],
 ) -> Result<bool> {
-    let coverage = observations.coverage_snapshot();
-    if coverage.is_none_or(|snapshot| {
-        snapshot.current_intervals().is_empty() || snapshot.supports_negative_claim()
-    }) && observations.transient_coverage_reader_delivery_pending(probe)?
+    if observations.coverage_ready().is_none_or(|ready| ready)
+        && observations.transient_coverage_reader_delivery_pending(probe)?
     {
         erebor_telemetry::debug!(
             "deferred evidence health sampling while producer or reader delivery completes",

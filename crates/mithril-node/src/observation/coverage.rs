@@ -655,6 +655,12 @@ impl CoverageHealthOwner {
         })
     }
 
+    #[must_use]
+    pub(super) fn readiness(&self) -> Option<bool> {
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        (!inner.snapshot.sources.is_empty()).then(|| inner.snapshot.supports_negative_claim())
+    }
+
     pub fn snapshot(&self) -> CoverageSnapshotV1 {
         self.inner
             .lock()
@@ -1019,6 +1025,43 @@ mod tests {
                 ..CoverageCountersV1::default()
             },
         }
+    }
+
+    #[test]
+    fn readiness_matches_snapshot() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("coverage.json");
+        let owner = open_owner(&path, 1)?;
+        let check = |owner: &CoverageHealthOwner, expected| {
+            let snapshot = owner.snapshot();
+            let ready = (!snapshot.current_intervals().is_empty())
+                .then(|| snapshot.supports_negative_claim());
+            assert_eq!(owner.readiness(), ready);
+            assert_eq!(ready, expected);
+        };
+
+        check(&owner, None);
+        owner.observe(2, 1)?;
+        assert_eq!(
+            owner.snapshot().current_intervals()[0].state,
+            crate::CoverageStateV1::Unknown
+        );
+        check(&owner, Some(false));
+        owner.sample_health(&[health(1, 0)])?;
+        check(&owner, Some(true));
+        owner.mark_all_gapped(CoverageGapReasonV1::ControlDelay)?;
+        check(&owner, Some(false));
+        owner.recover_after_probe(&[health(1, 0)])?;
+        check(&owner, Some(true));
+        drop(owner);
+
+        let reopened = open_owner(&path, 1)?;
+        check(&reopened, Some(false));
+        drop(reopened);
+        let next_epoch = open_owner(&path, 2)?;
+        assert!(!next_epoch.snapshot().history.is_empty());
+        check(&next_epoch, None);
+        Ok(())
     }
 
     #[test]

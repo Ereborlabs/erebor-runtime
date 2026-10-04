@@ -574,6 +574,16 @@ impl EffectObservationStore {
     }
 
     #[must_use]
+    pub(crate) fn coverage_ready(&self) -> Option<bool> {
+        self.inner.durable.as_ref().and_then(|durable| {
+            durable
+                .lock()
+                .ok()
+                .and_then(|durable| durable.coverage.readiness())
+        })
+    }
+
+    #[must_use]
     pub fn coverage_snapshot(&self) -> Option<CoverageSnapshotV1> {
         self.inner.durable.as_ref().and_then(|durable| {
             durable
