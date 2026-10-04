@@ -12,6 +12,40 @@ behavior, inputs, outputs, limits, commands, examples, and proof. Remove
 management-report language, generic strategy statements, boilerplate lists,
 and filler. A short concrete example is better than an abstract summary.
 
+## Required Plan Format
+
+Start each plan with a short description. State what the plan changes and why
+the change is necessary. Then add an `Intended end state` section. State the
+observable result that must exist when the plan is complete. Do not put a long
+background section before this material.
+
+Put the implementation flow after the intended end state. Use event blocks in
+runtime order. Start each block with a concrete trigger or actor action. Put
+each resulting transition on a new line. Prefix each transition with `->`.
+Use this form:
+
+```text
+Actor performs the trigger
+  -> owner validates one exact input
+  -> owner changes one exact state
+  -> execution owner performs the approved effect
+
+Operation fails or expires
+  -> owner does not commit the target state
+  -> owner removes the temporary state
+  -> a retry requires a new operation lifetime
+```
+
+Use one action or fact on each line. Name the exact owner, object, operation,
+state, and physical result. Include the normal path, denial path, cleanup path,
+and retry path when these paths apply. State limits and unsupported conditions
+in the flow at the point where they take effect.
+
+The event flow is the main plan. Do not repeat the same sequence in prose. Add
+owner tables, interface details, acceptance criteria, verification commands,
+and exclusions after the flow only when an engineer needs that information to
+implement or verify the change.
+
 ## Planning Hierarchy
 
 Use the smallest level that can own the decision. Do not create a new level
@@ -68,8 +102,8 @@ master-plan/
 
 ## Choose The Smallest Useful Shape
 
-- A small, independent change can use a short ordered checklist with an
-  acceptance test.
+- A small, independent change can use a short event flow with an acceptance
+  test.
 - Non-trivial work needs a master document with status, goal, constraints,
   baseline, target ownership, phases, verification, and explicit stop points.
 - Give each non-trivial phase its own purpose, scope, owners, changes,
