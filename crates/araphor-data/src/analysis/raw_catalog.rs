@@ -485,7 +485,13 @@ impl RawJournal {
         {
             let mut statement = writer
                 .prepare(&format!(
-                    "SELECT 0::UTINYINT AS kind, tenant_id, SUM(bytes)::UBIGINT AS bytes
+                    "WITH reservations AS (
+                     SELECT COUNT(*)::UBIGINT AS unfinished,
+                     COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
+                     WHERE s.stream_key = r.stream_key AND s.state = 'Live')
+                     THEN 1 ELSE 2 END), 0)::UBIGINT AS slots
+                     FROM trace_receipts r WHERE terminal IS NULL)
+                     SELECT 0::UTINYINT AS kind, tenant_id, SUM(bytes)::UBIGINT AS bytes
                      FROM ({}) GROUP BY tenant_id
                      UNION ALL SELECT 1::UTINYINT, tenant_id, logical_bytes FROM tenant_usage
                      UNION ALL SELECT 2::UTINYINT, c.tenant_id,
@@ -493,7 +499,9 @@ impl RawJournal {
                      + octet_length(c.entity_key) + octet_length(c.lifetime_key))::UBIGINT
                      FROM context_versions c SEMI JOIN context_refs r USING
                      (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
-                     GROUP BY c.tenant_id",
+                     GROUP BY c.tenant_id
+                     UNION ALL SELECT 3::UTINYINT, ''::BLOB, unfinished FROM reservations
+                     UNION ALL SELECT 4::UTINYINT, ''::BLOB, slots FROM reservations",
                     super::quota::TRACE_CHARGES
                 ))
                 .context(AnalysisDatabaseSnafu {
@@ -514,6 +522,21 @@ impl RawJournal {
                 let (kind, tenant, bytes) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode raw budget charge",
                 })?;
+                match kind {
+                    3 => {
+                        budget.trace_reserve = bytes
+                            .checked_mul(super::quota::TRACE_RESERVE)
+                            .ok_or_else(|| self.invalid("the diagnostic reserve is exhausted"))?;
+                        continue;
+                    }
+                    4 => {
+                        budget.trace_slots = usize::try_from(bytes).map_err(|_| {
+                            self.invalid("the diagnostic slot reserve is exhausted")
+                        })?;
+                        continue;
+                    }
+                    _ => {}
+                }
                 let reason = match kind {
                     0 => "the diagnostic tenant is invalid",
                     1 => "the raw quota tenant is invalid",
@@ -541,16 +564,6 @@ impl RawJournal {
                     }
                 }
             }
-            let (unfinished, slots): (u64, u64) = writer.query_row(
-                "SELECT COUNT(*)::UBIGINT, COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
-                 WHERE s.stream_key = r.stream_key AND s.state = 'Live') THEN 1 ELSE 2 END), 0)::UBIGINT
-                 FROM trace_receipts r WHERE terminal IS NULL", [], |row| Ok((row.get(0)?, row.get(1)?))
-            ).context(AnalysisDatabaseSnafu { operation: "read diagnostic reservations" })?;
-            budget.trace_reserve = unfinished
-                .checked_mul(super::quota::TRACE_RESERVE)
-                .ok_or_else(|| self.invalid("the diagnostic reserve is exhausted"))?;
-            budget.trace_slots = usize::try_from(slots)
-                .map_err(|_| self.invalid("the diagnostic slot reserve is exhausted"))?;
         }
         {
             let mut statement = writer.prepare("SELECT stream_key, MIN(consumed_cursor)::UBIGINT FROM processor_progress WHERE class = 'required' AND NOT retired GROUP BY stream_key")
