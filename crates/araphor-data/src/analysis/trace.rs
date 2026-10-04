@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use duckdb::{params, Connection, OptionalExt as _};
+use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
@@ -219,40 +219,31 @@ impl AnalysisStore {
         control.query_run(reader, || {
             let mut statement = reader
                 .prepare(
-                    "SELECT request_id FROM traces WHERE tenant_id = ?
+                    "SELECT request_id, source, source_sha256, bindings, authority,
+                     accepted_unix_ns, deadline_unix_ns, host_sensitive, content_sha256,
+                     revision, cancel_requested, read_revoked FROM traces WHERE tenant_id = ?
                      AND (CAST(? AS BLOB) IS NULL OR request_id > ?)
                      ORDER BY request_id LIMIT ?",
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare trace intent page",
                 })?;
-            let requests = statement
-                .query_map(
-                    params![
-                        tenant.as_slice(),
-                        after.as_ref().map(|id| id.as_slice()),
-                        after.as_ref().map(|id| id.as_slice()),
-                        TRACE_PAGE_ROWS as u32,
-                    ],
-                    |row| row.get::<_, Vec<u8>>(0),
-                )
+            let mut rows = statement
+                .query(params![
+                    tenant.as_slice(),
+                    after.as_ref().map(|id| id.as_slice()),
+                    after.as_ref().map(|id| id.as_slice()),
+                    TRACE_PAGE_ROWS as u32,
+                ])
                 .context(AnalysisDatabaseSnafu {
-                    operation: "read trace intent keys",
-                })?
-                .collect::<duckdb::Result<Vec<_>>>()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "decode trace intent keys",
+                    operation: "read trace intent page",
                 })?;
-            let mut intents = Vec::with_capacity(requests.len());
-            for request in requests {
+            let mut intents = Vec::with_capacity(TRACE_PAGE_ROWS);
+            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                operation: "read trace intent row",
+            })? {
                 control.check()?;
-                let request = request
-                    .try_into()
-                    .map_err(|_| self.state_error("the stored trace request key is invalid"))?;
-                intents.push(
-                    Self::read_trace_intent(reader, &self.root, tenant, request)?
-                        .ok_or_else(|| self.state_error("the stored trace intent is absent"))?,
-                );
+                intents.push(Self::read_trace_row(row, &self.root, tenant)?);
             }
             let next_request = (intents.len() == TRACE_PAGE_ROWS)
                 .then(|| intents.last().map(|(state, _)| state.request_id))
@@ -341,34 +332,54 @@ impl AnalysisStore {
     ) -> Result<Option<(TraceStateV1, TraceIntentV1)>> {
         let mut statement = reader
             .prepare(
-                "SELECT source, source_sha256, bindings, authority, accepted_unix_ns,
-             deadline_unix_ns, host_sensitive, content_sha256, revision,
+                "SELECT request_id, source, source_sha256, bindings, authority,
+             accepted_unix_ns, deadline_unix_ns, host_sensitive, content_sha256, revision,
              cancel_requested, read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?",
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare trace intent",
             })?;
-        let row = statement
-            .query_row(params![tenant.as_slice(), request.as_slice()], |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
-                    row.get::<_, u64>(4)?,
-                    row.get::<_, u64>(5)?,
-                    row.get::<_, bool>(6)?,
-                    row.get::<_, Vec<u8>>(7)?,
-                    row.get::<_, u64>(8)?,
-                    row.get::<_, bool>(9)?,
-                    row.get::<_, bool>(10)?,
-                ))
-            })
-            .optional()
+        let mut rows = statement
+            .query(params![tenant.as_slice(), request.as_slice()])
             .context(AnalysisDatabaseSnafu {
                 operation: "read trace intent",
             })?;
-        let Some((
+        rows.next()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read trace intent row",
+            })?
+            .map(|row| Self::read_trace_row(row, root, tenant))
+            .transpose()
+    }
+
+    fn read_trace_row(
+        row: &duckdb::Row<'_>,
+        root: &Path,
+        tenant: [u8; 16],
+    ) -> Result<(TraceStateV1, TraceIntentV1)> {
+        let row = row
+            .get::<_, Vec<u8>>(0)
+            .and_then(|request| {
+                Ok((
+                    request,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, u64>(5)?,
+                    row.get::<_, u64>(6)?,
+                    row.get::<_, bool>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, u64>(9)?,
+                    row.get::<_, bool>(10)?,
+                    row.get::<_, bool>(11)?,
+                ))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode trace intent row",
+            })?;
+        let (
+            request,
             bytes,
             digest,
             bindings,
@@ -380,10 +391,14 @@ impl AnalysisStore {
             revision,
             cancel,
             revoked,
-        )) = row
-        else {
-            return Ok(None);
-        };
+        ) = row;
+        let request = request.try_into().map_err(|_| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the stored trace request key is invalid",
+            }
+            .build()
+        })?;
         let sha256 = digest.try_into().map_err(|_| {
             crate::AnalysisStateSnafu {
                 path: root,
@@ -411,7 +426,7 @@ impl AnalysisStore {
         if intent.digest(root)?.as_slice() != checksum {
             return Self::reject_path(root, "the immutable trace intent changed");
         }
-        Ok(Some((
+        Ok((
             TraceStateV1 {
                 tenant_id: tenant,
                 request_id: request,
@@ -420,7 +435,7 @@ impl AnalysisStore {
                 read_revoked: revoked,
             },
             intent,
-        )))
+        ))
     }
 
     pub(super) fn validate_traces(reader: &Connection, root: &Path) -> Result<()> {
@@ -566,15 +581,32 @@ mod tests {
     fn observability_intent_pages() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("data"))?;
-        for request in 1..=17 {
+        for request in 1..=16 {
             store.accept_trace(&intent(request)?)?;
         }
         let first = store.trace_intents([1; 16], None)?;
         assert_eq!(first.intents.len(), 16);
         assert_eq!(first.next_request, Some([16; 16]));
+        for (request, (state, input)) in (1..=16).zip(&first.intents) {
+            assert_eq!(state.request_id, [request; 16]);
+            assert_eq!(input, &intent(request)?);
+            assert_eq!(
+                store.trace_intent([1; 16], state.request_id)?,
+                Some((state.clone(), input.clone()))
+            );
+        }
+        let end = store.trace_intents([1; 16], first.next_request)?;
+        assert!(end.intents.is_empty());
+        assert!(end.next_request.is_none());
+        let state = store.accept_trace(&intent(17)?)?;
+        let state = store.update_trace(&TraceStateV1 {
+            cancel_requested: true,
+            read_revoked: true,
+            ..state
+        })?;
         let last = store.trace_intents([1; 16], first.next_request)?;
         assert_eq!(last.intents.len(), 1);
-        assert_eq!(last.intents[0].0.request_id, [17; 16]);
+        assert_eq!(last.intents, vec![(state, intent(17)?)]);
         assert!(last.next_request.is_none());
         assert!(store.trace_intents([2; 16], None)?.intents.is_empty());
         let mut invalid = intent(18)?;
@@ -594,6 +626,7 @@ mod tests {
             params![b"changed-input".as_slice()],
         )?;
         assert!(store.trace_intent([1; 16], [3; 16]).is_err());
+        assert!(store.trace_intents([1; 16], None).is_err());
         drop(store);
         assert!(AnalysisStore::open(&root).is_err());
         Ok(())
