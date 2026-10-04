@@ -248,6 +248,13 @@ impl CoverageHealthOwner {
                 sources: BTreeMap::new(),
             }
         };
+        let parent = path.parent().ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "coverage state path has no parent".to_owned(),
+            }
+            .build()
+        })?;
+        fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
         let inner = Self {
             inner: Arc::new(Mutex::new(CoverageInner {
                 path,
@@ -971,13 +978,6 @@ fn interval_is_valid(interval: &CoverageIntervalV1, current: bool) -> bool {
 
 fn persist_snapshot(path: &Path, snapshot: &CoverageSnapshotV1) -> Result<()> {
     validate_snapshot(snapshot)?;
-    let parent = path.parent().ok_or_else(|| {
-        EvidenceStateSnafu {
-            reason: "coverage state path has no parent".to_owned(),
-        }
-        .build()
-    })?;
-    fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
     let bytes = serde_json::to_vec(snapshot).map_err(|error| {
         EvidenceStateSnafu {
             reason: format!("coverage state encoding failed: {error}"),
@@ -1341,6 +1341,28 @@ mod tests {
 
         assert!(owner.observe(2, 1).is_err());
         assert_eq!(owner.snapshot(), before);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_directory_rejects_commit() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let parent = directory.path().join("active");
+        let path = parent.join("coverage.json");
+        let owner = open_owner(&path, 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        let before = owner.snapshot();
+        let retained = directory.path().join("retained");
+        std::fs::rename(&parent, &retained)?;
+
+        assert!(owner.observe(2, 1).is_err());
+        assert!(!parent.exists());
+        assert_eq!(owner.snapshot(), before);
+
+        std::fs::rename(&retained, &parent)?;
+        assert!(owner.observe(2, 1)?.is_some());
+        drop(owner);
+        assert_eq!(open_owner(&path, 1)?.observe(2, 1)?, None);
         Ok(())
     }
 }
