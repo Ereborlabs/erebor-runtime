@@ -11,22 +11,21 @@ use mithril_control::EvidenceIntakeIdentityV1;
 use mithril_control::{
     lower_kubernetes_policy, serve, workload_target_fact_digest, AllowedNodeIdentity,
     ContainerKindV1, ControlPlane, ControlServerTls, ControlStore, KubernetesWorkloadIdentityV1,
-    NodeRegistration, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
+    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
     PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1, RegistryDigestsV1,
     TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 #[cfg(test)]
 use mithril_control::{
     KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner, KubernetesNodeReadinessOwner,
-    NodeDecommissionAuthorizationV1,
-    SignedNodeDecommissionV1,
+    NodeDecommissionAuthorizationV1, NodeRegistration, SignedNodeDecommissionV1,
 };
+#[cfg(test)]
+use mithril_node::{ControlConnection, NodeDecommissionConfig, TrustCache};
 #[cfg(test)]
 use mithril_node::{
     EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, ObservationCanonicalizer,
 };
-#[cfg(test)]
-use mithril_node::{ControlConnection, NodeDecommissionConfig, TrustCache};
 use mithril_node::{NodeControlConfig, NodeControlConnector};
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,

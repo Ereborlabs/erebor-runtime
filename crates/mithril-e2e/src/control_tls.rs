@@ -11,9 +11,9 @@ use ed25519_dalek::SigningKey;
 use kube::client::Body as KubeBody;
 use kube::Client;
 use mithril_control::{
-    AllowedNodeIdentity, AuthenticatedEvidenceNodeV1, CapabilityRecord, ControlPlane, ControlStore, NodeRegistration,
-    EvidenceBatch, EvidenceIntakeIdentityV1, EvidenceIntakeOwner, EvidenceRecord, EvidenceTemporalCoverage,
-    TrustGenerationV1, WorkloadProtectionPolicy,
+    AllowedNodeIdentity, AuthenticatedEvidenceNodeV1, CapabilityRecord, ControlPlane, ControlStore,
+    EvidenceBatch, EvidenceIntakeIdentityV1, EvidenceIntakeOwner, EvidenceRecord,
+    EvidenceTemporalCoverage, NodeRegistration, TrustGenerationV1, WorkloadProtectionPolicy,
 };
 use mithril_node::{NodeControlConnector, PolicyControlPacingOwner, TrustCache};
 use prost::Message as _;
@@ -22,8 +22,8 @@ use tokio::sync::{oneshot, watch, Notify};
 use tower::service_fn;
 
 use crate::control_fixture::{
-    control_store_lease_ready, Certificates, MtlsFixture, OutagePolicyFixture,
-    OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
+    control_store_lease_ready, Certificates, ControlServerFixture, MtlsFixture,
+    OutagePolicyFixture, OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
 };
 
 mod administrative;
@@ -56,7 +56,9 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
         TrustGenerationAckRequest,
     };
     use mithril_control::{EvidenceBatch, EvidenceIntakeIdentityV1};
-    use mithril_node::{EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, ObservationCanonicalizer};
+    use mithril_node::{
+        EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, ObservationCanonicalizer,
+    };
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
     use tonic::transport::{Certificate as TonicCertificate, ClientTlsConfig, Endpoint, Identity};
