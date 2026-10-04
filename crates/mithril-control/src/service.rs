@@ -1925,6 +1925,7 @@ impl ControlPlane {
         let mut reply = crate::TraceExchangeReplyV1::default();
         if let Some(upload) = exchange.output {
             // The current enrolled node can return its retained output from an earlier boot.
+            let id = upload.batch.execution_id;
             let receipt = owner
                 .append(
                     tenant,
@@ -1932,11 +1933,11 @@ impl ControlPlane {
                     upload.target_index,
                     node,
                     upload.original_node_boot_id,
-                    upload.batch.clone(),
+                    upload.batch,
                 )
                 .map_err(trace_status)?;
             reply.acknowledgement = Some(crate::TraceAcknowledgementV1 {
-                execution_id: upload.batch.execution_id,
+                execution_id: id,
                 last_sequence: receipt.last_sequence,
                 terminal: receipt.terminal,
             });
@@ -3010,7 +3011,7 @@ mod tests {
     #[tokio::test]
     async fn observability_recovery_session_dispatch_ack_and_revocation() -> TestResult {
         use crate::{TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceUploadV1};
-        use araphor_observability::test_support::{grant, request};
+        use araphor_observability::test_support::{access, grant, request};
         let directory = TempDir::new()?;
         let store = crate::ControlStore::open(directory.path())?;
         let key = SigningKey::from_bytes(&[23; 32]);
@@ -3111,6 +3112,14 @@ mod tests {
                 .acknowledgement
                 .as_ref()
                 .ok_or("missing ack")?
+                .execution_id,
+            id
+        );
+        assert_eq!(
+            reply
+                .acknowledgement
+                .as_ref()
+                .ok_or("missing ack")?
                 .last_sequence,
             1
         );
@@ -3118,6 +3127,16 @@ mod tests {
             reply,
             control.exchange_trace("node-a", &context, exchange.clone())?
         );
+        let mut access = access();
+        access.valid_until_unix_ns = now + 60_000_000_000;
+        let output =
+            control
+                .trace_owner()?
+                .output([1; 16], request.request_id, 0, &access, now, 0)?;
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].execution_id, id);
+        assert_eq!(output[0].frames.len(), 1);
+        assert_eq!(output[0].frames[0].bytes, b"raw\n");
         let mut changed = exchange.clone();
         changed
             .output
