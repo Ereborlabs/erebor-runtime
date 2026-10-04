@@ -117,8 +117,10 @@ after successful recovery. Keep target, lease, cancellation, authorization,
 quota, sync-before-ACK and cleanup checks unchanged. Do not change the
 bpftrace source or collection settings to improve a measurement.
 
-Status: **Not done** for complete capture qualification. The storage checks
-below do not replace physical capture checks on the implementing revision.
+Status: **Done** for implementation and scoped correctness. Read the
+[completion record](#implementation-completion-record) for the source,
+artifacts, platform and checks. Performance remains **UNQUALIFIED** under the
+user's explicit approval. Diagnostics stay disabled in deployment.
 
 ### Storage bounds
 
@@ -2326,6 +2328,90 @@ Read `capture-pairs.json` and `test.log` under
 `/tmp/araphor-observability-153-final-20261004-5000`.
 Performance parity remains **Not done**.
 
+### Repeated comparisons and approved completion boundary
+
+On 2026-10-04, the user permits implementation completion with performance
+**UNQUALIFIED**. This approval does not pass the zero-increase gate, qualify
+a deployment, or permit diagnostics to start without the existing readiness
+checks. Keep diagnostics disabled. Further performance work belongs to the
+actual bpftrace execution path, not unrelated SQL work.
+
+The following runs use the same frozen binary for each source's original and
+repeat. Each run has five alternating plain-bpftrace/Araphor pairs. Each leg
+has 5,000 denied opens, 1-ms spacing, a 30-second capture and DEBUG logging.
+The backend, source, actor archive and two-vCPU VM remain unchanged. No build,
+profiler or guest status query runs during sampling. A positive value means
+that Araphor p99 exceeds plain bpftrace p99. Each cell gives the signed
+difference in nanoseconds, then the percentage in parentheses.
+
+| Source and run | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Pair 5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `7bdff7f7`, original | -27,260 (-21.8265%) | -17,702 (-14.8761%) | -12,693 (-11.4883%) | +1,397 (+1.1655%) | -16,366 (-13.4732%) |
+| `7bdff7f7`, repeat | +29,387 (+22.7385%) | +13,555 (+8.7477%) | +16,130 (+12.3987%) | +22,474 (+17.7683%) | +9,696 (+5.6942%) |
+| `304e4832`, original | -2,523 (-2.3169%) | -6,732 (-6.2985%) | -7,793 (-6.8674%) | +3,887 (+3.3724%) | -20,059 (-14.9349%) |
+| `304e4832`, repeat | +10,372 (+7.5743%) | +17,155 (+11.4032%) | +12,003 (+8.3971%) | +2,338 (+1.3904%) | +6,941 (+4.0056%) |
+| `c826d053`, original | -15,007 (-14.1021%) | +755 (+0.7153%) | +24,930 (+24.0285%) | +8,781 (+8.6214%) | +20,419 (+19.3033%) |
+| `c826d053`, repeat | -9,687 (-7.5336%) | +46,964 (+42.0628%) | +61,303 (+49.5434%) | -21,241 (-13.9614%) | -52,010 (-28.6890%) |
+
+Every command returns 101 because at least one pair fails the zero-increase
+gate. Every leg retains 5,000 exact denial witnesses, zero reported
+enforcement-event loss, zero unresolved effects and negative-claim eligibility.
+Every Araphor capture reports `Deadline`, complete output and `Verified`
+cleanup. Trace kernel loss remains unknown.
+
+Read the original `7bdff7f7` receipt at
+`/tmp/araphor-budget-data.CF2ctVtV/capture-pairs.json` and the original
+`304e4832` receipt at
+`/tmp/araphor-projection-data.808FTj1S/capture-pairs.json`.
+Read `budget-repeat-pairs.json`, `projection-repeat-pairs.json`,
+`counts-pairs.json` and `counts-repeat-pairs.json` under
+`/tmp/araphor-budget-repeat-data.kaOJB07e` for the remaining runs.
+
+Both plain and Araphor p99 increase in every repeated `304e4832` and
+`c826d053` pair. The passing fourth and fifth `c826d053` repeat pairs result
+from a larger increase in plain p99, not a decrease in Araphor p99. These
+results do not prove a performance improvement or regression from a code
+change. The unchanged `7bdff7f7` repeat also loses its earlier result.
+Do not select a source from its most favorable single run.
+
+Source `4b0803ac` replaces the two reservation-count rows with one fixed-width
+row. The fresh read, quota rules and publication order remain unchanged.
+The change removes six lines. The focused analysis run passes 118 tests;
+five process fixtures remain ignored. Independent correctness and Ponytail
+review find no required correction. The user accepts this simplification.
+No plain-bpftrace comparison runs on this source. Its performance is
+**UNQUALIFIED**.
+
+### Actual bpftrace path review
+
+Plain bpftrace uses `-B none -f json -e SOURCE CGROUPID`. Araphor uses
+`-B none -f json - CGROUPID` and supplies the same source through stdin.
+Both commands use the same nine environment values. Stock bpftrace owns
+parsing, compilation, map creation, loading, attachment and event collection.
+Araphor does not replace these operations. Source transfer finishes before
+the attachment notification starts the collection deadline.
+
+Araphor adds bounded pipe supervision, current target checks, durable Node
+spooling and upload acknowledgement. Keep authorization, fresh lifetime
+checks, deadlines, output bounds and sync-before-ACK unchanged.
+Read the source-linked path in the
+[implementation review](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/implementation-review.md#actual-bpftrace-path-and-attribution-limits).
+
+The retained scheduler recording at `14f84a7a` measures 36.274630 ms of
+spool-thread CPU and 15.639587 ms of supervisor-thread CPU during an actor
+window of approximately 5.76 seconds. These totals do not attribute p99
+delay. This binary contains the current guarded static-resource path.
+The recording does not prove which branch ran or isolate its cost.
+The CPU sampler excludes future threads and backend children. Backend-child
+CPU and I/O remain unknown. Read
+`/tmp/araphor-batch-cpu-data.44GvEGyj` for the retained recording and analysis.
+
+No measured leaf cost supports another backend patch. If investigation
+continues, start a bounded inherited CPU recording before backend spawn.
+Record each backend PID, start time and executable identity. Select samples
+inside the exact actor windows. Keep the normal comparison separate from
+the instrumented run. Obtain approval for any new performance experiment.
+
 1. Start a reviewed capture against a protected Kubernetes Pod. Replace that
    Pod with the same name. Require the original execution to end with
    `TargetChanged`. Require no output from the replacement under the original
@@ -2341,6 +2427,110 @@ Performance parity remains **Not done**.
    production owners. Make AnalysisStore unavailable. Require no ACK, bounded
    Node spooling, local expiry and explicit loss/uncertainty. Restore the store
    and verify duplicate replay creates no second output or execution.
+
+### Implementation completion record
+
+The implementation is **Done** with performance **UNQUALIFIED**, as approved
+by the user on 2026-10-04. Production source is `4b0803ac`. The final test-only
+edit removes the needless borrow in `budget_matches_charge_reads`.
+The Rust, Cargo, CI and harness source fingerprint is
+`700f52ac8612297ebe283359731e669963b47d3d76056315d24666c4d4113d2b`.
+No covered source changes after the final CI run.
+
+Run from `worktrees/mithril-ui`. The recorded run has no `CARGO_TARGET_DIR`
+override. Cargo uses
+`/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/worktrees/mithril-ui/target`.
+Do not inherit a target-directory override from another checkout.
+The following command returns zero:
+
+```sh
+rtk proxy env CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
+  CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 \
+  bash .github/scripts/verify-rust-ci.sh
+```
+
+Formatting, workspace check, strict Clippy and all workspace tests pass.
+Data passes 169 tests, Observability 23, Interceptor 49, Control 170,
+Mithril e2e 153 and Node 265. The 413 ignored e2e cases are not passes.
+The separate local-spool ACK-write ENOSPC test remains ignored.
+Read `/tmp/araphor-owned-final.yJCKDpgi/rust-ci-final.log`.
+
+All five current-source native routes return zero on the owned VM
+`mithril-runtime-qualification-20261002163710`, `192.168.122.153`, kernel
+`6.8.0-142-generic`. Each harness runs its lightweight companion first.
+The immutable CI libtest copy is `target/araphor-capture-close.xUdrguIm/libtest`,
+SHA-256 `3722d61a77d49ab502fed8d3a617357d8ad596c6e6b74cc606e4a6a8377edc62`.
+The host routes use the fixture archive from the earlier native result.
+Their explicit OCI-hook input has SHA-256
+`77b90501236b45f4a4117ebf0f2a7dc0feaf7104b72e3bad1b1575e5c25cb989`.
+
+Use the `owned.sh` and `disk-full.sh` command forms in
+[the native result](#final-source-native-correctness) with this libtest copy,
+the same archive and the output directories below. Set
+`RUST_TEST_THREADS=1` and
+`MITHRIL_TEST_OCI_HOOK=/mnt/mithril-source/worktrees/mithril-ui/target/debug/mithril-oci-hook`.
+
+| Route | Physical test, s | Guest receipt |
+| --- | ---: | --- |
+| Restart before execution | 77.28 | `/tmp/araphor-close-before-20261004/restart.json` |
+| Restart after attachment | 74.16 | `/tmp/araphor-close-after-20261004/restart.json` |
+| Five capture faults | 135.55 | `/tmp/araphor-close-faults-20261004/capture-pairs.json` |
+| AnalysisStore ENOSPC | 139.77 | `/tmp/araphor-close-storage-20261004/storage.json` |
+| Same-name Pod replacement | 147.76 | `/tmp/araphor-close-pods-ready-20261004/result.json` |
+
+Restart retains `NodeRestarted`, incomplete output, unknown cleanup and
+recorded coverage gaps. Independent checks require diagnostic removal before
+fixture shutdown. Both physical denials and recovered enforcement health pass.
+The five fault cases retain their expected terminal reasons and `Verified`
+cleanup. Partition receives no terminal ACK before repair and replays the
+exact retained spool after repair. Enforcement resources remain unchanged.
+
+The full-store case records OS error 28 before segment sync, no failed-upload
+ACK and raw receipt zero before replay. Discovery remains disabled. Repair
+acknowledges the retained 22 frames, 969 bytes and terminal. All three physical
+denials pass. Output remains incomplete; trace kernel loss remains unknown.
+
+The Pod route uses freshly built production images with tag
+`araphor-owned-capture-4b0803ac`. The Node image ID is
+`e65421ac8c9b5fc0ecea9797a1a06b0f67d26c49c24153998adaec8761995fc9`.
+The Control image ID is
+`878ef90f1d09020365be2244af3f31db337c045793e3b7dcd506ee7cc462a27d`.
+Both production Dockerfile targets build from the current worktree. Both
+`ldd` checks pass. The image archive SHA-256 is
+`6fe32a0fb8dc922de47329391626fc890a9eac634c2a190507b33f35ee6abbc0`.
+The earlier `388c298a` images do not supply this proof.
+
+The `pods.sh BIN --test-admission RUNTIME OUTPUT` command uses the full guest
+worktree as `MITHRIL_TEST_ROOT`. It uses the current image tags, the explicit
+`target/debug/mithril-kube-exec` input and
+`MITHRIL_TEST_HELM=/var/tmp/mithril-runtime-qualification-20261002163710/bin/helm`.
+The pinned actor is
+`docker.io/library/python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285`.
+The verified runtime bundle is
+`/var/tmp/araphor-capture-inputs.VMoOpWq2/backend-runtime.olmFu3lr`.
+Every entry in its checksum manifest passes. Its manifest SHA-256 is
+`3f93add007b8cb154cdc1218c663c1fe1ab858f6d8eea36dafb87d5a43f6a06d`.
+
+The original and replacement Pods have different UID, CRI, cgroup and lifetime
+identities. Each backend attaches once. The original ends with `TargetChanged`;
+the replacement ends with `Cancelled`. Original output stays unchanged.
+Both physical denials, independent cleanup, receipt validation and teardown
+pass. Output remains incomplete and trace kernel loss remains unknown.
+
+The first Pod attempt lacks an explicit Helm input. The next attempt stops
+before capture because kubelet disk-pressure cleanup removes the unused actor
+image. These attempts are not passes. Compression of six closed comparison
+logs restores space. Decompressed hashes match all originals. The same pinned
+actor is restored before the unchanged successful run. No production code or
+acceptance predicate changes. K3s returns to its initial stopped state.
+
+Read `host-receipts.tar.gz` and `pod-receipts.tar.gz` under
+`/tmp/araphor-owned-final.yJCKDpgi`. These archives retain the logs and receipts,
+including the unsuccessful prerequisite attempts. All successful native runs
+use `synthetic-test-only` admission. They claim neither performance nor
+production enablement. Read the actual bpftrace review above before further
+performance work. Public APIs, SQL workers, CRDs and remote deployment remain
+outside this implementation.
 
 ### End-to-end deliverable
 

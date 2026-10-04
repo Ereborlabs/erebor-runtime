@@ -2434,7 +2434,7 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | [service.rs tests](../../../../crates/mithril-control/src/service.rs), [contract.rs](../../../../crates/mithril-control/tests/contract.rs), [control_tls.rs](../../../../crates/mithril-e2e/src/control_tls.rs) | Authenticated dispatch/reconnect, current-session checks, durable output, and revocation. The mTLS test does not itself execute a kernel trace. |
 | [trace intent tests](../../../../crates/araphor-data/src/analysis/trace.rs), [raw tests](../../../../crates/araphor-data/src/analysis/raw.rs), [recipe.rs tests](../../../../crates/araphor-observability/src/recipe.rs) | Shared recovery preserves source, exact execution identity, frame order and terminal state. Unknown syscall values remain unknown. Spoofed measurement schemas are rejected. |
 | [observability.rs](../../../../crates/mithril-e2e/src/observability.rs), [test binary](../../../../crates/mithril-e2e/src/bin/mithril_observability_test.rs), [guest.sh](../../../../crates/mithril-e2e/harness/observability/guest.sh) | Automated physical backend cases on a disposable host; resource snapshots before and after each case. Not part of an ordinary unprivileged test run. |
-| [pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh), [Kubernetes capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | Lightweight owner proof precedes same-name real Pod replacement through Control, Node and shared data. Checks actual UID, CRI and cgroup lifetimes, physical denial, frozen old output and diagnostic BPF cleanup. Compiled; physical execution is open. |
+| [pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh), [Kubernetes capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | Lightweight owner proof precedes same-name real Pod replacement through Control, Node and shared data. Checks actual UID, CRI and cgroup lifetimes, physical denial, frozen old output and diagnostic BPF cleanup. The current-image route passes; read the linked completion record for its artifacts and limits. |
 | [observability_runtime_library_names](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | The bundle accepts the native `libstdc++.so.6` name. The name check rejects path separators, shell metacharacters, whitespace and replacement system libraries. The bundle also requires regular files and a complete verified checksum manifest. |
 | [Host qualification](../../../../crates/mithril-e2e/src/platform/host.rs), [owned.sh](../../../../crates/mithril-e2e/harness/observability/owned.sh), [process fixture](../../../../crates/mithril-e2e/fixtures/process/observability.py) | Full Node/Control capture, five paired interference runs, and failure cases with physical enforcement checks. |
 | [disk-full.sh](../../../../crates/mithril-e2e/harness/observability/disk-full.sh) | Lightweight owner proof precedes native AnalysisStore ENOSPC during active capture on a separate 1 GiB tmpfs. Requires no ACK, local expiry, bounded output, physical denial, zero committed progress and exact current-session replay. Physical execution passes at `d486e637` on the owned VM. Read `storage-current/storage.json` under `/tmp/araphor-owned-lifecycle.DlPg5O1y`. |
@@ -2448,13 +2448,13 @@ The [backend result](../../araphor-observability/phase-1-contracts-and-backend.m
 records the current 16 physical cases, missing-BTF host preflight, and
 parent-death cleanup at source `8e752bdb`. The earlier owned-capture measurements
 do not qualify the shared storage contract. The
-[owned-capture plan](../../araphor-observability/phase-2-owned-capture.md)
-keeps that integration and its physical proof open. Zero measured loss deltas
-in an earlier run do not prove uninterrupted coverage or qualify this source.
-No new performance experiment ran for the current backend closure.
+[owned-capture completion record](../../araphor-observability/phase-2-owned-capture.md#implementation-completion-record)
+records current-source integration and physical correctness. Performance
+remains **UNQUALIFIED** under explicit user approval. Zero measured loss deltas
+do not prove uninterrupted coverage. Diagnostics stay disabled.
 
-**Not done:** complete Node-owned capture across real Pod replacement and
-current performance parity. Paired physical Node crash-before/after-spawn
+**Done:** owned-capture implementation and scoped correctness in the linked
+record. **Not done:** performance parity. Paired physical Node crash-before/after-spawn
 cases pass at `af4b91fe`. Read `restart.json` in `restart-before-paired` and
 `restart-after-paired` under `/tmp/araphor-owned-lifecycle.DlPg5O1y`.
 Both receipts preserve `NodeRestarted`, incomplete output and unknown cleanup.
@@ -3672,3 +3672,75 @@ Read [all five measurements](../../araphor-observability/phase-2-owned-capture.m
 Pairs 2 and 5 increase p99 by 1.935801% and 11.033782%. All ten samples retain
 5,000 denial witnesses and zero enforcement-event loss. Correctness does not
 close the zero-increase performance gate.
+
+### Actual bpftrace path and attribution limits
+
+This review covers production source `4b0803ac`. The final test-only correction
+removes a needless borrow in `budget_matches_charge_reads`; it does not change
+the production path. Read the following flow before another optimization.
+
+[NodeTraceOwner::capture](../../../../crates/araphor-observability/src/capture.rs) checks the frozen target and lease before backend execution.<br>
+-> [TraceBackend::start](../../../../crates/araphor-observability/src/capture.rs) selects production Capture mode.<br>
+-> [DiagnosticBackend::start](../../../../crates/erebor-interceptor/src/diagnostic.rs) opens and hashes the exact backend inode.<br>
+-> [DiagnosticBackend::command](../../../../crates/erebor-interceptor/src/diagnostic.rs) executes that held inode with bounded source supplied through stdin.<br>
+-> [SupervisedChild::run](../../../../crates/erebor-interceptor/src/diagnostic.rs) closes stdin after source transfer and starts the collection deadline at the exact attachment notification.<br>
+-> [TraceTargetLeaseV1::validate](../../../../crates/araphor-observability/src/target.rs) checks the named cgroup, held descriptor and native binding during each active capture turn.<br>
+-> [TraceSpool::append](../../../../crates/araphor-observability/src/capture.rs) validates and synchronizes a frame before publishing its committed sequence.<br>
+-> [TraceSpool::complete](../../../../crates/araphor-observability/src/capture.rs) synchronizes the terminal file, rename and directory.<br>
+-> [NodeTraceOwner::acknowledge](../../../../crates/araphor-observability/src/capture.rs) records the matching terminal ACK durably before removing retained output.
+
+[PlainCapture::command](../../../../crates/mithril-e2e/src/observability/plain.rs)
+uses `-e SOURCE`; Araphor uses `-` and stdin. Both routes use the same output
+options and nine environment values. In stock bpftrace v0.20.2,
+[main](https://github.com/bpftrace/bpftrace/blob/v0.20.2/src/main.cpp#L836)
+reads either source form before the common compiler path.
+[BPFtrace::run](https://github.com/bpftrace/bpftrace/blob/v0.20.2/src/bpftrace.cpp#L1171)
+creates maps and attaches probes.
+[AttachedProbe::load_prog](https://github.com/bpftrace/bpftrace/blob/v0.20.2/src/attached_probe.cpp#L653)
+loads the generated BPF program. The same bpftrace process collects and formats
+events. Rust supervises this process; Rust does not compile the script or
+replace the backend loader. The retained snapshots match program tags, types
+and map layouts. They do not prove complete bytecode or map-binding identity.
+
+The supervisor bounds stdout/stderr work, frames and channel capacity.
+The supervisor checks child state, cancellation and deadlines on 10-ms turns.
+The capture owner also checks the target on 10-ms turns. These checks retain
+their authorization and cleanup purpose. The configured 500-ms Control poll
+exists in both comparison legs; active capture and upload add work.
+
+The `14f84a7a` scheduler recording measures 36.274630 ms for the spool thread
+and 15.639587 ms for the supervisor thread in an actor window of approximately
+5.76 seconds. That binary contains the guarded static-resource path described
+above. These totals do not identify its branch, its leaf cost or a p99 cause.
+The CPU recording excludes future threads and children. Backend-child CPU and
+I/O remain unknown. Do not compare these totals with an unverified plain
+process selected by its process name.
+
+Independent backend review finds no measured basis for another patch. Buffer
+reuse is an unmeasured candidate, not an established cause. A later recording
+must include backend children and retain PID, start-time and executable
+identity before attribution. Keep instrumented timing separate from the normal
+comparison. Read the
+[repeat results and approved boundary](../../araphor-observability/phase-2-owned-capture.md#repeated-comparisons-and-approved-completion-boundary).
+The user permits completion with performance **UNQUALIFIED**. This approval
+does not change readiness validation or permit deployment enablement.
+
+### Approved implementation completion
+
+Read the
+[completion record](../../araphor-observability/phase-2-owned-capture.md#implementation-completion-record)
+for the current source fingerprint, exact artifact identities, commands,
+workspace counts and five paired native routes. Final Rust CI returns zero.
+The four Host routes and current-image Pod route return zero. ENOSPC replay
+retains 22 frames and 969 bytes. The complete Pod receipt check and teardown
+pass. Earlier prerequisite failures remain in the evidence archive; they are
+not passes.
+
+Correctness and Ponytail review find no required change. The accepted
+reservation read removes six lines without a cache or another owner.
+The actual bpftrace audit finds no measured basis for a further patch.
+Implementation is **Done** with performance **UNQUALIFIED**, as the user
+permits. Production readiness checks remain unchanged. Diagnostics remain
+disabled. Unknown trace loss, restart coverage gaps and the ignored local-spool
+ACK-write ENOSPC test remain explicit limits. No public API, SQL worker, CRD,
+remote deployment or next-phase implementation is included.

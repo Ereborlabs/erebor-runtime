@@ -15,7 +15,7 @@ mod tests {
     #[test]
     fn budget_matches_charge_reads() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(&directory.path().join("analysis"))?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let mut guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
         let writer = guard.as_mut().ok_or("writer closed")?;
         let mut raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;

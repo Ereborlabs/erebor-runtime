@@ -404,12 +404,13 @@ No separate gap-review document is required.
 Phase 1 is **Done** at source `8e752bdb`. Read its
 [corrected result](phase-1-contracts-and-backend.md#corrected-backend-proof)
 for direct partial-attach and missing-hook proof, paired lightweight and
-physical runs, and full workspace checks. Phase 2 is **Not done**. Shared trace
-storage and the lightweight Node capture chain are implemented. Read its
-[current result](phase-2-owned-capture.md#verified-implementation-slices) for
-source revisions and checks. Source `7dc26bd2` adds compiled physical capture
-harnesses and a passing before-append owner case. Physical capture and
-interference gates remain open. Deployment diagnostics stay disabled.
+physical runs, and full workspace checks. Phase 2 is **Done** for implementation
+and scoped correctness, with performance **UNQUALIFIED** under explicit user
+approval. Read its
+[completion record](phase-2-owned-capture.md#implementation-completion-record)
+for the current workspace checks, five paired native routes, source and
+artifact identities, and limits. The zero-increase performance gate is not
+passed. Deployment diagnostics stay disabled.
 
 The initial recipe set is syscall errors and failed file opens. Connection
 outcomes and latency follow only with explicit asynchronous/entry-return

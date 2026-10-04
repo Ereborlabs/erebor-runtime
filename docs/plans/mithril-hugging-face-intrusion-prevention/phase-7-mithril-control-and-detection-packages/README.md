@@ -163,13 +163,13 @@ belong to Observability 3. This closure does not start another phase.
 Observability 1 is **Done** at source `8e752bdb`. Its
 [corrected result](../../araphor-observability/phase-1-contracts-and-backend.md#corrected-backend-proof)
 records direct partial-attach and missing-hook proof, paired lightweight and
-physical runs, and full workspace checks. Observability 2 is **Not done**.
-Shared trace storage and the lightweight Node capture chain are implemented.
-Source `7dc26bd2` adds compiled physical capture harnesses and a passing
-before-append owner case. Physical execution remains open.
-Read its [current result](../../araphor-observability/phase-2-owned-capture.md#verified-implementation-slices)
-for source revisions, checks, and open physical gates. Production enablement
-still requires physical capture and approved interference proof.
+physical runs, and full workspace checks. Observability 2 is **Done** for
+implementation and scoped correctness. Performance remains **UNQUALIFIED**
+under explicit user approval. Read its
+[completion record](../../araphor-observability/phase-2-owned-capture.md#implementation-completion-record)
+for current workspace checks, five paired native routes, source and artifact
+identities, and limits. This approval does not pass the zero-increase gate or
+enable deployment diagnostics. Production readiness checks remain unchanged.
 
 Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 →
 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 if selected → 7.10.
