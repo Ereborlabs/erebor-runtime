@@ -762,6 +762,7 @@ impl NodeChassis {
         if let Some(administrative) = self.administrative.as_mut() {
             administrative.cancel_armed_slots(host)?;
         }
+        host.reconcile_tasks().context(InterceptorSnafu)?;
         self.bindings.retire_profile_bindings(
             host,
             &cleanup.profile_id,

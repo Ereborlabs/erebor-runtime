@@ -203,6 +203,8 @@ int BPF_PROG(erebor_wake_up_new_task, struct task_struct *task)
     return 0;
 }
 
+static __noinline int reconcile_orphan_task_references(void);
+
 SEC("iter/task")
 int erebor_reconcile_tasks(struct bpf_iter__task *context)
 {
@@ -224,7 +226,7 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     int result;
 
     if (!task)
-        return 0;
+        return reconcile_orphan_task_references();
     config = identity_runtime_config();
     if (!config || !config->enabled)
         return 0;
