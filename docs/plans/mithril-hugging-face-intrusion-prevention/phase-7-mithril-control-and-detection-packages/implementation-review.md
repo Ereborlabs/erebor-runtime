@@ -3628,3 +3628,47 @@ zero loss, negative-claim eligibility and verified cleanup. Performance parity
 remains **Not done**. The linked proof includes every signed difference and
 the exact binary. The function-span results concern the earlier source, not
 this change.
+
+### Final-source native correctness
+
+Read [owned.sh](../../../../crates/mithril-e2e/harness/observability/owned.sh)
+for the paired restart and five-case fault routes. Read
+[disk-full.sh](../../../../crates/mithril-e2e/harness/observability/disk-full.sh)
+for real AnalysisStore ENOSPC. Both harnesses run their exact lightweight
+companion before [Host qualification](../../../../crates/mithril-e2e/src/platform/host.rs).
+Read the [source, artifact, commands and receipts](../../araphor-observability/phase-2-owned-capture.md#final-source-native-correctness)
+before accepting a result.
+
+All four harness commands return zero on `aefa92b4`, on the owned VM
+`mithril-runtime-qualification-20261002163710`. The immutable libtest copy is
+`target/araphor-owned-final.1YPoBWam/libtest`, SHA-256
+`ae4528afa16d7933378a724973f89879b644a0619b356a2a3771635909858740`.
+Read `restart-before-final/restart.json`, `restart-after-final/restart.json`,
+`failures-final/capture-pairs.json` and `storage-final/storage.json` under
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. The paired logs are in those directories.
+This proof covers the final map-verification code, not only the earlier sources.
+
+Restart retains `NodeRestarted`, incomplete output, unknown cleanup and recorded
+coverage gaps. Independent checks prove diagnostic removal before fixture
+shutdown. Recovered enforcement health and both physical denials pass.
+All five fault cases preserve enforcement and pass independent cleanup before
+Node shutdown. Partition permits no terminal ACK before repair and replays the
+exact retained spool after repair. AnalysisStore ENOSPC occurs before sync,
+returns no upload ACK and retains zero committed progress before replay.
+Repair acknowledges the retained 29-frame, 1,312-byte prefix and terminal.
+Trace kernel loss remains unknown in all these receipts.
+
+Final workspace CI returns zero after the last Rust and harness edits.
+Its covered source fingerprint is
+`fb0f9291081bf2af447f774531de03a6ce1650c832e3f26c6e766d2cb452f3d5`.
+Read `workspace-pod-finish-final-2.log` in the same evidence directory.
+Ignored cases are not passes. The separate local-spool ACK-write ENOSPC test
+remains ignored. Native host correctness is **Done** on this artifact and
+platform. Admission is synthetic; these receipts do not qualify performance
+or deployment. Performance parity remains **Not done**. Diagnostics stay disabled.
+
+The current unprofiled comparison returns 101 on the final immutable binary.
+Read [all five measurements](../../araphor-observability/phase-2-owned-capture.md#current-plain-bpftrace-comparison).
+Pairs 2 and 5 increase p99 by 1.935801% and 11.033782%. All ten samples retain
+5,000 denial witnesses and zero enforcement-event loss. Correctness does not
+close the zero-increase performance gate.

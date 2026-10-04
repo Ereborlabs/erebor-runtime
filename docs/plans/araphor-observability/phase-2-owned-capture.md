@@ -2216,8 +2216,115 @@ Read `restart.json`, `test.log`, `lightweight.log` and
 `/tmp/araphor-owned-lifecycle.DlPg5O1y`. Node restart qualification is **Done**
 at `af4b91fe` on this platform. The combined capture-failure route and native
 full-store qualification pass at `d486e637`, as recorded above. These earlier
-results do not qualify later changes. Current performance parity and Pod
-replacement remain **Not done**.
+results do not qualify later changes. Performance parity and Pod replacement
+remain **Not done** on those earlier sources.
+
+### Final-source native correctness
+
+The four host routes pass on source `aefa92b4`. The owned VM is
+`mithril-runtime-qualification-20261002163710`, address `192.168.122.153`.
+The immutable libtest copy is `target/araphor-owned-final.1YPoBWam/libtest`.
+Its SHA-256 is
+`ae4528afa16d7933378a724973f89879b644a0619b356a2a3771635909858740`.
+All four harness commands return zero. Each command runs its exact lightweight
+case before the physical case.
+
+Restart commands use `owned.sh BIN ARCHIVE OUTPUT 1 --test-admission MODE`.
+The modes are `restart-before` and `restart-after`. The combined fault command
+uses `owned.sh BIN ARCHIVE OUTPUT 1 --test-admission`. The full-store command
+uses `disk-full.sh BIN ARCHIVE OUTPUT --test-admission`. Both scripts are in
+`crates/mithril-e2e/harness/observability`.
+The archive is
+`/var/tmp/araphor-owned-fault-inputs.qiLXnxP9/fixtures-current.tar.gz`, SHA-256
+`e45a80566a94034b43e44f23272e59a93cc5c60d9d0c0886a5cf4331da733929`.
+The explicit `MITHRIL_TEST_OCI_HOOK` input is
+`/mnt/mithril-source/worktrees/mithril-ui/target/debug/mithril-oci-hook`, SHA-256
+`55ac03551c8d03be927f7adef41cf49e13712201e59a745a38d7e7461e2474f5`.
+
+| Route | Owned upload, s | Paired lightweight case, s | Physical case, s | Receipt |
+| --- | ---: | ---: | ---: | --- |
+| `restart-before` | 26.43 | 1.44 | 66.78 | `restart-before-final/restart.json` |
+| `restart-after` | 26.29 | 1.45 | 67.01 | `restart-after-final/restart.json` |
+| Combined faults | 25.66 | 0.69 | 117.16 | `failures-final/capture-pairs.json` |
+| AnalysisStore ENOSPC | 25.53 | 0.72 | 132.21 | `storage-final/storage.json` |
+
+The restart companion is `observability_owned_restart`. The fault and full-store
+companion is `observability_partition_tls_repair`. Read each receipt and its
+`test.log`, `lightweight.log` and paired lightweight log under
+`/tmp/araphor-owned-lifecycle.DlPg5O1y`. Guest output directories use
+`/tmp/araphor-owned-ROUTE-final-20261004`, where `ROUTE` is `restart-before`,
+`restart-after`, `failures` or `storage`.
+
+Both restart receipts preserve `NodeRestarted`, unknown cleanup, incomplete
+output and unknown trace kernel loss. The before-execution case has no frames
+or observed diagnostic resources. The after-attachment case retains two frames
+and 85 bytes. Its observed programs are 7601 and 7602; its maps are 4834 to 4836.
+No links are observed. Independent cleanup passes before fixture shutdown.
+Both cases retain two physical policy denials and recovered enforcement health.
+The recovered health reports zero loss, unresolved effects, decoder errors,
+evidence errors, reader queue drops and WAL capacity failures. Recorded restart
+gaps remain; these results do not prove continuous coverage across Node death.
+
+All five fault cases pass: partition, revocation, map exhaustion, output limit
+and target retirement. Their terminal reasons are `Deadline`, `Cancelled`,
+`Completed`, `ConsumerSlow` and `TargetChanged`, respectively. Each case reports
+`Verified` cleanup and unchanged enforcement resources. Independent cleanup
+passes before Node shutdown. Partition records no terminal ACK before repair
+and exact spool replay after repair. Each case has one physical denial; target
+retirement has two. Trace kernel loss stays unknown. The bounded map case is
+not a capacity benchmark.
+
+The full-store receipt records real `ENOSPC`, OS error 28, during segment
+creation before sync. The failed upload receives no ACK. The raw receipt before
+replay is zero. Discovery analysis remains disabled. The Node retains 29 frames
+and 1,312 bytes, then ends at its local deadline. Repair returns the exact ACK
+with last sequence 29 and the retained terminal. Three physical denials pass.
+Independent cleanup passes before Node shutdown. Enforcement resources remain
+unchanged. Output is incomplete and trace kernel loss stays unknown.
+
+Final `bash .github/scripts/verify-rust-ci.sh` returns zero after the last Rust
+and harness edits. The covered source fingerprint is
+`fb0f9291081bf2af447f774531de03a6ce1650c832e3f26c6e766d2cb452f3d5`.
+Read `workspace-pod-finish-final-2.log` in the same evidence directory.
+Data passes 167 tests, Observability 23, Interceptor 49, Control 170,
+Mithril e2e 153 and Node 262. The 413 ignored e2e cases are not passes.
+The separate 384-MiB local-spool ACK-write ENOSPC test remains ignored.
+That test is not the AnalysisStore ENOSPC case above.
+
+Native host correctness is **Done** on this source, artifact and platform.
+These routes use `synthetic-test-only` admission. Every receipt sets
+`performance_claim` and `performance_qualified` to false. These results do not
+qualify performance or deployment. Performance parity remains **Not done**.
+Diagnostics stay disabled.
+
+### Current plain-bpftrace comparison
+
+The unchanged comparison at `aefa92b4` returns 101 in 582.90 seconds.
+It uses the immutable final libtest copy above, stock bpftrace, DEBUG logging,
+5,000 denied opens per sample, 1-ms spacing and five alternating pairs.
+The actor archive remains `fixtures-5000-20261003.tar.gz`, SHA-256
+`e03a6bd8b320a4ce4655b7dedba001f94e6050263d87997e358ad106941d05ba`.
+K3s is stopped. No build, profiler or guest polling runs during measurement.
+The limit is zero increase for each pair. The positive harness input `1`
+does not change that comparison gate.
+
+| Pair | Plain p99, ns | Araphor p99, ns | Difference, ns | Difference, % |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 242,520 | 185,579 | -56,941 | -23.478888% |
+| 2 | 235,768 | 240,332 | +4,564 | +1.935801% |
+| 3 | 284,884 | 226,498 | -58,386 | -20.494657% |
+| 4 | 251,807 | 189,137 | -62,670 | -24.888109% |
+| 5 | 287,517 | 319,241 | +31,724 | +11.033782% |
+
+All ten samples retain exactly 5,000 denial witnesses, zero enforcement-event
+loss, zero unresolved effects and negative-claim eligibility. All five
+Araphor captures retain `Deadline`, complete output and `Verified` cleanup.
+Trace kernel loss stays unknown. Pairs 2 and 5 fail. Do not select only the
+three faster pairs or treat correctness as performance qualification.
+Read `capture-pairs.json` and `test.log` under
+`/tmp/araphor-current-performance.FR1DmmNg`. The guest output is
+`/tmp/araphor-observability-153-final-20261004-5000`.
+Performance parity remains **Not done**.
 
 1. Start a reviewed capture against a protected Kubernetes Pod. Replace that
    Pod with the same name. Require the original execution to end with
