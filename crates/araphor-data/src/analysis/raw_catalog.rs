@@ -485,23 +485,23 @@ impl RawJournal {
         {
             let mut statement = writer
                 .prepare(&format!(
-                    "WITH reservations AS (
-                     SELECT COUNT(*)::UBIGINT AS unfinished,
-                     COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
-                     WHERE s.stream_key = r.stream_key AND s.state = 'Live')
-                     THEN 1 ELSE 2 END), 0)::UBIGINT AS slots
-                     FROM trace_receipts r WHERE terminal IS NULL)
-                     SELECT 0::UTINYINT AS kind, tenant_id, SUM(bytes)::UBIGINT AS bytes
+                    "SELECT 0::UTINYINT AS kind, tenant_id, SUM(bytes)::UBIGINT AS bytes,
+                     0::UBIGINT AS slots
                      FROM ({}) GROUP BY tenant_id
-                     UNION ALL SELECT 1::UTINYINT, tenant_id, logical_bytes FROM tenant_usage
+                     UNION ALL SELECT 1::UTINYINT, tenant_id, logical_bytes, 0::UBIGINT
+                     FROM tenant_usage
                      UNION ALL SELECT 2::UTINYINT, c.tenant_id,
                      SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id))
-                     + octet_length(c.entity_key) + octet_length(c.lifetime_key))::UBIGINT
+                     + octet_length(c.entity_key) + octet_length(c.lifetime_key))::UBIGINT,
+                     0::UBIGINT
                      FROM context_versions c SEMI JOIN context_refs r USING
                      (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
                      GROUP BY c.tenant_id
-                     UNION ALL SELECT 3::UTINYINT, ''::BLOB, unfinished FROM reservations
-                     UNION ALL SELECT 4::UTINYINT, ''::BLOB, slots FROM reservations",
+                     UNION ALL SELECT 3::UTINYINT, ''::BLOB, COUNT(*)::UBIGINT,
+                     COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
+                     WHERE s.stream_key = r.stream_key AND s.state = 'Live')
+                     THEN 1 ELSE 2 END), 0)::UBIGINT
+                     FROM trace_receipts r WHERE terminal IS NULL",
                     super::quota::TRACE_CHARGES
                 ))
                 .context(AnalysisDatabaseSnafu {
@@ -513,29 +513,23 @@ impl RawJournal {
                         row.get::<_, u8>(0)?,
                         row.get::<_, Vec<u8>>(1)?,
                         row.get::<_, u64>(2)?,
+                        row.get::<_, u64>(3)?,
                     ))
                 })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read raw budget charges",
                 })?;
             for row in rows {
-                let (kind, tenant, bytes) = row.context(AnalysisDatabaseSnafu {
+                let (kind, tenant, bytes, slots) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode raw budget charge",
                 })?;
-                match kind {
-                    3 => {
-                        budget.trace_reserve = bytes
-                            .checked_mul(super::quota::TRACE_RESERVE)
-                            .ok_or_else(|| self.invalid("the diagnostic reserve is exhausted"))?;
-                        continue;
-                    }
-                    4 => {
-                        budget.trace_slots = usize::try_from(bytes).map_err(|_| {
-                            self.invalid("the diagnostic slot reserve is exhausted")
-                        })?;
-                        continue;
-                    }
-                    _ => {}
+                if kind == 3 {
+                    budget.trace_reserve = bytes
+                        .checked_mul(super::quota::TRACE_RESERVE)
+                        .ok_or_else(|| self.invalid("the diagnostic reserve is exhausted"))?;
+                    budget.trace_slots = usize::try_from(slots)
+                        .map_err(|_| self.invalid("the diagnostic slot reserve is exhausted"))?;
+                    continue;
                 }
                 let reason = match kind {
                     0 => "the diagnostic tenant is invalid",
