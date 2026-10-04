@@ -102,6 +102,25 @@ fn stop_kills_child_after_exit() -> crate::Result<()> {
 
 #[test]
 fn fatal_exec_dies() -> crate::Result<()> {
+    const CHILD: &str = "MITHRIL_FATAL_EXEC_TEST_CHILD";
+    // Isolate the ELF writer from children that other tests create.
+    if std::env::var_os(CHILD).is_none() {
+        let exe = std::env::current_exe().context(IoSnafu {
+            path: "current test executable",
+        })?;
+        let status = Command::new(&exe)
+            .args([
+                "process::tests::fatal_exec_dies",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .context(IoSnafu { path: &exe })?;
+        assert!(status.success(), "fatal exec test child: {status}");
+        return Ok(());
+    }
     let dir = tempfile::tempdir().context(IoSnafu {
         path: "temporary directory",
     })?;
