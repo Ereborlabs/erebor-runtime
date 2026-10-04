@@ -125,6 +125,8 @@ mod retained_host;
 #[cfg(test)]
 mod runtime_changed;
 #[cfg(test)]
+mod runtime_cold_view;
+#[cfg(test)]
 mod runtime_control;
 #[cfg(test)]
 mod runtime_effects;

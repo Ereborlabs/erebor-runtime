@@ -6731,6 +6731,21 @@ setup, production actions, assertions, and focused test.
     callers passed on Host, runc, and Kubernetes in the physical matrix.
     The final repository Rust CI gate passed on 2026-10-02. This tooling does
     not prove concurrent exec, Node collection, or scenario retirement.
+  - [x] Reproduce the cold host-namespace cache with
+    [cold_runtime_builds_cache](src/identity/scenarios/runtime_cold_view.rs).
+    Reuse [mount_alias.py](fixtures/process/mount_alias.py), the signed
+    wildcard policy, and [proc_read.py](fixtures/process/proc_read.py).
+    The host-namespace probe enters the workload cgroup and reads its real
+    process environment. Require exactly one added READY row. Keep the actor
+    namespace, mountinfo, epoch, generation, and existing rows unchanged.
+    The exact direct-runc case passed in 38.42 seconds on 2026-10-02 and
+    44.29 seconds on 2026-10-04. Normal cleanup and owned path removal passed
+    in the current-source run. See
+    `/tmp/mithril-cold-audit-runc-current-20261004.log`.
+    Read `ProcessFixture` for process ownership and `MountCache::snapshot`
+    for read-only map selection. This reproduction does not qualify the
+    separate concurrent-exec or startup-probe conditions. No old check is
+    removed by this commit.
   - [x] Replace the 70,000-read queue burst with `reader_burst_keeps_events`.
     Use the deployed Node observation path. Require the public attempted count,
     a later application child exec, a drained evidence backlog, and unchanged

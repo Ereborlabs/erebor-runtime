@@ -145,12 +145,12 @@ if args in (["external-setattr"], ["external-bind"]):
         check(libc.prctl(15, name, 0, 0, 0))
     sys.exit(0)
 if args not in (
-    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"], ["reconfigure"], ["cache"], ["shared"]
+    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"], ["reconfigure"], ["cache"], ["shared"], ["overlap"]
 ):
     sys.exit(2)
 mode = args[0] if args else "early"
 root = os.path.join(sys.argv[1], "mount")
-secret = os.path.join(root, "secret")
+secret = os.path.join(root, "team/blue/secret" if mode == "overlap" else "secret")
 allowed = os.path.join(root, "allowed")
 denied_alias = os.path.join(root, "denied-alias")
 allowed_alias = os.path.join(root, "allowed-alias")
@@ -184,13 +184,13 @@ if mode == "subpath":
     sys.exit(0)
 
 mount_error = 0
-if mode not in ("future", "runtime"):
+if mode not in ("future", "runtime", "overlap"):
     check(libc.unshare(CLONE_NEWNS))
     check(libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None))
 mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
 if mode == "early":
     check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
-if mode not in ("recursive", "future", "runtime", "reconfigure"):
+if mode not in ("recursive", "future", "runtime", "reconfigure", "overlap"):
     check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
 marker = None
 if mode == "shared":
@@ -384,14 +384,14 @@ elif mode == "propagate" and command == "share\n":
     with open(result_path, "w", encoding="utf-8") as output:
         json.dump({"phase": "shared", "errno": code}, output)
     sys.exit(0)
-if mode in ("late", "recursive", "runtime") and command in ("mount-read\n", "mount\n"):
-    flags = MS_BIND | (MS_REC if mode == "recursive" else 0)
+if mode in ("late", "recursive", "runtime", "overlap") and command in ("mount-read\n", "mount\n"):
+    flags = MS_BIND | (MS_REC if mode in ("recursive", "overlap") else 0)
     result = libc.mount(secret.encode(), denied_alias.encode(), None, flags, None)
     mount_error = ctypes.get_errno() if result else 0
-    if mode in ("recursive", "runtime"):
+    if mode in ("recursive", "runtime", "overlap"):
         result = libc.mount(allowed.encode(), allowed_alias.encode(), None, flags, None)
         allowed_mount_error = ctypes.get_errno() if result else 0
-    if mode == "runtime" and command == "mount\n":
+    if mode in ("runtime", "overlap") and command == "mount\n":
         with open(result_path, "w", encoding="utf-8") as output:
             json.dump(
                 {
@@ -405,6 +405,47 @@ if mode in ("late", "recursive", "runtime") and command in ("mount-read\n", "mou
             sys.exit(2)
 elif command not in ("read\n", "race\n"):
     sys.exit(2)
+
+if mode == "overlap":
+    if mount_error or allowed_mount_error:
+        raise RuntimeError(f"recursive bind failed: {mount_error}, {allowed_mount_error}")
+    blocked = os.path.join(denied_alias, "blocked")
+    warm = read_file(blocked)
+    with open(result_path, "w", encoding="utf-8") as output:
+        json.dump({"phase": "warm", "denied": warm["errno"]}, output)
+    check(libc.prctl(15, ctypes.create_string_buffer(b"overlap-warm"), 0, 0, 0))
+    if sys.stdin.readline() != "start\n":
+        sys.exit(2)
+    done = threading.Event()
+    counts = {"denied": 0, "allowed": 0, "other": 0, "stopped": False}
+
+    def stop_reads():
+        try:
+            counts["stopped"] = sys.stdin.readline() == "stop\n"
+        finally:
+            done.set()
+
+    watcher = threading.Thread(target=stop_reads)
+    watcher.start()
+    first = True
+    for _ in range(16384):
+        if done.wait(0.01):
+            break
+        try:
+            fd = os.open(blocked, os.O_RDONLY)
+            os.close(fd)
+            counts["allowed"] += 1
+        except OSError as error:
+            counts["denied" if error.errno == errno.EACCES else "other"] += 1
+        if first:
+            check(libc.prctl(15, ctypes.create_string_buffer(b"guard-ready"), 0, 0, 0))
+            first = False
+    else:
+        raise TimeoutError("concurrent exec did not stop within 16384 protected reads")
+    watcher.join()
+    with open(result_path, "w", encoding="utf-8") as output:
+        json.dump(counts, output)
+    sys.exit(0)
 
 try:
     denied_path = secret if mode in ("future", "race") else denied_alias

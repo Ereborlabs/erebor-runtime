@@ -56,7 +56,7 @@
         "pathTreeDenials": [
           {
             "name": "deny-secret-tree",
-            "path": "/work/mount/secret",
+            "path": "/work/mount/**/secret",
             "operations": ["OpenRead"]
           },
           {
