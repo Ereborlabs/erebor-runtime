@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
+#[cfg(test)]
+use std::os::fd::AsRawFd as _;
+use std::os::fd::{AsFd as _, FromRawFd as _, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -264,6 +266,7 @@ impl ResourceSnapshot {
             && self.links.is_disjoint(&observed.links)
     }
 
+    #[cfg(test)]
     #[allow(unsafe_code)]
     fn program_maps() -> ProofResult<BTreeMap<u64, BTreeSet<u64>>> {
         let mut programs = BTreeMap::new();
@@ -316,6 +319,7 @@ impl ResourceSnapshot {
         }
     }
 
+    #[cfg(test)]
     fn map_entries(
         id: u32,
         info: &libbpf_rs::libbpf_sys::bpf_prog_info,
@@ -501,12 +505,23 @@ impl ResourceSnapshot {
         Ok(true)
     }
 
+    #[cfg(test)]
+    pub(crate) fn capture_baseline() -> ProofResult<Self> {
+        let mut baseline = Self::read()?;
+        let graph = Self::program_maps()?;
+        baseline.programs = graph.keys().copied().collect();
+        baseline.maps.extend(graph.into_values().flatten());
+        Ok(baseline)
+    }
+
     pub(crate) fn read() -> ProofResult<Self> {
         if !rustix::process::geteuid().is_root() {
             return Err("BPF inventory requires root".into());
         }
         Ok(Self {
-            programs: Self::program_maps()?.into_keys().collect(),
+            programs: libbpf_rs::query::ProgInfoIter::default()
+                .map(|item| u64::from(item.id))
+                .collect(),
             maps: libbpf_rs::query::MapInfoIter::default()
                 .map(|item| u64::from(item.id))
                 .collect(),

@@ -2121,6 +2121,37 @@ before Node teardown calls the admission listener. Read `pods-scoped` in the
 same evidence directory. The scoped verifier is **Done**. The complete Pod
 route and performance parity remain **Not done**. Diagnostics stay disabled.
 
+`Kubernetes::capture_finish` now retires the scenario under the live guard,
+stops Node through the active admission listener, closes the guard, then
+publishes `finish.json`. Retirement or Node-stop failure leaves the finish
+file unpublished. The `observability_pod_finish` test uses the existing
+Platform seam. It fails with the old order and passes with this order.
+Read `pod-finish-red.log` and `pod-finish-green.log`. The harness runs this
+exact lightweight test before the physical case. Ordinary inventory keeps
+the earlier plain-bpftrace preparation path. Both Pod-leg baselines use a
+separate fallible program graph and its referenced map IDs.
+
+The complete Pod command returns zero with immutable libtest SHA-256
+`f593ffe65feb0485e1abd6b1ed5e99eb108e5322d799aa052a5eb1b5d8138455`.
+Owned upload passes in 25.65 seconds, lightweight shutdown in 0.01 seconds,
+and physical replacement in 137.20 seconds. The unchanged receipt check
+returns zero. Original programs 7136 and 7137 and maps 4660 to 4662 disappear.
+Replacement programs 7149 and 7150 and maps 4666 to 4668 disappear.
+Enforcement pins and program graphs stay unchanged. Each trace attaches once.
+The original ends with `TargetChanged`; the replacement ends with `Cancelled`.
+Both physical policy denials pass. Output remains incomplete and trace
+kernel loss stays unknown. Teardown succeeds. Read `pods-finish` under the
+same evidence directory. This binary precedes only the test-only import
+annotation; production Node and Control images retain `388c298a`.
+Pod replacement is **Done** on this artifact and platform. Final workspace
+CI returns zero after the test-only import correction. The tracked Rust,
+Cargo, CI and harness fingerprint stays unchanged during the run. Data
+passes 167 tests, Observability 23, Interceptor 49, Control 170, Mithril e2e
+153 and Node 262. The 413 ignored e2e cases are not passes. Read
+`workspace-pod-finish-final-2.log` in the same evidence directory.
+Final Rust CI is **Done**. Performance parity remains **Not done**.
+Diagnostics stay disabled.
+
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses
 production Control dispatch, NodeTraceOwner, the shared spool and current

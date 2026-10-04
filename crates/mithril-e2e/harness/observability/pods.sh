@@ -29,6 +29,8 @@ export MITHRIL_TRACE_RUNTIME="$runtime_bundle"
 export MITHRIL_TRACE_PROOF="$output/result.json"
 "$test_binary" observability::tests::observability_owned_upload \
   --exact --nocapture >"$output/lightweight.log" 2>&1
+"$test_binary" platform::kubernetes::observability_pod_finish \
+  --exact --nocapture >"$output/lightweight-finish.log" 2>&1
 "$test_binary" platform::kubernetes::observability_pod_replacement \
   --ignored --exact --nocapture --test-threads=1 >"$output/test.log" 2>&1
 [[ -s $MITHRIL_TRACE_PROOF ]]

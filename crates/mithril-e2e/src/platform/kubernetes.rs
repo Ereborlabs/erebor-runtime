@@ -2437,7 +2437,7 @@ impl Kubernetes {
         let mut actor = env.start_actor("read_path.py", &["before"], &labels)?;
         env.wait_workload_ready()?;
         env.running(actor.id())?;
-        let initial = crate::observability::ResourceSnapshot::read()?;
+        let initial = crate::observability::ResourceSnapshot::capture_baseline()?;
         let enforcement = crate::observability::ResourceSnapshot::owned(&env.pin_path)?;
         let original_uid = env
             .pod()?
@@ -2459,7 +2459,7 @@ impl Kubernetes {
         let mut actor = env.start_actor("read_path.py", &["after"], &labels)?;
         env.wait_workload_ready()?;
         env.running(actor.id())?;
-        let baseline = crate::observability::ResourceSnapshot::read()?;
+        let baseline = crate::observability::ResourceSnapshot::capture_baseline()?;
         let replacement_uid = env
             .pod()?
             .metadata
@@ -2517,9 +2517,21 @@ impl Kubernetes {
             &temporary,
             serde_json::to_vec_pretty(&json!({"finish": true}))?,
         )?;
+        Self::capture_finish(&mut env, &temporary, &finish, |env| env.clean_test())?;
+        fs::write(proof, serde_json::to_vec_pretty(&record)?)?;
+        Ok(())
+    }
+
+    fn capture_finish<P: Platform>(
+        env: &mut P,
+        temporary: &Path,
+        finish: &Path,
+        retire: impl FnOnce(&mut P) -> TestResult<()>,
+    ) -> TestResult<()> {
+        retire(env)?;
+        env.stop_node()?;
         env.stop()?;
         fs::rename(temporary, finish)?;
-        fs::write(proof, serde_json::to_vec_pretty(&record)?)?;
         Ok(())
     }
 }
@@ -2872,6 +2884,88 @@ impl PodCapture {
             _ = tokio::time::sleep(Duration::from_secs(900)) => Err("the Control fixture exceeded its lifetime".into()),
         }
     }
+}
+
+#[test]
+fn observability_pod_finish() -> TestResult<()> {
+    struct CapturePlatform {
+        finish: PathBuf,
+        reader: KernelStateReader,
+        retired: bool,
+        node_stopped: bool,
+        closed: bool,
+        fail_stop: bool,
+    }
+
+    impl Platform for CapturePlatform {
+        fn source(&self) -> &Path {
+            &self.finish
+        }
+
+        fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
+            Err("the shutdown double has no observation snapshot".into())
+        }
+
+        fn maps(&self) -> (&Path, &KernelStateReader) {
+            (&self.finish, &self.reader)
+        }
+
+        fn stop_node(&mut self) -> TestResult<()> {
+            if self.finish.exists() || self.closed || !self.retired {
+                return Err("Node stop needs live Control, a held guard and retired work".into());
+            }
+            if self.fail_stop {
+                return Err("Node stop failed".into());
+            }
+            self.node_stopped = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> TestResult<()> {
+            if self.finish.exists() || !self.node_stopped {
+                return Err("the guard closes before Node stop".into());
+            }
+            self.closed = true;
+            Ok(())
+        }
+    }
+
+    for failure in [None, Some("retirement"), Some("node")] {
+        let directory = tempfile::tempdir()?;
+        let temporary = directory.path().join("finish.tmp");
+        let finish = directory.path().join("finish.json");
+        fs::write(&temporary, b"{\"finish\":true}")?;
+        let mut env = CapturePlatform {
+            finish: finish.clone(),
+            reader: KernelStateReader::new(directory.path()),
+            retired: false,
+            node_stopped: false,
+            closed: false,
+            fail_stop: failure == Some("node"),
+        };
+        let result = Kubernetes::capture_finish(&mut env, &temporary, &finish, |env| {
+            if failure == Some("retirement") {
+                return Err("scenario retirement failed".into());
+            }
+            if env.closed || env.node_stopped || env.finish.exists() {
+                return Err("scenario retirement needs live Node and Control".into());
+            }
+            env.retired = true;
+            Ok(())
+        });
+        if failure.is_none() {
+            result?;
+            assert!(env.retired && env.node_stopped && env.closed);
+            assert_eq!(fs::read(&finish)?, b"{\"finish\":true}");
+            assert!(!temporary.exists());
+        } else {
+            assert!(result.is_err());
+            assert!(!env.node_stopped && !env.closed && !finish.exists());
+            assert!(temporary.exists());
+            assert_eq!(env.retired, failure == Some("node"));
+        }
+    }
+    Ok(())
 }
 
 #[test]

@@ -3470,6 +3470,25 @@ The Node selector update cannot pass its fail-closed webhook. This result
 does not qualify the complete Pod route. Pod and performance qualification
 remain **Not done**.
 
+[Kubernetes::capture_finish](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) retires work while Node and Control remain live.<br>
+-> [KubernetesState::stop_node](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) updates the selector and verifies Node Pod and socket removal.<br>
+-> [Kubernetes::close](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) closes the lifecycle guard.<br>
+-> [PodCapture::capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) observes the published finish file and returns.
+
+The same-file `observability_pod_finish` test proves this order through the
+existing Platform seam. The test also requires an unpublished finish file
+after retirement or Node-stop failure. The paired harness runs this test
+first. Both Pod legs call `ResourceSnapshot::capture_baseline`; the ordinary
+global reader retains the earlier benchmark preparation path.
+The complete Pod command and receipt check now return zero. Read
+`pods-finish` under `/tmp/araphor-owned-lifecycle.DlPg5O1y` and the
+[exact artifact and result](../../araphor-observability/phase-2-owned-capture.md#pod-fixture-input-correction).
+No admission rule or production owner changes. Pod replacement is **Done**
+on that artifact and platform. Final workspace CI returns zero after the
+test-only import correction. Its tracked Rust, Cargo, CI and harness
+fingerprint remains unchanged. Read `workspace-pod-finish-final-2.log` in
+the same evidence directory. Performance parity remains **Not done**.
+
 For the default resource-scan path, read
 [`SupervisedChild::record_resources`](../../../../crates/erebor-interceptor/src/diagnostic.rs)
 and `read_resource`, then the three same-file resource tests. The existing
