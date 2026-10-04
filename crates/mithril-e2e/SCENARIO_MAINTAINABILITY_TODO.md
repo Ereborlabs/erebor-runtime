@@ -2398,6 +2398,21 @@ test does not close a row when its physical condition or an assertion changed.
     Keep the old runner until the replacement and recorder pass. A narrow
     production-owner correction requires user approval. Do not add retries,
     sleeps, or a second cleanup sequence to the scenario.
+    The unchanged Host draft failed at the same decommission readback on
+    2026-10-04 in 12.38 seconds. See
+    `/tmp/mithril-file-gate-audit-host-20261004.log`. Keep this draft
+    unqualified. No production code or assertion changed.
+    A fresh run passed in 71.79 seconds. The final artifact-bound run then
+    failed the same exact map-absence check in 12.97 seconds. See
+    `/tmp/mithril-file-gate-final-host-20261004.log`. This is an intermittent
+    owner cleanup failure, not a qualified deliverable. Keep the scenario
+    unchanged. A separate owner correction needs approval.
+    On 2026-10-04, the user required production to stay unchanged. Source
+    review found no retained BPF descriptor in the test. The loader, object
+    layout, link records, map reader, and cleanup wrappers retain paths or
+    metadata only. The exact decommission contract exists in baseline
+    `95775f48`. Keep the test unqualified. Do not conceal the owner failure
+    with a scenario delay, retry, or accepted error.
 - [x] `HostLifecycleRunner::host_lifecycle`: own the pin root and lease, use
   readiness diagnostics, and keep both `KernelHostOwner` starts and the
   concurrent-owner rejection explicit.
@@ -3519,6 +3534,13 @@ test does not close a row when its physical condition or an assertion changed.
     direct-`runc` identity lifecycle passed 57 tests. Both lifecycles removed
     their pin root, lease, and cgroup. The repository Rust CI gate passed.
     This does not qualify descriptor transfer.
+    A Host draft started two members with one shared
+    `/tmp` directory. Both actors see the same file device and inode. A
+    policy without `exact: true` denies the direct secret open through a
+    composite atom, so it does not preserve the old exact-selector check.
+    With exact selectors, the replacement remains pending for two targets
+    and the 30-second readiness check fails. The draft was removed. Do not
+    remove the old actions.
     This is a design, not a passing replacement. A Host draft with one shared
     `/tmp` mount proved matching file device/inode and reached exact-policy
     readiness, but the sender's Unix connect returned `EACCES` before transfer.
@@ -6746,6 +6768,171 @@ setup, production actions, assertions, and focused test.
     for read-only map selection. This reproduction does not qualify the
     separate concurrent-exec or startup-probe conditions. No old check is
     removed by this commit.
+  - [ ] Make the existing `add_actor` receiver shared. Keep normal return,
+    denial, readiness, and cleanup behavior. Use a standard mutex only for
+    Kubernetes approval state. Give each direct-runc exec a temporary PID-file
+    directory. Do not add a batch method, clone the Platform, serialize the
+    exec requests, or change production. Qualify the common tooling before
+    its dependent migration. Run the full physical matrix for this change.
+    - Fresh related checks passed on 2026-10-04: Host entry-role isolation
+      in 32.55 seconds, direct-runc signed-entry replacement in 54.42 seconds,
+      and Kubernetes entry-role isolation in 76.30 seconds. Normal cleanup
+      passed. These focused results do not close the full-matrix gate.
+  - [ ] Replace the old 32-request overlap with one shared Rust test below
+    100 lines. Use the shared mount actor and existing policy. Release all
+    32 `add_actor("sleep", ...)` calls at one thread barrier while the main
+    actor reads the protected path. Require every exec to fail with `EACCES`,
+    positive read count, no allowed or other read, fresh task-attributed
+    `PATH_TREE_POLICY_DENY`, no unresolved evidence, unchanged namespace,
+    mountinfo, security epoch, cache generation and READY keys, and increased
+    mount activity. Keep the old Rust and shell assertions until this passes.
+    - [x] Keep the recursive wildcard from the original `/srv/**/secrets`
+      policy. The shared policy uses `/work/mount/**/secret`. The overlap
+      actor opens the bind alias of `/work/mount/team/blue/secret/blocked`.
+      Existing actors still test the zero-segment wildcard case.
+    - [x] Bound actor work without ending the protected read loop before the
+      exec requests complete. The first draft made 491,161 denied reads and
+      exceeded the normal policy-retirement readiness limit. The old actor
+      made at most 16,384 attempts. The actor now waits on its stop event
+      between reads and fails if 16,384 reads complete without a stop command.
+      Keep the separate reader-queue burst test.
+    - [x] Pass the 95-line overlap test on direct runc and real Kubernetes.
+      On 2026-10-02, direct runc passed in 38.43 seconds and Kubernetes passed
+      in 91.04 seconds. The runtime receives one earlier undeclared entry
+      before the baseline snapshot, as the old probes did. All entries must
+      return `EACCES`. Exact cache-key equality remains required.
+    - [ ] Retire the matched Rust overlap after the common tooling commit.
+      Remove its embedded actor loop, FIFO, result field, predicate, and
+      matcher. Keep the later stale-cache repair and row-collection checks.
+      Read their baseline cache immediately before the stale-cache action.
+      The 182-line deletion draft compiled but failed the remaining collector
+      precondition: no READY row existed in the current cache generation.
+      The removed actor loop also warmed that cache. The deletion is withdrawn;
+      the old runner and launcher now match HEAD. A proposed warm-up rewrite
+      in the old runner was rejected because it added legacy orchestration.
+      Add no replacement warm-up helper there. Preserve the old coverage until
+      the shared collector replacement can remove this dependency. The final
+      Rust CI gate remains required for the shared fixture changes.
+    - [ ] Capture the full request interval through Node snapshots. A final
+      snapshot contains only recent events and can omit an earlier unresolved
+      result. The existing `EffectCheck` now collects fresh observations
+      during the action and rejects a per-CPU sequence gap. Keep the denial
+      and no-unresolved assertions in the 95-line test. Qualify the revised
+      test on direct runc before Kubernetes. Both physical matrix processes
+      ended before the revised executable was built. The revised direct-runc
+      test passed in 44.93 seconds. Kubernetes passed the scenario assertions,
+      then failed normal retirement after 180 seconds. Node still reported
+      one active runtime binding. The case is not qualified. Reproduce the
+      missing cleanup condition in lightweight before a fix or Kubernetes
+      rerun. The final Rust CI gate passed on 2026-10-02.
+      A fresh direct-runc run on 2026-10-04 found a capture sequence gap.
+      Protected reads started before the capture pump was ready. The pump
+      now confirms its first snapshot before the action starts. The actor
+      starts its protected loop inside that action. The unchanged sequence
+      check then passed on direct runc in 50.40 seconds and Kubernetes in
+      112.87 seconds. Both runs completed normal cleanup. The capture review
+      still requires an exact end watermark: a last recent-window snapshot
+      alone can miss an event that Node has not delivered yet. Keep this
+      capture gate open until that condition is fixed and verified.
+      The exact-watermark draft failed on 2026-10-04. The final diagnostic
+      run found a permanent CPU-0 sequence gap from 1173 to 2536 with zero
+      kernel loss. Sixteen captured hard results were `UNSUPPORTED_OBJECT`
+      exec denials with `EACCES`. No captured result was `UNRESOLVED_OBJECT`,
+      but the missing interval prevents that negative claim. Removing extra
+      per-denial snapshot requests and the capture poll delay did not fix
+      the gap. The public snapshot keeps 1,024 recent records and provides
+      no cursor, page, or stream. Do not reopen an active WAL or Control store,
+      add a competing ring reader, or accept incomplete capture. See
+      `/tmp/mithril-overlap-fixture-opt-runc-20261004.log`. No Kubernetes
+      rerun followed this lightweight failure. Keep the old coverage.
+    - [ ] Preserve the real Kubernetes probe overlap before shell retirement.
+      The old startup probe retries `cat` while its last input file is absent.
+      The launcher creates that file after the 32 exec requests. The file is
+      not a FIFO, and the probe does not hold a process open. The current
+      replacement Pod has no startup probe. The separate probe-entry test
+      proves classification, not this mount-cache overlap. Keep the old
+      Kubernetes actor and shell assertions until this condition passes in
+      the shared Rust test. Use existing physical setup and `add_actor`.
+      Do not add a Platform API or a second runner.
+    - [ ] Revisit concurrent Host entry setup. The Host trial timed out at
+      actor exit and was removed from the attribute. Do not claim Host support
+      or change production to make this trial pass. The old overlap check
+      used containerd, not Host entry setup.
+    - [ ] Complete common-fixture qualification before its commit. The
+      Host, runc, and Kubernetes lifecycle matrix was run. The
+      pre-existing uncommitted `file_gate` draft is not a qualified baseline
+      case and is excluded. Crate tests passed: 92 library tests and two binary
+      tests. Workspace formatting, check, and strict clippy passed. Workspace
+      tests stopped at the unchanged CLI test
+      `cli::start::tests::start_builds_surface_launch_plan`: actual surfaces
+      are BrowserCdp and Terminal; the assertion expects BrowserCdp only.
+      The physical matrix found a missing VM prerequisite: `clean_host_restarts`
+      could not start `clang`. Install `clang` and `libbpf-dev` in the retained
+      test VM. Rerun this exact case after the current VM lane ends. Do not
+      replace its fresh compilation with a prebuilt object or change assertions.
+      A second failure occurred in `poststart_uses_literal_path` on direct
+      runc. After Node restart, `runc exec cp` exited before PID publication.
+      The diagnostics report one placement mismatch and a
+      `CORRUPT_IDENTITY_OR_GENERATION` denial. The cause is not yet proved.
+      Run the exact case, then its five-case `node_restart_runc` lifecycle.
+      Keep the test order, policy, assertions, and readiness limits unchanged.
+      The lightweight matrix completed 124 lifecycle groups: 312 passed and
+      these two cases failed. Fresh compilation passed in 26.65 seconds after
+      the prerequisite installation. The unchanged PostStart case passed in
+      79.73 seconds. Its five-case lifecycle then passed in 287.59 seconds.
+      Normal resource cleanup passed for all three focused commands. The
+      initial PostStart failure is not a proved or fixed production defect.
+      Kubernetes failed `unmatched_signal_is_denied` before its signal action.
+      Policy readiness timed out with Accepted and Compiled true, but zero
+      desired and active targets. The recovery scenario had an actor before
+      Node. Trace the missing target and reproduce a missing external condition
+      in lightweight before an implementation change or Kubernetes retry.
+      Do not lower the expected target count or increase the readiness limit.
+      The retained log is
+      `/tmp/mithril-runtime-tools-kube-matrix-20261002.log`. It has no matching
+      Pod inventory, image digest, Node identity, or target rejection reason.
+      Accepted and Compiled with zero targets does not prove the cause.
+      The final repository Rust CI gate passed for the current test and
+      receiver edits on 2026-10-04. See
+      `/tmp/mithril-pending-final-ci-after-fixture-20261004.log`. This result
+      does not qualify a later owner or capture change.
+      The final Rust CI gate passed after the last Rust edit on 2026-10-04.
+      The E2E library run passed 94 tests and ignored 505 physical cases.
+      The Node library passed all 255 tests. See
+      `/tmp/mithril-approved-owner-final-ci-20261004.log`. This result does
+      not close the physical matrix gate.
+      The parallel process fixture group exposed `ETXTBSY` in
+      `fatal_exec_dies`. Another test's child can inherit the writable ELF
+      descriptor before exec closes it. The test now runs its unchanged ELF
+      write, real exec, and fatal-signal assertion in an isolated child test
+      process. No retry, sleep, accepted error, or production change was added.
+      The exact test and all 12 process fixture tests passed. See
+      `/tmp/mithril-fatal-exec-isolated-group-20261004.log`.
+  - [ ] Replace the detached-exec overlap with
+    `runtime_exec_keeps_mount_view`.
+    - [ ] Use the shared mount actor and the existing `Platform::add_actor`
+      operation. Do not add a platform API.
+    - [ ] Keep protected reads active while 32 undeclared `sleep` entries fail
+      with `EACCES`.
+    - [ ] Require at least one protected read, no allowed or unresolved read,
+      and an attributed `PATH_TREE_POLICY_DENY` result.
+    - [ ] Require the actor mount namespace, mountinfo, security-view state,
+      canonical cache generation, and canonical cache keys to stay unchanged.
+      Require mount activity to advance without advancing the mutation epoch.
+    - [ ] Pass and commit Kubernetes. Both old launchers execute this case
+      through containerd: the Kubernetes launcher uses K3s `crictl exec`, and
+      the VM launcher always supplies `--containerd-path`. Host and stock
+      `runc` do not execute detached containerd mount preparation.
+    - [ ] Remove the matching legacy Rust, actor, shell, result, and launcher
+      assertions only after the Kubernetes replacement passes.
+    - A rejected draft kept the protected read active but called
+      `Platform::add_actor` 32 times in sequence. This weakens the old
+      simultaneous 32-request condition. At that time, the operation borrowed
+      the platform mutably until each request finished. The draft was removed.
+      The new shared-receiver tooling permits one barrier to release all
+      requests. Do not add a batch operation or expose Kubernetes or
+      containerd setup to the scenario. Keep the remaining probe condition
+      and legacy removal checks open.
   - [x] Replace the 70,000-read queue burst with `reader_burst_keeps_events`.
     Use the deployed Node observation path. Require the public attempted count,
     a later application child exec, a drained evidence backlog, and unchanged
@@ -7756,6 +7943,94 @@ setup, production actions, assertions, and focused test.
   running before Node starts. Require public production recovery, exact
   identity retention across the Kubernetes service and Node outages, and
   fresh identity after same-name Pod and container recreation.
+  - [ ] Replace the external-task label-loss and Node-restart checks with
+    `external_restart::recovered_root_survives_restart`. Reuse the Platform
+    lifecycle, checked policy, and process owner. Hold the external actor,
+    delete its pidfd-keyed task label, and require an absent label. A real
+    hostname read must allocate a fresh restricted task and process identity.
+    Require the full recovered snapshot and coordinate to remain equal during
+    the Node gap and after restart. Require public observation to fail during
+    the gap and report supported identity after restart. Pass Host, direct
+    `runc`, and Kubernetes before removing the matching old checks. Keep the
+    direct CRI, Kubernetes-service-outage, and same-name recreation checks.
+    - On 2026-10-03, the 98-line shared test passed its Host fault, read,
+      fresh-identity, Node-gap, and restart assertions. Normal retirement
+      failed after 30 seconds. A second focused run confirmed the failure.
+      Do not add runc or Kubernetes, commit the test as qualified, or remove
+      the old checks while this result is red.
+    - The live map read showed one retained task reference in generation 1,
+      zero socket and async references, and no active profile pointer. The
+      raw task-label deletion leaves the original task ownership record.
+      Recovery adds a fresh identity. The exit hook releases the current
+      label's references, not the deleted label's references. The generation
+      retirement guard therefore retains the old generation. The old
+      identity-only probe did not require signed-policy retirement.
+    - Read [the shared test](src/identity/scenarios/external_restart.rs),
+      [the actor](fixtures/process/label_loss.py),
+      [the exit hook](../../bpf/erebor-interceptor/programs/identity_exit.bpf.h),
+      and [the retirement guard](../mithril-node/src/policy.rs).
+      The actor blocks on stdin instead of SIGSTOP. An unmanaged controller
+      cannot send SIGCONT to the label-less governed task under the signed
+      policy. The bounded pipe wait and process-name result use existing
+      process fixture APIs. No production or Platform API changed.
+    - The final Rust CI gate and VM harness checks passed. The focused debug
+      log is `/tmp/mithril-external-restart-host-debug-20261003.log`. The CI
+      log is `/tmp/mithril-external-restart-host-ci-20261003.log`. These
+      checks do not qualify the failed physical cleanup.
+    - The unchanged Host case failed the same retirement check on 2026-10-04
+      in 80.54 seconds. See `/tmp/mithril-external-audit-host-20261004.log`.
+      The scenario assertions passed. Keep the cleanup result red and the
+      test unqualified. No production code or assertion changed.
+    - A fresh stdin-controlled run failed before the read result. The signed
+      policy does not permit pipe reads. The actor now maps a one-byte control
+      file before protected placement. The test changes that byte to request
+      the real hostname read. No pipe-read permission was added. The 89-line
+      Host test passed its fault, fresh identity, Node-gap, restart, and normal
+      actor-exit assertions, then failed signed-policy retirement in 95.49
+      seconds. See `/tmp/mithril-external-mailbox-host-20261004.log`.
+      The user approved a narrow ownership correction. Keep all assertions
+      and readiness limits. Release retained task references only after exact
+      kernel lifetime proof; never clear counters to force retirement.
+    - [x] Pass the corrected Host scenario and the exact-owner regression.
+      The 96-line scenario passed in 50.71 seconds. Its original reference
+      stays Owned while the exact task lifetime is live. The 90-line
+      `orphan_release_requires_exact_owner` test passed in 95.67 seconds.
+      An invalid process-instance join retains both references. After the
+      join is restored, reconciliation releases the dead reference once.
+      A second reconciliation keeps the tombstone and count unchanged.
+      Both tests complete normal signed-policy retirement and path cleanup.
+      See `/tmp/mithril-external-final-owner-host-20261004.log` and
+      `/tmp/mithril-orphan-owner-proof-host-20261004.log`.
+    - Review the approved ownership correction in this order:
+
+      [Node retirement](../mithril-node/src/node.rs) finds pending inventory cleanup
+        -> [KernelHost](../erebor-interceptor/src/host.rs) runs the existing task iterator
+        -> [task iterator](../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h) offers orphan maintenance
+        -> [exit owner](../../bpf/erebor-interceptor/programs/identity_exit.bpf.h) checks exact coordinate and reference joins
+        -> [kernel task lookup](../../bpf/erebor-interceptor/programs/identity_exit.bpf.h) proves the old physical lifetime is absent
+        -> [reference release](../../bpf/erebor-interceptor/programs/identity_exit.bpf.h) uses the normal atomic release bits
+
+      Live tasks, failed reads, invalid joins, pending transitions, and partial
+      releases retain ownership. Normal exit does not scan a map. The change
+      adds no map, ABI, public API, or Platform operation. Qualification covers
+      external or restored process-root leaders with trusted kernel coordinates
+      on the retained Linux 6.8 VM. It does not prove arbitrary map corruption,
+      nonleader orphan cleanup, or full-capacity scan performance. Final Rust
+      CI passed. The common physical matrix gate remains open.
+    - The existing Node-restart and signed-entry condition also passed
+      on direct runc in 60.16 seconds with the corrected owner. Full task
+      snapshots and coordinates remained equal across the Node gap. The
+      later declared entry kept its exact role and normal cleanup passed.
+      See `/tmp/mithril-owner-restart-runc-20261004.log`. This result does
+      not qualify the Host label-loss fault injection on runc.
+      The same unchanged Node-restart test passed on Kubernetes in 113.23
+      seconds. The deployed Node used the corrected ownership code. Full
+      snapshots, coordinates, the declared-entry role, and normal namespace
+      cleanup passed. See `/tmp/mithril-owner-restart-kube-20261003.log`.
+      This result does not qualify label-loss fault injection on Kubernetes.
+    - Keep the old label-loss actions while the Kubernetes-service-outage
+      checks use their recovered snapshot. Remove only the matching Node
+      restart block and four Node-specific result fields after qualification.
   - [x] Extend the existing `node_restart_keeps_actor` platform test with the
     live application's full task snapshot during the Node gap. It already
     compares the before and after snapshots. The separate PostStart test
