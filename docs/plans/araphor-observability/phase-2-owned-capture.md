@@ -2045,16 +2045,32 @@ Waiting for that transport before closing stdin reaches the 120-second
 `pods-args/test.log` in the evidence directory. This result does not qualify
 Pod replacement.
 
-`Kubernetes::capture_exit` now closes the transport input after confirmed Pod
-deletion and before waiting for exit. It calls the existing ProcessFixture
-owner. That owner also requires the recorded remote process to be absent.
-Acceptance does not force-kill either process. Exact UID deletion, target
-retirement, policy checks and independent BPF cleanup remain unchanged.
-`platform::kubernetes::observability_pod_exec_exit` first reproduces the same
-timeout with external process doubles. After the fix, it passes in 0.02 seconds.
-Read `pod-exit-red.log` and `pod-exit-green.log` in the evidence directory.
-The transport correction is **Done**. Its paired physical result and final
-workspace CI remain **Not done**.
+The earlier input-close regression passes in 0.02 seconds. Read
+`pod-exit-red.log` and `pod-exit-green.log` in the evidence directory.
+That regression does not include the Kubernetes actor-status check.
+
+The paired run at `388c298a` passes owned upload in 25.57 seconds. The physical
+case returns 101 after 242.84 seconds, with the same 120-second timeout.
+The actor-status check returns no exit status when the deleted Pod is absent.
+`ProcessFixture::try_wait` continues to use that check after it reaps the local
+attach process. Closing input does not make that status check complete.
+Read `pods-388c298a-failed/test.log` in the same evidence directory.
+
+After exact Pod UID deletion completes, `Kubernetes::capture_exit` now calls
+`ProcessFixture::stop`. The existing owner closes input, bounds graceful
+cleanup, uses held process descriptors or the recorded cgroup for cleanup,
+and reaps the local attach process. The owner can force-stop that local
+process during fixture cleanup. No remote exit status is fabricated.
+Exact UID deletion, target retirement, physical policy denials, retained
+output checks and independent BPF cleanup remain unchanged.
+
+`platform::kubernetes::observability_pod_exec_exit` now includes the absent-Pod
+status check. The test requires a dead remote process and a live local
+transport before cleanup. It requires the local transport to be absent after
+cleanup. The old extra wait fails in 3.01 seconds. The reviewed correction
+passes in 2.01 seconds. Read `pod-status-red.log`, `pod-status-green.log`
+and `pod-status-reviewed.log`. The fixture correction is **Done**. Its new
+paired physical result and final workspace CI remain **Not done**.
 
 The paired lightweight restart case is
 `observability::lifecycle::tests::observability_owned_restart`. It uses

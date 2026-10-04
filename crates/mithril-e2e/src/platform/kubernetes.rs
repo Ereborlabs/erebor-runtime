@@ -2342,9 +2342,7 @@ impl Kubernetes {
         Ok(())
     }
 
-    fn capture_exit(actor: &mut ProcessFixture, limit: Duration) -> TestResult<()> {
-        actor.close();
-        actor.wait_exit("deleted Pod actor", limit)?;
+    fn capture_exit(actor: &mut ProcessFixture) -> TestResult<()> {
         actor.stop()?;
         Ok(())
     }
@@ -2385,7 +2383,7 @@ impl Kubernetes {
             },
             || self.diagnostics(),
         )?;
-        Self::capture_exit(actor, STOP_LIMIT)?;
+        Self::capture_exit(actor)?;
         self.actor_id = None;
         self.actor_pid = None;
         self.actor_cgroup = None;
@@ -2871,8 +2869,10 @@ fn observability_pod_exec_exit() -> TestResult<()> {
     let mut command = Command::new(path);
     let mut remote = ProcessFixture::spawn(&mut command, path)?;
     let mut actor = ProcessFixture::spawn(&mut command, path)?;
+    let transport_pid = actor.id();
     let remote_pid = remote.id();
     actor.set_actor(remote_pid)?;
+    actor.set_exit_probe(|| Ok(None));
     remote.close();
     assert!(remote
         .wait_exit("remote Pod actor", Duration::from_secs(2))?
@@ -2880,11 +2880,9 @@ fn observability_pod_exec_exit() -> TestResult<()> {
     remote.stop()?;
     assert!(!Path::new(&format!("/proc/{remote_pid}")).exists());
     actor.ensure_running("local exec transport with open stdin")?;
-    Kubernetes::capture_exit(&mut actor, Duration::from_secs(2))?;
-    assert!(actor
-        .try_wait()?
-        .ok_or("the local exec transport has no exit status")?
-        .success());
+    assert!(Path::new(&format!("/proc/{transport_pid}")).exists());
+    Kubernetes::capture_exit(&mut actor)?;
+    assert!(!Path::new(&format!("/proc/{transport_pid}")).exists());
     Ok(())
 }
 

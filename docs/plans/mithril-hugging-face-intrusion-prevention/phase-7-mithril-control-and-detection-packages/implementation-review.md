@@ -3411,14 +3411,28 @@ The next paired Pod run passes owned upload in 25.57 seconds. The physical
 case fails in 250.66 seconds after the original Pod is deleted. The local
 exec helper retains an open stdin pipe. The fixture waits for helper exit
 before closing that pipe. Read `pods-args/test.log`; this is not a Pod pass.
-Read same-file `Kubernetes::capture_exit` and `observability_pod_exec_exit`
-next. The fixture now closes input only after confirmed Pod deletion, then
-waits for both the helper and recorded remote process to exit. It does not
-force-kill a process to pass acceptance. The regression first reproduces the
-timeout, then passes in 0.02 seconds. Read `pod-exit-red.log` and
-`pod-exit-green.log`. Independent target, policy and BPF checks do not change.
-The transport correction is **Done**; paired physical qualification and
-final CI for this correction remain **Not done**.
+The earlier input-close regression passes in 0.02 seconds. Read
+`pod-exit-red.log` and `pod-exit-green.log`. That regression omits the
+Kubernetes actor-status check. The paired run at `388c298a` passes owned
+upload in 25.57 seconds, then fails in 242.84 seconds at the 120-second
+deleted-actor wait. Read `pods-388c298a-failed/test.log`. The status check
+returns no exit status for an absent Pod, even after the attach child is reaped.
+
+[Kubernetes::delete_capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) deletes the exact original Pod UID and confirms that Pod is absent.<br>
+-> [Kubernetes::capture_exit](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) calls the existing cleanup owner without another actor-status wait.<br>
+-> [ProcessFixture::stop](../../../../crates/mithril-e2e/src/process.rs) closes input, bounds graceful cleanup, uses scoped cleanup if needed, and reaps the local attach process.<br>
+-> [Kubernetes::capture_cleanup](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) independently requires the diagnostic BPF resources to disappear and enforcement resources to remain unchanged.
+
+The fixture can force-stop its local transport during cleanup. No remote
+exit status or successful backend exit is fabricated. The original target,
+retained output, new target lifetime and physical policy checks do not change.
+The same-file `observability_pod_exec_exit` regression now includes the
+absent-Pod status check and verifies a live transport before cleanup and an
+absent transport after cleanup. The extra wait fails in 3.01 seconds. The
+reviewed correction passes in 2.01 seconds. Read `pod-status-red.log`,
+`pod-status-green.log` and `pod-status-reviewed.log`. The fixture correction
+is **Done**; its new paired physical qualification and final CI remain
+**Not done**.
 
 For the default resource-scan path, read
 [`SupervisedChild::record_resources`](../../../../crates/erebor-interceptor/src/diagnostic.rs)
