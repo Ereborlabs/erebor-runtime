@@ -13,6 +13,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn budget_matches_charge_reads() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(&directory.path().join("analysis"))?;
+        let mut guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
+        let writer = guard.as_mut().ok_or("writer closed")?;
+        let mut raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
+        raw.refresh_budget(writer)?;
+        assert!(raw.budget.diagnostics.is_empty());
+        assert!(raw.budget.usage.is_empty());
+        assert!(raw.budget.contexts.is_empty());
+
+        for tenant in [1u8, 2] {
+            writer.execute(
+                "INSERT INTO traces VALUES (?, ?, ?, ?, '[]', ?, 1, 2, false, ?, 1, false, false)",
+                params![
+                    [tenant; 16].as_slice(),
+                    [3u8; 16].as_slice(),
+                    [1u8, 2, 3].as_slice(),
+                    [0u8; 32].as_slice(),
+                    [1u8, 2].as_slice(),
+                    [0u8; 32].as_slice(),
+                ],
+            )?;
+        }
+        for (tenant, bytes) in [(1u8, 1000u64), (3, 3000), (4, 0)] {
+            writer.execute(
+                "INSERT INTO tenant_usage VALUES (?, ?, 0, 0, 0)",
+                params![[tenant; 16].as_slice(), bytes],
+            )?;
+        }
+        for tenant in [1u8, 5, 6] {
+            writer.execute(
+                "INSERT INTO context_versions VALUES (?, 'p', ?, ?, 1, 1, NULL,
+                 'Tenant', ?, ?, 1)",
+                params![
+                    [tenant; 16].as_slice(),
+                    [1u8].as_slice(),
+                    [1u8].as_slice(),
+                    [1u8, 2, 3].as_slice(),
+                    [0u8; 32].as_slice(),
+                ],
+            )?;
+        }
+        for (tenant, reference) in [(1u8, "first"), (1, "second"), (5, "third")] {
+            writer.execute(
+                "INSERT INTO context_refs VALUES (?, ?, 'p', ?, ?, 1, ?)",
+                params![
+                    reference,
+                    [tenant; 16].as_slice(),
+                    [1u8].as_slice(),
+                    [1u8].as_slice(),
+                    [0u8; 32].as_slice(),
+                ],
+            )?;
+        }
+        raw.refresh_budget(writer)?;
+        assert_eq!(
+            raw.budget.diagnostics,
+            BTreeMap::from([([1; 16], 263), ([2; 16], 263)])
+        );
+        assert_eq!(raw.budget.diagnostic_total, 526);
+        assert_eq!(
+            raw.budget.usage,
+            BTreeMap::from([([1; 16], 1000), ([3; 16], 3000), ([4; 16], 0)])
+        );
+        assert_eq!(raw.budget.total, 4000);
+        assert_eq!(
+            raw.budget.contexts,
+            BTreeMap::from([([1; 16], 262), ([5; 16], 262)])
+        );
+
+        writer.execute(
+            "UPDATE tenant_usage SET logical_bytes = 2000 WHERE tenant_id = ?",
+            params![[1u8; 16].as_slice()],
+        )?;
+        writer.execute(
+            "DELETE FROM context_refs WHERE tenant_id = ?",
+            params![[1u8; 16].as_slice()],
+        )?;
+        raw.refresh_budget(writer)?;
+        assert_eq!(raw.budget.usage[&[1; 16]], 2000);
+        assert_eq!(raw.budget.total, 5000);
+        assert_eq!(raw.budget.contexts, BTreeMap::from([([5; 16], 262)]));
+        Ok(())
+    }
+
+    #[test]
     fn catalogue_recovers_partial_group() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
@@ -359,31 +446,61 @@ impl RawJournal {
         {
             let mut statement = writer
                 .prepare(&format!(
-                    "SELECT tenant_id, SUM(bytes)::UBIGINT FROM ({}) GROUP BY tenant_id",
+                    "SELECT 0::UTINYINT AS kind, tenant_id, SUM(bytes)::UBIGINT AS bytes
+                     FROM ({}) GROUP BY tenant_id
+                     UNION ALL SELECT 1::UTINYINT, tenant_id, logical_bytes FROM tenant_usage
+                     UNION ALL SELECT 2::UTINYINT, c.tenant_id,
+                     SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id))
+                     + octet_length(c.entity_key) + octet_length(c.lifetime_key))::UBIGINT
+                     FROM context_versions c SEMI JOIN context_refs r USING
+                     (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
+                     GROUP BY c.tenant_id",
                     super::quota::TRACE_CHARGES
                 ))
                 .context(AnalysisDatabaseSnafu {
-                    operation: "prepare diagnostic budget",
+                    operation: "prepare raw budget charges",
                 })?;
             let rows = statement
                 .query_map([], |row| {
-                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?))
+                    Ok((
+                        row.get::<_, u8>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, u64>(2)?,
+                    ))
                 })
                 .context(AnalysisDatabaseSnafu {
-                    operation: "read diagnostic budget",
+                    operation: "read raw budget charges",
                 })?;
             for row in rows {
-                let (tenant, bytes) = row.context(AnalysisDatabaseSnafu {
-                    operation: "decode diagnostic budget",
+                let (kind, tenant, bytes) = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode raw budget charge",
                 })?;
-                let tenant = tenant
-                    .try_into()
-                    .map_err(|_| self.invalid("the diagnostic tenant is invalid"))?;
-                budget.diagnostics.insert(tenant, bytes);
-                budget.diagnostic_total = budget
-                    .diagnostic_total
-                    .checked_add(bytes)
-                    .ok_or_else(|| self.invalid("the diagnostic budget is exhausted"))?;
+                let reason = match kind {
+                    0 => "the diagnostic tenant is invalid",
+                    1 => "the raw quota tenant is invalid",
+                    2 => "the raw context tenant is invalid",
+                    _ => return Err(self.invalid("the raw budget charge kind is invalid")),
+                };
+                let tenant = tenant.try_into().map_err(|_| self.invalid(reason))?;
+                match kind {
+                    0 => {
+                        budget.diagnostics.insert(tenant, bytes);
+                        budget.diagnostic_total = budget
+                            .diagnostic_total
+                            .checked_add(bytes)
+                            .ok_or_else(|| self.invalid("the diagnostic budget is exhausted"))?;
+                    }
+                    1 => {
+                        budget.usage.insert(tenant, bytes);
+                        budget.total = budget
+                            .total
+                            .checked_add(bytes)
+                            .ok_or_else(|| self.invalid("the raw quota total is exhausted"))?;
+                    }
+                    _ => {
+                        budget.contexts.insert(tenant, bytes);
+                    }
+                }
             }
             let (unfinished, slots): (u64, u64) = writer.query_row(
                 "SELECT COUNT(*)::UBIGINT, COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM segments s
@@ -395,33 +512,6 @@ impl RawJournal {
                 .ok_or_else(|| self.invalid("the diagnostic reserve is exhausted"))?;
             budget.trace_slots = usize::try_from(slots)
                 .map_err(|_| self.invalid("the diagnostic slot reserve is exhausted"))?;
-        }
-        {
-            let mut statement = writer
-                .prepare("SELECT tenant_id, logical_bytes FROM tenant_usage")
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare raw quota totals",
-                })?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?))
-                })
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read raw quota totals",
-                })?;
-            for row in rows {
-                let (tenant, bytes) = row.context(AnalysisDatabaseSnafu {
-                    operation: "decode raw quota total",
-                })?;
-                let tenant = tenant
-                    .try_into()
-                    .map_err(|_| self.invalid("the raw quota tenant is invalid"))?;
-                budget.usage.insert(tenant, bytes);
-                budget.total = budget
-                    .total
-                    .checked_add(bytes)
-                    .ok_or_else(|| self.invalid("the raw quota total is exhausted"))?;
-            }
         }
         {
             let mut statement = writer.prepare("SELECT stream_key, MIN(consumed_cursor)::UBIGINT FROM processor_progress WHERE class = 'required' AND NOT retired GROUP BY stream_key")
@@ -471,28 +561,6 @@ impl RawJournal {
                             .map_err(|_| self.invalid("the raw witness tenant is invalid"))?,
                         expiry,
                     ),
-                );
-            }
-        }
-        {
-            let mut statement = writer.prepare("SELECT c.tenant_id, SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id)) + octet_length(c.entity_key) + octet_length(c.lifetime_key))::UBIGINT FROM context_versions c SEMI JOIN context_refs r USING (tenant_id, owner_id, entity_key, lifetime_key, owner_revision) GROUP BY c.tenant_id")
-                .context(AnalysisDatabaseSnafu { operation: "prepare raw context charges" })?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?))
-                })
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read raw context charges",
-                })?;
-            for row in rows {
-                let (tenant, bytes) = row.context(AnalysisDatabaseSnafu {
-                    operation: "decode raw context charge",
-                })?;
-                budget.contexts.insert(
-                    tenant
-                        .try_into()
-                        .map_err(|_| self.invalid("the raw context tenant is invalid"))?,
-                    bytes,
                 );
             }
         }
