@@ -100,7 +100,7 @@ impl Host {
         Ok(())
     }
 
-    fn start_entry(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+    fn start_entry(&self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         let init = self.init_pid.ok_or("the initial actor is not running")?;
         let maps_path = PathBuf::from(format!("/proc/{init}/maps"));
         let maps = fs::read(&maps_path).context(IoSnafu { path: &maps_path })?;
@@ -289,7 +289,7 @@ impl Platform for Host {
         Ok(group)
     }
 
-    fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+    fn add_actor(&self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)
     }
 

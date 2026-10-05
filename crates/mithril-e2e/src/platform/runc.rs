@@ -224,12 +224,13 @@ impl Runc {
         )?)?)
     }
 
-    fn start_entry(&mut self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+    fn start_entry(&self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         let id = self
             .container_id
             .as_deref()
             .ok_or("the runc actor is not started")?;
-        let pid_path = self.shared.work().join("exec.pid");
+        let paths = tempfile::tempdir_in(self.shared.work())?;
+        let pid_path = paths.path().join("pid");
         let mut command = Command::new(&self.runc_path);
         command
             .arg("--root")
@@ -242,33 +243,8 @@ impl Runc {
         let mut actor = ProcessFixture::spawn(&mut command, Path::new(program))?;
         let parent = actor.id();
         let operation = format!("runc exec `{program}` outer PID");
-        let pid = match actor.wait_pid(&pid_path, &operation) {
-            Ok(pid) => pid,
-            Err(source) => {
-                let recent = self.shared.snapshot().map(|snapshot| {
-                    snapshot
-                        .recent_effects
-                        .into_iter()
-                        .rev()
-                        .take(8)
-                        .map(|event| {
-                            (
-                                event.reason,
-                                event.effect_family,
-                                event.operation,
-                                event.kernel_result,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                });
-                let health = self.shared.health();
-                return Err(format!(
-                    "{source}; identity health: {health:?}; recent effects: {recent:?}"
-                )
-                .into());
-            }
-        };
-        fs::remove_file(&pid_path)?;
+        let pid = actor.wait_pid(&pid_path, &operation)?;
+        paths.close()?;
         self.shared.move_out(parent)?;
         actor.wait_command(pid, program)?;
         actor.set_actor(pid)?;
@@ -433,7 +409,7 @@ impl Platform for Runc {
         Ok(group)
     }
 
-    fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+    fn add_actor(&self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)
     }
 

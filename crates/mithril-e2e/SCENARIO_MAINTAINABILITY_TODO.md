@@ -6849,6 +6849,16 @@ setup, production actions, assertions, and focused test.
       `/tmp/mithril-process-order-final-ci-20261004.log`, and
       `/tmp/mithril-fd-exec-final-kube-20261005-standard.log`.
       No production code or security assertion changed.
+    - [x] Commit the tested shared-receiver tooling for the bounded cleanup.
+      Read `start_entry` in [Host](src/platform/host.rs),
+      [Runc](src/platform/runc.rs), and [Kubernetes](src/platform/kubernetes.rs).
+      Runc owns one temporary PID directory per exec. Kubernetes locks only
+      its approval state. [Observation](src/platform/observation.rs) bounds
+      the existing SDK snapshot call. [Shared](src/platform/shared.rs) uses
+      the production Node runtime type. Related entry checks passed on all
+      three platforms. The final workspace CI gate passed on 2026-10-05.
+      Full-suite qualification remains open; these checks do not qualify
+      the unchanged startup-SIGTERM or intermittent counter failures.
   - [ ] Replace the old 32-request overlap with one shared Rust test below
     100 lines. Use the shared mount actor and existing policy. Release all
     32 `add_actor("sleep", ...)` calls at one thread barrier while the main

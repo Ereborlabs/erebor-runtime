@@ -27,6 +27,7 @@ mod kubernetes_approval;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
+mod observation;
 mod runc;
 mod shared;
 
@@ -112,6 +113,7 @@ pub(super) fn policy_labels(
     Ok(selector.match_labels.clone())
 }
 
+#[derive(Clone)]
 pub(crate) struct Task {
     pub(crate) pid: u32,
     pub(crate) ns_pid: u32,
@@ -212,7 +214,7 @@ pub(crate) trait Platform: Sized {
         pending("start actor group")
     }
     fn add_actor(
-        &mut self,
+        &self,
         _command: &str,
         _args: &[&str],
     ) -> TestResult<crate::process::ProcessFixture> {

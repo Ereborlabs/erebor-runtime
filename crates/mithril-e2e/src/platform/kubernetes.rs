@@ -5,11 +5,11 @@ use std::fs::{self, File};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
-use erebor_runtime_client::MithrilObservationClient;
 use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{
@@ -103,7 +103,7 @@ pub(crate) struct KubernetesState {
     tls: MtlsFixture,
     inspector: NativeIdentityInspector,
     reader: KernelStateReader,
-    approval: KubernetesApproval,
+    approval: Mutex<KubernetesApproval>,
     state: Option<ProbeDirectory>,
     identity: Option<ProbeDirectory>,
     config: Option<ProbeFile>,
@@ -141,10 +141,17 @@ impl DerefMut for Kubernetes {
 }
 
 impl KubernetesState {
+    fn approval(&self) -> TestResult<MutexGuard<'_, KubernetesApproval>> {
+        self.approval
+            .lock()
+            .map_err(|error| format!("Kubernetes approval state is poisoned: {error}").into())
+    }
+
     fn approve_entry(&mut self, command: &str, args: &[&str]) -> TestResult<()> {
         self.ready_node()?;
-        self.approval.start_forward(&self.runtime, &self.system)?;
-        self.approval.approve(
+        let mut approval = self.approval()?;
+        approval.start_forward(&self.runtime, &self.system)?;
+        approval.approve(
             &self.runtime,
             &self.work_path,
             &self.namespace,
@@ -239,8 +246,7 @@ impl KubernetesState {
     }
 
     fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
-        let client = MithrilObservationClient::new(self.observation_path.clone(), "/".to_owned());
-        Ok(self.runtime.block_on(client.snapshot())?)
+        super::observation::Observation::new(self.observation_path.clone()).snapshot()
     }
 
     fn install_exception(&mut self, bytes: &[u8], path: &Path) -> TestResult<()> {
@@ -604,7 +610,7 @@ impl KubernetesState {
             ),
             (
                 "/administrative_exec/oidc_issuer_url",
-                Value::String(self.approval.issuer()),
+                Value::String(self.approval()?.issuer()),
             ),
             (
                 "/administrative_exec/node_ids_by_kubernetes_name",
@@ -651,7 +657,7 @@ impl KubernetesState {
             ),
             (
                 "/control/administrativeExec/webhookCABundle",
-                Value::String(Self::ca_bundle(self.approval.ca())?),
+                Value::String(Self::ca_bundle(self.approval()?.ca())?),
             ),
         ] {
             Self::set(&mut values, path, value)?;
@@ -696,7 +702,7 @@ impl KubernetesState {
                 fs::read_to_string(&self.tls.files.server_key)?,
             ),
         ]);
-        data.extend(self.approval.secrets()?);
+        data.extend(self.approval()?.secrets()?);
         let secrets = Api::<Secret>::namespaced(self.client.clone(), &self.system);
         let secret = Secret {
             metadata: ObjectMeta {
@@ -956,10 +962,11 @@ impl KubernetesState {
         })
     }
 
-    fn start_entry(&mut self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+    fn start_entry(&self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         let member = self.container_id_for(CONTAINER)?;
         let group = Self::cgroup(self.inspect_pid(&member)?)?;
-        let mut command = if let Some(kube) = self.approval.kubeconfig() {
+        let kube = self.approval()?.kubeconfig().map(Path::to_owned);
+        let mut command = if let Some(kube) = kube {
             let mut command = Command::new(&self.exec_path);
             command
                 .arg("--kubeconfig")
@@ -1012,7 +1019,7 @@ impl KubernetesState {
             actor.set_input(input);
         }
         actor.set_actor(pid)?;
-        self.approval.clear();
+        self.approval()?.clear();
         Ok(actor)
     }
 
@@ -1030,7 +1037,10 @@ impl KubernetesState {
 
     fn clean_test(&mut self) -> TestResult<()> {
         let mut failed = None;
-        self.approval.clear();
+        Self::retain(
+            &mut failed,
+            self.approval().map(|mut approval| approval.clear()),
+        );
         if self.work_up {
             Self::retain(&mut failed, self.delete_ns(&self.namespace));
         }
@@ -1114,7 +1124,10 @@ impl KubernetesState {
             Self::retain(&mut failed, self.wait_api());
             self.runtime_up = false;
         }
-        Self::retain(&mut failed, self.approval.stop());
+        Self::retain(
+            &mut failed,
+            self.approval().and_then(|mut approval| approval.stop()),
+        );
         if self.helm_up {
             let mut command = Command::new(&self.helm_path);
             command
@@ -1384,7 +1397,7 @@ impl Platform for Kubernetes {
             tls,
             inspector,
             reader,
-            approval,
+            approval: Mutex::new(approval),
             state: Some(state),
             identity: Some(identity),
             config: Some(config),
@@ -1413,7 +1426,7 @@ impl Platform for Kubernetes {
             return self.wait_control();
         }
         let state: &mut KubernetesState = self;
-        state.approval.start_oidc(&state.runtime)?;
+        state.approval()?.start_oidc(&state.runtime)?;
         KubernetesState::require_image(&self.k3s_path, &self.control_image)?;
         KubernetesState::require_image(&self.k3s_path, &self.node_image)?;
         self.create_system()?;
@@ -1557,7 +1570,7 @@ impl Platform for Kubernetes {
     {
         self.start_group(actors, labels, before_app)
     }
-    fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+    fn add_actor(&self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)
     }
 

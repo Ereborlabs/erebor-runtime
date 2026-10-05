@@ -11,7 +11,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
-use erebor_runtime_client::MithrilObservationClient;
 use erebor_runtime_ipc::v1::{
     MithrilObservationSnapshot, RuntimeAdmissionDecision, RuntimeAdmissionPrepareRequest,
     RuntimeAdmissionStageRequest,
@@ -39,6 +38,7 @@ use tokio::sync::watch;
 use zerocopy::TryFromBytes as _;
 
 use super::lifecycle::{enter, LifecycleGuard};
+use super::observation::Observation;
 use super::{policy_labels, policy_path, CriFixture, Labels, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{
@@ -562,7 +562,7 @@ impl SharedState {
         })
     }
 
-    fn read_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+    fn read_task(&self, pid: u32, name: &str) -> TestResult<Task> {
         let snapshot = self.runtime.block_on(wait_for_async(
             &self.pin_path,
             name,
@@ -740,7 +740,7 @@ impl Shared {
         let (stop, receiver) = watch::channel(false);
         let (started, ready) = mpsc::sync_channel(1);
         let task = thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .map_err(|source| mithril_node::Error::Io {
@@ -1524,7 +1524,7 @@ impl Shared {
         self.task_from(pid, snapshot)
     }
 
-    pub(super) fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+    pub(super) fn task(&self, pid: u32, name: &str) -> TestResult<Task> {
         self.read_task(pid, name)
     }
 
@@ -1596,11 +1596,7 @@ impl Shared {
     }
 
     pub(super) fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
-        let client = MithrilObservationClient::new(self.observation_path.clone(), "/".to_owned());
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        Ok(runtime.block_on(client.snapshot())?)
+        Observation::new(self.observation_path.clone()).snapshot()
     }
 
     pub(super) fn maps(&self) -> (&Path, &KernelStateReader) {
