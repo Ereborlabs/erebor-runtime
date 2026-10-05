@@ -381,9 +381,13 @@ impl EffectCheck {
                     .into_iter()
                     .filter(|event| self.fresh(event))
                     .collect::<Vec<_>>();
-                *last.borrow_mut() = fresh
+                let observed = fresh
                     .iter()
                     .rev()
+                    .filter(|event| {
+                        event.task_cookie == self.task.snapshot.task_cookie
+                            || event.target_task_cookie == self.task.snapshot.task_cookie
+                    })
                     .take(8)
                     .map(|event| {
                         (
@@ -399,7 +403,10 @@ impl EffectCheck {
                             event.exact_object_key_id,
                         )
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
+                if !observed.is_empty() {
+                    *last.borrow_mut() = observed;
+                }
                 let matched = fresh
                     .into_iter()
                     .filter(|event| check(event))

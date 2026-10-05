@@ -68,7 +68,6 @@ fn exact_read_is_allowed<P: Platform>() -> TestResult<()> {
         let effects = EffectCheck::new(&env, task.clone())?;
 
         actor.send(b"act\n")?;
-        actor.wait_name(actor.id(), "control-0-0", "two fresh benign reads", limit)?;
         let events = effects.wait_many(
             &env,
             "EXACT_POLICY_ALLOW",
@@ -77,6 +76,7 @@ fn exact_read_is_allowed<P: Platform>() -> TestResult<()> {
             2,
             "exact read evidence",
         )?;
+        actor.wait_name(actor.id(), "control-0-0", "two fresh benign reads", limit)?;
         assert_eq!(events.len(), 2);
         let process = env.process(&task.snapshot.process_state_id)?;
         let generation = process.active_profile_generation_ref_id;

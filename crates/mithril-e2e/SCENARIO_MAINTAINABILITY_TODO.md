@@ -3959,6 +3959,38 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Qualify direct runc. The same `identity_runc` case passed in
       55.62 seconds. The test body and assertions did not change.
     - [ ] Qualify and commit Kubernetes.
+      Not done. The first attempt stopped before actor startup because K3s
+      removed the unused Python image under guest disk pressure. Remove old
+      test-binary copies and use the existing infrastructure image helper.
+      Do not import images in the Rust platform.
+      The next attempt reached the actor but both fresh opens returned
+      `EACCES`. Reproduce the container's OverlayFS storage in lightweight
+      before another Kubernetes run. Mount OverlayFS in the owned VM and put
+      the unchanged Host case's `MITHRIL_TEST_OUTPUT` under that mount.
+      The Host reproduction reports one File/OpenRead `EXACT_POLICY_ALLOW`
+      followed by one File/OpenRead `UNRESOLVED_OBJECT` for each attempt.
+      It fails before either read. The task, external role, and generation
+      stay the same across each pair. The reproduction took 70.61 seconds.
+      Keep task-specific failure records in the existing `EffectCheck` wait.
+      Unrelated IPC events must not erase the last actor records. Matching
+      rules, security assertions, and wait limits stay unchanged. The three
+      capture checks passed. Ordinary Host and runc passed in 38.80 and
+      62.48 seconds. The diagnostic OverlayFS reproduction took 61.99 seconds.
+      Kubernetes then reported the same paired OpenRead decisions and failed
+      in 111.89 seconds. No production source changed.
+      The final diagnostic source passed 28 related Mithril effect checks.
+      Rust CI passed formatting, workspace check, and strict Clippy. Its test
+      step stopped at the unchanged Araphor `observability_raw_recovery`
+      `AnalysisReadDeadline`: 168 passed, one failed, and five ignored.
+      Linux opens an internal backing file on a private mount for OverlayFS.
+      [The Linux backing-file owner](https://raw.githubusercontent.com/torvalds/linux/v6.8/fs/backing-file.c)
+      also stores the user-visible path. Mithril reads the raw `file.f_path`.
+      A proposed BPF correction needs user approval. Use the stored visible
+      path only for kernel-marked backing files, then retain the exact-object,
+      namespace, and fail-closed checks. Ordinary unattached files must stay
+      denied. Do not move the protected file to hostPath or change the Allow
+      assertion to a denial. Keep Kubernetes out of the committed attribute
+      until this exact case passes. Keep the legacy action and result field.
     - [ ] Remove only the matching legacy read action and result field.
   - [x] Complete BPF-link pin removal without the old mount fixture.
     [link_pin_removal_is_denied](src/effect/link_pin.rs) uses the common
