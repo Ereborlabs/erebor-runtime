@@ -131,6 +131,46 @@ fn group_errors_are_distinct() {
 }
 
 #[test]
+fn disappearance_precedes_exit_status() -> crate::Result<()> {
+    for exited in [true, false] {
+        let mut actor = ProcessFixture::python(&fixture("ready.py"), std::iter::empty::<&str>())?;
+        let child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .context(IoSnafu { path: "sleep" })?;
+        let mut child = ProcessFixture::new(child, Path::new("sleep"));
+        actor.track(child.id())?;
+        let pid = child.id();
+        if exited {
+            child.stop()?;
+        }
+        actor.send(b"stop\n")?;
+        actor
+            .child
+            .as_mut()
+            .context(InvalidInputSnafu {
+                path: "ready.py",
+                reason: "the actor child is missing",
+            })?
+            .wait()
+            .context(IoSnafu { path: "ready.py" })?;
+        let result = actor.wait_gone(pid, "tracked child exit");
+        if exited {
+            result?;
+        } else {
+            let error = result.err().context(InvalidInputSnafu {
+                path: "sleep",
+                reason: "a live child was accepted after the actor exited",
+            })?;
+            assert!(error.to_string().contains("before tracked child exit"));
+            child.stop()?;
+        }
+        actor.stop()?;
+    }
+    Ok(())
+}
+
+#[test]
 fn stop_kills_child_after_exit() -> crate::Result<()> {
     let dir = tempfile::tempdir().context(IoSnafu {
         path: "temporary directory",

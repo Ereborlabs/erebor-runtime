@@ -6827,6 +6827,20 @@ setup, production actions, assertions, and focused test.
       `/tmp/mithril-cgroup-removed-repro-20261004.log` and
       `/tmp/mithril-cgroup-fixed-final-ci-20261004.log`. No production or
       scenario assertion changed. Resume only the unrun matrix groups.
+    - [x] Check tracked-process disappearance before actor-wrapper status in
+      `ProcessFixture::wait_gone`. The denied FD-exec scenario reached its
+      assertions, but cleanup reported the wrapper's late exit after the
+      tracked child was already absent. The fixture still rejects a live child
+      after wrapper exit. Its existing regression failed before the fix and
+      passed after it. The unchanged FD-exec scenario passed on Host in
+      28.05 seconds, direct runc in 36.14 seconds, and Kubernetes in
+      75.14 seconds. All owned resources were removed. The final repository
+      Rust CI gate passed with 98 E2E tests and 255 Node tests. See
+      `/tmp/mithril-process-order-repro-20261004.log`,
+      `/tmp/mithril-process-order-fixed-20261004.log`,
+      `/tmp/mithril-process-order-final-ci-20261004.log`, and
+      `/tmp/mithril-fd-exec-final-kube-20261005-standard.log`.
+      No production code or security assertion changed.
   - [ ] Replace the old 32-request overlap with one shared Rust test below
     100 lines. Use the shared mount actor and existing policy. Release all
     32 `add_actor("sleep", ...)` calls at one thread barrier while the main

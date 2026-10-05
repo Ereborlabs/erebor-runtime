@@ -966,6 +966,17 @@ impl ProcessFixture {
             operation,
             START_LIMIT,
             || {
+                match fs::read_to_string(&path) {
+                    Ok(text) => {
+                        *last.borrow_mut() = text
+                            .lines()
+                            .find(|line| line.starts_with("State:"))
+                            .unwrap_or("State: <missing>")
+                            .to_owned();
+                    }
+                    Err(source) if process_gone(&source) => return Ok(Some(())),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                }
                 if !self.stopped && self.owns_status() {
                     if let Some(status) = self.try_wait()? {
                         if id != self.actor_pid {
@@ -982,18 +993,7 @@ impl ProcessFixture {
                         *last.borrow_mut() = format!("actor wrapper status: {status}");
                     }
                 }
-                match fs::read_to_string(&path) {
-                    Ok(text) => {
-                        *last.borrow_mut() = text
-                            .lines()
-                            .find(|line| line.starts_with("State:"))
-                            .unwrap_or("State: <missing>")
-                            .to_owned();
-                        Ok(None)
-                    }
-                    Err(source) if process_gone(&source) => Ok(Some(())),
-                    Err(source) => Err(source).context(IoSnafu { path: &path }),
-                }
+                Ok(None)
             },
             || format!("process {id}; last {}", last.borrow()),
         )?;
