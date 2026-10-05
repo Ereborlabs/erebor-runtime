@@ -3956,7 +3956,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Qualify Host with the shared `identity` lifecycle. The 99-line
       [exact_read_is_allowed](src/effect/benign_read.rs) test keeps both modes
       and all explicit role, selector, generation, and evidence assertions.
-    - [ ] Qualify and commit direct runc.
+    - [x] Qualify direct runc. The same `identity_runc` case passed in
+      55.62 seconds. The test body and assertions did not change.
     - [ ] Qualify and commit Kubernetes.
     - [ ] Remove only the matching legacy read action and result field.
   - [x] Complete BPF-link pin removal without the old mount fixture.

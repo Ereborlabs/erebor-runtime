@@ -10,7 +10,7 @@ use mithril_control::{
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn exact_read_is_allowed<P: Platform>() -> TestResult<()> {
     let policy = include_str!("../../fixtures/process/benign_read_policy.json");
