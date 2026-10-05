@@ -617,12 +617,20 @@ need replacement:
 
 | Source | Current lines | Open work |
 | --- | ---: | --- |
-| `effect/runc.rs` | 5,909 | Size and runner retirement |
 | `identity.rs` | 4,845 | Size and runner retirement |
-| `effect.rs` | 2,907 | Size and runner retirement |
-| `effect/child.rs` | 2,715 | Size and runner retirement |
-| `control_tls.rs` | 1,598 | Runner retirement; size limit met |
-| `effect/network.rs` | 1,505 | Runner retirement; size limit met |
+| `effect/runc.rs` | 4,600 | Size and runner retirement |
+| `platform/kubernetes.rs` | 3,253 | Size and fixture responsibility |
+| `observability.rs` | 3,146 | Size and scenario simplification |
+| `platform/host.rs` | 2,911 | Size and fixture responsibility |
+| `discovery/data_store.rs` | 2,715 | Size and scenario simplification |
+| `effect.rs` | 2,530 | Size and runner retirement |
+| `effect/child.rs` | 2,435 | Size and fixture retirement |
+| `platform/shared.rs` | 2,323 | Size and fixture responsibility |
+| `control_tls.rs` | 976 | Runner retirement; size limit met |
+| `effect/network.rs` | 1,411 | Runner retirement; size limit met |
+
+This measurement covers `cec19dd0` in the refactoring worktree. Earlier
+verification records apply only to their recorded source state.
 
 The behavior sections below are the runner-retirement inventory. This size
 table does not close any runner or shell action.
@@ -3899,6 +3907,17 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the exact benign-file read control with a small platform test.
+    The baseline uses a recovered unknown root with entry rule zero. Do not
+    replace it with an admitted application root. Reuse `retained_descriptor.py`
+    for two fresh opens and one-byte reads. Require the correct byte, successful
+    exit, and two fresh, task-attributed File/Read `EXACT_POLICY_ALLOW` events
+    in Protect and Observe modes. Check the signed selector and active policy
+    generation. Use existing platform recovery and policy operations only.
+    Pass and commit Host, runc, then Kubernetes before removing the matching
+    old action and `benign_read_allowed` field. Keep the first protected open,
+    outside-tree control, deep-tree inputs, asynchronous reads, generation
+    checks, and saturation controls until their own replacements pass.
   - [x] Complete BPF-link pin removal without the old mount fixture.
     [link_pin_removal_is_denied](src/effect/link_pin.rs) uses the common
     `ProcessFixture` and [link_pin.py](fixtures/process/link_pin.py) for mount
@@ -6867,6 +6886,30 @@ setup, production actions, assertions, and focused test.
     `PATH_TREE_POLICY_DENY`, no unresolved evidence, unchanged namespace,
     mountinfo, security epoch, cache generation and READY keys, and increased
     mount activity. Keep the old Rust and shell assertions until this passes.
+    - [x] Restore the exact `mount_security_views` key check after the
+      requests. The baseline checks this map before and after the overlap.
+      `CacheView` equality does not check this map. Use the existing map reader;
+      add no Platform API. Keep the probe and collection dependencies open.
+      Check the keys before the actor stops. Node can retire the namespace
+      after actor exit. The review route is
+      [runtime_mount_view.rs](src/identity/scenarios/runtime_mount_view.rs),
+      [MountCache::snapshot](src/physical/mount_cache.rs), and
+      [KernelStateReader::keys](../erebor-interceptor/src/host.rs). The test
+      reads the map. Node retains loader and cleanup ownership. The final
+      96-line test passed on runc in 169.24 seconds and real Kubernetes in
+      97.74 seconds on 2026-10-05. The runc state, cgroup, and BPF pins were
+      removed. Kubernetes left only system Pods, no scenario files, and no
+      owned runtime socket or BPF root. The output parent directory is empty.
+      The first Kubernetes command lost its result when the host output
+      capture failed with `ENOSPC`. The verified command kept its full log in
+      the VM and returned exit zero. The test and timeout did not change.
+      VM harness checks passed. The non-privileged library suite passed:
+      159 passed, 0 failed, 524 ignored. The final Rust CI formatting,
+      workspace check, and strict Clippy passed. Workspace tests stopped at
+      the unchanged ArData `observability_raw_recovery` test with
+      `AnalysisReadDeadline`. That test shares one one-second control across
+      four reads, intervening writes, and a store reopen. Production code is
+      unchanged. Full workspace and platform qualification remain open.
     - [x] Keep the recursive wildcard from the original `/srv/**/secrets`
       policy. The shared policy uses `/work/mount/**/secret`. The overlap
       actor opens the bind alias of `/work/mount/team/blue/secret/blocked`.

@@ -35,7 +35,7 @@ fn runtime_exec_keeps_mount_view<P: Platform + Sync>() -> TestResult<()> {
     let before = cache.snapshot()?;
     assert!(!before.keys.is_empty(), "{before:?}");
     let ns = u32::try_from(before.namespace)?.to_ne_bytes().to_vec();
-    assert_eq!(env.maps().1.keys("mount_security_views")?, vec![ns]);
+    assert_eq!(env.maps().1.keys("mount_security_views")?, vec![ns.clone()]);
     let key = 0_u32.to_ne_bytes();
     let name = "mount_global_activity_sequence";
     let initial = env.state::<u64>(name, &key, name)?.ok_or("no activity")?;
@@ -61,6 +61,7 @@ fn runtime_exec_keeps_mount_view<P: Platform + Sync>() -> TestResult<()> {
                 .collect::<Result<Vec<_>, _>>()
         })?;
         let after = cache.snapshot()?;
+        assert_eq!(env.maps().1.keys("mount_security_views")?, vec![ns]);
         let current = env.state::<u64>(name, &key, name)?.ok_or("no activity")?;
         actor.send(b"stop\n")?;
         let status = actor.wait_exit("concurrent mount reads", limit)?;
