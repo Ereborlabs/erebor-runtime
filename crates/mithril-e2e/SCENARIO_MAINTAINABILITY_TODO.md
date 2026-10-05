@@ -7014,6 +7014,30 @@ setup, production actions, assertions, and focused test.
       process. No retry, sleep, accepted error, or production change was added.
       The exact test and all 12 process fixture tests passed. See
       `/tmp/mithril-fatal-exec-isolated-group-20261004.log`.
+      On 2026-10-05, the final workspace Rust CI gate passed: 98 E2E tests,
+      508 ignored physical cases, and 255 Node tests. See
+      `/tmp/mithril-final-pending-ci-20261005.log`. The physical lightweight
+      matrix completed with 339 passes and eight failures. Focused checks
+      then passed the FD-exec cleanup case, the live-Node stall case, all four
+      installer cases, and the unchanged socket-relation case. This gives
+      346 passed cases across runs, not a single green 347-case matrix.
+      The installer cases used the real K3s binary from the retained cluster;
+      no installer or second cluster was started. See
+      `/tmp/mithril-platform-runtime-installer-final-20261005.log`.
+      Keep `startup_sigterm_is_recoverable` open. The current Node binary was
+      killed by SIGTERM on the matrix run and the diagnostic run. The test
+      still requires graceful exit, retained pins, and successful recovery.
+      Production remains unchanged. This cleanup does not add a Node fix. See
+      `/tmp/mithril-platform-startup-signal-diagnostic-20261005.log`.
+      The approved stock-probe diagnostic passed in 81.34 seconds. Its earlier
+      admission timeout remains unexplained. The 11 formerly blocked Kubernetes
+      bodies then ran: ten passed, including the mount test; `tid_reuse_is_fresh`
+      failed its first global allocator check (7811 instead of 7810). Later TID
+      assertions did not run. The unchanged Host and runc cases passed with the
+      same diagnostic sampler in 30.41 and 39.93 seconds. This did not reproduce
+      the extra ID. Keep both exact allocator assertions and the cause open.
+      See `/tmp/mithril-identity-blocked-final-kube-20261005.log` and
+      `/tmp/mithril-tid-sampler-host-20261005.log`.
   - [ ] Replace the detached-exec overlap with
     `runtime_exec_keeps_mount_view`.
     - [ ] Use the shared mount actor and the existing `Platform::add_actor`
