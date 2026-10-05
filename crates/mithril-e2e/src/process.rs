@@ -1174,6 +1174,10 @@ impl ProcessFixture {
         self.stdin.take();
     }
 
+    fn group_removed(source: &std::io::Error) -> bool {
+        source.kind() == ErrorKind::NotFound || source.raw_os_error() == Some(libc::ENODEV)
+    }
+
     pub(crate) fn stop(&mut self) -> Result<()> {
         self.close();
         let graceful = self.stopped
@@ -1233,7 +1237,8 @@ impl ProcessFixture {
                 || {
                     let value = match fs::read_to_string(&path) {
                         Ok(value) => value,
-                        Err(source) if source.kind() == ErrorKind::NotFound => return Ok(Some(())),
+                        // Removal after open makes kernfs return ENODEV.
+                        Err(source) if Self::group_removed(&source) => return Ok(Some(())),
                         Err(source) => return Err(source).context(IoSnafu { path: &path }),
                     };
                     *last.borrow_mut() = value;

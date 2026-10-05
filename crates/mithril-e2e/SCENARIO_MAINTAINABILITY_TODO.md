@@ -6811,6 +6811,22 @@ setup, production actions, assertions, and focused test.
       in 32.55 seconds, direct-runc signed-entry replacement in 54.42 seconds,
       and Kubernetes entry-role isolation in 76.30 seconds. Normal cleanup
       passed. These focused results do not close the full-matrix gate.
+    - [x] Handle removal during an actor-cgroup cleanup read. The final
+      Kubernetes matrix stopped at `exec_path_recovery_kubernetes` after its
+      security assertions. Containerd removed the empty cgroup between open
+      and read. Linux returned `ENODEV`. Before the fix, a real-cgroup test
+      reproduced this result in 0.12 seconds. It first required `EBUSY` for
+      removal of the live, populated group. Read `ProcessFixture::stop` and
+      `group_removed` in [process.rs](src/process.rs). Accept `ENODEV` only
+      for that cleanup read. Keep permission and other I/O errors as failures.
+      The fixed native regression passed in 0.10 seconds. Twelve process
+      fixture unit tests passed. The unchanged paired Host scenario passed
+      in 32.56 seconds before Kubernetes passed in 81.71 seconds. All owned
+      resources were removed. The final repository Rust CI gate passed:
+      97 E2E tests, 508 ignored physical cases, and 255 Node tests. See
+      `/tmp/mithril-cgroup-removed-repro-20261004.log` and
+      `/tmp/mithril-cgroup-fixed-final-ci-20261004.log`. No production or
+      scenario assertion changed. Resume only the unrun matrix groups.
   - [ ] Replace the old 32-request overlap with one shared Rust test below
     100 lines. Use the shared mount actor and existing policy. Release all
     32 `add_actor("sleep", ...)` calls at one thread barrier while the main

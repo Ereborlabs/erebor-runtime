@@ -1,16 +1,19 @@
 use std::fs::{self, File};
+use std::io::Read as _;
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use snafu::ResultExt as _;
+use snafu::{OptionExt as _, ResultExt as _};
 
 use super::ProcessFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu};
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    std::env::var_os("MITHRIL_TEST_ROOT")
+        .map(|root| PathBuf::from(root).join("crates/mithril-e2e"))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
         .join("fixtures/process")
         .join(name)
 }
@@ -73,6 +76,58 @@ fn stop_kills_actor() -> crate::Result<()> {
 
     actor.stop()?;
     actor.stop()
+}
+
+#[test]
+#[ignore = "requires a writable cgroup v2 mount"]
+fn removed_group_returns_enodev() -> crate::Result<()> {
+    let path = PathBuf::from(format!(
+        "/sys/fs/cgroup/mithril-process-{}-removed",
+        std::process::id()
+    ));
+    let group = crate::physical::ProbeCgroup::create(&path)?;
+    let procs = path.join("cgroup.procs");
+    let mut actor = ProcessFixture::python(&fixture("ready.py"), std::iter::empty::<&str>())?;
+    group.move_in(actor.id())?;
+    let live = fs::read_to_string(&procs).context(IoSnafu { path: &procs })?;
+    assert!(live.lines().any(|pid| pid == actor.id().to_string()));
+    let error = fs::remove_dir(&path).err().context(InvalidInputSnafu {
+        path: &path,
+        reason: "a populated cgroup was removed",
+    })?;
+    assert_eq!(error.raw_os_error(), Some(libc::EBUSY));
+
+    actor.send(b"stop\n")?;
+    assert!(actor
+        .wait_exit("actor exit", Duration::from_secs(5))?
+        .success());
+    let mut reader = File::open(&procs).context(IoSnafu { path: &procs })?;
+    group.cleanup()?;
+    let error = reader
+        .read_to_string(&mut String::new())
+        .err()
+        .context(InvalidInputSnafu {
+            path: &procs,
+            reason: "a removed cgroup remained readable",
+        })?;
+    assert_eq!(error.raw_os_error(), Some(libc::ENODEV));
+    assert!(ProcessFixture::group_removed(&error));
+    assert!(!path.exists());
+    actor.stop()
+}
+
+#[test]
+fn group_errors_are_distinct() {
+    for errno in [libc::ENOENT, libc::ENODEV] {
+        assert!(ProcessFixture::group_removed(
+            &std::io::Error::from_raw_os_error(errno)
+        ));
+    }
+    for errno in [libc::EACCES, libc::EPERM, libc::EIO, libc::EOPNOTSUPP] {
+        assert!(!ProcessFixture::group_removed(
+            &std::io::Error::from_raw_os_error(errno)
+        ));
+    }
 }
 
 #[test]
