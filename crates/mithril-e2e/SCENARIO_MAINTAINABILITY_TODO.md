@@ -2352,6 +2352,39 @@ test does not close a row when its physical condition or an assertion changed.
 
 ### Kernel and host lifecycle
 
+- [x] Replace the rejected file-gate draft with a shared Platform test below
+  100 lines. Start real Control and Node. Control signs each policy, and Node
+  installs it through its production policy path. Use the existing Python
+  actor to prove allow, deny, clear, and deny on one running process. Check
+  physical results, attributed evidence, active signed generations, and normal
+  cleanup. Do not load BPF or change policy maps in the test. Qualify Host,
+  then runc, then Kubernetes. The loader draft is preserved in stash
+  `ff88972e1f4d98c08ec7ed60ff9b489633c43c57`; it is not a deliverable.
+  The loader migration proposal and results below are historical. They do
+  not authorize the new scenario to bypass Node or claim benchmark coverage.
+  `signed_file_gate_changes` is 99 lines. Host passed in 59.52 seconds, runc
+  passed in 76.45 seconds, and Kubernetes passed in 116.66 seconds. All three
+  commands completed normal cleanup. See
+  `/tmp/mithril-file-gate-node-final-host-20261004.log`,
+  `/tmp/mithril-file-gate-node-final-runc-20261004.log`, and
+  `/tmp/mithril-file-gate-node-kube-20261004.log`.
+  The task birth generation stays unchanged. Fresh evidence must match the
+  process active generation. Four distinct generation handles and increasing
+  signed owner versions remain required. The final repository Rust CI passed:
+  95 E2E library tests passed, 507 physical cases were ignored, and all 255
+  Node library tests passed. See
+  `/tmp/mithril-file-gate-node-final-ci-20261004.log`. VM harness checks passed.
+  Review the production path in this order:
+  [test](src/identity/scenarios/file_gate.rs)
+    -> [Platform policy installation](src/platform/shared.rs)
+    -> [Node policy installation](../mithril-node/src/policy.rs)
+    -> [actor read](fixtures/process/read_path.py)
+    -> [fresh evidence](src/effect/check.rs) and
+       [generation readback](src/identity/scenarios/generation_state.rs).
+  Run this test through the existing physical launcher. Select the exact
+  `identity::scenarios::file_gate::signed_file_gate_changes::identity_host`,
+  `identity_runc`, or `identity_kubernetes` case with
+  `--exact --ignored --nocapture --test-threads=1`.
 - [ ] `KernelQualificationRunner::physical_file_open_probe`: own the lease
   and output paths with existing cleanup owners. Keep
   `BpfQualificationLoader` attachment and shutdown explicit.

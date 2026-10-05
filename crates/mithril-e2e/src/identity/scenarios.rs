@@ -39,6 +39,8 @@ mod external_restart;
 #[cfg(test)]
 mod external_roots;
 #[cfg(test)]
+mod file_gate;
+#[cfg(test)]
 mod generation_state;
 #[cfg(test)]
 mod group_boundary;
