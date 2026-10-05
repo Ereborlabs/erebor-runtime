@@ -7038,6 +7038,23 @@ setup, production actions, assertions, and focused test.
       the extra ID. Keep both exact allocator assertions and the cause open.
       See `/tmp/mithril-identity-blocked-final-kube-20261005.log` and
       `/tmp/mithril-tid-sampler-host-20261005.log`.
+      The remaining Kubernetes qualification completed all 41 previously
+      unrun lifecycle groups: 60 passed and one failed across 61 cases.
+      Groups 32 through 62 passed all 35 cases. No failed case was retried.
+      `effect::file_bind_allowed::allowed_bind_keeps_exact_allow::mount_late_kubernetes`
+      failed during Python startup. Python could not read
+      `/usr/local/lib/python3.13/encodings/aliases.py`. The read failed with
+      `EACCES`; Python exited with status 1. The actor script and mount action
+      did not run. The result assertions did not run.
+      The retained evidence does not identify the BPF denial reason.
+      Keep the cause open; no policy, assertion, timeout, or production code
+      changed. Every completed group removed its owned pins, lease, sockets,
+      output, namespaces, CRI records, and Rust process. See
+      `/tmp/mithril-platform-final-remaining-kube-20261005.log` and
+      `/tmp/mithril-kube-unrun-progress-20261005-22942.log`.
+      The pending test and fixture changes are committed. Final qualification
+      is not green: the startup-SIGTERM, Kubernetes allocator, and Python
+      startup failures remain open. This cleanup does not resume migration.
   - [ ] Replace the detached-exec overlap with
     `runtime_exec_keeps_mount_view`.
     - [ ] Use the shared mount actor and the existing `Platform::add_actor`
