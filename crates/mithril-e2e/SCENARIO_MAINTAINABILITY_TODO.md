@@ -3908,8 +3908,12 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
   - [ ] Replace the exact benign-file read control with a small platform test.
-    The baseline uses a recovered unknown root with entry rule zero. Do not
-    replace it with an admitted application root. Reuse `retained_descriptor.py`
+    The baseline installs an external-role exact Allow and leaves the initial
+    root unarmed. Its read assertion does not check a root-class name. Keep
+    entry rule zero and the external role in the replacement. Use an explicit
+    recovered unknown root, not an admitted application root. Publish the same
+    policy without file rules first. Wait for runtime recovery before installing
+    its exact rule. Reuse `retained_descriptor.py`
     for two fresh opens and one-byte reads. Require the correct byte, successful
     exit, and two fresh, task-attributed File/Read `EXACT_POLICY_ALLOW` events
     in Protect and Observe modes. Check the signed selector and active policy
@@ -3918,6 +3922,43 @@ test does not close a row when its physical condition or an assertion changed.
     old action and `benign_read_allowed` field. Keep the first protected open,
     outside-tree control, deep-tree inputs, asynchronous reads, generation
     checks, and saturation controls until their own replacements pass.
+    - [x] Let the existing `install_policy` accept an explicit policy file.
+      Keep named fixture lookup and actor path rules unchanged. Use one typed
+      policy fixture for Protect and Observe; do not copy its full document.
+      Add the two-fresh-read control mode to the shared descriptor actor. Pass
+      the input-path check and physical production checks before committing
+      this common tooling and then the scenario.
+      The input-path check passed on 2026-10-05. The first Host trial failed
+      before its reads. Node rejected the exact selector because no runtime
+      file object was proven. The existing readiness wait now joins a stopped
+      Node and returns its error. The diagnostic reproduction reported the
+      exact selector error in 29.19 seconds instead of a readiness timeout.
+      Production source and readiness deadlines remain unchanged.
+      The Host scenario passed in 51.17 seconds. The VM harness checks passed.
+      Formatting, workspace check, and strict Clippy passed. Rust CI stopped
+      at the unchanged Araphor `observability_raw_recovery` test with
+      `AnalysisReadDeadline`: 168 passed, one failed, and five ignored.
+      The complete lightweight library passed: 160 tests, zero failures, and
+      525 ignored physical or helper cases. The existing retained, passed, and
+      independent descriptor cases each passed on Host, runc, and Kubernetes.
+      The Host scenario uses the existing Node-first `identity` lifecycle.
+      It passed with the retained and independent descriptor cases in one
+      process: three passed in 69.79 seconds. The first batch command selected
+      zero tests; that command is not qualification evidence.
+      Review the implemented input and result flow:
+      [policy_path](src/platform.rs) accepts a named fixture or an existing file.
+      -> [Shared::install_policy](src/platform/shared.rs) uses signed production policy delivery.
+      -> [retained_descriptor.py](fixtures/process/retained_descriptor.py) opens and reads the real file.
+      -> [EffectCheck::wait_many](src/effect/check.rs) selects fresh attributed effects.
+      [ProcessFixture::stop](src/process.rs) owns normal process cleanup.
+      The scenario reads `ExecutionSetBindingStateV1` with a native-endian
+      root-cgroup key. It checks the external role against the real binding.
+    - [ ] Commit the qualified Host case with the shared `identity` lifecycle.
+      The 99-line `exact_read_is_allowed` test keeps both modes
+      and all explicit role, selector, generation, and evidence assertions.
+    - [ ] Qualify and commit direct runc.
+    - [ ] Qualify and commit Kubernetes.
+    - [ ] Remove only the matching legacy read action and result field.
   - [x] Complete BPF-link pin removal without the old mount fixture.
     [link_pin_removal_is_denied](src/effect/link_pin.rs) uses the common
     `ProcessFixture` and [link_pin.py](fixtures/process/link_pin.py) for mount

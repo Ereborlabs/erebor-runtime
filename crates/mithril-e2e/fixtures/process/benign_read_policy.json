@@ -1,0 +1,54 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "benign-read",
+    "namespace": "default",
+    "uid": "10000000-0000-4000-8000-000000000110",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {"matchLabels": {"app.kubernetes.io/name": "benign-read"}},
+    "mode": "Protect",
+    "containers": [{
+      "names": ["worker"],
+      "kinds": ["Application"],
+      "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      "applicationEntry": {"executionRule": "python", "role": "worker"},
+      "additionalEntries": [],
+      "administrativeEntry": {"role": "administrator"},
+      "externalRole": "external"
+    }],
+    "roles": [
+      {
+        "name": "worker",
+        "files": [],
+        "execution": [{"name": "python", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}],
+        "network": {"destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "administrator", "files": [], "execution": [],
+        "network": {"destinations": []}, "processControl": [], "unixStreams": []
+      },
+      {
+        "name": "external",
+        "files": [{
+          "name": "control-read",
+          "path": "/tmp/mithril-descriptor-allowed",
+          "recursive": false,
+          "exact": true,
+          "operations": ["OpenRead", "Read"],
+          "action": "Allow"
+        }],
+        "execution": [],
+        "network": {"destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      }
+    ],
+    "exceptionGrants": []
+  }
+}

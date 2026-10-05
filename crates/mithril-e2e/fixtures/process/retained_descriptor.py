@@ -2,6 +2,7 @@ import ctypes
 import errno
 import mmap
 import os
+import select
 import socket
 import sys
 
@@ -44,6 +45,32 @@ os.makedirs("/tmp", exist_ok=True)
 for path, content in [(secret_path, b"secret\n"), (allowed_path, b"allowed\n")]:
     with open(path, "wb") as output:
         output.write(content)
+if sys.argv[-1] == "control":
+    print("native-fixture-ready", flush=True)
+    if sys.stdin.buffer.readline() != b"act\n":
+        sys.exit(2)
+    results = []
+    for _ in range(2):
+        descriptor = -1
+        try:
+            descriptor = os.open(allowed_path, os.O_RDONLY)
+            if os.read(descriptor, 1) != b"a":
+                raise RuntimeError("the control read returned the wrong byte")
+            results.append(0)
+        except OSError as failure:
+            results.append(failure.errno)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    name = ctypes.create_string_buffer(("control-" + "-".join(map(str, results))).encode("ascii"))
+    if libc.prctl(PR_SET_NAME, ctypes.addressof(name), 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+    release = select.poll()
+    release.register(sys.stdin, select.POLLIN | select.POLLHUP)
+    events = release.poll()
+    if results != [0, 0] or not any(flags & select.POLLIN for _, flags in events):
+        sys.exit(3)
+    sys.exit(0)
 if sys.argv[-1] == "passed":
     receiver, sender = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
     with receiver, sender:

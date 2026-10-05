@@ -1344,7 +1344,7 @@ impl Shared {
         Ok(())
     }
 
-    fn wait_policy(&self, revision: &str, digest: &str) -> TestResult<()> {
+    fn wait_policy(&mut self, revision: &str, digest: &str) -> TestResult<()> {
         let mut expected = vec![(revision, digest)];
         expected.extend(
             self.targets
@@ -1362,11 +1362,20 @@ impl Shared {
                 }),
         );
         let last = RefCell::new(String::from("<absent>"));
-        Ok(wait_for(
+        let result = wait_for(
             &self.state_path,
             "test policy readiness",
             READY_LIMIT,
             || {
+                ensure!(
+                    self.node_task
+                        .as_ref()
+                        .is_some_and(|task| !task.is_finished()),
+                    InvalidInputSnafu {
+                        path: &self.state_path,
+                        reason: "Node stopped before policy readiness",
+                    }
+                );
                 let status =
                     mithril_node::policy_delivery_status(&self.state_path).context(NodeSnafu)?;
                 let active = expected.iter().all(|(revision, digest)| {
@@ -1391,7 +1400,15 @@ impl Shared {
                     last.borrow()
                 )
             },
-        )?)
+        );
+        if self
+            .node_task
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            self.stop_node()?;
+        }
+        Ok(result?)
     }
 
     pub(super) fn node_ready(&mut self) -> TestResult<()> {

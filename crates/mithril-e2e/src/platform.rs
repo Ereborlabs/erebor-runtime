@@ -100,6 +100,17 @@ pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
 }
 
 pub(crate) fn policy_path(root: &Path, name: &str) -> crate::Result<PathBuf> {
+    let path = Path::new(name);
+    if path.is_absolute() {
+        snafu::ensure!(
+            path.is_file(),
+            InvalidInputSnafu {
+                path,
+                reason: "the policy file is missing",
+            }
+        );
+        return Ok(path.to_owned());
+    }
     fixture_path(root, name, "policy fixture")
 }
 
@@ -507,4 +518,30 @@ pub(crate) trait Platform: Sized {
 
 fn pending<T>(name: &str) -> TestResult<T> {
     Err(format!("{name} is not implemented for this platform").into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_files_keep_paths() -> TestResult<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("missing repository root")?;
+        let named = policy_path(root, "python_policy.json")?;
+        let directory = tempfile::tempdir()?;
+        let file = directory.path().join("policy.json");
+        std::fs::copy(&named, &file)?;
+        let input = file.to_str().ok_or("invalid policy path")?;
+        assert_eq!(policy_path(root, input)?, file);
+        assert!(actor_script(root, input).is_err());
+        assert!(policy_path(root, "../python_policy.json").is_err());
+        let input = directory.path().to_str().ok_or("invalid directory path")?;
+        assert!(policy_path(root, input).is_err());
+        assert!(policy_path(root, "/missing/mithril-policy.json").is_err());
+        assert_eq!(policy_path(root, "python_policy.json")?, named);
+        Ok(())
+    }
 }
