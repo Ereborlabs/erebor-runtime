@@ -3953,8 +3953,8 @@ test does not close a row when its physical condition or an assertion changed.
       [ProcessFixture::stop](src/process.rs) owns normal process cleanup.
       The scenario reads `ExecutionSetBindingStateV1` with a native-endian
       root-cgroup key. It checks the external role against the real binding.
-    - [ ] Commit the qualified Host case with the shared `identity` lifecycle.
-      The 99-line `exact_read_is_allowed` test keeps both modes
+    - [x] Qualify Host with the shared `identity` lifecycle. The 99-line
+      [exact_read_is_allowed](src/effect/benign_read.rs) test keeps both modes
       and all explicit role, selector, generation, and evidence assertions.
     - [ ] Qualify and commit direct runc.
     - [ ] Qualify and commit Kubernetes.

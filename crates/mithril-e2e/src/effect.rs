@@ -3,6 +3,8 @@ mod admin_exec;
 #[cfg(test)]
 mod app_default;
 #[cfg(test)]
+mod benign_read;
+#[cfg(test)]
 mod bpf;
 #[cfg(test)]
 mod check;
