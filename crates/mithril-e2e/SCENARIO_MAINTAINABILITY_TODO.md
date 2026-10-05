@@ -6926,6 +6926,31 @@ setup, production actions, assertions, and focused test.
       add a competing ring reader, or accept incomplete capture. See
       `/tmp/mithril-overlap-fixture-opt-runc-20261004.log`. No Kubernetes
       rerun followed this lightweight failure. Keep the old coverage.
+      The revised collector uses the opening and closing kernel sequence
+      watermarks. It rejects missing records, new reader faults, and kernel
+      loss. It counts captured `UNSUPPORTED_OBJECT` and `UNRESOLVED_OBJECT`
+      hard results separately from the test's explicit no-unresolved check.
+      Three collector unit tests passed. The Node fixture used a single-thread
+      runtime, but the production Node binary uses a multi-thread runtime.
+      Admission performs synchronous kernel and durable-state operations.
+      Change only the fixture Node runtime to the production runtime type.
+      Keep all 32 simultaneous exec requests and all read assertions unchanged.
+      With this configuration, direct runc passed in 45.96 seconds and
+      Kubernetes passed in 93.68 seconds. Both commands completed normal
+      cleanup. See `/tmp/mithril-overlap-production-runtime-runc-20261004.log`
+      and `/tmp/mithril-overlap-production-runtime-kube-20261004.log`.
+      No production code changed. No client cache or new Platform API was
+      added. These focused results qualify the draft, not the full fixture
+      matrix. Keep full-suite qualification and the old Kubernetes
+      startup-probe overlap open after the bounded cleanup commits.
+      [The 95-line scenario](src/identity/scenarios/runtime_mount_view.rs)
+      starts the protected read loop inside
+      [EffectCheck::capture](src/effect/check.rs). The collector reads the
+      opening and closing kernel counters and gathers public Node snapshots.
+      The scenario checks all 32 exec denials, denied reads, exact cache
+      equality, and absence of unresolved results. The same Kubernetes body
+      passed in the later 11-case group; that group had one unrelated TID
+      counter failure. No legacy coverage is removed by this cleanup commit.
     - [ ] Preserve the real Kubernetes probe overlap before shell retirement.
       The old startup probe retries `cat` while its last input file is absent.
       The launcher creates that file after the 32 exec requests. The file is
