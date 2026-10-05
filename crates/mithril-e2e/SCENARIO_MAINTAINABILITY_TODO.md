@@ -673,6 +673,14 @@ Runner retirement is a separate, open check. In particular:
   on Host (55 tests, 572.53 seconds), direct `runc` (50 tests, 563.35 seconds),
   and Kubernetes (50 tests, 1320.75 seconds). This proves the missing timeout
   case. It does not identify the cause of the earlier Kubernetes stall.
+  On 2026-10-05, the existing test passed in 38.87 seconds with the live Node,
+  eight-second CRI stall, and four-second client deadline unchanged. The SDK
+  sets both a gRPC deadline and an outer deadline. Accept only the two exact
+  timeout results and require completion between four and five seconds.
+  Keep rejection of every response during the stall, the live socket check,
+  and successful admission after the stall. All five owned paths were absent.
+  See `/tmp/mithril-platform-live-stall-final-20261005.log`. Production did
+  not change. This result does not explain the earlier Kubernetes stall.
 - [ ] Identify the intermittent live-Node admission stall. The complete
   Kubernetes identity lifecycle passed on the next run, including the earlier
   failed TCP case. Do not claim that the intermittent stall is fixed without

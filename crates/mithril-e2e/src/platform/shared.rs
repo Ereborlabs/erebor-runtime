@@ -1835,24 +1835,27 @@ mod tests {
             // Keep the client deadline below Node's deadline to test the transport timeout.
             let client = RuntimeAdmissionClient::new(socket.clone(), Duration::from_secs(4))?;
             assert!(env.runtime.block_on(client.available()));
+            let started = std::time::Instant::now();
             let result = env
                 .runtime
                 .block_on(client.stage_runtime_facts(request.clone()));
+            let elapsed = started.elapsed();
             cri.delay_list(Duration::ZERO)?;
             let error = match result {
                 Err(error) => error,
                 Ok(response) => {
-                    return Err(format!(
-                        "the live Node answered during a blocked CRI read: {response:?}"
-                    )
-                    .into())
+                    return Err(format!("Node answered during CRI stall: {response:?}").into())
                 }
             };
+            let message = error.to_string();
             assert!(
-                error
-                    .to_string()
-                    .contains("runtime admission endpoint exceeded its fail-closed timeout"),
+                message.contains("runtime admission endpoint exceeded its fail-closed timeout")
+                    || message.contains("status: Cancelled, message: \"Timeout expired\""),
                 "{error}"
+            );
+            assert!(
+                (Duration::from_secs(4)..Duration::from_secs(5)).contains(&elapsed),
+                "{elapsed:?}"
             );
             assert!(socket.exists());
             let last = RefCell::new(String::from("<none>"));
