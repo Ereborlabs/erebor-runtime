@@ -2062,6 +2062,17 @@ test does not close a row when its physical condition or an assertion changed.
       zero. The log is `/tmp/mithril-clone-move-final-ci-20261006.log`.
       The lightweight crate passed 159 tests; 544 physical tests were ignored.
       The three physical moved-root cases passed separately as recorded above.
+  - [ ] Replace the remaining native-child first-open Rust fixture with
+    `clone_cgroup.py` and `ProcessFixture`. Add one real fork action to the
+    shared actor. Use existing `wait_child` and PID tracking. Keep root binding
+    role, restricted creator-free identity, root and child runnable state,
+    child lineage, absent child root/class labels, inherited role, active
+    execution/state-vector values, successful first open, and normal cleanup.
+    Keep the test below 100 lines. Run the two existing clone actor cases and
+    the new case on Host, direct `runc`, and Kubernetes. Remove only the old
+    native-child case and its unused constructor, release method, status
+    poller, and open branch after qualification. Add no fixture or Platform
+    API and no production change. Keep the remaining clone behaviors.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields
