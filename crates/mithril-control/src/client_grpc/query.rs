@@ -87,12 +87,10 @@ impl QueryTransport {
     }
 
     #[cfg(test)]
-    pub(super) fn expire(&mut self) {
-        self.deadline
-            .as_mut()
-            .expect("the duration exists")
-            .as_mut()
-            .reset(tokio::time::Instant::now());
+    pub(super) async fn expire(&mut self) {
+        let deadline = self.deadline.as_mut().expect("the duration exists");
+        deadline.as_mut().reset(tokio::time::Instant::now());
+        deadline.as_mut().await;
     }
 
     pub(super) fn checkpoint(bytes: &[u8]) -> Result<Option<QueryCheckpoint>, Status> {

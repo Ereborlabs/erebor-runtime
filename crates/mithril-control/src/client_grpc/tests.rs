@@ -488,7 +488,7 @@ async fn observability_grpc_duration_revocation() -> TestResult {
         ClientGrpcOwner::now()?,
         true,
     )?;
-    stream.expire();
+    stream.expire().await;
     let status = tokio::time::timeout(WAIT, stream.next())
         .await?
         .ok_or("duration revocation status is absent")?;
@@ -538,7 +538,7 @@ async fn observability_grpc_duration_pending() -> TestResult {
         rows.payload,
         Some(proto::query_frame::Payload::Rows(value)) if value.rows.len() == 1
     ));
-    stream.expire();
+    stream.expire().await;
     let frame = Fixture::next(&mut stream).await?;
     assert_eq!(frame.read_revision, checkpoint.read_revision);
     assert!(matches!(
