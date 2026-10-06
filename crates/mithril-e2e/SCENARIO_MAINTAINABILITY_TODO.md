@@ -2208,6 +2208,26 @@ test does not close a row when its physical condition or an assertion changed.
     binding is active before the external clone starts.
   - [x] Remove only the matching native-child namespace/exec block and fields
     from `IdentityTestRunner::physical_probe` after the replacement passes.
+  - [ ] Replace the remaining Host-only `clone_exec::child_enters_mount_ns`
+    with one shared platform test below 100 lines. Compare with baseline
+    `95775f48:760–842`. Start real Control and Node and install the existing
+    `exec_observe_policy.json`. Observe mode matches the original identity
+    policy; this case tests identity, not execution denial. Reuse `ready.py`
+    through `ProcessFixture::start` and Linux `unshare` for the target namespace.
+    Extend the shared `clone_cgroup.py` actor to enter that namespace and exec.
+    Add no Platform API or production change.
+    - [ ] Keep the creator-free restricted root and native child lineage.
+      Require different namespaces before entry and the target namespace after
+      real exec. Keep cookie, creator, parent, process state, and role stable.
+      Require new execution and image IDs, no root or installed role class,
+      runnable coordinates, active execution and state vector, and no exec guard.
+      Use normal process-owner cleanup and assert process removal.
+    - [ ] Pass the new case and all five existing clone-actor cases on Host,
+      direct `runc`, and Kubernetes after the shared actor change.
+    - [ ] Remove `clone_exec.rs`, `CloneIntoCgroupFixture`, `IdentityFixture`,
+      and their module declarations only after all three platforms pass.
+      These fixtures have no other caller. Pass harness checks and final Rust
+      CI after the deletion. Record the commands and terminal results here.
 - [x] Native child exec: start the admitted environment with `ready.py`, then
   use `add_actor` for the child-exec program. Keep the fork and exec actions,
   production identity snapshots, and allocation diagnostics visible. Assert
