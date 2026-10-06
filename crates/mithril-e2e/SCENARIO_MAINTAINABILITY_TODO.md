@@ -7356,6 +7356,12 @@ setup, production actions, assertions, and focused test.
       The removed actor loop also warmed that cache. The deletion is withdrawn;
       the old runner and launcher now match HEAD. A proposed warm-up rewrite
       in the old runner was rejected because it added legacy orchestration.
+      - [ ] Remove the duplicate overlap result, cache comparison, denial
+        matcher, and launcher predicate. The shared runc and Kubernetes cases
+        and native startup-probe case are qualified. Keep the existing 32-exec
+        warm-up, actor loop, FIFO, and collector baseline unchanged. Their
+        removal still needs the independent collector replacement. Add no
+        orchestration or Platform API to the old runner.
       Add no replacement warm-up helper there. Preserve the old coverage until
       the shared collector replacement can remove this dependency. The final
       Rust CI gate remains required for the shared fixture changes.
