@@ -116,13 +116,17 @@ elif mode in ("symlink", "hardlink", "procfd", "bind", "bind-allowed"):
                 break
             if action in paths:
                 error = open_errno(paths[action], os.O_RDONLY)
-            elif action == "mount":
+            elif action in ("mount", "cache"):
                 alias = work / "bind-3"
-                alias.mkdir()
+                alias.mkdir(exist_ok=True)
                 result = libc.mount(os.fsencode(secret.parent), os.fsencode(alias), None, 4096, None)
-                write("bind-change-mount", str(ctypes.get_errno() if result else 0))
+                mount_error = ctypes.get_errno() if result else 0
                 error = open_errno(alias / secret.name, os.O_RDONLY)
-                action = "change"
+                if action == "cache":
+                    error = f"{mount_error}-{error}"
+                else:
+                    write("bind-change-mount", str(mount_error))
+                    action = "change"
             elif action == "replace":
                 source = work / "replacement-file"
                 source.write_bytes(b"benign replacement\n")

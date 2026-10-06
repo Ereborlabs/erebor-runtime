@@ -2759,6 +2759,33 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching old first-read decision and effect after
       the deferred Kubernetes case passes. Keep dirty-view, replaced-path,
       restoration, and cache snapshot checks until their own replacements pass.
+    - [ ] Replace the late-bind READY-cache snapshot check with
+      `bind_rebuilds_ready_cache`. Keep one shared test below 100 lines. Reuse
+      `exception.py`, `file_mount_change_policy.json`, `EffectCheck`, and
+      `MountCache`. Start the actor before Node; keep recovery visible.
+      Test Protect and Observe with the same actor. Require successful bind,
+      the first alias read's expected result, fresh attributed exact evidence,
+      an advanced epoch, and a new READY key. Keep namespace identity, changed
+      mountinfo, distinct mount IDs, and equal object, composite, task cookie,
+      and effect generation explicit.
+      - [x] Improve the shared bind action first. Capture mount errno before
+        the read. Add a cache action that does not write a result file before
+        or after the first protected read. Use process-name readiness. Keep
+        the existing mount action and result file. Reuse the owned alias
+        directory when the same actor changes policy mode.
+      - [x] Pass the existing affected Host and direct-runc cases and the
+        Kubernetes bind-alias case; commit shared tooling first.
+        Host first-bind passed in 38.87 seconds. Direct runc passed in 65.80
+        seconds. The existing Kubernetes bind-alias case passed in 80.05
+        seconds. Generic process checks passed 14 tests with one privileged
+        case ignored. VM harness checks and format passed. The cache action's
+        production qualification follows in the shared scenario below.
+      - [ ] Pass Host and commit the scenario. Pass direct runc and commit
+        its registration. Run related checks and final Rust CI.
+      - [ ] Revisit Kubernetes only after approval. Keep the old late-bind
+        decision, snapshot assertions, result fields, and helpers until the
+        paired physical replacement passes. Do not count Host or runc as
+        Kubernetes proof.
     - [x] Replace the Protect-mode overmount and restoration pair with
       `mount_replacement_stays_closed`. Keep one small shared Rust test below
       100 lines. Reuse `exception.py`, the qualified bind/recovery setup,
