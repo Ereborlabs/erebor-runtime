@@ -3907,7 +3907,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace ordinary generation retirement with a small standard platform
+  - [x] Replace ordinary generation retirement with a small standard platform
     test. Reuse `ready.py`, both actor policies, and `GenerationState`. Keep
     Protect and Observe modes. Start both holders before the first policy,
     as the old probe does. Let Node recover their runtime identity. Replace
@@ -3949,7 +3949,16 @@ test does not close a row when its physical condition or an assertion changed.
       `/var/tmp/mithril-startup-retained-host-20261006.log` in the Host VM.
       The passing focused rerun had no concurrent workspace CI. This result
       does not prove which operation delayed the first run's Node.
-    - [ ] Retire only the matched pre-saturation legacy checks.
+    - [x] Retire only the matched pre-saturation legacy checks. The deletion
+      removes 54 lines from `effect.rs`. The exact-file migration effect,
+      ring-loss and WAL-capacity assertions, and post-pressure last-holder
+      retirement remain unchanged. Comparison with `95775f48` confirms the
+      shared test retains both removed assertions in Protect and Observe.
+      The 28 focused effect tests and local VM harness checks passed.
+      The final repository Rust CI gate passed with `RUST_TEST_THREADS=1`.
+      Formatting, workspace check, strict Clippy, and workspace tests passed.
+      No physical matrix was repeated for this matched legacy deletion.
+      Log: `/tmp/mithril-refactor-generation-retire-ci-20261006.log`.
     - [ ] Replace last-holder retirement after ring loss and WAL saturation.
       Keep `old_generation_deleted_after_last_holder` until this condition passes.
 

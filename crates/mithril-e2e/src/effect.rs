@@ -162,8 +162,7 @@ use std::time::{Duration, Instant};
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-    PolicyGenerationStateV1, ProfileGenerationDescriptorV1, QualificationResultV1,
-    MAX_CANONICAL_PATH_COMPONENTS_V1,
+    QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
     PathSelectorV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDocumentV1,
@@ -176,7 +175,7 @@ use mithril_node::{
 };
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
-use zerocopy::{IntoBytes as _, TryFromBytes as _};
+use zerocopy::IntoBytes as _;
 
 use self::child::{EffectProcessFixture, HardClosedOperation};
 use self::support::{
@@ -524,7 +523,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub mount_snapshot_rebuilt_after_mutation: bool,
     pub external_mount_replacement_failed_closed: bool,
     pub exact_object_restored_after_mount_removal: bool,
-    pub active_generation_published: bool,
     pub existing_process_migrated_to_active_generation: bool,
     pub old_generation_deleted_after_last_holder: bool,
     pub baseline_average_open_ns: u64,
@@ -2000,57 +1998,6 @@ impl EffectTestRunner {
                 next_test_exact_objects,
             )
             .context(NodeSnafu)?;
-        let active_generation = host
-            .lookup_map(
-                "active_profile_generations",
-                Id128V1::new(0x1111_1111_1111_4111, 0x8111_1111_1111_1111).as_bytes(),
-            )
-            .context(InterceptorSnafu)?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: Path::new("active_profile_generations"),
-                    reason: "profile generation 2 was not published",
-                }
-                .build()
-            })?;
-        let active_generation_published =
-            u64::from_ne_bytes(active_generation.try_into().unwrap_or_default())
-                == NEXT_PROFILE_GENERATION_REF_ID;
-        ensure!(
-            active_generation_published,
-            InvalidInputSnafu {
-                path: Path::new("active_profile_generations"),
-                reason: "profile generation 2 did not become the active binding generation",
-            }
-        );
-        let retiring = host
-            .lookup_map(
-                "profile_generation_descriptors",
-                &PROFILE_GENERATION_REF_ID.to_ne_bytes(),
-            )
-            .context(InterceptorSnafu)?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: Path::new("profile_generation_descriptors"),
-                    reason: "generation 1 was deleted while it still had task holders",
-                }
-                .build()
-            })?;
-        let retiring =
-            ProfileGenerationDescriptorV1::try_read_from_bytes(&retiring).map_err(|error| {
-                InvalidInputSnafu {
-                    path: Path::new("profile_generation_descriptors"),
-                    reason: format!("generation 1 descriptor is invalid: {error}"),
-                }
-                .build()
-            })?;
-        ensure!(
-            retiring.state == PolicyGenerationStateV1::Retiring,
-            InvalidInputSnafu {
-                path: Path::new("profile_generation_descriptors"),
-                reason: "generation 1 did not enter RETIRING while its tasks remained live",
-            }
-        );
         let retained_marker = observations.cursor();
         ensure!(
             fixture.read(&paths.benign)?.allowed,
@@ -2285,7 +2232,6 @@ impl EffectTestRunner {
             mount_snapshot_rebuilt_after_mutation: true,
             external_mount_replacement_failed_closed: true,
             exact_object_restored_after_mount_removal: true,
-            active_generation_published,
             existing_process_migrated_to_active_generation,
             old_generation_deleted_after_last_holder,
             baseline_average_open_ns: baseline.average_ns(),
