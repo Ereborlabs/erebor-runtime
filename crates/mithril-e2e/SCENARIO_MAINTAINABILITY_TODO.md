@@ -2023,7 +2023,7 @@ test does not close a row when its physical condition or an assertion changed.
       failed link files. An earlier retry hit an unrelated data-read deadline;
       the unchanged exact test then passed. Use two test workers for the final
       complete CI run. Do not change its assertions or deadline.
-  - [ ] Replace the moved-root first-open denial with the existing shared
+  - [x] Replace the moved-root first-open denial with the existing shared
     `clone_cgroup.py` actor and `ProcessFixture`. Keep the root's exact binding
     role, creator-free restricted identity, and runnable state before movement.
     Move the root with the existing `move_task` API. Keep identity stable,
@@ -2033,6 +2033,35 @@ test does not close a row when its physical condition or an assertion changed.
     and Kubernetes before removing the old case, its first-open methods, and
     its unused root-open branch. Keep the other clone cases. Add no Platform
     API, actor change, policy change, or production change.
+    - [x] Pass `clone_move::moved_first_open_denied` on Host, direct `runc`,
+      and Kubernetes in 33.87, 30.00, and 78.25 seconds. The file is 78 lines.
+      Compare with baseline `95775f48:2252–2323`. Keep the exact external
+      binding role, restricted creator-free identity, stable task cookie,
+      fail-closed coordinate, real `EACCES`, and both mismatch increases.
+      Add an explicit process-removal assertion. The preceding unmoved
+      control passed on all three platforms with the same unchanged actor.
+    - [x] Remove only the matched old `cgroup_fork` denial, its constructor,
+      its errno poller, and its root-open branch. The legacy test and fixture
+      shrink by 107 lines. Keep the other four clone cases. The existing
+      shared process checks passed: 14 passed, one privileged case ignored.
+      Strict clippy and the local VM harness checks passed before deletion.
+    - Source review: [clone_move](src/identity/scenarios/clone_move.rs) starts
+      Control, Node, the signed policy, and the initial actor.
+      -> [ProcessFixture](src/process.rs) owns the shared launcher and root.
+      -> [clone_cgroup.py](fixtures/process/clone_cgroup.py) creates and holds
+      the root in the initial actor's cgroup before its first open.
+      -> [move_task](src/platform.rs) moves the root through the existing
+      platform implementation. The Node snapshot must report fail closed.
+      -> The test requests the open, checks `EACCES` and the second mismatch
+      increase, then stops and checks process removal. Production is unchanged.
+    - [x] Pass the related native-child Host case after the fixture deletion.
+      The unchanged case passed in 31.36 seconds.
+    - [x] Pass final repository Rust CI after the matched legacy deletions.
+      Run `env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2
+      bash .github/scripts/verify-rust-ci.sh`. The command exited with status
+      zero. The log is `/tmp/mithril-clone-move-final-ci-20261006.log`.
+      The lightweight crate passed 159 tests; 544 physical tests were ignored.
+      The three physical moved-root cases passed separately as recorded above.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields

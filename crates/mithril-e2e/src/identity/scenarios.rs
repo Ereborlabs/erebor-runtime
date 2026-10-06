@@ -13,6 +13,8 @@ mod clean_host;
 #[cfg(test)]
 mod clone_exec;
 #[cfg(test)]
+mod clone_move;
+#[cfg(test)]
 mod clone_open;
 #[cfg(test)]
 mod container_kinds;

@@ -34,12 +34,7 @@ pub(super) struct CloneIntoCgroupFixture {
 impl CloneIntoCgroupFixture {
     #[cfg(test)]
     pub(super) fn start(cgroup_path: &Path) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None, None, None)
-    }
-
-    #[cfg(test)]
-    pub(super) fn start_with_root_first_effect(cgroup_path: &Path, path: &Path) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None, Some(path), None)
+        Self::start_with_namespace_target(cgroup_path, None, None)
     }
 
     #[cfg(test)]
@@ -47,18 +42,17 @@ impl CloneIntoCgroupFixture {
         cgroup_path: &Path,
         path: &Path,
     ) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None, None, Some(path))
+        Self::start_with_namespace_target(cgroup_path, None, Some(path))
     }
 
     pub(super) fn start_with_mount_namespace_target(cgroup_path: &Path) -> Result<Self> {
         let target = start_mount_namespace_target()?;
-        Self::start_with_namespace_target(cgroup_path, Some(target), None, None)
+        Self::start_with_namespace_target(cgroup_path, Some(target), None)
     }
 
     fn start_with_namespace_target(
         cgroup_path: &Path,
         mut namespace_target: Option<Child>,
-        first_effect_path: Option<&Path>,
         native_child_first_effect_path: Option<&Path>,
     ) -> Result<Self> {
         let cgroup = match File::open(cgroup_path).context(IoSnafu { path: cgroup_path }) {
@@ -110,7 +104,6 @@ impl CloneIntoCgroupFixture {
             run_child(
                 root_gate.as_ptr().cast::<AtomicU32>(),
                 namespace_target_read.as_ref().map(|file| file.as_raw_fd()),
-                first_effect_path,
                 native_child_first_effect_path,
             );
         }
@@ -439,36 +432,6 @@ impl CloneIntoCgroupFixture {
         Ok(None)
     }
 
-    #[cfg(test)]
-    pub(super) fn moved_root_first_effect_denied(&mut self) -> Result<Option<()>> {
-        let mut status = 0;
-        // SAFETY: root_pid is this process's child and status is writable.
-        let result =
-            unsafe { libc::waitpid(self.root_pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
-        if result < 0 {
-            return Err(invalid_state(format!(
-                "wait for moved-root first-effect exit: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        if result == self.root_pid as libc::pid_t {
-            if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == libc::EACCES {
-                return Ok(Some(()));
-            }
-            let reason = if libc::WIFEXITED(status) {
-                format!("exit status {}", libc::WEXITSTATUS(status))
-            } else if libc::WIFSIGNALED(status) {
-                format!("signal {}", libc::WTERMSIG(status))
-            } else {
-                format!("wait status {status}")
-            };
-            return Err(invalid_state(format!(
-                "moved-root first effect did not fail with EACCES: {reason}"
-            )));
-        }
-        Ok(None)
-    }
-
     pub(super) fn stop(&mut self) -> Result<()> {
         let child = self.stop_child();
         let root = self.stop_root();
@@ -636,7 +599,6 @@ fn stop_namespace_target(target: &mut Option<Child>) {
 fn run_child(
     root_gate: *const AtomicU32,
     namespace_target_fd: Option<i32>,
-    first_effect_path: Option<&Path>,
     native_child_first_effect_path: Option<&Path>,
 ) -> ! {
     if !close_inherited_fds(namespace_target_fd) {
@@ -646,9 +608,6 @@ fn run_child(
     root_gate.store(1, Ordering::Release);
     while root_gate.load(Ordering::Acquire) != 2 {
         unsafe { libc::sched_yield() };
-    }
-    if let Some(path) = first_effect_path {
-        direct_open_exit(path);
     }
     let native_child = unsafe { libc::syscall(libc::SYS_fork) };
     if native_child == 0 {
@@ -717,10 +676,6 @@ fn close_inherited_fds(keep: Option<i32>) -> bool {
         low = fd.saturating_add(1);
     }
     unsafe { libc::syscall(libc::SYS_close_range, low, u32::MAX, 0) == 0 }
-}
-
-fn direct_open_exit(path: &Path) -> ! {
-    unsafe { libc::_exit(direct_open(path)) }
 }
 
 fn direct_open(path: &Path) -> i32 {
