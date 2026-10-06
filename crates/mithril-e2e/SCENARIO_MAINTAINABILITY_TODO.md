@@ -7356,12 +7356,29 @@ setup, production actions, assertions, and focused test.
       The removed actor loop also warmed that cache. The deletion is withdrawn;
       the old runner and launcher now match HEAD. A proposed warm-up rewrite
       in the old runner was rejected because it added legacy orchestration.
-      - [ ] Remove the duplicate overlap result, cache comparison, denial
+      - [x] Remove the duplicate overlap result, cache comparison, denial
         matcher, and launcher predicate. The shared runc and Kubernetes cases
         and native startup-probe case are qualified. Keep the existing 32-exec
         warm-up, actor loop, FIFO, and collector baseline unchanged. Their
         removal still needs the independent collector replacement. Add no
         orchestration or Platform API to the old runner.
+        On 2026-10-06, retirement removed 125 net Rust lines and one launcher
+        predicate. The remaining runc source has 4,475 lines. The unused
+        private observation store, matcher test, and snapshot fields are gone.
+        The shared tests retain every baseline overlap comparison and require
+        exact READY-key equality, task attribution, and complete capture.
+        Read [runtime_exec_keeps_mount_view](src/identity/scenarios/runtime_mount_view.rs)
+          -> [probe_keeps_mount_view](src/identity/scenarios/probe_mount_view.rs)
+          -> [MountCache](src/physical/mount_cache.rs) for read-only cache state
+          -> [EffectCheck](src/effect/check.rs) for production observation capture.
+        The actor loop and collector remain in [the old runner](src/effect/runc.rs).
+        Capture checks passed all three tests. VM harness checks, shell syntax,
+        and final repository Rust CI passed. E2E passed 159 ordinary tests,
+        with 540 physical tests ignored; Node passed 265 tests. See
+        `/tmp/mithril-overlap-retire-verified-ci-20261006.log`.
+        No production, Platform, actor, or shared assertion changed. The prior
+        focused physical results apply to those unchanged shared tests. No
+        full physical matrix was run for this deletion.
       Add no replacement warm-up helper there. Preserve the old coverage until
       the shared collector replacement can remove this dependency. The final
       Rust CI gate remains required for the shared fixture changes.
@@ -8884,6 +8901,8 @@ keep an actor-only duplicate only to preserve the old name.
 - `effect/network.rs::signed_network_fixture_compiles_before_physical_use`
 - `effect/network.rs::signed_network_fixture_compiles_two_node_peer`
 - `effect/runc.rs::normal_path_tree_denial_requires_the_application_read_identity`
+  is retired with its test-only matcher. Shared overlap tests require the
+  production denial, task cookie, role, and entry ID through `EffectCheck`.
 - `effect/runc.rs::runc_seccomp_fixture_binds_inside_its_runtime`
 - `effect/support.rs::enforcement_fixture_is_a_verified_protect_artifact`
 - `effect/support.rs::exact_observation_match_rejects_the_same_reason_from_another_hook`

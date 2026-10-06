@@ -20,7 +20,6 @@ use erebor_interceptor_abi::{
     ExactFileObjectKeyV1, ExecutionSetBindingStateV1, Id128V1, KernelEffectFamilyV1,
     KernelEffectOperationV1, RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1,
 };
-use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, policy_custom_resource, CapabilityRecord,
@@ -211,7 +210,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub stable_canonical_mount_policy_preserved_after_mount_mutation: bool,
     pub runc_post_create_mount_mutation_observed: bool,
     pub bpf_runtime_topology_initialized: bool,
-    pub concurrent_exec_detached_mounts_preserved_view: bool,
     pub recursive_wildcard_stable_after_concurrent_exec: bool,
     pub unreachable_mount_cache_rows_collected: bool,
     pub prestop_retained_during_runtime_inventory_omission: bool,
@@ -2435,13 +2433,10 @@ impl EffectTestRunner {
         drop(startup_reader);
 
         let observations = EffectObservationStore::default();
-        let physical_effect_capture = EffectObservationStore::new(65_536);
         let sink = observations.clone();
-        let capture = physical_effect_capture.clone();
         let reader = host
             .effect_observation_reader(move |bytes| {
                 sink.record_bytes(bytes);
-                capture.record_bytes(bytes);
                 0
             })
             .context(InterceptorSnafu)?;
@@ -3154,10 +3149,6 @@ impl EffectTestRunner {
             true,
             "the recursive-wildcard concurrent-exec barrier",
         )?;
-        let concurrent_recursive_marker = observations.cursor();
-        let concurrent_recursive_mount_epoch = global_mount_mutation_epoch(&host)?;
-        let concurrent_recursive_mount_activity = global_mount_activity_sequence(&host)?;
-        let concurrent_recursive_mount_topology = mount_topology_snapshot(&host, initial_pid)?;
         fs::write(
             role_directory.join("concurrent-recursive-start.fifo"),
             b"start\n",
@@ -3197,9 +3188,6 @@ impl EffectTestRunner {
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
-        let mount_epoch_after_concurrent_exec = global_mount_mutation_epoch(&host)?;
-        let mount_activity_after_concurrent_exec = global_mount_activity_sequence(&host)?;
-        let mount_topology_after_concurrent_exec = mount_topology_snapshot(&host, initial_pid)?;
         fs::write(role_directory.join("concurrent-recursive-stop"), b"stop\n").context(
             IoSnafu {
                 path: &role_directory,
@@ -3211,74 +3199,8 @@ impl EffectTestRunner {
             true,
             "the recursive-wildcard result during containerd exec preparation",
         )?;
-        let concurrent_recursive_denied = fs::read_to_string(&concurrent_recursive_result)
-            .context(IoSnafu {
-                path: &concurrent_recursive_result,
-            })?
-            .trim()
-            == "PATH_TREE_DENIED";
-        let concurrent_recursive_count =
-            fs::read_to_string(role_directory.join("concurrent-recursive-count"))
-                .context(IoSnafu {
-                    path: role_directory.join("concurrent-recursive-count"),
-                })?
-                .trim()
-                .parse::<u64>()
-                .map_err(|error| {
-                    InvalidInputSnafu {
-                        path: role_directory.join("concurrent-recursive-count"),
-                        reason: format!("the protected read count is invalid: {error}"),
-                    }
-                    .build()
-                })?;
-        let concurrent_effects = physical_effect_capture.recent_since(concurrent_recursive_marker);
-        let normal_denials = concurrent_effects
-            .iter()
-            .filter(|event| {
-                normal_path_tree_denial_matches(
-                    event,
-                    active.active_role_id,
-                    active.admitted_entry_rule_id,
-                )
-            })
-            .count();
-        let unresolved_objects = concurrent_effects
-            .iter()
-            .filter(|event| event.reason == "UNRESOLVED_OBJECT")
-            .count();
-        let detached_cache_stayed_current = mount_topology_after_concurrent_exec.cache_generation
-            >= concurrent_recursive_mount_topology.cache_generation
-            && (mount_topology_after_concurrent_exec.cache_generation
-                > concurrent_recursive_mount_topology.cache_generation
-                || mount_topology_after_concurrent_exec.ready_snapshot_keys
-                    == concurrent_recursive_mount_topology.ready_snapshot_keys);
-        let concurrent_exec_detached_mounts_preserved_view = concurrent_recursive_denied
-            && concurrent_recursive_count > 0
-            && normal_denials > 0
-            && unresolved_objects == 0
-            && mount_epoch_after_concurrent_exec == concurrent_recursive_mount_epoch
-            && mount_activity_after_concurrent_exec > concurrent_recursive_mount_activity
-            && mount_topology_after_concurrent_exec.mount_namespace_inode
-                == concurrent_recursive_mount_topology.mount_namespace_inode
-            && mount_topology_after_concurrent_exec.security_view_epoch
-                == concurrent_recursive_mount_topology.security_view_epoch
-            && detached_cache_stayed_current
-            && mount_topology_after_concurrent_exec.mountinfo_sha256
-                == concurrent_recursive_mount_topology.mountinfo_sha256;
-        ensure!(
-            concurrent_exec_detached_mounts_preserved_view,
-            InvalidInputSnafu {
-                path: &concurrent_recursive_result,
-                reason: format!(
-                    "detached runc exec preparation changed the protected mount view: denied={concurrent_recursive_denied}, count={concurrent_recursive_count}, normal_denials={normal_denials}, unresolved={unresolved_objects}, security_epoch={concurrent_recursive_mount_epoch}->{mount_epoch_after_concurrent_exec}, activity={concurrent_recursive_mount_activity}->{mount_activity_after_concurrent_exec}, topology={concurrent_recursive_mount_topology:?}->{mount_topology_after_concurrent_exec:?}, effects={:?}",
-                    recent_effect_summary(&observations, concurrent_recursive_marker),
-                ),
-            }
-        );
-        make_canonical_mount_cache_stale_for_test(
-            &host,
-            &mount_topology_after_concurrent_exec.ready_snapshot_keys,
-        )?;
+        let cache_before = mount_topology_snapshot(&host, initial_pid)?;
+        make_canonical_mount_cache_stale_for_test(&host, &cache_before.ready_snapshot_keys)?;
         let stable_recursive_marker = observations.cursor();
         fs::write(
             role_directory.join("stable-recursive-start.fifo"),
@@ -3695,7 +3617,6 @@ impl EffectTestRunner {
             stable_canonical_mount_policy_preserved_after_mount_mutation,
             runc_post_create_mount_mutation_observed,
             bpf_runtime_topology_initialized,
-            concurrent_exec_detached_mounts_preserved_view,
             recursive_wildcard_stable_after_concurrent_exec,
             unreachable_mount_cache_rows_collected,
             prestop_retained_during_runtime_inventory_omission,
@@ -4157,11 +4078,9 @@ fn make_canonical_mount_cache_stale_for_test(
 
 #[derive(Debug)]
 struct MountTopologySnapshotV1 {
-    mount_namespace_inode: u32,
     security_view_epoch: u64,
     cache_generation: u64,
     ready_snapshot_keys: BTreeSet<Vec<u8>>,
-    mountinfo_sha256: String,
 }
 
 fn mount_topology_snapshot(host: &KernelHost, host_pid: u32) -> Result<MountTopologySnapshotV1> {
@@ -4218,35 +4137,11 @@ fn mount_topology_snapshot(host: &KernelHost, host_pid: u32) -> Result<MountTopo
             ),
         }
     );
-    let mountinfo_path = PathBuf::from(format!("/proc/{host_pid}/mountinfo"));
-    let mountinfo = fs::read(&mountinfo_path).context(IoSnafu {
-        path: &mountinfo_path,
-    })?;
     Ok(MountTopologySnapshotV1 {
-        mount_namespace_inode,
         security_view_epoch,
         cache_generation,
         ready_snapshot_keys,
-        mountinfo_sha256: hex::encode(Sha256::digest(mountinfo)),
     })
-}
-
-fn normal_path_tree_denial_matches(
-    event: &MithrilEffectObservation,
-    active_role_id: u32,
-    admitted_entry_rule_id: u32,
-) -> bool {
-    event.reason == "PATH_TREE_POLICY_DENY"
-        && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
-        && matches!(
-            event.operation,
-            operation
-                if operation == u32::from(KernelEffectOperationV1::OpenRead as u16)
-                    || operation == u32::from(KernelEffectOperationV1::Read as u16)
-        )
-        && event.active_role_id == active_role_id
-        && event.admitted_entry_rule_id == admitted_entry_rule_id
-        && event.kernel_result == -13
 }
 
 fn canonical_mount_route_summary(host: &KernelHost) -> Result<String> {
@@ -4576,25 +4471,5 @@ mod tests {
         fixture.finish()?;
         assert!(!listener_path.exists());
         Ok(())
-    }
-
-    #[test]
-    fn normal_path_tree_denial_requires_the_application_read_identity() {
-        let mut event = MithrilEffectObservation {
-            reason: "PATH_TREE_POLICY_DENY".to_owned(),
-            effect_family: u32::from(KernelEffectFamilyV1::File as u16),
-            operation: u32::from(KernelEffectOperationV1::OpenRead as u16),
-            active_role_id: 8,
-            admitted_entry_rule_id: 7,
-            kernel_result: -13,
-            ..Default::default()
-        };
-        assert!(normal_path_tree_denial_matches(&event, 8, 7));
-
-        event.active_role_id = 3;
-        assert!(!normal_path_tree_denial_matches(&event, 8, 7));
-        event.active_role_id = 8;
-        event.operation = u32::from(KernelEffectOperationV1::Write as u16);
-        assert!(!normal_path_tree_denial_matches(&event, 8, 7));
     }
 }
