@@ -166,5 +166,5 @@ The run includes 11 passing `araphor-data` tests with two ignored and 190 passin
 Control library tests with two ignored. Control still uses its existing live
 evidence store. Production Node intake, durable ACK measurements, and recovery
 belong to 7.2. QueryOwner and bounded extraction belong to 7.3. Production
-SQL admission, worker isolation and wire-level gRPC frames belong to
+SQL admission, bounded asynchronous execution and wire-level gRPC frames belong to
 Observability 3.

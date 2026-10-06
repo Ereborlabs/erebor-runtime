@@ -16,6 +16,13 @@ results, progress, pins, source state, and transactional deletion intent. It
 does not store a batch-offset catalogue. CRC32C checks raw frames; raw batches
 and raw witness references do not require SHA-256. Policy and artifact
 signatures retain their existing contracts.
+Use exact source/session bytes for internal lookup keys, not their hashes.
+Coverage and trace metadata do not store additional SHA-256 checksums.
+Context retries compare the complete value at the full owner/lifetime/revision
+key. Context pins include its committed revision. A result stores its body
+once and exact retry metadata separately; compare both values on retry.
+Charge the retained metadata bytes to the same quota transaction. Do not
+calculate storage-only body or request digests.
 The segment owner stores record bounds only. AnalysisStore owns admission
 quotas and retention limits. Retention uses those limits; it accepts no
 separate configuration. Control context projection advances its scan cursor
@@ -286,7 +293,13 @@ Storage fails or cannot meet capacity
 
 7. Back up and restore the complete segment/database bundle, not a DB file.
    Pause intake, drain work/readers, seal and sync segments, checkpoint/close
-   metadata, and copy exact files with a digest manifest. Keep the lease.
+   metadata, and copy exact files with a size and identity manifest. Keep the lease.
+   Do not calculate whole-file SHA-256 for the bundle. Open its metadata
+   database read-only. Validate its schema, store identity, state, and exact
+   segment catalog. Read only sealed segments and check their existing CRC32C.
+   Reject active files without repair. Validate the source before destination
+   creation and validate the copied bundle before recovery. Preserve live
+   active-segment recovery.
    Reserve bundle bytes plus 25 percent, manifest space, and actual file count.
    Count incomplete copies. Never overwrite or automatically remove backups.
    Restore only to an empty leased directory with a synced restore.pending

@@ -36,6 +36,13 @@ unsupported stored formats without changing them. Do not add old-store imports,
 schema migrations, or mixed-version support. Current-format restart, replay,
 backup and restore remain required.
 
+Do not calculate application digests for bookkeeping or storage corruption
+checks. Use exact owner keys, lifetimes, revisions, positions, and retained
+values. Raw frames retain their CRC32C checks. Current signatures, approvals,
+executable checks, and replay bindings retain their content checks until one
+approved contract replaces each binding. Their later removal must replace
+the complete producer and consumer contract; it must not remove validation.
+
 ## Implementation flow
 
 ```text
@@ -131,7 +138,7 @@ Each row is a bounded deliverable. The required test level appears below.
 | 2 | [7.2 Data store](phase-7-2-data-store.md) | Reuse segment storage in the data crate; durable append/metadata commits, whole-segment retention, complete backup and clean activation; needs 7.1. |
 | 3 | [7.3 Query and follow](phase-7-3-query-and-follow.md) | First correct reader/rotation locking. Then add portable decoding, the DuckDB input adapter, trusted query/follow, moving windows and fixed buckets; needs 7.2. No public SQL access. |
 | 4 | [Observability 1](../../araphor-observability/phase-1-contracts-and-backend.md), then [2](../../araphor-observability/phase-2-owned-capture.md) | Backend proof can run alongside 7.1–7.3. Capture integration requires 7.2 and backend proof. |
-| 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Production SQL admission, disclosure and isolated workers before public access; shared gRPC, SQL/trace CLI, console and old client-route retirement; needs 7.3 and Observability 2. |
+| 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Production SQL admission, disclosure and bounded Tokio execution before public access; shared gRPC, SQL/trace CLI, console and old client-route retirement; needs 7.3 and Observability 2. |
 | 6 | [7.4 Profiles and context](phase-7-4-profiles-and-context.md) | Exact discovery, baseline differences and context; start after 7.2, close view/e2e work after 7.3. Can run alongside trace work. |
 | 7 | [7.5 Graphs and notifications](phase-7-5-graphs-findings-and-notifications.md) | Local packages, provenance, mandatory routes and authority records; needs 7.4. |
 | 8 | [7.6 Methods and preview](phase-7-6-methods-and-preview.md) | Deterministic recipes, typed suggestions, requirements and exact native preview; needs 7.3 and 7.5. |
@@ -157,7 +164,7 @@ export archive. At that storage closure, 7.3 had not started.
 7.3 is now **Done** for trusted internal query and follow at source `17d8262e`.
 The complete workspace procedure and all eight standalone query-follow cases
 passed. Read its [final result](phase-7-3-query-and-follow.md#additional-correctness-checks)
-for commands, counts, and proof limits. Public SQL and process isolation still
+for commands, counts, and proof limits. Public SQL and asynchronous execution still
 belong to Observability 3. This closure does not start another phase.
 
 Observability 1 is **Done** at source `8e752bdb`. Its
@@ -194,7 +201,7 @@ production owners without Kubernetes; run a physical case only where listed.
 | --- | --- | --- |
 | 7.1 | Check schema bounds, exact derivation, offline DuckDB recovery, SQL admission and worker isolation. | Run `offline-exact` and `storage-contract` through public recorded and AnalysisStore methods. Do not call live Node intake; no physical case is required. |
 | 7.2 | Check segment-sync/catalog commits, pin/delete races, bounded extraction, bundle backup and clean-start refusal. | Run `data-store-recovery` through Node mTLS with durable ACK and storage measurements, `data-store-startup` on a fresh development state and the paired physical storage/partition case. |
-| 7.3 | Check reader/rotation progress, shared decoding, trusted scope, extraction limits, moving/fixed windows, follow frames, pending-source visibility and replay floors. | Run internal `query-follow` against AnalysisStore and QueryOwner. Public SQL admission and isolation are tested in Observability 3; physical qualification follows in 7.10. |
+| 7.3 | Check reader/rotation progress, shared decoding, trusted scope, extraction limits, moving/fixed windows, follow frames, pending-source visibility and replay floors. | Run internal `query-follow` against AnalysisStore and QueryOwner. Public SQL admission, disclosure and bounded Tokio execution are tested in Observability 3; physical qualification follows in 7.10. |
 | 7.4 | Check exact atoms, context selection, comparison and deterministic replay. | Run `context-roundtrip` and `profile-restart` from Node WAL through mTLS and DiscoveryOwner; physical qualification follows in 7.10. |
 | 7.5 | Check graph, finding, provenance and routing decisions under gaps and retries. | Run `graph-notification` through intake, graph and router owners, then run the paired physical incident case. |
 | 7.6 | Check method matches, suggestion validation and exact preview counterexamples. | Run `detection-context`, `proposal-preview` and `poisoned-window` through production owners; physical policy proof follows in 7.8 and 7.10. |

@@ -15,7 +15,7 @@ name. Do not infer application verbs from opaque network effects.
 
 AnalysisStore owns one segment store for raw events and diagnostic output.
 DuckDB stores the segment catalog, receipts, context, and derived state. It
-also runs isolated SQL queries over bounded authorized input. Raw payloads
+also runs SQL queries over bounded authorized input on Tokio blocking tasks. Raw payloads
 are not copied into DuckDB or discovery archives. Durable segment acceptance
 precedes each source acknowledgement; catalogue publication does not delay it.
 ControlStore keeps policy, trust, rollout,
@@ -63,7 +63,7 @@ record before calling a data owner. The data owner computes a source key from
 the exact identity fields and checks receipt, duplicate, gap, and size rules.
 It must not accept client-supplied tenant or source keys as authority.
 Mithril 7 owns data recovery, query evaluation, and retention. Observability 3
-adds production client SQL admission and isolation to the same data owner.
+adds production client SQL admission and asynchronous execution to the same data owner.
 Discovery analysis and Control's TraceOwner use those facilities independently. The
 query credential has no source-write,
 signing, Kubernetes, response, or model-provider authority. The external agent
@@ -518,7 +518,7 @@ the first noise controls; optional classification is not a release dependency.
 Use one AnalysisStore in `araphor-data`. Reuse the existing segment codec,
 checksums, bounded append, and reader from Control. Retain the pinned DuckDB
 binding for file lifecycle state, derived-state transactions,
-and isolated SQL workers. Raw acceptance uses the original segment writer
+and bounded asynchronous SQL evaluation. Raw acceptance uses the original segment writer
 inside `araphor-data`; it does not commit DuckDB per raw batch.
 Do not add SQLite, DataFusion, a broker, an ORM, or a storage-driver framework.
 
@@ -551,7 +551,7 @@ retention sweep when necessary; do not keep expired input forever because no
 new batch arrives. Enforce open-file and source-count limits.
 
 Every tenant-owned metadata key includes tenant identity. Validate reference
-ownership, checked integers, schema versions, and canonical digests. Use these
+ownership, checked integers, schema versions, and exact retained values. Use these
 relations; create later result families only in their owning phase.
 
 | Relation | Key and content |
@@ -561,8 +561,8 @@ relations; create later result families only in their owning phase.
 | `segments` | One lifecycle row per file: source, file ID/name, accounted byte end, and Live/Deleting state. This row supports quota accounting, bundle backup, and durable deletion intent. It contains no batch offsets or event offsets. |
 | `events` | A logical query relation decoded from committed segment ranges. Derived revision notices have distinct kinds and are not sensor actions. No persisted raw-event table. |
 | `source_receipts`, `coverage` | Source/session binding, contiguous ACK position, bounded pending ranges, explicit expiry/loss intervals, and coverage revisions. Kernel sequence stays separate. |
-| `context_versions` | Exact owner/lifetime/revision, validity, sensitivity, bounded body, and digest. |
-| `processor_progress`, `evidence_refs`, `context_refs` | Processor/version/scope, consumed position, exact dependencies, reason, expiry, and required input floor. A raw witness stores source, cursor, and segment ID, not a raw-frame digest. |
+| `context_versions` | Exact owner/lifetime/revision, validity, sensitivity, and bounded body. An identical retry compares the complete value. |
+| `processor_progress`, `evidence_refs`, `context_refs` | Processor/version/scope, consumed position, exact dependencies, reason, expiry, and required input floor. A raw witness stores source, cursor, and segment ID, not a raw-frame digest. A context reference stores the full owner/lifetime/revision key and its committed revision. |
 | `expired_ranges` | Source, tenant, segment ID, exact expired cursor interval, and commit revision. The segment ID binds the interval to its deletion intent. This relation contains no byte offsets. |
 | `replay_floors` | One greatest deleted raw store position per tenant. Commit it with deletion intent. It bounds append replay, not ordinary retained-witness reads. |
 | `profiles`, `behavior_atoms`, `behavior_buckets` | Derived counts, keys, manifests, lifecycle coverage, and method version. Working rows are separate from sealed results. |
@@ -571,6 +571,12 @@ relations; create later result families only in their owning phase.
 | `traces` | Immutable request source, exact execution bindings, bounded Control authority, and revision-checked cancellation/read revocation. Source bytes occur once per request. |
 | `trace_receipts` | One diagnostic receipt per execution: exact identity, last frame sequence, byte count, bounded terminal summary, retained floor and commit revision. It does not contain raw output frames or offsets. |
 | `trace_output`, `trace_measurements` | Segment-backed raw frames and reviewed derived measurements. Observability 3 registers their scoped query relations; raw frames are not copied into DuckDB. |
+
+An analysis result stores its body once. Its retry record contains the exact
+request metadata without that body. A retry compares tenant, metadata, and
+body. Include the metadata bytes in the quota charge. Coverage and trace
+metadata do not add storage-only SHA-256 fields. Trace source approval and
+signed dispatch retain their current exact source binding.
 
 Raw batch headers store cursor ranges, event end offsets, CPU, intake time,
 and commit/ordinal positions. The segment owner reconstructs one compact
@@ -755,7 +761,11 @@ reject diagnostics first and backpressure uncommitted intake.
 Backup pauses admission, drains work and read leases, seals/syncs segments,
 checkpoints/closes the metadata DB, and copies the complete directory state.
 The manifest lists schema, store/epoch/revision, exact segment files and
-committed sizes/digests, and the metadata database digest. No active native
+committed sizes, and metadata database identity and size. Do not add whole-file
+SHA-256 checks. Read the bundle database in read-only mode. Validate its native
+state and exact segment catalog. Read sealed segments through the segment
+owner and check existing CRC32C. Reject an active file without repair.
+Validate before destination creation and again after copy. No active native
 WAL is omitted. Resume only after validated reopen; keep the lease throughout.
 Managed backups use unique subdirectories under backups/, never overwrite or
 auto-delete old copies, and count all files against capacity. Reserve total
@@ -819,7 +829,7 @@ files. Null, unknown, nonmonotonic, or unproved bounds cannot exclude input.
 Use exact target/context checks during decode unless a qualified batch summary
 proves exclusion. A sparse result can still require a large scan. Bound both
 scanned bytes and extracted bytes; return an explicit limit, not a partial
-aggregate. Query workers receive decoded authorized batches, never segment
+aggregate. The evaluator receives decoded authorized batches, never segment
 paths or the persistent database.
 
 ### Portable records and query input
@@ -840,8 +850,9 @@ No raw-event table, second archive or persistent query cache is created.
 AnalysisStore selects and decodes bounded input, then releases storage guards.
 Temporary conversion and evaluation buffers are required; they are not a
 durable raw replica. Release them on success, error and cancellation.
-Observability 3 sends authorized input to an isolated worker, which has no
-segment access. Remote placement runs the same extractor beside its segments;
+Observability 3 runs the same evaluator on the host's Tokio runtime. It uses
+authorized input and no persistent database connection. Remote placement runs
+the same extractor beside its segments;
 no query depends on Control-local files.
 
 ### Built-in DuckDB input adapter
@@ -875,8 +886,8 @@ temporary; no raw-event table or persistent query copy is created. Conversion
 can copy values, so this contract does not claim zero-copy execution.
 
 Phase 7.3 uses this adapter for trusted internal evaluation. Observability 3
-reuses it inside the isolated worker over transferred authorized input; the
-worker does not read segment files. Embedded and remote data hosts use the
+reuses it in a bounded Tokio blocking task over authorized input. The
+evaluator does not read segment files. Embedded and remote data hosts use the
 same decoder and adapter. AnalysisStore remains the only segment owner.
 
 ### One query contract
@@ -889,7 +900,7 @@ No read-job, subscription-registration, start/status/stop protocol is required.
 This public contract is delivered in Observability 3. Phase 7.3 delivers its
 trusted internal evaluator and follow engine only. A trusted plan contains a
 code-owned SQL template and checked typed parameters, not caller SQL. Public
-admission, disclosure, authenticated cursors and OS isolation must pass before
+admission, disclosure, authenticated cursors and asynchronous execution must pass before
 any client can submit SQL. The earlier offline proof is not that release gate.
 
 | View | Contract |
@@ -936,7 +947,7 @@ conjunctions. Match direct received_at comparisons against typed UTC timestamp
 literals/parameters, BETWEEN, or CURRENT_TIMESTAMP minus a literal integer
 second interval. Preserve inclusive/exclusive endpoints and SQL null behavior.
 Convert only checked bound values into fixed parameterized extraction statements.
-Keep the complete predicate in the worker query.
+Keep the complete predicate in the evaluation query.
 
 Do not infer a global window from a branch of OR, NOT, HAVING, an outer join,
 a computed/renamed timestamp, or a nested/CTE predicate. Multiple references
@@ -957,7 +968,7 @@ GROUP BY operation;
 
 Extract permitted columns and rows in that recognized lower range, not the
 tenant's complete history. Freeze one UTC evaluation instant for both extraction
-and the worker AST parameter. Bind the original SQL, parameters, inferred bounds,
+and the evaluator's AST parameter. Bind the original SQL, parameters, inferred bounds,
 binder version and read revision to the receipt. Report any unavailable history.
 Do not apply an event-time filter to the creation date of a referenced policy
 or context record; preserve its exact identity and validity.
@@ -989,9 +1000,9 @@ No general incremental SQL engine or persistent result cache is required.
 Client requests follow
   -> QueryOwner validates grants, SQL and dependencies, then registers watch
   -> trusted reader captures one metadata snapshot, committed segment ends, and revision
-  -> worker evaluates the initial retained range or complete bounded snapshot
+  -> a bounded Tokio task evaluates the initial retained range or complete snapshot
   -> QueryOwner emits metadata, result frames and a committed checkpoint
-  -> all segment leases, DB readers, and workers close before client backpressure
+  -> all segment leases, DB readers, and evaluation connections close before client backpressure
   -> relevant commit or supported time-window expiry marks the query dirty
   -> one evaluation runs; concurrent changes set one coalesced dirty flag
   -> QueryOwner rechecks dependencies after evaluation and before waiting
@@ -1031,13 +1042,14 @@ No traffic is needed for an old row to leave a window.
 The [window contract](#intake-time-windows) adds fixed buckets over this same
 bounded evaluator. Both window forms use complete replacement results.
 
-Each frame has schema version, operation, store epoch, read revision, frame ID,
+Each frame has schema version, operation, store epoch, read revision,
 coverage and bounded payload. Append checkpoints carry the last scanned
 position, including nonmatching rows. A full frame stops before the next
 unreturned match. Replacement output must fit 200 rows and 1 MiB in one
 complete frame or fail ResultTooLarge; do not send a partial replacement.
-Use stable frame IDs for append retries. Consumers can deduplicate repeats;
-delivery is at least once, not exactly once.
+Consumers deduplicate append rows by store position within the same bound
+query and store epoch. Delivery is at least once, not exactly once. Frames
+do not need a digest or a separate frame ID.
 
 A cursor binds SQL/parameters, target snapshot, current scope, disclosure,
 view version, store UUID/epoch and position. It grants no permission and pins
@@ -1064,15 +1076,14 @@ not prove trace cleanup.
 
 Freeze the version-one protobuf payloads as follows. Every frame carries
 `schema_version`, operation, store UUID and recovery epoch, read revision,
-stable frame ID, coverage summary and one typed payload. The coverage summary
-contains its revision, completeness state and authorized missing ranges. Do
-not put an untrusted SQL expression or a secret in a frame ID.
+coverage summary and one typed payload. The coverage summary contains its
+revision, completeness state and authorized missing ranges.
 
 | Payload | Required fields and meaning |
 | --- | --- |
 | Metadata | Selected `append` or `replace` operation; authorized column names, types, null meanings and units; query receipt; dependency revisions; row/byte limits; owner readiness. Include the one-second resolution for a moving window. |
-| Append | Ordered rows with their store positions. A row belongs to this frame only after its complete bytes are sent. A retry uses the same frame ID for the same rows and cursor binding. |
-| Replace | One complete ordered result, row count and result digest. The client replaces its prior table only after this frame is complete. An oversized result is an error, not a partial table. |
+| Append | Ordered rows with their store positions. A row belongs to this frame only after its complete bytes are sent. A retry preserves row positions and the cursor binding. |
+| Replace | One complete ordered result and row count. The client replaces its prior table only after this frame is complete. An oversized result is an error, not a partial table. |
 | Checkpoint | Opaque resume cursor and last completely scanned store position for append, or the read revision for replace. A nonmatching row can advance an append checkpoint. |
 | Health | Current relation revisions, owner readiness and lag. It has no result rows and does not mark missing evidence complete. |
 | Error | Typed code, bounded safe reason and last complete checkpoint if available. Close the stream after this frame. |
@@ -1157,10 +1168,10 @@ engine is part of this work. If a required workload cannot meet its budget,
 report that workload and obtain approval before adding maintained state.
 New performance measurements require separate user approval.
 
-### Query isolation
+### Query execution
 
 Observability 3 implements and qualifies this production boundary before
-public SQL access. Phase 7.3 must not claim it from an in-process evaluator.
+public SQL access. Phase 7.3 proves trusted evaluation only.
 
 Read-only SQL is not a sandbox. Follow [DuckDB security guidance](https://duckdb.org/docs/current/operations_manual/securing_duckdb/overview).
 QueryOwner uses a maintained parser plus a closed relation/function binder.
@@ -1174,26 +1185,37 @@ Export complete bounded authorized relation batches and needed columns from one
 metadata/segment snapshot. Over-limit extraction fails and requests a narrower SQL predicate or
 target scope; do not execute arbitrary client expressions in the persistent DB.
 
-A disposable unprivileged worker evaluates those batches in an in-memory
-DuckDB instance. It has no production credentials, mounts, persistent database
-handle, inherited sensitive descriptors or network. Apply OS memory/CPU/process
-limits and a deadline. Disable engine external access, extension installation/
-autoload and configuration changes. These settings supplement OS isolation.
-Worker failure cannot terminate Control or change a receipt/progress record.
-No SQL worker remains alive merely to wait for a follow notification.
+`QueryOwner::query_client` returns a future on the existing Tokio runtime.
+Reserve evaluation and buffer capacity before scheduling `spawn_blocking`.
+The blocking task evaluates authorized input with the shared in-memory DuckDB
+evaluator. It does not receive a persistent connection or store path. Disable
+external access, extension installation, autoload and configuration changes.
+Use one DuckDB thread and its configured memory limit. Use the existing
+native interrupt owner for deadlines and cancellation. Future drop requests
+interruption; the blocking task retains its capacity until cleanup returns.
+Return native errors and task failures as typed errors.
+
+Follow implements `futures::Stream<Item = Result<QueryFrame>>`. Relevant
+commit and expiry notifications schedule one evaluation at a time. Append
+output retains exact positions. Aggregate output replaces one complete result.
+The bounded stream preserves output order and rechecks current grants before
+each yield. Closing a viewer requests read cancellation, not trace cancellation.
+No query subprocess, IPC, namespace setup or AppArmor change is required.
+The host has one query engine and no separate subscription store.
 
 Use validated data-owned QueryLimits in both placements. Configure scan,
 input and output bounds, deadlines, concurrency and stream count. Reserve
 aggregate buffer capacity before extraction; individual query limits alone
 do not bound concurrent allocations. The defaults in verification.md are
-provisional, not measured capacity. Observability 3 also applies the worker
-OS budget. New performance workloads or pass limits require user approval.
+provisional, not measured capacity. New performance workloads or pass limits
+require user approval.
 
 Pin the engine dialect, explicit ordering and canonical integer reductions.
 Floating-point/model scores do not enter deterministic fact digests.
-Measure native RSS and spill; engine memory settings are not an RSS limit.
-If isolation or full authorized-input extraction cannot meet the limits,
-reject that query shape. Do not fall back to credentialed in-process SQL.
+Engine memory settings are not a hard process memory limit. In-process
+execution does not claim process-level crash containment or forced native
+termination. Fix native execution faults at their owner. If complete
+authorized-input extraction cannot meet the limits, reject that query shape.
 
 ## Durable lifecycle and recovery
 
@@ -1252,8 +1274,8 @@ targets and approvals. Preserve the original request key and bytes across both
 placements. Trace reads/output come from the shared store. The CLI follows them
 automatically at the selected endpoint. No Node credential, signing key or
 general Kubernetes mutation credential moves to the data process. Only
-NotificationRouter receives its configured, scoped sink credentials; SQL workers
-receive none.
+NotificationRouter receives its configured, scoped sink credentials. SQL
+evaluation receives authorized input, not sink or Control credentials.
 
 Node evidence and output still enter authenticated Control intake. Forward
 bounded batches; acknowledge only the remote durable receipt. Use private

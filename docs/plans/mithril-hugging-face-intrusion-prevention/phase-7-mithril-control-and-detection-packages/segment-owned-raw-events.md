@@ -4,7 +4,7 @@
 segments. The original segment writer runs inside `araphor-data`, not Control.
 Synced segments are authoritative for raw acceptance and replay. DuckDB holds
 file lifecycle rows, source receipts and transactional derived state and runs
-isolated queries over bounded authorized input. The implementation belongs to
+in-process queries over bounded authorized input. The implementation belongs to
 [7.2](phase-7-2-data-store.md); shared contracts are in
 [engine-design.md](engine-design.md#embedded-storage-and-query-contract).
 
@@ -41,7 +41,7 @@ or move the raw owner back into Control.
 7.2 must prove durable ACK, tail recovery, result/progress atomicity, bounded
 whole-segment pin cost, complete backup/restore, and bounded authorized input
 extraction. 7.3 proves trusted internal query and follow over those reads.
-Observability 3 qualifies public SQL admission and worker isolation.
+Observability 3 qualifies public SQL admission and bounded Tokio execution.
 7.4 removes the old
 copied raw export while converting discovery. Observability 2 uses the same
 raw-output storage protocol; optional 7.9 moves the whole component.

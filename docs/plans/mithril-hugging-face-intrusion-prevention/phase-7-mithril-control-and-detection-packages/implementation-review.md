@@ -1,6 +1,6 @@
 # Non-UI Branch Implementation Review
 
-This guide covers the non-UI changes on `codex/mithril-ui`. Read the linked
+This guide covers the non-UI changes in primary `main`. Read the linked
 flows first. Then use the owner, storage, BPF, and test sections to check each
 boundary. Araphor is the product name. Existing crate names remain unchanged.
 
@@ -32,8 +32,8 @@ declarative captures are not delivered by these changes.
 
 This section covers the new data-crate query owner. The intended result is the
 [trusted query flow](phase-7-3-query-and-follow.md#implementation-flow).
-Public SQL, client grants, authenticated cursors, and isolated worker processes
-are not part of this implementation. No new BPF program or kernel attachment
+Public SQL, client grants, and authenticated cursors are not part of this
+trusted-query result. No new BPF program or kernel attachment
 is part of this change.
 
 [QueryPlan::new](../../../../crates/araphor-data/src/query/plan.rs) Trusted code supplies a reviewed read plan, typed parameters and exact tenant/source scope.<br>
@@ -173,6 +173,204 @@ a partial replacement or checkpoint advance. The final Ponytail review added
 no storage or service layer.
 Use the [phase result](phase-7-3-query-and-follow.md#implementation-result)
 for the final source revision, commands, and verification limits.
+
+### Public query boundary review
+
+This section covers the working-tree changes on `main`, after `dae9053`.
+The intended result is the
+[public query boundary](../../araphor-observability/phase-3-cli-api-and-console.md#query-boundary-before-client-access).
+The data owner accepts client SQL only after admission and scope checks. Public
+transport remains **Not implemented**. Asynchronous execution remains
+**Not done** until the adapter change and current tests pass. Query execution
+uses the existing Tokio runtime. No query process or new BPF program is part
+of this boundary.
+
+Not implemented: ClientGrpcOwner authenticates a public caller and obtains current grants.<br>
+-> [QuerySql::admit](../../../../crates/araphor-data/src/query/admission.rs) The binder resolves columns against the permitted schema and rejects unsupported SQL.<br>
+-> [QueryPlan::client](../../../../crates/araphor-data/src/query/plan.rs) The plan binds tenant, source, target, field and principal grants.<br>
+-> [QueryOwner::query_client](../../../../crates/araphor-data/src/query/mod.rs) The owner checks current authority before extraction.<br>
+-> [QuerySql::bind_at](../../../../crates/araphor-data/src/query/admission.rs) The owner freezes the clock and applies only proved AST time bounds.<br>
+-> [QueryOwner::evaluate_async](../../../../crates/araphor-data/src/query/mod.rs) The owner reserves input, output and evaluation capacity before a bounded Tokio blocking task.<br>
+-> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) The owner extracts bounded input and filters target rows.<br>
+-> Partial [InputRelations](../../../../crates/araphor-data/src/query/input.rs): The authorized-column projection must replace the deleted IPC conversion.<br>
+-> [QueryEvaluation::run](../../../../crates/araphor-data/src/query/evaluation.rs) The shared in-memory evaluator returns bounded rows or a typed failure.<br>
+-> [QueryTokens::receipt](../../../../crates/araphor-data/src/query/authorization.rs) The signer binds the result to the query, grants, bounds and store identity.<br>
+-> [QueryOwner::query_client](../../../../crates/araphor-data/src/query/mod.rs) The owner checks current authority before it returns the result.<br>
+-> Not implemented: The shared client listener sends protobuf frames to the CLI or console.
+
+[QueryOwner::follow_client_clock](../../../../crates/araphor-data/src/query/follow.rs) Client follow is requested.<br>
+-> [QuerySession](../../../../crates/araphor-data/src/query/authorization.rs) The session retains the exact grant and a current-authorization provider.<br>
+-> [QueryFollow::run_loop](../../../../crates/araphor-data/src/query/follow.rs) The owner registers watches before the snapshot and checks authority after waits.<br>
+-> [QueryOwner::evaluate_async](../../../../crates/araphor-data/src/query/mod.rs) One evaluation future returns append rows or one complete replacement.<br>
+-> [QueryFollow::send](../../../../crates/araphor-data/src/query/follow.rs) One bounded channel retains ordered frames.<br>
+-> [QueryStream](../../../../crates/araphor-data/src/query/follow.rs) The standard Stream implementation checks authority before and after receipt of a queued frame.<br>
+-> [QueryTokens::resume](../../../../crates/araphor-data/src/query/authorization.rs) A retry checks the signed checkpoint against the current plan and store.<br>
+-> [QueryStream::cancel](../../../../crates/araphor-data/src/query/follow.rs) Cancellation requests the end of this read.
+
+#### Owners and limits
+
+The host creates one QueryOwner with an AnalysisStore and QueryLimits.
+The trusted query entry point rejects a client plan. QueryAuthorization is
+the host seam for current grants, revocation notifications and expiry. Control
+does not implement that seam yet. QueryTokens uses an injected Ed25519 signing
+key. Tokens create no durable subscription or history pin.
+The follow task checks cancellation and signals AnalysisReadControl.
+The native evaluation task retains its reservations until evaluation and
+cleanup return. Stream drop does not abort a task that owns running native work.
+
+QuerySql uses the pinned sqlparser DuckDbDialect. It expands permitted stars
+and binds nested names against QuerySchema. It preserves the full predicate.
+Unproved OR, CTE, join, renamed-time and precision shapes use complete bounded
+input. Unsupported syntax fails. A moving predicate uses one frozen evaluation
+clock. Follow rejects unsupported volatile expressions.
+
+AnalysisStore remains the only durable data owner. Segment readers close before
+evaluation. InputRelations owns temporary typed pages. The pending client
+projection must retain only granted columns, permitted target rows and private
+append positions. Private positions support replay; they are not public SQL fields.
+Client output omits global byte counters and catalog join keys. Coverage
+requires the separate node-wide coverage grant.
+
+QueryOwner::query_client returns a future. QueryOwner::evaluate_async reserves
+capacity before spawn_blocking. QueryTask signals cancellation if the caller
+drops the future. AnalysisReadControl supplies deadlines and DuckDB interruption.
+QueryEvaluation uses the same temporary table adapter for trusted and client SQL.
+The evaluator disables external access, extension loading and native spill.
+DuckDB settings bound native memory and threads; these settings are not a hard
+process-memory limit or process-crash containment. Task failure and native SQL
+failure return typed errors. The query executable, bubblewrap launcher and IPC
+owner are removed.
+
+QueryStream implements Stream and FusedStream. The producer waits for relevant
+commits or time-window expiry, awaits one evaluation, sends ordered frames and
+waits again. The channel contains at most one frame. A frame retains its output
+lease until the reader drops that frame. Authorization failure discards queued
+frames, returns one error and ends the stream. This flow uses the notification,
+evaluation-future and stream pattern from Mangroves; it adds no task queue or
+subscription store.
+
+#### Digest removal review
+
+This working tree removes non-security digest fields. Current signatures,
+approvals, executable checks, and content-bound replay checks remain.
+
+[AnalysisStore::commit_context](../../../../crates/araphor-data/src/analysis/context.rs) A context owner retries an immutable version.<br>
+-> [AnalysisContextKeyV1](../../../../crates/araphor-data/src/analysis/context.rs) The full tenant, owner, entity, lifetime, and revision select one value.<br>
+-> [AnalysisStore::commit_context](../../../../crates/araphor-data/src/analysis/context.rs) The store compares the complete retained value and returns its original commit revision.<br>
+-> [AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) A result pins that key and exact commit revision.
+
+[EvidenceIntakeIdentityV1::key](../../../../crates/araphor-data/src/analysis/schema.rs) Intake selects one evidence source.<br>
+-> [RawIdentity::key](../../../../crates/araphor-data/src/analysis/raw.rs) The owner uses disjoint exact evidence or diagnostic key bytes.<br>
+-> [AnalysisStore::bind_source](../../../../crates/araphor-data/src/analysis/schema.rs) The exact epoch key retains the boot and label conflict check.<br>
+-> [RawJournal](../../../../crates/araphor-data/src/analysis/raw.rs) The same key selects receipts, ranges, witnesses, and required progress.<br>
+-> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) Retention pages borrow the same key representation.
+
+Evidence keys contain a kind byte, tenant, boot, source, label epoch, source
+epoch, node length, and node bytes. Integer fields use big-endian order.
+Diagnostic keys contain a different kind byte, tenant, and execution ID.
+The complete trace identity still rejects a changed binding for that execution.
+Segment headers and raw CRC32C checks do not change.
+
+[AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) A processor retries one result.<br>
+-> [AnalysisResultCommitV1::request_meta](../../../../crates/araphor-data/src/analysis/progress.rs) The owner encodes all request metadata without the result body.<br>
+-> [AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) The store compares tenant, metadata, and the separately stored body.<br>
+-> [UsageChange](../../../../crates/araphor-data/src/analysis/quota.rs) The transaction charges the metadata and body once.
+
+[QueryFrame::data](../../../../crates/araphor-data/src/query/frame.rs) The query owner creates append or complete replacement output.<br>
+-> [QueryResult::check_rows](../../../../crates/araphor-data/src/query/frame.rs) The frame validates borrowed rows without a frame hash.<br>
+-> [QueryCheckpoint](../../../../crates/araphor-data/src/query/frame.rs) Exact store positions preserve append replay.<br>
+-> [QueryTokens::receipt](../../../../crates/araphor-data/src/query/authorization.rs) A signed receipt retains its result content binding.
+
+[DiscoveryIndex::publish_revisions](../../../../crates/mithril-control/src/discovery/index/feed.rs) Discovery publishes a retained change.<br>
+-> [DiscoveryRevisionEventV1::key](../../../../crates/mithril-control/src/discovery/index/feed.rs) Exact source/cursor, source/coverage revision, or owner/revision/ordinal bytes select the change.<br>
+-> [DiscoveryIndex::same_revision](../../../../crates/mithril-control/src/discovery/index/feed.rs) A duplicate compares metadata and the retained source content.<br>
+-> [DiscoveryIndex::read_revisions](../../../../crates/mithril-control/src/discovery/index/feed.rs) Reads check exact key, tenant, origin, and position.
+
+[DiscoveryIndex::context_key](../../../../crates/mithril-control/src/discovery/index.rs) Context selection encodes an exact subject or method key.<br>
+-> [DiscoveryIndex::context_candidates](../../../../crates/mithril-control/src/discovery/index.rs) The reader uses the same bounded encoding as the writer.<br>
+-> [DiscoveryOwner::context_view](../../../../crates/mithril-control/src/discovery/context.rs) The owner still checks the full subject, lifetime, method, disclosure, and trust.
+
+Coverage and trace metadata do not store additional corruption-only SHA-256
+columns. `TraceSourceV1` retains its approved source content check. Its
+constructor computes that check once. `TraceDispatchV1::input` checks the
+target index directly; it does not calculate and discard an execution ID.
+The data format is 13. The discovery index format is 7. The Control journal
+format is 8. Older development
+formats are unsupported. This change does not modify existing stores.
+
+[AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) Restore reads one completed bundle.<br>
+-> [AnalysisStore::validate_bundle](../../../../crates/araphor-data/src/analysis/backup.rs) Read-only database checks validate identity, state, and the exact segment catalog before destination creation.<br>
+-> [RawJournal::read_sealed](../../../../crates/araphor-data/src/analysis/raw.rs) The raw owner checks sealed records and CRC32C without active-file repair.<br>
+-> [AnalysisStore::validate_bundle](../../../../crates/araphor-data/src/analysis/backup.rs) The same checks validate copied files before recovery.
+
+Backup manifests contain exact names, sizes, and store identity. They contain
+no whole-file SHA-256 fields. Native state checks and raw CRC32C do not prove
+that a hostile same-UID source is immutable during copy.
+
+[UsageChange::apply](../../../../crates/araphor-data/src/analysis/quota.rs) A metadata transaction charges each stored key and payload.<br>
+-> [AnalysisStore::commit_raw](../../../../crates/araphor-data/src/analysis/raw.rs) Raw admission reserves the same exact key bytes before append.<br>
+-> [AnalysisStore::validate_usage](../../../../crates/araphor-data/src/analysis/quota.rs) Reopen compares stored usage with retained rows.<br>
+-> [AnalysisStore::remove_segment](../../../../crates/araphor-data/src/analysis/segments.rs) Segment removal subtracts the same key and payload charge.
+
+[ControlPlane::acknowledge](../../../../crates/mithril-control/src/service.rs) Control receives one policy acknowledgement.<br>
+-> [ControlPlane::authenticated_node](../../../../crates/mithril-control/src/service.rs) The existing mTLS check identifies the Node.<br>
+-> [PolicyRolloutOwner::acknowledge](../../../../crates/mithril-control/src/policy/reconciliation.rs) The owner checks the current physical session before retry lookup.<br>
+-> [ControlStore::acknowledge_policy](../../../../crates/mithril-control/src/store.rs) The store compares the complete retained record or commits one new version.<br>
+-> [PolicyRolloutStateV1](../../../../crates/mithril-control/src/policy/kubernetes.rs) The rollout retains the last acknowledged version separately from its current transition.
+
+[PolicyRolloutOwner::acknowledge_exception](../../../../crates/mithril-control/src/policy/kubernetes_exceptions.rs) Control receives one exception acknowledgement.<br>
+-> [ControlStore::current_node_session_matches](../../../../crates/mithril-control/src/store.rs) The owner checks the current physical session before retry lookup.<br>
+-> [ControlStore::acknowledge_exception](../../../../crates/mithril-control/src/store.rs) The store compares the full record under candidate, Node, and acknowledged version.
+
+Acknowledgement records contain no separate content hash or certificate/request
+audit hash. Policy retries retain their original durable closure decision.
+Session settlement does not overwrite the last acknowledged version.
+Signed candidate and policy content checks remain.
+
+The owner tests check complete context conflicts, result retries, exact quota
+charges, frame shape, checkpoint validity, and discovery content conflicts.
+The full workspace gate passed for the earlier subprocess source snapshot.
+That result does not qualify the current asynchronous rewrite. A source edit
+is not a test result.
+
+#### Public query verification
+
+[Admission tests](../../../../crates/araphor-data/src/query/admission_tests.rs)
+compare proved bounds with full authorized input in the pinned DuckDB.
+[Authorization tests](../../../../crates/araphor-data/src/query/authorization_tests.rs)
+check grants, hidden metadata, signed tokens and frame disclosure.
+[Client tests](../../../../crates/araphor-data/src/query/client_tests.rs) contain
+enabled in-process cases. `query_client_scheduler` pauses a native scan on a
+current-thread runtime and checks that another future advances.
+`query_client_cancel` and `query_client_drop` check native interruption,
+retained capacity during cleanup, input release and a later successful query.
+`query_client_capacity` rejects excessive rows or bytes before query or follow
+starts. Append replay, timer replacement, hidden fields, target rows, quiet
+revocation and buffered revocation use the same production owner.
+[Follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs) check
+ordered frames, backpressure, cancellation and fused stream closure.
+These cases require a new run on the current source.
+
+The enabled
+[observability_query_upload](../../../../crates/mithril-e2e/src/observability/query.rs)
+case uses QueryOwner, TraceOwner, Node capture and mTLS upload with discovery
+disabled. Admitted SQL reaches a native value-conversion error. The same owner
+then completes a valid query. A Node output frame arrives after that failure.
+The case checks its durable receipt, ACK and exact replay before cancellation,
+Node spool reopen and Control/data reopen. The backend and binding inputs are
+external fixtures. The command is
+`mithril-observability-test --case query-upload`. This case does not prove
+native interruption, process-crash containment, native BPF cleanup or
+performance. It has not run on the current source.
+
+The authorized-input projection and unchanged signed-value encoding remain
+blocked by the edit approval check. The current rewrite does not compile until
+those edits are permitted and complete. The query-upload case needs
+lightweight and paired physical proof. The physical Control Pod keeps UID
+65532 and its current security settings.
+The shared listener, administrative route migration,
+CLI, console, built-client end-to-end case and final workspace gate remain
+required. This section does not claim public SQL is qualified.
 
 ### Storage owner review
 

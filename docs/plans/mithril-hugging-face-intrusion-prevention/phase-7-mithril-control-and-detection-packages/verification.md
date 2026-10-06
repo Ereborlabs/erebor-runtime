@@ -123,7 +123,7 @@ commitments. Phase 7.1 pins offline feasibility defaults. Phase 7.2 requires
 storage correctness, recovery, and bounded extraction before completion.
 Its capacity and throughput measurements are separate qualification; prove
 a capacity before advertising it. Phase 7.3 checks trusted extraction and
-evaluation limits. Observability 3 qualifies production worker isolation
+evaluation limits. Observability 3 qualifies bounded Tokio execution
 before public SQL release. Enforce both count and byte limits;
 use the first one reached.
 
@@ -153,7 +153,7 @@ use the first one reached.
 | Trusted extraction | 256 rows/1 MiB pages; 256 MiB scanned segment bytes; 64 MiB admitted input; 1 second | Apply scope and reviewed template bounds in 7.3. Observability 3 adds field disclosure and proved AST bounds. Complete input or explicit rejection; never truncate COUNT/joins. |
 | SQL input/result | 16 KiB SQL; 200 rows/1 MiB output | Explicit limited normal result; oversized replacement fails without changing the displayed snapshot. |
 | Query evaluations | 2/process, 1/tenant; 1-second evaluation deadline | Configure in 7.3. Reserve concurrent input/output capacity before extraction. Close readers before evaluation or output waits. |
-| Isolated query workers | Same evaluation slots; 256 MiB OS memory and 1 CPU each | Observability 3 adds this boundary. No network/credentials/live DB; terminate over-budget evaluation. Worker memory is separate from analysis memory. |
+| Query native evaluation | Same evaluation slots; 64 MiB native buffer target and one engine thread | Observability 3 uses bounded Tokio blocking tasks. Only authorized input enters the temporary evaluator. Disable external access and extension loading. Deadline or cancellation requests native interruption. Keep capacity until cleanup returns. This is not an OS memory cap or forced termination. |
 | Follow | 16 streams/process, 4/tenant; one evaluation and one queued frame/stream | One dirty flag coalesces changes. No read transaction while waiting. |
 | Follow timing | 15-second heartbeat, 500-ms minimum replacement interval, 10-second output-stall timeout | Recheck grants/health; close slow readers without blocking intake. |
 | Moving-window follow | 1–86,400-second lower window, one-second expiry resolution | Bind one evaluation clock; timer removes expired rows without new commits. Other volatile forms reject. |
@@ -380,7 +380,7 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | 7.10 | full relevant crate suites | all for the frozen capability set; paired physical harness |
 | Observability 1 | observability_backend_ | backend-lifecycle; real backend pair |
 | Observability 2 | observability_target_, observability_recovery_, measurement validation | owned-capture; existing owned/pods/disk-full physical pairs |
-| Observability 3 | query_admission_, disclosure, worker isolation, observability_cli_, observability_grpc_, UI stream tests | query-trace-client with public SQL security and native/browser stream parity |
+| Observability 3 | query_admission_, disclosure, asynchronous execution, observability_cli_, observability_grpc_, UI stream tests | query-trace-client with public SQL security and native/browser stream parity |
 | Observability 4 | observability_crd_ | trace-crd; physical Kubernetes pair |
 
 Keep discovery cases in `src/discovery/` and their entry point in
@@ -394,9 +394,9 @@ runs. A physical mismatch must first become a failing lightweight assertion.
 
 Check local links, anchors, code fences, whitespace and dependency order.
 Raw events and trace output live once in segments. DuckDB holds transactional
-metadata/derived state and executes isolated SQL. Policy/control persistence
+metadata/derived state and executes bounded SQL on the existing Tokio runtime. Policy/control persistence
 is unchanged. Backup/remote moves include the full segment/database bundle.
-Storage, query and trace work with discovery disabled. A failed query worker
+Storage, query and trace work with discovery disabled. A query error or cancellation
 does not stop data commits; a failed authoritative data store does stop ACK.
 Follow is a committed-change stream, not repeated long-poll responses.
 Keep generic public producer ingestion outside scope. No implementation pass

@@ -27,7 +27,7 @@ the 256 MiB process memory gate. Neither result compares the two store designs.
 The selected design puts the segment writer and reader in the portable data
 owner. Discovery must read committed pages without another raw archive.
 Results, progress, and exact references must remain durable. SQL must use
-bounded authorized input in an isolated worker. Keeping the old Control writer
+bounded authorized input through the shared in-process evaluator. Keeping the old Control writer
 unchanged would not meet the data-owner boundary or retention contract.
 
 The shared design defines the retention contract. Consumption alone cannot

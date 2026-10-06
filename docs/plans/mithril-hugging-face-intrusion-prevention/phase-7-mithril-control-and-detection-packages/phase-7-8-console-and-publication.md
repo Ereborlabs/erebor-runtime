@@ -88,7 +88,7 @@ tests here, not keep this phase open until Mithril 10.
    RPC and add mutation RPCs in [console-and-api.md](console-and-api.md).
    No read-job API. Limit results to 200 rows/1 MiB; normal overflow is explicit,
    and follow cursors bind SQL, scope, schema, export policy, and position.
-   Use the qualified isolated query worker and committed digest checks. Return
+   Use the qualified asynchronous query owner and committed content checks. Return
    Pending/Unavailable on owner lag, not an empty list. Close DB readers
    before gRPC output; verify cursors survive ordinary database restart.
    Serve assets and gRPC/gRPC-Web on the shared optional Control TLS listener.

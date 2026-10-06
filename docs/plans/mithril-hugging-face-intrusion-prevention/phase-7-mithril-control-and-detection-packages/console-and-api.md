@@ -269,7 +269,7 @@ operation switch inside `query` or add tracing side effects to SQL.
 
 | Proposed tool | Owning behavior | Release gate |
 | --- | --- | --- |
-| `query(sql, follow=false, cursor?)` | Shared Control query code reads authorized views, including capability and protection state. | Query isolation, scope, replay, and follow tests. |
+| `query(sql, follow=false, cursor?)` | Shared Control query code reads authorized views, including capability and protection state. | Bounded asynchronous execution, scope, replay, and follow tests. |
 | `submit_assessment(report)` | DiscoveryOwner validates classifications, counterevidence, and typed suggestions as drafts. | Draft grant; cited evidence and revision validation. |
 | `propose_policy(requirements, base_revision, targets)` | DiscoveryOwner builds and previews; native policy owners validate/compile. | Qualified exact policy subset; no publication side effect. |
 | `publish_policy(proposal_id, approval_id)` | Publication adapter submits the exact approved source. | Separate publish grant, valid independent approval, stale-target checks, durable intent. Not in default investigator credentials. |

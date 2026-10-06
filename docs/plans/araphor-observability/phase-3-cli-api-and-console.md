@@ -9,8 +9,8 @@ Reuse shared query code; do not reimplement SQL evaluation or tracing in a clien
 An agent runs `araphor sql` or `araphor trace` in its terminal. Both commands
 print their own results. The console calls the same APIs and shows the same
 source, provenance, limits, and outcomes. MCP is not a release dependency.
-This phase also adds production SQL admission and worker isolation to the
-trusted internal engine from 7.3. Do not enable public SQL before both pass.
+This phase also adds production SQL admission and asynchronous execution to
+the trusted internal engine from 7.3. Do not enable public SQL before both pass.
 
 ## Query boundary before client access
 
@@ -22,14 +22,19 @@ trusted internal engine from 7.3. Do not enable public SQL before both pass.
    predicate, join, aggregate or error. Apply only the proved AST time bounds
    in [engine-design.md](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/engine-design.md#sql-derived-input-bounds).
    Keep unsupported shapes explicit; do not implement a general optimizer.
-2. Add the isolated worker entry point under `araphor-data/src/bin/`. Reuse
-   the internal evaluator and typed query input, not a second query engine.
-   Transfer only complete bounded authorized pages and an admitted query.
-   No segment path, persistent database handle, credential or network access
-   enters the worker. Enforce OS memory/CPU limits, a deadline, bounded IPC,
-   cancellation and child reaping. Disable external access and extension
-   loading. Do not fall back to in-process evaluation for client SQL.
-   An isolated SQL-worker failure must leave trace output upload available.
+2. Run queries inside the host's existing Tokio runtime. Make
+   `QueryOwner::query_client` an asynchronous operation. Reserve evaluation,
+   input and output capacity before `spawn_blocking`; DuckDB's synchronous
+   calls must not block an asynchronous runtime thread. Use the same evaluator
+   and temporary table adapter for trusted and client plans. Register only
+   authorized relations and columns. Pass complete bounded input, not segment
+   paths or a persistent database connection. Disable external access and
+   extension loading. Apply DuckDB memory and thread limits and the existing
+   deadline and interrupt owner. Future drop and stream cancellation request
+   interruption. Keep capacity charged until native evaluation and cleanup
+   return. Return query errors and task failures as typed errors. A query
+   error or cancellation must leave trace output upload available. Do not
+   add a query executable, IPC, namespace setup or AppArmor prerequisite.
 3. Add authenticated query receipts and resume tokens. Recheck current grants
    before every frame and after waits; authorization loss stops disclosure.
    Bind the exact query, parameters, scope, schema and store identity. Map
@@ -37,8 +42,22 @@ trusted internal engine from 7.3. Do not enable public SQL before both pass.
    unavailable, not proof that this filter lost a matching row. Keep limits
    in the data crate so the optional remote host uses the same contract.
 
-The client work below starts after this boundary passes. The offline worker
-proof and trusted 7.3 tests do not qualify public arbitrary SQL.
+Frames do not need a separate frame ID or result digest. Append replay uses
+exact row positions under the bound query and store epoch. Replacement output
+is one complete bounded result. Signed query receipts retain their current
+result content binding. Do not calculate a second hash for the frame.
+
+`QueryStream` implements `futures::Stream<Item = Result<QueryFrame>>`.
+Committed changes wake follow. An evaluation future returns bounded append
+rows or one complete replacement. The stream returns frames in order, then
+waits for the next relevant commit or expiry. Keep one bounded output channel.
+Use the notification, evaluation-future and output-stream pattern in
+`mangroves/src/sql/src/execution/subscribe.rs`; do not add DataFusion or copy
+its buffer and error behavior.
+
+The client work below starts after this boundary passes. Trusted 7.3 tests
+alone do not qualify client SQL. DuckDB memory limits are not a hard process
+memory limit. This design does not claim process-level crash containment.
 
 ## Implementation flow
 
@@ -120,7 +139,7 @@ Status: **Not done**.
    Follow declares append or replace semantics from Mithril 7.3.
    An aggregate uses complete bounded replacements on relevant commits.
    Neither normal nor followed aggregates count a truncated input.
-   Reuse 7.3 segment extraction and qualify the isolated worker in this phase.
+   Reuse 7.3 segment extraction and qualify the asynchronous evaluator here.
    The CLI and console cannot open segments or the metadata database. Both
    SQL follow and trace output use committed store positions and the same
    expiry contract; neither needs a separate subscription store.
@@ -170,16 +189,17 @@ success, missing terminal result, JSON escaping, foreign trace reads, revoked
 token, CSRF, read-only resume, duplicate submit, cursor expiry and slow clients.
 API success must not conceal a partial trace or failed cleanup.
 
-Add `query_admission_` and worker-isolation tests beside the data owner.
+Add `query_admission_` and asynchronous execution tests beside the data owner.
 Compare each accepted SQL bound with full authorized-input evaluation in the
 pinned DuckDB. Cover OR, aliases, CTE reuse, self-joins, outer joins, quoted
 and shadowed names, nulls, timestamp offsets/precision and bound endpoints.
 Reject unsupported moving predicates. Check hidden-column predicates and
 foreign-row counts. Reject nested forbidden functions and file/network/extension
-access. Kill, hang and cancel workers; prove cleanup and continued intake.
-With discovery analysis disabled, terminate the isolated SQL worker during a
-trace. Prove that output upload continues through production owners. Run this
-lightweight case before its paired physical Kubernetes case.
+access. Test native SQL errors, task panic, deadlines, future drop and stream
+cancellation. Prove that evaluation capacity remains charged until cleanup.
+With discovery analysis disabled, cause an actual native SQL error during a
+trace. Require fresh output and a durable ACK after the query failure.
+Run this lightweight case before its paired physical Kubernetes case.
 Test configured N/N+1 input, output and concurrency bounds with small fixtures.
 These are correctness checks, not authorization for new performance workloads.
 
@@ -224,6 +244,36 @@ fixture-only data. Require one-shot and server-streaming parity with native
 gRPC, including browser reconnect and terminal error handling. Prove that a
 browser receives a follow frame before the stream closes; buffering the full
 stream does not pass.
+
+## Implementation result
+
+Status: **Not done**. Current changes use primary `main` based on `cec19dd0`.
+The client listener, administrative gRPC migration, CLI and console are not
+implemented. Do not enable public SQL from this partial result.
+
+The data crate contains the closed SQL binder, exact client grants, target
+and field filtering, signed receipts and cursors, and current-authority
+checks for query and follow. The asynchronous execution and standard stream
+change is not qualified. No client listener, administrative gRPC migration,
+CLI or console result is proved by these partial changes.
+
+The query-failure trace-upload case must call the production in-process
+QueryOwner, TraceOwner, Node capture and mTLS upload with discovery disabled.
+Its external fixtures supply the backend and target identity. The paired
+physical case must keep Control's non-root user and security settings.
+No process-isolation or performance result is required by this query design.
+
+The current rewrite is incomplete. The edit approval check blocked the
+authorized-input projection and the unchanged signed-value encoding move.
+`cargo fmt --all -- --check` fails because `query/value.rs` is absent.
+Scoped formatting and `git diff --check` pass. No current compilation or
+runtime test result is claimed. The earlier full workspace pass covers the
+subprocess source snapshot, not this rewrite.
+
+Asynchronous execution and the final Rust CI procedure remain unqualified. The
+[implementation review](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/implementation-review.md#public-query-boundary-review)
+links the present owners and tests. Continue with public client work only
+after the query boundary passes.
 
 ## Stop point
 

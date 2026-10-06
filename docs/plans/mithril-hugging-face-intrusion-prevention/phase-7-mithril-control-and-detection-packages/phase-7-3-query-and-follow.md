@@ -14,7 +14,7 @@ The owner, record decoder, and query input types live in `araphor-data`.
 They work without a Control process or Control crate dependency. Phase 7.9
 packages these same owners as the optional remote data service.
 Observability 3 adds client SQL admission, current caller grants, disclosure,
-authenticated receipts/cursors, and the production isolated worker before
+authenticated receipts/cursors, and bounded Tokio execution before
 public SQL access. This phase must not expose arbitrary SQL through a service.
 
 ## Implementation flow
@@ -77,13 +77,13 @@ Reader is slow, cancelled or disconnected
    Templates specify relations, columns, source selection, time bounds and
    append/replace behavior. No network request, client attachment, stored
    document or caller SQL string can construct a trusted plan. Reuse one
-   evaluator when Observability 3 adds its isolated process entry point.
+   evaluator when Observability 3 adds its asynchronous client entry point.
    Use a temporary in-memory connection, never the persistent metadata
    connection. Keep native external access and extension loading disabled.
    Implement the [built-in input adapter](engine-design.md#built-in-duckdb-input-adapter)
    with the existing DuckDB `VTab` trait. Register query-owned input and expose
    SQL views over it; do not insert raw records into DuckDB tables. Reuse the
-   same adapter in the later isolated worker. No loadable plugin is required.
+   same adapter for client execution. No loadable plugin is required.
 5. Implement typed rows and internal frames for `catalog`, `events`, `coverage`
    and `context_versions`. Document units, nulls, exact join keys and proof
    limits. `received_at` is Control intake time; source boot-relative time is
