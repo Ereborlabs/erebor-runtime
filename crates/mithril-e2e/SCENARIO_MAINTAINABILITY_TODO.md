@@ -7425,6 +7425,20 @@ setup, production actions, assertions, and focused test.
       Kubernetes actor and shell assertions until this condition passes in
       the shared Rust test. Use existing physical setup and `add_actor`.
       Do not add a Platform API or a second runner.
+      - [ ] Qualify `probe_keeps_mount_view` as one Kubernetes Rust test below
+        100 lines. Reuse `mount_alias.py` in `overlap` mode. Use a Pod fixture
+        with a real StartupProbe `cat` command and a distinct signed policy.
+        The probe reads the ready input, the secret, and an absent final file.
+        Keep the worker's recursive secret denial and the probe's secret Allow.
+        Require an unready Pod, 32 simultaneous undeclared exec denials,
+        positive denied reads, zero allowed reads, unchanged mount namespace,
+        mountinfo, epoch, generation, READY keys, and one security-view key.
+        Create the final file after the requests. Require Pod readiness before
+        stopping the actor. Retain attributed denial and loss-aware evidence
+        checks. The paired direct-runc overlap is already qualified.
+      - [ ] Remove only the matching shell overlap checks after this native
+        probe passes. Keep the mount-cache collector setup and assertions
+        until their independent platform replacement passes.
     - [ ] Revisit concurrent Host entry setup. The Host trial timed out at
       actor exit and was removed from the attribute. Do not claim Host support
       or change production to make this trial pass. The old overlap check
