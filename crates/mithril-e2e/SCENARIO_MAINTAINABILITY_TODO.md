@@ -1976,6 +1976,15 @@ test does not close a row when its physical condition or an assertion changed.
     from `IdentityTestRunner::physical_probe` after the replacement passes.
 - [x] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
+  - [ ] Replace the remaining Rust-fixture first-open control with a shared
+    Python actor and `ProcessFixture`. Start Control, Node, and the signed
+    external-read policy first. Create the root with `CLONE_INTO_CGROUP`, not
+    a later cgroup attach. Hold the root before its first file open. Keep
+    creator-free restricted identity, nonzero role, runnable coordinate,
+    successful open, and normal cleanup. Require fresh attributed Node Allow
+    evidence. Keep the test below 100 lines. Pass Host before adding another
+    applicable platform. Add no Platform API or production change. Remove
+    only the matching old case and fixture method after qualification.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields
