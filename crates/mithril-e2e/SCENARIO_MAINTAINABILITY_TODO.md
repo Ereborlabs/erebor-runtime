@@ -2542,6 +2542,31 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact case passed in 64.85
       seconds. All five Kubernetes exception tests passed together in 192.26
       seconds on the retained K3s VM.
+- [ ] Replace the excessive-use request block in
+  `harness/vm/two-node-convergence.sh` with `excess_uses_are_rejected`.
+  Baseline `95775f48` requests two uses against a one-use grant and requires
+  the exception CRD state `Failed`. Keep that rejection. Use the existing
+  `exception` lifecycle, actor, policy, and installation API. Keep the shared
+  test below 100 lines. Do not add a Platform API or change production code.
+  - [ ] Make Kubernetes exception readiness report a current-generation
+    terminal `Failed` status with its actual conditions. Preserve API errors
+    and the bounded timeout. A timeout is not a rejected request.
+    Verify existing exception activation and cleanup before committing tooling.
+  - [ ] Derive an owned typed request from `one_use_exception.json`. Request
+    two uses of `expired-write`, whose policy limit is one. Use a distinct
+    name and UID. Require the exact Control rejection or the observed
+    Kubernetes `Failed` and `ReconcileRejected` status. Require no new kernel
+    authority or receipt row from the rejected request.
+  - [ ] Use `exception.py` in single mode. Require the ungranted write to
+    return `EACCES`. Submit a valid one-use request as a control. Require one
+    success and then `EACCES`. Match fresh File/OpenWrite evidence to the
+    same task, role, entry, generation, and protected path atom.
+  - [ ] Pass Host and commit it. Pass direct runc and commit its registration.
+    Pass real Kubernetes and commit its registration. Add each platform only
+    after its exact case passes. Record cleanup and focused commands here.
+  - [ ] Remove only the matched shell request and
+    `exception_excess_bound_rejected` result field after all three cases pass.
+    Keep the exception wait helper and all other exception and RBAC checks.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
   - [ ] Repair the old Observe probe's baseline setup. The current VM run
@@ -2789,8 +2814,13 @@ test does not close a row when its physical condition or an assertion changed.
         body passed both modes on one actor in 79.15 seconds. Output, pin,
         lease, and cgroup cleanup passed. The all-feature workspace build
         passed. No assertion, policy, timeout, or production change was needed.
-      - [ ] Run final Rust CI after the final registration edit. Do not
-        repeat the physical matrix for this scenario-only change.
+      - [x] Run final Rust CI after the final registration edit. The
+        repository CI procedure passed at `e6d685d4` on 2026-10-06. Formatting,
+        workspace check, strict all-target all-feature Clippy, and the full
+        workspace tests passed. Mithril e2e passed 160 tests with 531 physical
+        cases ignored. The log is
+        `/tmp/mithril-bind-snapshot-final-ci-20261006.log`.
+        Do not repeat the physical matrix for this scenario-only change.
       - [ ] Revisit Kubernetes only after approval. Keep the old late-bind
         decision, snapshot assertions, result fields, and helpers until the
         paired physical replacement passes. Do not count Host or runc as
