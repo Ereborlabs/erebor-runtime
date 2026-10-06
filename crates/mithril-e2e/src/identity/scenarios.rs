@@ -3,8 +3,6 @@ mod binding_gap;
 #[cfg(test)]
 mod cache_rebuild;
 #[cfg(test)]
-mod cgroup_fork;
-#[cfg(test)]
 mod cgroup_reuse;
 #[cfg(test)]
 mod child_exec;
@@ -20,6 +18,8 @@ mod clone_fork;
 mod clone_move;
 #[cfg(test)]
 mod clone_open;
+#[cfg(test)]
+mod clone_stop;
 #[cfg(test)]
 mod container_kinds;
 #[cfg(test)]

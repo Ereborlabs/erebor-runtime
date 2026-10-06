@@ -2151,7 +2151,7 @@ test does not close a row when its physical condition or an assertion changed.
       The 12 focused physical cases passed separately as recorded above.
       Remove the old status-only fixture test only because the real fork
       return and `EACCES` checks now pass on all three platforms.
-  - [ ] Replace the remaining moved-root cleanup case with the existing
+  - [x] Replace the remaining moved-root cleanup case with the existing
     `clone_cgroup.py` actor and `ProcessFixture`. Keep Node-first setup,
     a live held root, physical cgroup movement, fail-closed identity, and
     bounded normal cleanup. Use the existing single stop call. Check root
@@ -2160,6 +2160,44 @@ test does not close a row when its physical condition or an assertion changed.
     before removing the old case and its unused no-namespace constructor.
     Keep namespace-exec coverage. Add no actor, fixture, Platform, policy, or
     production change.
+    - [x] Pass `clone_stop::moved_root_stops` on Host, direct `runc`, and
+      Kubernetes in 29.51, 29.13, and 76.87 seconds. The shared file is 65
+      lines. Keep the original fail-closed and root-removal checks. Add
+      runnable initial identity, stable cookie/class/role, launcher removal,
+      and the live initial-actor check. The actor and process owner are unchanged.
+    - [x] Remove the now-empty legacy `cgroup_fork` scenario module and the
+      unused `CloneIntoCgroupFixture::start` constructor. Keep the remaining
+      namespace-exec case and its used fixture operations. Do not claim the
+      whole clone fixture is retired.
+    - Source review: [clone_stop](src/identity/scenarios/clone_stop.rs) starts
+      real Control, Node, the signed policy, and the initial actor.
+      -> [clone_cgroup.py](fixtures/process/clone_cgroup.py) creates a held
+      root in the initial actor's cgroup.
+      -> [move_task](src/platform.rs) changes physical placement. The test
+      checks fail closed and stable root identity.
+      -> [ProcessFixture::stop](src/process.rs) closes the actor's input.
+      The existing actor releases and reaps the root, then exits.
+      -> The test checks root and launcher removal and keeps the initial
+      actor running until its own stop. No new fixture or production path.
+    - [x] Pass the remaining namespace-exec Host regression after deletion.
+      `clone_exec::child_enters_mount_ns` passed in 30.15 seconds. The log is
+      `/tmp/mithril-clone-stop-ns-host-20261006.log`.
+    - [x] Pass the final repository Rust CI procedure before commit. The
+      first run exited with status 101: 125 lightweight tests passed, 33
+      failed, and 550 physical tests were ignored. Storage checks reported
+      the filesystem reserve limit; the host had only 245 MB free. Keep the
+      failed log at `/tmp/mithril-clone-stop-final-ci-20261006.log`.
+      Safe artifact and cache cleanup restored 8.7 GB free. The unchanged
+      `discovery::data_store::tests::data_store_recovery` then passed in
+      8.35 seconds. The retry exited with status zero without source changes.
+      Run `env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2
+      bash .github/scripts/verify-rust-ci.sh`. Formatting, workspace check,
+      strict workspace clippy, and workspace tests passed. The lightweight
+      crate passed 158 tests in 183.46 seconds; 550 physical tests were ignored.
+      All three focused physical cases passed separately as recorded above.
+      The log is `/tmp/mithril-clone-stop-clean-ci-20261006.log`.
+      The local VM harness checks also passed. No qualified physical case
+      was repeated for the disk-space failure.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields

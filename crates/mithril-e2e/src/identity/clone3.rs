@@ -30,11 +30,6 @@ pub(super) struct CloneIntoCgroupFixture {
 }
 
 impl CloneIntoCgroupFixture {
-    #[cfg(test)]
-    pub(super) fn start(cgroup_path: &Path) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None)
-    }
-
     pub(super) fn start_with_mount_namespace_target(cgroup_path: &Path) -> Result<Self> {
         let target = start_mount_namespace_target()?;
         Self::start_with_namespace_target(cgroup_path, Some(target))
