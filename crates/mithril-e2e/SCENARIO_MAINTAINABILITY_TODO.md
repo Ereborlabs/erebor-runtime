@@ -3926,7 +3926,9 @@ test does not close a row when its physical condition or an assertion changed.
       Initial trials started holders after policy installation. Protect passed;
       Observe admission timed out. The final setup starts both holders before
       protection, as the baseline does. No production code or deadline changed.
-    - [ ] Direct runc: run the same body, then add the platform and commit.
+    - [x] Direct runc: both modes passed in 183.38 seconds on 2026-10-06.
+      The body, fixture inputs, production code, and deadlines are unchanged.
+      Log: `/var/tmp/mithril-generation-runc-20261006.log` in the retained VM.
     - [ ] Kubernetes: run the same body after lightweight passes, then commit.
     - [ ] Retire only the matched pre-saturation legacy checks.
     - [ ] Replace last-holder retirement after ring loss and WAL saturation.
@@ -3947,6 +3949,9 @@ test does not close a row when its physical condition or an assertion changed.
     `analysis::raw::tests::observability_raw_recovery` deadline: 168 passed,
     one failed, five ignored. Log:
     `/tmp/mithril-refactor-generation-recovery-ci-20261005.log`.
+    The runc registration passed the same compile and lint checks. Its CI gate
+    stopped at the same Araphor deadline: 168 passed, one failed, five ignored.
+    Log: `/tmp/mithril-refactor-generation-runc-ci-20261006.log`.
   - [ ] Replace the exact benign-file read control with a small platform test.
     The baseline installs an external-role exact Allow and leaves the initial
     root unarmed. Its read assertion does not check a root-class name. Keep

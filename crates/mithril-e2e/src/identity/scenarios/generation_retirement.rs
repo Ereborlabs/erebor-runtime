@@ -6,7 +6,7 @@ use mithril_control::{KubernetesPolicyModeV1 as Mode, WorkloadProtectionPolicy a
 use super::{generation_state::GenerationState, lifetime_result::LifetimeState};
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn generation_retires_after_exit<P: Platform>() -> TestResult<()> {
     let mut policies: [Policy; 2] = [
