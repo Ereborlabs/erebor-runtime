@@ -22,9 +22,11 @@ Current scope: Discovery contracts, offline derivation, and offline AnalysisStor
 proof are implemented. Default Control startup selects AnalysisStore for data
 and keeps ControlStore for policy authority.
 Diagnostic contracts, execution, transport, and projection are implemented.
-Diagnostic physical qualification is incomplete. Public SQL,
-trace CLI/API, assessment submission, classification, proposal generation, and
-declarative captures are not delivered by these changes.
+Public SQL, trace CLI/API and the shared client listener are implemented.
+Native and live-browser checks pass at the recorded source revisions. Complete
+client qualification remains **Not done** because the latest physical check
+fails before capture. Assessment submission, classification, proposal
+generation and declarative captures are not delivered by these changes.
 
 ## Linked implementation flows
 
@@ -178,7 +180,7 @@ for the final source revision, commands, and verification limits.
 
 ### Public query boundary review
 
-This section covers the working-tree changes on `main`, after `55b804b3`.
+This section covers the client implementation on primary `main`.
 The intended result is the
 [public query boundary](../../araphor-observability/phase-3-cli-api-and-console.md#query-boundary-before-client-access).
 The data owner accepts client SQL only after admission and tenant checks. Public
@@ -312,6 +314,24 @@ The approval owner keeps its separate authority and one-use delivery rules.
 membership. `one_draft_starts_only_one_approval` checks that an approval
 attempt without a credential remains Attempted, not Approved.
 
+[ClientAuth::complete_login](../../../../crates/mithril-control/src/client_auth.rs) Investigation login checks subject membership before session creation.<br>
+-> [Membership tests](../../../../crates/mithril-control/src/client_auth/tests.rs) Non-member login and removed membership reject.
+
+[ClientListener::router](../../../../crates/mithril-control/src/client_listener.rs) One TLS listener selects the registered administrative service.<br>
+-> [AdministrativeHttpOwner](../../../../crates/mithril-control/src/administrative_http/grpc.rs) Typed methods keep separate request, poll, activation and approval authority.<br>
+-> [Native TLS decommission tests](../../../../crates/mithril-e2e/src/control_tls/decommission.rs) The tests check unchanged decisions and absent JSON business routes.
+
+[IPC build configuration](../../../../crates/erebor-runtime-ipc/build.rs) Code generation boxes the Rust `TraceFrame.payload.metadata` field without changing protobuf tags.<br>
+-> [TraceTransport](../../../../crates/mithril-control/src/client_grpc/trace.rs) The transport moves metadata into this generated frame.<br>
+-> [Output](../../../../crates/erebor-runtime-cli/src/cli/araphor/output.rs) The CLI renders the same metadata as text or JSONL.<br>
+-> [trace_metadata_roundtrip](../../../../crates/erebor-runtime-ipc/src/lib.rs) A typed boxed constructor and encode/decode check prove the generated shape.
+
+QueryTransport and TraceTransport reuse a pending read-check future. Missing
+checkpoint state returns a typed error instead of a panic. The current-authority
+check and reader lease remain required. Tonic boundaries use the standard
+`Status` error. Their local `result_large_err` allowances add no error wrapper
+and do not disable other clippy checks.
+
 The catalog exposes code-owned relation fields and recipes. `targets` reads
 retained policy snapshots, not complete live inventory. Control publishes
 these contexts through its existing context owner. Recipe capability remains
@@ -320,7 +340,7 @@ start capture. Signed Node leases and exact target lifetimes remain required.
 
 #### Digest removal review
 
-This working tree removes non-security digest fields and query signatures.
+The implementation removes non-security digest fields and query signatures.
 Policy signatures, signed Node execution leases, approvals and executable
 checks remain.
 
@@ -399,9 +419,9 @@ Signed candidate and policy content checks remain.
 
 The owner tests check complete context conflicts, result retries, exact quota
 charges, frame shape, checkpoint validity, and discovery content conflicts.
-The full workspace gate passed for the earlier subprocess source snapshot.
-That result does not qualify the current asynchronous rewrite. A source edit
-is not a test result.
+The full workspace gate passed at `55b804b3` for the earlier in-process query
+implementation. That result does not qualify the later client integration.
+A source edit is not a test result.
 
 #### Public query verification
 
@@ -424,8 +444,9 @@ The 85 query owner tests passed at `55b804b3`. The required final
 workspace procedure passed on 2026-10-05 at that source: format,
 workspace check, all-feature clippy with warnings denied, and all-target,
 all-feature workspace tests. This result does not cover the later client
-integration changes. Public transport, CLI, console and
-paired physical client proof remain unqualified.
+integration changes. Use the current client
+[qualification record](../../araphor-observability/phase-3-cli-api-and-console.md#implementation-result)
+for the native, live-browser and latest physical results.
 
 The enabled
 [observability_query_upload](../../../../crates/mithril-e2e/src/observability/query.rs)
@@ -439,11 +460,11 @@ external fixtures. The command is
 native interruption, process-crash containment, native BPF cleanup or
 performance. The lightweight case passed at `55b804b3`.
 
-The query-upload case still needs paired physical proof. The physical Control Pod keeps UID
-65532 and its current security settings.
-The shared listener, administrative route migration,
-CLI, console, built-client end-to-end case and a final workspace gate for those changes remain
-required. This section does not claim public SQL is qualified.
+An earlier paired physical query-upload run passed. The latest physical client
+run failed before capture at Python startup. The cause is unknown. The physical
+Control Pod keeps UID 65532 and its current security settings. The shared
+listener, administrative route migration, CLI and console are implemented.
+This section does not claim complete public-client qualification.
 
 On 2026-10-06, the current working tree passed the native TLS
 `observability_query_upload` and OIDC `observability_oidc_login` tests.
@@ -464,8 +485,10 @@ uses this same fixture, built assets and generated gRPC-Web client. It does
 not replace network calls with browser responses. The native case and its
 exact ignored wrapper passed on 2026-10-06. They check submitted source,
 retry, durable output, SQL replacement and distinct interruption behavior.
-The live browser case and the remaining completion, expiry and reconnect
-checks are not yet qualified. A native fixture failure must preserve its
+At `e79f3084`, the native case passed all ten checks, including natural
+completion, timer-only expiry, listener restart and cursor expiry. The live
+Control-backed browser case passed one test. These results do not prove native
+BPF cleanup. A native fixture failure must preserve its
 typed error; cancellation output must not satisfy a startup assertion.
 
 ### Storage owner review
@@ -2722,13 +2745,13 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | Read these tests or harnesses | Contract and limit |
 | --- | --- |
 | [diagnostic.rs tests](../../../../crates/erebor-interceptor/src/diagnostic.rs) | Executable/source checks, output bounds, quiet child, deadlines, cancellation, forced kill, and parent death. Process doubles do not prove real BPF attachment. |
-| [owner.rs tests](../../../../crates/araphor-observability/src/owner.rs), [dispatch.rs tests](../../../../crates/araphor-observability/src/dispatch.rs) | Separate grants, complete signature binding, frozen partial cohorts, regrouped replay, changed frames, and late terminal. |
+| [owner.rs tests](../../../../crates/araphor-observability/src/owner.rs), [dispatch.rs tests](../../../../crates/araphor-observability/src/dispatch.rs) | Tenant investigate permission, signed Node leases, frozen partial cohorts, regrouped replay, changed frames and late terminal. Recovery retains selection and finding references without a second source copy. |
 | [capture.rs tests](../../../../crates/araphor-observability/src/capture.rs), [target.rs tests](../../../../crates/araphor-observability/src/target.rs) | Recovery does not respawn; only synced output is visible; allocation preserves the evidence reserve; disk-full acknowledgement retains output. The lease rejects descriptor mismatch, changed lifetime and reused paths. |
 | [observability_target_wal_reserve](../../../../crates/mithril-node/src/config.rs) | Full Node configuration rejects a diagnostic reserve that cannot protect the 256 MiB evidence WAL and 16 MiB metadata. The check rejects 256 MiB and 272 MiB minus one byte; 272 MiB passes. Synthetic qualification values prove configuration validation only. |
 | [service.rs tests](../../../../crates/mithril-control/src/service.rs), [contract.rs](../../../../crates/mithril-control/tests/contract.rs), [control_tls.rs](../../../../crates/mithril-e2e/src/control_tls.rs) | Authenticated dispatch/reconnect, current-session checks, durable output, and revocation. The mTLS test does not itself execute a kernel trace. |
 | [trace intent tests](../../../../crates/araphor-data/src/analysis/trace.rs), [raw tests](../../../../crates/araphor-data/src/analysis/raw.rs), [recipe.rs tests](../../../../crates/araphor-observability/src/recipe.rs) | Shared recovery preserves source, exact execution identity, frame order and terminal state. Unknown syscall values remain unknown. Spoofed measurement schemas are rejected. |
 | [observability.rs](../../../../crates/mithril-e2e/src/observability.rs), [test binary](../../../../crates/mithril-e2e/src/bin/mithril_observability_test.rs), [guest.sh](../../../../crates/mithril-e2e/harness/observability/guest.sh) | Automated physical backend cases on a disposable host; resource snapshots before and after each case. Not part of an ordinary unprivileged test run. |
-| [pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh), [Kubernetes capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | Lightweight owner proof precedes same-name real Pod replacement through Control, Node and shared data. Checks actual UID, CRI and cgroup lifetimes, physical denial, frozen old output and diagnostic BPF cleanup. The current-image route passes; read the linked completion record for its artifacts and limits. |
+| [pods.sh](../../../../crates/mithril-e2e/harness/observability/pods.sh), [Kubernetes capture](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | Lightweight owner proof precedes same-name real Pod replacement through Control, Node and shared data. Checks actual UID, CRI and cgroup lifetimes, physical denial, frozen old output and diagnostic BPF cleanup. An earlier-source run passed. The latest run failed at Python startup before capture; read the current client result for the exact limit. |
 | [observability_runtime_library_names](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) | The bundle accepts the native `libstdc++.so.6` name. The name check rejects path separators, shell metacharacters, whitespace and replacement system libraries. The bundle also requires regular files and a complete verified checksum manifest. |
 | [Host qualification](../../../../crates/mithril-e2e/src/platform/host.rs), [owned.sh](../../../../crates/mithril-e2e/harness/observability/owned.sh), [process fixture](../../../../crates/mithril-e2e/fixtures/process/observability.py) | Full Node/Control capture, five paired interference runs, and failure cases with physical enforcement checks. |
 | [disk-full.sh](../../../../crates/mithril-e2e/harness/observability/disk-full.sh) | Lightweight owner proof precedes native AnalysisStore ENOSPC during active capture on a separate 1 GiB tmpfs. Requires no ACK, local expiry, bounded output, physical denial, zero committed progress and exact current-session replay. Physical execution passes at `d486e637` on the owned VM. Read `storage-current/storage.json` under `/tmp/araphor-owned-lifecycle.DlPg5O1y`. |
@@ -2803,7 +2826,7 @@ future owner exists. UI code and the console-only plan family are excluded.
 | [engine design](engine-design.md), [intelligence design](local-intelligence.md), [console/API contract](console-and-api.md) | Specify one shared context, assessment, query, and governed-action system. These non-UI contracts remain in scope. Model integration and public tool delivery are not implemented by a schema alone. |
 | [research](research-and-demand.md), [verification contract](verification.md) | Record incident-inspired demand, upstream design references, and acceptance requirements. Research is not a claim that upstream runtime code was copied or deployed. |
 | [proposal plan](phase-7-6-methods-and-preview.md), [classification plan](phase-7-7-agent-investigation-and-classification.md), [publication plan](phase-7-8-console-and-publication.md), [final qualification plan](phase-7-10-qualification.md) | Future Discovery work. No production proposal generator, classifier/model runner, assessment publication API, or new response authority exists in this branch. Console-only implementation is excluded from this guide. |
-| [CLI/API plan](../../araphor-observability/phase-3-cli-api-and-console.md), [declarative capture plan](../../araphor-observability/phase-4-declarative-captures.md) | Future `araphor sql`, `araphor trace`, shared gRPC reads, and optional Kubernetes Trace resource. Internal Rust methods and Node RPC are not those public interfaces. |
+| [CLI/API plan](../../araphor-observability/phase-3-cli-api-and-console.md), [declarative capture plan](../../araphor-observability/phase-4-declarative-captures.md) | `araphor sql`, `araphor trace` and shared client gRPC are implemented. Complete qualification remains Not done. The optional Kubernetes Trace resource remains future work. |
 | [Control/detection plan](README.md), [distributed causality plan](../phase-8-kubernetes-distributed-causality.md) | Plan amendments require later detection and graph owners to reuse shared storage and owner-qualified references. These amendments do not implement those owners. |
 | [response plan](../phase-9-local-and-distributed-response.md), [provider plan](../phase-10-provider-connectors-and-recovery.md), [installation/conformance plan](../phase-11-production-installation-and-final-conformance.md) | Plan amendments keep approval, physical response, provider evidence, recovery, and deployment proof distinct. A diagnostic trace cannot substitute for those results. |
 
@@ -4036,5 +4059,32 @@ The actual bpftrace audit finds no measured basis for a further patch.
 Implementation is **Done** with performance **UNQUALIFIED**, as the user
 permits. Production readiness checks remain unchanged. Diagnostics remain
 disabled. Unknown trace loss, restart coverage gaps and the ignored local-spool
-ACK-write ENOSPC test remain explicit limits. No public API, SQL worker, CRD,
-remote deployment or next-phase implementation is included.
+ACK-write ENOSPC test remain explicit limits. That earlier source includes no
+public API, SQL worker, CRD, remote deployment or next-phase implementation.
+
+### Shared client verification
+
+This guide's client reading route covers implementation commit `878de63e`.
+The shared TLS listener, typed administrative methods, in-process query/follow
+owner and native client are implemented. Investigation login retains the
+membership check. Administrative approval remains a separate authority.
+The final owner review finds no extra service, queue, store or payload copy.
+The guide's local source and document paths are checked against this checkout.
+
+The final Rust procedure passes after the last Rust edit: 1,615 tests pass,
+zero fail and 545 are ignored across the top-level suites. Ignored cases are
+not passes. The native built-client case passes all ten receipt checks. Its
+exact committed wrapper passes one test. The live Control-backed browser case
+passes one test; its membership, streaming and revocation checks use production
+owners. No new BPF program or security relaxation is part of these corrections.
+Read the
+[current qualification record](../../araphor-observability/phase-3-cli-api-and-console.md#current-client-qualification)
+for commands, artifact identities, versions and logs.
+
+Complete client qualification is **Not done**. The latest physical case fails
+before capture. Python cannot read `/usr/local/lib/python3.13/encodings/aliases.py`
+at startup. The cause is unknown, and no capture receipt exists. The earlier
+physical pass does not qualify this later source. The pending scope decision
+controls investigation into protected-start owners. Performance remains
+**UNQUALIFIED**. Declarative capture, remote deployment, assessment and model
+integration are not included in this client result.

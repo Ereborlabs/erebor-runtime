@@ -271,10 +271,12 @@ stream does not pass.
 
 ## Implementation result
 
-Status: **Not done**. Current changes use primary `main` based on `55b804b3`.
+Status: **Not done**. Implementation uses the primary `main` checkout.
 The shared TLS listener, typed administrative migration, native CLI and
-generated browser client are implemented. Their complete qualification is
-not finished. Do not enable public SQL from this partial result.
+generated browser client are implemented. The investigation login membership
+check remains required. Native and live-browser checks pass at their recorded
+source revisions. The latest physical check fails before capture. Complete
+qualification is not finished. Do not enable public SQL from this partial result.
 
 The data crate changes use the closed SQL binder, tenant-selected input and
 current-authority checks for query and follow. The approved rewrite removes
@@ -301,20 +303,22 @@ all-target, all-feature workspace tests. The data crate passed 216 tests,
 including the 85 query tests; the shared trace crate passed 23 tests. The
 lightweight query-failure trace-upload case also passed in this procedure.
 This result does not cover later client integration edits.
-Ignored physical and performance cases did not run. The paired physical client case,
-shared listener, route migration, CLI and console remain unqualified. The
+Ignored physical and performance cases did not run. At that source, the paired
+physical client case, shared listener, route migration, CLI and console were
+not qualified. The
 [implementation review](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/implementation-review.md#public-query-boundary-review)
 links the present owners and tests. Continue with public client work only
 after the query boundary passes.
 
-The current browser source passed its type check, 16 unit tests and production
+An earlier browser source passed its type check, 16 unit tests and production
 build on 2026-10-06. Generated clients use the shared protobuf schema,
 gRPC-Web 2.0.2 and `grpcwebtext`. Assets include
 `assets/administrative.js` and `assets/administrative.css`. The strict content
 security policy remains unchanged. Unit tests do not prove TLS, OIDC login,
-browser streaming or live trace execution. Those checks remain required.
+browser streaming or live trace execution. Those checks remained open at that
+source. The later live-browser result is recorded below.
 
-The current source passed 24 existing browser layout and accessibility tests
+An earlier source passed 24 existing browser layout and accessibility tests
 on 2026-10-06. These tests use the production asset build, but do not connect
 to Control. They do not qualify live gRPC-Web or OIDC behavior.
 
@@ -347,17 +351,21 @@ has `complete: true`, `cleanup_complete: false` and `output_incomplete: true`.
 This is not proof of verified native BPF cleanup. A prior run reached a query
 deadline. The unchanged rerun passed; no deadline limit changed. The fixture
 now rejects an unexpected typed error before an expected startup frame.
-Normal completion, window expiry, reconnect and cursor-expiry checks remain
-required, as does the live browser case.
+At `e79f3084`, the native case passed all ten checks and its exact ignored
+wrapper passed one test. The additional checks cover natural completion,
+timer-only window expiry, listener restart and cursor expiry. Natural completion
+reports complete output but unknown cleanup; the CLI returns a partial result.
+The live Control-backed browser case passed one test. These results do not
+prove native BPF cleanup.
 
-The current data-owner suite passed 239 enabled tests on 2026-10-06. Five
+An earlier data-owner suite passed 239 enabled tests on 2026-10-06. Five
 tests were ignored. Two ignored process-isolation tests were then removed;
 they do not test the approved in-process query owner. The remaining ignored
 tests are performance qualification cases. No performance case ran. The
-current Control owner suite passed 204 tests with zero failures and two
+earlier Control owner suite passed 204 tests with zero failures and two
 ignored tests. These runs do not replace the final workspace procedure.
 
-The paired VM run passed all three lightweight prerequisites and the
+An earlier paired VM run passed all three lightweight prerequisites and the
 physical Pod replacement case on 2026-10-06. The harness returned exit zero,
 including its receipt checks and teardown. Both captures reported Verified
 cleanup. Original output remained unchanged after replacement and retry.
@@ -367,6 +375,15 @@ x86_64, kernel 6.8.0-142 and K3s v1.35.5+k3s1, with stock bpftrace 0.20.2
 as a checked private test input. Diagnostic admission was synthetic-test-only;
 performance remains unqualified. The receipt is
 `/tmp/araphor-pod-retry.d6g9SNwz/result.json`.
+
+The latest physical case failed before capture. Python startup returned
+`EACCES` for `/usr/local/lib/python3.13/encodings/aliases.py`. The cause is
+unknown. No capture receipt was produced. The three lightweight prerequisites
+passed; the physical case failed. The retained log is
+`/tmp/araphor-pod-final-close.eUKgZKea/test.log`. The earlier physical pass does
+not qualify this later source. No security setting or protected-start owner
+was changed after this failure. Investigation into protected-start owners
+requires the pending scope decision.
 
 The first physical run failed after its Control child exited 101. Its error
 text was lost during teardown; the cause remains unknown. The second run
@@ -386,6 +403,90 @@ that absolute path. Current Control, Node and CLI release images also built
 on 2026-10-06. Each image returned exit code zero for `--help`. These checks
 prove packaging and executable startup. They do not qualify a deployment,
 browser connection or capture.
+
+### Current client qualification
+
+Implementation source: `878de63e`. Status: **Not done**. The remaining gate is
+physical qualification. Shared listener, typed administrative migration,
+in-process SQL, asynchronous follow, CLI and live console checks pass.
+The login membership check remains required. Administrative approval remains
+separate from the tenant investigate permission.
+
+| Check | Result on 2026-10-06 |
+| --- | --- |
+| Final Rust procedure | PASS. Formatting, workspace check, all-target/all-feature clippy and workspace tests pass. The top-level suites report 1,615 passed, zero failed and 545 ignored. Data: 247; shared trace: 23; Control: 205; Mithril e2e: 164; CLI: 53. Ignored cases are not passes. |
+| Built native client | PASS. All ten receipt checks pass with the rebuilt CLI and fixture. Natural completion preserves complete output and unknown cleanup. Cancellation and viewer interruption remain distinct. This fixture does not prove native BPF cleanup. |
+| UI and live browser | PASS. Type check, production build, 23 unit tests, 24 layout/accessibility tests and one live Control test pass. Non-member login returns 403 without a session. Streaming, reconnect, CSRF and quiet revocation pass. No page or content-security-policy error occurs. |
+| Helm and release images | PASS. Existing lint/template checks pass. Control, Node and client images build. Read-only, network-disabled startup and native-library checks pass. Control and client keep UID 65532. Console assets are present. No image was imported into the VM in this refresh. |
+| Latest physical client case | FAIL. Three lightweight prerequisites pass. Python startup fails before capture with the error recorded above. The cause is unknown. No capture receipt exists. |
+| Performance | UNQUALIFIED. No new performance test or benchmark ran. Diagnostic deployment remains disabled. |
+
+The final Rust command is:
+
+```sh
+CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
+  CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 \
+  bash .github/scripts/verify-rust-ci.sh
+```
+
+Read `/tmp/araphor-client-final-rust-ci.log`. This procedure ran after the
+last Rust edit. Commit `878de63e` contains exactly that Rust source.
+The recovery test now includes the approved `selection` and `finding_reference`
+fields. Its source-copy exclusion, round-trip and binding checks remain.
+The owner review finds no new service, queue, store or payload copy.
+
+The native command is:
+
+```sh
+target/debug/mithril-observability-test --case query-trace-client \
+  --output-directory /tmp/araphor-client-final-native.KjAbrVW6 \
+  --client-executable /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/araphor
+```
+
+The receipt directory must be empty before this command starts. Keep the
+command log outside that directory. Read `result.json` in the named directory
+and `/tmp/araphor-client-final-native.log`. The receipt declares
+`sql_execution: in-process`, `physical: false` and `performance_claim: false`.
+The committed `observability::client::tests::observability_cli_client` wrapper
+also passes one enabled test with `ARAPHOR_CLI` set to this rebuilt CLI.
+Read `/tmp/araphor-client-final-native-wrapper.log`. Its command uses
+`cargo test --workspace --all-targets --all-features` with that exact test name
+and `-- --exact --ignored`. Other filtered test binaries do not count as proof.
+The rebuilt CLI SHA-256 is
+`99549b36f6a4b6e1f325af54950d49666858af4cf5484bf421ed552b175c3349`.
+The rebuilt fixture SHA-256 is
+`57f523ab2753288d9c36100638dd9716dcea0ae795c723ad90477cec836f1c27`.
+These hashes identify qualification artifacts; the product does not calculate
+query or result hashes.
+
+The UI commands are `npm run check`, `npm run test`, `npm run build` and
+`npm run test:e2e` in `ui/mithril-console`. Their logs are in
+`/tmp/araphor-console-checks.Y9qZ50rC`. The live command is:
+
+```sh
+ARAPHOR_CLIENT_FIXTURE=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/mithril-observability-test \
+  npm run test:control -- --output=/tmp/araphor-client-final-browser
+```
+
+Read `/tmp/araphor-client-final-browser.log`. The browser uses built assets,
+generated gRPC-Web and real TLS/OIDC fixture endpoints. The browser test does
+not mock page responses or disable HTTPS or content-security-policy checks.
+Fixture shutdown returns zero. Production build warnings from `google-protobuf`
+and chunk size remain explicit; the live test reports no policy error.
+
+The packaging command is `bash packaging/mithril/helm/tests/verify.sh`.
+Read `/tmp/araphor-client-final-helm.log` and the `verified-close-*` build and
+startup logs in `/tmp/araphor-physical-images.tAbN8Ggz`.
+The images contain the final production changes. The later recovery correction
+changes a `cfg(test)` assertion only. No protected-start or security change is
+part of this packaging result.
+
+Versions: rustc/cargo 1.97.1, pinned DuckDB sys crate 1.10505.0,
+Node 24.15.0, npm 11.12.1, TypeScript 7.0.2, Vite 8.2.2, Vitest 4.1.11,
+Playwright 1.62.1, Chromium 151.0.7922.34, gRPC-Web 2.0.2, protobuf 4.0.3,
+protoc 3.21.12 and Helm 3.8.0. The earlier physical platform and private
+bpftrace version remain as recorded above. Those versions do not convert
+the latest physical failure into a pass.
 
 ## Stop point
 
