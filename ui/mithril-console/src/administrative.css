@@ -1,0 +1,11 @@
+body { margin: 0; padding: 32px 16px; color: #182230; background: #f1f5f9; font: 16px/1.6 system-ui, sans-serif; }
+#administrative-root { max-width: 760px; margin: auto; padding: 28px; background: white; border: 1px solid #cbd5e1; border-radius: 12px; }
+dt { margin-top: 12px; font-weight: 700; }
+dd { margin: 0; overflow-wrap: anywhere; }
+code { white-space: pre-wrap; font: 14px/1.5 ui-monospace, monospace; }
+ol { margin: 0; padding-left: 24px; }
+button { padding: 10px 14px; margin: 8px 8px 8px 0; border: 1px solid #155da8; border-radius: 5px; background: #155da8; color: white; cursor: pointer; font: inherit; }
+button:disabled { opacity: .55; cursor: not-allowed; }
+a { color: #155da8; }
+:focus-visible { outline: 3px solid #155da8; outline-offset: 3px; }
+.approval-risk { border-left: 3px solid #a15b00; background: #fff5e4; padding: 14px; }

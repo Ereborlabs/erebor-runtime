@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ConsoleShell, ConsoleView } from './Console';
 import type { ConsoleRoute } from './consoleData';
 import { operationById, sessionGraph, type CausalEdge, type CauseStrength, type Machine, type Operation } from './data';
@@ -130,18 +130,6 @@ function SessionReplay() {
     const top = Math.max(0, position.y - viewport.clientHeight * 0.42);
     viewport.scrollTo({ left: target, top, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   }, [currentOperation, layout.positions, playing]);
-
-  useEffect(() => {
-    if (!selectedOperationId || !viewportRef.current) return;
-    const position = layout.positions.get(selectedOperationId);
-    if (!position) return;
-    const viewport = viewportRef.current;
-    viewport.scrollTo({
-      left: Math.max(0, position.x - Math.max(16, (viewport.clientWidth - position.width) / 2)),
-      top: Math.max(0, position.y - viewport.clientHeight * 0.36),
-      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-    });
-  }, [layout.positions, selectedOperationId]);
 
   useEffect(() => {
     if (!showCounterfactual || !viewportRef.current) return;
@@ -383,9 +371,10 @@ function SessionReplay() {
             <span>AGENT EVENT TIME</span>
             <span>step {step + 1}/{finalStep + 1}</span>
           </div>
-          <input type="range" min="0" max={finalStep} step="1" value={step} aria-label="Replay position"
-            onChange={(event) => { setPlaying(false); setSelection(null); setStep(Number(event.target.value)); }}
-            style={{ '--progress': `${step / finalStep * 100}%` } as React.CSSProperties} />
+          <div className="playback-slider"><progress aria-hidden="true" max={finalStep} value={step} />
+            <input type="range" min="0" max={finalStep} step="1" value={step} aria-label="Replay position"
+              onChange={(event) => { setPlaying(false); setSelection(null); setStep(Number(event.target.value)); }} />
+          </div>
         </div>
         <label className="speed">
           <span className="sr-only">Playback speed</span>
@@ -424,7 +413,27 @@ interface GraphMapProps {
 function GraphMap(props: GraphMapProps) {
   const selectedEdge = props.edges.find((edge) => edge.id === props.selectedEdgeId);
   const stopPosition = props.layout.positions.get('secret-open');
-  const stageHeight = props.layout.height + (props.showCounterfactual ? 205 : 0);
+  const selectedPosition = props.selectedOperationId ? props.layout.positions.get(props.selectedOperationId) : undefined;
+  const [cardHeight, setCardHeight] = useState(0);
+  const stageHeight = Math.max(
+    props.layout.height + (props.showCounterfactual ? 205 : 0),
+    (selectedPosition?.y ?? 0) + cardHeight,
+  );
+
+  useLayoutEffect(() => {
+    const card = props.viewportRef.current?.querySelector<HTMLElement>('.operation-card.expanded');
+    setCardHeight(card?.offsetHeight ?? 0);
+  }, [props.layout, props.selectedOperationId, props.viewportRef]);
+
+  useEffect(() => {
+    const viewport = props.viewportRef.current;
+    if (!selectedPosition || !viewport) return;
+    viewport.scrollTo({
+      left: Math.max(0, selectedPosition.x - Math.max(16, (viewport.clientWidth - selectedPosition.width) / 2)),
+      top: Math.max(0, selectedPosition.y - viewport.clientHeight * 0.36),
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
+  }, [selectedPosition, stageHeight, props.viewportRef]);
 
   return (
     <section className="graph-panel" aria-label="Session operation DAG">
@@ -433,17 +442,19 @@ function GraphMap(props: GraphMapProps) {
         <strong>{operationById.get(props.currentOperationId)?.title}</strong>
         <span>{operationById.get(props.currentOperationId)?.machineId} · {operationById.get(props.currentOperationId)?.summary}</span>
       </div>
-      <div className="graph-viewport" ref={props.viewportRef} tabIndex={0} aria-label="Scrollable causal graph">
-        <div className="graph-stage" style={{ width: props.layout.width, height: stageHeight }}>
+      <div className="graph-viewport" ref={props.viewportRef} role="group" tabIndex={0} aria-label="Scrollable causal graph">
+        <svg className="graph-stage" width={props.layout.width} height={stageHeight}>
           {sessionGraph.machines.map((machine, index) => (
-            <MachineLane key={machine.id} machine={machine} index={index}
+            <foreignObject key={machine.id} x={0} y={index * 220} width={props.layout.width} height={220}>
+            <MachineLane machine={machine} index={index}
               visibleCount={props.operations.filter((operation) => operation.machineId === machine.id).length}
               totalCount={sessionGraph.operations.filter((operation) => operation.machineId === machine.id).length}
               focused={props.focusedMachine === machine.id}
               dimmed={Boolean(props.focusedMachine && props.focusedMachine !== machine.id)}
               onFocus={() => props.onFocusMachine(props.focusedMachine === machine.id ? null : machine.id)} />
+            </foreignObject>
           ))}
-          <svg className="edge-layer" width={props.layout.width} height={stageHeight} aria-hidden="false">
+          <g className="edge-layer" aria-hidden="false">
             <defs>
               <marker id="arrow-direct" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
                 <path d="M 0 0 L 10 5 L 0 10 z" />
@@ -477,7 +488,7 @@ function GraphMap(props: GraphMapProps) {
                 </g>
               );
             })}
-          </svg>
+          </g>
           {props.edges.map((edge) => {
             const source = props.layout.positions.get(edge.source);
             const target = props.layout.positions.get(edge.target);
@@ -487,13 +498,14 @@ function GraphMap(props: GraphMapProps) {
             const point = edgeInspectPosition(source, target);
             const dimmed = edgeDimmed(edge, props.filter, props.focusedMachine, sourceOperation, targetOperation);
             return (
-              <button key={`inspect-${edge.id}`} type="button"
+              <foreignObject key={`inspect-${edge.id}`} className="graph-object" x={point.x} y={point.y} width={28} height={28}>
+              <button type="button"
                 className={`edge-inspect strength-${edge.strength} ${edge.id === props.selectedEdgeId ? 'selected' : ''} ${dimmed ? 'dimmed' : ''}`}
-                style={{ left: point.x, top: point.y }}
                 aria-label={`${edge.label}, ${edge.strength} causal edge from ${sourceOperation.title} to ${targetOperation.title}`}
                 title={`Inspect ${edge.label}`} onClick={() => props.onSelectEdge(edge)}>
                 <span aria-hidden="true" />
               </button>
+              </foreignObject>
             );
           })}
           {props.operations.map((operation) => {
@@ -508,7 +520,7 @@ function GraphMap(props: GraphMapProps) {
             );
           })}
           {props.showCounterfactual && stopPosition ? <CounterfactualPath x={stopPosition.x + stopPosition.width + 44} y={stopPosition.y + 126} /> : null}
-        </div>
+        </svg>
       </div>
       {selectedEdge ? <EdgeDetail edge={selectedEdge} onClose={() => props.onSelectEdge(selectedEdge)} /> : null}
     </section>
@@ -525,7 +537,7 @@ function MachineLane({ machine, index, visibleCount, totalCount, focused, dimmed
   onFocus: () => void;
 }) {
   return (
-    <div className={`machine-lane ${focused ? 'focused' : ''} ${dimmed ? 'dimmed' : ''}`} style={{ height: 220 }}>
+    <div className={`machine-lane ${index === 0 ? 'first-lane' : ''} ${focused ? 'focused' : ''} ${dimmed ? 'dimmed' : ''}`}>
       <button type="button" className="lane-label" onClick={onFocus} aria-pressed={focused}>
         <span className="lane-status" />
         <strong>{machine.name}</strong>
@@ -549,8 +561,8 @@ function OperationCard({ operation, position, selected, current, dimmed, connect
   const incoming = sessionGraph.edges.filter((edge) => edge.target === operation.id).length;
   const outgoing = sessionGraph.edges.filter((edge) => edge.source === operation.id).length;
   return (
+    <foreignObject className="graph-object" x={position.x} y={position.y} width={position.width} height={position.height}>
     <article className={`operation-card outcome-${operation.outcome} proof-${operation.proof} ${operation.id === 'secret-open' ? 'stop-point' : ''} ${selected ? 'expanded' : ''} ${current ? 'current' : ''} ${dimmed ? 'dimmed' : ''}`}
-      style={{ left: position.x, top: position.y, width: position.width, minHeight: position.height }}
       data-operation-id={operation.id} data-testid={`operation-${operation.id}`}>
       {operation.id === 'secret-open' ? <span className="stop-point-label">STOPPED HERE</span> : null}
       <button type="button" className="operation-trigger" onClick={onSelect} aria-expanded={selected}>
@@ -574,6 +586,7 @@ function OperationCard({ operation, position, selected, current, dimmed, connect
         </div>
       )}
     </article>
+    </foreignObject>
   );
 }
 
@@ -585,10 +598,12 @@ function CounterfactualPath({ x, y }: { x: number; y: number }) {
     ['Database and private data', 'Production data enters the reachable effect set'],
   ];
   return (
-    <section className="counterfactual-path" style={{ left: x, top: y }} aria-label="Counterfactual path if the denied effect were allowed" data-testid="counterfactual-path">
+    <foreignObject className="graph-object" x={x} y={y} width={1040} height={160}>
+    <section className="counterfactual-path" aria-label="Counterfactual path if the denied effect were allowed" data-testid="counterfactual-path">
       <header><strong>WHAT IF THIS EFFECT WAS ALLOWED?</strong><span>COUNTERFACTUAL · INCIDENT-GROUNDED · NOT EVIDENCE</span></header>
       <div>{nodes.map(([title, detail], index) => <article key={title}><small>HYPOTHETICAL {index + 1}</small><strong>{title}</strong><span>{detail}</span>{index < nodes.length - 1 ? <i aria-hidden="true">→</i> : null}</article>)}</div>
     </section>
+    </foreignObject>
   );
 }
 

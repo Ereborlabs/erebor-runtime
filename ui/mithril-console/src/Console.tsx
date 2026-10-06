@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { consoleData as data, type ConsoleFinding, type ConsoleRoute } from './consoleData';
+import { Investigation } from './Investigation';
 
 interface ConsoleActions {
   navigate: (route: ConsoleRoute) => void;
@@ -394,6 +395,7 @@ function FindingsView({ openSession }: ConsoleActions) {
           {selected.graph ? <button type="button" className="primary-action" onClick={openSession}>Open finding in replay <span>→</span></button> : <button type="button" className="secondary-action" disabled>No graph in fixture</button>}
         </aside>
       </div>
+      <Investigation key={selected.id} />
     </main>
   );
 }
@@ -457,7 +459,7 @@ function PoliciesView({ showToast }: Pick<ConsoleActions, 'showToast'>) {
       <div className="authority-banner"><strong>Status is not authority.</strong><span>The active signed node generation decides. Kubernetes status is an informational projection.</span></div>
       <section className="console-panel policy-table">
         <header className="panel-heading"><div><span className="eyebrow">WorkloadProtectionPolicy</span><h2>Desired policies</h2></div><span>{data.policies.length} sources</span></header>
-        {policies.map((policy) => <button type="button" key={policy.name} className={selected.name === policy.name ? 'active' : ''} onClick={() => selectPolicy(policy)}><span><small>{policy.namespace}</small><strong>{policy.name}</strong></span><span><small>Mode</small><strong>{policy.mode}</strong></span><span><small>Source / generation</small><strong>{policy.source} / {policy.generation}</strong></span><span><small>Activation</small><strong>{policy.active} / {policy.desired}</strong><i><b style={{ width: `${policy.active / policy.desired * 100}%` }} /></i></span><em className={`policy-${policy.state.toLowerCase()}`}>{policy.state}</em></button>)}
+        {policies.map((policy) => <button type="button" key={policy.name} className={selected.name === policy.name ? 'active' : ''} onClick={() => selectPolicy(policy)}><span><small>{policy.namespace}</small><strong>{policy.name}</strong></span><span><small>Mode</small><strong>{policy.mode}</strong></span><span><small>Source / generation</small><strong>{policy.source} / {policy.generation}</strong></span><span><small>Activation</small><strong>{policy.active} / {policy.desired}</strong><progress value={policy.active} max={policy.desired} aria-label={`${policy.name} activation`} /></span><em className={`policy-${policy.state.toLowerCase()}`}>{policy.state}</em></button>)}
       </section>
       <section className={`policy-editor ${editing ? 'editing' : ''}`} aria-labelledby="policy-editor-title">
         <header>

@@ -5,16 +5,24 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 4173",
-    "build": "tsc -b && vite build",
-    "check": "tsc -b --pretty false",
-    "test": "vitest run",
-    "test:e2e": "playwright test"
+    "generate": "node scripts/generate.mjs",
+    "build": "npm run check && vite build",
+    "check": "npm run generate && tsc -b --pretty false",
+    "check:control": "tsc -p tsconfig.control.json --pretty false",
+    "test": "npm run generate && vitest run",
+    "test:e2e": "playwright test",
+    "test:control": "npm run check:control && npm run build && playwright test --config playwright.control.config.ts"
   },
   "dependencies": {
+    "google-protobuf": "4.0.3",
+    "grpc-web": "2.0.2",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@types/node": "24.19.1",
+    "@protocolbuffers/protoc-gen-js": "4.0.3",
+    "@types/google-protobuf": "3.15.12",
     "@axe-core/playwright": "4.13.0",
     "@playwright/test": "1.62.1",
     "@types/react": "19.2.18",
