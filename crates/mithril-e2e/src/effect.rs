@@ -591,12 +591,6 @@ fn build_generation_artifact(
             None,
         ),
         (
-            "manual-benign-bind",
-            fixture_root.join("allowed-bind-source/allowed"),
-            "MANUAL_BENIGN",
-            None,
-        ),
-        (
             "manual-exec",
             fixture_root.join("exec-target"),
             "MANUAL_EXEC",
@@ -1174,16 +1168,8 @@ impl EffectTestRunner {
         let path_tree_preexisting = path_tree_root.join("pre-existing");
         let path_tree_preexisting_bind_target =
             fixture_root.join("path-tree-preexisting-bind-alias");
-        let allowed_bind_source = fixture_root.join("allowed-bind-source");
-        let allowed_bind_source_file = allowed_bind_source.join("allowed");
         fs::create_dir_all(&path_tree_root).context(IoSnafu {
             path: &path_tree_root,
-        })?;
-        fs::create_dir(&allowed_bind_source).context(IoSnafu {
-            path: &allowed_bind_source,
-        })?;
-        fs::write(&allowed_bind_source_file, b"allowed bind source\n").context(IoSnafu {
-            path: &allowed_bind_source_file,
         })?;
         fs::create_dir(&path_tree_preexisting_bind_target).context(IoSnafu {
             path: &path_tree_preexisting_bind_target,
@@ -1261,19 +1247,7 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
-        let allowed_bind_inode_generation =
-            inode_generation(fixture.pid(), &allowed_bind_source_file)?;
-        let allowed_bind_object = ExactFileObjectResolver::resolve(
-            fixture.pid(),
-            &allowed_bind_source_file,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
-            "MANUAL_BENIGN".to_owned(),
-            allowed_bind_inode_generation,
-            None,
-        )
-        .context(NodeSnafu)?;
-        let mut exact_objects = vec![exact_object.clone(), benign_object, allowed_bind_object];
+        let mut exact_objects = vec![exact_object.clone(), benign_object];
         if protect {
             exact_objects.push(
                 ExactFileObjectResolver::resolve(

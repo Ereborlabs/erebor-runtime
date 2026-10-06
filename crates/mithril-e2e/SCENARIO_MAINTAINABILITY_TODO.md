@@ -2898,7 +2898,7 @@ test does not close a row when its physical condition or an assertion changed.
           unused alias mount after all three platforms pass. Keep the source
           resolver for policy publication and the propagation checks. The
           old runner still fails its pre-policy baseline before this block.
-        - [ ] Remove the unused `allowed-bind-source` file, its signed
+        - [x] Remove the unused `allowed-bind-source` file, its signed
           `manual-benign-bind` selector, and its exact-object setup. No
           remaining legacy action reads that file. The propagation actions
           and their peer setup were retired separately below. Keep the
@@ -2907,6 +2907,24 @@ test does not close a row when its physical condition or an assertion changed.
           related effect checks, harness checks, and final Rust CI before
           committing this deletion. Do not change the shared test or repair
           the old pre-policy baseline failure.
+          On 2026-10-06, the unchanged 90-line shared test passed Host in
+          41.65 seconds, runc in 45.69 seconds, and Kubernetes in 88.40
+          seconds. Owned output, pins, sockets, and leases were removed.
+          The logs are `/var/tmp/mithril-bind-source-retire-{host,runc}-20261006.log`
+          in the lightweight VM and
+          `/var/tmp/mithril-bind-source-retire-kube-20261006.log` in the
+          retained K3s VM. The 12 related effect/child checks and VM harness
+          checks passed. Final format, workspace check, strict Clippy, and
+          all-target/all-feature workspace tests passed; the log is
+          `/tmp/mithril-bind-source-retire-final-ci-20261006.log`.
+          Review [the remaining runner](src/effect.rs),
+          [the shared test](src/effect/file_bind_allowed.rs),
+          [the actor](fixtures/process/exception.py), and
+          [the snapshot checks](src/effect/check.rs). The actor makes a real
+          bind mount and opens both paths. The test requires attributed
+          Allow results and equal exact identity with distinct mount IDs.
+          The runner has 26 fewer lines. No assertion, Platform, actor,
+          policy fixture, or production source changed.
     - [x] Remove only the duplicate protected-alias resolver comparison from
       the old effect probe. The shared Protect and Observe tests resolve the
       original file and both aliases. They require distinct mount IDs and
