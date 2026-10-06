@@ -293,8 +293,9 @@ role/state, operation, exact resource binding, source decision, physical
 result, and proof kind. Missing values are explicit variants, not empty strings
 that match qualified values. Coverage is retained by source interval; it is
 not averaged into a confidence score. Use checked integer counts, deterministic
-ordering, and a versioned canonical encoding. Hashes index keys; retain the
-full key and reject conflicting content instead of merging it.
+ordering, and a versioned canonical encoding. Use exact retained keys and
+values. Reject conflicting content instead of merging it. Do not calculate
+bookkeeping digests for discovery keys or profiles.
 
 A display group can combine atoms with the same qualified cohort, declared
 role, exact policy expression, operation, outcome, and proof class. It keeps
@@ -322,18 +323,18 @@ times for inspection without inventing cross-node causality. An event that
 arrives after sealing belongs to a new snapshot, even if its source time is
 older. Late context or coverage corrections also produce new revisions.
 
-Canonical content digests exclude run IDs, wall-clock creation time, database
-row IDs, and optional model annotations. Input identity, retained times,
-context, coverage, transformation version, and deterministic output remain
-bound. Replay with different page sizes, thread scheduling, and arrival order
-must produce the same content digest. Statistical experiments use explicitly
-ordered feature sequences; they do not change this deterministic result.
+Canonical values exclude run IDs, wall-clock creation time, database row IDs,
+and optional model annotations. Input identity, retained times, context,
+coverage, transformation version, and deterministic output remain explicit.
+Replay with different page sizes, thread scheduling, and arrival order must
+produce equal canonical values. Statistical experiments use explicitly ordered
+feature sequences; they do not change this deterministic result.
 
 Record context used by each derivation: request key, catalog/source revision,
 returned value or error, and validity interval. Replaying a sealed bundle uses
 these records only. A missing or mismatched context read fails that derivation;
 it cannot query the current cluster. Include every context record in the input
-digest and expose incomplete replay explicitly. Reuse the same production
+manifest and expose incomplete replay explicitly. Reuse the same production
 derivation owner methods and simulation API in an offline entry point.
 
 Live collection is optional for the first experiment. A sealed accepted-input

@@ -9,6 +9,9 @@ differences and scoped context. Counts survive replay and restart. Raw retention
 does not erase retained profiles or their qualified witnesses.
 Entry for derivation: 7.2. Query/view and end-to-end closure also require 7.3.
 Status: **Not done** for this data contract.
+Implementation is in progress from source `baa938e0`. Use the existing
+AnalysisStore result, progress, context, and witness transaction. Do not add
+a separate discovery database or a raw export archive.
 
 ## Implementation flow
 
@@ -70,8 +73,9 @@ Derivation fails or is disabled
    unresolved plus excluded equals unique input; duplicates are separate.
 4. Commit atom changes and progress in one transaction. Freeze per-source end
    positions and coverage revisions. Seal at the record/byte bound or configured
-   interval; late events/context create new revisions. Canonical digests do not
-   depend on arrival, database row order or worker scheduling.
+   interval; late events/context create new revisions. Canonical values do not
+   depend on arrival, database row order or worker scheduling. Compare exact
+   retained values. Do not calculate discovery hashes or bookkeeping digests.
 5. Build exact display groups with member references. Implement ordered set
    differences against an explicitly reviewed baseline. Keep image/config
    changes, new resources, changed results and lost coverage separate. Repeated
@@ -101,7 +105,7 @@ Add `discovery_derivation_`, `discovery_context_` and
 `discovery_comparison_` unit tests. Check repeated/reordered input, conflicting
 keys, generation-handle reuse, denied/failed/unknown results, missing bindings,
 integer overflow, source gaps, poisoned baseline, future review leakage and
-quota N/N+1. Equal manifests must yield equal canonical digests.
+quota N/N+1. Equal manifests must yield equal canonical values.
 
 Extend the existing `context-roundtrip` and `evidence-restart` storage cases
 in `crates/mithril-e2e/src/discovery/roundtrip.rs`. Add `profile-restart`
@@ -127,6 +131,8 @@ bash .github/scripts/verify-rust-ci.sh
 ## Completion gate
 
 Pass DE-IDENTITY, DE-CONTEXT, DE-AGGREGATE, DE-GAP, DE-NOISE, DE-POISON,
-DE-PACKET, DE-REPLAY and DE-RETENTION. Measure 50,000-atom read and comparison
-cost while intake runs. No classifier, causal graph, proposal publication or
-model dependency is required for this phase.
+DE-PACKET, DE-REPLAY and DE-RETENTION. A 50,000-atom read and comparison
+measurement while intake runs requires separate user approval. Do not add or
+run a performance test under the implementation approval. Record performance
+as unqualified until an approved measurement passes. No classifier, causal
+graph, proposal publication or model dependency is required for this phase.

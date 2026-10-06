@@ -57,8 +57,8 @@ existing evaluation manifest. No model candidate is a core release dependency.
 The core uses no model: exact identity checks, counts, partitions, ordered set
 differences, native validation, guardrails, and test selection. Pin canonical
 encoding, integer overflow behavior, feature order, and tie-breaking. Replays
-with permuted arrival and different batch boundaries must return the same
-core content digests. No online learning or random clustering enters this path.
+with permuted arrival and different batch boundaries must return equal
+canonical values. No online learning or random clustering enters this path.
 
 Deterministic text templates explain why a row exists: source rule, exact
 operation, revision difference, missing lifecycle case, or guardrail conflict.
