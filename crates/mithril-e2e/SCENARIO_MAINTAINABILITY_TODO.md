@@ -2650,6 +2650,28 @@ test does not close a row when its physical condition or an assertion changed.
     Reproduce the same startup condition with a real production Node in
     lightweight before an implementation change or another Kubernetes run.
     Keep the old overlap check until Kubernetes passes. Production is unchanged.
+  - [x] Reproduce interrupted Node startup in lightweight. The retained
+    containerd log records the first Node start at 03:47:01 UTC, SIGTERM at
+    03:48:01, and SIGKILL at 03:48:11. The next Node exited with status one.
+    The chart uses 30 startup probes at two-second intervals and a ten-second
+    termination grace period. The reason for slow initial startup is not yet
+    proved. Reuse `Shared` for Control and configuration and `ProcessFixture`
+    for the real Node executable. Kill that Node after it creates its pin
+    directories and before admission readiness. Require the next public Node
+    startup to reject the incomplete root. Use normal fixture cleanup. Add no
+    Platform API, fake pin, or direct BPF loader. Keep this focused fixture
+    check below 100 lines; it supplements the shared exception scenario.
+    The 61-line standard Rust fixture check passed in 1.02 seconds. Real Node
+    created empty map and link directories, then SIGKILL stopped its startup.
+    The next public Node startup rejected the incomplete root as stale and
+    created no admission endpoint. Pin, lease, cgroup, and output cleanup passed.
+    The first attempt kept the parent outside Node's dedicated cgroup and
+    failed the earlier controller check. The existing cgroup owner's `move_in`
+    call restores the required placement before the second startup. The full
+    all-feature build, formatting, diff checks, and strict Clippy passed.
+    The log is `/var/tmp/mithril-overlap-startup-fixed-20261006.log` in the
+    retained Host VM. This check does not explain the first Kubernetes startup
+    duration. No production code, Platform API, or readiness limit changed.
   - [ ] Remove only the matched overlap request and
     `exception_overlap_rejected` result field after all three cases pass.
     Keep adjacent consumption, expiry, deletion, and RBAC checks.
@@ -2677,6 +2699,15 @@ test does not close a row when its physical condition or an assertion changed.
   these artifacts with the existing provider. Keep the originals and verify
   identical loadable contents before removing debug sections from a copy.
   Host and direct runc qualification are done. Kubernetes is not done.
+  Startup review route:
+  [fixture check](src/platform/shared/startup.rs) starts real Control through
+  [Shared](src/platform/shared.rs) and owns the real Node child through
+  [ProcessFixture](src/process.rs).
+    -> [Node executable](../mithril-node/src/main.rs) calls public Node startup.
+    -> [KernelHostOwner](../erebor-interceptor/src/host.rs) creates the real pin
+    directories. SIGKILL stops that process before admission readiness.
+    -> Public Node startup rejects the retained incomplete root.
+    -> Normal fixture stop removes only the owned process and test resources.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
   - [ ] Repair the old Observe probe's baseline setup. The current VM run

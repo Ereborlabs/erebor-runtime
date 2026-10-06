@@ -63,6 +63,8 @@ const POLICY_UID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 #[cfg(test)]
 mod admission;
+#[cfg(test)]
+mod startup;
 
 struct ActorFiles {
     work: ProbeDirectory,
