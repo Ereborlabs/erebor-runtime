@@ -18,6 +18,8 @@ mod dns_exfil;
 #[cfg(test)]
 mod exception;
 #[cfg(test)]
+mod exception_limit;
+#[cfg(test)]
 mod exception_once;
 #[cfg(test)]
 mod exec_allow;

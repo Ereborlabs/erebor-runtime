@@ -2565,12 +2565,36 @@ test does not close a row when its physical condition or an assertion changed.
     return `EACCES`. Submit a valid one-use request as a control. Require one
     success and then `EACCES`. Match fresh File/OpenWrite evidence to the
     same task, role, entry, generation, and protected path atom.
-  - [ ] Pass Host and commit it. Pass direct runc and commit its registration.
-    Pass real Kubernetes and commit its registration. Add each platform only
-    after its exact case passes. Record cleanup and focused commands here.
+  - [x] Pass Host and commit it. The 89-line shared test passed in 39.51
+    seconds. Output, pin, lease, and cgroup cleanup passed. The all-feature
+    workspace build, formatting, and strict Clippy passed. No policy, actor,
+    production implementation, or readiness deadline changed.
+  - [ ] Pass direct runc and commit its registration.
+  - [ ] Pass real Kubernetes and commit its registration. Add each platform
+    only after its exact case passes.
   - [ ] Remove only the matched shell request and
     `exception_excess_bound_rejected` result field after all three cases pass.
     Keep the exception wait helper and all other exception and RBAC checks.
+  - [ ] Pass the final repository Rust CI procedure after the last source
+    edit. The affected existing Kubernetes cases already passed together.
+  Review route:
+  [shared test](src/effect/exception_limit.rs) submits the owned request through
+  the existing policy installation API.
+    -> [Shared](src/platform/shared.rs) calls Control's production exception
+    reconciler on Host and runc.
+    -> [Kubernetes](src/platform/kubernetes.rs) creates the real CRD and reads
+    its current-generation status. An API error or timeout is not rejection.
+    -> [Python actor](fixtures/process/exception.py) makes the three writes.
+    -> [EffectCheck](src/effect/check.rs) reads fresh attributed evidence for
+    the protected path atom. The test checks physical results and typed-map
+    keys through the existing reader. Normal actor and platform stop calls
+    remove the owned resources.
+  Run `effect::exception_limit::excess_uses_are_rejected::exception_host`
+  in the mounted standard Rust test executable with
+  `--exact --ignored --nocapture --test-threads=1`. The Host log is
+  `/var/tmp/mithril-exception-limit-host-20261006.log` in the retained
+  qualification VM. Source review matches baseline `95775f48`. Direct runc
+  and Kubernetes remain unqualified. The shell check is unchanged.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
   - [ ] Repair the old Observe probe's baseline setup. The current VM run
