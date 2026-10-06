@@ -555,7 +555,9 @@ mod tests {
                 "access",
                 "recipe",
                 "targets",
-                "unresolved"
+                "unresolved",
+                "selection",
+                "finding_reference"
             ])
         );
         assert!(!intent

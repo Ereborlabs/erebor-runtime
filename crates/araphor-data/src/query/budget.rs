@@ -279,7 +279,12 @@ mod tests {
             };
             let lease = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
                 .await
-                .expect("budget wait did not wake")?;
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "test budget wait timeout",
+                    }
+                    .build()
+                })??;
             drop(lease);
             drop(retained);
         }

@@ -97,7 +97,7 @@ impl AnalysisStore {
         control: &AnalysisReadControl,
         permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<()> {
-        if tenant == [0; 16] || requests.len() > 1024 || requests.iter().any(|id| *id == [0; 16]) {
+        if tenant == [0; 16] || requests.len() > 1024 || requests.contains(&[0; 16]) {
             return crate::QueryDeniedSnafu.fail();
         }
         let mut reader = self.reader_wait(Some(control), permit)?;

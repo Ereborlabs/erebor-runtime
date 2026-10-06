@@ -326,6 +326,7 @@ impl AdministrativeHttpOwner {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     fn poll_draft(
         &self,
         token: &str,
@@ -404,6 +405,7 @@ impl AdministrativeHttpOwner {
         ))
     }
 
+    #[allow(clippy::result_large_err)]
     fn activation(
         &self,
         token: &str,
@@ -632,6 +634,7 @@ impl AdministrativeHttpOwner {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     fn approve_draft(
         &self,
         activation_token: &str,
@@ -844,6 +847,7 @@ impl Draft {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn browser(
         &self,
         headers: &HeaderMap,

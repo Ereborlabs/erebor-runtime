@@ -88,9 +88,10 @@ impl QueryTransport {
 
     #[cfg(test)]
     pub(super) async fn expire(&mut self) {
-        let deadline = self.deadline.as_mut().expect("the duration exists");
-        deadline.as_mut().reset(tokio::time::Instant::now());
-        deadline.as_mut().await;
+        if let Some(deadline) = self.deadline.as_mut() {
+            deadline.as_mut().reset(tokio::time::Instant::now());
+            deadline.as_mut().await;
+        }
     }
 
     pub(super) fn checkpoint(bytes: &[u8]) -> Result<Option<QueryCheckpoint>, Status> {
@@ -157,17 +158,17 @@ impl Stream for QueryTransport {
                     "Follow ended before its first complete checkpoint.",
                 ))));
             }
-            if self.checking.is_none() {
-                let frame = self.guard.clone().expect("the checkpoint frame exists");
-                self.checking = Some(Box::pin(async move { frame.check_read().await }));
-            }
-            match self
+            let Some(frame) = self.guard.clone() else {
+                self.done = true;
+                let _cancelled = self.inner.cancel();
+                return Poll::Ready(Some(Err(Status::internal(
+                    "The query checkpoint frame is absent.",
+                ))));
+            };
+            let checking = self
                 .checking
-                .as_mut()
-                .expect("the read check exists")
-                .as_mut()
-                .poll(context)
-            {
+                .get_or_insert_with(|| Box::pin(async move { frame.check_read().await }));
+            match checking.as_mut().poll(context) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(error)) => {
                     self.done = true;

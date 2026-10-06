@@ -914,7 +914,8 @@ async fn query_trace_read_admission() -> TestResult {
     let error = frame
         .check_read()
         .await
-        .expect_err("the reader pool is full");
+        .err()
+        .ok_or("the full reader pool accepted a read")?;
     assert!(matches!(
         error,
         crate::Error::AnalysisBusy {
@@ -991,10 +992,11 @@ fn query_trace_read_drop() -> TestResult {
         })
         .await??;
         check.abort();
-        assert!(tokio::time::timeout(WAIT, check)
+        let error = tokio::time::timeout(WAIT, check)
             .await?
-            .unwrap_err()
-            .is_cancelled());
+            .err()
+            .ok_or("the read check did not cancel")?;
+        assert!(error.is_cancelled());
         drop(frame);
         assert!(scope.upgrade().is_some());
         assert!(stream.upgrade().is_some());

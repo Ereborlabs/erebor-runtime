@@ -527,23 +527,17 @@ impl Stream for TraceTransport {
                     self.held = None;
                     self.checking = None;
                 }
-                if self.checking.is_none() {
-                    let Some(frame) = self.guard.clone() else {
-                        self.done = true;
-                        let _cancelled = self.inner.cancel();
-                        return Poll::Ready(Some(Err(Status::deadline_exceeded(
-                            "Trace ended before its first read checkpoint.",
-                        ))));
-                    };
-                    self.checking = Some(Box::pin(async move { frame.check_read().await }));
-                }
-                match self
+                let Some(frame) = self.guard.clone() else {
+                    self.done = true;
+                    let _cancelled = self.inner.cancel();
+                    return Poll::Ready(Some(Err(Status::deadline_exceeded(
+                        "Trace ended before its first read checkpoint.",
+                    ))));
+                };
+                let checking = self
                     .checking
-                    .as_mut()
-                    .expect("the read check exists")
-                    .as_mut()
-                    .poll(context)
-                {
+                    .get_or_insert_with(|| Box::pin(async move { frame.check_read().await }));
+                match checking.as_mut().poll(context) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Err(error)) => {
                         self.done = true;
@@ -567,18 +561,11 @@ impl Stream for TraceTransport {
                     self.frame(proto::trace_frame::Payload::Result(self.result()))
                 )));
             }
-            if let Some(frame) = &self.held {
-                if self.checking.is_none() {
-                    let frame = frame.clone();
-                    self.checking = Some(Box::pin(async move { frame.check_read().await }));
-                }
-                match self
+            if let Some(frame) = self.held.clone() {
+                let checking = self
                     .checking
-                    .as_mut()
-                    .expect("the read check exists")
-                    .as_mut()
-                    .poll(context)
-                {
+                    .get_or_insert_with(|| Box::pin(async move { frame.check_read().await }));
+                match checking.as_mut().poll(context) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Err(error)) => {
                         self.done = true;
