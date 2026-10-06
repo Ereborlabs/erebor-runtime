@@ -101,7 +101,10 @@ impl TraceDispatchV1 {
 
     fn input(&self) -> Result<DiscoveryDigestV1> {
         self.accepted.validate()?;
-        self.accepted.execution_id(self.target_index)?;
+        TraceErrorCodeV1::Invalid.require(
+            (self.target_index as usize) < self.accepted.request.targets.len(),
+            "trace target index is invalid",
+        )?;
         TraceErrorCodeV1::Invalid.require(
             !self.signing_key_id.is_empty()
                 && self.signing_key_id.len() <= 128
@@ -163,6 +166,22 @@ mod tests {
         };
         let dispatch = TraceDispatchV1::sign(accepted, 0, "key".into(), 1, &key)?;
         dispatch.verify(&key.verifying_key(), [1; 16], "node-a", [2; 16], 2)?;
+        for index in [1, u16::MAX] {
+            assert!(matches!(
+                TraceDispatchV1::sign(dispatch.accepted.clone(), index, "key".into(), 1, &key),
+                Err(crate::Error::Observability {
+                    code: TraceErrorCodeV1::Invalid, reason, ..
+                }) if reason == "trace target index is invalid"
+            ));
+            let mut changed = dispatch.clone();
+            changed.target_index = index;
+            assert!(matches!(
+                changed.verify(&key.verifying_key(), [1; 16], "node-a", [2; 16], 2),
+                Err(crate::Error::Observability {
+                    code: TraceErrorCodeV1::Invalid, reason, ..
+                }) if reason == "trace target index is invalid"
+            ));
+        }
         assert!(dispatch
             .verify(&key.verifying_key(), [9; 16], "node-a", [2; 16], 2)
             .is_err());

@@ -46,21 +46,30 @@ pub struct TraceSourceV1 {
 
 impl TraceSourceV1 {
     pub fn new(bytes: Vec<u8>) -> Result<Self> {
-        let source = Self {
+        Self::validate_bytes(&bytes)?;
+        Ok(Self {
             sha256: Sha256::digest(&bytes).into(),
             bytes,
-        };
-        source.validate()?;
-        Ok(source)
+        })
     }
 
     pub fn validate(&self) -> Result<()> {
+        Self::validate_bytes(&self.bytes)?;
         ensure!(
-            !self.bytes.is_empty()
-                && self.bytes.len() <= MAX_TRACE_SOURCE_BYTES
-                && !self.bytes.contains(&0)
-                && std::str::from_utf8(&self.bytes).is_ok()
-                && self.sha256 == <[u8; 32]>::from(Sha256::digest(&self.bytes)),
+            self.sha256 == <[u8; 32]>::from(Sha256::digest(&self.bytes)),
+            TraceInvalidSnafu {
+                reason: "trace source is empty, invalid, too large, or changed",
+            }
+        );
+        Ok(())
+    }
+
+    fn validate_bytes(bytes: &[u8]) -> Result<()> {
+        ensure!(
+            !bytes.is_empty()
+                && bytes.len() <= MAX_TRACE_SOURCE_BYTES
+                && !bytes.contains(&0)
+                && std::str::from_utf8(bytes).is_ok(),
             TraceInvalidSnafu {
                 reason: "trace source is empty, invalid, too large, or changed",
             }
@@ -223,8 +232,17 @@ mod tests {
     #[test]
     fn observability_backend_source_pins_exact_bytes() -> Result<()> {
         let mut source = TraceSourceV1::new(b"BEGIN { @x = count(); }".to_vec())?;
+        source.validate()?;
+        assert_eq!(
+            source.sha256,
+            <[u8; 32]>::from(Sha256::digest(&source.bytes))
+        );
+        source.sha256[0] ^= 1;
+        assert!(source.validate().is_err());
+        source.sha256[0] ^= 1;
         source.bytes.push(b' ');
         assert!(source.validate().is_err());
+        assert!(TraceSourceV1::new(Vec::new()).is_err());
         assert!(TraceSourceV1::new(vec![b'x'; MAX_TRACE_SOURCE_BYTES + 1]).is_err());
         assert!(TraceSourceV1::new(vec![0xff]).is_err());
         assert!(TraceSourceV1::new(vec![0]).is_err());
