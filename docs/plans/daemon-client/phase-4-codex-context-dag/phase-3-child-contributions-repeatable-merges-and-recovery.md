@@ -133,7 +133,7 @@ Implemented the delivery/merge owner in
   deliberately scope-generic: an adapter can use the same checked direct-child
   scope for a bounded operation delivery without a generic operation-result
   state machine.
-- `erebor session context inbox`, `receive`, and `reject` are daemon-client
+- `araphor session context inbox`, `receive`, and `reject` are daemon-client
   calls. A parent-client names its session and an immutable child
   path/commit/expected head; the daemon derives the receiver scope, verifies
   that it belongs to that session, and is the sole writer. Each inbox item also
@@ -164,7 +164,7 @@ Passed while implementing this phase:
 ```sh
 cargo test -p erebor-runtime-daemon context_dag::delivery --lib
 cargo test -p erebor-runtime-session agents::codex::broker --lib
-cargo check -p erebor-runtime-e2e -p erebor-runtime-daemon -p erebor-runtime-client -p erebor-runtime-cli
+cargo check -p erebor-runtime-e2e -p erebor-runtime-daemon -p erebor-runtime-client -p araphor-cli
 ```
 
 Repository-wide verification passed on the final Rust source state:

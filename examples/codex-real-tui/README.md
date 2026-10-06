@@ -14,7 +14,7 @@ interpolation or a configuration-generating program.
 From the repository root:
 
 ```sh
-cargo build --package erebor-runtime-cli --bin erebor
+cargo build --package araphor-cli --bin araphor
 cargo build --package erebor-runtime-daemon --bin erebord --bin erebor-path-broker
 cargo build --package erebor-runtime-session --bin erebor-linux-session-controller \
   --bin erebor-codex-hook

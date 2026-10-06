@@ -86,10 +86,11 @@ Kubernetes reconciles a Trace resource
 
 ## CLI contract
 
-These commands and schemas are proposed. Add `araphor` as an entry point to
-the existing CLI command tree; retain `erebor` compatibility. Do not rename
-crates, API groups, or repositories. The selected TLS gRPC endpoint is distinct
-from the local Runtime daemon socket.
+The `araphor-cli` crate owns one executable: `araphor`. Use one root parser and
+one dispatch path. Keep all Runtime commands. Put `catalog`, `sql` and `trace`
+at the root. Do not add an `erebor` executable or an `araphor` subcommand.
+Keep other crate names, API groups and the repository name unchanged. The
+selected TLS gRPC endpoint is distinct from the local Runtime daemon socket.
 Reject a daemon-socket option on these commands. --endpoint or the configured
 profile can select Control or the optional remote deployment. Keep commands,
 tokens' intended API audience, methods and output unchanged. The remote endpoint
@@ -114,8 +115,10 @@ araphor trace --resume TRACE_ID --output jsonl
   Names are resolved server-side to UIDs. `--cluster` is required for ambiguous
   locators. An optional container selector narrows a pod. Unknown, unsupported,
   ambiguous, and empty targets fail; none means all hosts.
-- Both commands support `--output table|jsonl`. Default to table on a TTY and
-  JSONL on a pipe. JSONL includes metadata, data, diagnostic, and terminal
+- Both commands support `--output table|jsonl`. SQL follow defaults to table,
+  including when stdout is a pipe. Other commands default to table on a TTY
+  and JSONL on a pipe. Use one table layout for query and Runtime rows.
+  JSONL includes metadata, data, diagnostic, and terminal
   records. Service logs and human progress go to stderr. Escape terminal
   control bytes; do not treat observed text as agent instructions.
 - The CLI stays in the foreground. The agent uses its existing terminal

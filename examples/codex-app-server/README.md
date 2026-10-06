@@ -38,9 +38,9 @@ delete anything. It requires the standard `strip` tool from your distribution's
 Inside the printed `[erebor host lab]` shell, run:
 
 ```sh
-erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
+araphor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
   --adapter codex-v1 --name fixture-codex
-erebor run --policy fixture --workspace "$PWD" fixture-codex
+araphor run --policy fixture --workspace "$PWD" fixture-codex
 ```
 
 The second command attaches to a daemon-owned TTY. The fixture prints
@@ -49,11 +49,11 @@ The second command attaches to a daemon-owned TTY. The fixture prints
 `fixture-daemon-socket=absent`, then echoes each input line as
 `fixture-tty-input=<line>`. To leave the TTY, press `Ctrl-P`, then `Ctrl-Q`.
 That detaches the client while the daemon retains the same governed fixture
-session. Inspect it with `erebor session ps`; when finished, stop it through
+session. Inspect it with `araphor session ps`; when finished, stop it through
 the daemon, for example:
 
 ```sh
-erebor session stop <session-id> --idempotency-key manual-fixture-stop
+araphor session stop <session-id> --idempotency-key manual-fixture-stop
 ```
 
 The fixture's `exit` command is intentionally not part of this manual path:
@@ -70,7 +70,7 @@ To exercise the daemon-owned typed App Server path instead:
 ```sh
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-  | erebor run --policy fixture --workspace "$PWD" --app-server fixture-codex
+  | araphor run --policy fixture --workspace "$PWD" --app-server fixture-codex
 ```
 
 Its standard output is JSONL protocol output only. Daemon/session diagnostics
@@ -88,31 +88,31 @@ the staged client against that same socket:
 
 ```sh
 lab=/tmp/erebor-codex-app-server-<uid>.<suffix>
-erebor_lab() { "$lab/bin/erebor" --socket "$lab/run/daemon.sock" "$@"; }
-erebor_lab daemon status
-erebor_lab session ps
+araphor_lab() { "$lab/bin/araphor" --socket "$lab/run/daemon.sock" "$@"; }
+araphor_lab daemon status
+araphor_lab session ps
 ```
 
 `session ps` uses compact, Docker-like 12-character IDs. The displayed short
 ID is a unique prefix, so it can be pasted directly into every session command:
 
 ```sh
-erebor_lab session inspect <short-id>
-erebor_lab session logs <short-id>
-erebor_lab session events <short-id>
+araphor_lab session inspect <short-id>
+araphor_lab session logs <short-id>
+araphor_lab session events <short-id>
 ```
 
 For an admitted parent session, its pending direct-child contributions are
 visible through the daemon-owned view:
 
 ```sh
-erebor_lab session context inbox <parent-short-id>
+araphor_lab session context inbox <parent-short-id>
 ```
 
 This prints the child scope and immutable delivery pin that the parent may
 receive or reject. Delivery and parent-pin values are deliberately full-length:
 they are compare-and-set inputs, unlike the safely abbreviated session IDs.
-An ordinary `erebor run … codex` fixture is a root session, so its inbox is
+An ordinary `araphor run … codex` fixture is a root session, so its inbox is
 correctly empty until the fixture creates a logical child scope. A Codex
 thread is such a scope inside this same session, never a second session or
 TTY. In the first terminal, create B and run an authenticated operation from B:
@@ -126,7 +126,7 @@ fixture/deliver {"sequence":1,"selected_text":"B completed ls"}
 fixture/command {"command":"ls"}
 ```
 
-`erebor_lab session ps` must still show exactly one session. Authenticated hook
+`araphor_lab session ps` must still show exactly one session. Authenticated hook
 events bind the `ls` operation to B's scope. This example does not claim
 syscall-level physical enforcement. `fixture/start-q` declares retained
 operation key `fixture-q` before
@@ -143,7 +143,7 @@ stale cached head. Back in the second terminal, render the daemon-owned scope
 DAG:
 
 ```sh
-erebor_lab session context graph <parent-short-id>
+araphor_lab session context graph <parent-short-id>
 ```
 
 The graph is a compact Git-style tree of durable scopes and their retained,
@@ -166,8 +166,8 @@ q publishes output; it does not merge itself into B. After q prints both
 `CHILD SCOPE` is q's scope. Then copy its three full values into this command:
 
 ```sh
-erebor_lab session context inbox <parent-short-id>
-erebor_lab session context receive <parent-short-id> \
+araphor_lab session context inbox <parent-short-id>
+araphor_lab session context receive <parent-short-id> \
   <delivery-path> <child-pin> \
   --expected-parent-head <parent-pin> \
   --idempotency-key receive-q-1

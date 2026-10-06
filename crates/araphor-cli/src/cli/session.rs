@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, ContentArrangement, Table};
 use erebor_runtime_client::DaemonClient;
 use erebor_runtime_core::TerminalSize;
 use erebor_runtime_ipc::v1::{
@@ -251,7 +250,7 @@ impl<'a> SessionCommandOwner<'a> {
             .context(DaemonClientSnafu)?;
         Self::write_record(started);
         if !args.request.detached {
-            let client_instance_id = format!("erebor-cli-{}", std::process::id());
+            let client_instance_id = format!("araphor-cli-{}", std::process::id());
             Self::follow_attached(
                 client,
                 &created.session_id,
@@ -321,7 +320,7 @@ impl<'a> SessionCommandOwner<'a> {
             Self::write_record(started);
         }
         if !args.detached {
-            let client_instance_id = format!("erebor-cli-{}", std::process::id());
+            let client_instance_id = format!("araphor-cli-{}", std::process::id());
             if app_server {
                 Self::follow_codex_app_server(
                     client,
@@ -904,7 +903,7 @@ impl<'a> SessionCommandOwner<'a> {
                     .await
                     .context(DaemonClientSnafu)?
                     .deliveries;
-                let mut table = Self::table();
+                let mut table = super::output::table();
                 table.set_header([
                     "PARENT SCOPE",
                     "CHILD SCOPE",
@@ -1004,7 +1003,7 @@ impl<'a> SessionCommandOwner<'a> {
     }
 
     fn write_create(record: erebor_runtime_ipc::v1::SessionCreateResponse) {
-        let mut table = Self::table();
+        let mut table = super::output::table();
         table.set_header(["ID", "STATE", "GENERATION", "RETRY EXPIRES (MS)"]);
         table.add_row([
             record.session_id,
@@ -1020,7 +1019,7 @@ impl<'a> SessionCommandOwner<'a> {
     }
 
     fn write_records(records: &[SessionRecord]) {
-        let mut table = Self::table();
+        let mut table = super::output::table();
         table.set_header([
             "ID",
             "STATE",
@@ -1185,15 +1184,6 @@ impl<'a> SessionCommandOwner<'a> {
                 lines,
             );
         }
-    }
-
-    fn table() -> Table {
-        let mut table = Table::new();
-        table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_content_arrangement(ContentArrangement::Dynamic);
-        table
     }
 
     fn short_id(value: &str) -> String {

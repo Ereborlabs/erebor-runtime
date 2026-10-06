@@ -216,7 +216,7 @@ Deliverables:
 
 Acceptance:
 
-- `erebor start` starts the configured CDP/browser session surface service.
+- `araphor start` starts the configured CDP/browser session surface service.
 - A governed browser session can be created through the runtime API.
 - The client receives only the governed endpoint.
 - The real CDP endpoint is treated as internal state.

@@ -11,7 +11,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 erebord=/usr/lib/erebor/erebord
-erebor=/usr/local/bin/erebor
+araphor=/usr/local/bin/araphor
 service_group=erebor
 service_user=erebor-daemon-service-client
 service_user_two=erebor-daemon-service-client-two
@@ -27,7 +27,7 @@ for command in systemctl groupadd useradd userdel groupdel getent runuser; do
     exit 1
   }
 done
-if [[ ! -x "$erebord" || ! -x "$erebor" ]]; then
+if [[ ! -x "$erebord" || ! -x "$araphor" ]]; then
   echo "installed daemon or client binary is missing" >&2
   exit 1
 fi
@@ -70,7 +70,7 @@ trap report_failure ERR
 await_service() {
   local last_client_error=""
   for _ in $(seq 1 100); do
-    if last_client_error="$("$erebor" daemon status 2>&1)"; then
+    if last_client_error="$("$araphor" daemon status 2>&1)"; then
       return
     fi
     if systemctl is-failed --quiet erebord.service; then
@@ -96,7 +96,7 @@ await_restarted_service() {
   local main_pid=""
   for _ in $(seq 1 100); do
     main_pid="$(systemctl show --property=MainPID --value erebord.service)"
-    if [[ "$main_pid" != 0 && "$main_pid" != "$previous_main_pid" ]] && [[ -S "$socket" ]] && "$erebor" daemon status >/dev/null 2>&1; then
+    if [[ "$main_pid" != 0 && "$main_pid" != "$previous_main_pid" ]] && [[ -S "$socket" ]] && "$araphor" daemon status >/dev/null 2>&1; then
       return
     fi
     sleep 0.1
@@ -126,37 +126,37 @@ systemctl is-enabled --quiet erebord.service
 await_service
 
 [[ "$(stat -c '%U:%G:%a' "$socket")" == "root:$service_group:660" ]]
-runuser -u "$service_user" -- "$erebor" daemon status | grep -q 'running'
-"$erebor" --socket "$socket" daemon status | grep -q 'running'
-if runuser -u "$outside_user" -- "$erebor" daemon status >/dev/null 2>&1; then
+runuser -u "$service_user" -- "$araphor" daemon status | grep -q 'running'
+"$araphor" --socket "$socket" daemon status | grep -q 'running'
+if runuser -u "$outside_user" -- "$araphor" daemon status >/dev/null 2>&1; then
   echo "user outside the connection group reached the installed control socket" >&2
   exit 1
 fi
-if runuser -u "$service_user" -- "$erebor" daemon logs --maximum-records 1 >/dev/null 2>&1; then
+if runuser -u "$service_user" -- "$araphor" daemon logs --maximum-records 1 >/dev/null 2>&1; then
   echo "non-root caller read installed daemon logs" >&2
   exit 1
 fi
-if runuser -u "$service_user" -- "$erebor" daemon reload \
+if runuser -u "$service_user" -- "$araphor" daemon reload \
   --idempotency-key daemon-systemd-nonroot-reload >/dev/null 2>&1; then
   echo "non-root caller reloaded the installed daemon" >&2
   exit 1
 fi
-if runuser -u "$service_user" -- "$erebor" daemon stop \
+if runuser -u "$service_user" -- "$araphor" daemon stop \
   --idempotency-key daemon-systemd-nonroot-stop >/dev/null 2>&1; then
   echo "non-root caller stopped the installed daemon" >&2
   exit 1
 fi
 
-"$erebor" daemon logs --maximum-records 32 | grep -q 'daemon control service started'
-"$erebor" daemon reload --idempotency-key daemon-systemd-reload \
+"$araphor" daemon logs --maximum-records 32 | grep -q 'daemon control service started'
+"$araphor" daemon reload --idempotency-key daemon-systemd-reload \
   | grep -q 'configuration reloaded'
-before_invalid_reload="$("$erebor" daemon status)"
+before_invalid_reload="$("$araphor" daemon status)"
 printf '{"socket_group_gid":' >"$config_path"
-if "$erebor" daemon reload --idempotency-key daemon-systemd-invalid-reload >/dev/null 2>&1; then
+if "$araphor" daemon reload --idempotency-key daemon-systemd-invalid-reload >/dev/null 2>&1; then
   echo "the installed daemon accepted invalid replacement configuration" >&2
   exit 1
 fi
-[[ "$before_invalid_reload" == "$("$erebor" daemon status)" ]]
+[[ "$before_invalid_reload" == "$("$araphor" daemon status)" ]]
 printf '{"socket_group_gid":%s,"linux_runner":{"containment":"systemd"},"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"max_session_output_bytes":67108864,"session_output_rotation_bytes":4194304,"max_daemon_loss_grace_seconds":2}\n' \
   "$group_gid" >"$config_path"
 chown root:root "$config_path"

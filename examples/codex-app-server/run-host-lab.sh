@@ -22,7 +22,7 @@ caller_gid="$(id -g "$caller")"
 target_dir="$repo_root/target/debug"
 
 for binary in \
-  erebor \
+  araphor \
   erebord \
   erebor-path-broker \
   erebor-linux-session-controller \
@@ -56,7 +56,7 @@ stage_root_binary() {
   install -o root -g root -m 0755 "$target_dir/$name" "$lab_root/bin/$name"
 }
 
-stage_root_binary erebor
+stage_root_binary araphor
 stage_root_binary erebord
 stage_root_binary erebor-path-broker
 stage_root_binary erebor-linux-session-controller
@@ -104,7 +104,7 @@ trap stop_daemon EXIT INT TERM
 
 socket="$lab_root/run/daemon.sock"
 as_caller() {
-  runuser -u "$caller" -- "$lab_root/bin/erebor" --socket "$socket" "$@"
+  runuser -u "$caller" -- "$lab_root/bin/araphor" --socket "$socket" "$@"
 }
 
 daemon_ready=false
@@ -143,7 +143,7 @@ fi
 printf '%s\n' "temporary erebord is ready at $socket; type exit in the lab shell to stop it"
 printf '%s\n' "The retained lab is $lab_root"
 runuser -u "$caller" -- env \
-  EREBOR_BIN="$lab_root/bin/erebor" \
+  EREBOR_BIN="$lab_root/bin/araphor" \
   EREBOR_SOCKET="$socket" \
   EREBOR_CODEX_PACKAGE_NAME="$package_name" \
   EREBOR_CODEX_FIXTURE="$lab_root/caller/codex-v1-fixture" \

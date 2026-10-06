@@ -12,7 +12,7 @@ Erebor-owned browser session and the governed endpoint that Playwright receives.
 Start Erebor with the demo config:
 
 ```sh
-cargo run -p erebor-runtime-cli -- start \
+cargo run -p araphor-cli --bin araphor -- start \
   --config examples/playwright-cdp-demo/runtime-config.json
 ```
 

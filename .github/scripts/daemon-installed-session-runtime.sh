@@ -6,7 +6,7 @@ if [[ "$(id -u)" -ne 0 || "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-erebor=/usr/local/bin/erebor
+araphor=/usr/local/bin/araphor
 first_user="${EREBOR_INSTALLED_SESSION_USER:?first session user is required}"
 second_user="${EREBOR_INSTALLED_SESSION_USER_TWO:?second session user is required}"
 config_path=/etc/erebor/erebord.json
@@ -19,7 +19,7 @@ report_failure() {
 trap report_failure ERR
 
 for binary in \
-  "$erebor" \
+  "$araphor" \
   /usr/libexec/erebor/erebor-linux-session-controller \
   /usr/libexec/erebor/erebor-path-broker; do
   [[ -x "$binary" ]] || {
@@ -45,7 +45,7 @@ session_id_from() {
 as_user() {
   local user="$1"
   shift
-  runuser -u "$user" -- "$erebor" "$@"
+  runuser -u "$user" -- "$araphor" "$@"
 }
 
 child_pid_of() {
@@ -65,10 +65,10 @@ child_pid_of() {
 
 await_daemon() {
   for _ in $(seq 1 150); do
-    "$erebor" daemon status >/dev/null 2>&1 && return
+    "$araphor" daemon status >/dev/null 2>&1 && return
     sleep 0.1
   done
-  "$erebor" daemon status
+  "$araphor" daemon status
 }
 
 await_terminal_state() {
@@ -212,14 +212,14 @@ start_session "$first_user" "$tty_session" tty-first
   sleep 1
   printf '\020\021'
 } | runuser -u "$first_user" -- script -qefc \
-  "stty rows 24 cols 80; $erebor session attach $tty_session --input --client-instance-id tty-first --idempotency-key tty-attach-first" \
+  "stty rows 24 cols 80; $araphor session attach $tty_session --input --client-instance-id tty-first --idempotency-key tty-attach-first" \
   /dev/null >/dev/null
 await_log "$first_user" "$tty_session" 'tty-input-governed'
 as_user "$first_user" session inspect "$tty_session" | grep -q 'running'
 stop_and_remove "$first_user" "$tty_session" tty-first
 
 sigint_output="$(mktemp)"
-runuser -u "$first_user" -- "$erebor" session run \
+runuser -u "$first_user" -- "$araphor" session run \
   --runner linux-host \
   --workspace "/home/$first_user" \
   --loss-grace-seconds 1 \

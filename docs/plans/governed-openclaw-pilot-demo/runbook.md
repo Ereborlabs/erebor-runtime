@@ -220,7 +220,7 @@ From the repo root:
 EREBOR_OAUTH_LAB_URL=http://127.0.0.1:5105 \
 EREBOR_OPENCLAW_PROMPT_FILE=examples/governed-openclaw-pilot/prompt.txt \
 EREBOR_OPENCLAW_HEADLESS=false \
-cargo run -p erebor-runtime-cli -- \
+cargo run -p araphor-cli --bin araphor -- \
   session run \
   --runner linux-host \
   --config examples/governed-openclaw-pilot/session-config.json \
@@ -378,13 +378,13 @@ oauth_callback_received
 Show the shared browser/process audit:
 
 ```bash
-cargo run -p erebor-runtime-cli -- audit tail "$SESSION_ID"
+cargo run -p araphor-cli --bin araphor -- audit tail "$SESSION_ID"
 ```
 
 Render the reviewer-ready evidence trace:
 
 ```bash
-cargo run -p erebor-runtime-cli -- audit evidence-trace "$SESSION_ID" \
+cargo run -p araphor-cli --bin araphor -- audit evidence-trace "$SESSION_ID" \
   --prompt examples/governed-openclaw-pilot/prompt.txt \
   --out examples/governed-openclaw-pilot/evidence-trace.md
 ```
@@ -489,7 +489,7 @@ EREBOR_OPENCLAW_BROWSER_EXECUTABLE=google-chrome \
 EREBOR_OAUTH_LAB_URL=http://127.0.0.1:5105 \
 EREBOR_OPENCLAW_PROMPT_FILE=examples/governed-openclaw-pilot/prompt.txt \
 EREBOR_OPENCLAW_HEADLESS=false \
-cargo run -p erebor-runtime-cli -- \
+cargo run -p araphor-cli --bin araphor -- \
   session run \
   --runner linux-host \
   --config examples/governed-openclaw-pilot/session-config.json \

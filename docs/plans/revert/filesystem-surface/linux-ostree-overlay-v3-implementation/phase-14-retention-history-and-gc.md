@@ -66,9 +66,9 @@ Extend the live probe with retention operations:
 ```sh
 cargo fmt
 cargo check -p erebor-runtime-filesystem --all-targets --all-features
-cargo check -p erebor-runtime-cli --all-targets --all-features
+cargo check -p araphor-cli --all-targets --all-features
 cargo test -p erebor-runtime-filesystem --lib retention
-cargo test -p erebor-runtime-cli --all-targets --all-features retention
+cargo test -p araphor-cli --all-targets --all-features retention
 cargo test -p erebor-runtime-session --test filesystem_surface_lifecycle retention -- --test-threads=1 --nocapture
 PATH=/tmp/erebor-ostree-deb.JOW1pw/root/usr/bin:$PATH \
   EREBOR_REQUIRE_FILESYSTEM_LIFECYCLE=1 \
@@ -111,8 +111,8 @@ Implemented:
   - `FilesystemRetentionInventory::load`
   - `FilesystemRetentionPrune::prune`
 - Added explicit operator CLI commands:
-  - `erebor filesystem retention list --registry <registry> --session <session> [--format text|json]`
-  - `erebor filesystem retention prune --registry <registry> --session <session> <target> [--format text|json]`
+  - `araphor filesystem retention list --registry <registry> --session <session> [--format text|json]`
+  - `araphor filesystem retention prune --registry <registry> --session <session> <target> [--format text|json]`
 - Text CLI output renders tables for transaction/subtransaction state,
   retained OSTree refs, local artifacts, and prune results. JSON remains
   available through `--format json` for GUI/API reuse.
@@ -152,16 +152,16 @@ Implemented:
 Operator examples:
 
 ```sh
-erebor filesystem retention list \
+araphor filesystem retention list \
   --registry .erebor/sessions \
   --session session-filesystem-retention-protected
 
-erebor filesystem retention prune \
+araphor filesystem retention prune \
   --registry .erebor/sessions \
   --session session-filesystem-retention-restored \
   tx@{0}
 
-erebor filesystem retention prune \
+araphor filesystem retention prune \
   --registry .erebor/sessions \
   --session session-filesystem-retention-restored \
   tx@{0}.sub@{0}
@@ -195,9 +195,9 @@ Verification run:
 ```sh
 cargo fmt
 cargo check -p erebor-runtime-filesystem --all-targets --all-features
-cargo check -p erebor-runtime-cli --all-targets --all-features
+cargo check -p araphor-cli --all-targets --all-features
 cargo test -p erebor-runtime-filesystem --lib retention -- --nocapture
-cargo test -p erebor-runtime-cli --all-targets --all-features retention -- --nocapture
+cargo test -p araphor-cli --all-targets --all-features retention -- --nocapture
 cargo test -p erebor-runtime-session --test filesystem_surface_lifecycle retention -- --test-threads=1 --nocapture
 PATH=/tmp/erebor-ostree-deb.JOW1pw/root/usr/bin:$PATH \
   EREBOR_REQUIRE_FILESYSTEM_LIFECYCLE=1 \

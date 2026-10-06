@@ -102,7 +102,7 @@ Redact prompts, credentials, registry tokens, hook tickets, and user data.
    systemd.
 2. Verify exactly one daemon owns the temporary `daemon.sock`; record socket
    owner `root`, the temporary connection group, and mode `0660`.
-3. As each in-group user, run `erebor daemon status`. Verify the response
+3. As each in-group user, run `araphor daemon status`. Verify the response
    identifies the kernel-observed caller but exposes no other user's state.
 4. As the user outside the group, prove the connection is rejected by the
    socket boundary.
@@ -253,8 +253,8 @@ As each test user:
 
    ```sh
    erebor create --name created-only --policy probe -- sh -lc 'echo must-not-run'
-   erebor run --policy probe -- sh -lc 'printf "allowed-out\n"; printf "allowed-err\n" >&2'
-   erebor run -d --name detached --policy probe -- sh -lc 'sleep 1; echo detached-done'
+   araphor run --policy probe -- sh -lc 'printf "allowed-out\n"; printf "allowed-err\n" >&2'
+   araphor run -d --name detached --policy probe -- sh -lc 'sleep 1; echo detached-done'
    erebor ps -a
    erebor inspect detached --format json
    erebor logs --tail 20 detached
@@ -273,7 +273,7 @@ As each test user:
    approve it once, and prove exact-effect release and replay rejection. Repeat
    denial, expiry, session cancellation, wrong-user access, and daemon restart
    with a pending approval.
-8. Stop `erebord`, invoke generic `erebor run`, and prove it fails before
+8. Stop `erebord`, invoke generic `araphor run`, and prove it fails before
    creating any process/container. Confirm migrated commands have no direct
    fallback. The sole `erebor` command may retain only the current direct Codex
    implementation until Phase 4.
@@ -298,7 +298,7 @@ Implemented evidence lives in
 `crates/erebor-runtime-e2e/src/bin/codex_v1_fixture.rs`,
 `crates/erebor-runtime-e2e/tests/codex_v1_fixture.rs`, and the privileged
 `.github/scripts/daemon-phase4-codex-runtime.sh` extension to the installed
-systemd probe. The fixture is loaded through `erebor agent load`; it has no
+systemd probe. The fixture is loaded through `araphor agent load`; it has no
 real Codex binary, login, `HOME`, or `CODEX_HOME` dependency. The privileged
 two-UID Linux matrix passed its TTY, typed JSONL, EOF, cancellation, malformed
 output, disconnect, hook ticket, daemon-socket-absence, artifact-revalidation,
@@ -327,7 +327,7 @@ evidence belong to Phase 10.
 ## Phase 10: Registry, Trust, And Packaging
 
 1. Import signed generic-agent, Codex-agent, and policy-package OCI-layout
-   fixtures through `erebor agent import`, then push the admitted subjects plus
+   fixtures through `araphor agent import`, then push the admitted subjects plus
    signatures, provenance, SBOMs, compatibility reports where applicable, and
    review statements to the loopback OCI registry. Prove descriptor-broker path
    safety and that each compatibility report names the exact Phase 2 capability
@@ -351,9 +351,9 @@ evidence belong to Phase 10.
 
 ## Phase 5: Ambient Surfaces
 
-1. Prove `erebor start` is rejected before it can create a foreground listener,
+1. Prove `araphor start` is rejected before it can create a foreground listener,
    process, surface record, or daemon request. Create/start a named browser-CDP
-   ambient surface through `erebor surface`, then exercise one allowed and one
+   ambient surface through `araphor surface`, then exercise one allowed and one
    denied CDP action against a real Erebor-owned or fixture browser.
 2. Verify surface health, logs, events, evidence, restart classification,
    owner-only access, session binding, stop, and removal.

@@ -12,7 +12,7 @@ receives.
 Start Erebor with this demo config:
 
 ```sh
-cargo run -p erebor-runtime-cli -- start \
+cargo run -p araphor-cli --bin araphor -- start \
   --config examples/playwright-google-policy-demo/runtime-config.json
 ```
 

@@ -73,7 +73,7 @@ cat >"$probe_dir/config.json" <<JSON
 JSON
 
 allowed_output="$(
-  cargo run -p erebor-runtime-cli -- \
+  cargo run -p araphor-cli --bin araphor -- \
     session run \
     --runner linux-host \
     --config "$probe_dir/config.json" \
@@ -85,7 +85,7 @@ test -d "$probe_dir/.erebor/sessions"
 
 set +e
 denied_output="$(
-  cargo run -p erebor-runtime-cli -- \
+  cargo run -p araphor-cli --bin araphor -- \
     session run \
     --runner linux-host \
     --config "$probe_dir/config.json" \

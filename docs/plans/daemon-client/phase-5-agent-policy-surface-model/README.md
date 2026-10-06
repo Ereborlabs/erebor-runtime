@@ -16,7 +16,7 @@ remains surface-owned, and no source file becomes a second runtime authority.
 The existing Docker-inspired CLI remains the working product direction:
 
 ```text
-erebor surface create|start|ls|inspect|logs|events|stop|rm
+araphor surface create|start|ls|inspect|logs|events|stop|rm
 ```
 
 This design does not introduce `erebor apply`, remove or rename an existing
@@ -27,7 +27,7 @@ resource contracts below are complete.
 ## Why This Is A Separate Master
 
 The current parent Phase 5 correctly owns daemon-owned ambient surfaces,
-filesystem ownership, agent-state projection, and removal of `erebor start`.
+filesystem ownership, agent-state projection, and removal of `araphor start`.
 It deliberately defers declarative reconciliation until it can state identity,
 create, update, delete, ownership, recovery, and evidence semantics.
 
@@ -47,7 +47,7 @@ creating a new abstraction. It must not recreate behavior that can be reused.
 
 | Existing owner/mechanism | Reuse as far as compatible | Change only as necessary |
 | --- | --- | --- |
-| Verified local-agent enrollment, descriptor-broker resolution, staging, and executable verification | The existing `erebor agent load … --from …` path and its daemon-owned verification evidence | Bind the supplied Agent name and explicit built-in adapter to its existing verified result. |
+| Verified local-agent enrollment, descriptor-broker resolution, staging, and executable verification | The existing `araphor agent load … --from …` path and its daemon-owned verification evidence | Bind the supplied Agent name and explicit built-in adapter to its existing verified result. |
 | PolicyPackage lifecycle, `RuntimeEvent` matching, ordered policy evaluation, decisions, and evidence | Rule evaluation remains owned by the existing policy/runtime path | Validate the v1 resource envelope and replace only untyped mediation metadata with the existing built-in handler's typed contract. |
 | `RuntimeGuardService`, `RuntimeInterceptionBrokerServer`, `SessionInterceptionSetup`, ptrace guards, and Phase 4 controller PTY | One shared interception listener and the existing per-Session routing, guard, PTY, input, resize, detach, and reattach behavior | Bind those existing per-Session results into Session admission/evidence; do not create a second terminal broker or PTY system. |
 | `FilesystemSessionStorage`, `SystemOstreeRepository`, volume-overlay planning, and existing filesystem transaction/retention domain behavior | `prepare`, `open_existing`, the per-Session `filesystem/repo` and `filesystem/work` layout, and one OSTree repository per Session | Put daemon lifecycle and policy enforcement around that storage owner; no repository migration, replacement planner, or second filesystem store. |
@@ -255,7 +255,7 @@ target. The daemon-owned runtime realizing the intrinsic filesystem Surface
 owns the projection and the Session records the physical result; neither the
 Agent nor its adapter chooses the source.
 
-The existing `erebor agent load … --from …` verification path remains the
+The existing `araphor agent load … --from …` verification path remains the
 Phase 5 producer for a locally enrolled Agent, but Phase 5 requires its Agent
 name and built-in adapter as explicit input. It must bind that declared name
 and adapter to the verified staged revision rather than generate a separate
@@ -513,7 +513,7 @@ resources and later records the activated binding identities internally.
 The current CLI remains the path for verifying a local vendor executable:
 
 ```text
-erebor agent load codex-v1 --from /opt/codex/bin/codex \
+araphor agent load codex-v1 --from /opt/codex/bin/codex \
   --adapter codex-v1 --name local-codex
   -> name=local-codex
 ```
@@ -637,7 +637,7 @@ TUI session.
 1. **[5.1 Agent And Policy Resource Model](phase-5-1-agent-and-policy-resource-model.md) — Done.**
    Define the immutable, reusable `Agent`, `PolicyPackage`, and `PolicySet`
    resources. Require a declared Agent name on the existing verified-local
-   `erebor agent load` flow with explicit `--adapter` and `--name`, and make
+   `araphor agent load` flow with explicit `--adapter` and `--name`, and make
    package ordering and `PolicySet` resolution evidence-bearing.
 2. **[5.2 Surface Model — Intrinsic And Named Surfaces](phase-5-2-surface-and-session-admission-model.md) — Done.**
    Fix the static v1 model: registered Surfaces, intrinsic versus named Surface
@@ -652,7 +652,7 @@ TUI session.
 4. **[5.4 Named Browser CDP Surface And Directed Mediation](phase-5-4-daemon-owned-browser-cdp-lifecycle-and-directed-mediation.md).**
    Make Browser CDP the first listener-bearing named Surface, then implement
    terminal-to-Browser-CDP mediation through the explicit policy target and
-   admitted Session binding. Remove the foreground `erebor start` path.
+   admitted Session binding. Remove the foreground `araphor start` path.
 5. **[5.5 Real Codex TUI Governed Acceptance](phase-5-5-real-codex-tui-governed-acceptance.md).**
    Run a real explicitly enrolled Codex TUI through the fixed resource model,
    private state projection, daemon-owned surface, and controller PTY, with

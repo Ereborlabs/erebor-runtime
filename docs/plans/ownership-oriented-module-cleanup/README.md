@@ -127,7 +127,7 @@ Observed baseline:
 - The largest production files are:
   - `crates/erebor-runtime-core/src/config.rs` - 4,600 lines.
   - `crates/erebor-runtime-cdp/src/server.rs` - 2,106 lines.
-  - `crates/erebor-runtime-cli/src/cli.rs` - 1,802 lines.
+  - `crates/araphor-cli/src/cli.rs` - 1,802 lines.
   - `crates/erebor-runtime-session/src/os/linux/process_guard.rs` - 1,522
     lines.
   - `crates/erebor-runtime-audit/src/session_review.rs` - 1,366 lines.

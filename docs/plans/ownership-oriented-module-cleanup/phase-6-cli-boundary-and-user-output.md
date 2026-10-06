@@ -15,15 +15,15 @@ logging structured diagnostics.
 Migrate:
 
 ```text
-crates/erebor-runtime-cli/src/cli.rs
-crates/erebor-runtime-cli/src/main.rs
-crates/erebor-runtime-cli/src/logging.rs
+crates/araphor-cli/src/cli.rs
+crates/araphor-cli/src/main.rs
+crates/araphor-cli/src/logging.rs
 ```
 
 Create:
 
 ```text
-crates/erebor-runtime-cli/src/error.rs
+crates/araphor-cli/src/error.rs
 ```
 
 Optionally create submodules if `error.rs` would exceed 300 lines.
@@ -68,7 +68,7 @@ Optionally create submodules if `error.rs` would exceed 300 lines.
 
 ```sh
 cargo fmt
-cargo test -p erebor-runtime-cli --all-targets --all-features
+cargo test -p araphor-cli --all-targets --all-features
 cargo test -p erebor-runtime-session --all-targets --all-features
 cargo test --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -98,8 +98,8 @@ State: Done as of 2026-07-04.
 
 Implemented:
 
-- `CliError` moved from `crates/erebor-runtime-cli/src/cli.rs` to
-  `crates/erebor-runtime-cli/src/error.rs`.
+- `CliError` moved from `crates/araphor-cli/src/cli.rs` to
+  `crates/araphor-cli/src/error.rs`.
 - `CliError` now uses SNAFU, `snafu::Location`, SNAFU context selectors, and
   the shared `erebor_runtime_error::ErrorExt` status/output behavior.
 - CLI `thiserror` dependency removed.

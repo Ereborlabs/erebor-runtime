@@ -84,7 +84,7 @@ its policy/evidence owner.
   configuration or lifecycle; the Session receives only its filesystem binding.
   A later independently retained/shared filesystem resource may justify a named
   Surface document only with a separately approved model.
-- Move `erebor filesystem transactions|retention` and their direct
+- Move `araphor filesystem transactions|retention` and their direct
   workspace-registry/storage path behind typed daemon requests. The CLI cannot
   open a caller-selected registry or select a raw `--registry` root after this
   migration.
@@ -200,10 +200,10 @@ mount in the session.
 These requests must fail rather than create a shortcut around the projection:
 
 ```text
-erebor session run ... --env CODEX_HOME=/home/user/.codex
+araphor session run ... --env CODEX_HOME=/home/user/.codex
   -> error: CODEX_HOME is adapter-owned
 
-erebor session run ... --mount /home/user/.codex:/run/erebor/state/codex
+araphor session run ... --mount /home/user/.codex:/run/erebor/state/codex
   -> error: raw mounts are not session inputs
 ```
 

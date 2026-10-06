@@ -20,7 +20,7 @@ crates/erebor-runtime-core/src/session_registry.rs
 crates/erebor-runtime-session/src
 crates/erebor-runtime-cdp/src
 crates/erebor-runtime-audit/src
-crates/erebor-runtime-cli/src/main.rs
+crates/araphor-cli/src/main.rs
 ```
 
 ## Implementation Steps
@@ -79,7 +79,7 @@ cargo test -p erebor-runtime-core --all-targets --all-features
 cargo test -p erebor-runtime-audit --all-targets --all-features
 cargo test -p erebor-runtime-session --all-targets --all-features
 cargo test -p erebor-runtime-cdp --all-targets --all-features
-cargo test -p erebor-runtime-cli --all-targets --all-features
+cargo test -p araphor-cli --all-targets --all-features
 cargo test --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 git diff --check
@@ -116,7 +116,7 @@ Changed logging boundaries:
 - Replaced direct lifecycle/protocol `tracing::{debug, info, warn}` macro usage
   with `erebor_runtime_telemetry::{debug, info, warn}` in the scoped runtime
   crates.
-- Left CLI tracing initialization in `crates/erebor-runtime-cli/src/logging.rs`
+- Left CLI tracing initialization in `crates/araphor-cli/src/logging.rs`
   as the CLI-specific adapter. The CLI command-failure boundary already used
   `erebor_runtime_telemetry::error!` from Phase 6.
 - Added structured fields where useful:

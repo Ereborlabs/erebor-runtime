@@ -4,7 +4,7 @@ Status: Not approved. Not started.
 
 ## Purpose
 
-Allow `erebor run codex` to register a live session that can deterministically
+Allow `araphor run codex` to register a live session that can deterministically
 adopt later unchanged Codex runtimes before their first instruction.
 
 ## Current Baseline

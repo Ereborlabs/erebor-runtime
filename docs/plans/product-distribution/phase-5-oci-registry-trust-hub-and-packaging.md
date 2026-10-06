@@ -62,8 +62,8 @@ remain authoritative for install and run.
   erebor search QUERY
   erebor pull NAME[:TAG]|NAME@DIGEST
   erebor push LOCAL_REF REMOTE_REF
-  erebor agent tag SOURCE TARGET
-  erebor agent inspect|verify|install|ls|rm
+  araphor agent tag SOURCE TARGET
+  araphor agent inspect|verify|install|ls|rm
   erebor registry login|logout|ls
   ```
 

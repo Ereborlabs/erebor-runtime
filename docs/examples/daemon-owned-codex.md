@@ -26,7 +26,7 @@ From the repository root, build the exact binaries used by the service:
 
 ```sh
 rtk cargo build -p erebor-runtime-daemon --bin erebord --bin erebor-path-broker
-rtk cargo build -p erebor-runtime-cli --bin erebor
+rtk cargo build -p araphor-cli --bin araphor
 rtk cargo build -p erebor-runtime-session --bin erebor-linux-session-controller
 rtk cargo build -p erebor-runtime-session \
   --features editor-process-guard-target \
@@ -47,7 +47,7 @@ sudo install -m 0755 target/debug/erebor-linux-session-controller \
 sudo install -m 0755 target/debug/erebor-linux-process-guard \
   /usr/libexec/erebor/erebor-linux-process-guard
 sudo install -m 0755 target/debug/codex-v1-fixture /usr/lib/erebor/codex-v1-fixture
-sudo install -m 0755 target/debug/erebor /usr/local/bin/erebor
+sudo install -m 0755 target/debug/araphor /usr/local/bin/araphor
 sudo install -m 0644 packaging/systemd/erebord.service /etc/systemd/system/erebord.service
 ```
 
@@ -91,10 +91,10 @@ test -n "$root_policy_name"
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now erebord
-erebor daemon status
+araphor daemon status
 ```
 
-`erebor daemon status` must report `state=running`. The socket is root-owned,
+`araphor daemon status` must report `state=running`. The socket is root-owned,
 group `erebor`, and mode `0660`; ordinary group members can use sessions but
 cannot reload, stop, or read global daemon logs.
 
@@ -115,10 +115,10 @@ and create a named PolicySet:
 fixture_bin="$HOME/.local/bin/codex-v1-fixture"
 install -D -m 0755 /usr/lib/erebor/codex-v1-fixture "$fixture_bin"
 
-erebor agent load "$package_name" --from "$fixture_bin" \
+araphor agent load "$package_name" --from "$fixture_bin" \
   --adapter codex-v1 --name local-codex
 
-erebor policyset create --name fixture \
+araphor policyset create --name fixture \
   --package "$root_policy_name" \
   --idempotency-key codex-example-policy
 ```
@@ -133,7 +133,7 @@ The public `local-codex` Agent creates a daemon-owned PTY. Type one line and pre
 Enter; the deterministic fixture prints that line and exits.
 
 ```sh
-erebor run --policy fixture --workspace "$PWD" local-codex
+araphor run --policy fixture --workspace "$PWD" local-codex
 ```
 
 The output includes `fixture-daemon-socket=absent`, proving the workload cannot
@@ -149,7 +149,7 @@ validates child output before returning it to this command's stdout.
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
   '{"jsonrpc":"2.0","id":2,"method":"fixture/hook"}' \
-  | erebor run --policy fixture --workspace "$PWD" --app-server local-codex
+  | araphor run --policy fixture --workspace "$PWD" --app-server local-codex
 ```
 
 The response contains `"turnId":"fixture-turn"` and
@@ -171,16 +171,16 @@ artifacts, and a generic private state projection. That is the explicit Phase
 the user-side enrollment shape remains:
 
 ```sh
-erebor agent load REAL_CODEX_PACKAGE --from /absolute/path/to/codex \
+araphor agent load REAL_CODEX_PACKAGE --from /absolute/path/to/codex \
   --adapter codex-v1 --name local-codex
 ```
 
 ## Inspect and stop
 
 ```sh
-erebor session ps
-erebor session logs <session-id>
-erebor audit tail <session-id>
+araphor session ps
+araphor session logs <session-id>
+araphor audit tail <session-id>
 
 sudo systemctl stop erebord
 ```

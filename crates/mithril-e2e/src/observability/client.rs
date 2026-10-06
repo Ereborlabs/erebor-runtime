@@ -873,6 +873,7 @@ impl ClientFixture {
 
     async fn native(&mut self, executable: &Path) -> ProofResult<Value> {
         let window = self.window(executable).await?;
+        let table = self.table(executable).await?;
         let mut sql =
             CliProcess::spawn(executable, &self.profile, &self.root, "sql", &["sql", SQL])?;
         let rows = sql.until("query_replace").await?;
@@ -1068,12 +1069,38 @@ impl ClientFixture {
             "source_frozen": true, "exact_retry": true, "read_only_interrupt": true,
             "initiator_cancelled": true, "query_replace": true, "trace_id": id,
             "selected_parity": true,
+            "table_follow": table,
             "terminal": terminal, "trace_exit": exit, "commit": committed,
             "window_expired": true, "connection_restarted": true,
             "normal_completed": true, "cursor_expired": true,
             "window": window, "completed": completed, "expired": expired,
             "proof_boundary": "The built CLI uses production TLS client RPCs, OIDC validation, QueryOwner and TraceOwner. A runtime fixture answers live target resolution. Production NodeTraceOwner supervises an external backend and uploads output through mTLS. Cleanup is Unknown. This case does not prove physical BPF cleanup or performance."}),
         )
+    }
+
+    async fn table(&self, executable: &Path) -> ProofResult<Value> {
+        let output = tokio::time::timeout(
+            WAIT,
+            Command::new(executable)
+                .arg("--profile")
+                .arg(&self.profile)
+                .args(["sql", SQL, "--follow", "--duration", "1s"])
+                .current_dir(&self.root)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await??;
+        let stdout = String::from_utf8(output.stdout)?;
+        fs::write(self.root.join("table.stdout"), &stdout)?;
+        fs::write(self.root.join("table.stderr"), &output.stderr)?;
+        if !output.status.success()
+            || !stdout.contains("│ count")
+            || !stdout.contains("query_replace")
+            || !stdout.contains("query_checkpoint")
+        {
+            return Err("default table follow did not print a complete result".into());
+        }
+        Ok(json!({"default_format": "table", "result": "PASS", "exit": output.status.code()}))
     }
 
     async fn shutdown(mut self) -> ProofResult<()> {

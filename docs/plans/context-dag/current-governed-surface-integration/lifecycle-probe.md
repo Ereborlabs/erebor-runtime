@@ -39,7 +39,7 @@ filesystem audit failure      -> guard returns denial before the file effect
    cargo test -p erebor-runtime-e2e --test context_current_surface_integration --all-features
    ```
 
-2. Run a Linux-host `erebor session run` fixture with the current ptrace guard,
+2. Run a Linux-host `araphor session run` fixture with the current ptrace guard,
    filesystem interception enabled, and a short controlled command. The test
    fixture must receive its configuration and workspace from a temporary
    directory and record the generated session id, registry directory, audit
@@ -58,7 +58,7 @@ filesystem audit failure      -> guard returns denial before the file effect
 ## Host Limitations
 
 - A sandbox that blocks the Linux ptrace guard cannot prove the filesystem
-  effect boundary. Report the exact `erebor session run` command and guard error
+  effect boundary. Report the exact `araphor session run` command and guard error
   rather than treating a router fixture as equivalent.
 - A Chrome sandbox failure proves neither a CDP integration failure nor a
   browser success. Report Chrome stderr, including a `crashpad` or

@@ -1,5 +1,5 @@
 [package]
-name = "erebor-runtime-cli"
+name = "araphor-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -28,12 +28,8 @@ tonic.workspace = true
 uuid.workspace = true
 
 [[bin]]
-name = "erebor"
-path = "src/main.rs"
-
-[[bin]]
 name = "araphor"
-path = "src/bin/araphor.rs"
+path = "src/main.rs"
 
 [lints]
 workspace = true

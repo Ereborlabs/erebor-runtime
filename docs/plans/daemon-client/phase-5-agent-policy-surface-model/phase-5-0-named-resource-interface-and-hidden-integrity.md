@@ -14,7 +14,7 @@ to detect replacement and recover safely.
 ## Current Public Model To Replace
 
 The current CLI's `PolicyArgs::Set` command family in
-`crates/erebor-runtime-cli/src/cli/policy.rs` exposes a split PolicySet command
+`crates/araphor-cli/src/cli/policy.rs` exposes a split PolicySet command
 name, a special root-policy digest input, digest-addressed inspect/verify
 operations, and a mutable alias operation. The current client/IPC/daemon
 requests carry those public digest fields, and
@@ -47,7 +47,7 @@ PolicyPackages. Daemon-internal integrity evidence remains internal.
   to independently configured Surface records use their declared names.
   Intrinsic Surfaces such as Phase 5 filesystem are registry-selected by
   admission and have no user-created name.
-- Replace the legacy split PolicySet command family with `erebor policyset`.
+- Replace the legacy split PolicySet command family with `araphor policyset`.
   Its `create`, `ls`, `inspect`, and `verify` operations accept or return
   declared names, never a root package, a digest, or a mutable alias. Do not
   retain the split command or any alias subcommand as compatibility syntax:
@@ -99,12 +99,12 @@ are deliberately not accepted until the owning subphase defines them.
 ### User-facing references are names
 
 ```text
-erebor agent load codex-v1 --from /opt/codex/bin/codex \
+araphor agent load codex-v1 --from /opt/codex/bin/codex \
   --adapter codex-v1 --name local-codex
-erebor policyset create --name company-workspace \
+araphor policyset create --name company-workspace \
   --package company-baseline --package workspace-write
-erebor surface create engineering-browser --type browser_cdp
-erebor session run \
+araphor surface create engineering-browser --type browser_cdp
+araphor session run \
   --agent local-codex \
   --surface engineering-browser \
   --policy company-workspace
@@ -136,7 +136,7 @@ This is rejected because the existing Agent name already identifies a different
 immutable Agent revision:
 
 ```text
-erebor agent load codex-v1 --from /opt/codex-next/bin/codex \
+araphor agent load codex-v1 --from /opt/codex-next/bin/codex \
   --adapter codex-v1 --name local-codex
   -> error: Agent name already exists; choose a new name
 ```
@@ -200,18 +200,18 @@ Implemented the Phase 5.0 public naming boundary without replacing the
 existing daemon verifier, content store, replacement checks, session leases,
 or policy evaluator:
 
-- `erebor agent load` now accepts a root-curated package name plus mandatory
+- `araphor agent load` now accepts a root-curated package name plus mandatory
   `--adapter` and `--name`, returns `agent=<name>`, and persists an immutable
   owner-scoped `Agent` envelope. Its private integrity record remains bound to
   the verified installation; a second revision cannot retarget the same name.
-- `erebor policyset create|ls|inspect|verify` replaces the retired
-  `erebor policy set` family. It accepts a declared PolicySet name and ordered
+- `araphor policyset create|ls|inspect|verify` replaces the retired
+  `araphor policy set` family. It accepts a declared PolicySet name and ordered
   PolicyPackage names, returns names only, and resolves the existing internal
   root-curated package boundary from package provenance rather than exposing a
   special root digest. The alias command and direct-digest reference path are
   removed.
 - The daemon client, IPC messages, control service, and Codex run request now
-  carry Agent, PolicySet, and package names only. `erebor run` selects a named
+  carry Agent, PolicySet, and package names only. `araphor run` selects a named
   Agent; `--app-server` selects its certified app-server entrypoint rather than
   treating an entrypoint alias as an Agent identity.
 - The existing immutable package, installation, PolicySet revision, and

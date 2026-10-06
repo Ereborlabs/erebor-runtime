@@ -9,7 +9,7 @@ session. A Codex turn, `spawn_agent`-style child, App Server thread, or nested
 prompt is not an Erebor session, TTY, process guard, hook socket, package
 installation, or daemon client.
 
-One `erebor run … codex` creates one session and one guarded Linux process
+One `araphor run … codex` creates one session and one guarded Linux process
 tree. Logical scopes explain which Codex thread caused an effect in that tree.
 They do not create containment that the existing process guard does not have.
 

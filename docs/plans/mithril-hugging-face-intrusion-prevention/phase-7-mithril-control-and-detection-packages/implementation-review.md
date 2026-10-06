@@ -223,13 +223,40 @@ for the current source and verification limits.
 -> [QueryCheckpoint::validate](../../../../crates/araphor-data/src/query/frame.rs) A retry checks the unsigned bookmark's store, epoch, operation, revision and retention floor.<br>
 -> [QueryStream::cancel](../../../../crates/araphor-data/src/query/follow.rs) Cancellation requests the end of this read.
 
-[CommandRun::sql](../../../../crates/erebor-runtime-cli/src/cli/araphor.rs) A query connection ends without a final record.<br>
--> [QueryReplay::resume](../../../../crates/erebor-runtime-cli/src/cli/araphor.rs) The CLI resumes only follow reads and copies the last complete bookmark.<br>
+[CommandRun::sql](../../../../crates/araphor-cli/src/cli/araphor.rs) A query connection ends without a final record.<br>
+-> [QueryReplay::resume](../../../../crates/araphor-cli/src/cli/araphor.rs) The CLI resumes only follow reads and copies the last complete bookmark.<br>
 -> [QueryRead::reconnect](../../../../ui/mithril-console/src/clientState.ts) The browser query state permits resume only for follow reads.<br>
 -> [Client::read](../../../../ui/mithril-console/src/client.ts) The browser retains the complete rows and reports an interrupted one-shot read as partial.<br>
 -> [client regression tests](../../../../ui/mithril-console/src/client.test.ts) EOF and retryable transport errors do not open a second one-shot request.
 
 #### Owners and limits
+
+The CLI package is `araphor-cli`. It has one executable, one root parser and
+one command dispatch path. It keeps the existing command owners. Read the
+[rename record](../../araphor-observability/phase-3-cli-api-and-console.md#cli-crate-rename)
+for its current verification result.
+
+[package manifest](../../../../crates/araphor-cli/Cargo.toml) Cargo builds araphor-cli.<br>
+-> [workspace manifest](../../../../Cargo.toml) The workspace selects crates/araphor-cli.<br>
+-> [library entry point](../../../../crates/araphor-cli/src/lib.rs) One executable entry point calls the araphor_cli library.<br>
+-> [command dispatch](../../../../crates/araphor-cli/src/cli.rs) Existing command owners retain their behavior.
+
+[CommandRun::sql](../../../../crates/araphor-cli/src/cli/araphor.rs) The CLI receives an ordered query frame.<br>
+-> [Output::query](../../../../crates/araphor-cli/src/cli/araphor/output.rs) The output owner formats row values and escapes terminal control bytes.<br>
+-> [shared table layout](../../../../crates/araphor-cli/src/cli/output.rs) Runtime and query output use the same table layout. Each query batch has its own table.
+
+SQL follow defaults to table, including when stdout is a pipe. Other commands
+retain their stdout-based default. Explicit `--output jsonl` retains all stream
+records for agents. Append, replacement, coverage, limits and errors remain
+visible. The output owner does not retain an ever-growing row list.
+
+[AraphorCommand::prepare](../../../../crates/araphor-cli/src/cli/araphor/args.rs) An operator selects query or trace input.<br>
+-> [TryFrom selector conversion](../../../../crates/araphor-cli/src/cli/araphor/args.rs) TryFrom validates the existing selector bounds.<br>
+-> [AraphorCommandOwner](../../../../crates/araphor-cli/src/cli/araphor.rs) The CLI sends the same InputSelection through the existing client.
+
+[TryFrom selector conversion](../../../../crates/araphor-cli/src/cli/araphor/args.rs) A selector is invalid.<br>
+-> [AraphorCommandError](../../../../crates/araphor-cli/src/cli/araphor/error.rs) TryFrom returns the existing invalid-input error.<br>
+-> [AraphorCommandError::exit_code](../../../../crates/araphor-cli/src/cli/araphor/error.rs) The CLI returns exit code 2.
 
 ClientGrpcOwner holds one optional data state with the existing store and query
 owner. If data startup fails, the shared listener and policy owner remain
@@ -337,7 +364,7 @@ attempt without a credential remains Attempted, not Approved.
 
 [IPC build configuration](../../../../crates/erebor-runtime-ipc/build.rs) Code generation boxes the Rust `TraceFrame.payload.metadata` field without changing protobuf tags.<br>
 -> [TraceTransport](../../../../crates/mithril-control/src/client_grpc/trace.rs) The transport moves metadata into this generated frame.<br>
--> [Output](../../../../crates/erebor-runtime-cli/src/cli/araphor/output.rs) The CLI renders the same metadata as text or JSONL.<br>
+-> [Output](../../../../crates/araphor-cli/src/cli/araphor/output.rs) The CLI renders the same metadata as text or JSONL.<br>
 -> [trace_metadata_roundtrip](../../../../crates/erebor-runtime-ipc/src/lib.rs) A typed boxed constructor and encode/decode check prove the generated shape.
 
 QueryTransport and TraceTransport reuse a pending read-check future. Missing

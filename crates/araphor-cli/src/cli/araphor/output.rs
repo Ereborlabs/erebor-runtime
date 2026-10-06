@@ -46,10 +46,10 @@ impl serde_json::ser::Formatter for AsciiJson {
 }
 
 impl Output {
-    pub(super) fn new(mode: Option<OutputMode>) -> Self {
+    pub(super) fn new(mode: Option<OutputMode>, follow: bool) -> Self {
         Self {
             mode: mode.unwrap_or_else(|| {
-                if io::stdout().is_terminal() {
+                if follow || io::stdout().is_terminal() {
                     OutputMode::Table
                 } else {
                     OutputMode::Jsonl
@@ -168,15 +168,17 @@ impl Output {
                     metadata.moving_resolution_ns, Self::text(&metadata.resume_semantics));
             }
             Payload::Rows(rows) => {
-                let _ = writeln!(text, "{}", self.columns.join("\t"));
+                let mut table = crate::cli::output::table();
+                table.set_header(&self.columns);
                 for row in &rows.rows {
                     let values = row
                         .values
                         .iter()
                         .map(Self::value)
                         .collect::<Result<Vec<_>>>()?;
-                    let _ = writeln!(text, "{}", values.join("\t"));
+                    table.add_row(values);
                 }
+                let _ = writeln!(text, "{table}");
                 let _ = writeln!(
                     text,
                     "rows\tlimited={}\tmissing_contexts={}\tevaluated_utc_ns={}",
@@ -422,6 +424,57 @@ impl Output {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn query_batches_use_tables() -> Result<()> {
+        let mut output = Output::new(None, true);
+        assert!(matches!(output.mode, OutputMode::Table));
+        assert!(matches!(
+            Output::new(Some(OutputMode::Jsonl), true).mode,
+            OutputMode::Jsonl
+        ));
+        let mut frame = wire::QueryFrame {
+            operation: wire::QueryOperation::Replace as i32,
+            payload: Some(wire::query_frame::Payload::Metadata(wire::QueryMetadata {
+                columns: vec![wire::QueryColumn {
+                    name: "count".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        output.query(&frame)?;
+        for (operation, count) in [
+            (wire::QueryOperation::Replace, u64::MAX),
+            (wire::QueryOperation::Append, 42),
+        ] {
+            frame.operation = operation as i32;
+            frame.payload = Some(wire::query_frame::Payload::Rows(wire::QueryRows {
+                rows: vec![wire::QueryRow {
+                    values: vec![wire::QueryValue {
+                        kind: Some(wire::query_value::Kind::Unsigned(count)),
+                    }],
+                }],
+                ..Default::default()
+            }));
+            let bytes = output.query(&frame)?;
+            let text = std::str::from_utf8(&bytes).map_err(|_| Output::invalid("test output"))?;
+            assert!(text.contains("│ count"));
+            assert!(text.contains(&count.to_string()));
+            assert!(text.contains(if operation == wire::QueryOperation::Append {
+                "query_append"
+            } else {
+                "query_replace"
+            }));
+        }
+        frame.payload = Some(wire::query_frame::Payload::Rows(wire::QueryRows::default()));
+        let bytes = output.query(&frame)?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| Output::invalid("test output"))?;
+        assert!(text.contains("│ count"));
+        assert!(!text.contains("│ 42"));
+        Ok(())
+    }
+
     #[test]
     fn observability_cli_output_escapes() -> Result<()> {
         let value = "<script>\u{1b}[2J\u{9b}2J\u{202e}x\n😀";
@@ -469,7 +522,7 @@ mod tests {
             })),
             ..Default::default()
         };
-        let bytes = Output::new(Some(OutputMode::Jsonl)).query(&frame)?;
+        let bytes = Output::new(Some(OutputMode::Jsonl), false).query(&frame)?;
         assert!(String::from_utf8_lossy(&bytes).contains("\"Real\":\"Infinity\""));
         Ok(())
     }
@@ -498,12 +551,12 @@ mod tests {
             )),
             ..Default::default()
         };
-        let bytes = Output::new(Some(OutputMode::Table)).trace(&frame)?;
+        let bytes = Output::new(Some(OutputMode::Table), false).trace(&frame)?;
         let text = std::str::from_utf8(&bytes).map_err(|_| Output::invalid("test output"))?;
         assert!(text.contains("epoch=3\tread_revision=4"));
         assert!(text.contains("target=pod/ns/name\\n\t"));
         assert!(text.contains("output_bytes=4096"));
-        let bytes = Output::new(Some(OutputMode::Jsonl)).trace(&frame)?;
+        let bytes = Output::new(Some(OutputMode::Jsonl), false).trace(&frame)?;
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(Output::encoding)?;
         assert_eq!(value["frame"]["recovery_epoch"], 3);
         assert_eq!(

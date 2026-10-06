@@ -139,7 +139,7 @@ erebor-runtime-core
   state, and run/adopt plan facts; Phase 6 adds auto-adopt route declarations,
   trusted session-template references, hard profile limits, and plan facts
 
-erebor-runtime-cli/src/cli/session
+araphor-cli/src/cli/session
   request parsing only; Phase 6 adds `session auto-adopt add/list/remove`
   wiring to the privileged host service
 

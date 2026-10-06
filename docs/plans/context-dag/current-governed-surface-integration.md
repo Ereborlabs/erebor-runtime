@@ -43,7 +43,7 @@ or agent turn unless a later approved source proves that association.
 
 ## Research Conclusion And Scope Boundary
 
-The repository is already created for every `erebor session run` lifecycle, but
+The repository is already created for every `araphor session run` lifecycle, but
 no current surface appends to it or calls `enforce_with_context(...)`:
 
 | Current path | Existing owner | First-plan treatment |
@@ -53,7 +53,7 @@ no current surface appends to it or calls `enforce_with_context(...)`:
 | Filesystem open/read/mutation interception | `erebor-runtime-session` `FilesystemFileOperationHandler` | Context-aware, pinned, durable-audit decision. |
 | CDP browser-state recovery audit | CDP observer | Remains a non-decision maintenance audit in this plan; it receives no invented pin. |
 | Terminal/process-exec guard | `erebor-runtime-terminal` and session IPC broker | Deferred. It does not yet construct a `RuntimeEvent` or use the durable engine/audit boundary. |
-| `erebor start` standalone browser service | CLI/start surface runner | Remains context-free. It creates a synthetic runtime session id rather than a registry-owned session artifact. |
+| `araphor start` standalone browser service | CLI/start surface runner | Remains context-free. It creates a synthetic runtime session id rather than a registry-owned session artifact. |
 | Session adoption | session adoption path | Deferred. It has no prepared session registry/context owner. |
 
 This is deliberately narrower than the long-term process-and-surface attribution
@@ -228,7 +228,7 @@ and error; fixture tests do not replace the probe.
 - policy predicates that decode Git blobs or a generic `RuntimeEvent` context
   adapter;
 - exposing context repository administration through CLI;
-- converting standalone `erebor start` or adoption into a registered session;
+- converting standalone `araphor start` or adoption into a registered session;
 - retention, ref deletion, archival refs, pruning, garbage collection, or
   power-loss claims beyond the completed repository plan.
 

@@ -11,10 +11,8 @@ pub(super) struct TempJsonFile {
 impl TempJsonFile {
     pub(super) fn write(source: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "erebor-runtime-cli-{nanos}-{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("araphor-cli-{nanos}-{}.json", std::process::id()));
         fs::write(&path, source)?;
         Ok(Self { path })
     }

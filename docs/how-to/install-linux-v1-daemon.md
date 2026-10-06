@@ -53,10 +53,10 @@ writable by group or other users.
 Use the new short-lived client only for control-plane commands in Phase 1:
 
 ```sh
-erebor daemon status
-sudo erebor daemon logs --maximum-records 100
-sudo erebor daemon reload --idempotency-key maintenance-2026-07-19
-sudo erebor daemon stop --idempotency-key maintenance-stop-2026-07-19
+araphor daemon status
+sudo araphor daemon logs --maximum-records 100
+sudo araphor daemon reload --idempotency-key maintenance-2026-07-19
+sudo araphor daemon stop --idempotency-key maintenance-stop-2026-07-19
 ```
 
 Every retry of `reload` or `stop` after an uncertain result must reuse the same
@@ -65,7 +65,7 @@ Non-root group members can obtain only the sanitized status response. They
 cannot read global daemon logs, reload configuration, or stop the daemon.
 
 Daemon operational records are written as rotated JSON Lines under
-`/var/log/erebor/daemon.jsonl`. `erebor daemon logs` is the only deliberate
+`/var/log/erebor/daemon.jsonl`. `araphor daemon logs` is the only deliberate
 CLI retrieval path; ordinary command output and governed workload streams do
 not receive daemon diagnostics. Do not place registry credentials, package
 tokens, hook tickets, or workload data in daemon configuration or command

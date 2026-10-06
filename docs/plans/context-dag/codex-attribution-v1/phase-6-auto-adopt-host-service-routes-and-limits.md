@@ -79,7 +79,7 @@ cargo fmt
 cargo test -p erebor-runtime-core --all-targets --all-features
 cargo test -p erebor-runtime-ipc --all-targets --all-features
 cargo test -p erebor-runtime-session --all-targets --all-features
-cargo test -p erebor-runtime-cli --all-targets --all-features
+cargo test -p araphor-cli --all-targets --all-features
 cargo test --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 git diff --check

@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     fs::File,
     io::{self, Read},
     path::{Path, PathBuf},
@@ -6,44 +7,28 @@ use std::{
     time::Duration,
 };
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
 use erebor_runtime_client::AraphorProfile;
 use erebor_runtime_ipc::araphor as wire;
 use uuid::Uuid;
 
 use super::error::{AraphorCommandError as Error, Result};
-use crate::logging::LoggingArgs;
-
-#[derive(Debug, Parser)]
-#[command(
-    name = "araphor",
-    version,
-    about = "Query retained tenant data and run a supported trace"
-)]
-pub(crate) struct AraphorCli {
-    #[command(flatten)]
-    pub(crate) logging: LoggingArgs,
-    #[command(flatten)]
-    pub(crate) args: AraphorArgs,
-}
 
 #[derive(Debug, Args)]
-pub(crate) struct AraphorArgs {
+pub(crate) struct ConnectionArgs {
     /// JSON profile for the TLS endpoint, tenant, and service credential file.
     #[arg(long, global = true)]
     pub(super) profile: Option<PathBuf>,
     /// Override the profile's HTTPS endpoint. The tenant and credentials stay unchanged.
     #[arg(long, global = true)]
     pub(super) endpoint: Option<String>,
-    /// Select table or JSONL output. The default depends on stdout.
+    /// Select table or JSONL output. Follow defaults to table. Other defaults depend on stdout.
     #[arg(long, global = true, value_enum)]
     pub(super) output: Option<OutputMode>,
-    #[command(subcommand)]
-    pub(super) command: AraphorCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub(super) enum AraphorCommand {
+pub(crate) enum AraphorCommand {
     /// List query relations, recipe source, or retained policy targets.
     Catalog(CatalogArgs),
     /// Evaluate one SQL statement, or follow its committed results.
@@ -54,7 +39,7 @@ pub(super) enum AraphorCommand {
 
 #[derive(Debug, Args)]
 #[command(group(clap::ArgGroup::new("catalog_kind").args(["relation", "recipes", "targets"]).multiple(false)))]
-pub(super) struct CatalogArgs {
+pub(crate) struct CatalogArgs {
     #[arg(long)]
     relation: Option<String>,
     #[arg(long)]
@@ -73,7 +58,7 @@ pub(super) enum OutputMode {
 
 #[derive(Debug, Args)]
 #[command(group(clap::ArgGroup::new("statement").args(["sql", "file"]).required(true).multiple(false)))]
-pub(super) struct SqlArgs {
+pub(crate) struct SqlArgs {
     /// One SQL statement. Use --file - to read stdin.
     sql: Option<String>,
     #[arg(short = 'f', long)]
@@ -88,7 +73,7 @@ pub(super) struct SqlArgs {
 
 #[derive(Debug, Args)]
 #[command(group(clap::ArgGroup::new("source").args(["file", "expression", "recipe"]).multiple(false)))]
-pub(super) struct TraceArgs {
+pub(crate) struct TraceArgs {
     #[arg(long, conflicts_with = "resume")]
     file: Option<PathBuf>,
     #[arg(long, conflicts_with = "resume")]
@@ -151,9 +136,9 @@ pub(super) enum Prepared {
     },
 }
 
-impl AraphorArgs {
+impl AraphorCommand {
     pub(super) fn prepare(&self) -> Result<Prepared> {
-        match &self.command {
+        match self {
             AraphorCommand::Catalog(args) => args.prepare(),
             AraphorCommand::Sql(args) => {
                 let bytes =
@@ -165,7 +150,7 @@ impl AraphorArgs {
                     request: wire::QueryRequest {
                         sql,
                         parameters: Vec::new(),
-                        selection: Some(args.selection.wire()?),
+                        selection: Some((&args.selection).try_into()?),
                         follow: args.follow,
                         bookmark: Vec::new(),
                         duration_ns: duration.map(|value| value.as_nanos() as u64),
@@ -185,7 +170,7 @@ impl AraphorArgs {
                         trace_id: id.as_bytes().to_vec(),
                     });
                 }
-                let selection = args.selection.wire()?;
+                let selection = wire::InputSelection::try_from(&args.selection)?;
                 if selection.target.is_empty() {
                     return Err(SourceInput::invalid("trace target is required"));
                 }
@@ -222,6 +207,22 @@ impl AraphorArgs {
                 })
             }
         }
+    }
+}
+
+impl fmt::Display for AraphorCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Catalog(_) => "catalog",
+            Self::Sql(_) => "sql",
+            Self::Trace(_) => "trace",
+        })
+    }
+}
+
+impl ConnectionArgs {
+    pub(crate) fn selected(&self) -> bool {
+        self.profile.is_some() || self.endpoint.is_some() || self.output.is_some()
     }
 
     pub(super) fn connection(&self) -> Result<AraphorProfile> {
@@ -276,7 +277,7 @@ impl CatalogArgs {
             request: wire::QueryRequest {
                 sql: sql.into(),
                 parameters,
-                selection: Some(self.selection.wire()?),
+                selection: Some((&self.selection).try_into()?),
                 ..Default::default()
             },
             duration: None,
@@ -291,14 +292,18 @@ impl SelectionArgs {
             || self.container.is_some()
             || !self.nodes.is_empty()
     }
+}
 
-    fn wire(&self) -> Result<wire::InputSelection> {
-        for value in self
+impl TryFrom<&SelectionArgs> for wire::InputSelection {
+    type Error = Error;
+
+    fn try_from(selection: &SelectionArgs) -> Result<Self> {
+        for value in selection
             .target
             .iter()
-            .chain(self.cluster.iter())
-            .chain(self.container.iter())
-            .chain(self.nodes.iter())
+            .chain(selection.cluster.iter())
+            .chain(selection.container.iter())
+            .chain(selection.nodes.iter())
         {
             if value.trim().is_empty() || value.len() > 1024 || value.contains('\0') {
                 return Err(SourceInput::invalid(
@@ -306,14 +311,14 @@ impl SelectionArgs {
                 ));
             }
         }
-        if self.nodes.len() > 64 {
+        if selection.nodes.len() > 64 {
             return Err(SourceInput::invalid("too many node selectors"));
         }
-        Ok(wire::InputSelection {
-            target: self.target.clone().unwrap_or_default(),
-            cluster: self.cluster.clone().unwrap_or_default(),
-            container: self.container.clone().unwrap_or_default(),
-            node_ids: self.nodes.clone(),
+        Ok(Self {
+            target: selection.target.clone().unwrap_or_default(),
+            cluster: selection.cluster.clone().unwrap_or_default(),
+            container: selection.container.clone().unwrap_or_default(),
+            node_ids: selection.nodes.clone(),
         })
     }
 }
@@ -372,6 +377,15 @@ impl SourceInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn prepare(cli: Cli) -> Result<Prepared> {
+        let Command::Investigate(command) = cli.command else {
+            return Err(SourceInput::invalid("test command"));
+        };
+        command.prepare()
+    }
 
     #[test]
     fn observability_cli_arguments() {
@@ -395,20 +409,13 @@ mod tests {
                 "--recipe",
                 "failed-opens@1",
             ],
-            vec![
-                "araphor",
-                "sql",
-                "SELECT 1",
-                "--socket",
-                "/run/erebor/daemon.sock",
-            ],
             vec!["araphor", "sql", "SELECT 1", "--token", "secret"],
             vec!["araphor", "catalog", "--recipes", "--targets"],
             vec!["araphor", "catalog", "--relation", "events", "--recipes"],
         ] {
-            assert!(AraphorCli::try_parse_from(args).is_err());
+            assert!(Cli::try_parse_from(args).is_err());
         }
-        assert!(AraphorCli::try_parse_from([
+        assert!(Cli::try_parse_from([
             "araphor",
             "sql",
             "--file",
@@ -418,6 +425,56 @@ mod tests {
             "1m"
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn observability_cli_selectors() -> Result<()> {
+        let args = Cli::try_parse_from([
+            "araphor",
+            "sql",
+            "SELECT 1",
+            "--target",
+            "pod/payments/api",
+            "--cluster",
+            "prod",
+            "--container",
+            "worker",
+            "--node",
+            "node-a",
+            "--node",
+            "node-b",
+        ])
+        .map_err(|_| SourceInput::invalid("test args"))?;
+        let Prepared::Sql { request, .. } = prepare(args)? else {
+            return Err(SourceInput::invalid("test query"));
+        };
+        assert_eq!(
+            request.selection,
+            Some(wire::InputSelection {
+                target: "pod/payments/api".into(),
+                cluster: "prod".into(),
+                container: "worker".into(),
+                node_ids: vec!["node-a".into(), "node-b".into()],
+            })
+        );
+        let oversized = "x".repeat(1025);
+        for flag in ["--target", "--cluster", "--container", "--node"] {
+            for invalid in ["", " ", "\0", oversized.as_str()] {
+                let args = Cli::try_parse_from(["araphor", "sql", "SELECT 1", flag, invalid])
+                    .map_err(|_| SourceInput::invalid("test args"))?;
+                assert!(prepare(args).is_err());
+            }
+        }
+        let mut selection = SelectionArgs {
+            target: None,
+            cluster: None,
+            container: None,
+            nodes: vec!["node-a".into(); 64],
+        };
+        assert!(wire::InputSelection::try_from(&selection).is_ok());
+        selection.nodes.push("node-b".into());
+        assert!(wire::InputSelection::try_from(&selection).is_err());
+        Ok(())
     }
 
     #[test]
@@ -437,9 +494,8 @@ mod tests {
                 "relation = $1",
             ),
         ] {
-            let args =
-                AraphorCli::try_parse_from(args).map_err(|_| SourceInput::invalid("test args"))?;
-            let Prepared::Sql { request, duration } = args.args.prepare()? else {
+            let args = Cli::try_parse_from(args).map_err(|_| SourceInput::invalid("test args"))?;
+            let Prepared::Sql { request, duration } = prepare(args)? else {
                 return Err(SourceInput::invalid("catalog query"));
             };
             assert!(request.sql.contains(expected));
@@ -459,16 +515,15 @@ mod tests {
                 );
             }
         }
-        let args =
-            AraphorCli::try_parse_from(["araphor", "catalog", "--relation", "events'; SELECT 1"])
-                .map_err(|_| SourceInput::invalid("test args"))?;
-        assert!(args.args.prepare().is_err());
+        let args = Cli::try_parse_from(["araphor", "catalog", "--relation", "events'; SELECT 1"])
+            .map_err(|_| SourceInput::invalid("test args"))?;
+        assert!(prepare(args).is_err());
         Ok(())
     }
 
     #[test]
     fn observability_cli_readonly_resume() -> Result<()> {
-        let args = AraphorCli::try_parse_from([
+        let args = Cli::try_parse_from([
             "araphor",
             "trace",
             "--resume",
@@ -476,10 +531,10 @@ mod tests {
         ])
         .map_err(|_| SourceInput::invalid("test args"))?;
         assert!(matches!(
-            args.args.prepare()?,
+            prepare(args)?,
             Prepared::Trace { request: None, .. }
         ));
-        let args = AraphorCli::try_parse_from([
+        let args = Cli::try_parse_from([
             "araphor",
             "trace",
             "--resume",
@@ -488,14 +543,14 @@ mod tests {
             "pod/ns/name",
         ])
         .map_err(|_| SourceInput::invalid("test args"))?;
-        assert!(args.args.prepare().is_err());
+        assert!(prepare(args).is_err());
         Ok(())
     }
 
     #[test]
     fn observability_cli_fixed_source() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let file = crate::cli::test_support::TempJsonFile::write("BEGIN { exit(); }")?;
-        let args = AraphorCli::try_parse_from([
+        let args = Cli::try_parse_from([
             "araphor",
             "trace",
             "--file",
@@ -509,7 +564,7 @@ mod tests {
         let Prepared::Trace {
             request: Some(request),
             trace_id,
-        } = args.args.prepare()?
+        } = prepare(args)?
         else {
             return Err(SourceInput::invalid("test trace").into());
         };

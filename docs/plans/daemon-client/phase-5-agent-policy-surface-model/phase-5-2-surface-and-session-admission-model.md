@@ -77,7 +77,7 @@ Surface. The Session names that concrete Surface when one is required.
   Surface; and the
   Agent's declared adapter must be known. An Agent and a Surface never select
   one another.
-- Implement typed daemon/client `erebor surface create|ls|inspect` operations
+- Implement typed daemon/client `araphor surface create|ls|inspect` operations
   for independent surfaces. Creation persists only surface-owned configuration;
   no client-side policy/agent flags or generated aliases can be smuggled into
   the Surface record.
@@ -215,7 +215,7 @@ Likewise, this Session fails because `filesystem-only` has no Browser CDP
 source Rule or `replacement_surface: browser_cdp` requirement:
 
 ```text
-erebor session create \
+araphor session create \
   --agent local-codex \
   --surface engineering-browser \
   --policy filesystem-only
@@ -224,7 +224,7 @@ erebor session create \
 
 ## Non-Goals
 
-- Do not start Browser CDP, create an ambient listener, remove `erebor start`,
+- Do not start Browser CDP, create an ambient listener, remove `araphor start`,
   establish terminal interception bindings, or migrate filesystem operations;
   those are Phases 5.3 and 5.4.
 - Do not attach a PolicySet or Agent list to Surface, let an Agent select a
@@ -292,12 +292,12 @@ runner admission, or workload:
   package admission rejects any Rule `match.surface` or mediation
   `replacement_surface` outside that registry. No policy, Agent, or document
   can extend it.
-- `erebor surface create|ls|inspect` now manages immutable, owner-isolated
+- `araphor surface create|ls|inspect` now manages immutable, owner-isolated
   named Surface records. The delivered v1 schema accepts only
   `spec.type: browser_cdp`; `terminal` and `filesystem` are explicitly
   rejected as intrinsic Surfaces rather than stored as incomplete documents.
   Surface records reject reverse Agent, PolicySet, Session, and policy fields.
-- `erebor session create` and `erebor session run` accept the static
+- `araphor session create` and `araphor session run` accept the static
   `--agent`, `--policy`, and repeatable `--surface` association form. The
   daemon assigns the Session name, stores the v1 `Session` envelope, resolves
   and retains the Agent, PolicySet, ordered PolicyPackage revisions, and named

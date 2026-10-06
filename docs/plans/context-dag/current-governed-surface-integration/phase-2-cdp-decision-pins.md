@@ -150,7 +150,7 @@ context method.
   corresponding browser effect and does not emit a duplicate legacy record.
 - Denied and approval-required commands retain their current externally visible
   CDP behavior while gaining a valid durable pin.
-- `erebor start` and CDP unit callers without an injected journal retain the
+- `araphor start` and CDP unit callers without an injected journal retain the
   existing context-free behavior and do not fabricate a session repository.
 
 ## Acceptance

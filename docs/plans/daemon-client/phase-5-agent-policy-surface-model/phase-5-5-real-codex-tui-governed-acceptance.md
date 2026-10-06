@@ -23,7 +23,7 @@ complete Phase 5.4.
   end-to-end proof of the preserved path under the new Session association, not
   a second Codex launcher, filesystem implementation, or TUI controller.
 - Use an explicitly selected local Codex candidate with the existing
-  `erebor agent load … --from …` flow. The daemon must follow it through the
+  `araphor agent load … --from …` flow. The daemon must follow it through the
   descriptor broker, verify the resolved final regular executable's version,
   stage it, and run the staged installation without later `PATH`, home,
   launcher, or symlink rediscovery.
@@ -64,7 +64,7 @@ inputs, not a synthetic temporary user, a fabricated Codex home, or an
 implicit caller-home mount. The full workload-visible input set must be
 declared on the concrete Session run. It is not part of the immutable Codex
 package or Agent: an Agent is portable, while caller paths vary by Session.
-The existing `erebor run` route is merely its first caller. The generic
+The existing `araphor run` route is merely its first caller. The generic
 filesystem Surface input is:
 
 ```json
@@ -307,20 +307,20 @@ exact Session argument spelling is fixed by Phase 5.2; no Agentfile
 participates.
 
 ```text
-erebor agent load codex-v1 --from /opt/codex/bin/codex \
+araphor agent load codex-v1 --from /opt/codex/bin/codex \
   --adapter codex-v1 --name local-codex
   -> name=local-codex
 
-erebor policy package apply "$EREBOR_CODEX_RUNTIME_POLICY" \
+araphor policy package apply "$EREBOR_CODEX_RUNTIME_POLICY" \
   --name codex-runtime-guardrail
   -> name=codex-runtime-guardrail
 
-erebor policyset create --name codex-runtime-guardrail-set \
+araphor policyset create --name codex-runtime-guardrail-set \
   --package codex-runtime-guardrail \
   --idempotency-key codex-policy-1
   -> name=codex-runtime-guardrail-set
 
-erebor session run \
+araphor session run \
   --agent local-codex \
   --policy codex-runtime-guardrail-set
   -> session=session-a31... controller-pty=attached
@@ -380,7 +380,7 @@ example rather than CI evidence.
 codex
   -> rejected as evidence: bypasses daemon admission and the declared source view
 
-erebor start --config codex.toml
+araphor start --config codex.toml
   -> rejected: foreground start was removed
 
 Agentfile -> Agent -> Session
@@ -508,7 +508,7 @@ State: In progress.
   non-overlapping caller-home file/directory sources with access mode; it is
   deliberately absent from `CodexPackageDefinition` and the Agent resource.
   The direct example passes the caller's `.bashrc`, `.codex`, and current
-  repository source through the existing `erebor run` request. Generic and Codex
+  repository source through the existing `araphor run` request. Generic and Codex
   admission reject a workspace outside a declared writable directory, project
   only those descriptor-verified paths, hide the rest of the caller home, and
   mask `.codex/ipc`. The root daemon retains ownership of hooks, policy,
@@ -517,7 +517,7 @@ State: In progress.
   isolated fixture path continues to use `FilesystemSessionStorage` and its
   per-Session OSTree repository unchanged.
 - The direct workflow starts only the root daemon, then performs enrollment,
-  policy setup, and the interactive `erebor run` command as the invoking
+  policy setup, and the interactive `araphor run` command as the invoking
   developer. It does not make a user, copy a Codex home, write
   `~/.codex/config.toml`, or start a provider. The real TUI uses the declared
   existing Codex configuration. The deterministic mock remains CI-only.
@@ -564,7 +564,7 @@ State: In progress.
   directory remains root-owned and non-writable (`root:<lab-group> 0750`), but
   its root-owned binaries now use the existing direct-runner host-lab mode
   (`0755`). A fresh lab run is required to verify that correction.
-- The host-lab launch instruction now invokes `erebor run` with no trailing
+- The host-lab launch instruction now invokes `araphor run` with no trailing
   Codex option. The previously documented `-d` is not a current Codex CLI
   option and was an invalid command. It did not request the TUI. The actual
   dangerous bypass is the distinct long
@@ -647,7 +647,7 @@ State: In progress.
 - The required `bash .github/scripts/verify-rust-ci.sh` was rerun with host
   local-socket permission after the sandbox correctly blocked CDP WebSocket
   binding. It then reached a legacy Browser-CDP e2e failure: the test invokes
-  removed `erebor session diagnose`, while the current CLI deliberately rejects
+  removed `araphor session diagnose`, while the current CLI deliberately rejects
   that foreground command. Reworking that test to use a named Browser-CDP
   Surface would implement the deferred Phase 5.4 model; suppressing or
   deleting it would weaken coverage. Neither action is included here. The

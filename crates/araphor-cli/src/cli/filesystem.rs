@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn filesystem_commands_name_a_daemon_session_not_a_registry_path() {
         assert!(TestCli::try_parse_from([
-            "erebor",
+            "araphor",
             "filesystem",
             "transactions",
             "list",
@@ -369,7 +369,7 @@ mod tests {
         ])
         .is_ok());
         assert!(TestCli::try_parse_from([
-            "erebor",
+            "araphor",
             "filesystem",
             "transactions",
             "list",

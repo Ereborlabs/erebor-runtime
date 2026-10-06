@@ -15,7 +15,7 @@ pub struct EreborCliFixture {
 
 impl EreborCliFixture {
     pub fn build() -> Result<Self, E2eError> {
-        if let Some(binary) = std::env::var_os("CARGO_BIN_EXE_erebor") {
+        if let Some(binary) = std::env::var_os("CARGO_BIN_EXE_araphor") {
             return Ok(Self {
                 binary: PathBuf::from(binary),
             });
@@ -23,16 +23,16 @@ impl EreborCliFixture {
 
         let workspace_root = WorkspaceRoot::resolve()?;
         let output = Command::new("cargo")
-            .args(["build", "-p", "erebor-runtime-cli", "--bin", "erebor"])
+            .args(["build", "-p", "araphor-cli", "--bin", "araphor"])
             .current_dir(workspace_root.path())
             .output()
             .context(IoSnafu)?;
         if !output.status.success() {
-            return Err(command_error("cargo build erebor", output));
+            return Err(command_error("cargo build araphor", output));
         }
 
         Ok(Self {
-            binary: workspace_root.binary_path("erebor"),
+            binary: workspace_root.binary_path("araphor"),
         })
     }
 
@@ -43,7 +43,7 @@ impl EreborCliFixture {
     ) -> Result<String, E2eError> {
         let output = self.command_in(cwd, args).output().context(IoSnafu)?;
         if !output.status.success() {
-            return Err(command_error("erebor command", output));
+            return Err(command_error("araphor command", output));
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
@@ -76,7 +76,7 @@ impl EreborCliFixture {
             .context(IoSnafu)?;
         if output.status.success() {
             return Err(external_error(
-                "erebor command expected failure",
+                "araphor command expected failure",
                 std::io::Error::other(format!(
                     "command unexpectedly succeeded: stdout={} stderr={}",
                     String::from_utf8_lossy(&output.stdout),

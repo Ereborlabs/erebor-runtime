@@ -110,7 +110,7 @@ Cargo package and workspace view:
 ```text
 crates/erebor-runtime-audit/Cargo.toml
 crates/erebor-runtime-cdp/Cargo.toml
-crates/erebor-runtime-cli/Cargo.toml
+crates/araphor-cli/Cargo.toml
 crates/erebor-runtime-core/Cargo.toml
 crates/erebor-runtime-e2e/Cargo.toml
 crates/erebor-runtime-error/Cargo.toml
@@ -149,7 +149,7 @@ Near-threshold watch list, generated with the Phase 0 command for files over
 | `crates/erebor-runtime-core/src/config/filesystem_surface.rs` | 278 | Phase 1 watch list; moved to `config/surfaces/filesystem.rs` during Phase 1. |
 | `crates/erebor-runtime-filesystem/src/normalizer/tests.rs` | 275 | Guard-only watch list. |
 | `crates/erebor-runtime-error/src/ext.rs` | 275 | Guard-only watch list; split before adding error extension behavior. |
-| `crates/erebor-runtime-cli/src/error.rs` | 270 | Phase 4 watch list; split only if CLI error surface grows. |
+| `crates/araphor-cli/src/error.rs` | 270 | Phase 4 watch list; split only if CLI error surface grows. |
 | `crates/erebor-runtime-session/src/runtime_interception_broker/platform.rs` | 266 | Phase 5 watch list; avoid platform growth while process owners move. |
 | `crates/erebor-runtime-filesystem/src/promotion/tests/multivolume.rs` | 265 | Guard-only watch list. |
 | `crates/erebor-runtime-filesystem/src/storage.rs` | 264 | Guard-only watch list. |

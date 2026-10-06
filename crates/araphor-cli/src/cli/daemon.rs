@@ -135,25 +135,25 @@ mod tests {
     use crate::cli::Cli;
 
     #[test]
-    fn daemon_commands_share_the_erebor_root_command_tree() {
-        assert!(Cli::try_parse_from(["erebor", "daemon", "status"]).is_ok());
+    fn daemon_uses_shared_root() {
+        assert!(Cli::try_parse_from(["araphor", "daemon", "status"]).is_ok());
         assert!(Cli::try_parse_from([
-            "erebor",
+            "araphor",
             "--socket",
             "/tmp/daemon.sock",
             "daemon",
             "status"
         ])
         .is_ok());
-        assert!(Cli::try_parse_from(["erebor", "status"]).is_err());
+        assert!(Cli::try_parse_from(["araphor", "status"]).is_err());
         assert!(Cli::try_parse_from([
-            "erebor",
+            "araphor",
             "daemon",
             "reload",
             "--idempotency-key",
             "retry-1",
         ])
         .is_ok());
-        assert!(Cli::try_parse_from(["erebor", "session", "run"]).is_err());
+        assert!(Cli::try_parse_from(["araphor", "session", "run"]).is_err());
     }
 }

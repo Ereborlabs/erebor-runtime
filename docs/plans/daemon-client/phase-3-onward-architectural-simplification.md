@@ -42,7 +42,7 @@ two policy-composition models.
 
 ### Simplified target
 
-When `erebor policy set create` selects immutable source revisions, the daemon
+When `araphor policy set create` selects immutable source revisions, the daemon
 compiles them once into an immutable **effective policy revision**. The
 revision contains:
 

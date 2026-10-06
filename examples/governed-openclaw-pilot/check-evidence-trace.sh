@@ -47,7 +47,7 @@ JSON
 
 (
   cd "$workspace"
-  cargo run --manifest-path "$repo_root/Cargo.toml" -p erebor-runtime-cli --quiet -- \
+  cargo run --manifest-path "$repo_root/Cargo.toml" -p araphor-cli --bin araphor --quiet -- \
     audit evidence-trace \
     "$session_id" \
     --prompt "$prompt_path" \

@@ -8,7 +8,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
 
 cd -- "$repo_root"
-cargo build --package erebor-runtime-cli --bin erebor
+cargo build --package araphor-cli --bin araphor
 cargo build --package erebor-runtime-daemon --bin erebord --bin erebor-path-broker
 cargo build --package erebor-runtime-session --bin erebor-linux-session-controller
 cargo build --package erebor-runtime-e2e --bin codex-v1-fixture

@@ -67,7 +67,7 @@ if a follow-up crosses the CLI/session lifecycle boundary.
 
 ```sh
 cargo test -p erebor-runtime-core --all-targets --all-features
-cargo test -p erebor-runtime-cli --all-targets --all-features --no-run
+cargo test -p araphor-cli --all-targets --all-features --no-run
 cargo fmt
 git diff --check
 ```
@@ -154,7 +154,7 @@ modules stay in family roots.
   `SessionArtifactCopier`, `SessionRegistryClock`, `SessionRegistryPath`,
   `SessionRegistryPathResolver`, and `LinuxHostTextBusyRetry`.
 - Follow-up call-site edits touched
-  `crates/erebor-runtime-cli/src/cli.rs`,
+  `crates/araphor-cli/src/cli.rs`,
   `crates/erebor-runtime-audit/src/session_review.rs`,
   `crates/erebor-runtime-session/src/interception_backend.rs`,
   `crates/erebor-runtime-session/src/interception_setup.rs`, and

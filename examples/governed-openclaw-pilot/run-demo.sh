@@ -148,7 +148,7 @@ set +e
   cd "$repo_root"
   EREBOR_OAUTH_LAB_URL="$lab_url" \
     EREBOR_OPENCLAW_PROMPT_FILE="examples/governed-openclaw-pilot/prompt.txt" \
-    cargo run -p erebor-runtime-cli -- \
+    cargo run -p araphor-cli --bin araphor -- \
       session run \
       --runner linux-host \
       --config examples/governed-openclaw-pilot/session-config.json \

@@ -1,4 +1,4 @@
-//! Command wiring for the public `erebor` client.
+//! Command wiring for the `araphor` client.
 
 mod cli;
 mod error;
@@ -10,12 +10,6 @@ use erebor_runtime_error::ErrorExt;
 pub fn run() {
     let cli = cli::Cli::parse();
     exit_on_error(cli.execute());
-}
-
-pub fn run_araphor() {
-    let cli = cli::araphor::AraphorCli::parse();
-    logging::init_tracing(&cli.logging);
-    exit_on_error(cli::araphor::AraphorCommandOwner::new(&cli.args).execute());
 }
 
 fn exit_on_error(result: Result<(), error::CliError>) {

@@ -15,6 +15,7 @@ mod audit;
 pub(super) mod config_paths;
 mod daemon;
 mod filesystem;
+mod output;
 mod parsers;
 mod policy;
 mod runner;
@@ -46,11 +47,11 @@ impl DaemonSocketArgs {
             .unwrap_or_else(DaemonClient::local)
     }
 
-    fn validate_legacy_command(&self, command: &str) -> Result<(), CliError> {
+    fn validate_foreground(&self, command: &str) -> Result<(), CliError> {
         if let Some(socket) = &self.socket {
             return Err(CliError::InvalidDaemonSocket {
                 reason: format!(
-                    "`--socket {}` cannot be used with `{command}` until Phase 5 moves that legacy foreground command into the daemon",
+                    "`--socket {}` cannot be used with `{command}` because it does not use the local daemon",
                     socket.display()
                 ),
                 location: snafu::Location::default(),
@@ -62,9 +63,9 @@ impl DaemonSocketArgs {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "erebor",
+    name = "araphor",
     version,
-    about = "Zero-trust action governance runtime for AI agents",
+    about = "Govern agent actions, query evidence, and run supported traces",
     next_line_help = true
 )]
 pub struct Cli {
@@ -72,6 +73,8 @@ pub struct Cli {
     logging: LoggingArgs,
     #[command(flatten)]
     daemon_socket: DaemonSocketArgs,
+    #[command(flatten)]
+    connection: araphor::ConnectionArgs,
     #[command(subcommand)]
     command: Command,
 }
@@ -80,11 +83,12 @@ impl Cli {
     pub fn execute(&self) -> Result<(), CliError> {
         init_tracing(&self.logging);
         tracing::debug!(command = %self.command, "executing command");
+        self.validate_route()?;
         let client = self.daemon_socket.client();
 
         match &self.command {
             Command::Start(args) => {
-                self.daemon_socket.validate_legacy_command("erebor start")?;
+                self.daemon_socket.validate_foreground("araphor start")?;
                 start::StartCommand::new(args).execute()
             }
             Command::Agent(args) => agent::AgentCommandOwner::new(args, &client).execute(),
@@ -98,19 +102,28 @@ impl Cli {
             Command::Approval(args) => approval::ApprovalCommandOwner::new(args, &client).execute(),
             Command::Filesystem(args) => filesystem::execute(args, &client),
             Command::Daemon(args) => daemon::DaemonCommandOwner::new(args, &client).execute(),
-            Command::Araphor(args) => {
-                if self.daemon_socket.socket.is_some() {
-                    return Err(CliError::Araphor {
-                        source: Box::new(araphor::error::AraphorCommandError::Invalid {
-                            field: "a local daemon socket cannot select an Araphor endpoint",
-                            location: snafu::Location::default(),
-                        }),
-                        location: snafu::Location::default(),
-                    });
-                }
-                araphor::AraphorCommandOwner::new(args).execute()
+            Command::Investigate(command) => {
+                araphor::AraphorCommandOwner::new(&self.connection, command).execute()
             }
         }
+    }
+
+    fn validate_route(&self) -> Result<(), CliError> {
+        let field = match &self.command {
+            Command::Investigate(_) if self.daemon_socket.socket.is_some() => {
+                "a local daemon socket cannot select an Araphor endpoint"
+            }
+            Command::Investigate(_) => return Ok(()),
+            _ if self.connection.selected() => {
+                "profile, endpoint and output apply only to catalog, sql and trace"
+            }
+            _ => return Ok(()),
+        };
+        Err(araphor::error::AraphorCommandError::Invalid {
+            field,
+            location: snafu::Location::default(),
+        }
+        .into())
     }
 }
 
@@ -141,8 +154,8 @@ enum Command {
     Filesystem(filesystem::FilesystemArgs),
     /// Inspect or administer the local Erebor daemon.
     Daemon(daemon::DaemonArgs),
-    /// Query retained tenant data or run a supported finite trace over TLS.
-    Araphor(araphor::AraphorArgs),
+    #[command(flatten)]
+    Investigate(araphor::AraphorCommand),
 }
 
 impl fmt::Display for Command {
@@ -160,7 +173,7 @@ impl fmt::Display for Command {
             Self::Approval(args) => formatter.write_str(&args.display()),
             Self::Filesystem(args) => formatter.write_str(&args.display()),
             Self::Daemon(_) => formatter.write_str("daemon"),
-            Self::Araphor(_) => formatter.write_str("araphor"),
+            Self::Investigate(command) => command.fmt(formatter),
         }
     }
 }

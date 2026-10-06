@@ -152,10 +152,10 @@ mod tests {
 
     #[test]
     fn approval_commands_require_exact_mutation_bindings() {
-        assert!(Cli::try_parse_from(["erebor", "approval", "ls"]).is_ok());
-        assert!(Cli::try_parse_from(["erebor", "approval", "approve", "approval-1"]).is_err());
+        assert!(Cli::try_parse_from(["araphor", "approval", "ls"]).is_ok());
+        assert!(Cli::try_parse_from(["araphor", "approval", "approve", "approval-1"]).is_err());
         assert!(Cli::try_parse_from([
-            "erebor",
+            "araphor",
             "approval",
             "deny",
             "approval-1",

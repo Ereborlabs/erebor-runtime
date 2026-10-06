@@ -13,7 +13,7 @@ run_case() {
   echo "policy_fixture=${name}"
   output="$(
     cd "$repo_root" && \
-      cargo run -p erebor-runtime-cli --quiet -- \
+      cargo run -p araphor-cli --bin araphor --quiet -- \
         policy test \
         --policy "$policy" \
         --event "$event"

@@ -21,7 +21,7 @@ RUN apt-get update \
 
 COPY packaging/systemd/erebord.service /etc/systemd/system/erebord.service
 COPY target/debug/erebord /usr/lib/erebor/erebord
-COPY target/debug/erebor /usr/local/bin/erebor
+COPY target/debug/araphor /usr/local/bin/araphor
 COPY target/debug/erebor-linux-session-controller \
     /usr/libexec/erebor/erebor-linux-session-controller
 COPY target/debug/erebor-path-broker /usr/libexec/erebor/erebor-path-broker
@@ -50,7 +50,7 @@ RUN chmod 0755 \
         /usr/lib/erebor/erebor-codex-real-profile \
         /usr/lib/erebor/codex-context-dag-inspector \
         /usr/lib/erebor/erebor-terminal-lease-probe \
-        /usr/local/bin/erebor \
+        /usr/local/bin/araphor \
         /usr/local/lib/erebor/daemon-systemd-control-plane.sh \
         /usr/local/lib/erebor/daemon-installed-session-runtime.sh \
         /usr/local/lib/erebor/daemon-codex-runtime.sh \

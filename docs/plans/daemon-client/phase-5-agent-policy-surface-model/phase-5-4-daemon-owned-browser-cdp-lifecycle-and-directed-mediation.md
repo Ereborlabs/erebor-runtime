@@ -83,7 +83,7 @@ missing, unhealthy, or unauthorized engineering-browser binding
   far as they meet daemon ownership. Replace the foreground lifecycle wrappers
   only where they cannot survive client exit; do not create a second CDP
   transport, browser launcher, or endpoint security model.
-- Implement typed daemon-owned `erebor surface start|logs|events|stop|rm`
+- Implement typed daemon-owned `araphor surface start|logs|events|stop|rm`
   operations against the immutable records from Phase 5.2. A start/stop/remove
   request acts on the persisted revision; it must not recreate a surface from
   client input.
@@ -100,7 +100,7 @@ missing, unhealthy, or unauthorized engineering-browser binding
 - Use owner-mode Unix sockets by default. Enforce root policy and
   per-connection authentication for any loopback TCP/WebSocket listener, and
   keep daemon-control and runtime-guard endpoints out of agent namespaces.
-- Remove the top-level `erebor start --config … --listen …` parser, help,
+- Remove the top-level `araphor start --config … --listen …` parser, help,
   protocol, examples, and foreground path. It cannot remain as a client-side
   daemon launcher or a translation to implicit surface creation.
 - Complete the directed `managed_browser_cdp` path. Its PolicyPackage Rule
@@ -158,12 +158,12 @@ After Phase 5.2 has persisted the surface specification, its lifecycle is
 always directed at that stored object:
 
 ```text
-erebor surface create engineering-browser ...
+araphor surface create engineering-browser ...
   -> name=engineering-browser
-erebor surface start engineering-browser
+araphor surface start engineering-browser
   -> status=healthy endpoint=unix:///run/erebor/surfaces/1000/browser.sock
-erebor surface logs engineering-browser
-erebor surface stop engineering-browser
+araphor surface logs engineering-browser
+araphor surface stop engineering-browser
 ```
 
 The exact argument spelling is defined by this phase; the important property
@@ -175,8 +175,8 @@ after the creating client exits.
 ### The foreground shortcut is not translated
 
 ```text
-erebor start --config browser.toml --listen 127.0.0.1:9222
-  -> error: `erebor start` was removed; create and start a daemon-owned surface
+araphor start --config browser.toml --listen 127.0.0.1:9222
+  -> error: `araphor start` was removed; create and start a daemon-owned surface
 ```
 
 The daemon must not silently create a surface from `browser.toml`, because that
@@ -212,7 +212,7 @@ while making the concrete endpoint selection explicit and evidence-bearing.
 - Do not turn the filesystem surface into a listener or treat a browser session
   as the owner of a persistent endpoint.
 - Do not add Agentfile, Docker/OCI execution, remote listeners, session
-  adoption, or a compatibility wrapper for `erebor start`.
+  adoption, or a compatibility wrapper for `araphor start`.
 
 ## Checkpoint
 
@@ -226,12 +226,12 @@ Add daemon/client e2e coverage for:
 - terminal-to-Browser-CDP mediation where the raw process is not executed, the
   exact policy-required Browser CDP binding supplies the returned lease, and a
   missing/failed binding fails closed without fallback; and
-- rejection of every legacy `erebor start` path without creating a listener,
+- rejection of every legacy `araphor start` path without creating a listener,
   process, persisted surface, or daemon request.
 
 ## Acceptance
 
-- `erebor surface` is the sole public lifecycle for named Surface records, and
+- `araphor surface` is the sole public lifecycle for named Surface records, and
   `erebor` is a typed daemon client for it. Intrinsic terminal/filesystem
   runtimes have no fake `surface create` path.
 - Browser CDP is a durable surface-owned endpoint, not a foreground client
@@ -239,7 +239,7 @@ Add daemon/client e2e coverage for:
 - Client exit cannot replace or stop the surface; every physical endpoint is
   attributable to its surface, the Sessions that use it, and its owner. Each
   Session retains its own validated PolicySet and explicit binding association.
-- `erebor start` is absent from public and hidden runtime paths.
+- `araphor start` is absent from public and hidden runtime paths.
 
 ## Stop Point
 

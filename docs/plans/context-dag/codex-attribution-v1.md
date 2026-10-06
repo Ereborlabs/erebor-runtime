@@ -70,11 +70,11 @@ not call one operation by another operation's name.
 
 | Command | Status | Meaning | Strict V1 consequence |
 | --- | --- | --- | --- |
-| `erebor session run --config <path> --runner <runner> -- <command>` | Current | Starts the supplied new child inside a governed session runner. | It governs that caller-supplied launch. It does not create a route for arbitrary later Codex execs. |
-| `erebor session adopt --config <path> --runner linux-host --pid <pid>` or `--match <text>` | Current | Manually attaches one already-running, explicitly selected Linux process. | This is manual adoption. It never repairs the missed launch boundary and cannot promote an existing Codex process to V1 strict. |
-| `erebor session auto-adopt add --config <path> --runner linux-host --profile <name> --join-session <id>` or `--create-per-exec` | Deferred final Phases 6–7 | Registers an Erebor-owned route for normally launched future Codex execs. It does not launch Codex itself or require the user to label the later process. | `--join-session` captures the command's derived launch context and joins that session later. `--create-per-exec` installs a default profile route that creates a fresh session. Phase 7 fanotify admission holds the exec before either path can resume it. |
-| `erebor session auto-adopt list [--format <format>]` | Deferred final Phase 6 | Lists persistent auto-adoption routes visible to the caller. | A non-root caller sees only routes it owns. |
-| `erebor session auto-adopt remove --route <id>` | Deferred final Phase 6 | Removes one caller-owned route. | Context routes also expire with their session/context root; default routes otherwise persist until removal or profile/template invalidation. |
+| `araphor session run --config <path> --runner <runner> -- <command>` | Current | Starts the supplied new child inside a governed session runner. | It governs that caller-supplied launch. It does not create a route for arbitrary later Codex execs. |
+| `araphor session adopt --config <path> --runner linux-host --pid <pid>` or `--match <text>` | Current | Manually attaches one already-running, explicitly selected Linux process. | This is manual adoption. It never repairs the missed launch boundary and cannot promote an existing Codex process to V1 strict. |
+| `araphor session auto-adopt add --config <path> --runner linux-host --profile <name> --join-session <id>` or `--create-per-exec` | Deferred final Phases 6–7 | Registers an Erebor-owned route for normally launched future Codex execs. It does not launch Codex itself or require the user to label the later process. | `--join-session` captures the command's derived launch context and joins that session later. `--create-per-exec` installs a default profile route that creates a fresh session. Phase 7 fanotify admission holds the exec before either path can resume it. |
+| `araphor session auto-adopt list [--format <format>]` | Deferred final Phase 6 | Lists persistent auto-adoption routes visible to the caller. | A non-root caller sees only routes it owns. |
+| `araphor session auto-adopt remove --route <id>` | Deferred final Phase 6 | Removes one caller-owned route. | Context routes also expire with their session/context root; default routes otherwise persist until removal or profile/template invalidation. |
 
 `session auto-adopt` is the public name for the OS-mediated path previously
 called “automatic adoption.” Its active registration is an **auto-adoption
@@ -622,7 +622,7 @@ crates/erebor-runtime-core/
   plan facts; Phase 6 adds auto-adopt plan facts, route declarations, trusted
   template references, and bounded profile limits
 
-crates/erebor-runtime-cli/src/cli/session/
+crates/araphor-cli/src/cli/session/
   command parsing and request translation only; Phase 6 adds distinct
   Linux-host `session auto-adopt add/list/remove` wiring without moving route
   selection here

@@ -6,7 +6,7 @@ members = [
     "crates/erebor-runtime-approvals",
     "crates/erebor-runtime-cdp",
     "crates/erebor-runtime-client",
-    "crates/erebor-runtime-cli",
+    "crates/araphor-cli",
     "crates/erebor-runtime-core",
     "crates/erebor-runtime-context",
     "crates/erebor-runtime-daemon",

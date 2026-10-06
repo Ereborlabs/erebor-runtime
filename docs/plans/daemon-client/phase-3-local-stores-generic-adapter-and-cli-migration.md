@@ -20,7 +20,7 @@ product between two independently approved phases.
 
 Phase 3 admits only the daemon-installed built-in package and root-curated
 package digests. It does not accept local user OCI layouts, remote packages, or
-publisher signatures, and it exposes no `erebor agent import` command or
+publisher signatures, and it exposes no `araphor agent import` command or
 protocol. The immutable package/install/policy/session binding still applies:
 the removal is a package-distribution and publisher-trust boundary, not an
 execution-governance bypass.
@@ -86,11 +86,11 @@ rules and safe path/owner checks.
   trait under `erebor-runtime-session::agents`; core owns immutable adapter
   descriptors/capabilities and the daemon owns registry selection. The CLI
   owns none of them.
-- `erebor policy package apply PATH` reads a directory through the Phase 2
+- `araphor policy package apply PATH` reads a directory through the Phase 2
   UID-dropped descriptor broker, validates it from held descriptors, and
   stores an immutable policy-package revision. A small bounded single-file or
   stdin form may instead use the declared-size/digest upload transaction.
-  `erebor policy set create` stores an immutable composition. Aliases point to
+  `araphor policy set create` stores an immutable composition. Aliases point to
   digests and updates never mutate prior revisions. The shape remains
   compatible with the existing development-plan contract (`policy.toml`,
   `rules/`, `examples/`, `tests/`, and `README.md`).
@@ -125,7 +125,7 @@ rules and safe path/owner checks.
   repository and typed protocol:
 
   ```text
-  erebor approval ls | inspect | approve | deny
+  araphor approval ls | inspect | approve | deny
   ```
 
 - Bind one approval to owner UID, session id/generation, exact effect digest,
@@ -161,7 +161,7 @@ rules and safe path/owner checks.
   other trees use the Phase 2 UID-dropped descriptor broker; `erebord` consumes
   its held descriptors and `statx` identity and never reopens an unchecked user
   path string. The CLI does not proxy unbounded blobs.
-- Do not expose `erebor agent import` in Phase 3. The daemon receives its
+- Do not expose `araphor agent import` in Phase 3. The daemon receives its
   built-in package from its own installation and may accept only a root-curated
   exact digest through an administrative installation path. Private-key
   authoring, local OCI-layout import, and publisher-signature verification are
@@ -175,7 +175,7 @@ later Phase 10 work.
   commands. The legacy filesystem surface remains direct only until its Phase 5
   daemon-owned surface lifecycle and artifact requests replace it.
 - Expose the Phase 2 capability contract directly through
-  `erebor runner ls|inspect`. These commands render the existing versioned
+  `araphor runner ls|inspect`. These commands render the existing versioned
   `RunnerCapabilityDocument`, implementation id/version, availability, and
   conformance status used by admission; they do not construct a second runner
   capability model.
@@ -189,7 +189,7 @@ later Phase 10 work.
   guard server. The only remaining foreground construction is the explicitly
   identified Codex path, which Phase 4 removes when the real hook broker and
   Codex session move into `erebord`.
-- Rewrite `crates/erebor-runtime-cli/src/cli.rs` and its command modules as
+- Rewrite `crates/araphor-cli/src/cli.rs` and its command modules as
   wiring over `erebor-runtime-client`. Keep the sole `erebor` target behind the
   shared logging/error/output harness; migrate modules without copying domain
   behavior. The CLI may
@@ -335,10 +335,10 @@ rtk git diff --check
 - Old-to-new non-Codex CLI capability mapping with e2e test names, the exact
   Phase 5 filesystem-surface exception, and the remaining direct Codex-only
   surface inside `erebor`.
-- Proof that stopping `erebord` makes `erebor run` fail before process launch.
+- Proof that stopping `erebord` makes `araphor run` fail before process launch.
 - Linux-host generic-session lifecycle results and Docker's explicit
   unavailable result.
-- `erebor runner ls|inspect` output matched to the exact Phase 2 capability
+- `araphor runner ls|inspect` output matched to the exact Phase 2 capability
   documents used by admission.
 - Proof that pre-daemon workspace state was neither imported nor deleted.
 
@@ -399,7 +399,7 @@ Implemented in this in-progress slice:
   those stores at create and start. The old `PhaseTwoValidatedFixture`
   admission fallback is gone. Configuration reload also seeds only compatible
   immutable root-curated records before publishing the new generation.
-- `erebor session` now sends create/start/list/inspect/logs/attach/events/stop/
+- `araphor session` now sends create/start/list/inspect/logs/attach/events/stop/
   kill/wait/remove/prune lifecycle requests to the daemon. It no longer exposes
   generic direct run, diagnosis, adoption, or audit-file review. The temporary
   foreground branch must positively match a configured brokered Codex App
@@ -430,7 +430,7 @@ Implemented in the current continuation:
   rule JSON before storage, and persists an immutable revision. Immutable
   user policy sets require a root-curated minimum and are reconstructed as
   mandatory layered policy inputs for the session guard router.
-- `erebor policy test`, `policy package apply`, `policy set create`, and
+- `araphor policy test`, `policy package apply`, `policy set create`, and
   `runner ls|inspect` use daemon RPCs. The runner report is the same versioned
   capability document used by admission, with availability as a transport
   status rather than a second model.
@@ -445,7 +445,7 @@ rtk cargo test -p erebor-runtime-core --lib --all-features
 rtk cargo test -p erebor-runtime-session runners::linux::tests --all-features
 rtk cargo test -p erebor-runtime-daemon path_broker::tests::held_directory_reader --all-features
 rtk cargo test -p erebor-runtime-daemon session_api::tests --all-features
-rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo test -p araphor-cli --lib --all-features
 rtk cargo check --workspace
 rtk cargo clippy -p erebor-runtime-core -p erebor-runtime-session \
   -p erebor-runtime-daemon --all-targets --all-features -- -D warnings
@@ -469,7 +469,7 @@ rtk cargo test -p erebor-runtime-packages --all-targets --all-features
 rtk cargo test -p erebor-runtime-daemon \
   local_store::tests::root_curated_records_are_immutable_and_resolved_per_owner \
   --all-features
-rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo test -p araphor-cli --lib --all-features
 rtk cargo test -p erebor-runtime-e2e --test daemon_control_plane --no-run
 rtk cargo check --workspace
 rtk cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -487,13 +487,13 @@ required outside this host.
 
 Implemented in this continuation:
 
-- Session aliases are durable daemon-owned per-UID records. `erebor session
+- Session aliases are durable daemon-owned per-UID records. `araphor session
   alias set|remove|list` crosses the authenticated daemon protocol; alias
   targets are resolved to an exact owned session before they enter the
   idempotency record. Session lookup accepts exact IDs first, then a valid
   local alias, then one unique prefix. The repository test proves durability,
   ownership isolation, unsafe-alias rejection, and exact target binding.
-- `erebor audit tail` now streams the daemon-owned bounded session-event page
+- `araphor audit tail` now streams the daemon-owned bounded session-event page
   and durable cursor. It no longer reads a legacy workspace audit file.
 - The installed privileged Linux acceptance now builds and uses only the
   public `erebor` client for the generic lifecycle, output, audit tail,
@@ -504,13 +504,13 @@ Implemented in this continuation:
 - The cumulative example has the matching simple public client walkthrough;
   building the process guard explicitly enables its required
   `editor-process-guard-target` feature.
-- `erebor audit evidence-trace` now reads the bounded durable evidence stream
+- `araphor audit evidence-trace` now reads the bounded durable evidence stream
   through the daemon. The stale CLI path that opened a workspace-local
   `SessionRegistry`, read legacy JSONL/config/policy artifacts, rendered a
   report, and wrote an arbitrary local output path is gone. The client now
   presents only the typed daemon response, alongside `audit tail` for the
   lifecycle-event stream.
-- `erebor policy package ls|inspect|verify` and `erebor policy set
+- `araphor policy package ls|inspect|verify` and `araphor policy set
   ls|inspect|verify` now use typed daemon control requests. Listing and
   inspection enumerate only canonical root-curated or caller-owned immutable
   records; `verify` re-reads and validates the canonical bytes and referenced
@@ -523,7 +523,7 @@ rtk cargo fmt --all
 rtk cargo test -p erebor-runtime-session \
   aliases_are_durable_scoped_and_resolve_to_exact_session_ids --all-features
 rtk cargo test -p erebor-runtime-client --lib --all-features
-rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo test -p araphor-cli --lib --all-features
 rtk cargo test -p erebor-runtime-e2e --test daemon_control_plane --no-run
 rtk cargo check --workspace
 bash -n .github/scripts/daemon-installed-session-runtime.sh
@@ -546,7 +546,7 @@ rtk cargo test -p erebor-runtime-ipc --test contract --all-features
 rtk cargo test -p erebor-runtime-daemon \
   local_store::tests::policy_catalogs_are_daemon_owned_and_revalidate_canonical_records \
   --all-features
-rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo test -p araphor-cli --lib --all-features
 rtk cargo test -p erebor-runtime-client --lib --all-features
 rtk cargo check --workspace
 rtk cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -580,7 +580,7 @@ to the privileged Linux lane.
   non-PTY attached `run` turns one client SIGINT into one typed runner
   `interrupt`. Read-only attach, input-lease expiry, and client transport loss
   never signal a workload.
-- `erebor start` remains direct because the approved Phase 5 ambient-surface
+- `araphor start` remains direct because the approved Phase 5 ambient-surface
   plan owns its replacement. The migration table and acceptance wording above
   now name that boundary explicitly. The filesystem transaction/retention
   surface remains the other Phase 5 exception. `dev proxy-cdp` remains removed
@@ -597,7 +597,7 @@ to the privileged Linux lane.
   configuration-reload rollback, and systemd recovery after a SIGKILL.
   The obsolete temporary-daemon probe and its old `daemon --socket` spelling
   were deleted. Phase 4 restores the approved root-level
-  `erebor --socket <absolute-path>` foreground selector for daemon-backed
+  `araphor --socket <absolute-path>` foreground selector for daemon-backed
   commands; it remains process-local, defaults to the installed socket when
   omitted, and does not create a persisted alternate-daemon model.
 
@@ -617,11 +617,11 @@ rtk cargo fmt --all
 rtk cargo test -p erebor-runtime-session \
   forwards_only_current_interactive --lib --all-features
 rtk cargo test -p erebor-runtime-ipc --test contract --all-features
-rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo test -p araphor-cli --lib --all-features
 rtk cargo check --workspace
 rtk cargo clippy --workspace --all-targets --all-features -- -D warnings
 rtk cargo build -p erebor-runtime-daemon --bin erebord --bin erebor-path-broker
-rtk cargo build -p erebor-runtime-cli --bin erebor
+rtk cargo build -p araphor-cli --bin araphor
 rtk cargo build -p erebor-runtime-session --features editor-process-guard-target \
   --bin erebor-linux-session-controller --bin erebor-linux-process-guard
 rtk docker build -f .github/containers/daemon-systemd.Dockerfile \

@@ -31,10 +31,10 @@ Terminology:
 
 Current implementation slice:
 
-- `erebor session run --runner docker --config <path> -- <command>`
+- `araphor session run --runner docker --config <path> -- <command>`
   builds one governed session and launches the agent entrypoint through
   Docker/OCI.
-- `erebor session diagnose --runner docker --config <path> <name>`
+- `araphor session diagnose --runner docker --config <path> <name>`
   currently launches a named diagnostic command through the same Docker/OCI
   runner path. This is useful for smoke testing runner mechanics and process
   enforcement, but it is not the richer multi-command terminal/PTY UX needed
@@ -238,10 +238,11 @@ Already present:
 - `integrations/openclaw-ts/README.md` exists as the reserved home for the first
   OpenClaw UX integration.
 - `erebor-runtime-audit` has a JSONL sink and reader.
-- `erebor-runtime-cli audit tail` can read JSONL audit records.
+- The `erebor` executable from `araphor-cli` can read JSONL audit records with
+  `audit tail`.
 - Runtime events already include browser and terminal/process action kinds.
-- `erebor session run --runner docker` and
-  `erebor session diagnose --runner docker` now create a session plan
+- `araphor session run --runner docker` and
+  `araphor session diagnose --runner docker` now create a session plan
   and delegate Docker launch to `erebor-runtime-core`.
 - `erebor-runtime-core` now owns a `SessionRunner` trait and
   `DockerSessionRunner` implementation.
@@ -253,10 +254,10 @@ Already present:
 - `erebor-runtime-session` builds a static Rust Linux ptrace process guard,
   mounts it into Docker/OCI sessions, and uses it as the container entrypoint
   when `session.interception` enables the Linux ptrace backend.
-- `erebor session run --runner linux-host` now relaunches a local
+- `araphor session run --runner linux-host` now relaunches a local
   command with Erebor session metadata and can wrap it with the Linux ptrace
   process guard when `session.interception` enables the Linux ptrace backend.
-- `erebor session adopt --runner linux-host --pid <pid>` now attaches
+- `araphor session adopt --runner linux-host --pid <pid>` now attaches
   the Linux ptrace process guard to an already-running process tree when host
   ptrace permissions allow it. The guard emits a capability/residual-risk
   report and attempts best-effort cgroup v2 membership.
@@ -316,9 +317,9 @@ session:
 3. Reset the lab/browser authorization state so the governed run starts clean.
 4. Start a governed Linux host session by relaunching installed OpenClaw under
    Erebor:
-   `erebor session run --runner linux-host --config <path> -- openclaw`.
+   `araphor session run --runner linux-host --config <path> -- openclaw`.
    After relaunch works, add the weaker attach path:
-   `erebor session adopt --runner linux-host --config <path> --pid <pid>`.
+   `araphor session adopt --runner linux-host --config <path> --pid <pid>`.
 5. The session prepares an Erebor-owned browser and gives OpenClaw only the
    governed CDP endpoint through an attach-only profile or config overlay.
 6. The session attaches the Linux ptrace process surface to the OpenClaw process
@@ -421,10 +422,10 @@ Implementation:
 - Add a session launch path equivalent to:
 
 ```bash
-erebor session run --runner docker -- openclaw
+araphor session run --runner docker -- openclaw
 ```
 
-- Agent-specific presets such as `erebor run openclaw --runner docker` may be
+- Agent-specific presets such as `araphor run openclaw --runner docker` may be
   added later, but they must compile to the same session request shape.
 - Create a Docker/OCI session runner that:
   - creates a session id and actor identity
@@ -487,19 +488,19 @@ Public interface:
 - Canonical relaunch path:
 
 ```bash
-erebor session run --runner linux-host --config <path> -- openclaw
+araphor session run --runner linux-host --config <path> -- openclaw
 ```
 
 - Follow-up adoption path:
 
 ```bash
-erebor session adopt --runner linux-host --config <path> --pid <pid>
+araphor session adopt --runner linux-host --config <path> --pid <pid>
 ```
 
 - Current-process match adoption path:
 
 ```bash
-erebor session adopt --runner linux-host --config <path> --match openclaw
+araphor session adopt --runner linux-host --config <path> --match openclaw
 ```
 
 This resolves exactly one already-running matching process from `/proc` and
@@ -977,7 +978,7 @@ Implementation:
 ```bash
 SESSION_JSON=$(ls -t .erebor/sessions/*/session.json | head -1)
 SESSION_ID=$(jq -r .session_id "$SESSION_JSON")
-cargo run -p erebor-runtime-cli -- audit tail "$SESSION_ID"
+cargo run -p araphor-cli --bin araphor -- audit tail "$SESSION_ID"
 ```
 
 Audit records shown during the call should include:
@@ -1066,7 +1067,7 @@ Implementation:
 - Added a thin CLI adapter:
 
 ```bash
-cargo run -p erebor-runtime-cli -- audit evidence-trace "$SESSION_ID" \
+cargo run -p araphor-cli --bin araphor -- audit evidence-trace "$SESSION_ID" \
   --prompt examples/governed-openclaw-pilot/prompt.txt \
   --out examples/governed-openclaw-pilot/evidence-trace.md
 ```
@@ -1595,7 +1596,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 Browser validation:
 
 ```bash
-cargo run -p erebor-runtime-cli -- start --config examples/playwright-cdp-demo/runtime-config.json
+cargo run -p araphor-cli --bin araphor -- start --config examples/playwright-cdp-demo/runtime-config.json
 cd examples/playwright-cdp-demo
 npm run smoke
 ```
@@ -1605,8 +1606,8 @@ Session pilot validation:
 ```bash
 GITHUB_CLIENT_ID=<client-id> node examples/openclaw-oauth-click-lab/lab.mjs
 openclaw
-cargo run -p erebor-runtime-cli -- session run --runner linux-host --config <pilot-session-config.json> -- openclaw
-cargo run -p erebor-runtime-cli -- session adopt --runner linux-host --config <pilot-session-config.json> --pid <openclaw-pid>
+cargo run -p araphor-cli --bin araphor -- session run --runner linux-host --config <pilot-session-config.json> -- openclaw
+cargo run -p araphor-cli --bin araphor -- session adopt --runner linux-host --config <pilot-session-config.json> --pid <openclaw-pid>
 ```
 
 Use the first `openclaw` command only for the ungoverned baseline. Reset the lab

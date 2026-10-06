@@ -70,7 +70,7 @@ review or evidence-trace behavior across a session registry.
 
 ```sh
 cargo test -p erebor-runtime-audit --all-targets --all-features
-cargo test -p erebor-runtime-cli --all-targets --all-features --no-run
+cargo test -p araphor-cli --all-targets --all-features --no-run
 cargo fmt
 git diff --check
 ```
@@ -179,7 +179,7 @@ Completed on 2026-07-05.
 - `crates/erebor-runtime-audit/src/filter.rs`
 - `crates/erebor-runtime-audit/src/filter/*`
 - `crates/erebor-runtime-audit/src/tests.rs`
-- `crates/erebor-runtime-cli/src/cli.rs`
+- `crates/araphor-cli/src/cli.rs`
 
 ### Line Counts
 

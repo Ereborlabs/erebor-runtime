@@ -110,11 +110,11 @@ the IPC reorganization must not merge either dispatcher.
 - Add `crates/erebor-runtime-client` as the typed daemon transport owner.
   It discovers the fixed local socket by default, performs the handshake,
   correlates unary responses, consumes bounded streams, and maps daemon errors.
-  `erebor daemon --socket <path>` may name one explicit local Unix socket
+  `araphor daemon --socket <path>` may name one explicit local Unix socket
   instead of its default `/run/erebor/daemon.sock`; it is neither a persisted
   context nor a remote or multi-daemon product interface. The crate must not
   contain CLI rendering or domain decisions.
-- Keep `crates/erebor-runtime-cli` as wiring. `erebor` is the only public
+- Keep `crates/araphor-cli` as wiring. `erebor` is the only public
   client target from this phase, rooted at `src/main.rs`. Its one `cli.rs`
   command tree contains the existing direct foreground commands and the
   `daemon status|logs|reload|stop` subcommand family in `cli/daemon.rs`. Remove
@@ -323,7 +323,7 @@ Implemented:
   commands remain temporarily available under `erebor` until their owning
   later phases daemonize them.
 - Added generic root-only `erebord --config`, `--runtime-dir`, `--log-dir`,
-  and `--state-dir` local path overrides plus explicit local `erebor daemon
+  and `--state-dir` local path overrides plus explicit local `araphor daemon
   --socket <path>` wiring for the manual example. Each omitted daemon argument
   uses its installed default; the installed client likewise defaults to
   `/run/erebor/daemon.sock`. No context or remote target exists.
@@ -357,16 +357,16 @@ rtk git diff --check
 bash -n .github/scripts/daemon-control-plane.sh
 bash -n .github/scripts/daemon-systemd-control-plane.sh
 rtk cargo build -p erebor-runtime-daemon --bin erebord
-rtk cargo build -p erebor-runtime-cli --bin erebor
+rtk cargo build -p araphor-cli --bin araphor
 rtk docker build --file .github/containers/daemon-systemd.Dockerfile --tag erebor-daemon-systemd:local .
 EREBOR_DAEMON_SYSTEMD_IMAGE=erebor-daemon-systemd:local rtk cargo test -p erebor-runtime-e2e --test daemon_control_plane -- --ignored
 rtk cargo test -p erebor-runtime-daemon -- --ignored
 rtk cargo test -p erebor-runtime-session --lib
-rtk cargo test -p erebor-runtime-cli --all-targets
+rtk cargo test -p araphor-cli --all-targets
 rtk cargo test -p erebor-runtime-e2e --tests --no-run
 rtk cargo test -p erebor-runtime-e2e --test daemon_control_plane --no-run
 rtk cargo test -p erebor-runtime-session --test filesystem_surface_lifecycle --no-run
-rtk cargo run -p erebor-runtime-cli --bin erebor -- --help
+rtk cargo run -p araphor-cli --bin araphor -- --help
 rtk cargo run -p erebor-runtime-daemon --bin erebord -- --help
 ```
 
@@ -379,7 +379,7 @@ cleanup when another socket replaces the daemon path.
 
 The final CLI probe showed one `erebor` root command with its existing `start`,
 `session`, `dev`, `policy`, `audit`, and `filesystem` commands plus `daemon`.
-`erebor daemon --help` exposes only the Phase 1 `status`, `logs`, `reload`, and
+`araphor daemon --help` exposes only the Phase 1 `status`, `logs`, `reload`, and
 `stop` control operations. `Cargo.toml` exposes no `erebor-runtime` binary.
 The hands-on walkthrough itself was not run locally because this sandbox sets
 `no_new_privileges`; it cannot start a host root daemon. The automated probe

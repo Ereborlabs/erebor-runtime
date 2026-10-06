@@ -33,26 +33,26 @@ use.
 - Add transaction catalog commands. Candidate shape for implementation:
 
 ```sh
-erebor filesystem transactions list \
+araphor filesystem transactions list \
   --registry <workspace>/.erebor/sessions \
   --session <session-id>
 
-erebor filesystem transactions show \
+araphor filesystem transactions show \
   --registry <workspace>/.erebor/sessions \
   --session <session-id> \
   tx@{0}
 
-erebor filesystem transactions rename \
+araphor filesystem transactions rename \
   --registry <workspace>/.erebor/sessions \
   --session <session-id> \
   tx@{0} "before dependency update"
 
-erebor filesystem transactions rollback \
+araphor filesystem transactions rollback \
   --registry <workspace>/.erebor/sessions \
   --session <session-id> \
   tx@{0}
 
-erebor filesystem transactions rollback \
+araphor filesystem transactions rollback \
   --registry <workspace>/.erebor/sessions \
   --session <session-id> \
   tx@{0}.sub@{1}
@@ -148,10 +148,10 @@ The live probe must:
 ```sh
 cargo fmt
 cargo check -p erebor-runtime-filesystem --all-targets --all-features
-cargo check -p erebor-runtime-cli --all-targets --all-features
+cargo check -p araphor-cli --all-targets --all-features
 cargo check -p erebor-runtime-session --all-targets --all-features
 cargo test -p erebor-runtime-filesystem --lib transaction_catalog
-cargo test -p erebor-runtime-cli --all-targets --all-features
+cargo test -p araphor-cli --all-targets --all-features
 cargo test -p erebor-runtime-session --test filesystem_surface_lifecycle
 PATH=/tmp/erebor-ostree-deb.JOW1pw/root/usr/bin:$PATH \
   EREBOR_REQUIRE_FILESYSTEM_LIFECYCLE=1 \
@@ -215,10 +215,10 @@ Implemented:
 - Added selected-volume rollback so a subtransaction can restore only one
   configured filesystem volume.
 - Added CLI commands:
-  - `erebor filesystem transactions list`
-  - `erebor filesystem transactions show <target>`
-  - `erebor filesystem transactions rename <target> <name>`
-  - `erebor filesystem transactions rollback <target>`
+  - `araphor filesystem transactions list`
+  - `araphor filesystem transactions show <target>`
+  - `araphor filesystem transactions rename <target> <name>`
+  - `araphor filesystem transactions rollback <target>`
 - Text output is table formatted with `comfy_table`; JSON output preserves the
   structured API model.
 - Added lifecycle probe coverage:
@@ -260,10 +260,10 @@ Verification:
 ```sh
 cargo fmt
 cargo check -p erebor-runtime-filesystem --all-targets --all-features
-cargo check -p erebor-runtime-cli --all-targets --all-features
+cargo check -p araphor-cli --all-targets --all-features
 cargo check -p erebor-runtime-session --all-targets --all-features
 cargo test -p erebor-runtime-filesystem --lib transaction_catalog
-cargo test -p erebor-runtime-cli --all-targets --all-features
+cargo test -p araphor-cli --all-targets --all-features
 cargo test -p erebor-runtime-session --test filesystem_surface_lifecycle
 PATH=/tmp/erebor-ostree-deb.JOW1pw/root/usr/bin:$PATH \
   EREBOR_REQUIRE_FILESYSTEM_LIFECYCLE=1 \

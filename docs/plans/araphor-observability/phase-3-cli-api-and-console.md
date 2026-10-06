@@ -144,7 +144,7 @@ Status: **Done**.
    ends after rows but before their checkpoint, report a partial result;
    do not report completion with an older checkpoint.
 3. Add SQL and Trace command parsing/rendering to the existing
-   `erebor-runtime-cli` command tree. Provide the `araphor` entry point without
+   `araphor-cli` command tree. Provide the `araphor` entry point without
    copying the tree. Put the generated Control gRPC client in a focused module of
    `erebor-runtime-client`; keep its local-daemon gRPC client unchanged.
    Wire types come from the shared protobuf schema, not client-owned duplicates.
@@ -628,6 +628,74 @@ Read `/tmp/araphor-review.77Y1JsTg/rust-ci.log`, `browser.log`,
 component proof; the live cases preserve existing follow and trace behavior.
 No physical case or performance test ran. The earlier physical proof limits
 remain unchanged. Performance remains **UNQUALIFIED**.
+
+### CLI crate rename
+
+Rename the shared CLI package and source directory to `araphor-cli`.
+Status: **Done**.
+
+#### Intended end state
+
+Build only `araphor` from `crates/araphor-cli`. Use one root parser, one command
+dispatch path and one error handler. Keep every command feature, output record
+and exit code. Put `catalog`, `sql` and `trace` at the root with the existing
+Runtime commands. Do not keep an `erebor` executable or a nested `araphor`
+command. Keep the existing transport and execution owners.
+
+Keep profile, endpoint and query-output options in one shared argument type.
+Use that type for the root parser and the query/trace owner. Reject a local
+daemon socket on query, catalog and trace commands. Reject the TLS profile,
+endpoint and query-output options on Runtime commands. Do not select a transport
+by a fallback. Replace selector conversion with `TryFrom`. Use `From` for the
+shared CLI error conversion.
+
+Follow uses table output by default, including when stdout is a pipe. Keep
+the existing stdout-based default for other commands. Use the same table layout
+for Runtime lists, one-shot query rows and follow rows. Print each row batch
+when it arrives. Do not keep a growing row list or add a second follow renderer.
+Keep append and replace markers, coverage, limits and errors visible.
+`--output jsonl` retains the full structured records for agents and scripts.
+Test default table follow with the built executable and production query owner.
+
+```text
+Cargo builds araphor-cli
+  -> the workspace selects crates/araphor-cli
+  -> one executable entry point calls the araphor_cli library
+  -> existing command owners retain their behavior
+
+An operator selects query or trace input
+  -> TryFrom validates the existing selector bounds
+  -> the CLI sends the same InputSelection through the existing client
+
+A selector is invalid
+  -> TryFrom returns the existing invalid-input error
+  -> the CLI returns exit code 2
+```
+
+Update packaging, executable test helpers, active source links and runnable
+examples. Do not change archived recovery documents, prior test counts or source
+revisions. Run all CLI tests, build the executable, run the built native client case,
+and run `bash .github/scripts/verify-rust-ci.sh` after the last code edit.
+No new performance test or physical-capture claim is part of this change.
+The retry-counter and trace-lifetime review findings remain separate work.
+
+#### Verification
+
+On 2026-10-06, all 58 CLI tests passed. Cargo metadata lists one CLI executable:
+`araphor`. The built native client case passed with the production query and
+trace owners. It checked default table follow through a pipe, explicit JSONL,
+reconnect, window expiry, selected output and trace lifecycle.
+
+`bash .github/scripts/verify-rust-ci.sh` passed after the last code edit.
+Formatting, workspace check, Clippy and workspace tests passed. Existing ignored
+tests remained unchanged. Syntax checks passed for the changed shell scripts.
+The workspace gate used `TMPDIR=/dev/shm` to keep Unix socket paths short.
+
+Read `/tmp/araphor-cli-rename.02oJID66/rust-ci-final-gate.log` and
+`/dev/shm/araphor-cli-rename.WJf822e3/native-table/result.json`.
+`table.stdout` in the native result directory contains the built follow output.
+Temporary stores used tmpfs. These checks do not qualify disk durability,
+physical capture or performance. Performance remains **UNQUALIFIED**.
 
 ## Stop point
 

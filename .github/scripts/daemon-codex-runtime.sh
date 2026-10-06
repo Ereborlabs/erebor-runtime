@@ -10,7 +10,7 @@ if [[ "$(id -u)" -ne 0 || "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-erebor=/usr/local/bin/erebor
+araphor=/usr/local/bin/araphor
 fixture=/usr/lib/erebor/codex-v1-fixture
 terminal_lease_probe=/usr/lib/erebor/erebor-terminal-lease-probe
 config_path=/etc/erebor/erebord.json
@@ -28,7 +28,7 @@ report_failure() {
 }
 trap report_failure ERR
 
-for binary in "$erebor" "$fixture" "$terminal_lease_probe"; do
+for binary in "$araphor" "$fixture" "$terminal_lease_probe"; do
   [[ -x "$binary" ]] || {
     echo "installed Codex runtime binary is missing: $binary" >&2
     exit 1
@@ -38,15 +38,15 @@ done
 as_user() {
   local user="$1"
   shift
-  runuser -u "$user" -- "$erebor" "$@"
+  runuser -u "$user" -- "$araphor" "$@"
 }
 
 await_daemon() {
   for _ in $(seq 1 150); do
-    "$erebor" daemon status >/dev/null 2>&1 && return
+    "$araphor" daemon status >/dev/null 2>&1 && return
     sleep 0.1
   done
-  "$erebor" daemon status
+  "$araphor" daemon status
 }
 
 session_ids() {
@@ -121,7 +121,7 @@ start_tty_attachment() {
     delayed_resize="( sleep 2; stty rows $resize_rows cols $resize_columns ) &"
   fi
   timeout 20s runuser -u "$user" -- script -qefc \
-    "stty rows $initial_rows cols $initial_columns; $delayed_resize exec $erebor session attach $session_id --input --client-instance-id $client_instance_id --idempotency-key $client_instance_id" \
+    "stty rows $initial_rows cols $initial_columns; $delayed_resize exec $araphor session attach $session_id --input --client-instance-id $client_instance_id --idempotency-key $client_instance_id" \
     /dev/null <"$tty_attachment_fifo" >"$output" 2>&1 &
   tty_attachment_pid="$!"
   exec {tty_attachment_writer}>"$tty_attachment_fifo"
@@ -336,7 +336,7 @@ start_waiting_app_server() {
   mkfifo "$fifo"
   runuser -u "$user" -- bash -c \
     'exec "$1" run --policy fixture --workspace "$2" --app-server "$3" <"$4"' \
-    -- "$erebor" "/home/$user" "$codex_agent_name" "$fifo" >"$output" 2>&1 &
+    -- "$araphor" "/home/$user" "$codex_agent_name" "$fifo" >"$output" 2>&1 &
   wait_client_parent="$!"
   exec {wait_writer}>"$fifo"
   printf '%s\n' '{"jsonrpc":"2.0","id":90,"method":"fixture/wait"}' >&"$wait_writer"
@@ -361,7 +361,7 @@ start_live_app_server() {
   mkfifo "$fifo"
   runuser -u "$user" -- bash -c \
     'exec "$1" run --policy fixture --workspace "$2" --app-server "$3" <"$4"' \
-    -- "$erebor" "/home/$user" "$codex_agent_name" "$fifo" >"$output" 2>&1 &
+    -- "$araphor" "/home/$user" "$codex_agent_name" "$fifo" >"$output" 2>&1 &
   live_client_pid="$!"
   exec {live_writer}>"$fifo"
 }
@@ -614,7 +614,7 @@ fi
 # same workload rather than creating another session or PTY.
 tty_create_output="$(mktemp)"
 timeout 20s runuser -u "$first_user" -- script -qefc \
-  "stty rows 24 cols 80; $erebor run --policy fixture --workspace /home/$first_user $codex_agent_name -d" \
+  "stty rows 24 cols 80; $araphor run --policy fixture --workspace /home/$first_user $codex_agent_name -d" \
   /dev/null >"$tty_create_output"
 tty_session="$(await_running_session "$first_user")"
 [[ "$(session_ids "$first_user" | wc -l | tr -d ' ')" == 1 ]]

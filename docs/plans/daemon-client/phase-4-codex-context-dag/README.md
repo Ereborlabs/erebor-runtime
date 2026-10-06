@@ -15,7 +15,7 @@ Parent plan: [Phase 4: Codex Adapter, Final CLI Cutover, And App Server Migratio
 ## Goal
 
 Make nested Codex work belong to a durable Git-shaped scope DAG inside one
-daemon-owned Erebor session. One `erebor run … codex` creates one session, one
+daemon-owned Erebor session. One `araphor run … codex` creates one session, one
 TTY, one hook registration, and one Linux guarded process tree. Codex threads,
 turns, `spawn_agent` children, and asynchronous operations are named scopes in
 that session, not separately trusted child sessions.
@@ -337,6 +337,6 @@ erebor-runtime-e2e
 ## Stop Point
 
 Nested Phase 4 is complete. Do not begin Phase 5 without its separate approval
-and scope. `erebor session context graph <session>` renders the daemon-derived
+and scope. `araphor session context graph <session>` renders the daemon-derived
 durable scope tree; its current HEAD and exact fork-parent pin make each
 displayed branch auditable without client access to the repository.

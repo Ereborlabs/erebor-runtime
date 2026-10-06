@@ -83,7 +83,7 @@ cargo check -p erebor-runtime-filesystem --all-targets --all-features
 cargo check -p erebor-runtime-session --all-targets --all-features
 cargo test -p erebor-runtime-filesystem --lib session_work -- --nocapture
 cargo test -p erebor-runtime-core --lib filesystem -- --nocapture
-cargo test -p erebor-runtime-cli --all-targets --all-features filesystem -- --nocapture
+cargo test -p araphor-cli --all-targets --all-features filesystem -- --nocapture
 cargo test -p erebor-runtime-session --test filesystem_surface_lifecycle session_work_transaction -- --test-threads=1 --nocapture
 PATH=/tmp/erebor-ostree-deb.JOW1pw/root/usr/bin:$PATH \
   EREBOR_REQUIRE_FILESYSTEM_LIFECYCLE=1 \

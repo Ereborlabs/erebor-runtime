@@ -19,12 +19,12 @@ directory, without systemd, a container, an installed service, or the default
 socket. It opens a shell as the original caller. There:
 
 ```sh
-erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
+araphor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
   --adapter codex-v1 --name local-codex
-erebor run --policy fixture --workspace "$PWD" local-codex
+araphor run --policy fixture --workspace "$PWD" local-codex
 
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-  | erebor run --policy fixture --workspace "$PWD" --app-server local-codex
+  | araphor run --policy fixture --workspace "$PWD" --app-server local-codex
 ```
 
 The named `local-codex` Agent uses an interactive daemon-owned TTY. After the fixture

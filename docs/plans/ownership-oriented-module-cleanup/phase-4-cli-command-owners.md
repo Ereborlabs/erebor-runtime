@@ -9,7 +9,7 @@ small command-owner modules without moving domain logic into the CLI crate.
 
 ## Scope
 
-Touch only `crates/erebor-runtime-cli`.
+Touch only `crates/araphor-cli`.
 
 Primary file:
 
@@ -54,7 +54,7 @@ behavior. CLI behavior that must prove command owners through the real binary
 belongs in `erebor-runtime-e2e` fixture owners.
 
 ```sh
-cargo test -p erebor-runtime-cli --all-targets --all-features
+cargo test -p araphor-cli --all-targets --all-features
 cargo test -p erebor-runtime-e2e --test cli_command_owners --all-features
 cargo test --workspace --all-targets --all-features --no-run
 cargo fmt
@@ -78,7 +78,7 @@ docs/plans/ownership-oriented-module-cleanup/lifecycle-probe.md
   incidental integration tests.
 - Add a real CLI e2e fixture for cross-crate command-owner behavior; do not rely
   only on unit tests or manual command probes for policy/audit/session wiring.
-- `erebor-runtime-cli` remains wiring only.
+- `araphor-cli` remains wiring only.
 - Focused item inventory shows remaining CLI free functions are private,
   stateless, local to command owners, and justified in the phase result.
 
@@ -94,7 +94,7 @@ Completed on 2026-07-06.
 
 ### Implementation Summary
 
-- Replaced the 1,805-line `crates/erebor-runtime-cli/src/cli.rs` root with an
+- Replaced the 1,805-line `crates/araphor-cli/src/cli.rs` root with an
   87-line Clap root that owns only `Cli`, top-level `Command`, logging
   initialization, and dispatch.
 - Added command-owner modules:
@@ -147,24 +147,24 @@ scatter the CLI contract more than it would help.
 
 | File | Lines |
 | --- | ---: |
-| `crates/erebor-runtime-cli/src/cli.rs` | 87 |
-| `crates/erebor-runtime-cli/src/cli/audit.rs` | 155 |
-| `crates/erebor-runtime-cli/src/cli/config_paths.rs` | 94 |
-| `crates/erebor-runtime-cli/src/cli/config_paths/tests.rs` | 75 |
-| `crates/erebor-runtime-cli/src/cli/dev.rs` | 107 |
-| `crates/erebor-runtime-cli/src/cli/dev/tests.rs` | 39 |
-| `crates/erebor-runtime-cli/src/cli/filesystem.rs` | 170 |
-| `crates/erebor-runtime-cli/src/cli/filesystem/render.rs` | 203 |
-| `crates/erebor-runtime-cli/src/cli/filesystem/storage.rs` | 58 |
-| `crates/erebor-runtime-cli/src/cli/parsers.rs` | 74 |
-| `crates/erebor-runtime-cli/src/cli/policy.rs` | 117 |
-| `crates/erebor-runtime-cli/src/cli/session.rs` | 172 |
-| `crates/erebor-runtime-cli/src/cli/session/args.rs` | 190 |
-| `crates/erebor-runtime-cli/src/cli/session/tests.rs` | 159 |
-| `crates/erebor-runtime-cli/src/cli/start.rs` | 72 |
-| `crates/erebor-runtime-cli/src/cli/start/tests.rs` | 142 |
-| `crates/erebor-runtime-cli/src/cli/test_support.rs` | 112 |
-| `crates/erebor-runtime-cli/src/cli/tests.rs` | 293 |
+| `crates/araphor-cli/src/cli.rs` | 87 |
+| `crates/araphor-cli/src/cli/audit.rs` | 155 |
+| `crates/araphor-cli/src/cli/config_paths.rs` | 94 |
+| `crates/araphor-cli/src/cli/config_paths/tests.rs` | 75 |
+| `crates/araphor-cli/src/cli/dev.rs` | 107 |
+| `crates/araphor-cli/src/cli/dev/tests.rs` | 39 |
+| `crates/araphor-cli/src/cli/filesystem.rs` | 170 |
+| `crates/araphor-cli/src/cli/filesystem/render.rs` | 203 |
+| `crates/araphor-cli/src/cli/filesystem/storage.rs` | 58 |
+| `crates/araphor-cli/src/cli/parsers.rs` | 74 |
+| `crates/araphor-cli/src/cli/policy.rs` | 117 |
+| `crates/araphor-cli/src/cli/session.rs` | 172 |
+| `crates/araphor-cli/src/cli/session/args.rs` | 190 |
+| `crates/araphor-cli/src/cli/session/tests.rs` | 159 |
+| `crates/araphor-cli/src/cli/start.rs` | 72 |
+| `crates/araphor-cli/src/cli/start/tests.rs` | 142 |
+| `crates/araphor-cli/src/cli/test_support.rs` | 112 |
+| `crates/araphor-cli/src/cli/tests.rs` | 293 |
 | `crates/erebor-runtime-e2e/tests/cli_command_owners.rs` | 95 |
 | `crates/erebor-runtime-e2e/tests/support/cli_commands.rs` | 229 |
 

@@ -123,6 +123,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "araphor-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "comfy-table",
+ "erebor-runtime-audit",
+ "erebor-runtime-cdp",
+ "erebor-runtime-client",
+ "erebor-runtime-core",
+ "erebor-runtime-error",
+ "erebor-runtime-events",
+ "erebor-runtime-ipc",
+ "erebor-runtime-session",
+ "erebor-telemetry",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tokio",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "araphor-data"
 version = "0.1.0"
 dependencies = [
@@ -1473,32 +1499,6 @@ dependencies = [
  "snafu",
  "tokio",
  "tokio-tungstenite 0.26.2",
-]
-
-[[package]]
-name = "erebor-runtime-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "comfy-table",
- "erebor-runtime-audit",
- "erebor-runtime-cdp",
- "erebor-runtime-client",
- "erebor-runtime-core",
- "erebor-runtime-error",
- "erebor-runtime-events",
- "erebor-runtime-ipc",
- "erebor-runtime-session",
- "erebor-telemetry",
- "rustix 1.1.4",
- "serde",
- "serde_json",
- "snafu",
- "tokio",
- "tonic",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

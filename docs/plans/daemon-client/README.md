@@ -49,7 +49,7 @@ alternate daemon path.
 
 The Linux core must support both:
 
-- an interactive governed agent, for example `erebor run … codex`, where the
+- an interactive governed agent, for example `araphor run … codex`, where the
   daemon owns the PTY and workload, the exclusive controller client relays
   terminal I/O and geometry, and observers are read-only; and
 - a typed agent protocol, for example `codex-app-server`, where the daemon
@@ -134,7 +134,7 @@ upon. This table is grounding, not an acceptance claim.
 | Generic adapter | `erebor-runtime-session/src/agents/generic.rs` | Retain one compiled `generic-process-v1` adapter; no plugin loader. |
 | Codex adapter | `erebor-runtime-session/src/agents/codex/` | Retain adapter-specific artifacts, ticket, hook, attribution, and App Server owners behind the generic contract. |
 | Shared hook/App Server services | `agents/codex/broker.rs`, `agents/codex/app_server.rs` | Preserve distinct authenticated hook and typed-stdio contracts. |
-| Public CLI | `erebor-runtime-cli/src/cli/` | Migrate remaining public commands to typed daemon requests in their owning phase. |
+| Public CLI | `araphor-cli/src/cli/` | Migrate remaining public commands to typed daemon requests in their owning phase. |
 | Legacy direct filesystem/start paths | `cli/filesystem.rs`, `cli/start.rs` | Do not delete blindly; Phase 5 moves their responsibility into daemon-owned surfaces, then removes the direct paths. |
 
 ## Product Vocabulary And Public Shape
@@ -151,8 +151,8 @@ bound to compatible sessions.
 `package` is the stored artifact model beneath it. The approved local flow is:
 
 ```text
-erebor agent load PACKAGE_REF --from EXECUTABLE
-erebor run --policy POLICY --workspace WORKSPACE AGENT_ALIAS [agent arguments]
+araphor agent load PACKAGE_REF --from EXECUTABLE
+araphor run --policy POLICY --workspace WORKSPACE AGENT_ALIAS [agent arguments]
 ```
 
 `agent load` is deliberate: it records a local, daemon-verified installation
@@ -162,7 +162,7 @@ distribution. `agent install` is not the public command. `agent import` is
 reserved for Phase 10 because it requires OCI layout and publisher-trust
 verification.
 
-`erebor run` resolves the requested generic command or admitted alias, creates
+`araphor run` resolves the requested generic command or admitted alias, creates
 and starts a daemon-owned session, then either attaches a client to its daemon-
 owned stream or returns after a detached request. It is not an ambient-surface
 launcher and it does not create a second privileged namespace outside the
@@ -176,8 +176,8 @@ phases must preserve them unless the user explicitly changes the architecture.
 1. **Complete CLI cutover is required.** Every public command ends as a typed
    client operation. Commands are moved to the daemon owner before their old
    foreground implementation is removed.
-2. **`erebor start` is not a product surface.** It is an ambiguous ambient
-   foreground launcher. Phase 5 replaces it with `erebor surface
+2. **`araphor start` is not a product surface.** It is an ambiguous ambient
+   foreground launcher. Phase 5 replaces it with `araphor surface
    create|start|ls|inspect|logs|events|stop|rm`; it must then be absent from
    parsing, help, examples, protocol, and compatibility paths.
 3. **Filesystem belongs to the daemon-owned surface lifecycle.** The current
@@ -190,7 +190,7 @@ phases must preserve them unless the user explicitly changes the architecture.
    or `CODEX_HOME`. The fixture is acceptance evidence, not a stand-in for a
    useful real-Codex demonstration. Real authenticated Codex state and the
    corresponding walkthrough are Phase 5 filesystem-projection work.
-5. **Interactive Codex stays interactive.** `erebor run … codex` presents the
+5. **Interactive Codex stays interactive.** `araphor run … codex` presents the
    governed Codex TUI over the daemon-owned PTY. Phase 4 owns Linux TTY
    fidelity: initial rows/columns, controller-authorized resize, `SIGWINCH`
    delivery, read-only observers, and session-preserving detach/reattach.
@@ -322,7 +322,7 @@ moves Codex to the generic adapter/package/install/session path and removes the
 last direct Codex launch. Its intended evidence is:
 
 - a deterministic `codex-v1` package and executable fixture loaded with
-  `erebor agent load`, then run through the daemon-owned TTY path;
+  `araphor agent load`, then run through the daemon-owned TTY path;
 - a Linux TTY contract covering initial geometry, controller-only resize and
   input, read-only observers, and disconnect/reattach of the same session;
 - typed App Server JSONL tests covering input, cancellation, EOF, malformed
@@ -352,8 +352,8 @@ demonstration. It now has two entry commands:
 2. `sudo run-host-lab.sh` creates one fresh retained `/tmp` root, starts a root
    `erebord` in the foreground with isolated state/runtime/log roots and a
    unique absolute socket, then gives the lab shell an
-   `erebor --socket <temporary-socket>` client wrapper;
-3. load the deterministic fixture with `erebor agent load`; then run both the
+   `araphor --socket <temporary-socket>` client wrapper;
+3. load the deterministic fixture with `araphor agent load`; then run both the
    interactive `codex` fixture and the typed `codex-app-server` fixture; and
 4. prove the fixture TTY contract, the daemon socket is absent in the
    workload, and terminal/session evidence is coherent.
@@ -380,7 +380,7 @@ cutover. It owns:
 
 - a named-resource boundary: users create and reference Agents, policy, and
   surfaces by declared names while integrity verification remains daemon-internal;
-- replacement of `erebor start` by the typed durable `erebor surface` lifecycle;
+- replacement of `araphor start` by the typed durable `araphor surface` lifecycle;
 - one daemon-owned supervisor for long-lived ambient resources, beginning with
   Browser CDP;
 - migration of the legacy filesystem transaction and retention commands into

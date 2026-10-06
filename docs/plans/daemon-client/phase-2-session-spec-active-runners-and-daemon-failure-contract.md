@@ -322,7 +322,7 @@ supported daemon host.
   `BindsTo=` relationship to it. The daemon unit contains only `erebord` and
   private non-session workers.
 - Treat direct daemon SIGKILL and `systemctl stop/restart erebord` as daemon
-  loss, so the session helper applies the admitted mode. `erebor daemon stop`
+  loss, so the session helper applies the admitted mode. `araphor daemon stop`
   is the graceful RPC and refuses active unresolved sessions. Host shutdown is
   outside the initial `continue` guarantee. Record the exact unit/scope
   `KillMode`, delegation, restart, and cleanup behavior.

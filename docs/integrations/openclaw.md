@@ -3,7 +3,7 @@
 This folder is reserved for the first agent UX integration.
 
 The integration should live where users interact with an agent. It should make
-erebor policy visible and actionable by showing governed session status,
+araphor policy visible and actionable by showing governed session status,
 active policy packages, approval prompts, denial reasons, and audit references.
 
 It must not become the enforcement layer. Enforcement belongs in the

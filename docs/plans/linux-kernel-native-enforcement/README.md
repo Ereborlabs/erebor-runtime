@@ -231,7 +231,7 @@ ptrace-era duplicate ownership:
 | Session admission/teardown orchestration | `erebor-runtime-daemon` and existing session manager | raw BPF instructions or filesystem repository replacement |
 | Filesystem view, COW layers, checkpoints, retention, and reconciliation | existing `FilesystemSessionStorage` and filesystem runtime | kernel policy ownership |
 | Kernel or mediated event drain, ordered ledger append, health/fence state | Surface enforcement owner with the existing audit domain | policy reevaluation |
-| CLI | `erebor-runtime-cli` | kernel decisions, evidence persistence, or feature implementation |
+| CLI | `araphor-cli` | kernel decisions, evidence persistence, or feature implementation |
 
 ## Surface Policy Lowering Contract
 

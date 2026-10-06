@@ -8,7 +8,7 @@ remains separately scoped and unstarted.
 ## Approved Design Decisions
 
 - A governed session has one daemon-owned I/O boundary. A normal interactive
-  `erebor run ... codex` session uses the existing TTY/PTY attachment: the
+  `araphor run ... codex` session uses the existing TTY/PTY attachment: the
   daemon owns the PTY and workload process, while the CLI relays terminal bytes
   through its exclusive input lease. Codex's TUI is not an App Server protocol.
 - Terminal geometry is part of that governed I/O boundary, not an output-log
@@ -45,7 +45,7 @@ remains separately scoped and unstarted.
   client's absolute `--socket` is only an explicit, process-local foreground
   daemon path for the hands-on host example; it does not create a persisted
   context, remote target, or multi-daemon product model.
-- `erebor --socket <absolute-path>` selects that local daemon for every
+- `araphor --socket <absolute-path>` selects that local daemon for every
   daemon-backed command family in the process (`agent`, `run`, `session`,
   `policy`, `runner`, `audit`, `approval`, and `daemon`). Omitting it keeps the
   installed `/run/erebor/daemon.sock` default. The legacy direct `start` and
@@ -64,7 +64,7 @@ Turn the existing Codex-specific enforcement into the first product-grade
 agent adapter and package/install flow, while preserving its current strict
 artifact, hook, process, attribution, and App Server guarantees.
 
-The outcome is easy usage through `erebor run ... codex`, not a Codex-specific
+The outcome is easy usage through `araphor run ... codex`, not a Codex-specific
 daemon architecture. Once the migrated Codex path passes, this phase removes
 the last direct foreground implementation. OCI distribution and the formal
 installable bundle are later Phase 10 work.
@@ -118,7 +118,7 @@ current owner or an explicit rejection.
 | `enabled`, `profiles` | Codex required the legacy session/filesystem layers, at least one profile, and unique profile IDs/executables. | **Removed.** A package/installation selected by typed `CodexRunRequest` is the only admission route. Package, installation, adapter, entrypoint, and policy-set identities are resolved by `DaemonSessionApi`; raw executable/profile selection is impossible. |
 | `id` | Safe unique profile identifier. | **Codex package:** `CodexPackageDefinition.release_id`, `AgentPackageManifest`, and canonical package digest; their validators require safe identities. |
 | `runner` | Linux-host only. | **Adapter package plus root daemon:** `CodexSupportedPlatform` and `CodexPackageDefinition` certify the supported host; `DaemonConfig.linux_runner` determines the available Linux runner. The public Codex request cannot name a raw runner. |
-| `executable`, `executable_sha256` | Normalized path and exact digest; fleet deployments rejected mutable user/temp locations. | **Caller installation:** `InstallationRecord` retains the descriptor-verified local artifact and owner UID after `erebor agent load`; admission revalidates held artifact identity. Root-curated definitions pin the expected executable digest. |
+| `executable`, `executable_sha256` | Normalized path and exact digest; fleet deployments rejected mutable user/temp locations. | **Caller installation:** `InstallationRecord` retains the descriptor-verified local artifact and owner UID after `araphor agent load`; admission revalidates held artifact identity. Root-curated definitions pin the expected executable digest. |
 | `deployment`, `trust_root` | Distinguished fleet-managed artifacts and required managed sources below one stable trust root. | **Root daemon configuration:** `RootCuratedCodexPackage.trust_root` validates support-artifact sources and package identity. The ambiguous deployment mode is removed: the daemon never trusts a caller path as fleet-managed, and caller enrollment is always descriptor-brokered. |
 | `requirements_source`, `requirements_sha256`, `requirements_path` | Trusted source/digest and fixed managed runtime target. | **Codex package:** `CodexManagedArtifacts.requirements_source` is a `CodexArtifact`; its target is validated under the private `/run/erebor/codex/` projection. |
 | `managed_hook_source`, `managed_hook_sha256`, `managed_hook_path` | Trusted source/digest, shared managed directory, fixed hook target. | **Codex package and adapter:** `CodexManagedArtifacts.managed_hook_source` and fixed private target; `CodexHookService` authenticates the projected hook's session, kernel peer, and one-use ticket. |
@@ -193,7 +193,7 @@ and App Server failures.
   - redistributable support artifacts that may live in package layers; and
   - vendor/user-provided binaries that require an explicit installation
   provider and local verification.
-- `erebor agent load CODEX_REF --from PATH` is explicit. The daemon does not
+- `araphor agent load CODEX_REF --from PATH` is explicit. The daemon does not
   trust `PATH`, silently download restricted software, or accept a same-named
   executable. `--from` is resolved under the caller UID through the Phase 2
   UID-dropped descriptor broker; installation hashes/copies from its held
@@ -252,12 +252,12 @@ separate Erebor session.
   structurally:
 
   ```sh
-  erebor agent load CODEX_PACKAGE@sha256:... --from /verified/codex
-  erebor run --policy engineering codex-app-server
+  araphor agent load CODEX_PACKAGE@sha256:... --from /verified/codex
+  araphor run --policy engineering codex-app-server
   ```
 
 - Eliminate the old direct acceptance path based on
-  `erebor session run --runner linux-host --config runtime.json ...`.
+  `araphor session run --runner linux-host --config runtime.json ...`.
   Do not claim automatic installation if the fixture still requires an
   externally provided Codex binary.
 - The deterministic fixture host lab is a developer acceptance harness, not a
@@ -276,7 +276,7 @@ separate Erebor session.
 - The remaining foreground `SessionExecutionService`, `SessionRunPlan`, old
   `SessionRegistry`, registry lifecycle, and surface/filesystem test helpers
   are explicitly **not** Phase 4 deletion targets. They still own the legacy
-  top-level `erebor start` and filesystem paths that Phase 5 replaces with
+  top-level `araphor start` and filesystem paths that Phase 5 replaces with
   daemon-owned ambient surfaces. Phase 5 must remove those owners and preserve
   existing workspace-local `.erebor/sessions` data as read-only legacy data.
 - Verify every formerly public CLI capability is either represented by a typed
@@ -422,8 +422,8 @@ an additional acceptance gate.
 Implemented so far:
 
 - Replaced the direct foreground `runtime.json`/profile App Server test path
-  with a daemon-only CLI path. `erebor run ... codex` always requests a
-  daemon-owned TTY; `erebor run ... codex-app-server` always requests the
+  with a daemon-only CLI path. `araphor run ... codex` always requests a
+  daemon-owned TTY; `araphor run ... codex-app-server` always requests the
   exact certified non-TTY entrypoint and emits no create/start telemetry on
   protocol stdout.
 - Added typed App Server attach, bounded JSONL input, and EOF IPC messages;
@@ -474,7 +474,7 @@ Implemented so far:
   produces a pinned root-curated package definition, a caller-owned enrollment
   binary, exact TTY output, a bounded JSONL App Server, and a projected managed
   hook without a vendor binary, login, `HOME`, or `CODEX_HOME` dependency.
-- Renamed the public enrollment command to `erebor agent load`. The durable
+- Renamed the public enrollment command to `araphor agent load`. The durable
   verified-installation record remains an internal identity, not a second
   public command vocabulary.
 - Extended the installed Ubuntu 24.04 systemd probe with the fixture and its

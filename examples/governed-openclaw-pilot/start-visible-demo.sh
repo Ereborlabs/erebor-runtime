@@ -238,7 +238,7 @@ lab_watch_pid="$!"
   EREBOR_OAUTH_LAB_URL="$lab_url" \
     EREBOR_OPENCLAW_PROMPT_FILE="examples/governed-openclaw-pilot/prompt.txt" \
     EREBOR_OPENCLAW_HEADLESS="${EREBOR_OPENCLAW_HEADLESS:-false}" \
-    cargo run -p erebor-runtime-cli -- \
+    cargo run -p araphor-cli --bin araphor -- \
       session run \
       --runner linux-host \
       --config examples/governed-openclaw-pilot/session-config.json \

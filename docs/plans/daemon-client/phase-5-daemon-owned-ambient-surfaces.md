@@ -13,18 +13,18 @@ daemon-owned surface boundary.
 
 ## Purpose
 
-Replace the legacy foreground `erebor start` command with daemon-owned runtime
+Replace the legacy foreground `araphor start` command with daemon-owned runtime
 implementations of intrinsic Surfaces, plus named Surface records only where a
 Surface needs independent configuration/lifecycle. `terminal` and `filesystem`
 remain intrinsic Surfaces; their runtime implementations are not additional
 Surface records. After this phase, `erebor` is a client for every public
 command and `erebord` is the sole lifecycle, policy, evidence, and endpoint
-owner on the Linux-host core path. `erebor start` is removed, not retained as a
+owner on the Linux-host core path. `araphor start` is removed, not retained as a
 compatibility wrapper or a configuration-driven shortcut.
 
 ## Scope
 
-- Remove the top-level `erebor start --config … --listen …` parser and its
+- Remove the top-level `araphor start --config … --listen …` parser and its
   foreground `StartCommand`/`SurfaceLaunchRunner` path. It must not translate
   a runtime config into implicit surface creation, and it must not remain as a
   hidden client-side daemon launcher.
@@ -32,7 +32,7 @@ compatibility wrapper or a configuration-driven shortcut.
   surface lifecycle:
 
   ```text
-  erebor surface create|start|ls|inspect|logs|events|stop|rm
+  araphor surface create|start|ls|inspect|logs|events|stop|rm
   ```
 
   `surface create` persists one named, immutable Surface specification only
@@ -43,10 +43,10 @@ compatibility wrapper or a configuration-driven shortcut.
   are never fake named Surface records.
 - A future declarative reconciliation command may be designed only after it
   can state create/update/delete, identity, ownership, and recovery semantics.
-  It is not part of this phase and cannot reuse the removed `erebor start`
+  It is not part of this phase and cannot reuse the removed `araphor start`
   spelling.
 
-- Move the legacy filesystem surface and `erebor filesystem transactions|retention`
+- Move the legacy filesystem surface and `araphor filesystem transactions|retention`
   operations behind the daemon-owned runtime that realizes the intrinsic
   `filesystem` Surface. It creates a Session filesystem binding with one OSTree
   repository per Session, reusing `FilesystemSessionStorage` and its existing
@@ -75,7 +75,7 @@ compatibility wrapper or a configuration-driven shortcut.
   and its fixed private target, but it never names a caller host path. For
   `codex-v1`, the adapter's fixed target is a private `CODEX_HOME` path such as
   `/run/erebor/state/codex`; the caller cannot supply `HOME`, `CODEX_HOME`, or
-  an equivalent state path in `erebor run`.
+  an equivalent state path in `araphor run`.
 - A state source is a bundle, not an implied home-directory bind. It may contain
   provider configuration, authentication material, and caches admitted by the
   source class, but package-specific managed configuration is rendered only in
@@ -126,7 +126,7 @@ compatibility wrapper or a configuration-driven shortcut.
   interception runtime; and the intrinsic filesystem Surface is realized by one
   `LinuxOstreeOverlayFilesystemRuntime` that returns per-session bindings.
   Together they own handles, health, restart classification, logs, evidence,
-  stop, and shutdown. Current `erebor start` behavior must not be moved
+  stop, and shutdown. Current `araphor start` behavior must not be moved
   wholesale: terminal and filesystem configuration entries do not become fake
   standalone listeners or user-loadable plugins.
 - Keep browser CDP as the first listener-bearing named ambient Surface.
@@ -156,13 +156,13 @@ compatibility wrapper or a configuration-driven shortcut.
 
 - A local Codex launcher or installer layout is not a runtime discovery
   mechanism. It may be documented as a way for the user to identify a candidate
-  for `erebor agent load … --from`, but the daemon follows the candidate through
+  for `araphor agent load … --from`, but the daemon follows the candidate through
   the descriptor broker, records the resolved final regular executable and its
   resolution provenance, verifies the declared version, and stages
   that installation. A later session runs the staged installation; it does not
   rescan the caller's home or follow a mutable launcher/symlink.
 - The Phase 5 Linux host walkthrough uses that explicitly enrolled, pinned
-  executable and a typed state surface. It runs the actual `erebor run … codex`
+  executable and a typed state surface. It runs the actual `araphor run … codex`
   TUI through the Phase 4 controller-PTY contract: initial terminal geometry,
   controller-only resize/input, read-only observers, and detach/reattach of the
   same daemon-owned session.
@@ -207,7 +207,7 @@ Add crate-local surface lifecycle tests and daemon/client e2e coverage for:
   controller/geometry contract;
 - listener authorization, daemon-socket absence, and root-owned endpoint paths;
 - daemon restart for each advertised surface failure mode; and
-- rejection of `erebor start` without creating a listener, process, record, or
+- rejection of `araphor start` without creating a listener, process, record, or
   daemon request; and
 - retirement of every foreground surface lifecycle caller.
 
@@ -225,7 +225,7 @@ rtk git diff --check
 ## Acceptance
 
 - Every public `erebor` command is a typed daemon client operation.
-- `erebor surface` is the sole public ambient-surface lifecycle. `erebor start`
+- `araphor surface` is the sole public ambient-surface lifecycle. `araphor start`
   is absent from the parser, help, protocol, examples, and compatibility paths.
 - Long-lived named Surfaces and the daemon-owned implementations of intrinsic
   Surfaces have lifecycle/evidence supervision; no foreground surface runtime

@@ -19,9 +19,9 @@ Make governed sessions the primary review object for Erebor.
 The user-facing object should be:
 
 ```text
-erebor session ls
-erebor session show <session-id>
-erebor session describe <session-id>
+araphor session ls
+araphor session show <session-id>
+araphor session describe <session-id>
 ```
 
 not:
@@ -76,7 +76,7 @@ across surfaces.
 ## Non-Goals
 
 - Do not replace JSONL audit logs. They remain the append-only source of truth.
-- Do not move session UX under `erebor audit`. `audit` is for raw logs, export,
+- Do not move session UX under `araphor audit`. `audit` is for raw logs, export,
   evidence traces, and debugging. `session` is the product view.
 - Do not claim full LLM-call governance from configuration alone. A configured
   `openai_base_url` is cooperative until direct provider egress is blocked.
@@ -154,12 +154,12 @@ understand intent and context. Audit records prove governance.
 
 ## CLI Shape
 
-### `erebor session ls`
+### `araphor session ls`
 
 List known sessions.
 
 ```text
-erebor session ls
+araphor session ls
 ```
 
 Example output:
@@ -183,12 +183,12 @@ Columns:
 
 The table should sort by newest session first by default.
 
-### `erebor session show <session-id>`
+### `araphor session show <session-id>`
 
 Show a concise buyer-readable summary.
 
 ```text
-erebor session show session-8421
+araphor session show session-8421
 ```
 
 Example output:
@@ -234,7 +234,7 @@ transitions:
 - process launches
 - semantic authority/data events after semantic classification lands
 
-### `erebor session describe <session-id>`
+### `araphor session describe <session-id>`
 
 Show the deep proof view.
 
@@ -297,10 +297,10 @@ decision and audit surface.
 `describe` should support filtering:
 
 ```text
-erebor session describe session-8421 --event evt-123
-erebor session describe session-8421 --denied
-erebor session describe session-8421 --surface browser_cdp
-erebor session describe session-8421 --rule deny-oauth-callback-network-request
+araphor session describe session-8421 --event evt-123
+araphor session describe session-8421 --denied
+araphor session describe session-8421 --surface browser_cdp
+araphor session describe session-8421 --rule deny-oauth-callback-network-request
 ```
 
 ## Session Registry
@@ -790,9 +790,9 @@ Bypass audit example:
 Add read-only session commands backed by the session registry:
 
 ```text
-erebor session ls
-erebor session show <session-id>
-erebor session describe <session-id>
+araphor session ls
+araphor session show <session-id>
+araphor session describe <session-id>
 ```
 
 Implementation:
@@ -823,7 +823,7 @@ Acceptance criteria:
 Current status:
 
 - State: `Done`.
-- Implemented `erebor session ls/show/describe` against
+- Implemented `araphor session ls/show/describe` against
   `.erebor/sessions/<session-id>/session.json` plus `--format text|json`.
 - Kept CLI as wiring only: session-review file loading, runtime config parsing,
   policy/config hashing, JSON/text rendering, summaries, timeline, and proof
@@ -865,9 +865,9 @@ Implementation:
 
 Acceptance criteria:
 
-- `erebor session run ...` creates `.erebor/sessions/<session-id>/session.json`.
-- `erebor session ls` works after a session run.
-- `erebor session show <session-id>` resolves audit/policy/config from registry.
+- `araphor session run ...` creates `.erebor/sessions/<session-id>/session.json`.
+- `araphor session ls` works after a session run.
+- `araphor session show <session-id>` resolves audit/policy/config from registry.
 - CLI commands do not accept audit JSONL or registry path overrides.
 
 Current status:
@@ -1036,9 +1036,9 @@ Initial text output is enough.
 Add structured output early because this will feed a UI:
 
 ```text
-erebor session ls --json
-erebor session show session-8421 --json
-erebor session describe session-8421 --json
+araphor session ls --json
+araphor session show session-8421 --json
+araphor session describe session-8421 --json
 ```
 
 JSON output should use stable field names and avoid terminal-only formatting.
@@ -1083,7 +1083,7 @@ End-to-end tests:
 
 When Phase 1 lands:
 
-- update governed OpenClaw pilot README with `erebor session show`
+- update governed OpenClaw pilot README with `araphor session show`
 - update evidence trace docs to explain relationship:
   - `session show`: quick review
   - `session describe`: detailed proof
@@ -1114,9 +1114,9 @@ When LLM proxy lands:
 Ship this first:
 
 ```text
-erebor session ls
-erebor session show <session-id>
-erebor session describe <session-id>
+araphor session ls
+araphor session show <session-id>
+araphor session describe <session-id>
 ```
 
 Use registry-owned session records and infer proof where necessary.

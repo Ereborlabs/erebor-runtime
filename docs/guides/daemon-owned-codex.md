@@ -36,7 +36,7 @@ caller chooses the immutable Agent name and explicitly states its adapter.
 package_name='codex-v1'
 codex_bin="$HOME/.local/bin/codex"
 
-erebor agent load "$package_name" --from "$codex_bin" \
+araphor agent load "$package_name" --from "$codex_bin" \
   --adapter codex-v1 --name local-codex
 ```
 
@@ -50,7 +50,7 @@ requirement: the client attaches the terminal, while the daemon owns the PTY,
 workload, process guard, hook endpoint, output, and lifecycle.
 
 ```sh
-erebor run --policy engineering local-codex
+araphor run --policy engineering local-codex
 ```
 
 Use the normal Codex TUI. A nested Codex launched from that session remains a
@@ -72,7 +72,7 @@ real prompts out of shell history and committed files.
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"erebor-example","version":"1"},"capabilities":{"experimentalApi":true}}}' \
   '{"jsonrpc":"2.0","method":"initialized"}' \
-  | erebor run --policy engineering --app-server local-codex
+  | araphor run --policy engineering --app-server local-codex
 ```
 
 The command's stdout is only Codex App Server JSONL responses. Its stderr may
@@ -80,7 +80,7 @@ contain Codex diagnostics. A policy-denied sensitive transport method returns a
 JSON-RPC error on stdout and is not forwarded to Codex.
 
 For an interactive App Server client, connect that client directly to the
-command's stdin/stdout; do not wrap it with `erebor session attach` or send its
+command's stdin/stdout; do not wrap it with `araphor session attach` or send its
 frames through generic session input.
 
 ## Inspect governed evidence
@@ -89,11 +89,11 @@ After a run, use the daemon session commands to locate the session and inspect
 the durable records:
 
 ```sh
-erebor session ps
-erebor session inspect <session-id>
-erebor session events <session-id>
-erebor session logs <session-id> --stream stderr
-erebor audit tail <session-id>
+araphor session ps
+araphor session inspect <session-id>
+araphor session events <session-id>
+araphor session logs <session-id> --stream stderr
+araphor audit tail <session-id>
 ```
 
 Phase 4 acceptance uses a deterministic Codex-compatible privileged Linux

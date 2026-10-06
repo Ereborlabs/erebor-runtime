@@ -9,35 +9,35 @@ pub(crate) mod error;
 mod output;
 
 use args::Prepared;
-pub(crate) use args::{AraphorArgs, AraphorCli};
+pub(crate) use args::{AraphorCommand, ConnectionArgs};
 use error::{AraphorCommandError as Error, Result};
 use output::Output;
 
 type Interrupt = Pin<Box<dyn Future<Output = io::Result<()>> + Send>>;
 
 pub(crate) struct AraphorCommandOwner<'a> {
-    args: &'a AraphorArgs,
+    args: &'a ConnectionArgs,
+    command: &'a AraphorCommand,
 }
 
 impl<'a> AraphorCommandOwner<'a> {
-    pub(crate) fn new(args: &'a AraphorArgs) -> Self {
-        Self { args }
+    pub(crate) fn new(args: &'a ConnectionArgs, command: &'a AraphorCommand) -> Self {
+        Self { args, command }
     }
 
     pub(crate) fn execute(&self) -> std::result::Result<(), crate::error::CliError> {
-        let runtime = tokio::runtime::Runtime::new().map_err(|source| {
-            Self::cli(Error::Runtime {
-                source,
-                location: snafu::Location::default(),
-            })
+        let runtime = tokio::runtime::Runtime::new().map_err(|source| Error::Runtime {
+            source,
+            location: snafu::Location::default(),
         })?;
         let result = runtime.block_on(self.run());
         runtime.shutdown_timeout(Duration::from_secs(1));
-        result.map_err(Self::cli)
+        result.map_err(Into::into)
     }
 
     async fn run(&self) -> Result<()> {
-        let prepared = self.args.prepare()?;
+        let prepared = self.command.prepare()?;
+        let follow = matches!(&prepared, Prepared::Sql { request, .. } if request.follow);
         let profile = self.args.connection()?;
         let mut signal: Interrupt = Box::pin(tokio::signal::ctrl_c());
         let client = tokio::select! {
@@ -47,19 +47,12 @@ impl<'a> AraphorCommandOwner<'a> {
         };
         let mut run = CommandRun {
             client,
-            output: Output::new(self.args.output),
+            output: Output::new(self.args.output, follow),
             signal,
         };
         match prepared {
             Prepared::Sql { request, duration } => run.sql(request, duration).await,
             Prepared::Trace { request, trace_id } => run.trace(request, trace_id).await,
-        }
-    }
-
-    fn cli(source: Error) -> crate::error::CliError {
-        crate::error::CliError::Araphor {
-            source: Box::new(source),
-            location: snafu::Location::default(),
         }
     }
 }

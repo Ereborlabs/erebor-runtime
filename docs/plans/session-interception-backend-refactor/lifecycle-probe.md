@@ -289,7 +289,7 @@ JSON
 }
 JSON
 
-  cargo run -p erebor-runtime-cli -- \
+  cargo run -p araphor-cli --bin araphor -- \
     session run \
     --runner linux-host \
     --config "$success_root/config.json" \
@@ -457,7 +457,7 @@ JSON
 
   set +e
   failure_output="$(
-    cargo run -p erebor-runtime-cli -- \
+    cargo run -p araphor-cli --bin araphor -- \
       session run \
       --runner linux-host \
       --config "$failure_root/config.json" \
@@ -541,9 +541,9 @@ The checked probe now:
 
 - runs a real two-volume promoted session;
 - deletes mutable local promotion work files before rollback;
-- invokes `erebor filesystem transactions list` and verifies one parent
+- invokes `araphor filesystem transactions list` and verifies one parent
   transaction with two volume subtransactions;
-- invokes `erebor filesystem transactions show` for the parent and
+- invokes `araphor filesystem transactions show` for the parent and
   both subtransactions and verify changed paths are visible;
 - renames one subtransaction and verifies the custom name appears while immutable
   ids remain stable;

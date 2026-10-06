@@ -23,7 +23,7 @@ Agentfile, a new authoring format, or an alternative policy owner.
   `apiVersion`, `kind: Agent`, and `metadata.name` envelope is validated before
   any agent-specific fields; the user-chosen name is bound once to that revision
   and never acts as a retargetable alias.
-- Adapt the existing `erebor agent load … --from …` lifecycle so that its
+- Adapt the existing `araphor agent load … --from …` lifecycle so that its
   verified, staged executable supplies the Phase 5 `Agent` revision under an
   explicit `--name` and `--adapter`. The adapter is selected by the user from
   the registered built-in adapter names; the daemon validates that exact choice
@@ -62,7 +62,7 @@ Agentfile, a new authoring format, or an alternative policy owner.
 - Replace the legacy host-lab policy flow in
   `examples/codex-app-server/run-host-lab.sh`: it must create one named
   `fixture-baseline` PolicyPackage and one named `fixture` PolicySet through
-  `erebor policyset`, without a special root-policy input, digest parsing, or
+  `araphor policyset`, without a special root-policy input, digest parsing, or
   an alias. Update the host-lab shell and README to use that named target and
   the explicit `codex-v1` adapter.
 - Keep agent and policy stores owner-isolated. Inspection and evidence must be
@@ -89,7 +89,7 @@ of the v1 contract; fields not shown are rejected.
 | --- | --- | --- |
 | `apiVersion` | Selects the v1 Agent schema. Must equal `erebor.dev/v1`. | API contract |
 | `kind` | Selects the Agent validator. Must equal `Agent`. | API contract |
-| `metadata.name` | Immutable, owner-scoped Agent handle supplied with `erebor agent load --name`. A different revision needs a different name. | Agent owner |
+| `metadata.name` | Immutable, owner-scoped Agent handle supplied with `araphor agent load --name`. A different revision needs a different name. | Agent owner |
 | `spec.adapter` | Exact compiled adapter supplied with `--adapter`. It selects the Codex integration contract and must validate against the staged executable. It is never inferred, and it is not a host path, plugin, policy, mount, or private-state setting. | Agent owner / compiled adapter registry |
 
 There is intentionally no `privateStateTarget`, `requirements`, `policy`,
@@ -193,7 +193,7 @@ arbitrary browser or choose a different replacement surface.
 | --- | --- | --- |
 | `apiVersion` | Selects the v1 PolicySet schema. Must equal `erebor.dev/v1`. | API contract |
 | `kind` | Selects the PolicySet validator. Must equal `PolicySet`. | API contract |
-| `metadata.name` | Immutable, owner-scoped PolicySet handle supplied to `erebor policyset create --name`. It replaces the legacy alias. | PolicySet owner |
+| `metadata.name` | Immutable, owner-scoped PolicySet handle supplied to `araphor policyset create --name`. It replaces the legacy alias. | PolicySet owner |
 | `spec.packages` | Non-empty ordered list of immutable PolicyPackage `metadata.name` values. This is the PolicySet's sole static composition edge: it declares package membership and evaluation order, while the referenced packages retain the Rules. | PolicySet owner |
 | `spec.packages[]` | One PolicyPackage name. The daemon validates owner scope and existence at creation; a package cannot point back to sets. Order is immutable because package evaluation order affects enforcement. | PolicySet owner |
 
@@ -211,7 +211,7 @@ resolved immutable package revisions internally; users continue to use names.
 The current command remains the user input for a local Codex executable:
 
 ```text
-erebor agent load codex-v1 --from /opt/codex/bin/codex \
+araphor agent load codex-v1 --from /opt/codex/bin/codex \
   --adapter codex-v1 --name local-codex
   -> name=local-codex
 ```
@@ -224,7 +224,7 @@ This must fail: the adapter was provided explicitly, but it is not compatible
 with the admitted package/executable.
 
 ```text
-erebor agent load codex-v1 --from /opt/codex/bin/codex \
+araphor agent load codex-v1 --from /opt/codex/bin/codex \
   --adapter claude-code-v1 --name wrong-adapter
   -> error: adapter `claude-code-v1` is not admitted for `codex-v1`
 ```
@@ -235,27 +235,27 @@ The Phase 5.1 host lab supplies one simple fixture policy package. A user can
 inspect each stage by name:
 
 ```text
-erebor policy package apply "$EREBOR_FIXTURE_POLICY" \
+araphor policy package apply "$EREBOR_FIXTURE_POLICY" \
   --name fixture-baseline
   -> name=fixture-baseline
 
-erebor policyset create \
+araphor policyset create \
   --name fixture \
   --package fixture-baseline \
   --idempotency-key fixture-policyset-1
   -> name=fixture
 
-erebor policy package inspect fixture-baseline
-erebor policyset inspect fixture
+araphor policy package inspect fixture-baseline
+araphor policyset inspect fixture
 ```
 
-`fixture` is the named ordered composition used by the current `erebor run`
+`fixture` is the named ordered composition used by the current `araphor run`
 example. The package is rules only; it is not agent content or executable code.
 
 ### PolicyPackages compose a PolicySet, not an Agent
 
 ```text
-erebor policyset create \
+araphor policyset create \
   --name company-workspace \
   --package company-baseline \
   --package workspace-write \
@@ -270,7 +270,7 @@ This later Session request must fail because the example PolicySet has only
 terminal rule coverage and therefore cannot govern Browser CDP:
 
 ```text
-erebor session create --agent local-codex \
+araphor session create --agent local-codex \
   --surface engineering-browser \
   --policy fixture
   -> error: PolicySet `fixture` has no mandatory-package coverage for `browser_cdp`
@@ -331,11 +331,11 @@ example with its named fixture PolicySet and explicit `codex-v1` adapter. Its
 successful scripted path is:
 
 ```text
-erebor policy package apply "$EREBOR_FIXTURE_POLICY" --name fixture-baseline
-erebor policyset create --name fixture --package fixture-baseline
-erebor agent load codex-v1 --from "$EREBOR_CODEX_FIXTURE" \
+araphor policy package apply "$EREBOR_FIXTURE_POLICY" --name fixture-baseline
+araphor policyset create --name fixture --package fixture-baseline
+araphor agent load codex-v1 --from "$EREBOR_CODEX_FIXTURE" \
   --adapter codex-v1 --name fixture-codex
-erebor run --policy fixture --workspace "$PWD" fixture-codex
+araphor run --policy fixture --workspace "$PWD" fixture-codex
 ```
 
 ## Result
@@ -384,10 +384,10 @@ script as root with `SUDO_USER=erebor-lab`. Its interactive command stream
 successfully:
 
 ```text
-erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
+araphor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
   --adapter codex-v1 --name fixture-codex
-erebor run --policy fixture --workspace "$PWD" -d fixture-codex
-erebor session ps
+araphor run --policy fixture --workspace "$PWD" -d fixture-codex
+araphor session ps
 ```
 
 The daemon applied `fixture-baseline`, created `fixture`, enrolled

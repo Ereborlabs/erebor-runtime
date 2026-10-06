@@ -21,7 +21,7 @@ Copy the printed path; Terminal 2 uses the same path.
 
 ```sh
 cd /path/to/erebor-runtime
-cargo build -p erebor-runtime-cli --bin erebor
+cargo build -p araphor-cli --bin araphor
 cargo build -p erebor-runtime-daemon --bin erebord
 
 local_root="$(mktemp -d /tmp/erebor-phase1.XXXXXX)"
@@ -49,27 +49,27 @@ cd /path/to/erebor-runtime
 local_root=/tmp/erebor-phase1.<copied-suffix>
 socket="$local_root/run/daemon.sock"
 
-target/debug/erebor --socket "$socket" daemon status
+target/debug/araphor --socket "$socket" daemon status
 # expected: daemon_pid=... configuration_generation=1 state=running
 
-target/debug/erebor --socket "$socket" daemon logs --maximum-records 1
+target/debug/araphor --socket "$socket" daemon logs --maximum-records 1
 # expected: denied, because this caller is not root
 
-sudo target/debug/erebor --socket "$socket" daemon logs --maximum-records 10
+sudo target/debug/araphor --socket "$socket" daemon logs --maximum-records 10
 # expected: sequence=... daemon-control telemetry records
 
 key="manual-phase1-reload-$(date -u +%Y%m%dT%H%M%SZ)"
-sudo target/debug/erebor --socket "$socket" daemon reload --idempotency-key "$key"
+sudo target/debug/araphor --socket "$socket" daemon reload --idempotency-key "$key"
 # expected: configuration reloaded at generation 2
 
-sudo target/debug/erebor --socket "$socket" daemon reload --idempotency-key "$key"
+sudo target/debug/araphor --socket "$socket" daemon reload --idempotency-key "$key"
 # expected: the same stored result; generation does not increase again
 ```
 
 This proves that the real client connects to the real daemon, and exercises
 non-root status, root-only logs, transactional reload, and idempotent replay.
 `erebord`'s path arguments are ordinary local path overrides: omitting each
-one uses the installed system default. Likewise, omitting `erebor --socket`
+one uses the installed system default. Likewise, omitting `araphor --socket`
 uses `/run/erebor/daemon.sock`. None of these options add a remote
 endpoint, context, or daemon-selection model to the product.
 
@@ -77,7 +77,7 @@ To stop this daemon, run this in Terminal 2, then remove only the printed
 disposable directory:
 
 ```sh
-sudo target/debug/erebor --socket "$socket" daemon stop \
+sudo target/debug/araphor --socket "$socket" daemon stop \
   --idempotency-key "manual-phase1-stop-$(date -u +%Y%m%dT%H%M%SZ)"
 sudo rm -rf -- "$local_root"
 ```
@@ -91,7 +91,7 @@ acceptance is not run in CI.
 
 ## Phase 2: Daemon-Owned Generic Sessions
 
-Phase 2 intentionally has no public `erebor run` command yet. This walkthrough
+Phase 2 intentionally has no public `araphor run` command yet. This walkthrough
 uses the explicitly documented internal driver, but every operation still
 crosses the real authenticated daemon-control socket. It is a step-by-step
 example, not a wrapper around the automated acceptance.
@@ -102,7 +102,7 @@ repository root:
 
 ```sh
 cargo build \
-  -p erebor-runtime-cli --bin erebor \
+  -p araphor-cli --bin araphor \
   -p erebor-runtime-daemon --bins \
   -p erebor-runtime-session \
     --bin erebor-linux-process-guard \
@@ -150,10 +150,10 @@ docker_digest="${docker_image#sha256:}"
 
 systemctl daemon-reload
 systemctl enable --now erebord.service
-erebor daemon status
+araphor daemon status
 ```
 
-`erebor daemon status` should report `state=running`. The installed control
+`araphor daemon status` should report `state=running`. The installed control
 socket should also prove the intended owner and permissions:
 
 ```sh
@@ -291,17 +291,17 @@ sudo ./examples/codex-app-server/run-host-lab.sh
 ```
 
 The lab shell's `erebor` function always uses its isolated absolute local
-socket. It is equivalent to passing `erebor --socket "$EREBOR_SOCKET"` to each
+socket. It is equivalent to passing `araphor --socket "$EREBOR_SOCKET"` to each
 daemon-backed command; omitting `--socket` outside the lab still selects the
 installed `/run/erebor/daemon.sock`.
 
 ```sh
-erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
+araphor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
   --adapter codex-v1 --name local-codex
-erebor run --policy fixture --workspace "$PWD" local-codex
+araphor run --policy fixture --workspace "$PWD" local-codex
 
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-  | erebor run --policy fixture --workspace "$PWD" --app-server local-codex
+  | araphor run --policy fixture --workspace "$PWD" --app-server local-codex
 ```
 
 The interactive command proves daemon-owned TTY and socket absence; the second

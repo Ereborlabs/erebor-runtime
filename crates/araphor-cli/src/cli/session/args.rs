@@ -230,7 +230,7 @@ pub(crate) struct SessionAttachArgs {
     /// Request the exclusive input lease for an admitted TTY.
     #[arg(long)]
     pub(crate) input: bool,
-    #[arg(long, default_value = "erebor-cli", value_parser = parse_non_empty_string)]
+    #[arg(long, default_value = "araphor-cli", value_parser = parse_non_empty_string)]
     pub(crate) client_instance_id: String,
     #[arg(long, value_parser = parse_non_empty_string)]
     pub(crate) idempotency_key: String,

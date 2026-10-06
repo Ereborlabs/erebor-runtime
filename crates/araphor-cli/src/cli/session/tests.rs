@@ -10,7 +10,7 @@ const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 fn generic_session_commands_use_the_daemon_installed_admission(
 ) -> Result<(), Box<dyn std::error::Error>> {
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "create",
         "--runner",
@@ -24,7 +24,7 @@ fn generic_session_commands_use_the_daemon_installed_admission(
     ])
     .is_ok());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "create",
         "--runner",
@@ -44,7 +44,7 @@ fn generic_session_commands_use_the_daemon_installed_admission(
     ])
     .is_err());
     let cli = Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "create",
         "--agent",
@@ -69,7 +69,7 @@ fn generic_session_commands_use_the_daemon_installed_admission(
 #[test]
 fn static_session_association_uses_only_named_resources() {
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "create",
         "--agent",
@@ -83,7 +83,7 @@ fn static_session_association_uses_only_named_resources() {
     ])
     .is_ok());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "run",
         "--agent",
@@ -97,7 +97,7 @@ fn static_session_association_uses_only_named_resources() {
     ])
     .is_ok());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "create",
         "--idempotency-key",
@@ -105,7 +105,7 @@ fn static_session_association_uses_only_named_resources() {
     ])
     .is_err());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "create",
         "--agent",
@@ -115,7 +115,7 @@ fn static_session_association_uses_only_named_resources() {
     ])
     .is_err());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "create",
         "--runner",
@@ -137,7 +137,7 @@ fn static_session_association_uses_only_named_resources() {
 #[test]
 fn session_lifecycle_is_a_daemon_command_family() {
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "run",
         "--runner",
@@ -154,9 +154,9 @@ fn session_lifecycle_is_a_daemon_command_family() {
         "/usr/bin/true",
     ])
     .is_ok());
-    assert!(Cli::try_parse_from(["erebor", "session", "start", "session-1"]).is_err());
+    assert!(Cli::try_parse_from(["araphor", "session", "start", "session-1"]).is_err());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "start",
         "session-1",
@@ -164,14 +164,14 @@ fn session_lifecycle_is_a_daemon_command_family() {
         "start-1",
     ])
     .is_ok());
-    assert!(Cli::try_parse_from(["erebor", "session", "adopt", "--pid", "1"]).is_err());
-    assert!(Cli::try_parse_from(["erebor", "session", "diagnose", "test"]).is_err());
+    assert!(Cli::try_parse_from(["araphor", "session", "adopt", "--pid", "1"]).is_err());
+    assert!(Cli::try_parse_from(["araphor", "session", "diagnose", "test"]).is_err());
 }
 
 #[test]
 fn context_graph_accepts_a_short_session_reference_and_keeps_scope_labels_readable() {
     assert!(
-        Cli::try_parse_from(["erebor", "session", "context", "graph", "23f741c3-5ce",]).is_ok()
+        Cli::try_parse_from(["araphor", "session", "context", "graph", "23f741c3-5ce",]).is_ok()
     );
     assert_eq!(
         SessionCommandOwner::short_scope(
@@ -255,10 +255,10 @@ fn context_graph_nests_an_operation_under_its_source_tool_and_keeps_parent_merge
 #[test]
 fn codex_runs_only_through_a_daemon_owned_named_agent_request() {
     assert!(
-        Cli::try_parse_from(["erebor", "run", "--policy", "engineering", "local-codex",]).is_ok()
+        Cli::try_parse_from(["araphor", "run", "--policy", "engineering", "local-codex",]).is_ok()
     );
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "run",
         "--caller-home-source",
         ".bashrc:file:read_only",
@@ -270,7 +270,7 @@ fn codex_runs_only_through_a_daemon_owned_named_agent_request() {
     ])
     .is_ok());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "run",
         "--caller-home-source",
         "workspace:directory:write",
@@ -280,7 +280,7 @@ fn codex_runs_only_through_a_daemon_owned_named_agent_request() {
     ])
     .is_err());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "run",
         "--policy",
         "engineering",
@@ -289,7 +289,7 @@ fn codex_runs_only_through_a_daemon_owned_named_agent_request() {
     ])
     .is_err());
     assert!(Cli::try_parse_from([
-        "erebor",
+        "araphor",
         "session",
         "run",
         "--config",

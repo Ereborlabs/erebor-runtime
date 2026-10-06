@@ -187,6 +187,15 @@ impl CliError {
     }
 }
 
+impl From<crate::cli::araphor::error::AraphorCommandError> for CliError {
+    fn from(source: crate::cli::araphor::error::AraphorCommandError) -> Self {
+        Self::Araphor {
+            source: Box::new(source),
+            location: Location::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;

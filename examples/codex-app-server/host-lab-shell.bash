@@ -6,14 +6,14 @@ if [[ -z "${EREBOR_BIN:-}" || -z "${EREBOR_SOCKET:-}" || -z "${EREBOR_WORKSPACE:
   return 1
 fi
 
-erebor() {
+araphor() {
   "$EREBOR_BIN" --socket "$EREBOR_SOCKET" "$@"
 }
 
 cd -- "$EREBOR_WORKSPACE"
-PS1='[erebor host lab] \u@\h:\w$ '
+PS1='[araphor host lab] \u@\h:\w$ '
 
-printf '%s\n' "The erebor function selects $EREBOR_SOCKET for this shell only."
-printf '%s\n' 'Run: erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" --adapter codex-v1 --name fixture-codex'
-printf '%s\n' 'Then: erebor run --policy fixture --workspace "$PWD" fixture-codex'
+printf '%s\n' "The araphor function selects $EREBOR_SOCKET for this shell only."
+printf '%s\n' 'Run: araphor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" --adapter codex-v1 --name fixture-codex'
+printf '%s\n' 'Then: araphor run --policy fixture --workspace "$PWD" fixture-codex'
 printf '%s\n' 'Type exit to stop the foreground daemon. The lab directory is retained.'

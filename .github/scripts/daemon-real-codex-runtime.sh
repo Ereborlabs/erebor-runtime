@@ -11,7 +11,7 @@ if [[ "$(id -u)" -ne 0 || "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-erebor=/usr/local/bin/erebor
+araphor=/usr/local/bin/araphor
 profile=/usr/lib/erebor/erebor-codex-real-profile
 managed_hook=/usr/lib/erebor/erebor-codex-hook
 terminal_lease_probe=/usr/lib/erebor/erebor-terminal-lease-probe
@@ -35,7 +35,7 @@ report_failure() {
 }
 trap report_failure ERR
 
-for binary in "$erebor" "$profile" "$managed_hook" "$terminal_lease_probe" "$codex_source"; do
+for binary in "$araphor" "$profile" "$managed_hook" "$terminal_lease_probe" "$codex_source"; do
   [[ -x "$binary" ]] || {
     echo "required real Codex acceptance executable is missing: $binary" >&2
     exit 1
@@ -49,15 +49,15 @@ done
 as_user() {
   local user="$1"
   shift
-  runuser -u "$user" -- "$erebor" "$@"
+  runuser -u "$user" -- "$araphor" "$@"
 }
 
 await_daemon() {
   for _ in $(seq 1 150); do
-    "$erebor" daemon status >/dev/null 2>&1 && return
+    "$araphor" daemon status >/dev/null 2>&1 && return
     sleep 0.1
   done
-  "$erebor" daemon status
+  "$araphor" daemon status
 }
 
 session_ids() {
@@ -125,7 +125,7 @@ start_tty_attachment() {
   tty_attachment_fifo="$(mktemp -u)"
   mkfifo "$tty_attachment_fifo"
   timeout 45s runuser -u "$user" -- script -qefc \
-    "stty rows $rows cols $columns; exec $erebor session attach $session_id --input --client-instance-id $client_instance_id --idempotency-key $client_instance_id" \
+    "stty rows $rows cols $columns; exec $araphor session attach $session_id --input --client-instance-id $client_instance_id --idempotency-key $client_instance_id" \
     /dev/null <"$tty_attachment_fifo" >"$output" 2>&1 &
   tty_attachment_pid="$!"
   exec {tty_attachment_writer}>"$tty_attachment_fifo"
@@ -259,7 +259,7 @@ fi
 
 tty_create_output="$(mktemp)"
 timeout 180s runuser -u "$first_user" -- script -qefc \
-  "stty rows 24 cols 80; $erebor run --policy $policy_set --workspace $workspace \
+  "stty rows 24 cols 80; $araphor run --policy $policy_set --workspace $workspace \
     --caller-home-source .codex:directory:read_write \
     --caller-home-source workspace:directory:read_write \
     $agent_name -d" \

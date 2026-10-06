@@ -47,7 +47,7 @@ kernel effect.
 
 Add regression tests for:
 
-- standalone `erebor start` browser CDP: normal legacy behavior and no attempt
+- standalone `araphor start` browser CDP: normal legacy behavior and no attempt
   to discover a session repository;
 - session adoption: no fabricated registry/context path;
 - ungoverned CDP traffic: transparent forwarding and no synthetic context

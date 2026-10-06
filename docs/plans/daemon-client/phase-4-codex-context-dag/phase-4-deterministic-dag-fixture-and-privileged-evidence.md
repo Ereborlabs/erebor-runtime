@@ -138,7 +138,7 @@ through the normal child-delivery path.
   separate two-parent merges after B's intervening work. Replayed receive,
   forged PID, late output, cancellation, owner replacement, and parent/sibling
   receive attempts fail closed.
-- Assert `erebor session context graph <session>` is daemon-derived and renders
+- Assert `araphor session context graph <session>` is daemon-derived and renders
   the complete durable scope tree with each branch's current head, exact fork
   parent pin, binding, authenticated source identity, and retained
   scope-local hook and physical activity (for example `tool bash command="ls"`

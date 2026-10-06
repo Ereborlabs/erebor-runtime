@@ -1455,7 +1455,7 @@ daemon-owned Codex acceptance passes.
 Erebor currently has two different session products in the same binary:
 
 1. The legacy foreground path in
-   `crates/erebor-runtime-cli/src/cli/session.rs` reads `RuntimeConfig`, builds
+   `crates/araphor-cli/src/cli/session.rs` reads `RuntimeConfig`, builds
    `SessionRunPlan`, and invokes `SessionExecutionService` directly in the CLI.
    It uses the older `SessionRegistry` and owns commands such as foreground
    `session run`, diagnostics, adoption, and local review.
@@ -1494,7 +1494,7 @@ erebor CLI
       -> selected RunnerDriver
 ```
 
-- `erebor run` always creates a daemon-owned session.
+- `araphor run` always creates a daemon-owned session.
 - logs, wait, stop, kill, inspect, list, review, retention, and remove always
   read or mutate the daemon repository.
 - diagnostics are normal daemon-owned runs using an admitted diagnostic
@@ -1516,7 +1516,7 @@ called by daemon-owned sessions rather than by a second owner.
 
 ### What Must Exist Before Deletion
 
-- one easy `erebor run` flow;
+- one easy `araphor run` flow;
 - foreground attach or log-follow behavior for users who want terminal output;
 - daemon-backed `ls`, `inspect`, `logs`, `wait`, and review;
 - a daemon-owned diagnostic run replacement; and
@@ -1767,7 +1767,7 @@ public contract.
   identity and never duplicates resources;
 - the durable repository still proves `created` precedes resource creation;
 - a start failure is returned as a failed inspectable session; and
-- CLI help presents `erebor run`, not a required create/start sequence.
+- CLI help presents `araphor run`, not a required create/start sequence.
 
 ### Decision
 
