@@ -207,7 +207,7 @@ of this boundary.
 -> [AraphorClient](../../../../crates/erebor-runtime-client/src/araphor.rs) The native client reads current credentials for each RPC.<br>
 -> [Investigation](../../../../ui/mithril-console/src/Investigation.tsx) The existing console uses the generated gRPC-Web client and applies complete checkpoints.
 
-[QueryOwner::follow_client_clock](../../../../crates/araphor-data/src/query/follow.rs) Client follow is requested.<br>
+[QueryOwner::stream_client_clock](../../../../crates/araphor-data/src/query/follow.rs) Client follow is requested.<br>
 -> [QuerySession](../../../../crates/araphor-data/src/query/authorization.rs) The session retains the exact grant and a current-authorization provider.<br>
 -> [QueryFollow::run_loop](../../../../crates/araphor-data/src/query/follow.rs) The owner registers watches before the snapshot and checks authority after waits.<br>
 -> [QueryFollow::reserve](../../../../crates/araphor-data/src/query/follow.rs) An admitted stream waits within its existing deadline for input, output and evaluation capacity.<br>
@@ -216,6 +216,12 @@ of this boundary.
 -> [QueryStream](../../../../crates/araphor-data/src/query/follow.rs) The standard Stream implementation checks authority before and after receipt of a queued frame.<br>
 -> [QueryCheckpoint::validate](../../../../crates/araphor-data/src/query/frame.rs) A retry checks the unsigned bookmark's store, epoch, operation, revision and retention floor.<br>
 -> [QueryStream::cancel](../../../../crates/araphor-data/src/query/follow.rs) Cancellation requests the end of this read.
+
+[CommandRun::sql](../../../../crates/erebor-runtime-cli/src/cli/araphor.rs) A query connection ends without a final record.<br>
+-> [QueryReplay::resume](../../../../crates/erebor-runtime-cli/src/cli/araphor.rs) The CLI resumes only follow reads and copies the last complete bookmark.<br>
+-> [QueryRead::reconnect](../../../../ui/mithril-console/src/clientState.ts) The browser query state permits resume only for follow reads.<br>
+-> [Client::read](../../../../ui/mithril-console/src/client.ts) The browser retains the complete rows and reports an interrupted one-shot read as partial.<br>
+-> [client regression tests](../../../../ui/mithril-console/src/client.test.ts) EOF and retryable transport errors do not open a second one-shot request.
 
 #### Owners and limits
 
@@ -286,7 +292,7 @@ and cannot release a running native task's lease.
 
 [TraceOwner](../../../../crates/araphor-observability/src/owner.rs) Control accepts one supported source under the tenant investigate permission.<br>
 -> [ClientGrpcOwner::watch](../../../../crates/mithril-control/src/client_grpc/trace.rs) The owner reads terminal receipts before it starts the query snapshot.<br>
--> [QueryOwner::stream_client](../../../../crates/araphor-data/src/query/mod.rs) Trace output uses the same retained positions and bounded stream as SQL.<br>
+-> [QueryOwner::stream_client](../../../../crates/araphor-data/src/query/follow.rs) Trace output uses the same retained positions and bounded stream as SQL.<br>
 -> [QueryFrame::check_read](../../../../crates/araphor-data/src/query/frame.rs) A held output page rechecks read revocation before each row.<br>
 -> [TraceTransport](../../../../crates/mithril-control/src/client_grpc/trace.rs) A complete result requires an exhausted checkpoint and all selected terminal receipts. EOF is not success.
 

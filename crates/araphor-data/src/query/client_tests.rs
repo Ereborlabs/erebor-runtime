@@ -405,11 +405,6 @@ impl ClientFixture {
             .await
     }
 
-    fn follow(&self, plan: QueryPlan, checkpoint: Option<QueryCheckpoint>) -> Result<QueryStream> {
-        self.owner
-            .follow_client_clock(plan, checkpoint, self.authority.clone(), self.clock.clone())
-    }
-
     fn stream(&self, plan: QueryPlan, checkpoint: Option<QueryCheckpoint>) -> Result<QueryStream> {
         self.owner
             .stream_client_clock(plan, checkpoint, self.authority.clone(), self.clock.clone())
@@ -772,7 +767,7 @@ async fn query_trace_stream() -> TestResult {
         vec![],
         true,
     )?;
-    let mut stream = fixture.follow(plan.clone(), None)?;
+    let mut stream = fixture.stream(plan.clone(), None)?;
     assert!(matches!(
         ClientFixture::next(&mut stream).await?.payload,
         QueryPayload::Metadata(_)
@@ -824,7 +819,7 @@ async fn query_trace_stream() -> TestResult {
     ));
     let checkpoint = ClientFixture::checkpoint(&frame)?;
     ClientFixture::cancel(&mut stream).await?;
-    let mut resumed = fixture.follow(plan, Some(checkpoint))?;
+    let mut resumed = fixture.stream(plan, Some(checkpoint))?;
     let _metadata = ClientFixture::next(&mut resumed).await?;
     let frame = ClientFixture::next(&mut resumed).await?;
     assert!(ClientFixture::result(&frame, QueryOperation::Append)?
@@ -847,7 +842,7 @@ async fn query_trace_revocation() -> TestResult {
         br#"{"type":"map","data":{"@errors":{"-13":1}}}"#,
     )?;
     let plan = fixture.plan("SELECT sequence FROM trace_output", vec![], true)?;
-    let mut stream = fixture.follow(plan, None)?;
+    let mut stream = fixture.stream(plan, None)?;
     let metadata = ClientFixture::next(&mut stream).await?;
     tokio::time::timeout(WAIT, async {
         while stream.queued() == 0 {
@@ -1281,10 +1276,10 @@ async fn query_follow_wait_capacity() -> TestResult {
     fixture.commit(1, 1, 7, 4)?;
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
-    let mut first = fixture.follow(plan.clone(), None)?;
+    let mut first = fixture.stream(plan.clone(), None)?;
     ClientFixture::entered(&entering).await?;
     let waiting = fixture.wait_signal()?;
-    let mut second = fixture.follow(plan, None)?;
+    let mut second = fixture.stream(plan, None)?;
     tokio::time::timeout(WAIT, waiting).await??;
     fixture.inputs(true)?;
     assert_eq!((first.queued(), second.queued()), (0, 0));
@@ -1332,11 +1327,11 @@ async fn query_follow_wait_cancel() -> TestResult {
     fixture.commit(1, 1, 7, 4)?;
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
-    let mut first = fixture.follow(plan.clone(), None)?;
+    let mut first = fixture.stream(plan.clone(), None)?;
     ClientFixture::entered(&entering).await?;
     let inputs = fixture.input_count()?;
     let waiting = fixture.wait_signal()?;
-    let mut second = fixture.follow(plan, None)?;
+    let mut second = fixture.stream(plan, None)?;
     tokio::time::timeout(WAIT, waiting).await??;
     ClientFixture::cancel(&mut second).await?;
     fixture.inputs(true)?;
@@ -1373,11 +1368,11 @@ async fn query_follow_wait_close() -> TestResult {
     fixture.commit(1, 1, 7, 4)?;
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
-    let mut first = fixture.follow(plan.clone(), None)?;
+    let mut first = fixture.stream(plan.clone(), None)?;
     ClientFixture::entered(&entering).await?;
     let inputs = fixture.input_count()?;
     let waiting = fixture.wait_signal()?;
-    let mut second = fixture.follow(plan, None)?;
+    let mut second = fixture.stream(plan, None)?;
     tokio::time::timeout(WAIT, waiting).await??;
     let task = std::mem::replace(&mut second.task, tokio::spawn(async {}));
     drop(second);
@@ -1403,11 +1398,11 @@ async fn query_follow_wait_revoke() -> TestResult {
     fixture.commit(1, 1, 7, 4)?;
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
-    let mut first = fixture.follow(plan.clone(), None)?;
+    let mut first = fixture.stream(plan.clone(), None)?;
     ClientFixture::entered(&entering).await?;
     let inputs = fixture.input_count()?;
     let waiting = fixture.wait_signal()?;
-    let mut second = fixture.follow(plan, None)?;
+    let mut second = fixture.stream(plan, None)?;
     tokio::time::timeout(WAIT, waiting).await??;
     fixture.authority.revoke();
     tokio::time::timeout(WAIT, &mut second.task).await??;
@@ -1446,11 +1441,11 @@ async fn query_follow_wait_deadline() -> TestResult {
     fixture.commit(1, 1, 7, 4)?;
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
-    let mut first = fixture.follow(plan.clone(), None)?;
+    let mut first = fixture.stream(plan.clone(), None)?;
     ClientFixture::entered(&entering).await?;
     let inputs = fixture.input_count()?;
     let waiting = fixture.wait_signal()?;
-    let mut second = fixture.follow(plan, None)?;
+    let mut second = fixture.stream(plan, None)?;
     tokio::time::timeout(WAIT, waiting).await??;
     let frame = ClientFixture::next(&mut second).await?;
     assert!(matches!(
@@ -1608,31 +1603,20 @@ async fn query_client_drop() -> TestResult {
 }
 
 #[test]
-fn query_client_follow_admission() -> TestResult {
+fn query_client_stream_admission() -> TestResult {
     let fixture = ClientFixture::local()?;
-    for sql in [
-        "SELECT operation FROM events",
-        "SELECT COUNT(*) FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '300 seconds' OR operation = 7",
-        "SELECT COUNT(*) FROM events WHERE received_at <= CURRENT_TIMESTAMP - INTERVAL '300 seconds'",
-    ] {
-        let plan = fixture.plan(sql, vec![], false)?;
-        assert!(
-            matches!(
-                fixture
-                    .owner
-                    .follow_client(plan.clone(), None, fixture.authority.clone()),
-                Err(crate::Error::QueryDenied { .. })
-            ),
-            "{sql}"
-        );
-        assert!(
-            matches!(
-                fixture.follow(plan, None),
-                Err(crate::Error::QueryDenied { .. })
-            ),
-            "{sql}"
-        );
-    }
+    let mut plan = fixture.plan("SELECT operation FROM events", vec![], false)?;
+    plan.grant = None;
+    assert!(matches!(
+        fixture
+            .owner
+            .stream_client(plan.clone(), None, fixture.authority.clone()),
+        Err(crate::Error::QueryDenied { .. })
+    ));
+    assert!(matches!(
+        fixture.stream(plan, None),
+        Err(crate::Error::QueryDenied { .. })
+    ));
     assert!(fixture
         .owner
         .input_refs
@@ -1694,7 +1678,7 @@ async fn query_client_capacity() -> TestResult {
         ));
         let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
         assert!(matches!(
-            owner.follow_client(plan, None, fixture.authority.clone()),
+            owner.stream_client(plan, None, fixture.authority.clone()),
             Err(crate::Error::QueryInvalid { .. })
         ));
         assert!(owner
@@ -1972,7 +1956,7 @@ async fn query_client_append_resume() -> TestResult {
         vec![],
         true,
     )?;
-    let mut stream = fixture.follow(plan.clone(), None)?;
+    let mut stream = fixture.stream(plan.clone(), None)?;
     let metadata = ClientFixture::next(&mut stream).await?;
     let QueryPayload::Metadata(metadata) = &metadata.payload else {
         return Err("client metadata is absent".into());
@@ -2006,7 +1990,7 @@ async fn query_client_append_resume() -> TestResult {
     );
     ClientFixture::cancel(&mut stream).await?;
 
-    let mut resumed = fixture.follow(plan.clone(), Some(first))?;
+    let mut resumed = fixture.stream(plan.clone(), Some(first))?;
     assert!(matches!(
         ClientFixture::next(&mut resumed).await?.payload,
         QueryPayload::Metadata(_)
@@ -2035,7 +2019,7 @@ async fn query_client_append_resume() -> TestResult {
     ClientFixture::cancel(&mut resumed).await?;
 
     fixture.commit(7, 7, 7, 4)?;
-    let mut resumed = fixture.follow(plan, Some(complete))?;
+    let mut resumed = fixture.stream(plan, Some(complete))?;
     assert!(matches!(
         ClientFixture::next(&mut resumed).await?.payload,
         QueryPayload::Metadata(_)
@@ -2438,7 +2422,7 @@ async fn query_client_timer_replace() -> TestResult {
     let (entering, release) = fixture.clock.arm()?;
     assert!(fixture.clock.changes().is_none());
     assert!(WAIT < QueryLimits::default().heartbeat);
-    let mut stream = fixture.follow(plan, None)?;
+    let mut stream = fixture.stream(plan, None)?;
     let proof: TestResult<_> = match tokio::time::timeout(WAIT, async {
         let metadata = ClientFixture::next(&mut stream).await?;
         assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
@@ -2482,7 +2466,7 @@ async fn query_client_quiet_revoke() -> TestResult {
     let fixture = ClientFixture::new(200, 100)?;
     fixture.commit(1, 1, 7, 4)?;
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
-    let mut stream = fixture.follow(plan.clone(), None)?;
+    let mut stream = fixture.stream(plan.clone(), None)?;
     assert!(matches!(
         ClientFixture::next(&mut stream).await?.payload,
         QueryPayload::Metadata(_)
@@ -2518,7 +2502,7 @@ async fn query_client_buffered_revoke() -> TestResult {
     let fixture = ClientFixture::new(200, 100)?;
     fixture.commit(1, 1, 7, 4)?;
     let plan = fixture.plan("SELECT operation FROM events", vec![], true)?;
-    let mut stream = fixture.follow(plan, None)?;
+    let mut stream = fixture.stream(plan, None)?;
     assert!(matches!(
         ClientFixture::next(&mut stream).await?.payload,
         QueryPayload::Metadata(_)
@@ -2566,7 +2550,7 @@ async fn query_client_output_limit() -> TestResult {
     );
     assert!(!result.limited);
     drop(result);
-    let mut stream = fixture.follow(fixture.plan(sql, vec![], true)?, None)?;
+    let mut stream = fixture.stream(fixture.plan(sql, vec![], true)?, None)?;
     assert!(matches!(
         ClientFixture::next(&mut stream).await?.payload,
         QueryPayload::Metadata(_)

@@ -211,28 +211,6 @@ impl QueryOwner {
         self.follow_inner(plan, checkpoint, clock, None)
     }
 
-    pub fn follow_client(
-        self: &Arc<Self>,
-        plan: QueryPlan,
-        checkpoint: Option<QueryCheckpoint>,
-        authority: Arc<dyn QueryAuthorization>,
-    ) -> Result<QueryStream> {
-        self.follow_client_clock(plan, checkpoint, authority, Arc::new(SystemQueryClock))
-    }
-
-    pub fn follow_client_clock(
-        self: &Arc<Self>,
-        plan: QueryPlan,
-        checkpoint: Option<QueryCheckpoint>,
-        authority: Arc<dyn QueryAuthorization>,
-        clock: Arc<dyn QueryClock>,
-    ) -> Result<QueryStream> {
-        if !matches!(&plan.template, QueryTemplate::Client(sql) if sql.follow()) {
-            return crate::QueryDeniedSnafu.fail();
-        }
-        self.stream_client_clock(plan, checkpoint, authority, clock)
-    }
-
     pub fn stream_client(
         self: &Arc<Self>,
         plan: QueryPlan,
