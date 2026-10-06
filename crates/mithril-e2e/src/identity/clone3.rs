@@ -469,36 +469,6 @@ impl CloneIntoCgroupFixture {
         Ok(None)
     }
 
-    #[cfg(test)]
-    pub(super) fn root_first_effect_allowed(&mut self) -> Result<Option<()>> {
-        let mut status = 0;
-        // SAFETY: root_pid is this process's child and status is writable.
-        let result =
-            unsafe { libc::waitpid(self.root_pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
-        if result < 0 {
-            return Err(invalid_state(format!(
-                "wait for unmoved-root first-effect exit: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        if result == self.root_pid as libc::pid_t {
-            if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
-                return Ok(Some(()));
-            }
-            let reason = if libc::WIFEXITED(status) {
-                format!("exit status {}", libc::WEXITSTATUS(status))
-            } else if libc::WIFSIGNALED(status) {
-                format!("signal {}", libc::WTERMSIG(status))
-            } else {
-                format!("wait status {status}")
-            };
-            return Err(invalid_state(format!(
-                "unmoved-root first effect did not complete: {reason}"
-            )));
-        }
-        Ok(None)
-    }
-
     pub(super) fn stop(&mut self) -> Result<()> {
         let child = self.stop_child();
         let root = self.stop_root();

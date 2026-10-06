@@ -11,47 +11,6 @@ use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host)]
 #[lifecycle = identity]
-fn unmoved_first_open_allowed<P: Platform>() -> TestResult<()> {
-    let mut env = P::setup("cgroup-open-control")?;
-    let path = Path::new("/etc/hostname");
-    env.start_control()?;
-    env.start_node()?;
-    let labels = env.install_policy("external_read_policy.json")?;
-    env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[], &labels)?;
-    let group = env.actor_group()?.to_owned();
-    let mut actor = CloneIntoCgroupFixture::start_with_root_first_effect(&group, path)?;
-    let pid = actor.root_pid();
-    let task = env.task(pid, "unmoved root identity")?;
-
-    assert_eq!(task.snapshot.creator_task_cookie, None);
-    assert_eq!(
-        task.snapshot.root_class.as_deref(),
-        Some("external_runtime_root")
-    );
-    assert_eq!(
-        task.snapshot.installed_role_class.as_deref(),
-        Some("runtime_external_restricted")
-    );
-    assert_ne!(task.snapshot.active_role_id, 0);
-    assert_eq!(task.coordinate.state, TaskCoordinateStateV1::Runnable);
-
-    actor.release_root()?;
-    wait_for(
-        path,
-        "unmoved first open",
-        Duration::from_secs(5),
-        || actor.root_first_effect_allowed(),
-        || format!("clone root PID {pid} is still running"),
-    )?;
-
-    actor.stop()?;
-    init.stop()?;
-    env.stop()
-}
-
-#[platform_test(host)]
-#[lifecycle = identity]
 fn child_first_open_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-child-open")?;
     let path = Path::new("/etc/hostname");

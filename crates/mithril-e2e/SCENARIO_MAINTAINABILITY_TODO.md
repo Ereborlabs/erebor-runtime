@@ -1976,7 +1976,7 @@ test does not close a row when its physical condition or an assertion changed.
     from `IdentityTestRunner::physical_probe` after the replacement passes.
 - [x] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
-  - [ ] Replace the remaining Rust-fixture first-open control with a shared
+  - [x] Replace the remaining Rust-fixture first-open control with a shared
     Python actor and `ProcessFixture`. Start Control, Node, and the signed
     external-read policy first. Create the root with `CLONE_INTO_CGROUP`, not
     a later cgroup attach. Hold the root before its first file open. Keep
@@ -1985,6 +1985,44 @@ test does not close a row when its physical condition or an assertion changed.
     evidence. Keep the test below 100 lines. Pass Host before adding another
     applicable platform. Add no Platform API or production change. Remove
     only the matching old case and fixture method after qualification.
+    - [x] Pass `clone_open::root_first_open_allowed` on Host, direct `runc`,
+      and real Kubernetes in 28.65, 28.68, and 77.80 seconds. The shared test
+      is 78 lines. It uses `ProcessFixture::group_path` on all three platforms.
+      No Platform API, implementation, policy fixture, or production change.
+    - [x] Preserve the baseline `95775f48:2220–2250` placement control. Keep
+      its restricted creator-free identity, runnable coordinate, first-open
+      success, and cleanup. Restore exact equality with the binding's external
+      role. Add rule-zero, fresh Node result, role, and generation checks.
+      This control does not test exact-object rule selection. The first trial
+      wrongly required `EXACT_POLICY_ALLOW`; the runtime bootstrap path returns
+      `RUNTIME_ENTRY_INFRASTRUCTURE`. Check the attributed result, not an
+      invented policy-reason requirement. Production stays unchanged.
+    - [x] Remove only `cgroup_fork::unmoved_first_open_allowed` and
+      `CloneIntoCgroupFixture::root_first_effect_allowed`. Keep the other five
+      legacy clone cases and their used fixture methods. The unchanged Host
+      moved-root first-open denial passed in 29.02 seconds. The shared process
+      checks passed: 14 passed, one privileged cgroup case ignored. Strict
+      clippy and local VM harness checks passed.
+    - Source review: [clone_open](src/identity/scenarios/clone_open.rs) starts
+      Control, Node, the signed policy, and the initial actor in that order.
+      -> [ProcessFixture](src/process.rs) starts and owns the Python launcher.
+      -> [clone_cgroup.py](fixtures/process/clone_cgroup.py) creates the held
+      root in the target cgroup before its first open, then opens and closes
+      the requested file. The launcher reaps the root and reports its status.
+      -> [EffectCheck](src/effect/check.rs) excludes earlier observations. The
+      test checks the root's fresh File OpenRead result, role, and generation.
+      -> [ProcessFixture::stop](src/process.rs) checks normal root removal
+      before the initial actor and the environment stop. Drop is a fallback.
+    - [x] Pass final repository Rust CI after the matched legacy deletions.
+      Run `env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2
+      bash .github/scripts/verify-rust-ci.sh`. The command exited with status
+      zero. The log is `/tmp/mithril-clone-first-bounded-ci-20261006.log`.
+      The lightweight crate passed 159 tests; 542 physical tests were ignored.
+      The three physical clone tests passed separately as recorded above.
+      The first CI run exhausted disk space. Remove only generated cache and
+      failed link files. An earlier retry hit an unrelated data-read deadline;
+      the unchanged exact test then passed. Use two test workers for the final
+      complete CI run. Do not change its assertions or deadline.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields
