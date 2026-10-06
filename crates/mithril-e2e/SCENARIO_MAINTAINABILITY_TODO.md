@@ -2780,12 +2780,30 @@ test does not close a row when its physical condition or an assertion changed.
         seconds. Generic process checks passed 14 tests with one privileged
         case ignored. VM harness checks and format passed. The cache action's
         production qualification follows in the shared scenario below.
-      - [ ] Pass Host and commit the scenario. Pass direct runc and commit
-        its registration. Run related checks and final Rust CI.
+      - [x] Pass Host and commit the scenario. The 87-line test passed both
+        modes on one actor in 45.36 seconds. Output, pin, lease, and cgroup
+        cleanup passed. Focused lightweight effect checks passed 28 tests.
+        The all-feature workspace build passed. No production or Platform
+        implementation changed.
+      - [ ] Pass direct runc and commit its registration. Run final Rust CI
+        after the final registration edit. Do not repeat the physical matrix
+        for this scenario-only change.
       - [ ] Revisit Kubernetes only after approval. Keep the old late-bind
         decision, snapshot assertions, result fields, and helpers until the
         paired physical replacement passes. Do not count Host or runc as
         Kubernetes proof.
+      Review route:
+      [shared scenario](src/effect/file_mount_snapshot.rs) installs the signed
+      policy through Control and Node, then commands the actor.
+        -> [Python actor](fixtures/process/exception.py) binds the alias and
+        makes the first read before process-name readiness.
+        -> [EffectCheck](src/effect/check.rs) reads fresh production evidence
+        for the exact actor, role, entry, operation, and physical result.
+        -> [MountCache](src/physical/mount_cache.rs) reads typed READY rows,
+        epoch, namespace, and mountinfo. The scenario compares both snapshots.
+      Run `effect::file_mount_snapshot::bind_rebuilds_ready_cache::mount_alias_host`
+      in the mounted standard Rust test executable with
+      `--exact --ignored --nocapture --test-threads=1`.
     - [x] Replace the Protect-mode overmount and restoration pair with
       `mount_replacement_stays_closed`. Keep one small shared Rust test below
       100 lines. Reuse `exception.py`, the qualified bind/recovery setup,

@@ -52,6 +52,8 @@ mod file_hard_link;
 #[cfg(test)]
 mod file_mount_change;
 #[cfg(test)]
+mod file_mount_snapshot;
+#[cfg(test)]
 mod file_mutation;
 #[cfg(test)]
 mod file_observe;
