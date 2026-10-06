@@ -142,10 +142,41 @@ describe('complete frame application', () => {
 });
 
 describe('browser stream lifetime', () => {
+  it('completes a one-shot read only after its final record', () => {
+    const stream = new Stream<wire.QueryFrame>(); const open = vi.fn(() => stream.transport());
+    const read = new QueryRead(false); const state = vi.fn(); const stop = new AbortController();
+    Client.read(open, (frame: wire.QueryFrame) => read.receive(frame), () => Boolean(read.terminal), () => read.reconnect(), stop.signal, state);
+    stream.emit('data', metadata()); stream.emit('data', row('1')); stream.emit('data', checkpoint());
+    stream.emit('data', queryFrame().setTerminal(new wire.QueryTerminal().setReason('Completed')));
+    stream.emit('end');
+    expect(open).toHaveBeenCalledOnce(); expect(read.rows).toEqual([['1']]);
+    expect(state).toHaveBeenLastCalledWith('Read ended with an explicit final record.');
+    stop.abort();
+  });
+
+  it.each([
+    { event: 'end', error: undefined },
+    { event: 'error', error: { code: grpc.StatusCode.UNAVAILABLE, message: 'offline', metadata: {} } },
+    { event: 'error', error: { code: grpc.StatusCode.UNKNOWN, message: DISCONNECTED, metadata: {} } },
+  ])('keeps a one-shot read partial after $event without resuming its bookmark', ({ event, error }) => {
+    vi.useFakeTimers();
+    for (const operation of [wire.QueryOperation.QUERY_OPERATION_APPEND, wire.QueryOperation.QUERY_OPERATION_REPLACE]) {
+      const stream = new Stream<wire.QueryFrame>(); const open = vi.fn(() => stream.transport());
+      const read = new QueryRead(false); const state = vi.fn(); const stop = new AbortController();
+      Client.read(open, (frame: wire.QueryFrame) => read.receive(frame), () => Boolean(read.terminal), () => read.reconnect(), stop.signal, state);
+      stream.emit('data', metadata(operation)); stream.emit('data', row('1', 0, operation)); stream.emit('data', checkpoint(operation));
+      stream.emit(event, error); vi.advanceTimersByTime(10000);
+      expect(open).toHaveBeenCalledOnce(); expect(read.rows).toEqual([['1']]);
+      expect(read.bookmark).not.toBe(''); expect(read.terminal).toBe('');
+      expect(state).toHaveBeenLastCalledWith(expect.stringContaining('Partial read:'));
+      stop.abort();
+    }
+  });
+
   it('cancels reads and ignores old-scope frames without a capture cancellation call', () => {
     const stream = new Stream<wire.QueryFrame>();
     const stop = new AbortController(); const receive = vi.fn(); const state = vi.fn();
-    Client.read(() => stream.transport(), receive, () => false, vi.fn(), stop.signal, state);
+    Client.read(() => stream.transport(), receive, () => false, vi.fn(() => true), stop.signal, state);
     stream.emit('data', metadata()); expect(receive).toHaveBeenCalledTimes(1);
     stop.abort(); stream.emit('data', row('2')); stream.emit('end');
     expect(receive).toHaveBeenCalledTimes(1); expect(stream.cancel).toHaveBeenCalledOnce();
@@ -180,7 +211,7 @@ describe('browser stream lifetime', () => {
     vi.useFakeTimers();
     const stream = new Stream<wire.QueryFrame>(); const open = vi.fn(() => stream.transport());
     const receive = vi.fn(); const state = vi.fn(); const stop = new AbortController();
-    Client.read(open, receive, () => false, vi.fn(), stop.signal, state);
+    Client.read(open, receive, () => false, vi.fn(() => true), stop.signal, state);
     stream.emit('error', error);
     stream.emit('data', metadata()); vi.advanceTimersByTime(10000);
     expect(open).toHaveBeenCalledOnce(); expect(receive).not.toHaveBeenCalled();
@@ -193,7 +224,7 @@ describe('browser stream lifetime', () => {
     vi.useFakeTimers();
     const streams = Array.from({ length: 4 }, () => new Stream<wire.TraceFrame>());
     let index = 0; const state = vi.fn(); const stop = new AbortController();
-    Client.read(() => streams[index++].transport(), vi.fn(), () => false, vi.fn(), stop.signal, state);
+    Client.read(() => streams[index++].transport(), vi.fn(), () => false, vi.fn(() => true), stop.signal, state);
     const error = { code: grpc.StatusCode.UNKNOWN, message: DISCONNECTED, metadata: {} };
     streams[0].emit(event, error); vi.advanceTimersByTime(1000);
     streams[1].emit(event, error); vi.advanceTimersByTime(2000);

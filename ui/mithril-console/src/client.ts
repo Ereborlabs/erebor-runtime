@@ -154,7 +154,7 @@ export class Client {
   }
 
   static read<T>(open: () => grpc.ClientReadableStream<T>, receive: (frame: T) => void, complete: () => boolean,
-    reconnect: () => void, signal: AbortSignal, state: (text: string) => void): void {
+    reconnect: () => boolean, signal: AbortSignal, state: (text: string) => void): void {
     let stream: grpc.ClientReadableStream<T> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
@@ -175,8 +175,8 @@ export class Client {
         const disconnected = error?.code === grpc.StatusCode.UNKNOWN
           && error.message === 'Http response at 400 or 500 level, http status code: 0'
           && Object.keys(error.metadata ?? {}).length === 0;
-        if ((!error || error.code === grpc.StatusCode.UNAVAILABLE || disconnected) && attempts < 3) {
-          attempts += 1; reconnect();
+        if ((!error || error.code === grpc.StatusCode.UNAVAILABLE || disconnected) && attempts < 3 && reconnect()) {
+          attempts += 1;
           state(`Disconnected. Resume ${attempts}/3 from the last complete checkpoint.`);
           timer = setTimeout(start, 1000 * attempts);
         } else {

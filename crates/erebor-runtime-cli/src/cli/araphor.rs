@@ -90,7 +90,9 @@ impl CommandRun {
         let mut retries = 0;
         loop {
             if stream.is_none() {
-                request.bookmark.clone_from(&replay.bookmark);
+                if retries != 0 {
+                    replay.resume(&mut request)?;
+                }
                 let result = tokio::select! {
                     _ = self.signal.as_mut() => return Err(Self::interrupted()),
                     _ = &mut wait => return replay.duration(),
@@ -404,6 +406,14 @@ struct QueryReplay {
 }
 
 impl QueryReplay {
+    fn resume(&self, request: &mut wire::QueryRequest) -> Result<()> {
+        if !request.follow {
+            return Err(CommandRun::uncertain());
+        }
+        request.bookmark.clone_from(&self.bookmark);
+        Ok(())
+    }
+
     fn duration(&self) -> Result<()> {
         if self.bookmark.is_empty() {
             return Err(Error::OutputDeadline {
@@ -577,6 +587,33 @@ impl TraceReplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observability_cli_snapshot_resume() -> Result<()> {
+        let mut replay = QueryReplay::default();
+        let mut frame = wire::QueryFrame {
+            schema_version: 1,
+            operation: wire::QueryOperation::Replace as i32,
+            store_uuid: vec![1; 16],
+            read_revision: 1,
+            payload: Some(wire::query_frame::Payload::Checkpoint(vec![1])),
+            ..Default::default()
+        };
+        replay.advance(&mut frame)?;
+        let mut request = wire::QueryRequest::default();
+        assert_eq!(
+            replay
+                .resume(&mut request)
+                .err()
+                .map(|error| error.exit_code()),
+            Some(4)
+        );
+        assert!(request.bookmark.is_empty());
+        request.follow = true;
+        replay.resume(&mut request)?;
+        assert_eq!(request.bookmark, vec![1]);
+        Ok(())
+    }
 
     #[test]
     fn observability_cli_append_replay() -> Result<()> {

@@ -103,7 +103,7 @@ export class QueryRead {
     this.pending = undefined;
   }
 
-  reconnect(): void { this.pending = undefined; this.terminal = ''; }
+  reconnect(): boolean { this.pending = undefined; this.terminal = ''; return this.follow; }
 
   static compare(left: wire.StorePosition, right: wire.StorePosition): number {
     const a = BigInt(left.getCommitRevision());
@@ -195,5 +195,5 @@ export class TraceRead {
     this.pending = []; this.bytes = 0;
   }
 
-  reconnect(): void { this.pending = []; this.bytes = 0; this.result = undefined; }
+  reconnect(): boolean { this.pending = []; this.bytes = 0; this.result = undefined; return true; }
 }
