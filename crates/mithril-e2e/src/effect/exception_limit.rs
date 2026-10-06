@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionException as Exception;
 use super::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = exception]
 fn excess_uses_are_rejected<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-limit")?;
@@ -31,9 +31,10 @@ fn excess_uses_are_rejected<P: Platform>() -> TestResult<()> {
         .iter()
         .map(|map| Ok((*map, BTreeSet::from_iter(env.maps().1.keys(map)?))))
         .collect::<TestResult<Vec<_>>>()?;
-    let error = env
-        .install_policy(file)
-        .expect_err("excess uses were accepted");
+    let error = match env.install_policy(file) {
+        Err(error) => error,
+        Ok(_) => return Err("excess uses were accepted".into()),
+    };
     let detail = error.to_string();
     assert!(
         detail.contains("the exception desired transaction failed: active base policy")

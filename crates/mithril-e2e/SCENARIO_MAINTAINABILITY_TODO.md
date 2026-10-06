@@ -2565,11 +2565,17 @@ test does not close a row when its physical condition or an assertion changed.
     return `EACCES`. Submit a valid one-use request as a control. Require one
     success and then `EACCES`. Match fresh File/OpenWrite evidence to the
     same task, role, entry, generation, and protected path atom.
-  - [x] Pass Host and commit it. The 89-line shared test passed in 39.51
-    seconds. Output, pin, lease, and cgroup cleanup passed. The all-feature
-    workspace build, formatting, and strict Clippy passed. No policy, actor,
-    production implementation, or readiness deadline changed.
-  - [ ] Pass direct runc and commit its registration.
+  - [x] Pass Host and commit it. The first 89-line shared test passed in
+    39.51 seconds. Output, pin, lease, and cgroup cleanup passed. The
+    all-feature workspace build and formatting passed. Strict Clippy rejected
+    `expect_err`; the fallible-match correction then passed strict Clippy
+    and the exact Host case in 30.30 seconds. The current shared file is 90
+    lines. Cleanup passed again. No policy, actor, production implementation,
+    or readiness deadline changed.
+  - [x] Pass direct runc and commit its registration. The same 90-line body
+    passed in 58.39 seconds. Output, pin, lease, and cgroup cleanup passed.
+    The all-feature workspace build and strict Clippy passed. No assertion,
+    policy, actor, production implementation, or timeout changed.
   - [ ] Pass real Kubernetes and commit its registration. Add each platform
     only after its exact case passes.
   - [ ] Remove only the matched shell request and
@@ -2593,8 +2599,12 @@ test does not close a row when its physical condition or an assertion changed.
   in the mounted standard Rust test executable with
   `--exact --ignored --nocapture --test-threads=1`. The Host log is
   `/var/tmp/mithril-exception-limit-host-20261006.log` in the retained
-  qualification VM. Source review matches baseline `95775f48`. Direct runc
-  and Kubernetes remain unqualified. The shell check is unchanged.
+  qualification VM. The corrected Host run uses
+  `/var/tmp/mithril-exception-limit-host-match-20261006.log`. Direct runc uses
+  the `exception_runc` suffix and
+  `/var/tmp/mithril-exception-limit-runc-20261006.log`.
+  Source review matches baseline `95775f48`. Kubernetes remains unqualified.
+  The shell check is unchanged.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
   - [ ] Repair the old Observe probe's baseline setup. The current VM run
