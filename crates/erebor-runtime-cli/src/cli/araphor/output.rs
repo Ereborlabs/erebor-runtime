@@ -482,17 +482,20 @@ mod tests {
             store_uuid: vec![2; 16],
             recovery_epoch: 3,
             read_revision: 4,
-            payload: Some(wire::trace_frame::Payload::Metadata(wire::TraceDetail {
-                requested: Some(wire::InputSelection {
-                    target: "pod/ns/name\n".into(),
+            payload: Some(wire::trace_frame::Payload::Metadata(
+                wire::TraceDetail {
+                    requested: Some(wire::InputSelection {
+                        target: "pod/ns/name\n".into(),
+                        ..Default::default()
+                    }),
+                    limits: Some(wire::TraceLimits {
+                        output_bytes: 4096,
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                limits: Some(wire::TraceLimits {
-                    output_bytes: 4096,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })),
+                }
+                .into(),
+            )),
             ..Default::default()
         };
         let bytes = Output::new(Some(OutputMode::Table)).trace(&frame)?;

@@ -627,9 +627,9 @@ impl Stream for TraceTransport {
                         QueryPayload::Metadata(_) => {
                             self.guard = Some(Arc::new(frame));
                             if let Some(detail) = self.detail.take() {
-                                return Poll::Ready(Some(Ok(
-                                    self.frame(proto::trace_frame::Payload::Metadata(detail))
-                                )));
+                                return Poll::Ready(Some(Ok(self.frame(
+                                    proto::trace_frame::Payload::Metadata(detail.into()),
+                                ))));
                             }
                         }
                         QueryPayload::Append { result } if !result.rows.is_empty() => {

@@ -624,7 +624,7 @@ mod tests {
             read_revision: 3,
             commit_revision: 3,
             payload: Some(wire::trace_frame::Payload::Metadata(
-                wire::TraceDetail::default(),
+                wire::TraceDetail::default().into(),
             )),
             ..Default::default()
         };

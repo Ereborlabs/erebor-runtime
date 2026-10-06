@@ -29,6 +29,7 @@ fn main() -> Result<(), io::Error> {
         .build_client(true)
         .build_server(true)
         .type_attribute(".", "#[derive(serde::Serialize)]")
+        .boxed(".erebor.mithril.control.v1.TraceFrame.metadata")
         .compile_protos(&[client], &[clients])?;
 
     Ok(())
