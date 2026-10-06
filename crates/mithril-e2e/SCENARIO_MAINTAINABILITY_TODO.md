@@ -2555,13 +2555,13 @@ test does not close a row when its physical condition or an assertion changed.
     seconds. Generic process checks passed 14 tests with one privileged case
     ignored. The fixture-path test, VM harness checks, formatting, workspace
     build, and strict all-feature Clippy passed. The new negative request
-    still needs physical qualification. No production or Platform API changed.
-  - [ ] Derive an owned typed request from `one_use_exception.json`. Request
+    passed on all three platforms. No production or Platform API changed.
+  - [x] Derive an owned typed request from `one_use_exception.json`. Request
     two uses of `expired-write`, whose policy limit is one. Use a distinct
     name and UID. Require the exact Control rejection or the observed
     Kubernetes `Failed` and `ReconcileRejected` status. Require no new kernel
     authority or receipt row from the rejected request.
-  - [ ] Use `exception.py` in single mode. Require the ungranted write to
+  - [x] Use `exception.py` in single mode. Require the ungranted write to
     return `EACCES`. Submit a valid one-use request as a control. Require one
     success and then `EACCES`. Match fresh File/OpenWrite evidence to the
     same task, role, entry, generation, and protected path atom.
@@ -2576,8 +2576,12 @@ test does not close a row when its physical condition or an assertion changed.
     passed in 58.39 seconds. Output, pin, lease, and cgroup cleanup passed.
     The all-feature workspace build and strict Clippy passed. No assertion,
     policy, actor, production implementation, or timeout changed.
-  - [ ] Pass real Kubernetes and commit its registration. Add each platform
-    only after its exact case passes.
+  - [x] Pass real Kubernetes and commit its registration. The same 90-line
+    body passed in 74.18 seconds. The actor directory, scenario namespace,
+    Node pins, sockets, and lease were absent after cleanup. The first launcher
+    check incorrectly required removal of the empty output parent. Source
+    review confirmed that infrastructure owns that parent. The exact owned
+    cleanup check then passed without a test or implementation change.
   - [ ] Remove only the matched shell request and
     `exception_excess_bound_rejected` result field after all three cases pass.
     Keep the exception wait helper and all other exception and RBAC checks.
@@ -2603,8 +2607,10 @@ test does not close a row when its physical condition or an assertion changed.
   `/var/tmp/mithril-exception-limit-host-match-20261006.log`. Direct runc uses
   the `exception_runc` suffix and
   `/var/tmp/mithril-exception-limit-runc-20261006.log`.
-  Source review matches baseline `95775f48`. Kubernetes remains unqualified.
-  The shell check is unchanged.
+  Kubernetes uses the `exception_kubernetes` suffix and
+  `/var/tmp/mithril-exception-limit-kube-20261006.log` in the retained K3s VM.
+  Source review matches baseline `95775f48`. All three cases passed. The
+  shell check is unchanged until its separate retirement commit.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
   - [ ] Repair the old Observe probe's baseline setup. The current VM run
