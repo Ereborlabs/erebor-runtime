@@ -10,7 +10,7 @@ use libbpf_rs::{MapCore as _, MapFlags, MapHandle};
 use mithril_node::NativeIdentityInspector;
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = node_restart]
 fn recovered_root_survives_restart<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("external-restart")?;

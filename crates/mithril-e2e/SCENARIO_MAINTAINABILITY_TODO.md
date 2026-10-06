@@ -8544,8 +8544,17 @@ setup, production actions, assertions, and focused test.
       process placement, mapped control file, pidfd-keyed label deletion,
       read, snapshot, Node stop, Node start, and normal cleanup operations.
       Add no Platform API, actor copy, policy copy, or production change.
-    - [ ] Commit direct runc registration after its exact case and normal
+    - [x] Commit direct runc registration after its exact case and normal
       cleanup pass. The case suffix is `node_restart_runc`.
+      On 2026-10-06, the unchanged 96-line body passed the fresh Host case
+      in 69.28 seconds and direct runc in 57.23 seconds. Both runs removed
+      their output, pin, lease, actor cgroup, and Node cgroup. The only Rust
+      change adds runc to the attribute. Formatting and strict workspace
+      Clippy passed. The focused process checks passed 14 tests, with one
+      privileged test ignored. Both lifecycle checks and the VM harness
+      check passed. See `/var/tmp/mithril-external-restart-host-20261006.log`
+      and `/var/tmp/mithril-external-restart-runc-20261006.log` in the
+      retained lightweight VM. Kubernetes and final Rust CI remain open.
     - [ ] Commit Kubernetes registration after its exact case and normal
       cleanup pass. The case suffix is `node_restart_kubernetes`. Reproduce
       any new Kubernetes condition in lightweight before a fix or rerun.
