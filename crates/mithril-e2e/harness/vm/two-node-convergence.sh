@@ -3760,22 +3760,6 @@ jq -e '
 [[ $(jq -er '.terminal_exception_count' <<<"$(node_status "$other_node")") \
   -eq $other_terminal_exception_baseline ]]
 
-overlap=$work_a/exception-overlap.yaml
-sed '0,/name: temporary-file-access/s//name: overlapping-file-access/' \
-  "$exception" >"$overlap"
-"$provider" put "$vm_a" "$overlap" "$remote_a/exception-overlap.yaml"
-remote_kubectl --as="$exception_subject" create \
-  -f "$remote_a/exception-overlap.yaml" >/dev/null
-if ! remote_kubectl -n "$workload_namespace" wait \
-    --for=jsonpath='{.status.state}'=Failed \
-    workloadprotectionexception/overlapping-file-access \
-    --timeout=180s >/dev/null; then
-  echo "exception overlapping-file-access did not reject while the first grant was active" >&2
-  exit 1
-fi
-remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
-  workloadprotectionexception overlapping-file-access --wait=true --timeout=120s >/dev/null
-
 signal_pod_request "$selected_vm" \
   /var/lib/mithril-convergence/markers/protected.exception-request EXCEPTION
 for _attempt in {1..120}; do
@@ -4297,7 +4281,6 @@ jq -n \
     exception_revoked: true,
     exception_target_retired: true,
     exception_recreated_with_new_uid: true,
-    exception_overlap_rejected: true,
     desired_inventory_cleaned: true,
     deleted_root_not_inspected: true,
     old_root_replay_refused: true,

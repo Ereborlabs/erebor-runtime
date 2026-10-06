@@ -2542,7 +2542,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact case passed in 64.85
       seconds. All five Kubernetes exception tests passed together in 192.26
       seconds on the retained K3s VM.
-- [ ] Replace the excessive-use request block in
+- [x] Replace the excessive-use request block in
   `harness/vm/two-node-convergence.sh` with `excess_uses_are_rejected`.
   Baseline `95775f48` requests two uses against a one-use grant and requires
   the exception CRD state `Failed`. Keep that rejection. Use the existing
@@ -2585,8 +2585,9 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove only the matched shell request and
     `exception_excess_bound_rejected` result field after all three cases pass.
     Keep the exception wait helper and all other exception and RBAC checks.
-  - [ ] Pass the final repository Rust CI procedure after the last source
-    edit. The affected existing Kubernetes cases already passed together.
+  - [x] Pass the final repository Rust CI procedure after the last source
+    edit. The shared CI run below covers this migration and the overlap check.
+    The affected existing Kubernetes cases already passed together.
   Review route:
   [shared test](src/effect/exception_limit.rs) submits the owned request through
   the existing policy installation API.
@@ -2613,7 +2614,7 @@ test does not close a row when its physical condition or an assertion changed.
   matched 11-line shell request and its result flag are removed. The exception
   wait helper and all other exception and RBAC checks remain. Shell syntax,
   VM harness behavior checks, formatting, and diff checks passed.
-- [ ] Replace the overlapping-grant request block in
+- [x] Replace the overlapping-grant request block in
   `harness/vm/two-node-convergence.sh` with
   `overlapping_grants_are_rejected`. Baseline `95775f48:3811–3825` submits a
   second valid exception for the same live grant and target. The first grant
@@ -2649,7 +2650,7 @@ test does not close a row when its physical condition or an assertion changed.
     The log is `/var/tmp/mithril-exception-overlap-kube-light-20261006.log`.
     The first exact case failed in 203.15 seconds before actor startup. Node rejected
     `/sys/fs/bpf/mithril-pid-1546442-414106001` because it contained stale state.
-    The cause of that state is not yet proved. The log is
+    At that point, the cause of that state was not proved. The log is
     `/var/tmp/mithril-exception-overlap-kube-20261006.log` in the retained K3s VM.
     Reproduce the same startup condition with a real production Node in
     lightweight before an implementation change or another Kubernetes run.
@@ -2676,11 +2677,21 @@ test does not close a row when its physical condition or an assertion changed.
     The log is `/var/tmp/mithril-overlap-startup-fixed-20261006.log` in the
     retained Host VM. This check does not explain the first Kubernetes startup
     duration. No production code, Platform API, or readiness limit changed.
-  - [ ] Remove only the matched overlap request and
+  - [x] Remove only the matched overlap request and
     `exception_overlap_rejected` result field after all three cases pass.
     Keep adjacent consumption, expiry, deletion, and RBAC checks.
-  - [ ] Pass formatting, strict Clippy, harness checks, and the final repository
-    Rust CI procedure after the last source edit.
+  - [x] Pass formatting, strict Clippy, harness checks, and the final repository
+    Rust CI procedure after the last source edit. On 2026-10-06,
+    `CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1
+    bash .github/scripts/verify-rust-ci.sh` completed formatting, workspace
+    check, strict all-feature Clippy, and all workspace test targets.
+    Mithril e2e passed 160 ordinary tests; 538 physical or subprocess cases
+    were ignored. Its physical overlap cases passed separately on all three
+    platforms. The CI source is `a777bc1a` with the 17-line shell deletion
+    below. The tested shell blob is
+    `6d12bf7735529864f6020c9759dc238a97c2b1b9`. The log is
+    `/tmp/mithril-overlap-final-ci-20261006.log`. VM harness behavior checks
+    and shell syntax passed. This result is not a full physical matrix pass.
   Review route:
   [shared test](src/effect/exception_overlap.rs) submits two valid requests
   with different names and UIDs.
@@ -2704,8 +2715,10 @@ test does not close a row when its physical condition or an assertion changed.
   `/var/tmp/mithril-refactor-runtime-tools-20261006`. Infrastructure copies
   these artifacts with the existing provider. Keep the originals and verify
   identical loadable contents before removing debug sections from a copy.
-  Host, direct runc, and Kubernetes qualification are done. Legacy retirement
-  and the final repository Rust CI check remain.
+  Host, direct runc, and Kubernetes qualification are done. The matched
+  15-line shell request and its result flag are removed. Adjacent consumption,
+  expiry, deletion, recreation, node-local counters, and RBAC checks remain.
+  The final repository Rust CI check passed. This replacement is done.
   Startup review route:
   [fixture check](src/platform/shared/startup.rs) starts real Control through
   [Shared](src/platform/shared.rs) and owns the real Node child through
