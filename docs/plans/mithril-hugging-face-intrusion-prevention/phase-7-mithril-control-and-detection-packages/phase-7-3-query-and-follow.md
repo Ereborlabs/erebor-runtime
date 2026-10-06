@@ -14,7 +14,7 @@ The owner, record decoder, and query input types live in `araphor-data`.
 They work without a Control process or Control crate dependency. Phase 7.9
 packages these same owners as the optional remote data service.
 Observability 3 adds client SQL admission, current caller grants, disclosure,
-authenticated receipts/cursors, and bounded Tokio execution before
+unsigned bookmark checks, and bounded Tokio execution before
 public SQL access. This phase must not expose arbitrary SQL through a service.
 
 ## Implementation flow
@@ -99,9 +99,11 @@ Reader is slow, cancelled or disconnected
    overflow; never calculate a partial aggregate.
    Register watch before snapshot capture. Use one evaluation and one dirty
    flag per stream; recheck dependency revisions before waiting.
-7. Bind checkpoints to store UUID/epoch, plan/schema version, parameters and
-   exact scope. Retention commits a per-tenant replay floor with deletion
-   intent before unlink. The floor is the greatest deleted raw store position.
+7. Check the checkpoint schema, store UUID/epoch, operation, read revision and
+   position. The caller retains the exact plan, parameters and input selection.
+   A checkpoint grants no access. Retention commits a per-tenant replay floor
+   with deletion intent before unlink. The floor is the greatest deleted raw
+   store position.
    Reject older append checkpoints conservatively, even if their filter could
    have excluded the deleted rows. Report that replay is unavailable, not that
    a particular matching row was lost. The floor survives restart and backup.
@@ -125,7 +127,9 @@ Reader is slow, cancelled or disconnected
    segment leases and metadata readers before evaluation or output waits.
    Cancel native evaluation, release buffers on every exit and enforce the
    output-stall timeout. Native memory settings are not an OS process cap.
-   Observability 3 adds and qualifies the worker OS limits and public grants.
+   Observability 3 adds client admission and current caller grants. Its
+   asynchronous entry point uses bounded blocking tasks on the host's existing
+   Tokio runtime. Do not add a query process or an OS-isolation requirement.
 
 ## Unit tests and end-to-end proof
 
@@ -148,9 +152,10 @@ error, cancellation and repeated follow evaluations. No process-lifetime
 input registry or persistent event table may remain.
 Check every emitted append, replace, checkpoint, health, error and terminal
 frame against its fields and ordering. A closed stream is not a trace terminal
-result. Public SQL admission, authenticated tokens, grants, disclosure, sandbox
-and wire-level gRPC tests belong to Observability 3. Compare each trusted
-template with full scoped-input execution in the pinned DuckDB.
+result. Public SQL admission, unsigned bookmark checks, current caller grants,
+disclosure, bounded asynchronous execution and wire-level gRPC tests belong
+to Observability 3. Compare each trusted template with full scoped-input
+execution in the pinned DuckDB.
 
 Add `query-follow` to `mithril_discovery_test`. Use actual AnalysisStore
 commits and QueryOwner streams. Use deterministic commit barriers. Verify
@@ -414,9 +419,11 @@ links the source owners and their checks.
 
 These are component and lightweight production-owner proofs. Forced pin/delete
 orders and concurrent rotation are component proofs, not physical e2e proofs.
-Public SQL, authenticated client cursors, production process isolation, remote
-packaging, and later discovery algorithms remain outside this phase. No new
-performance experiment or retired 8-GiB qualification ran.
+Public SQL, unsigned client bookmarks, caller grants and client transports
+belong to Observability 3. Remote packaging and later discovery algorithms
+remain outside this phase. Query execution does not claim process-level
+crash containment. No new performance experiment or retired 8-GiB
+qualification ran.
 
 ### Additional correctness checks
 

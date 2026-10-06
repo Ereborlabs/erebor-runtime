@@ -132,8 +132,9 @@ araphor trace --resume TRACE_ID --output jsonl
   still mandatory. Browser navigation never cancels another client's trace.
 - `--resume` replays retained trace output and follows until terminal state.
   It never executes the script again. Normal use needs no resume command.
-  SQL reconnection reuses its cursor internally; expiry is an error, not a
-  silent fresh query.
+  SQL follow reconnection reuses its cursor internally; expiry is an error,
+  not a silent fresh query. An interrupted one-shot SQL read stays partial
+  if its final record is absent. A one-shot read does not resume its checkpoint.
 - Exit codes: 0 completed within its declared limits; 2 invalid input;
   3 denied or approval required; 4 partial, limited, or uncertain result;
   5 execution/transport failure; 130 interrupted. Zero rows can be valid, but
@@ -190,7 +191,7 @@ webhook callbacks still require HTTPS; they are not Araphor client data APIs.
 
 | RPC | Contract |
 | --- | --- |
-| `Query(QueryRequest) returns (stream QueryFrame)` | One-shot and follow use one server stream. The request carries SQL, parameters, optional selection, follow flag and unsigned resume bookmark. Frames carry metadata, append/replace, checkpoint, health, error and terminal results. Optional targets select input inside the authenticated tenant. |
+| `Query(QueryRequest) returns (stream QueryFrame)` | One-shot and follow use one server stream. The request carries SQL, parameters, optional selection and follow flag. Follow can supply an unsigned resume bookmark; one-shot cannot. Frames carry metadata, append/replace, checkpoint, health, error and terminal results. Optional targets select input inside the authenticated tenant. |
 | `SubmitTrace(SubmitTraceRequest) returns (TraceReceipt)` | Source or recipe, target, duration, parameters, optional finding reference and required idempotency key. The receipt has ID, accepted spec digest and state. The CLI calls `WatchTrace` within the same command. |
 | `GetTrace(GetTraceRequest) returns (TraceDetail)` | Authorized source, resolved scope, accepted limits, per-target state and result references. |
 | `WatchTrace(WatchTraceRequest) returns (stream TraceFrame)` | Optional bookmark; replay retained output and follow to terminal state. Use QueryOwner's bounded append reader with the tenant investigate permission. No SQL text or second user command is needed. |
@@ -420,6 +421,10 @@ Phase 3 is **Done** for CLI, API and console at qualification source
 for native, browser, paired physical, packaging and final workspace checks.
 Performance remains **UNQUALIFIED**. The earlier protected-start failure
 cause remains unknown; the current passing cases do not identify that cause.
+The accepted client review corrections are **Done** at `3e8a4349`.
+Read their [result](phase-3-cli-api-and-console.md#accepted-review-corrections)
+for current component, native, browser and workspace proof. These corrections
+do not add a physical or performance qualification claim.
 
 The initial recipe set is syscall errors and failed file opens. Connection
 outcomes and latency follow only with explicit asynchronous/entry-return

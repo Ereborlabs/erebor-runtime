@@ -89,7 +89,9 @@ Follow receives a committed change
   -> only a broken connection needs a resumed request
 
 Connection drops or authentication expires
-  -> client reconnects only with valid current credentials and the same cursor
+  -> follow and trace clients reconnect only with valid current credentials and the same cursor
+  -> a one-shot SQL client reports a partial read if the final record is absent
+  -> a one-shot SQL client does not send its checkpoint as a resume bookmark
   -> expired history produces an explicit gap error
   -> read failure cannot be shown as completed execution
 
@@ -211,6 +213,10 @@ flags, stdin EOF, source edit after submission, empty output with terminal
 success, missing terminal result, JSON escaping, foreign-tenant trace reads, revoked
 token, CSRF, read-only resume, duplicate submit, cursor expiry and slow clients.
 API success must not conceal a partial trace or failed cleanup.
+For one-shot SQL, disconnect after a complete checkpoint but before the final
+record. Require a partial read and no second request. Cover normal EOF and
+retryable transport errors. Follow and trace reads must retain their existing
+checkpoint replay behavior.
 
 Add `query_admission_` and asynchronous execution tests beside the data owner.
 Compare each accepted SQL bound with full authorized-input evaluation in the
@@ -277,9 +283,9 @@ generated browser client are implemented. The investigation login membership
 check remains required. Native and live-browser checks pass at their recorded
 source revisions. The current release images pass the paired capture case and
 the migrated administrative approval case. An earlier startup failure remains
-unexplained. The final Rust procedure passes at `6cb2de82` after the last
-Rust edit. Performance remains **UNQUALIFIED**. Deployment diagnostics stay
-disabled.
+unexplained. The final Rust procedure passes at `3e8a4349` after the accepted
+review corrections. Read their result below. Performance remains
+**UNQUALIFIED**. Deployment diagnostics stay disabled.
 
 The data crate changes use the closed SQL binder, tenant-selected input and
 current-authority checks for query and follow. The approved rewrite removes
@@ -596,6 +602,32 @@ event must identify its reason and `operation_argument` before an enforcement
 fix is selected. The earlier failure remains unexplained. This diagnostic
 run alone does not qualify the later release images. The separate current-image
 result is recorded above. Performance remains **UNQUALIFIED**.
+
+### Accepted review corrections
+
+Status: **Done** at source `3e8a4349`. The client retry correction is commit `79af516f`.
+The CLI reports exit 4 instead of sending a one-shot resume request. The
+browser retains the last complete rows and reports a partial read. Follow
+and trace retry behavior remains supported. The new CLI and browser
+regressions fail before the correction and pass after the correction.
+Commit `3e8a4349` removes both client follow wrappers and the duplicate test
+fixture method. All clients use the same stream entry point. The missing-grant
+check remains tested. The supporting query plan uses unsigned bookmarks and
+bounded Tokio execution. No query process is required.
+
+The CLI filter passes 13 tests. The client query-owner filter passes 37 tests.
+The UI passes 27 unit tests, its type check, production build, 24 layout and
+accessibility tests, and one live Control browser test. The current native
+client passes all ten receipt checks. The complete Rust procedure returns zero:
+77 top-level suites, 1,618 passed tests, zero failures and 545 ignored tests.
+The counts exclude nested recovery helpers. Ignored cases are not passes.
+
+Read `/tmp/araphor-review.77Y1JsTg/rust-ci.log`, `browser.log`,
+`browser-results/` and `native/result.json`. These results cover source
+`3e8a4349` and the current browser assets. One-shot disconnection is a
+component proof; the live cases preserve existing follow and trace behavior.
+No physical case or performance test ran. The earlier physical proof limits
+remain unchanged. Performance remains **UNQUALIFIED**.
 
 ## Stop point
 

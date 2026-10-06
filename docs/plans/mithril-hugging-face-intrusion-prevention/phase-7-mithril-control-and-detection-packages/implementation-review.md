@@ -187,9 +187,15 @@ The intended result is the
 [public query boundary](../../araphor-observability/phase-3-cli-api-and-console.md#query-boundary-before-client-access).
 The data owner accepts client SQL only after admission and tenant checks. Public
 transport, CLI and console code are present. Their complete end-to-end
-qualification is **Done** at `6cb2de82`. Query execution
+qualification at `6cb2de82` remains recorded. The accepted client review
+corrections are **Done** at `3e8a4349`, with current native, browser and full
+workspace proof. Query execution
 uses the existing Tokio runtime. No query process or new BPF program is part
 of this boundary.
+The accepted review corrections change one-shot retry handling and remove
+the separate client follow entry points. Read their
+[qualification record](../../araphor-observability/phase-3-cli-api-and-console.md#accepted-review-corrections)
+for the current source and verification limits.
 
 [ClientAuth::authenticate](../../../../crates/mithril-control/src/client_auth.rs) The shared authentication owner checks a browser session or service credential and the current tenant investigate permission.<br>
 -> [ClientGrpcOwner](../../../../crates/mithril-control/src/client_grpc.rs) The transport owner selects query or trace behavior without a second permission system.<br>
