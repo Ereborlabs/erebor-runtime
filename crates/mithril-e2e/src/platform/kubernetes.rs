@@ -34,6 +34,7 @@ use mithril_node::{
     NativeIdentityInspector, NativeTaskSnapshotV1, NodeConfig, RuntimeAdmissionClient,
     RuntimeIntegrationDecommissionV1, RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
 };
+use prost::Message as _;
 use serde_json::{json, Value};
 use snafu::ResultExt as _;
 use zerocopy::TryFromBytes as _;
@@ -2623,12 +2624,33 @@ impl Kubernetes {
             fs::write(proof, serde_json::to_vec_pretty(&record)?)?;
             Ok(())
         })();
-        Self::capture_result(&capture, result)
+        Self::capture_result(&capture, result, || env.snapshot())
     }
 
-    fn capture_result(path: &Path, result: TestResult<()>) -> TestResult<()> {
+    fn capture_result(
+        path: &Path,
+        result: TestResult<()>,
+        snapshot: impl FnOnce() -> TestResult<MithrilObservationSnapshot>,
+    ) -> TestResult<()> {
         if let Err(error) = &result {
             if path.exists() {
+                let (name, bytes) = match snapshot() {
+                    Ok(snapshot) => ("node-snapshot.pb", snapshot.encode_to_vec()),
+                    Err(source) => ("node-snapshot-error.txt", source.to_string().into_bytes()),
+                };
+                for (name, bytes) in [
+                    ("capture-failure.txt", error.to_string().into_bytes()),
+                    (name, bytes),
+                ] {
+                    let file = path.join(name);
+                    if let Err(source) = fs::write(&file, bytes) {
+                        erebor_telemetry::warn!(
+                            "capture diagnostics could not be retained",
+                            path = %file.display(),
+                            error = %source,
+                        );
+                    }
+                }
                 let retained = path
                     .parent()
                     .ok_or("the capture directory has no parent")?
@@ -3173,6 +3195,10 @@ fn observability_capture_cleanup() -> TestResult<()> {
             } else {
                 Ok(())
             },
+            || {
+                assert!(failed, "successful capture read failure diagnostics");
+                Ok(MithrilObservationSnapshot::default())
+            },
         );
         assert_eq!(result.is_err(), failed);
         if let Err(error) = result {
@@ -3188,6 +3214,95 @@ fn observability_capture_cleanup() -> TestResult<()> {
                 b"retained capture prefix"
             );
             assert!(!retained.join("unrelated").exists());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn observability_startup_failure() -> TestResult<()> {
+    use erebor_runtime_ipc::v1::MithrilEffectObservation;
+
+    let directory = tempfile::tempdir()?;
+    let error = "Kubernetes actor worker exited with code 1; Fatal Python error: Failed to import encodings module; PermissionError: [Errno 13] Permission denied: '/usr/local/lib/python3.13/encodings/aliases.py'";
+    // These event fields are test input, not a measured cause.
+    let event = MithrilEffectObservation {
+        reason: "EXACT_POLICY_DENY".to_owned(),
+        kernel_result: -libc::EACCES,
+        source_sequence: 1,
+        source_cpu_id: 2,
+        operation_argument: 7,
+        execution_approval_trace_stage: u32::from(
+            erebor_interceptor_abi::EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
+        ),
+        ..Default::default()
+    };
+    let mut snapshot = MithrilObservationSnapshot {
+        cgroup_scope: "/".to_owned(),
+        effect_health_available: true,
+        unresolved_effects: 3,
+        evidence_errors: 4,
+        recent_effects: vec![event.clone()],
+        ..Default::default()
+    };
+    snapshot
+        .recent_effects
+        .extend((2..=1024).map(|sequence| MithrilEffectObservation {
+            reason: "APPLICATION_DEFAULT_ALLOW".to_owned(),
+            kernel_result: 0,
+            source_sequence: sequence,
+            ..event.clone()
+        }));
+    assert!(snapshot
+        .recent_effects
+        .iter()
+        .rev()
+        .take(16)
+        .all(|event| event.kernel_result == 0));
+    for available in [true, false] {
+        let path = directory
+            .path()
+            .join(if available { "observed" } else { "unavailable" });
+        let out = ProbeDirectory::create(&path)?;
+        let capture = path.join("capture");
+        fs::create_dir(&capture)?;
+        let result = Kubernetes::capture_result(&capture, Err(error.into()), || {
+            if available {
+                Ok(snapshot.clone())
+            } else {
+                Err("the Node observation socket is unavailable".into())
+            }
+        });
+        assert_eq!(
+            result
+                .err()
+                .ok_or("the startup failure succeeded")?
+                .to_string(),
+            error
+        );
+        drop(out);
+        let retained = path.with_extension("capture-failed");
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read_to_string(retained.join("capture-failure.txt"))?,
+            error
+        );
+        for name in ["start-0.json", "ready-0.json", "result.json"] {
+            assert!(!retained.join(name).exists());
+        }
+        if available {
+            let bytes = fs::read(retained.join("node-snapshot.pb"))?;
+            assert_eq!(
+                MithrilObservationSnapshot::decode(bytes.as_slice())?,
+                snapshot
+            );
+            assert!(!retained.join("node-snapshot-error.txt").exists());
+        } else {
+            assert!(!retained.join("node-snapshot.pb").exists());
+            assert_eq!(
+                fs::read_to_string(retained.join("node-snapshot-error.txt"))?,
+                "the Node observation socket is unavailable"
+            );
         }
     }
     Ok(())
