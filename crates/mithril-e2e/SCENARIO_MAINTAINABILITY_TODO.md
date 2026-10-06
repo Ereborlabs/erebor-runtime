@@ -2634,7 +2634,14 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass Host and commit it. The 99-line test passed in 42.96 seconds.
     Output, pin, lease, and cgroup cleanup passed. The all-feature workspace
     build, formatting, diff checks, and strict Clippy passed.
-  - [ ] Pass direct runc and commit its registration.
+  - [x] Pass direct runc and commit its registration. The same test passed
+    in 34.42 seconds. Output, pin, lease, and cgroup cleanup passed. After
+    local build caches were removed, the cold rebuild took 12 minutes. The
+    first run used large debug artifacts from the shared source mount and
+    failed before actor startup when Node missed the existing 60-second limit.
+    Local VM copies without debug sections have identical loadable contents
+    and test registrations. With those copies, Node initialized in 26 seconds.
+    No scenario, production code, assertion, or readiness limit changed.
   - [ ] Pass real Kubernetes and commit its registration.
   - [ ] Remove only the matched overlap request and
     `exception_overlap_rejected` result field after all three cases pass.
@@ -2656,7 +2663,13 @@ test does not close a row when its physical condition or an assertion changed.
   in the mounted standard Rust test executable with
   `--exact --ignored --nocapture --test-threads=1`. The log is
   `/var/tmp/mithril-exception-overlap-host-20261006.log` in the retained VM.
-  Host qualification is done. Direct runc and Kubernetes are not done.
+  Direct runc uses the `exception_runc` suffix and
+  `/var/tmp/mithril-exception-overlap-runc-local-20261006.log`. Use the retained
+  VM-local test executable and hook under
+  `/var/tmp/mithril-refactor-runtime-tools-20261006`. Infrastructure copies
+  these artifacts with the existing provider. Keep the originals and verify
+  identical loadable contents before removing debug sections from a copy.
+  Host and direct runc qualification are done. Kubernetes is not done.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
   - [ ] Repair the old Observe probe's baseline setup. The current VM run

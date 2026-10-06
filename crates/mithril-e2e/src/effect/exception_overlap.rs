@@ -9,7 +9,7 @@ use mithril_control::WorkloadProtectionException as Exception;
 use super::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = exception]
 fn overlapping_grants_are_rejected<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-overlap")?;
