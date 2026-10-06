@@ -8538,6 +8538,22 @@ setup, production actions, assertions, and focused test.
     the gap and report supported identity after restart. Pass Host, direct
     `runc`, and Kubernetes before removing the matching old checks. Keep the
     direct CRI, Kubernetes-service-outage, and same-name recreation checks.
+    - [ ] Finish the remaining platform qualification with the unchanged
+      96-line shared body. Run the exact Host case on current artifacts,
+      then direct runc, then Kubernetes. Use the existing external Python
+      process placement, mapped control file, pidfd-keyed label deletion,
+      read, snapshot, Node stop, Node start, and normal cleanup operations.
+      Add no Platform API, actor copy, policy copy, or production change.
+    - [ ] Commit direct runc registration after its exact case and normal
+      cleanup pass. The case suffix is `node_restart_runc`.
+    - [ ] Commit Kubernetes registration after its exact case and normal
+      cleanup pass. The case suffix is `node_restart_kubernetes`. Reproduce
+      any new Kubernetes condition in lightweight before a fix or rerun.
+    - [ ] Compare the four legacy Node-specific fields and restart block
+      with baseline `95775f48`, then remove only their matched checks.
+      Keep label-loss setup and its recovered snapshot while the separate
+      Kubernetes-service-outage assertions use them. Run related checks,
+      harness checks, and final Rust CI after the last covered edit.
     - On 2026-10-03, the 98-line shared test passed its Host fault, read,
       fresh-identity, Node-gap, and restart assertions. Normal retirement
       failed after 30 seconds. A second focused run confirmed the failure.
