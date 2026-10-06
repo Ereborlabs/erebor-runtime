@@ -3907,6 +3907,46 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace ordinary generation retirement with a small standard platform
+    test. Reuse `ready.py`, both actor policies, and `GenerationState`. Keep
+    Protect and Observe modes. Start both holders before the first policy,
+    as the old probe does. Let Node recover their runtime identity. Replace
+    one live workload's signed policy.
+    Require a newer active generation and a retained `Retiring` predecessor.
+    Stop an added holder first and require the predecessor to stay present.
+    Stop the last holder and require no predecessor descriptor, activation
+    targets, or active bindings. Let production Node perform retirement.
+    Add no Platform or production API. Keep the file below 100 lines.
+    Pass and commit Host, runc, then Kubernetes before removing the
+    pre-saturation active-pointer and `Retiring` checks and
+    `active_generation_published` field. Keep the exact-file migration effect,
+    terminal-evidence checks, and post-saturation last-holder retirement check.
+    The new test does not reproduce ring loss or WAL-capacity saturation.
+    - [x] Host: both modes passed in 78.71 seconds. The file has 97 lines.
+      Initial trials started holders after policy installation. Protect passed;
+      Observe admission timed out. The final setup starts both holders before
+      protection, as the baseline does. No production code or deadline changed.
+    - [ ] Direct runc: run the same body, then add the platform and commit.
+    - [ ] Kubernetes: run the same body after lightweight passes, then commit.
+    - [ ] Retire only the matched pre-saturation legacy checks.
+    - [ ] Replace last-holder retirement after ring loss and WAL saturation.
+      Keep `old_generation_deleted_after_last_holder` until this condition passes.
+
+    Source review for the new test:
+
+    [generation_retires_after_exit](src/identity/scenarios/generation_retirement.rs)
+    starts two real holders before protection
+      -> [install_policy](src/platform/shared.rs) sends the signed policy through Control
+      -> [recovered](src/platform/shared.rs) waits for production Node recovery
+      -> [GenerationState](src/identity/scenarios/generation_state.rs) reads the active and retiring kernel generations
+      -> [ready.py](fixtures/process/ready.py) exits one holder, then the last holder
+      -> [GenerationState](src/identity/scenarios/generation_state.rs) verifies removal by production Node.
+
+    Final-source formatting, workspace check, and strict Clippy passed.
+    The Rust CI gate stopped at the unchanged Araphor
+    `analysis::raw::tests::observability_raw_recovery` deadline: 168 passed,
+    one failed, five ignored. Log:
+    `/tmp/mithril-refactor-generation-recovery-ci-20261005.log`.
   - [ ] Replace the exact benign-file read control with a small platform test.
     The baseline installs an external-role exact Allow and leaves the initial
     root unarmed. Its read assertion does not check a root-class name. Keep
