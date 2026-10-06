@@ -22,9 +22,9 @@ impl Default for RetentionLimitsV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RetentionSweepV1 {
-    pub next_source: Option<[u8; 32]>,
+    pub next_source: Option<Vec<u8>>,
     pub checked_sources: u32,
     pub removed_records: u32,
 }
@@ -46,7 +46,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
         Self { store }
     }
 
-    pub fn sweep(&self, after: Option<[u8; 32]>, now_utc_ns: u64) -> Result<RetentionSweepV1> {
+    pub fn sweep(&self, after: Option<&[u8]>, now_utc_ns: u64) -> Result<RetentionSweepV1> {
         if now_utc_ns == 0 {
             return self.store.reject("the retention time is invalid");
         }
@@ -57,7 +57,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
         result
     }
 
-    fn sweep_page(&self, after: Option<[u8; 32]>, now_utc_ns: u64) -> Result<RetentionSweepV1> {
+    fn sweep_page(&self, after: Option<&[u8]>, now_utc_ns: u64) -> Result<RetentionSweepV1> {
         let sources = {
             let writer = self.store.maintenance_writer()?;
             let reader = writer.get()?;
@@ -74,20 +74,13 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     operation: "prepare retention source page",
                 })?;
             statement
-                .query_map(
-                    params![
-                        after.as_ref().map(|key| key.as_slice()),
-                        after.as_ref().map(|key| key.as_slice()),
-                        SWEEP_SOURCES as u32
-                    ],
-                    |row| {
-                        Ok((
-                            row.get::<_, Vec<u8>>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    },
-                )
+                .query_map(params![after, after, SWEEP_SOURCES as u32], |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
                 .context(AnalysisDatabaseSnafu {
                     operation: "read retention source page",
                 })?
@@ -101,17 +94,17 @@ impl<'a> EvidenceRetentionOwner<'a> {
             checked_sources: sources.len() as u32,
             removed_records: 0,
         };
-        for (key, json, kind) in &sources {
-            let identity = RawIdentity::parse(kind, json, &self.store.root)?;
-            if !identity.valid() || identity.key().as_slice() != key {
+        let full = sources.len() == SWEEP_SOURCES;
+        for (key, json, kind) in sources {
+            let identity = RawIdentity::parse(&kind, &json, &self.store.root)?;
+            if !identity.valid() || identity.key() != key {
                 return self
                     .store
                     .reject("the retention source identity is invalid");
             }
-            let stream_key = identity.key();
             result.removed_records += self.retain_raw(identity, now_utc_ns)?.removed_records;
-            if sources.len() == SWEEP_SOURCES {
-                result.next_source = Some(stream_key);
+            if full {
+                result.next_source = Some(key);
             }
         }
         if result.removed_records > 0 || !self.store.retention_healthy() {
@@ -366,7 +359,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
         let expired = merged.len();
         let released: i64 = transaction
             .query_row(
-                "SELECT COALESCE(SUM(256 + octet_length(encode(ref_id))), 0)::BIGINT
+                "SELECT COALESCE(SUM(256 + octet_length(stream_key) + octet_length(encode(ref_id))), 0)::BIGINT
                 FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
                 params![key.as_slice(), tenant.as_slice(), now_utc_ns],
                 |row| row.get(0),
@@ -379,8 +372,10 @@ impl<'a> EvidenceRetentionOwner<'a> {
             params![key.as_slice(), tenant.as_slice(), now_utc_ns],
         ).context(AnalysisDatabaseSnafu { operation: "remove expired witness references" })?;
         let floor_charge = if previous_floor.is_none() { 256 } else { 0 };
-        super::quota::UsageChange::from(256 * expired as i64 + floor_charge - released)
-            .apply(&transaction, &tenant)?;
+        super::quota::UsageChange::from(
+            (256 + key.len() as i64) * expired as i64 + floor_charge - released,
+        )
+        .apply(&transaction, &tenant)?;
         let next_retained = raw
             .entries
             .values()
@@ -446,7 +441,6 @@ impl<'a> EvidenceRetentionOwner<'a> {
 #[cfg(test)]
 mod tests {
 
-    use super::super::source_key;
     use super::*;
     use crate::{
         AnalysisResultCommitV1, AnalysisWitnessV1, EvidenceStoreOutcomeV1, ProcessorClassV1,
@@ -865,7 +859,7 @@ mod tests {
         let writer = store.raw_access()?;
         {
             let raw = store.raw.lock().map_err(|_| "raw owner lock poisoned")?;
-            assert_eq!(raw.budget.required.get(&source_key(&source)), Some(&1));
+            assert_eq!(raw.budget.required.get(&source.key()), Some(&1));
             assert_eq!(raw.budget.protected.get(&source.tenant_id), Some(&2));
         }
         drop(writer);
@@ -1107,7 +1101,7 @@ mod tests {
         let first = owner.sweep(None, 200)?;
         assert_eq!(first.checked_sources, SWEEP_SOURCES as u32);
         assert!(first.next_source.is_some());
-        let second = owner.sweep(first.next_source, 200)?;
+        let second = owner.sweep(first.next_source.as_deref(), 200)?;
         assert_eq!(second.checked_sources, 1);
         assert_eq!(second.next_source, None);
         assert_eq!(

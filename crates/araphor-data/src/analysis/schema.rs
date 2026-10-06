@@ -1,14 +1,10 @@
-use std::fs::OpenOptions;
-use std::io::Read as _;
-use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
 
 use duckdb::{params, Connection, OptionalExt as _};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{source_key, AnalysisStore};
-use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
+use super::AnalysisStore;
+use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
 
 const MAX_SOURCES: u64 = 4096;
 
@@ -22,15 +18,27 @@ impl EvidenceIntakeIdentityV1 {
             && self.source_epoch != 0
     }
 
-    fn epoch_key(&self) -> [u8; 32] {
-        let mut hash = Sha256::new();
-        hash.update(b"ARAPHOR-ANALYSIS-EPOCH-V1\0");
-        hash.update(self.tenant_id);
-        hash.update((self.node_id.len() as u64).to_be_bytes());
-        hash.update(self.node_id.as_bytes());
-        hash.update(self.source_id);
-        hash.update(self.source_epoch.to_be_bytes());
-        hash.finalize().into()
+    pub(super) fn key(&self) -> Vec<u8> {
+        let mut key = Vec::with_capacity(67 + self.node_id.len());
+        key.push(0);
+        key.extend_from_slice(&self.tenant_id);
+        key.extend_from_slice(&self.node_boot_id);
+        key.extend_from_slice(&self.source_id);
+        key.extend_from_slice(&self.label_epoch.to_be_bytes());
+        key.extend_from_slice(&self.source_epoch.to_be_bytes());
+        key.extend_from_slice(&(self.node_id.len() as u16).to_be_bytes());
+        key.extend_from_slice(self.node_id.as_bytes());
+        key
+    }
+
+    pub(super) fn epoch_key(&self) -> Vec<u8> {
+        let mut key = Vec::with_capacity(42 + self.node_id.len());
+        key.extend_from_slice(&self.tenant_id);
+        key.extend_from_slice(&(self.node_id.len() as u16).to_be_bytes());
+        key.extend_from_slice(self.node_id.as_bytes());
+        key.extend_from_slice(&self.source_id);
+        key.extend_from_slice(&self.source_epoch.to_be_bytes());
+        key
     }
 }
 
@@ -45,7 +53,7 @@ impl AnalysisStore {
         Self::validate_traces(writer, root)?;
         Self::validate_trace_receipts(writer, root)?;
         let checks = [
-            ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) <> 32"),
+            ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) NOT BETWEEN 68 AND 195"),
             ("invalid segment identity or state", "SELECT 1 FROM segments e
                 LEFT JOIN (SELECT stream_key, tenant_id, identity_json, cpu_id, 'records' AS kind FROM source_receipts
                     UNION ALL SELECT stream_key, tenant_id, identity_json, NULL, 'diagnostic' FROM trace_receipts) s USING (stream_key)
@@ -54,9 +62,10 @@ impl AnalysisStore {
                 OR e.committed_end < 70 OR e.committed_end > 16777216
                 OR s.stream_key IS NULL OR e.tenant_id <> s.tenant_id
                 OR e.cpu_id IS DISTINCT FROM s.cpu_id OR e.identity_json <> s.identity_json"),
-            ("invalid coverage source or digest", "SELECT 1 FROM coverage c LEFT JOIN source_receipts s USING (stream_key)
+            ("invalid coverage source or size", "SELECT 1 FROM coverage c LEFT JOIN source_receipts s USING (stream_key)
                 WHERE s.stream_key IS NULL OR c.tenant_id <> s.tenant_id OR c.revision = 0
-                OR c.revision > s.coverage_revision OR sha256(c.report) <> lower(hex(c.report_sha256))"),
+                OR c.revision > s.coverage_revision OR octet_length(c.report) = 0
+                OR octet_length(c.report) > 4194304"),
             ("invalid coverage receipt", "SELECT 1 FROM source_receipts s WHERE s.coverage_revision <>
                 COALESCE((SELECT MAX(c.revision) FROM coverage c WHERE c.stream_key = s.stream_key), 0)"),
             ("invalid expiry range", "SELECT 1 FROM expired_ranges x LEFT JOIN (
@@ -76,8 +85,8 @@ impl AnalysisStore {
                 WHERE NOT EXISTS (SELECT 1 FROM replay_floors f WHERE f.tenant_id = x.tenant_id)"),
             ("invalid result body", "SELECT 1 FROM analysis_results WHERE octet_length(tenant_id) <> 16
                 OR result_id = '' OR length(result_id) > 256 OR processor_id = ''
-                OR octet_length(body) = 0 OR octet_length(body) > 16777216 OR sha256(body) <> lower(hex(body_sha256))
-                OR octet_length(request_sha256) <> 32"),
+                OR octet_length(body) = 0 OR octet_length(body) > 16777216
+                OR octet_length(request_meta) = 0 OR octet_length(request_meta) > 16777216"),
             ("invalid witness reference", "SELECT 1 FROM evidence_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
                 LEFT JOIN segments e ON e.segment_id = r.segment_id AND e.state = 'Live'
@@ -88,12 +97,12 @@ impl AnalysisStore {
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
                 LEFT JOIN context_versions c ON c.tenant_id = r.tenant_id AND c.owner_id = r.owner_id
                     AND c.entity_key = r.entity_key AND c.lifetime_key = r.lifetime_key
-                    AND c.owner_revision = r.owner_revision AND c.content_sha256 = r.content_sha256
-                WHERE a.result_id IS NULL OR c.owner_id IS NULL"),
+                    AND c.owner_revision = r.owner_revision AND c.commit_revision = r.commit_revision
+                WHERE a.result_id IS NULL OR c.owner_id IS NULL OR r.commit_revision = 0"),
             ("invalid processor progress", "SELECT 1 FROM processor_progress p
                 LEFT JOIN source_receipts s ON s.stream_key = p.stream_key AND s.tenant_id = p.tenant_id
                 WHERE p.class NOT IN ('required', 'optional') OR p.processor_id = '' OR p.method_version = 0
-                OR octet_length(p.tenant_id) <> 16 OR octet_length(p.stream_key) <> 32
+                OR octet_length(p.tenant_id) <> 16 OR octet_length(p.stream_key) NOT BETWEEN 68 AND 195
                 OR p.start_cursor = 0 OR p.required_floor <> p.consumed_cursor
                 OR p.consumed_cursor > COALESCE(s.contiguous_cursor, 0)
                 OR p.resume_floor > COALESCE(s.contiguous_cursor, 0)
@@ -128,7 +137,7 @@ impl AnalysisStore {
                         OR g.first_cursor::HUGEINT <> p.consumed_cursor::HUGEINT + 1
                         OR g.last_cursor <> p.retirement_cursor
                         OR g.commit_revision <> p.retirement_revision))"),
-            ("invalid recovery gap", "SELECT 1 FROM recovery_gaps WHERE octet_length(stream_key) <> 32
+            ("invalid recovery gap", "SELECT 1 FROM recovery_gaps WHERE octet_length(stream_key) NOT BETWEEN 68 AND 195
                 OR octet_length(tenant_id) <> 16 OR first_cursor = 0 OR last_cursor < first_cursor"),
         ];
         for (reason, query) in checks {
@@ -259,18 +268,17 @@ impl AnalysisStore {
                     serde_json::from_str(&json).context(JsonSnafu {
                         path: root.join("analysis.duckdb"),
                     })?;
-                if !identity.valid() || key != source_key(&identity) {
+                if !identity.valid() || key != identity.key() {
                     return Self::reject_path(root, "the stored source identity or key is invalid");
                 }
                 let receipt =
-                    Self::read_receipt_from(writer, root, &identity, &source_key(&identity))?
-                        .ok_or_else(|| {
-                            crate::AnalysisStateSnafu {
-                                path: root,
-                                reason: "the stored receipt is absent",
-                            }
-                            .build()
-                        })?;
+                    Self::read_receipt_from(writer, root, &identity, &key)?.ok_or_else(|| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "the stored receipt is absent",
+                        }
+                        .build()
+                    })?;
                 if receipt.retained_floor > receipt.contiguous_cursor {
                     return Self::reject_path(root, "the retained floor exceeds accepted evidence");
                 }
@@ -303,13 +311,39 @@ impl AnalysisStore {
         if counts.0 != counts.1 {
             return Self::reject_path(root, "the stored epoch binding has no receipt");
         }
+        let mut statement = writer
+            .prepare(
+                "SELECT stream_key, tenant_id FROM processor_progress
+             UNION ALL SELECT stream_key, tenant_id FROM recovery_gaps",
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare source key validation",
+            })?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read source keys",
+            })?;
+        for row in rows {
+            let (key, tenant) = row.context(AnalysisDatabaseSnafu {
+                operation: "decode source key",
+            })?;
+            if key.first() != Some(&0)
+                || !super::raw::RawIdentity::valid_key(&key)
+                || &key[1..17] != tenant.as_slice()
+            {
+                return Self::reject_path(root, "the stored source key or tenant is invalid");
+            }
+        }
         Ok(())
     }
 
     fn validate_trace_receipts(writer: &Connection, root: &Path) -> Result<()> {
         let invalid: bool = writer.query_row(
             "SELECT (SELECT COUNT(*) FROM trace_receipts) > 1024 OR EXISTS (
-             SELECT 1 FROM trace_receipts WHERE octet_length(stream_key) <> 32 OR octet_length(tenant_id) <> 16
+             SELECT 1 FROM trace_receipts WHERE octet_length(stream_key) <> 33 OR octet_length(tenant_id) <> 16
              OR octet_length(encode(identity_json)) > 4096 OR octet_length(encode(terminal)) > 4096
              OR last_sequence > 4096 OR output_bytes > 16777216 OR output_bytes < last_sequence
              OR retained_floor > last_sequence + CASE WHEN terminal IS NULL THEN 0 ELSE 1 END
@@ -436,17 +470,17 @@ impl AnalysisStore {
             "epoch_key, tenant_id, node_boot_id, label_epoch FROM source_bindings",
             "next_segment_id FROM store_meta",
             "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end FROM segments",
-            "stream_key, tenant_id, revision, report, report_sha256, commit_revision, ordinal FROM coverage",
-            "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, content_sha256, commit_revision FROM context_versions",
+            "stream_key, tenant_id, revision, report, commit_revision, ordinal FROM coverage",
+            "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision FROM context_versions",
             "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision FROM processor_progress",
             "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns, segment_id FROM evidence_refs",
-            "ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision, content_sha256 FROM context_refs",
-            "result_id, tenant_id, processor_id, body, body_sha256, request_sha256, commit_revision FROM analysis_results",
+            "ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision, commit_revision FROM context_refs",
+            "result_id, tenant_id, processor_id, body, request_meta, commit_revision FROM analysis_results",
             "processor_id, method_version, tenant_id, stream_key, first_cursor, last_cursor, commit_revision FROM processor_gaps",
             "stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM recovery_gaps",
             "segment_id, stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM expired_ranges",
             "tenant_id, commit_revision, ordinal FROM replay_floors",
-            "tenant_id, request_id, source, source_sha256, bindings, authority, accepted_unix_ns, deadline_unix_ns, host_sensitive, content_sha256, revision, cancel_requested, read_revoked FROM traces",
+            "tenant_id, request_id, source, source_sha256, bindings, authority, accepted_unix_ns, deadline_unix_ns, host_sensitive, revision, cancel_requested, read_revoked FROM traces",
         ];
         for projection in projections {
             writer
@@ -538,45 +572,9 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "bind source epoch",
             })?;
-        super::quota::UsageChange::from(256).apply(writer, &identity.tenant_id)?;
+        super::quota::UsageChange::from(256 + key.len() as i64)
+            .apply(writer, &identity.tenant_id)?;
         Ok(true)
-    }
-
-    pub(super) fn file_digest(path: &Path) -> Result<[u8; 32]> {
-        let input = OpenOptions::new()
-            .read(true)
-            .custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
-            )
-            .open(path)
-            .context(IoSnafu { path })?;
-        let metadata = input.metadata().context(IoSnafu { path })?;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-            return Self::reject_path(path, "the digest input is not a private regular file");
-        }
-        let bound = metadata.len().checked_add(1).ok_or_else(|| {
-            crate::AnalysisStateSnafu {
-                path,
-                reason: "the digest input size is invalid",
-            }
-            .build()
-        })?;
-        let mut input = input.take(bound);
-        let mut total = 0;
-        let mut digest = Sha256::new();
-        let mut chunk = [0_u8; 1024 * 1024];
-        loop {
-            let bytes = input.read(&mut chunk).context(IoSnafu { path })?;
-            if bytes == 0 {
-                break;
-            }
-            total += bytes as u64;
-            digest.update(&chunk[..bytes]);
-        }
-        if total != metadata.len() {
-            return Self::reject_path(path, "the digest input changed size during read");
-        }
-        Ok(digest.finalize().into())
     }
 
     pub(super) fn reject_path<T>(root: &Path, reason: &str) -> Result<T> {
@@ -594,6 +592,157 @@ mod tests {
 
     use super::*;
     use crate::EvidenceIntakeIdentityV1;
+
+    #[test]
+    fn analysis_keys_preserve_identity() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let header = super::super::segment_file::SegmentFile::encode_identity(&identity)?;
+        let key = identity.key();
+        assert_eq!(key[0], 0);
+        assert_eq!(&key[1..], &header[..header.len() - 4]);
+        assert!(super::super::raw::RawIdentity::valid_key(&key));
+        for changed in [
+            EvidenceIntakeIdentityV1 {
+                tenant_id: [4; 16],
+                ..identity.clone()
+            },
+            EvidenceIntakeIdentityV1 {
+                node_id: "node-b".into(),
+                ..identity.clone()
+            },
+            EvidenceIntakeIdentityV1 {
+                source_id: [4; 16],
+                ..identity.clone()
+            },
+            EvidenceIntakeIdentityV1 {
+                source_epoch: 2,
+                ..identity.clone()
+            },
+        ] {
+            assert_ne!(changed.key(), key);
+            assert_ne!(changed.epoch_key(), identity.epoch_key());
+        }
+        for changed in [
+            EvidenceIntakeIdentityV1 {
+                node_boot_id: [4; 16],
+                ..identity.clone()
+            },
+            EvidenceIntakeIdentityV1 {
+                label_epoch: 2,
+                ..identity.clone()
+            },
+        ] {
+            assert_ne!(changed.key(), key);
+            assert_eq!(changed.epoch_key(), identity.epoch_key());
+        }
+        for size in [1, 128] {
+            let changed = EvidenceIntakeIdentityV1 {
+                node_id: "n".repeat(size),
+                ..identity.clone()
+            };
+            assert_eq!(changed.key().len(), 67 + size);
+            assert!(super::super::raw::RawIdentity::valid_key(&changed.key()));
+        }
+        let mut invalid = key.clone();
+        invalid[66] = 0;
+        assert!(!super::super::raw::RawIdentity::valid_key(&invalid));
+        assert!(!super::super::raw::RawIdentity::valid_key(
+            &key[..key.len() - 1]
+        ));
+        assert!(!super::super::raw::RawIdentity::valid_key(&[1; 32]));
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_keys_validate_orphans() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let scope = super::super::ProcessorScopeV1 {
+            processor_id: "required".into(),
+            method_version: 1,
+            identity: EvidenceIntakeIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "n".repeat(128),
+                node_boot_id: [2; 16],
+                label_epoch: 1,
+                source_id: [3; 16],
+                source_epoch: 1,
+            },
+        };
+        let key_bytes = scope.identity.key().len() as u64;
+        assert_eq!(key_bytes, 195);
+        let progress_bytes = 256 + scope.processor_id.len() as u64 + key_bytes;
+        let store = AnalysisStore::open(&root)?;
+        store.register_processor(&scope, super::super::ProcessorClassV1::Required, 1)?;
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            progress_bytes
+        );
+        store.record_recovery_floor(&scope.identity, 3)?;
+        let total = progress_bytes + 256 + key_bytes;
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            total
+        );
+        store.record_recovery_floor(&scope.identity, 3)?;
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            total
+        );
+        assert!(store.source_receipt(&scope.identity)?.is_none());
+        AnalysisStore::validate_usage(store.writer()?.get()?, &root)?;
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        let mut writer = store.writer()?;
+        assert_eq!(
+            writer
+                .get()?
+                .query_row("SELECT logical_bytes FROM tenant_usage", [], |row| {
+                    row.get::<_, u64>(0)
+                })?,
+            total
+        );
+        AnalysisStore::validate_usage(writer.get()?, &root)?;
+        AnalysisStore::validate_sources(writer.get()?, &root)?;
+        for table in ["processor_progress", "recovery_gaps"] {
+            let transaction = writer.get_mut()?.transaction()?;
+            let mut invalid = scope.identity.key();
+            invalid[66] = 0;
+            transaction.execute(
+                &format!("UPDATE {table} SET stream_key = ?"),
+                params![invalid],
+            )?;
+            assert!(AnalysisStore::validate_sources(&transaction, &root).is_err());
+            transaction.rollback()?;
+            let transaction = writer.get_mut()?.transaction()?;
+            transaction.execute(
+                &format!("UPDATE {table} SET tenant_id = ?"),
+                params![[4_u8; 16].as_slice()],
+            )?;
+            assert!(AnalysisStore::validate_sources(&transaction, &root).is_err());
+            transaction.rollback()?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn analysis_source_count_bound() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -662,11 +811,13 @@ mod tests {
             "UPDATE evidence_refs SET durable_cursor = 2",
             "UPDATE evidence_refs SET segment_id = segment_id + 1",
             "UPDATE evidence_refs SET tenant_id = 'foreign'::BLOB",
-            "UPDATE context_refs SET content_sha256 = 'changed'::BLOB",
+            "UPDATE context_refs SET lifetime_key = 'changed'::BLOB",
             "DELETE FROM context_versions",
-            "UPDATE context_versions SET body = 'changed'::BLOB",
+            "UPDATE context_versions SET body = ''::BLOB",
             "UPDATE processor_progress SET consumed_cursor = 2",
-            "UPDATE analysis_results SET body = 'changed'::BLOB",
+            "UPDATE analysis_results SET body = ''::BLOB",
+            "UPDATE analysis_results SET request_meta = ''::BLOB",
+            "UPDATE context_refs SET commit_revision = commit_revision + 1",
             "UPDATE relation_revisions SET last_changed_revision = 99",
             "UPDATE store_meta SET recovery_epoch = 0",
         ];
@@ -728,8 +879,8 @@ mod tests {
                     expires_utc_ns: 3,
                 }],
                 context_refs: vec![crate::AnalysisContextRefV1 {
-                    content_sha256: context.content_digest()?,
                     key: context.key,
+                    commit_revision: revision,
                 }],
             })?;
             drop(store);

@@ -16,12 +16,10 @@ pub enum DiscoveryRevisionKindV1 {
         cursor: u64,
         cpu_id: Option<u32>,
         original_kernel_sequence: Option<u64>,
-        payload_digest: DiscoveryDigestV1,
     },
     Coverage {
         stream: EvidenceIntakeIdentityV1,
         revision: u64,
-        report_digest: DiscoveryDigestV1,
     },
     RetainedRangeExpired {
         stream: EvidenceIntakeIdentityV1,
@@ -36,7 +34,6 @@ pub enum DiscoveryRevisionKindV1 {
     Context {
         id: String,
         revision: u64,
-        document_digest: DiscoveryDigestV1,
         trust: DiscoveryContextTrustV1,
     },
 }
@@ -44,7 +41,6 @@ pub enum DiscoveryRevisionKindV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryRevisionEventV1 {
-    pub id: DiscoveryDigestV1,
     pub position: DiscoveryRevisionPositionV1,
     pub origin: DiscoveryHeadV1,
     pub change: DiscoveryRevisionKindV1,
@@ -56,6 +52,34 @@ pub struct DiscoveryRevisionPageV1 {
     pub complete_through: u64,
     pub events: Vec<DiscoveryRevisionEventV1>,
     pub next: Option<DiscoveryRevisionPositionV1>,
+}
+
+impl DiscoveryRevisionEventV1 {
+    fn key(&self) -> Result<Vec<u8>> {
+        let bytes = match &self.change {
+            DiscoveryRevisionKindV1::Observation { stream, cursor, .. } => {
+                rmp_serde::to_vec_named(&("observation", stream, cursor))
+            }
+            DiscoveryRevisionKindV1::Coverage { stream, revision } => {
+                rmp_serde::to_vec_named(&("coverage", stream, revision))
+            }
+            _ => rmp_serde::to_vec_named(&(
+                "revision",
+                &self.origin.key,
+                self.origin.revision,
+                self.position.ordinal,
+            )),
+        }
+        .map_err(|error| {
+            DiscoverySnafu {
+                code: "REVISION_ENCODING",
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        DiscoveryInputManifestV1::require(bytes.len() <= 1024, "REVISION_KEY_LIMIT")?;
+        Ok(bytes)
+    }
 }
 
 pub(super) enum RevisionPayload {
@@ -136,7 +160,6 @@ impl RevisionPayload {
                             original_kernel_sequence: wire
                                 .decision_context
                                 .map(|context| context.original_kernel_sequence),
-                            payload_digest: DiscoveryDigestV1::of(&record.wire_record)?,
                         },
                     ));
                 }
@@ -154,7 +177,6 @@ impl RevisionPayload {
                         DiscoveryRevisionKindV1::Coverage {
                             stream: page.stream.clone(),
                             revision: report.revision,
-                            report_digest: DiscoveryDigestV1::of(bytes)?,
                         },
                     ));
                 }
@@ -182,7 +204,6 @@ impl RevisionPayload {
                 DiscoveryRevisionKindV1::Context {
                     id: revision.document.id.clone(),
                     revision: revision.document.revision,
-                    document_digest: DiscoveryDigestV1::of(&revision.document)?,
                     trust: revision.document.trust,
                 },
             )),
@@ -190,17 +211,7 @@ impl RevisionPayload {
         changes
             .into_iter()
             .map(|(ordinal, change)| {
-                let id = match &change {
-                    DiscoveryRevisionKindV1::Observation { stream, cursor, .. } => {
-                        DiscoveryDigestV1::of(&("observation", stream, cursor))?
-                    }
-                    DiscoveryRevisionKindV1::Coverage {
-                        stream, revision, ..
-                    } => DiscoveryDigestV1::of(&("coverage", stream, revision))?,
-                    _ => DiscoveryDigestV1::of(&(&head.key, head.revision, ordinal))?,
-                };
                 Ok(DiscoveryRevisionEventV1 {
-                    id,
                     position: DiscoveryRevisionPositionV1 {
                         commit_index: head.commit_index,
                         ordinal,
@@ -325,12 +336,7 @@ impl DiscoveryIndex {
             operation: "begin revision projection",
         })?;
         for event in events {
-            let payload_digest = match &event.change {
-                DiscoveryRevisionKindV1::Observation { payload_digest, .. } => {
-                    payload_digest.clone()
-                }
-                _ => DiscoveryDigestV1::of(&event.change)?,
-            };
+            let key = event.key()?;
             let bytes = rmp_serde::to_vec_named(event).map_err(|error| {
                 DiscoverySnafu {
                     code: "REVISION_ENCODING",
@@ -339,11 +345,20 @@ impl DiscoveryIndex {
                 .build()
             })?;
             DiscoveryInputManifestV1::require(bytes.len() <= 8192, "REVISION_ROW_LIMIT")?;
-            let known: Option<([u8;32], [u8;8], u16)> = transaction.query_row("SELECT payload_digest,commit_index,ordinal FROM revision_event WHERE tenant=?1 AND id=?2",
-                params![head.key.tenant_id, event.id.0], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().context(DiscoveryDatabaseSnafu { operation: "deduplicate revision" })?;
-            if let Some((digest, commit, ordinal)) = known {
+            let known: Option<(Vec<u8>, [u8;8], u16)> = transaction.query_row("SELECT event,commit_index,ordinal FROM revision_event WHERE tenant=?1 AND id=?2",
+                params![head.key.tenant_id, key], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().context(DiscoveryDatabaseSnafu { operation: "deduplicate revision" })?;
+            if let Some((stored, commit, ordinal)) = known {
+                DiscoveryInputManifestV1::require(stored.len() <= 8192, "REVISION_ROW_LIMIT")?;
+                let previous: DiscoveryRevisionEventV1 =
+                    rmp_serde::from_slice(&stored).map_err(|error| {
+                        DiscoverySnafu {
+                            code: "REVISION_ENCODING",
+                            reason: error.to_string(),
+                        }
+                        .build()
+                    })?;
                 DiscoveryInputManifestV1::require(
-                    digest == payload_digest.0,
+                    previous.key()? == key && self.same_revision(&previous, event)?,
                     "REVISION_PAYLOAD_CONFLICT",
                 )?;
                 if (u64::from_be_bytes(commit), ordinal)
@@ -365,8 +380,8 @@ impl DiscoveryIndex {
                     "REVISION_PUBLISHED_POSITION_CONFLICT",
                 )?;
             }
-            transaction.execute("INSERT INTO revision_event VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(tenant,id) DO UPDATE SET commit_index=excluded.commit_index,ordinal=excluded.ordinal,event=excluded.event",
-                params![head.key.tenant_id, event.id.0, event.position.commit_index.to_be_bytes(), event.position.ordinal, payload_digest.0, bytes])
+            transaction.execute("INSERT INTO revision_event VALUES(?1,?2,?3,?4,?5) ON CONFLICT(tenant,id) DO UPDATE SET commit_index=excluded.commit_index,ordinal=excluded.ordinal,event=excluded.event",
+                params![head.key.tenant_id, key, event.position.commit_index.to_be_bytes(), event.position.ordinal, bytes])
                 .context(DiscoveryDatabaseSnafu { operation: "insert revision event" })?;
         }
         transaction
@@ -384,6 +399,46 @@ impl DiscoveryIndex {
         transaction.commit().context(DiscoveryDatabaseSnafu {
             operation: "commit revision projection",
         })
+    }
+
+    fn same_revision(
+        &self,
+        previous: &DiscoveryRevisionEventV1,
+        current: &DiscoveryRevisionEventV1,
+    ) -> Result<bool> {
+        if previous.change != current.change {
+            return Ok(false);
+        }
+        if previous.origin == current.origin {
+            return Ok(true);
+        }
+        match &current.change {
+            DiscoveryRevisionKindV1::Observation { cursor, .. } => {
+                let left = self.export(&previous.origin)?;
+                let right = self.export(&current.origin)?;
+                let left = left.records.iter().enumerate().find(|(index, _)| {
+                    left.first_cursor.checked_add(*index as u64) == Some(*cursor)
+                });
+                let right = right.records.iter().enumerate().find(|(index, _)| {
+                    right.first_cursor.checked_add(*index as u64) == Some(*cursor)
+                });
+                Ok(left
+                    .zip(right)
+                    .is_some_and(|((_, left), (_, right))| left.wire_record == right.wire_record))
+            }
+            DiscoveryRevisionKindV1::Coverage { .. } => {
+                let left = self.export(&previous.origin)?;
+                let right = self.export(&current.origin)?;
+                Ok(left.coverage_record.is_some() && left.coverage_record == right.coverage_record)
+            }
+            DiscoveryRevisionKindV1::Context { .. } => {
+                Ok(
+                    ContextRevision::read(&self.store, &previous.origin)?.document
+                        == ContextRevision::read(&self.store, &current.origin)?.document,
+                )
+            }
+            _ => Ok(true),
+        }
     }
 
     fn publish_revision_prefix(&self, cutoff: u64) -> Result<()> {
@@ -467,7 +522,7 @@ impl DiscoveryIndex {
                     }
                     .build()
                 })?;
-            let indexed_id: [u8; 32] = row.get(1).context(DiscoveryDatabaseSnafu {
+            let indexed_id: Vec<u8> = row.get(1).context(DiscoveryDatabaseSnafu {
                 operation: "read revision identity",
             })?;
             let indexed_commit: [u8; 8] = row.get(2).context(DiscoveryDatabaseSnafu {
@@ -478,7 +533,7 @@ impl DiscoveryIndex {
             })?;
             DiscoveryInputManifestV1::require(
                 event.origin.key.tenant_id == tenant.to_be_bytes()
-                    && event.id.0 == indexed_id
+                    && event.key()? == indexed_id
                     && event.position.commit_index == u64::from_be_bytes(indexed_commit)
                     && event.position.ordinal == indexed_ordinal
                     && event.origin.commit_index == event.position.commit_index
@@ -505,6 +560,64 @@ impl DiscoveryIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_feed_content_retries() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let owner = DiscoveryOwner::open(store.clone())?;
+        let page = super::super::tests::resolved_page()?;
+        let key = crate::DiscoveryHeadKeyV1 {
+            tenant_id: page.stream.tenant_id,
+            id: DiscoveryDigestV1::of(&"feed content")?,
+        };
+        store.commit_discovery_head(
+            key.clone(),
+            None,
+            store.put_discovery_artifact(&page.artifact()?)?,
+        )?;
+        assert!(owner.project_revisions()?);
+        let before = owner.read_revisions(page.stream.tenant_id.into(), None)?;
+        let first = before.events.first().ok_or("event absent")?;
+        let value = serde_json::to_value(first)?;
+        assert!(value.get("id").is_none());
+        for field in ["payload_digest", "report_digest", "document_digest"] {
+            assert!(
+                value["change"].get(field).is_none(),
+                "unexpected field {field}"
+            );
+        }
+        assert!(owner.live.index.same_revision(first, first)?);
+        for changed in [false, true] {
+            let mut retry = page.clone();
+            if changed {
+                let mut wire = EvidenceRecord::decode(retry.records[0].wire_record.as_slice())?;
+                wire.observed_boottime_ns += 1;
+                retry.records[0].wire_record = wire.encode_to_vec();
+            }
+            let retry_key = crate::DiscoveryHeadKeyV1 {
+                tenant_id: page.stream.tenant_id,
+                id: DiscoveryDigestV1::of(&("feed retry", changed))?,
+            };
+            let retry = store.commit_discovery_head(
+                retry_key,
+                None,
+                store.put_discovery_artifact(&retry.artifact()?)?,
+            )?;
+            let events = RevisionPayload::read(&owner, &retry)?.events(&retry)?;
+            assert_eq!(first.key()?, events[0].key()?);
+            assert_eq!(owner.live.index.same_revision(first, &events[0])?, !changed);
+            assert_eq!(
+                owner.live.index.publish_revisions(&retry, &events).is_ok(),
+                !changed
+            );
+        }
+        assert_eq!(
+            owner.read_revisions(page.stream.tenant_id.into(), None)?,
+            before
+        );
+        Ok(())
+    }
 
     #[test]
     fn discovery_index_revision_rejects_gaps_and_changed_native_positions(
@@ -544,7 +657,7 @@ mod tests {
                 .map_err(|_| "writer poisoned")?;
             writer.execute(
                 "UPDATE revision_event SET event=?1 WHERE tenant=?2 AND id=?3",
-                params![rmp_serde::to_vec_named(&changed)?, tenant, changed.id.0],
+                params![rmp_serde::to_vec_named(&changed)?, tenant, changed.key()?],
             )?;
         }
         assert!(owner.read_revisions(tenant.into(), None).is_err());
@@ -560,7 +673,7 @@ mod tests {
                 params![
                     rmp_serde::to_vec_named(&before.events[0])?,
                     tenant,
-                    changed.id.0
+                    changed.key()?
                 ],
             )?;
         }

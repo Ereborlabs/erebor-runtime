@@ -3,7 +3,7 @@ use serde::Serialize;
 use snafu::ResultExt as _;
 
 use super::{
-    source_key, AnalysisGapV1, AnalysisStore, ProcessorClassV1, ProcessorScopeV1, StorageUsageV1,
+    AnalysisGapV1, AnalysisStore, ProcessorClassV1, ProcessorScopeV1, StorageUsageV1,
     MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
@@ -243,7 +243,7 @@ impl AnalysisStore {
                 .query_map(
                     params![
                         identity.tenant_id.as_slice(),
-                        source_key(identity).as_slice(),
+                        identity.key().as_slice(),
                         after_cursor,
                         MAX_ANALYSIS_PAGE_RECORDS as u32
                     ],
@@ -269,7 +269,7 @@ impl AnalysisStore {
         if !scope.valid() {
             return self.reject("the processor health scope is invalid");
         }
-        let key = source_key(&scope.identity);
+        let key = scope.identity.key();
         let tenant = scope.identity.tenant_id.as_slice();
         self.read_snapshot(|snapshot| {
             let progress: Option<(String, u64, u64, bool)> = snapshot

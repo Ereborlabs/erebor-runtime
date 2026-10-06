@@ -24,6 +24,17 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Query disclosure is not authorized"))]
+    QueryDenied {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Query execution task failed: {source}"))]
+    QueryExecution {
+        source: tokio::task::JoinError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Query relation {relation} is unavailable"))]
     QueryUnsupported {
         relation: &'static str,
@@ -156,6 +167,7 @@ impl ErrorExt for Error {
             | Self::QueryLimit { .. }
             | Self::AnalysisInputTooLarge { .. } => StatusCode::InvalidArguments,
             Self::QueryUnsupported { .. } => StatusCode::Unsupported,
+            Self::QueryDenied { .. } => StatusCode::PermissionDenied,
             Self::QueryCursorExpired { .. } | Self::RetainedRangeExpired { .. } => {
                 StatusCode::NotFound
             }
@@ -170,7 +182,9 @@ impl ErrorExt for Error {
             | Self::EvidenceDecode { .. }
             | Self::AnalysisState { .. }
             | Self::Json { .. } => StatusCode::IllegalState,
-            Self::AnalysisDatabase { .. } | Self::Io { .. } => StatusCode::External,
+            Self::AnalysisDatabase { .. } | Self::Io { .. } | Self::QueryExecution { .. } => {
+                StatusCode::External
+            }
             Self::QueryEncoding { .. } => StatusCode::Internal,
         }
     }

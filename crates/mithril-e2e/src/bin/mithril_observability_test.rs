@@ -7,6 +7,7 @@ enum Case {
     Backend,
     BackendLifecycle,
     OwnedCapture,
+    QueryUpload,
 }
 
 #[derive(Parser)]
@@ -31,16 +32,20 @@ struct Cli {
 impl Cli {
     fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let owner = mithril_e2e::ObservabilityQualification::new(self.output_directory);
-        if self.case == Case::OwnedCapture {
+        if matches!(self.case, Case::OwnedCapture | Case::QueryUpload) {
             if self.executable.is_some()
                 || self.sha256.is_some()
                 || self.retained_pin_root.is_some()
                 || self.parent_fixture
                 || self.pod_cgroup.is_some()
             {
-                return Err("owned-capture does not accept physical-backend options".into());
+                return Err("owned capture cases do not accept physical-backend options".into());
             }
-            return owner.owned_capture();
+            return if self.case == Case::QueryUpload {
+                owner.query_upload()
+            } else {
+                owner.owned_capture()
+            };
         }
         if self.case == Case::BackendLifecycle {
             if self.executable.is_some()
@@ -146,6 +151,29 @@ mod tests {
         let cli = Cli::try_parse_from(args)?;
         assert_eq!(cli.case, Case::OwnedCapture);
         assert!(cli.executable.is_none());
+        for options in [
+            vec!["--parent-fixture"],
+            vec!["--retained-pin-root", "/sys/fs/bpf/unused"],
+            vec!["--pod-cgroup", "/sys/fs/cgroup/unused"],
+            vec!["--executable", "/unused/bpftrace", "--sha256", "00"],
+        ] {
+            let cli = Cli::try_parse_from(args.into_iter().chain(options))?;
+            assert!(cli.run().is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_query_cli() -> Result<(), Box<dyn std::error::Error>> {
+        let args = [
+            "test",
+            "--case",
+            "query-upload",
+            "--output-directory",
+            "/tmp/proof",
+        ];
+        let cli = Cli::try_parse_from(args)?;
+        assert_eq!(cli.case, Case::QueryUpload);
         for options in [
             vec!["--parent-fixture"],
             vec!["--retained-pin-root", "/sys/fs/bpf/unused"],

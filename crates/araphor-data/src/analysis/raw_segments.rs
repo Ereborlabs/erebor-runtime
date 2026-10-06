@@ -252,7 +252,11 @@ impl EvidenceSegmentStateV1 {
         committed_end: u64,
         kind: &str,
     ) -> Result<Option<Self>> {
-        let file = super::SegmentFile::open(&path)?;
+        let file = if sealed_last.is_some() {
+            super::SegmentFile::reader(&path)?
+        } else {
+            super::SegmentFile::open(&path)?
+        };
         let mut bytes = file.read(0, file.length()? as usize)?;
         if bytes.len() as u64 > MAX_SEGMENT_BYTES {
             return AnalysisStateSnafu {
@@ -501,8 +505,20 @@ impl EvidenceSegmentOwner {
     }
 
     pub(crate) fn open(raw_root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
+        fs::create_dir_all(raw_root).context(IoSnafu { path: raw_root })?;
+        Self::read_segments(raw_root, committed, false)
+    }
+
+    pub(super) fn read_sealed(raw_root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
+        Self::read_segments(raw_root, committed, true)
+    }
+
+    fn read_segments(
+        raw_root: &Path,
+        committed: &BTreeMap<u64, u64>,
+        sealed_only: bool,
+    ) -> Result<Self> {
         let root = raw_root.to_path_buf();
-        fs::create_dir_all(&root).context(IoSnafu { path: &root })?;
         let mut segments = BTreeMap::new();
         let mut active = BTreeMap::new();
         let mut identities = BTreeMap::new();
@@ -533,6 +549,12 @@ impl EvidenceSegmentOwner {
                 .fail();
             }
             let (id, stream, first, sealed_last, kind) = EvidenceSegmentStateV1::parse_name(&path)?;
+            if sealed_only && sealed_last.is_none() {
+                return super::AnalysisStore::reject_path(
+                    &path,
+                    "the completed raw bundle contains an active segment",
+                );
+            }
             if kind == "diagnostic" {
                 diagnostic_count += 1;
             } else {

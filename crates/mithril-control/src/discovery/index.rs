@@ -9,7 +9,6 @@ use std::{
 use prost::Message as _;
 use rusqlite::{params, Connection, OptionalExtension as _, Transaction};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::*;
@@ -26,7 +25,7 @@ mod feed;
 mod recovery;
 pub use feed::*;
 
-const INDEX_SCHEMA_VERSION: i64 = 6;
+const INDEX_SCHEMA_VERSION: i64 = 7;
 
 #[cfg(test)]
 pub(super) mod tests {
@@ -916,6 +915,166 @@ pub(super) mod tests {
         assert_eq!(snapshots(&owner)?, original);
         Ok(())
     }
+
+    #[test]
+    fn context_keys_select_exactly() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let owner = DiscoveryOwner::open(store.clone())?;
+        let page = resolved_page()?;
+        let DiscoveryContextJoinV1::Available(pin) = &page.records[0].context else {
+            return Err("fixture context absent".into());
+        };
+        let access = DiscoveryContextAccessV1 {
+            tenant_id: pin.binding.record_id.stream.tenant_id.into(),
+            subject: DiscoveryOwner::context_subject(pin)?,
+            lifetime: pin.binding.process_instance_id,
+            disclosure: DisclosurePolicyV1 {
+                principal: "operator".into(),
+                revision: 1,
+                purpose: "context selection".into(),
+                destination: DiscoveryDisclosureDestinationV1::LocalOnly,
+                allowed_fields: vec!["context".into(), "evidence".into()],
+            },
+            sensitivities: vec!["INTERNAL".into()],
+            can_import: true,
+            can_review: false,
+        };
+        let method = DiscoveryMethodV1 {
+            id: "credential-read".into(),
+            version: "1".into(),
+            parameters_digest: DiscoveryDigestV1([2; 32]),
+            client_supplied: false,
+        };
+        let subject_key = DiscoveryIndex::context_key("subject", &access.subject)?;
+        let method_key = DiscoveryIndex::context_key("method", &method)?;
+        let decoded: (String, DiscoveryReferenceV1) = rmp_serde::from_slice(&subject_key)?;
+        assert_eq!(decoded, ("subject".into(), access.subject.clone()));
+        let decoded: (String, DiscoveryMethodV1) = rmp_serde::from_slice(&method_key)?;
+        assert_eq!(decoded, ("method".into(), method.clone()));
+        for field in 0..5 {
+            let mut changed = access.subject.clone();
+            match field {
+                0 => changed.tenant_id = crate::EvidenceIdV1::new(7, 7),
+                1 => changed.owner = DiscoveryReferenceOwnerV1::Evidence,
+                2 => changed.id.push('x'),
+                3 => changed.revision += 1,
+                _ => changed.digest.0[0] ^= 1,
+            }
+            assert_ne!(
+                DiscoveryIndex::context_key("subject", &changed)?,
+                subject_key
+            );
+        }
+        for field in 0..4 {
+            let mut changed = method.clone();
+            match field {
+                0 => changed.id.push('x'),
+                1 => changed.version.push('x'),
+                2 => changed.parameters_digest.0[0] ^= 1,
+                _ => changed.client_supplied = true,
+            }
+            assert_ne!(DiscoveryIndex::context_key("method", &changed)?, method_key);
+        }
+        assert_ne!(
+            DiscoveryIndex::context_key("method", &access.subject)?,
+            subject_key
+        );
+        let mut changed = access.subject.clone();
+        changed.id = "x".repeat(1024);
+        assert!(DiscoveryIndex::context_key("subject", &changed).is_err());
+
+        let export = store.commit_discovery_head(
+            crate::DiscoveryHeadKeyV1 {
+                tenant_id: page.stream.tenant_id,
+                id: DiscoveryDigestV1::of(&"context key test")?,
+            },
+            None,
+            store.put_discovery_artifact(&page.artifact()?)?,
+        )?;
+        let document = DiscoveryContextDocumentV1 {
+            schema_version: 1,
+            tenant_id: access.tenant_id,
+            id: "runbook".into(),
+            revision: 1,
+            kind: DiscoveryContextKindV1::Runbook,
+            subject: access.subject.clone(),
+            lifetime: access.lifetime,
+            method: method.clone(),
+            origin: "operator".into(),
+            valid_from_utc_ns: 1,
+            valid_until_utc_ns: None,
+            sensitivity: "INTERNAL".into(),
+            trust: DiscoveryContextTrustV1::Unreviewed,
+            approver: None,
+            text: "Read the retained denial evidence.".into(),
+        };
+        let first = owner.import_context(&access, document.clone())?;
+        let mut other_method = method.clone();
+        other_method.version = "2".into();
+        let mut other = document.clone();
+        other.id = "other-method".into();
+        other.method = other_method.clone();
+        let second = owner.import_context(&access, other)?;
+        let mut other_access = access.clone();
+        other_access.subject.revision += 1;
+        let mut other = document;
+        other.id = "other-subject".into();
+        other.subject = other_access.subject.clone();
+        let third = owner.import_context(&other_access, other)?;
+        for (scope, selected, handle) in [
+            (&access, &method, &first),
+            (&access, &other_method, &second),
+            (&other_access, &method, &third),
+        ] {
+            assert_eq!(
+                owner
+                    .live
+                    .index
+                    .context_candidates(scope, selected, u64::MAX)?,
+                vec![handle.revision.clone()]
+            );
+        }
+        {
+            let writer = owner
+                .live
+                .index
+                .writer
+                .lock()
+                .map_err(|_| "writer poisoned")?;
+            let stored: (Vec<u8>, Vec<u8>) = writer.query_row(
+                "SELECT subject,method FROM context_document WHERE id='runbook'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(stored, (subject_key, method_key));
+            for invalid in [Vec::new(), vec![0_u8; 1025]] {
+                assert!(writer
+                    .execute(
+                        "UPDATE context_document SET subject=?1 WHERE id='runbook'",
+                        [invalid.as_slice()],
+                    )
+                    .is_err());
+                assert!(writer
+                    .execute(
+                        "UPDATE context_document SET method=?1 WHERE id='runbook'",
+                        [invalid.as_slice()],
+                    )
+                    .is_err());
+            }
+        }
+        let view = owner.context_view(&access, &export, &method, u64::MAX, "select".into())?;
+        assert_eq!(view.documents, vec![first.clone()]);
+        assert!(owner.read_context(&other_access, &first).is_err());
+        drop(owner);
+        drop(store);
+        let owner = DiscoveryOwner::open(ControlStore::open(directory.path())?)?;
+        assert_eq!(
+            owner.context_view(&access, &export, &method, u64::MAX, "select".into())?,
+            view
+        );
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -941,7 +1100,6 @@ pub struct DiscoveryExportPageV1 {
 
 struct IndexedRecord {
     cursor: u64,
-    payload_digest: [u8; 32],
     atom: Option<(DiscoveryDigestV1, Vec<u8>)>,
     unresolved: Option<&'static str>,
 }
@@ -1068,7 +1226,6 @@ impl DiscoveryExportPageV1 {
                         }
                         .build()
                     })?;
-                let payload_digest = Sha256::digest(&retained.wire_record).into();
                 let Some(cpu) = self
                     .cpu_binding
                     .filter(|binding| cursor >= binding.first_cursor)
@@ -1079,7 +1236,6 @@ impl DiscoveryExportPageV1 {
                     )?;
                     return Ok(IndexedRecord {
                         cursor,
-                        payload_digest,
                         atom: None,
                         unresolved: Some("UNKNOWN_SOURCE_CPU"),
                     });
@@ -1134,7 +1290,6 @@ impl DiscoveryExportPageV1 {
                 };
                 Ok(IndexedRecord {
                     cursor,
-                    payload_digest,
                     atom,
                     unresolved,
                 })
@@ -1311,7 +1466,7 @@ impl DiscoveryIndex {
                 PRIMARY KEY(tenant,build,atom), FOREIGN KEY(tenant,build) REFERENCES source_progress(tenant,build)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS input_record(
                 tenant BLOB NOT NULL, build BLOB NOT NULL, cursor BLOB NOT NULL CHECK(length(cursor)=8),
-                payload BLOB NOT NULL CHECK(length(payload)=32), commit_index BLOB NOT NULL CHECK(length(commit_index)=8),
+                commit_index BLOB NOT NULL CHECK(length(commit_index)=8),
                 ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 255), atom BLOB, unresolved TEXT,
                 CHECK((atom IS NULL) != (unresolved IS NULL)), PRIMARY KEY(tenant,build,cursor),
                 FOREIGN KEY(tenant,build) REFERENCES source_progress(tenant,build),
@@ -1324,8 +1479,8 @@ impl DiscoveryIndex {
                 PRIMARY KEY(tenant,snapshot)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS context_document(
                 tenant BLOB NOT NULL CHECK(length(tenant)=16), id TEXT NOT NULL, revision BLOB NOT NULL CHECK(length(revision)=8),
-                subject BLOB NOT NULL CHECK(length(subject)=32), lifetime BLOB NOT NULL CHECK(length(lifetime)=16),
-                method BLOB NOT NULL CHECK(length(method)=32), imported BLOB NOT NULL CHECK(length(imported)=8),
+                subject BLOB NOT NULL CHECK(length(subject) BETWEEN 1 AND 1024), lifetime BLOB NOT NULL CHECK(length(lifetime)=16),
+                method BLOB NOT NULL CHECK(length(method) BETWEEN 1 AND 1024), imported BLOB NOT NULL CHECK(length(imported)=8),
                 valid_from BLOB NOT NULL CHECK(length(valid_from)=8), valid_until BLOB,
                 commit_index BLOB NOT NULL CHECK(length(commit_index)=8), head BLOB NOT NULL,
                 PRIMARY KEY(tenant,id,revision), UNIQUE(tenant,commit_index)) WITHOUT ROWID;
@@ -1335,14 +1490,14 @@ impl DiscoveryIndex {
                 tenant BLOB NOT NULL CHECK(length(tenant)=16), commit_index BLOB NOT NULL CHECK(length(commit_index)=8),
                 head BLOB NOT NULL, PRIMARY KEY(tenant,commit_index)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS revision_event(
-                tenant BLOB NOT NULL CHECK(length(tenant)=16), id BLOB NOT NULL CHECK(length(id)=32),
+                tenant BLOB NOT NULL CHECK(length(tenant)=16), id BLOB NOT NULL CHECK(length(id) BETWEEN 1 AND 1024),
                 commit_index BLOB NOT NULL CHECK(length(commit_index)=8), ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 257),
-                payload_digest BLOB NOT NULL CHECK(length(payload_digest)=32), event BLOB NOT NULL,
+                event BLOB NOT NULL,
                 PRIMARY KEY(tenant,id), UNIQUE(tenant,commit_index,ordinal)) WITHOUT ROWID;
             DROP INDEX IF EXISTS revision_position;
             CREATE TABLE IF NOT EXISTS revision_prefix(id INTEGER PRIMARY KEY CHECK(id=1), commit_index BLOB NOT NULL CHECK(length(commit_index)=8));
             INSERT OR IGNORE INTO revision_prefix VALUES(1,x'0000000000000000');
-            PRAGMA user_version=6; COMMIT;")
+            PRAGMA user_version=7; COMMIT;")
             .context(DiscoveryDatabaseSnafu { operation: "initialize schema" })?;
         let first = Self::connection(&path, true)?;
         let second = Self::connection(&path, true)?;
@@ -1732,12 +1887,11 @@ impl DiscoveryIndex {
         }
         transaction
             .execute(
-                "INSERT INTO input_record VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT INTO input_record VALUES(?1,?2,?3,?4,?5,?6,?7)",
                 params![
                     tenant,
                     build,
                     cursor,
-                    record.payload_digest,
                     head.commit_index.to_be_bytes(),
                     ordinal as u32,
                     atom_id,
@@ -2017,6 +2171,18 @@ impl DiscoveryIndex {
         })
     }
 
+    fn context_key(tag: &str, value: &impl Serialize) -> Result<Vec<u8>> {
+        let bytes = rmp_serde::to_vec_named(&(tag, value)).map_err(|error| {
+            DiscoverySnafu {
+                code: "CONTEXT_INDEX_SCHEMA",
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        DiscoveryInputManifestV1::require(bytes.len() <= 1024, "CONTEXT_KEY_LIMIT")?;
+        Ok(bytes)
+    }
+
     pub(super) fn context_document(
         &self,
         tenant: crate::EvidenceIdV1,
@@ -2060,9 +2226,9 @@ impl DiscoveryIndex {
             .query_map(
                 params![
                     access.tenant_id.to_be_bytes(),
-                    DiscoveryDigestV1::of(&access.subject)?.0,
+                    Self::context_key("subject", &access.subject)?,
                     access.lifetime.to_be_bytes(),
-                    DiscoveryDigestV1::of(method)?.0,
+                    Self::context_key("method", method)?,
                     cutoff.to_be_bytes()
                 ],
                 |row| row.get::<_, Vec<u8>>(0),
@@ -2185,9 +2351,9 @@ impl DiscoveryIndex {
                         head.key.tenant_id,
                         document.id,
                         document.revision.to_be_bytes(),
-                        DiscoveryDigestV1::of(&document.subject)?.0,
+                        Self::context_key("subject", &document.subject)?,
                         document.lifetime.to_be_bytes(),
-                        DiscoveryDigestV1::of(&document.method)?.0,
+                        Self::context_key("method", &document.method)?,
                         revision.imported_utc_ns.to_be_bytes(),
                         document.valid_from_utc_ns.to_be_bytes(),
                         document.valid_until_utc_ns.map(u64::to_be_bytes),

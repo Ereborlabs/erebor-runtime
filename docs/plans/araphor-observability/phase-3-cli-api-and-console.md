@@ -282,7 +282,12 @@ followed by new output, durable ACK, exact replay and reopen checks. The paired
 physical case must keep Control's non-root user and security settings.
 No process-isolation or performance result is required by this query design.
 
-The final Rust CI procedure is in progress. The paired physical client case,
+The final Rust CI procedure passed on the current source on 2026-10-05:
+format check, workspace check, all-feature clippy with warnings denied, and
+all-target, all-feature workspace tests. The data crate passed 216 tests,
+including the 85 query tests; the shared trace crate passed 23 tests. The
+lightweight query-failure trace-upload case also passed in this procedure.
+Ignored physical and performance cases did not run. The paired physical client case,
 shared listener, route migration, CLI and console remain unqualified. The
 [implementation review](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/implementation-review.md#public-query-boundary-review)
 links the present owners and tests. Continue with public client work only

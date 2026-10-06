@@ -14,7 +14,10 @@ fn while_held<T: Send>(
     held: QueryResult,
     work: impl FnOnce() -> TestResult<T> + Send,
 ) -> TestResult<T> {
-    let digest = held.digest()?;
+    let columns = held.columns.clone();
+    let types = held.types.clone();
+    let rows = held.rows.clone();
+    let positions = held.positions.clone();
     let meta = held.meta.clone();
     let sources = held.sources.to_vec();
     let (done, completed) = mpsc::channel();
@@ -25,9 +28,12 @@ fn while_held<T: Send>(
             result
         });
         let completed = completed.recv_timeout(Duration::from_secs(5));
-        let unchanged = held.digest().map(|current| {
-            current == digest && held.meta == meta && &**held.sources == sources.as_slice()
-        });
+        let unchanged = held.columns == columns
+            && held.types == types
+            && held.rows == rows
+            && held.positions == positions
+            && held.meta == meta
+            && &**held.sources == sources.as_slice();
         // Release held output before join, also when the worker did not finish.
         drop(held);
         (completed, unchanged, worker.join())
@@ -36,7 +42,7 @@ fn while_held<T: Send>(
         completed.is_ok(),
         "held query output blocked store maintenance"
     );
-    assert!(unchanged?, "store maintenance changed held query output");
+    assert!(unchanged, "store maintenance changed held query output");
     result.map_err(|_| "store maintenance worker panicked")?
 }
 

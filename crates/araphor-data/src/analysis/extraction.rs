@@ -7,7 +7,7 @@ use snafu::ResultExt as _;
 
 use super::segments::SegmentRange;
 use super::{
-    source_key, AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl,
+    AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl,
     AnalysisRecordV1, AnalysisSourceReceiptV1, AnalysisStore, AnalysisStoreMetaV1, StorePositionV1,
     MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
 };
@@ -422,7 +422,7 @@ impl AnalysisStore {
             }
             for identity in &selection.sources {
                 control.check()?;
-                let key = source_key(identity);
+                let key = identity.key();
                 let receipt = Self::read_receipt_from(snapshot, &self.root, identity, &key)?
                     .ok_or_else(|| self.state_error("the selected source is absent"))?;
                 output.charge(receipt.identity.node_id.capacity())?;
@@ -599,7 +599,7 @@ impl AnalysisStore {
         let identity = &receipt.identity;
         let revision = Self::read_meta_from(snapshot, &self.root)?.commit_revision;
         let retained = control.lock(|| self.raw.try_lock())?.record_count(
-            source_key(identity),
+            &identity.key(),
             1,
             receipt.contiguous_cursor,
             revision,
@@ -637,10 +637,7 @@ impl AnalysisStore {
         })?;
         let rows = statement
             .query_map(
-                params![
-                    source_key(identity).as_slice(),
-                    identity.tenant_id.as_slice()
-                ],
+                params![identity.key().as_slice(), identity.tenant_id.as_slice()],
                 |row| {
                     Ok(AnalysisGapV1 {
                         first_cursor: row.get(0)?,
@@ -1520,7 +1517,7 @@ mod tests {
             .lock()
             .map_err(|_| "raw lock poisoned")?
             .ranges
-            .remove(&(source_key(&identity), 2));
+            .remove(&(identity.key(), 2));
         assert!(store
             .extract(&selection, &AnalysisReadControl::default(), |_| Ok(None))
             .is_err());

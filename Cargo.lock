@@ -129,6 +129,8 @@ dependencies = [
  "crc32c",
  "duckdb",
  "erebor-runtime-error",
+ "futures-core",
+ "futures-util",
  "minicbor",
  "prost",
  "prost-build",

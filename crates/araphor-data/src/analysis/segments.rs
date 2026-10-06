@@ -150,7 +150,7 @@ impl AnalysisStore {
         })?;
         let (tenant, bytes): (Vec<u8>, i64) = transaction
             .query_row(
-                "SELECT tenant_id, (256 + committed_end + octet_length(encode(identity_json)))::BIGINT
+                "SELECT tenant_id, (256 + octet_length(stream_key) + committed_end + octet_length(encode(identity_json)))::BIGINT
                 FROM segments WHERE segment_id = ? AND state = 'Deleting'",
                 params![segment_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),

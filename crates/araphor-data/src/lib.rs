@@ -21,10 +21,11 @@ pub use evidence::{
     MAX_EVIDENCE_RECORD_BYTES,
 };
 pub use query::{
-    QueryCheckpoint, QueryClock, QueryColumn, QueryCoverage, QueryCoverageRows, QueryCoverageState,
-    QueryErrorCode, QueryFrame, QueryLimits, QueryMetadata, QueryOperation, QueryOwner,
-    QueryPayload, QueryPlan, QueryResult, QueryStream, QueryTemplate, QueryTerminalReason,
-    SystemQueryClock, QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
+    QueryAuthorization, QueryBinding, QueryCheckpoint, QueryClock, QueryColumn, QueryCoverage,
+    QueryCoverageRows, QueryCoverageState, QueryErrorCode, QueryFrame, QueryGrant, QueryHealth,
+    QueryLimits, QueryMetadata, QueryOperation, QueryOwner, QueryPayload, QueryPlan, QueryResult,
+    QuerySql, QueryStream, QueryTemplate, QueryTerminalReason, SystemQueryClock,
+    QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
 };
 pub use trace::{
     TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,

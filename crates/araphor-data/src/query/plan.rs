@@ -1,15 +1,14 @@
 use std::ops::Bound;
 
 use duckdb::types::Value;
-use sha2::{Digest as _, Sha256};
-use snafu::IntoError as _;
 
+use super::{QueryGrant, QuerySql};
 use crate::{AnalysisSelectionV1, Result};
 
 pub const QUERY_SCHEMA_VERSION: u32 = 1;
 
-/// Code-owned queries. This type has no SQL-string or deserialization entry point.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Trusted templates and client SQL that passed the closed binder.
+#[derive(Clone, Debug, PartialEq)]
 pub enum QueryTemplate {
     Events { operation: Option<u32> },
     OperationCounts,
@@ -21,6 +20,7 @@ pub enum QueryTemplate {
     Coverage,
     ContextVersions,
     Catalog,
+    Client(QuerySql),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -33,10 +33,14 @@ pub enum QueryOperation {
 pub struct QueryPlan {
     pub(super) selection: AnalysisSelectionV1,
     pub(super) template: QueryTemplate,
+    pub(super) grant: Option<QueryGrant>,
 }
 
 impl QueryPlan {
     pub fn new(selection: AnalysisSelectionV1, template: QueryTemplate) -> Result<Self> {
+        if matches!(template, QueryTemplate::Client(_)) {
+            return crate::QueryDeniedSnafu.fail();
+        }
         if !selection.valid() {
             return crate::QueryInvalidSnafu { field: "scope" }.fail();
         }
@@ -88,11 +92,25 @@ impl QueryPlan {
         Ok(Self {
             selection,
             template,
+            grant: None,
+        })
+    }
+
+    pub fn client(grant: QueryGrant, sql: QuerySql) -> Result<Self> {
+        grant.validate()?;
+        if !grant.selection.results.is_empty() {
+            return crate::QueryDeniedSnafu.fail();
+        }
+        Ok(Self {
+            selection: grant.selection.clone(),
+            template: QueryTemplate::Client(sql),
+            grant: Some(grant),
         })
     }
 
     pub fn operation(&self) -> QueryOperation {
-        match self.template {
+        match &self.template {
+            QueryTemplate::Client(sql) => sql.operation(),
             QueryTemplate::Events { .. } | QueryTemplate::ExactMatch { .. } => {
                 QueryOperation::Append
             }
@@ -104,7 +122,28 @@ impl QueryPlan {
         &self.template
     }
 
+    pub(super) fn moving_seconds(&self) -> Option<u32> {
+        match &self.template {
+            QueryTemplate::MovingCount { seconds } => Some(*seconds),
+            QueryTemplate::Client(sql) => sql.moving_seconds(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn evaluation_at(&self, now_ns: u64) -> Result<(String, Vec<Value>)> {
+        match &self.template {
+            QueryTemplate::Client(sql) => {
+                let bound = sql.bind_at(now_ns)?;
+                Ok((bound.sql, bound.parameters))
+            }
+            _ => Ok((self.sql(), self.parameters(now_ns))),
+        }
+    }
+
     pub(super) fn reads_events(&self) -> bool {
+        if let QueryTemplate::Client(sql) = &self.template {
+            return sql.dependencies().contains("events");
+        }
         !matches!(
             self.template,
             QueryTemplate::Coverage
@@ -114,9 +153,33 @@ impl QueryPlan {
         )
     }
 
-    pub(super) fn dependencies(&self, now_ns: u64) -> AnalysisSelectionV1 {
+    pub(super) fn dependencies(&self, now_ns: u64) -> Result<AnalysisSelectionV1> {
         let mut selection = self.selection(now_ns);
-        match self.template {
+        match &self.template {
+            QueryTemplate::Client(sql) => {
+                let bound = sql.bind_at(now_ns)?;
+                let (first, last) = selection.time_range().unwrap_or((1, 0));
+                let from = match bound.received_from {
+                    Bound::Included(value) => value.max(first),
+                    Bound::Excluded(value) => value.saturating_add(1).max(first),
+                    Bound::Unbounded => first,
+                };
+                let until = match bound.received_until {
+                    Bound::Included(value) => value.min(last),
+                    Bound::Excluded(value) => value.saturating_sub(1).min(last),
+                    Bound::Unbounded => last,
+                };
+                selection.received_from = Bound::Included(from);
+                selection.received_until = Bound::Included(until);
+                if !sql.dependencies().contains("events")
+                    && !sql.dependencies().contains("coverage")
+                {
+                    selection.sources.clear();
+                }
+                if !sql.dependencies().contains("context_versions") {
+                    selection.contexts.clear();
+                }
+            }
             QueryTemplate::Catalog => {
                 selection.sources.clear();
                 selection.contexts.clear();
@@ -131,7 +194,7 @@ impl QueryPlan {
             }
             _ => {}
         }
-        selection
+        Ok(selection)
     }
 
     pub(super) fn selection(&self, now_ns: u64) -> AnalysisSelectionV1 {
@@ -155,6 +218,7 @@ impl QueryPlan {
             QueryTemplate::Coverage => "SELECT * FROM coverage ORDER BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, kind, first_cursor, last_cursor, commit_revision, interval_id, interval_revision",
             QueryTemplate::ContextVersions => "SELECT * FROM context_versions ORDER BY owner_id, entity_key, lifetime_key, owner_revision",
             QueryTemplate::Catalog => "SELECT * FROM catalog ORDER BY relation, ordinal",
+            QueryTemplate::Client(_) => "",
         }
     }
 
@@ -195,70 +259,5 @@ impl QueryPlan {
             _ => Vec::new(),
         });
         parameters
-    }
-
-    pub(super) fn binding(&self) -> Result<[u8; 32]> {
-        let mut hash = Sha256::new();
-        hash.update(b"ARAPHOR-INTERNAL-QUERY-V1\0");
-        hash.update(QUERY_SCHEMA_VERSION.to_be_bytes());
-        hash.update(self.sql().as_bytes());
-        hash.update(self.selection.tenant_id);
-        for source in &self.selection.sources {
-            let bytes = serde_json::to_vec(source)
-                .map_err(|source| crate::QueryEncodingSnafu.into_error(source))?;
-            hash.update((bytes.len() as u64).to_be_bytes());
-            hash.update(bytes);
-        }
-        for key in &self.selection.contexts {
-            let bytes = serde_json::to_vec(key)
-                .map_err(|source| crate::QueryEncodingSnafu.into_error(source))?;
-            hash.update((bytes.len() as u64).to_be_bytes());
-            hash.update(bytes);
-        }
-        for bound in [
-            &self.selection.received_from,
-            &self.selection.received_until,
-        ] {
-            let (tag, value) = match bound {
-                Bound::Unbounded => (0, 0),
-                Bound::Included(value) => (1, *value),
-                Bound::Excluded(value) => (2, *value),
-            };
-            hash.update([tag]);
-            hash.update(value.to_be_bytes());
-        }
-        // These parameters contain only integers, null, or an exact object ID.
-        for value in self.parameters(0) {
-            match value {
-                Value::Null => hash.update([0]),
-                Value::UInt(value) => {
-                    hash.update([1]);
-                    hash.update(value.to_be_bytes());
-                }
-                Value::UBigInt(value) => {
-                    hash.update([2]);
-                    hash.update(value.to_be_bytes());
-                }
-                Value::BigInt(value) => {
-                    hash.update([3]);
-                    hash.update(value.to_be_bytes());
-                }
-                Value::Blob(value) => {
-                    hash.update([4]);
-                    hash.update((value.len() as u64).to_be_bytes());
-                    hash.update(value);
-                }
-                _ => {
-                    return crate::QueryInvalidSnafu {
-                        field: "template parameters",
-                    }
-                    .fail()
-                }
-            }
-        }
-        if let QueryTemplate::MovingCount { seconds } = self.template {
-            hash.update(seconds.to_be_bytes());
-        }
-        Ok(hash.finalize().into())
     }
 }

@@ -361,7 +361,9 @@ revocation and buffered revocation use the same production owner.
 [Follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs) check
 ordered frames, backpressure, cancellation and fused stream closure.
 All 85 query owner tests pass on the current working tree. The required final
-workspace procedure remains in progress. Public transport, CLI, console and
+workspace procedure passed on 2026-10-05 after the last Rust edit: format,
+workspace check, all-feature clippy with warnings denied, and all-target,
+all-feature workspace tests. Public transport, CLI, console and
 paired physical client proof remain unqualified.
 
 The enabled
@@ -379,7 +381,7 @@ performance. The lightweight case passes on the current working tree.
 The query-upload case still needs paired physical proof. The physical Control Pod keeps UID
 65532 and its current security settings.
 The shared listener, administrative route migration,
-CLI, console, built-client end-to-end case and final workspace gate remain
+CLI, console, built-client end-to-end case and a final workspace gate for those changes remain
 required. This section does not claim public SQL is qualified.
 
 ### Storage owner review

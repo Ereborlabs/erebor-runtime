@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use duckdb::types::{Value, ValueRef};
-use duckdb::{params_from_iter, Config, Connection};
+use duckdb::types::Value;
 use snafu::ResultExt as _;
 
 use crate::{
@@ -11,7 +10,14 @@ use crate::{
 };
 
 mod adapter;
+mod admission;
+mod authorization;
+#[cfg(test)]
+mod authorization_tests;
 mod budget;
+#[cfg(test)]
+mod client_tests;
+mod evaluation;
 mod follow;
 #[cfg(test)]
 mod follow_tests;
@@ -23,11 +29,13 @@ mod plan;
 #[cfg(test)]
 mod tests;
 
+pub use admission::{QueryBinding, QuerySql};
+pub use authorization::{QueryAuthorization, QueryGrant};
 use budget::{QueryBudget, QueryLease};
 pub use follow::{QueryClock, QueryStream, SystemQueryClock};
 pub use frame::{
     QueryCheckpoint, QueryColumn, QueryCoverage, QueryCoverageRows, QueryCoverageState,
-    QueryErrorCode, QueryFrame, QueryMetadata, QueryPayload, QueryTerminalReason,
+    QueryErrorCode, QueryFrame, QueryHealth, QueryMetadata, QueryPayload, QueryTerminalReason,
     QUERY_CHECKPOINT_BYTES,
 };
 use input::{InputRelations, InputRow};
@@ -75,6 +83,16 @@ impl Default for QueryLimits {
 }
 
 impl QueryLimits {
+    fn client_capacity(&self) -> Result<()> {
+        if self.output_rows > 200 || self.output_bytes > 1024 * 1024 {
+            return crate::QueryInvalidSnafu {
+                field: "client query limits",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<()> {
         if self.scan_bytes == 0
             || self.input_bytes == 0
@@ -114,8 +132,9 @@ pub struct QueryResult {
     pub meta: AnalysisStoreMetaV1,
     pub sources: Arc<QueryCoverageRows>,
     pub missing_contexts: Vec<AnalysisContextKeyV1>,
-    pub scanned_bytes: usize,
-    pub input_bytes: usize,
+    /// Internal counters are absent from client results.
+    pub scanned_bytes: Option<usize>,
+    pub input_bytes: Option<usize>,
     pub input_rows: usize,
     pub output_bytes: usize,
     pub evaluated_utc_ns: u64,
@@ -123,6 +142,7 @@ pub struct QueryResult {
     pub exhausted: bool,
     pub limited: bool,
     pub next_expiry_ns: Option<u64>,
+    pub positions: Vec<StorePositionV1>,
     _lease: QueryLease,
 }
 
@@ -137,6 +157,24 @@ pub struct QueryOwner {
     scan_gate: std::sync::Mutex<Option<adapter::ScanGate>>,
     #[cfg(test)]
     native_failed: std::sync::atomic::AtomicBool,
+}
+
+struct QueryTask {
+    control: Arc<AnalysisReadControl>,
+    running: bool,
+}
+
+enum QueryRead {
+    Snapshot,
+    Append(Option<StorePositionV1>),
+}
+
+impl Drop for QueryTask {
+    fn drop(&mut self) {
+        if self.running {
+            let _cancelled = self.control.cancel();
+        }
+    }
 }
 
 impl QueryOwner {
@@ -170,20 +208,89 @@ impl QueryOwner {
         now_ns: u64,
         control: &AnalysisReadControl,
     ) -> Result<QueryResult> {
+        if plan.grant.is_some() {
+            return crate::QueryDeniedSnafu.fail();
+        }
         let control = control.within(self.limits.extract_timeout)?;
-        self.evaluate(plan, now_ns, None, false, &control)
+        self.evaluate(
+            plan,
+            now_ns,
+            QueryRead::Snapshot,
+            &control,
+            self.reserve(plan)?,
+        )
+    }
+
+    pub async fn query_client(
+        self: &Arc<Self>,
+        plan: QueryPlan,
+        authority: Arc<dyn QueryAuthorization>,
+        now_ns: u64,
+        control: Arc<AnalysisReadControl>,
+    ) -> Result<QueryResult> {
+        let grant = plan
+            .grant
+            .clone()
+            .ok_or_else(|| crate::QueryDeniedSnafu.build())?;
+        authority.check(&grant)?;
+        let result = self
+            .evaluate_async(plan, now_ns, None, false, control)
+            .await?;
+        authority.check(&grant)?;
+        Ok(result)
+    }
+
+    async fn evaluate_async(
+        self: &Arc<Self>,
+        plan: QueryPlan,
+        now_ns: u64,
+        after: Option<StorePositionV1>,
+        paged: bool,
+        control: Arc<AnalysisReadControl>,
+    ) -> Result<QueryResult> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "query runtime",
+            }
+            .build()
+        })?;
+        let stage = control.within(self.limits.extract_timeout)?;
+        let lease = self.reserve(&plan)?;
+        let owner = self.clone();
+        let mut task = QueryTask {
+            control,
+            running: true,
+        };
+        let result = runtime
+            .spawn_blocking(move || {
+                let read = if paged {
+                    QueryRead::Append(after)
+                } else {
+                    QueryRead::Snapshot
+                };
+                owner.evaluate(&plan, now_ns, read, &stage, lease)
+            })
+            .await;
+        task.running = false;
+        result.context(crate::QueryExecutionSnafu)?
+    }
+
+    fn reserve(&self, plan: &QueryPlan) -> Result<QueryLease> {
+        if plan.grant.is_some() {
+            self.limits.client_capacity()?;
+        }
+        self.budget.evaluate(plan.selection.tenant_id)
     }
 
     fn evaluate(
         &self,
         plan: &QueryPlan,
         now_ns: u64,
-        after: Option<StorePositionV1>,
-        paged: bool,
+        read: QueryRead,
         control: &AnalysisReadControl,
+        mut lease: QueryLease,
     ) -> Result<QueryResult> {
-        let mut lease = self.budget.evaluate(plan.selection.tenant_id)?;
-        let selection = plan.dependencies(now_ns);
+        let selection = plan.dependencies(now_ns)?;
         let project = |input: crate::AnalysisInputV1<'_>| {
             let row = InputRow::try_from(input)?;
             let bytes = row.allocation_bytes()?;
@@ -194,7 +301,7 @@ impl QueryOwner {
             input_bytes: self.limits.input_bytes,
             ..Default::default()
         };
-        let mut page = if paged {
+        let mut page = if let QueryRead::Append(after) = read {
             self.store
                 .position_rows(&selection, after, bounds, control, project)?
         } else if plan.reads_events() {
@@ -204,8 +311,8 @@ impl QueryOwner {
             self.store
                 .metadata_rows(&selection, bounds, control, project)?
         };
-        let next_expiry_ns = match plan.template {
-            QueryTemplate::MovingCount { seconds } => page
+        let next_expiry_ns = match plan.moving_seconds() {
+            Some(seconds) => page
                 .extraction
                 .pages
                 .iter()
@@ -232,6 +339,12 @@ impl QueryOwner {
             self.limits.input_bytes,
             &plan.template,
         )?;
+        let input = if plan.grant.is_some() && plan.operation() == QueryOperation::Append {
+            input.append_positions(self.limits.input_bytes)?
+        } else {
+            input
+        };
+        page.extraction.input_bytes = input.allocation_bytes();
         #[cfg(test)]
         self.input_refs
             .lock()
@@ -274,178 +387,40 @@ impl QueryOwner {
         }
         self.check_output(summary_bytes)?;
         let evaluation = control.stage(self.limits.evaluate_timeout)?;
-        let config = Config::default()
-            .with("temp_directory", "")
-            .and_then(|config| config.enable_external_access(false))
-            .and_then(|config| config.enable_autoload_extension(false))
-            .and_then(|config| config.threads(1))
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "configure trusted query",
-            })?;
-        let mut config = config;
-        for (name, value) in [
-            ("autoinstall_known_extensions", "false"),
-            ("allow_unsigned_extensions", "false"),
-            ("memory_limit", "64MiB"),
-        ] {
-            config = config
-                .with(name, value)
-                .context(crate::AnalysisDatabaseSnafu {
-                    operation: "bound trusted query",
-                })?;
-        }
-        let connection = Connection::open_in_memory_with_flags(config).context(
-            crate::AnalysisDatabaseSnafu {
-                operation: "open trusted query",
+        let (sql, parameters) = plan.evaluation_at(now_ns)?;
+        let output = evaluation::QueryEvaluation::run(
+            &input,
+            &sql,
+            &parameters,
+            evaluation::EvaluationLimits {
+                rows: self.limits.output_rows,
+                bytes: self.limits.output_bytes,
+                summary_bytes,
+                operation: plan.operation(),
+                complete: match &plan.template {
+                    QueryTemplate::Client(client) => client.follow(),
+                    _ => true,
+                },
             },
+            page.scanned_through,
+            &evaluation,
+            #[cfg(test)]
+            Some(&self.native_failed),
         )?;
-        let mut scanned_through = page.scanned_through;
-        let (columns, types, rows, output_bytes, limited) =
-            evaluation.query_run(&connection, || {
-                input.register(&connection)?;
-                let sql = format!(
-                    "SELECT * FROM ({}) AS query_result LIMIT {}",
-                    plan.sql(),
-                    self.limits.output_rows + 1
-                );
-                let mut statement =
-                    connection
-                        .prepare(&sql)
-                        .context(crate::AnalysisDatabaseSnafu {
-                            operation: "prepare trusted query",
-                        })?;
-                let parameters = plan.parameters(now_ns);
-                let native = statement.query(params_from_iter(parameters.iter()));
-                #[cfg(test)]
-                self.native_failed
-                    .store(native.is_err(), std::sync::atomic::Ordering::Release);
-                let mut result = native.context(crate::AnalysisDatabaseSnafu {
-                    operation: "execute trusted query",
-                })?;
-                let schema = result.as_ref().ok_or_else(|| {
-                    crate::QueryInvalidSnafu {
-                        field: "query result schema",
-                    }
-                    .build()
-                })?;
-                let columns = schema.column_names();
-                let types: Vec<_> = (0..schema.column_count())
-                    .map(|index| format!("{:?}", schema.column_logical_type(index).id()))
-                    .collect();
-                let mut rows = Vec::new();
-                let mut output_bytes = summary_bytes;
-                for fields in [&columns, &types] {
-                    output_bytes = output_bytes.saturating_add(
-                        fields
-                            .capacity()
-                            .saturating_mul(std::mem::size_of::<String>()),
-                    );
-                    for field in fields {
-                        output_bytes = output_bytes.saturating_add(field.capacity());
-                    }
-                }
-                self.check_output(output_bytes)?;
-                let mut limited = false;
-                while let Some(row) = result.next().context(crate::AnalysisDatabaseSnafu {
-                    operation: "read trusted query",
-                })? {
-                    evaluation.check()?;
-                    if rows.len() == self.limits.output_rows {
-                        limited = true;
-                        if plan.operation() == QueryOperation::Append {
-                            scanned_through = Self::before_row(row)?;
-                        }
-                        break;
-                    }
-                    let count = row.as_ref().column_count();
-                    let mut row_bytes = count.saturating_mul(std::mem::size_of::<Value>());
-                    let descriptor = if rows.len() == rows.capacity() {
-                        std::mem::size_of::<Vec<Value>>()
-                    } else {
-                        0
-                    };
-                    if output_bytes
-                        .saturating_add(row_bytes)
-                        .saturating_add(descriptor)
-                        > self.limits.output_bytes
-                    {
-                        if rows.is_empty() {
-                            return crate::QueryLimitSnafu {
-                                resource: "query output bytes",
-                                limit: self.limits.output_bytes,
-                            }
-                            .fail();
-                        }
-                        limited = true;
-                        if plan.operation() == QueryOperation::Append {
-                            scanned_through = Self::before_row(row)?;
-                        }
-                        break;
-                    }
-                    let mut values = Vec::with_capacity(count);
-                    for index in 0..count {
-                        let value = row.get_ref(index).context(crate::AnalysisDatabaseSnafu {
-                            operation: "read query value",
-                        })?;
-                        let bytes = match &value {
-                            ValueRef::Text(value) | ValueRef::Blob(value) => value.len(),
-                            _ => 0,
-                        };
-                        row_bytes = row_bytes.saturating_add(bytes);
-                        if output_bytes
-                            .saturating_add(row_bytes)
-                            .saturating_add(descriptor)
-                            > self.limits.output_bytes
-                        {
-                            limited = true;
-                            break;
-                        }
-                        values.push(value.to_owned());
-                    }
-                    if limited {
-                        if rows.is_empty() {
-                            return crate::QueryLimitSnafu {
-                                resource: "query output bytes",
-                                limit: self.limits.output_bytes,
-                            }
-                            .fail();
-                        }
-                        if plan.operation() == QueryOperation::Append {
-                            scanned_through = Self::before_row(row)?;
-                        }
-                        break;
-                    }
-                    let capacity = rows.capacity();
-                    rows.try_reserve_exact(1).map_err(|_| {
-                        crate::QueryLimitSnafu {
-                            resource: "query output allocation",
-                            limit: self.limits.output_bytes,
-                        }
-                        .build()
-                    })?;
-                    output_bytes += row_bytes
-                        + (rows.capacity() - capacity) * std::mem::size_of::<Vec<Value>>();
-                    if output_bytes > self.limits.output_bytes {
-                        return crate::QueryLimitSnafu {
-                            resource: "query output allocation",
-                            limit: self.limits.output_bytes,
-                        }
-                        .fail();
-                    }
-                    rows.push(values);
-                }
-                drop(result);
-                if limited && plan.operation() == QueryOperation::Replace {
-                    return crate::QueryLimitSnafu {
-                        resource: "complete replacement output",
-                        limit: self.limits.output_bytes,
-                    }
-                    .fail();
-                }
-                Ok((columns, types, rows, output_bytes, limited))
-            })?;
-        drop(connection);
         drop(input);
+        let evaluation::EvaluationResult {
+            mut columns,
+            mut types,
+            mut rows,
+            output_bytes,
+            limited,
+            scanned_through,
+        } = output;
+        let positions = if plan.grant.is_some() && plan.operation() == QueryOperation::Append {
+            QueryResult::take_positions(&mut columns, &mut types, &mut rows)?
+        } else {
+            Vec::new()
+        };
         let mut result = QueryResult {
             columns,
             types,
@@ -453,8 +428,11 @@ impl QueryOwner {
             meta: page.extraction.meta,
             sources,
             missing_contexts: page.extraction.missing_contexts,
-            scanned_bytes: page.extraction.scanned_bytes,
-            input_bytes: page.extraction.input_bytes,
+            scanned_bytes: plan
+                .grant
+                .is_none()
+                .then_some(page.extraction.scanned_bytes),
+            input_bytes: plan.grant.is_none().then_some(page.extraction.input_bytes),
             input_rows,
             output_bytes,
             evaluated_utc_ns: now_ns,
@@ -462,6 +440,7 @@ impl QueryOwner {
             exhausted: page.exhausted && !limited,
             limited,
             next_expiry_ns,
+            positions,
             _lease: lease,
         };
         result.output_bytes = result.allocation_bytes()?;
@@ -495,7 +474,7 @@ impl QueryOwner {
         crate::StorageHealthV1,
     )> {
         let mut lease = self.budget.evaluate(plan.selection.tenant_id)?;
-        let mut selection = plan.dependencies(now_ns);
+        let mut selection = plan.dependencies(now_ns)?;
         selection.contexts.clear();
         let bounds = crate::analysis::AnalysisExtractLimits {
             scan_bytes: self.limits.scan_bytes,
@@ -505,8 +484,8 @@ impl QueryOwner {
         let page = self
             .store
             .metadata_rows::<InputRow>(&selection, bounds, control, |_| Ok(None))?;
-        let sources = page
-            .extraction
+        let extraction = page.extraction;
+        let sources = extraction
             .sources
             .into_iter()
             .map(QueryCoverage::from)
@@ -516,18 +495,22 @@ impl QueryOwner {
         let sources = Arc::new(QueryCoverageRows::new(sources, lease.split(bytes)?)?);
         let health = self.store.storage_health()?;
         control.check()?;
-        Ok((page.extraction.meta, sources, health))
+        Ok((extraction.meta, sources, health))
     }
 
     fn before_row(row: &duckdb::Row<'_>) -> Result<StorePositionV1> {
         let revision: u64 = row
-            .get("commit_revision")
+            .get("__araphor_commit_revision")
+            .or_else(|_| row.get("commit_revision"))
             .context(crate::AnalysisDatabaseSnafu {
                 operation: "read query commit position",
             })?;
-        let ordinal: u32 = row.get("ordinal").context(crate::AnalysisDatabaseSnafu {
-            operation: "read query ordinal",
-        })?;
+        let ordinal: u32 = row
+            .get("__araphor_ordinal")
+            .or_else(|_| row.get("ordinal"))
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "read query ordinal",
+            })?;
         match ordinal.checked_sub(1) {
             Some(ordinal) => Ok(StorePositionV1 {
                 commit_revision: revision,
@@ -547,8 +530,57 @@ impl QueryOwner {
 }
 
 impl QueryResult {
+    fn take_positions(
+        columns: &mut Vec<String>,
+        types: &mut Vec<String>,
+        rows: &mut [Vec<Value>],
+    ) -> Result<Vec<StorePositionV1>> {
+        if columns.len() < 2
+            || columns.len() != types.len()
+            || columns[columns.len() - 2] != "__araphor_commit_revision"
+            || columns[columns.len() - 1] != "__araphor_ordinal"
+        {
+            return crate::QueryInvalidSnafu {
+                field: "query cursor output",
+            }
+            .fail();
+        }
+        let width = columns.len();
+        let mut positions = Vec::with_capacity(rows.len());
+        for row in rows {
+            if row.len() != width {
+                return crate::QueryInvalidSnafu {
+                    field: "query cursor output",
+                }
+                .fail();
+            }
+            let ordinal = row.pop();
+            let revision = row.pop();
+            let (Some(Value::UBigInt(commit_revision)), Some(Value::UInt(ordinal))) =
+                (revision, ordinal)
+            else {
+                return crate::QueryInvalidSnafu {
+                    field: "query cursor output",
+                }
+                .fail();
+            };
+            positions.push(StorePositionV1 {
+                commit_revision,
+                ordinal,
+            });
+        }
+        columns.truncate(width - 2);
+        types.truncate(width - 2);
+        Ok(positions)
+    }
+
     fn allocation_bytes(&self) -> Result<usize> {
         let mut bytes = std::mem::size_of::<QueryFrame>();
+        bytes = bytes.saturating_add(
+            self.positions
+                .capacity()
+                .saturating_mul(std::mem::size_of::<StorePositionV1>()),
+        );
         bytes = bytes.saturating_add(self.sources.allocation_bytes()?);
         bytes = bytes.saturating_add(
             self.missing_contexts

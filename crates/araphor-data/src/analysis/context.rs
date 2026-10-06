@@ -2,15 +2,14 @@ use std::path::Path;
 
 use duckdb::{params, Connection, OptionalExt as _};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::AnalysisStore;
-use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, JsonSnafu, Result};
+use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, Result};
 
 const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_CONTEXT_KEY_BYTES: usize = 256;
-type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, Vec<u8>, u64);
+type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, u64);
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct AnalysisContextKeyV1 {
@@ -83,10 +82,6 @@ impl AnalysisContextVersionV1 {
             && !self.body.is_empty()
             && self.body.len() <= MAX_CONTEXT_BYTES
     }
-
-    pub fn content_digest(&self) -> std::result::Result<[u8; 32], serde_json::Error> {
-        Ok(Sha256::digest(serde_json::to_vec(self)?).into())
-    }
 }
 
 impl AnalysisStore {
@@ -95,33 +90,14 @@ impl AnalysisStore {
             return self.reject("the context version identity or bounds are invalid");
         }
         let path = self.root.join("analysis.duckdb");
-        let digest = input.content_digest().context(JsonSnafu { path: &path })?;
         let key = &input.key;
         let mut writer_guard = self.writer()?;
         let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin context version",
         })?;
-        let existing: Option<(Vec<u8>, u64)> = transaction
-            .query_row(
-                "SELECT content_sha256, commit_revision FROM context_versions
-                 WHERE tenant_id = ? AND owner_id = ? AND entity_key = ?
-                 AND lifetime_key = ? AND owner_revision = ?",
-                params![
-                    key.tenant_id.as_slice(),
-                    key.owner_id,
-                    key.entity_key.as_slice(),
-                    key.lifetime_key.as_slice(),
-                    key.owner_revision,
-                ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read immutable context version",
-            })?;
-        if let Some((stored, revision)) = existing {
-            if stored != digest {
+        if let Some((stored, revision)) = Self::read_context_from(&transaction, &self.root, key)? {
+            if &stored != input {
                 return AnalysisConflictSnafu.fail();
             }
             return Ok(revision);
@@ -133,7 +109,7 @@ impl AnalysisStore {
         let sensitivity: &'static str = input.sensitivity.into();
         transaction
             .execute(
-                "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     key.tenant_id.as_slice(),
                     key.owner_id,
@@ -144,7 +120,6 @@ impl AnalysisStore {
                     input.valid_until_utc_ns,
                     sensitivity,
                     input.body.as_slice(),
-                    digest.as_slice(),
                     revision,
                 ],
             )
@@ -191,8 +166,7 @@ impl AnalysisStore {
     ) -> Result<Option<(AnalysisContextVersionV1, u64)>> {
         let stored: Option<ContextRow> = connection
             .query_row(
-                "SELECT valid_from_utc_ns, valid_until_utc_ns, sensitivity, body,
-                        content_sha256, commit_revision
+                "SELECT valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision
                  FROM context_versions WHERE tenant_id = ? AND owner_id = ? AND entity_key = ?
                  AND lifetime_key = ? AND owner_revision = ?",
                 params![
@@ -209,7 +183,6 @@ impl AnalysisStore {
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
-                        row.get(5)?,
                     ))
                 },
             )
@@ -217,7 +190,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read context version",
             })?;
-        let Some((from, until, sensitivity, body, digest, revision)) = stored else {
+        let Some((from, until, sensitivity, body, revision)) = stored else {
             return Ok(None);
         };
         let sensitivity = match ContextSensitivityV1::try_from(sensitivity.as_str()) {
@@ -231,10 +204,8 @@ impl AnalysisStore {
             sensitivity,
             body,
         };
-        let path = root.join("analysis.duckdb");
-        let expected = result.content_digest().context(JsonSnafu { path })?;
-        if !result.valid() || expected.as_slice() != digest {
-            return Self::reject_path(root, "the retained context version digest is invalid");
+        if !result.valid() || revision == 0 {
+            return Self::reject_path(root, "the retained context version is invalid");
         }
         Ok(Some((result, revision)))
     }
@@ -265,12 +236,20 @@ mod tests {
         let revision = store.commit_context(&input)?;
         assert_eq!(store.commit_context(&input)?, revision);
         assert_eq!(store.context_version(&input.key)?, Some(input.clone()));
-        let mut conflict = input.clone();
-        conflict.body.push(0);
-        assert!(matches!(
-            store.commit_context(&conflict),
-            Err(crate::Error::AnalysisConflict { .. })
-        ));
+        for change in 0..4 {
+            let mut conflict = input.clone();
+            match change {
+                0 => conflict.body.push(0),
+                1 => conflict.valid_from_utc_ns = Some(101),
+                2 => conflict.valid_until_utc_ns = Some(201),
+                _ => conflict.sensitivity = ContextSensitivityV1::HostRestricted,
+            }
+            assert!(matches!(
+                store.commit_context(&conflict),
+                Err(crate::Error::AnalysisConflict { .. })
+            ));
+            assert_eq!(store.meta()?.commit_revision, revision);
+        }
         let mut later = input.clone();
         later.key.owner_revision = 5;
         later.valid_from_utc_ns = Some(300);
@@ -293,6 +272,7 @@ mod tests {
         }
         drop(store);
         let reopened = AnalysisStore::open(path)?;
+        assert_eq!(reopened.commit_context(&input)?, revision);
         assert_eq!(reopened.context_version(&later.key)?, Some(later));
         assert_eq!(reopened.context_version(&unknown.key)?, Some(unknown));
         let mut foreign = input.key.clone();
@@ -301,7 +281,7 @@ mod tests {
         reopened.writer()?.get()?.execute(
             "UPDATE context_versions SET body = ? WHERE tenant_id = ? AND owner_id = ?",
             duckdb::params![
-                b"changed".as_slice(),
+                b"".as_slice(),
                 input.key.tenant_id.as_slice(),
                 input.key.owner_id,
             ],

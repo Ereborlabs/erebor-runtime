@@ -3,6 +3,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use duckdb::types::Value;
+use futures_core::stream::FusedStream;
+use futures_util::StreamExt;
 use tokio::sync::oneshot;
 
 use super::tests::QueryFixture;
@@ -87,7 +89,8 @@ impl QueryClock for ExpiryClock {
 async fn next(stream: &mut QueryStream) -> TestResult<QueryFrame> {
     tokio::time::timeout(WAIT, stream.next())
         .await?
-        .ok_or_else(|| "query stream closed before its expected frame".into())
+        .ok_or("query stream closed before its expected frame")?
+        .map_err(Into::into)
 }
 
 fn checkpoint(frame: &QueryFrame) -> TestResult<QueryCheckpoint> {
@@ -139,7 +142,12 @@ async fn cancelled(stream: &mut QueryStream, last: Option<&QueryCheckpoint>) -> 
         }
     }
     drop(frame);
-    assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+    assert!(tokio::time::timeout(WAIT, stream.next())
+        .await?
+        .transpose()?
+        .is_none());
+    assert!(stream.is_terminated());
+    assert!(stream.next().await.is_none());
     tokio::time::timeout(WAIT, &mut stream.task).await??;
     Ok(())
 }
@@ -394,7 +402,10 @@ async fn query_follow_output_stall() -> TestResult {
     let metadata = next(&mut stream).await?;
     assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
     drop(metadata);
-    assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+    assert!(tokio::time::timeout(WAIT, stream.next())
+        .await?
+        .transpose()?
+        .is_none());
     fixture.event(2, 2, 7)?;
     let result = owner.query_cancel(&plan, 2, &AnalysisReadControl::default())?;
     assert_eq!(result.rows.len(), 2);

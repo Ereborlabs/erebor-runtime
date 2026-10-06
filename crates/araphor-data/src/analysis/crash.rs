@@ -145,7 +145,8 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
         )?;
         let before = store.meta()?;
         let backup = original.join("backups/backup");
-        let manifest = store.backup(&backup)?;
+        store.backup(&backup)?;
+        let saved = fs::read(backup.join("analysis.duckdb"))?;
         assert!(AnalysisStore::restore(&backup, &original).is_err());
         assert!(!original.join("restore.pending").exists());
         assert_eq!(store.meta()?, before);
@@ -156,10 +157,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
             .env("ARAPHOR_CRASH_POINT", point)
             .status()?;
         assert_eq!(status.code(), Some(73), "{point}");
-        assert_eq!(
-            AnalysisStore::file_digest(&backup.join("analysis.duckdb"))?,
-            manifest.database_sha256
-        );
+        assert_eq!(fs::read(backup.join("analysis.duckdb"))?, saved);
         assert_eq!(store.meta()?, before, "{point}");
         let ready = point == "restore.ready";
         assert_eq!(root.join("restore.pending").exists(), !ready, "{point}");
@@ -195,10 +193,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
             retry.read_page(&source, 1)?.records[0].framed_record,
             b"record"
         );
-        assert_eq!(
-            AnalysisStore::file_digest(&backup.join("analysis.duckdb"))?,
-            manifest.database_sha256
-        );
+        assert_eq!(fs::read(backup.join("analysis.duckdb"))?, saved);
     }
     Ok(())
 }
@@ -666,7 +661,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         }],
         context_refs: vec![AnalysisContextRefV1 {
             key: context.key.clone(),
-            content_sha256: context.content_digest()?,
+            commit_revision: 4,
         }],
     };
     let limits = RetentionLimitsV1 {

@@ -3,7 +3,6 @@ use std::path::Path;
 
 use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 
 use super::{AnalysisReadControl, AnalysisStore};
@@ -71,11 +70,6 @@ impl TraceIntentV1 {
         }
         Ok(())
     }
-
-    fn digest(&self, root: &Path) -> Result<[u8; 32]> {
-        let bytes = serde_json::to_vec(self).context(JsonSnafu { path: root })?;
-        Ok(Sha256::digest(bytes).into())
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -104,7 +98,6 @@ impl AnalysisStore {
         accepted_unix_ns UBIGINT NOT NULL,
         deadline_unix_ns UBIGINT NOT NULL,
         host_sensitive BOOLEAN NOT NULL,
-        content_sha256 BLOB NOT NULL,
         revision UBIGINT NOT NULL,
         cancel_requested BOOLEAN NOT NULL,
         read_revoked BOOLEAN NOT NULL,
@@ -115,7 +108,6 @@ impl AnalysisStore {
         intent.validate()?;
         let bindings =
             serde_json::to_string(&intent.bindings).context(JsonSnafu { path: &self.root })?;
-        let digest = intent.digest(&self.root)?;
         let mut writer = self.maintenance_writer()?;
         let transaction = writer
             .get_mut()?
@@ -151,7 +143,7 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the trace intent revision is exhausted"))?;
         transaction
             .execute(
-                "INSERT INTO traces VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, false)",
+                "INSERT INTO traces VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, false)",
                 params![
                     intent.tenant_id.as_slice(),
                     intent.request_id.as_slice(),
@@ -162,7 +154,6 @@ impl AnalysisStore {
                     intent.accepted_unix_ns,
                     intent.deadline_unix_ns,
                     intent.host_sensitive,
-                    digest.as_slice(),
                     revision,
                 ],
             )
@@ -220,7 +211,7 @@ impl AnalysisStore {
             let mut statement = reader
                 .prepare(
                     "SELECT request_id, source, source_sha256, bindings, authority,
-                     accepted_unix_ns, deadline_unix_ns, host_sensitive, content_sha256,
+                     accepted_unix_ns, deadline_unix_ns, host_sensitive,
                      revision, cancel_requested, read_revoked FROM traces WHERE tenant_id = ?
                      AND (CAST(? AS BLOB) IS NULL OR request_id > ?)
                      ORDER BY request_id LIMIT ?",
@@ -333,7 +324,7 @@ impl AnalysisStore {
         let mut statement = reader
             .prepare(
                 "SELECT request_id, source, source_sha256, bindings, authority,
-             accepted_unix_ns, deadline_unix_ns, host_sensitive, content_sha256, revision,
+             accepted_unix_ns, deadline_unix_ns, host_sensitive, revision,
              cancel_requested, read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?",
             )
             .context(AnalysisDatabaseSnafu {
@@ -369,10 +360,9 @@ impl AnalysisStore {
                     row.get::<_, u64>(5)?,
                     row.get::<_, u64>(6)?,
                     row.get::<_, bool>(7)?,
-                    row.get::<_, Vec<u8>>(8)?,
-                    row.get::<_, u64>(9)?,
+                    row.get::<_, u64>(8)?,
+                    row.get::<_, bool>(9)?,
                     row.get::<_, bool>(10)?,
-                    row.get::<_, bool>(11)?,
                 ))
             })
             .context(AnalysisDatabaseSnafu {
@@ -387,7 +377,6 @@ impl AnalysisStore {
             accepted,
             deadline,
             host,
-            checksum,
             revision,
             cancel,
             revoked,
@@ -422,9 +411,6 @@ impl AnalysisStore {
         };
         if intent.validate().is_err() {
             return Self::reject_path(root, "the stored trace intent is invalid");
-        }
-        if intent.digest(root)?.as_slice() != checksum {
-            return Self::reject_path(root, "the immutable trace intent changed");
         }
         Ok((
             TraceStateV1 {
@@ -621,10 +607,10 @@ mod tests {
         let root = directory.path().join("data");
         let store = AnalysisStore::open(&root)?;
         store.accept_trace(&intent(3)?)?;
-        store.writer()?.get_mut()?.execute(
-            "UPDATE traces SET authority = ?",
-            params![b"changed-input".as_slice()],
-        )?;
+        store
+            .writer()?
+            .get_mut()?
+            .execute("UPDATE traces SET authority = ?", params![b"".as_slice()])?;
         assert!(store.trace_intent([1; 16], [3; 16]).is_err());
         assert!(store.trace_intents([1; 16], None).is_err());
         drop(store);

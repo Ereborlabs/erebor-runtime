@@ -4,14 +4,14 @@ use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt 
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-use duckdb::params;
+use duckdb::{params, AccessMode, Config, Connection};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 use uuid::Uuid;
 
 use super::{
     capacity::{StorageLimitsV1, StorageUsageV1},
-    source_key, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
+    AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
 
@@ -23,7 +23,6 @@ pub struct AnalysisBackupManifestV1 {
     pub recovery_epoch: u64,
     pub commit_revision: u64,
     pub database_bytes: u64,
-    pub database_sha256: [u8; 32],
     pub segments: Vec<AnalysisBackupSegmentV1>,
 }
 
@@ -33,7 +32,6 @@ pub struct AnalysisBackupSegmentV1 {
     pub segment_id: u64,
     pub file_name: String,
     pub bytes: u64,
-    pub sha256: [u8; 32],
 }
 
 const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
@@ -73,7 +71,7 @@ impl AnalysisStore {
         if !identity.valid() {
             return self.reject("the recovery source identity is invalid");
         }
-        let key = source_key(identity);
+        let key = identity.key();
         let mut writer = self.maintenance_writer()?;
         let transaction = writer
             .get_mut()?
@@ -120,7 +118,8 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "record unrecoverable source range",
                 })?;
-            super::quota::UsageChange::from(256).apply(&transaction, &identity.tenant_id)?;
+            super::quota::UsageChange::from(256 + key.len() as i64)
+                .apply(&transaction, &identity.tenant_id)?;
             self.check_logical(&transaction, identity.tenant_id, true)?;
             Self::record_revision(&transaction, revision, &["recovery_gaps"])?;
             #[cfg(test)]
@@ -343,16 +342,13 @@ impl AnalysisStore {
             recovery_epoch: meta.recovery_epoch,
             commit_revision: meta.commit_revision,
             database_bytes: source_bytes,
-            database_sha256: Self::file_digest(&source)?,
             segments: Vec::with_capacity(files.len()),
         };
         for (segment_id, bytes, name) in files {
-            let path = super::raw::RawJournal::file_path(&self.root, name)?;
             manifest.segments.push(AnalysisBackupSegmentV1 {
                 segment_id: *segment_id,
                 file_name: name.clone(),
                 bytes: *bytes,
-                sha256: Self::file_digest(&path)?,
             });
         }
         let manifest_path = destination.join("manifest.json");
@@ -479,6 +475,7 @@ impl AnalysisStore {
                 segment.segment_id == 0
                     || segment.bytes < 70
                     || segment.bytes > super::MAX_EVIDENCE_SEGMENT_BYTES as u64
+                    || !segment.file_name.ends_with(".seg")
             })
         {
             return Self::reject_path(root, "the backup manifest identity or bounds are invalid");
@@ -495,7 +492,6 @@ impl AnalysisStore {
         if !metadata.is_file()
             || metadata.permissions().mode() & 0o077 != 0
             || metadata.len() != manifest.database_bytes
-            || Self::file_digest(&database)? != manifest.database_sha256
         {
             return Self::reject_path(root, "the backup database differs from its manifest");
         }
@@ -531,9 +527,7 @@ impl AnalysisStore {
                 })?;
             let segment = &manifest.segments[index];
             let path = super::raw::RawJournal::file_path(root, &segment.file_name)?;
-            if path != entry.path()
-                || super::SegmentFile::reader(&path)?.length()? != segment.bytes
-                || Self::file_digest(&path)? != segment.sha256
+            if path != entry.path() || super::SegmentFile::reader(&path)?.length()? != segment.bytes
             {
                 return Self::reject_path(root, "the backup segment differs from its manifest");
             }
@@ -541,6 +535,66 @@ impl AnalysisStore {
         if count != manifest.segments.len() {
             return Self::reject_path(root, "the backup is missing a listed segment");
         }
+        let config = Config::default()
+            .with("temp_directory", "")
+            .and_then(|config| config.access_mode(AccessMode::ReadOnly))
+            .and_then(|config| config.enable_autoload_extension(false))
+            .and_then(|config| config.enable_external_access(false))
+            .and_then(|config| config.max_memory("64MiB"))
+            .and_then(|config| config.threads(2))
+            .context(AnalysisDatabaseSnafu {
+                operation: "bound backup validation",
+            })?;
+        let writer =
+            Connection::open_with_flags(&database, config).context(AnalysisDatabaseSnafu {
+                operation: "open backup validation",
+            })?;
+        let meta = Self::read_meta_from(&writer, &database)?;
+        if meta.store_uuid.to_string() != manifest.store_uuid
+            || meta.schema_version != manifest.schema_version
+            || meta.recovery_epoch != manifest.recovery_epoch
+            || meta.commit_revision != manifest.commit_revision
+        {
+            return Self::reject_path(
+                root,
+                "the backup database identity differs from its manifest",
+            );
+        }
+        Self::validate_tables(&writer)?;
+        Self::validate_state(&writer, root)?;
+        let files = Self::backup_segments(&writer)?;
+        if files
+            .iter()
+            .map(|(id, bytes, name)| (*id, *bytes, name.as_str()))
+            .ne(manifest.segments.iter().map(|segment| {
+                (
+                    segment.segment_id,
+                    segment.bytes,
+                    segment.file_name.as_str(),
+                )
+            }))
+        {
+            return Self::reject_path(root, "the backup catalog differs from its segment manifest");
+        }
+        let unsealed: bool = writer
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM segments WHERE NOT sealed)",
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "validate sealed backup catalog",
+            })?;
+        if unsealed {
+            return Self::reject_path(root, "the backup catalog contains an unsealed segment");
+        }
+        let committed = files.iter().map(|(id, bytes, _)| (*id, *bytes)).collect();
+        let mut raw = super::raw::RawJournal::read_sealed(root, &committed)?;
+        if raw.revision > meta.commit_revision {
+            return Self::reject_path(root, "the backup contains an unprojected raw commit");
+        }
+        raw.restore_receipts(&writer)?;
+        raw.validate_catalog(&writer)?;
         Ok(())
     }
 
@@ -967,6 +1021,7 @@ mod tests {
         }
         let backup = root.join("backups/first");
         let manifest = store.backup(&backup)?;
+        let saved = fs::read(backup.join("analysis.duckdb"))?;
         let usage = store.storage_usage()?;
         assert!(usage.file_bytes >= before.file_bytes + manifest.database_bytes);
         assert!(usage.allocated_bytes > before.allocated_bytes);
@@ -991,10 +1046,7 @@ mod tests {
         assert!(!blocked.exists());
         assert!(!blocked.join("manifest.json").exists());
         assert_eq!(store.meta()?, meta);
-        assert_eq!(
-            AnalysisStore::file_digest(&backup.join("analysis.duckdb"))?,
-            manifest.database_sha256
-        );
+        assert_eq!(fs::read(backup.join("analysis.duckdb"))?, saved);
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
         padding.set_len(0)?;
         store.backup(&blocked)?;
@@ -1041,7 +1093,7 @@ mod tests {
         )?;
         assert_eq!(store.meta()?, meta);
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
-        let saved_digest = AnalysisStore::file_digest(&destination.join("analysis.duckdb"))?;
+        let saved = fs::read(destination.join("analysis.duckdb"))?;
         assert!(AnalysisStore::open(&root).is_err());
         assert!(store.backup(&destination).is_err());
         assert_eq!(store.meta()?, meta);
@@ -1058,10 +1110,7 @@ mod tests {
         assert_eq!(fs::read_dir(&blocked)?.count(), 0);
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 2);
         assert!(AnalysisStore::restore(&blocked, &directory.path().join("invalid")).is_err());
-        assert_eq!(
-            AnalysisStore::file_digest(&destination.join("analysis.duckdb"))?,
-            saved_digest
-        );
+        assert_eq!(fs::read(destination.join("analysis.duckdb"))?, saved);
         Ok(())
     }
 
@@ -1173,6 +1222,9 @@ mod tests {
         store.accept_validated_batch(identity(), batch(1))?;
         let backup = root.join("backups/saved");
         let manifest = store.backup(&backup)?;
+        let value = serde_json::to_value(&manifest)?;
+        assert!(value.get("database_sha256").is_none());
+        assert!(value["segments"][0].get("sha256").is_none());
         let segment =
             super::super::raw::RawJournal::file_path(&backup, &manifest.segments[0].file_name)?;
         let bytes = fs::read(&segment)?;
@@ -1212,6 +1264,46 @@ mod tests {
         rejected();
         fs::write(&manifest_path, &manifest_bytes)?;
 
+        let active_name = format!(
+            "{}.open",
+            manifest.segments[0]
+                .file_name
+                .split('.')
+                .take(4)
+                .collect::<Vec<_>>()
+                .join(".")
+        );
+        let active = segment.with_file_name(&active_name);
+        fs::rename(&segment, &active)?;
+        let mut changed = manifest.clone();
+        changed.segments[0].file_name = active_name;
+        fs::write(&manifest_path, serde_json::to_vec(&changed)?)?;
+        rejected();
+        assert_eq!(fs::read(&active)?, bytes);
+        fs::rename(&active, &segment)?;
+        fs::write(&manifest_path, &manifest_bytes)?;
+
+        let database = backup.join("analysis.duckdb");
+        let database_bytes = fs::read(&database)?;
+        for sql in [
+            "UPDATE tenant_usage SET logical_bytes = logical_bytes + 1",
+            "DROP TABLE coverage",
+        ] {
+            let writer = Connection::open(&database)?;
+            writer.execute_batch(sql)?;
+            writer.execute_batch("CHECKPOINT")?;
+            drop(writer);
+            let mut changed = manifest.clone();
+            changed.database_bytes = fs::metadata(&database)?.len();
+            fs::write(&manifest_path, serde_json::to_vec(&changed)?)?;
+            rejected();
+            fs::write(&database, &database_bytes)?;
+            fs::write(&manifest_path, &manifest_bytes)?;
+        }
+
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o400))?;
+        fs::set_permissions(&segment, fs::Permissions::from_mode(0o400))?;
+
         let restored = AnalysisStore::restore(&backup, &target)?;
         assert_eq!(
             restored.read_page(&identity(), 1)?.records[0].framed_record,
@@ -1219,6 +1311,7 @@ mod tests {
         );
         assert_eq!(fs::read(&segment)?, bytes);
         assert_eq!(fs::read(&manifest_path)?, manifest_bytes);
+        assert_eq!(fs::read(&database)?, database_bytes);
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
         Ok(())
     }

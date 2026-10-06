@@ -2,7 +2,7 @@ use duckdb::{params, OptionalExt as _};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use super::{source_key, AnalysisStore, ProcessorScopeV1};
+use super::{AnalysisStore, ProcessorScopeV1};
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, Result};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -38,7 +38,7 @@ impl AnalysisStore {
             return self.reject("the processor retirement request is invalid");
         }
         let scope = &input.scope;
-        let key = source_key(&scope.identity);
+        let key = scope.identity.key();
         let tenant = scope.identity.tenant_id.as_slice();
         let mut writer = self.maintenance_writer()?;
         let transaction = writer
@@ -110,7 +110,7 @@ impl AnalysisStore {
             - change_id.len() as i64
             - reason.len() as i64
             + if consumed < accepted {
-                256 + scope.processor_id.len() as i64
+                256 + key.len() as i64 + scope.processor_id.len() as i64
             } else {
                 0
             };
@@ -142,7 +142,7 @@ impl AnalysisStore {
             "SELECT retirement_id, retirement_reason, consumed_cursor, retirement_cursor, retirement_revision
              FROM processor_progress WHERE processor_id = ? AND method_version = ?
                 AND tenant_id = ? AND stream_key = ? AND retired = true",
-            params![scope.processor_id, scope.method_version, scope.identity.tenant_id.as_slice(), source_key(&scope.identity).as_slice()],
+            params![scope.processor_id, scope.method_version, scope.identity.tenant_id.as_slice(), scope.identity.key().as_slice()],
             |row| Ok((ProcessorRetirementV1 {
                 scope: scope.clone(), change_id: row.get(0)?, reason: row.get(1)?,
                 expected_cursor: row.get(2)?, cutoff_cursor: row.get(3)?,
@@ -192,8 +192,20 @@ mod tests {
             raw_max_bytes: 100,
         };
         let mut store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
-        let input = request();
+        let mut input = request();
+        input.scope.identity.node_id = "n".repeat(128);
+        let key_bytes = input.scope.identity.key().len() as u64;
+        assert_eq!(key_bytes, 195);
         store.register_processor(&input.scope, ProcessorClassV1::Required, 1)?;
+        let progress_bytes = 256 + input.scope.processor_id.len() as u64 + key_bytes;
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            progress_bytes
+        );
         store.accept_validated_batch(
             input.scope.identity.clone(),
             ValidatedEvidenceBatchV1 {
@@ -223,6 +235,11 @@ mod tests {
         };
         let result_receipt = store.commit_result(&result)?;
         let before = store.meta()?;
+        let before_bytes = store.writer()?.get()?.query_row(
+            "SELECT logical_bytes FROM tenant_usage",
+            [],
+            |row| row.get::<_, u64>(0),
+        )?;
         let revisions = store.subscribe_revision();
         assert_eq!(
             EvidenceRetentionOwner::new(&store)
@@ -253,6 +270,19 @@ mod tests {
             0
         );
         let revision = store.retire_required(&input)?;
+        let retired_bytes = before_bytes
+            + input.change_id.len() as u64
+            + input.reason.len() as u64
+            + progress_bytes;
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            retired_bytes
+        );
+        AnalysisStore::validate_usage(store.writer()?.get()?, &root)?;
         let health = store
             .processor_health(&input.scope)?
             .ok_or("health absent")?;
@@ -292,8 +322,21 @@ mod tests {
             },
         )?;
         let before = store.meta()?;
+        let latest_bytes = store.writer()?.get()?.query_row(
+            "SELECT logical_bytes FROM tenant_usage",
+            [],
+            |row| row.get::<_, u64>(0),
+        )?;
         assert_eq!(store.retire_required(&input)?, revision);
         assert_eq!(store.meta()?, before);
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            latest_bytes
+        );
         changed = input.clone();
         changed.reason = "Different change".into();
         assert!(store.retire_required(&changed).is_err());
@@ -309,10 +352,27 @@ mod tests {
             Some((input.clone(), revision))
         );
         assert_eq!(reopened.retire_required(&input)?, revision);
+        assert_eq!(
+            reopened.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            latest_bytes
+        );
+        AnalysisStore::validate_usage(reopened.writer()?.get()?, &root)?;
         let mut replacement = input.scope.clone();
         replacement.method_version = 2;
         reopened.register_processor(&replacement, ProcessorClassV1::Required, 4)?;
         assert!(reopened.processor_retirement(&replacement)?.is_none());
+        assert_eq!(
+            reopened.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            latest_bytes + progress_bytes
+        );
         Ok(())
     }
 

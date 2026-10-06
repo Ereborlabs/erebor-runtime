@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, RwLock};
 
 use duckdb::{params, Connection, OptionalExt as _};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -64,7 +63,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 12;
+const ANALYSIS_SCHEMA_VERSION: i64 = 13;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -349,7 +348,6 @@ impl AnalysisStore {
                     tenant_id BLOB NOT NULL,
                     revision UBIGINT NOT NULL,
                     report BLOB NOT NULL,
-                    report_sha256 BLOB NOT NULL,
                     commit_revision UBIGINT NOT NULL,
                     ordinal UINTEGER NOT NULL,
                     PRIMARY KEY (stream_key, revision)
@@ -364,7 +362,6 @@ impl AnalysisStore {
                     valid_until_utc_ns UBIGINT,
                     sensitivity VARCHAR NOT NULL,
                     body BLOB NOT NULL,
-                    content_sha256 BLOB NOT NULL,
                     commit_revision UBIGINT NOT NULL,
                     PRIMARY KEY (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
                 );
@@ -403,7 +400,7 @@ impl AnalysisStore {
                     entity_key BLOB NOT NULL,
                     lifetime_key BLOB NOT NULL,
                     owner_revision UBIGINT NOT NULL,
-                    content_sha256 BLOB NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
                     PRIMARY KEY (ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
                 );
                 CREATE TABLE IF NOT EXISTS analysis_results (
@@ -411,8 +408,7 @@ impl AnalysisStore {
                     tenant_id BLOB NOT NULL,
                     processor_id VARCHAR NOT NULL,
                     body BLOB NOT NULL,
-                    body_sha256 BLOB NOT NULL,
-                    request_sha256 BLOB NOT NULL,
+                    request_meta BLOB NOT NULL,
                     commit_revision UBIGINT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS processor_gaps (
@@ -601,7 +597,7 @@ impl AnalysisStore {
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
         Ok(raw
             .sources
-            .get(&source_key(identity))
+            .get(&identity.key())
             .and_then(|source| source.receipt.evidence())
             .filter(|receipt| &receipt.identity == identity)
             .cloned())
@@ -611,7 +607,7 @@ impl AnalysisStore {
         &self,
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceStatusV1>> {
-        let key = source_key(identity);
+        let key = identity.key();
         self.read_snapshot(|writer| {
             let Some(receipt) = Self::read_receipt_from(writer, &self.root, identity, &key)? else {
                 return Ok(None);
@@ -621,7 +617,7 @@ impl AnalysisStore {
                 .raw
                 .lock()
                 .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
-                .record_count(key, 1, u64::MAX, revision);
+                .record_count(&key, 1, u64::MAX, revision);
             let latest_coverage_report = self.read_coverage_from(writer, &receipt)?;
             Ok(Some(AnalysisSourceStatusV1 {
                 receipt,
@@ -640,26 +636,26 @@ impl AnalysisStore {
             return Ok(None);
         }
         let identity = &receipt.identity;
-        let stored: Option<(Vec<u8>, Vec<u8>)> = snapshot
+        let stored: Option<Vec<u8>> = snapshot
             .query_row(
-                "SELECT report, report_sha256 FROM coverage
+                "SELECT report FROM coverage
                  WHERE stream_key = ? AND tenant_id = ? AND revision = ?",
                 params![
-                    source_key(identity).as_slice(),
+                    identity.key().as_slice(),
                     identity.tenant_id.as_slice(),
                     receipt.coverage_revision
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read retained coverage",
             })?;
-        let Some((report, digest)) = stored else {
+        let Some(report) = stored else {
             return self.reject("the source coverage receipt has no retained report");
         };
-        if Sha256::digest(&report).as_slice() != digest {
-            return self.reject("the retained coverage digest does not match its report");
+        if report.is_empty() || report.len() > MAX_EVIDENCE_GRPC_MESSAGE_BYTES {
+            return self.reject("the retained coverage report size is invalid");
         }
         Ok(Some(report))
     }
@@ -687,7 +683,7 @@ impl AnalysisStore {
             return self.reject("the validated coverage identity or bounds are invalid");
         }
         let bytes = &input.encoded_report;
-        let key = source_key(identity);
+        let key = identity.key();
         let mut writer_guard = self.maintenance_writer()?;
         let writer = writer_guard.get_mut()?;
         self.require_retention()?;
@@ -728,16 +724,14 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        let digest: [u8; 32] = Sha256::digest(bytes).into();
         transaction
             .execute(
-                "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, 0)",
+                "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, 0)",
                 params![
                     key.as_slice(),
                     identity.tenant_id.as_slice(),
                     input.revision,
                     bytes.as_slice(),
-                    digest.as_slice(),
                     revision,
                 ],
             )
@@ -745,7 +739,7 @@ impl AnalysisStore {
                 operation: "insert coverage",
             })?;
         quota::UsageChange {
-            bytes: 256 + bytes.len() as i64,
+            bytes: 256 + key.len() as i64 + bytes.len() as i64,
             coverage: 1,
             ..Default::default()
         }
@@ -777,7 +771,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert coverage receipt",
                 })?;
-            quota::UsageChange::from(256 + identity_json.len() as i64)
+            quota::UsageChange::from(256 + key.len() as i64 + identity_json.len() as i64)
                 .apply(&transaction, &identity.tenant_id)?;
         }
         let mut relations = vec!["coverage", "source_receipts"];
@@ -848,14 +842,14 @@ impl AnalysisStore {
         connection: &Connection,
         root: &Path,
         identity: &EvidenceIntakeIdentityV1,
-        key: &[u8; 32],
+        key: &[u8],
     ) -> Result<Option<AnalysisSourceReceiptV1>> {
         let stored: Option<(String, Vec<u8>, u32, u64, u64, u64)> = connection
             .query_row(
                 "SELECT identity_json, tenant_id, cpu_id, contiguous_cursor,
                         coverage_revision, retained_floor
                  FROM source_receipts WHERE stream_key = ?",
-                params![key.as_slice()],
+                params![key],
                 |row| {
                     Ok((
                         row.get(0)?,
@@ -993,19 +987,6 @@ impl AnalysisStore {
             commit_revision,
         })
     }
-}
-
-fn source_key(identity: &EvidenceIntakeIdentityV1) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(b"ARAPHOR-ANALYSIS-SOURCE-V1\0");
-    hash.update(identity.tenant_id);
-    hash.update((identity.node_id.len() as u64).to_be_bytes());
-    hash.update(identity.node_id.as_bytes());
-    hash.update(identity.node_boot_id);
-    hash.update(identity.label_epoch.to_be_bytes());
-    hash.update(identity.source_id);
-    hash.update(identity.source_epoch.to_be_bytes());
-    hash.finalize().into()
 }
 
 #[cfg(test)]
@@ -1254,7 +1235,7 @@ mod tests {
                 .map_err(|_| "raw lock poisoned")?
                 .ranges
                 .keys()
-                .filter(|(key, _)| key == &source_key(&identity))
+                .filter(|(key, _)| key == &identity.key())
                 .count(),
             5
         );
@@ -1398,7 +1379,7 @@ mod tests {
             let writer = reopened.writer()?;
             writer.get()?.execute(
                 "DELETE FROM segments WHERE stream_key = ?",
-                params![source_key(&identity).as_slice()],
+                params![identity.key().as_slice()],
             )?;
         }
         assert_eq!(
@@ -1414,11 +1395,28 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        let identity = identity();
+        let mut identity = identity();
+        identity.node_id = "n".repeat(128);
+        let key_bytes = identity.key().len() as u64;
+        let epoch_bytes = identity.epoch_key().len() as u64;
+        assert_eq!((key_bytes, epoch_bytes), (195, 170));
         assert_eq!(store.source_status(&identity)?, None);
         let accepted = coverage(&identity, 1, b"coverage-1");
+        let first_bytes = 768
+            + accepted.encoded_report.len() as u64
+            + serde_json::to_vec(&identity)?.len() as u64
+            + 2 * key_bytes
+            + epoch_bytes;
         assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
         assert_eq!(store.meta()?.commit_revision, 1);
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            first_bytes
+        );
         let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
         assert_eq!(receipt.contiguous_cursor, 0);
         assert_eq!(receipt.coverage_revision, 1);
@@ -1428,17 +1426,35 @@ mod tests {
         assert_eq!(status.latest_coverage_report, Some(b"coverage-1".to_vec()));
         assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
         assert_eq!(store.meta()?.commit_revision, 1);
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            first_bytes
+        );
 
         let conflicting = coverage(&identity, 1, b"changed");
         assert!(store.accept_validated_coverage(conflicting).is_err());
         assert_eq!(store.meta()?.commit_revision, 1);
 
         let newer = coverage(&identity, 3, b"coverage-3");
+        let last_bytes = first_bytes + 256 + newer.encoded_report.len() as u64 + key_bytes;
         assert_eq!(store.accept_validated_coverage(newer)?, 3);
         assert_eq!(store.meta()?.commit_revision, 2);
         let stale = coverage(&identity, 2, b"coverage-2");
         assert!(store.accept_validated_coverage(stale).is_err());
         assert_eq!(store.meta()?.commit_revision, 2);
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            last_bytes
+        );
+        AnalysisStore::validate_usage(store.writer()?.get()?, &root)?;
         drop(store);
         let reopened = AnalysisStore::open(&root)?;
         assert_eq!(reopened.meta()?.commit_revision, 2);
@@ -1453,6 +1469,13 @@ mod tests {
         {
             let writer_guard = reopened.writer()?;
             let writer = writer_guard.get()?;
+            assert_eq!(
+                writer.query_row("SELECT logical_bytes FROM tenant_usage", [], |row| {
+                    row.get::<_, u64>(0)
+                })?,
+                last_bytes
+            );
+            AnalysisStore::validate_usage(writer, &root)?;
             let changed: u64 = writer.query_row(
                 "SELECT COUNT(*) FROM relation_revisions WHERE last_changed_revision = 2",
                 [],
@@ -1460,8 +1483,8 @@ mod tests {
             )?;
             assert_eq!(changed, 2);
             writer.execute(
-                "UPDATE coverage SET report_sha256 = ? WHERE revision = 3",
-                params![vec![0_u8; 32]],
+                "UPDATE coverage SET report = ? WHERE revision = 3",
+                params![Vec::<u8>::new()],
             )?;
         }
         assert!(reopened.source_status(&identity).is_err());

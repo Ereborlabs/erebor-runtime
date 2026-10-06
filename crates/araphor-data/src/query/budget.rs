@@ -9,6 +9,7 @@ struct Usage {
     evaluations: usize,
     streams: usize,
     output_bytes: usize,
+    input_bytes: usize,
     tenants: BTreeMap<[u8; 16], (usize, usize)>,
 }
 
@@ -29,6 +30,7 @@ pub(super) struct QueryLease {
     tenant: [u8; 16],
     kind: LeaseKind,
     bytes: usize,
+    input_bytes: usize,
 }
 
 impl QueryBudget {
@@ -40,15 +42,20 @@ impl QueryBudget {
     }
 
     pub(super) fn evaluate(self: &Arc<Self>, tenant: [u8; 16]) -> Result<QueryLease> {
-        self.reserve(tenant, LeaseKind::Evaluation, self.limits.output_bytes)
+        self.reserve(
+            tenant,
+            LeaseKind::Evaluation,
+            self.limits.output_bytes,
+            self.limits.input_bytes,
+        )
     }
 
     pub(super) fn stream(self: &Arc<Self>, tenant: [u8; 16]) -> Result<QueryLease> {
-        self.reserve(tenant, LeaseKind::Stream, 0)
+        self.reserve(tenant, LeaseKind::Stream, 0, 0)
     }
 
     pub(super) fn output(self: &Arc<Self>, bytes: usize) -> Result<QueryLease> {
-        self.reserve([0; 16], LeaseKind::Output, bytes)
+        self.reserve([0; 16], LeaseKind::Output, bytes, 0)
     }
 
     fn reserve(
@@ -56,6 +63,7 @@ impl QueryBudget {
         tenant: [u8; 16],
         kind: LeaseKind,
         bytes: usize,
+        input_bytes: usize,
     ) -> Result<QueryLease> {
         let mut usage = self.usage.lock().map_err(|_| {
             crate::QueryInvalidSnafu {
@@ -74,11 +82,20 @@ impl QueryBudget {
                 .build()
             })?;
         let (evaluations, streams) = usage.tenants.get(&tenant).copied().unwrap_or_default();
+        let total_input = usage
+            .input_bytes
+            .checked_add(input_bytes)
+            .filter(|total| *total <= self.limits.input_capacity)
+            .ok_or_else(|| {
+                crate::AnalysisBusySnafu {
+                    resource: "query input capacity",
+                }
+                .build()
+            })?;
         match kind {
             LeaseKind::Evaluation => {
                 if usage.evaluations >= self.limits.global_evaluations
                     || evaluations >= self.limits.tenant_evaluations
-                    || usage.evaluations >= self.limits.input_capacity / self.limits.input_bytes
                 {
                     return crate::AnalysisBusySnafu {
                         resource: "query evaluation capacity",
@@ -103,11 +120,13 @@ impl QueryBudget {
             LeaseKind::Output => {}
         }
         usage.output_bytes = output_bytes;
+        usage.input_bytes = total_input;
         Ok(QueryLease {
             budget: self.clone(),
             tenant,
             kind,
             bytes,
+            input_bytes,
         })
     }
 }
@@ -128,6 +147,7 @@ impl QueryLease {
             tenant: self.tenant,
             kind: LeaseKind::Output,
             bytes,
+            input_bytes: 0,
         })
     }
 
@@ -154,6 +174,8 @@ impl QueryLease {
                 }
             }
             self.kind = LeaseKind::Output;
+            usage.input_bytes -= self.input_bytes;
+            self.input_bytes = 0;
         }
         usage.output_bytes -= self.bytes - bytes;
         self.bytes = bytes;
@@ -177,6 +199,7 @@ impl Drop for QueryLease {
             LeaseKind::Output => {}
         }
         usage.output_bytes -= self.bytes;
+        usage.input_bytes -= self.input_bytes;
         if let Some(tenant) = usage.tenants.get_mut(&self.tenant) {
             match self.kind {
                 LeaseKind::Evaluation => tenant.0 -= 1,
@@ -199,6 +222,39 @@ impl std::fmt::Debug for QueryLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_client_capacity() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            input_capacity: 30,
+            output_bytes: 10,
+            output_capacity: 30,
+            global_evaluations: 4,
+            ..Default::default()
+        });
+        let first = budget.evaluate([1; 16])?;
+        let second = budget.evaluate([2; 16])?;
+        let third = budget.evaluate([3; 16])?;
+        assert!(budget.evaluate([4; 16]).is_err());
+        drop(second);
+        drop(third);
+        let output = first.output(10)?;
+        let next = budget.evaluate([2; 16])?;
+        assert!(budget.output(11).is_err());
+        drop(next);
+        drop(output);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            (usage.evaluations, usage.input_bytes, usage.output_bytes),
+            (0, 0, 0)
+        );
+        assert!(usage.tenants.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn query_scope_capacity() -> Result<()> {

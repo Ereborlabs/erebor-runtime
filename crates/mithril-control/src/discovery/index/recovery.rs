@@ -1,3 +1,4 @@
+use sha2::{Digest as _, Sha256};
 use std::io::{Read as _, Write as _};
 
 use super::*;

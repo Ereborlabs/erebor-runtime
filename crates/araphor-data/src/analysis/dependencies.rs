@@ -1,9 +1,7 @@
 use duckdb::params;
 use snafu::ResultExt as _;
 
-use super::{
-    source_key, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1,
-};
+use super::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1};
 use crate::{AnalysisDatabaseSnafu, Result};
 
 impl AnalysisStore {
@@ -42,7 +40,7 @@ impl AnalysisStore {
                 })?;
             for identity in &selection.sources {
                 control.check()?;
-                let key = source_key(identity);
+                let key = identity.key();
                 let changed: Option<u64> = sources
                     .query_row(
                         params![

@@ -120,12 +120,13 @@ impl EvidenceIntakeOwner {
         let data = &self.data;
         let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut after = None;
+        let mut after: Option<Vec<u8>> = None;
         let mut failed = false;
         loop {
             timer.tick().await;
             let data = data.clone();
             let clock = self.clock.clone();
+            let cursor = after.clone();
             let result = tokio::task::spawn_blocking(move || -> crate::Result<_> {
                 let now = clock.now().duration_since(UNIX_EPOCH).map_err(|_| {
                     crate::error::InvalidConfigurationSnafu {
@@ -140,7 +141,7 @@ impl EvidenceIntakeOwner {
                     .build()
                 })?;
                 araphor_data::EvidenceRetentionOwner::new(&data)
-                    .sweep(after, now)
+                    .sweep(cursor.as_deref(), now)
                     .map_err(|source| crate::Error::DataStore {
                         source: Box::new(source),
                         location: snafu::Location::default(),

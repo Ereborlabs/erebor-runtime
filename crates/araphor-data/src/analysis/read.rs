@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use duckdb::params;
 use snafu::ResultExt as _;
 
-use super::{source_key, AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS};
+use super::{AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
 /// One deadline for a read stage and shared cancellation. The default is one second.
@@ -244,7 +244,7 @@ impl AnalysisStore {
         {
             return self.reject("the source page tenant or cursor is invalid");
         }
-        let after = after.map(source_key);
+        let after = after.map(EvidenceIntakeIdentityV1::key);
         let control = AnalysisReadControl::default();
         let mut reader_guard = self.reader_until(&control)?;
         control.run(&mut reader_guard, |reader| {
@@ -261,8 +261,8 @@ impl AnalysisStore {
                 .query_map(
                     params![
                         tenant_id.as_slice(),
-                        after.as_ref().map(|key| key.as_slice()),
-                        after.as_ref().map(|key| key.as_slice()),
+                        after.as_deref(),
+                        after.as_deref(),
                         MAX_ANALYSIS_PAGE_RECORDS as u32,
                     ],
                     |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
@@ -280,7 +280,7 @@ impl AnalysisStore {
                     serde_json::from_str(&json).context(crate::JsonSnafu { path: &self.root })?;
                 if identity.tenant_id != tenant_id
                     || !identity.valid()
-                    || source_key(&identity).as_slice() != key
+                    || identity.key().as_slice() != key
                 {
                     return self
                         .reject("the source page identity does not match its key or tenant");
@@ -736,7 +736,7 @@ mod tests {
             revision: 1,
             encoded_report: vec![2],
         })?;
-        expected.sort_by_key(source_key);
+        expected.sort_by_key(EvidenceIntakeIdentityV1::key);
         let before = store.meta()?;
         let changed = store.subscribe_revision();
         let first = store.source_page(identity.tenant_id, None)?;

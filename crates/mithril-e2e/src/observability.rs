@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 mod lifecycle;
 #[cfg(test)]
 mod plain;
+mod query;
 
 #[cfg(test)]
 pub(crate) use plain::PlainCapture;
@@ -542,12 +543,11 @@ impl ObservabilityQualification {
     }
 
     pub fn owned_capture(&self) -> ProofResult<()> {
-        use crate::control_fixture::{MtlsFixture, OutagePolicyFixture, OUTAGE_TENANT_ID};
+        use crate::control_fixture::{MtlsFixture, OutagePolicyFixture};
         use ed25519_dalek::SigningKey;
         use mithril_control::{
-            ControlStore, DiscoveryDigestV1, TraceBatchV1, TraceCleanupV1, TraceExchangeV1,
-            TraceExecutionGrantV1, TraceFrameKindV1, TraceFrameV1, TraceOwner, TraceReadAccessV1,
-            TraceRecipeV1, TraceRequestV1, TraceTargetV1, TraceTerminalReasonV1, TraceTerminalV1,
+            ControlStore, TraceBatchV1, TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1,
+            TraceFrameV1, TraceOwner, TraceReadAccessV1, TraceTerminalReasonV1, TraceTerminalV1,
             TraceUploadV1,
         };
         use mithril_node::TrustCache;
@@ -581,29 +581,8 @@ impl ObservabilityQualification {
                 let now = u64::try_from(
                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos(),
                 )?;
-                let tenant = *uuid::Uuid::parse_str(OUTAGE_TENANT_ID)?.as_bytes();
-                let target = TraceTargetV1 {
-                    fact_digest: DiscoveryDigestV1::of(&fact)?,
-                    fact,
-                    runtime_container_id: "1".repeat(64),
-                    node_boot_id: [7; 16],
-                    cgroup_id: 17,
-                    binding_id: [3; 16],
-                    binding_nonce: [4; 16],
-                    root_cgroup_live_interval_id: [5; 16],
-                    container_generation: 1,
-                    label_epoch: 1,
-                };
-                let grant = TraceExecutionGrantV1 {
-                    tenant_id: tenant,
-                    grant_id: [7; 16],
-                    principal: "qualification".into(),
-                    namespace_uids: [target.fact.namespace_uid.clone()].into(),
-                    node_ids: ["node-a".into()].into(),
-                    recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-                    host_diagnostic: false,
-                    valid_until_unix_ns: now + 120_000_000_000,
-                };
+                let (request, grant) = Self::trace_inputs(fact, now)?;
+                let tenant = request.tenant_id;
                 let access = TraceReadAccessV1 {
                     tenant_id: tenant,
                     namespace_uids: grant.namespace_uids.clone(),
@@ -611,14 +590,6 @@ impl ObservabilityQualification {
                     host_sensitive: false,
                     valid_until_unix_ns: grant.valid_until_unix_ns,
                     revoked: false,
-                };
-                let request = TraceRequestV1 {
-                    tenant_id: tenant,
-                    request_id: [6; 16],
-                    source: TraceRecipeV1::FailedOpens.manifest()?.source,
-                    targets: vec![target],
-                    unresolved: Vec::new(),
-                    collection_seconds: 30,
                 };
                 connection.report_readiness(true, true).await?;
                 let state = control.accept_trace(request.clone(), grant.clone(), None)?;
@@ -744,7 +715,7 @@ impl ObservabilityQualification {
             drop(control);
             drop(crate::control_fixture::reopen_control_store(&tls.path().join("control-store")).await?);
             record["storage_recovery"] = self.owned_storage(&tls, &key, request.clone(), grant.clone()).await?;
-            record["node_capture"] = self.owned_node(&key, request, grant).await?;
+            record["node_capture"] = self.owned_node(&key, request, grant, false).await?;
             self.write("result.json", &record)
         })
     }
@@ -941,6 +912,7 @@ impl ObservabilityQualification {
         key: &ed25519_dalek::SigningKey,
         request: mithril_control::TraceRequestV1,
         grant: mithril_control::TraceExecutionGrantV1,
+        query: bool,
     ) -> ProofResult<serde_json::Value> {
         use crate::control_fixture::{reopen_control_store, MtlsFixture, OutagePolicyFixture};
         use erebor_interceptor_abi::{BindingLifecycleStateV1, ExecutionSetBindingStateV1};
@@ -974,7 +946,9 @@ impl ObservabilityQualification {
         let mut cache = TrustCache::load(&tls.path().join("node-trust"))?;
         let result = tokio::time::timeout(Duration::from_secs(60), async {
             let mut records = Vec::new();
-            for (name, expected, request_id) in [
+            let cases = if query {
+                &[("query-failure", TraceTerminalReasonV1::Cancelled, 21)][..]
+            } else { &[
                 ("target-replacement", TraceTerminalReasonV1::TargetChanged, 9),
                 ("cancel", TraceTerminalReasonV1::Cancelled, 10),
                 ("partition-expiry", TraceTerminalReasonV1::Deadline, 11),
@@ -986,7 +960,8 @@ impl ObservabilityQualification {
                 ("retirement", TraceTerminalReasonV1::TargetChanged, 17),
                 ("store-native-append", TraceTerminalReasonV1::Deadline, 19),
                 ("output-before-upload", TraceTerminalReasonV1::OutputLimit, 20),
-            ] {
+            ][..] };
+            for &(name, expected, request_id) in cases {
                 let mut request = request.clone();
                 let mut grant = grant.clone();
                 let before_append = name == "store-before-append";
@@ -996,7 +971,8 @@ impl ObservabilityQualification {
                 let early_output = name == "output-before-upload";
                 let host_source = matches!(name, "map-exhaustion" | "output-limit" | "output-before-upload");
                 let revoked = name == "revocation";
-                let expected_frames = if name == "map-exhaustion" { 3 } else { 2 };
+                let expected_frames = if matches!(name, "map-exhaustion" | "query-failure") { 3 } else { 2 };
+                let mut query_failure = None;
                 let mut fault_codes = Vec::new();
                 let mut failed = None;
                 let mut recovered_prefix = Vec::new();
@@ -1048,6 +1024,7 @@ impl ObservabilityQualification {
                     fs::write(&output_path, bytes)?;
                 }
                 let script = match name {
+                    "query-failure" => "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; while [ ! -e \"$2\" ]; do sleep 0.01; done; printf 'output after query error\\n'; exec sleep 60",
                     "map-exhaustion" => "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; while [ ! -e \"$2\" ]; do sleep 0.01; done; cat \"$3\"",
                     "output-limit" => "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; while [ ! -e \"$2\" ]; do sleep 0.01; done; head -c 1048577 /dev/zero",
                     "output-before-upload" => "cat >/dev/null; printf '%s' \"$$\" >\"$1\"; printf '__BPFTRACE_NOTIFY_PROBES_ATTACHED\\n' >&2; printf 'node-owned output\\n'; head -c 1048577 /dev/zero",
@@ -1095,6 +1072,12 @@ impl ObservabilityQualification {
                 if dispatch.accepted.request != request {
                     return Err("Node capture dispatch changed the accepted request".into());
                 }
+                if name == "query-failure" && (dispatch.accepted.grant != grant
+                    || dispatch.accepted.recipe != Some(mithril_control::TraceRecipeV1::FailedOpens)
+                    || dispatch.accepted.approval.is_some())
+                {
+                    return Err("query case changed its accepted source authority".into());
+                }
                 let dispatch_key = cache.policy_signing_key(&dispatch.signing_key_id, dispatch.issuer_epoch)?;
                 let mut connection = Some(connection);
                 if name == "partition-expiry" {
@@ -1135,7 +1118,7 @@ impl ObservabilityQualification {
                 }
                 let pid: u32 = fs::read_to_string(&pid_path)?.parse()?;
                 let mut prefix_ack = None;
-                if matches!(name, "revocation" | "map-exhaustion" | "output-limit" | "retirement") {
+                if matches!(name, "revocation" | "map-exhaustion" | "output-limit" | "retirement" | "query-failure") {
                     let prefix = node.next_batch(id, 0)?.ok_or("missing active failure output")?;
                     let reply = connection.as_mut().ok_or("Control connection is absent")?
                         .exchange_diagnostics(&TraceExchangeV1 {
@@ -1154,9 +1137,88 @@ impl ObservabilityQualification {
                     }
                     prefix_ack = Some(ack);
                 }
+                let initial_ack = prefix_ack.clone();
+                if name == "query-failure" {
+                    let (_, intent) = data.trace_intent(request.tenant_id, request.request_id)?
+                        .ok_or("missing query case intent")?;
+                    let identity = &intent.bindings.iter().find(|binding| binding.identity.execution_id == id)
+                        .ok_or("missing query case binding")?.identity;
+                    let before = data.trace_receipt(identity)?.ok_or("missing active query case receipt")?;
+                    let retained = owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?;
+                    let mut failure = Self::fail_query(
+                        data.clone(),
+                        request.tenant_id, now, grant.valid_until_unix_ns,
+                    ).await?;
+                    node.reap()?;
+                    if node.terminal(id)?.is_some() || launches.load(Ordering::Acquire) != 1
+                        || data.trace_receipt(identity)?.as_ref() != Some(&before)
+                        || owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)? != retained
+                        || node.frames(id, 0)?.len() != 2 || !data.storage_health()?.write_ready
+                    {
+                        return Err("query error changed the live capture or durable prefix".into());
+                    }
+                    fs::write(&finish_path, b"query failed")?;
+                    let limit = Instant::now() + Duration::from_secs(3);
+                    let next = loop {
+                        node.reap()?;
+                        if node.terminal(id)?.is_some() {
+                            return Err("query error stopped capture before the new output".into());
+                        }
+                        if let Some(batch) = node.next_batch(id, before.last_sequence)? {
+                            if !batch.frames.is_empty() { break batch; }
+                        }
+                        if Instant::now() >= limit {
+                            return Err("capture did not emit new output after query error".into());
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    };
+                    if next.frames.len() != 1 || next.frames[0].sequence != 3
+                        || next.frames[0].kind != TraceFrameKindV1::Data
+                        || next.frames[0].bytes != b"output after query error\n"
+                        || next.terminal.is_some()
+                    {
+                        return Err("query case changed its new active output".into());
+                    }
+                    let exchange = TraceExchangeV1 {
+                        retained: vec![id], resolved: None,
+                        output: Some(TraceUploadV1 {
+                            request_id: request.request_id, target_index: 0,
+                            original_node_boot_id: [7; 16], batch: next.clone(),
+                        }),
+                    };
+                    let reply = connection.as_mut().ok_or("Control connection is absent")?
+                        .exchange_diagnostics(&exchange).await?;
+                    let replay = connection.as_mut().ok_or("Control connection is absent")?
+                        .exchange_diagnostics(&exchange).await?;
+                    if reply != replay || reply.dispatch.is_some() || !reply.cancel.is_empty() {
+                        return Err("query case changed its active upload reply or repeated dispatch".into());
+                    }
+                    let ack = reply.acknowledgement.ok_or("missing output ACK after query error")?;
+                    let after = data.trace_receipt(identity)?.ok_or("missing advanced query case receipt")?;
+                    if ack.execution_id != id || ack.last_sequence != 3 || ack.terminal.is_some()
+                        || replay.acknowledgement.as_ref() != Some(&ack)
+                        || replay.dispatch.is_some() || !replay.cancel.is_empty()
+                        || after.last_sequence != 3 || after.output_bytes != before.output_bytes + next.frames[0].bytes.len() as u64
+                        || after.commit_revision <= before.commit_revision || after.terminal.is_some()
+                        || !data.storage_health()?.write_ready || node.terminal(id)?.is_some()
+                    {
+                        return Err("query error blocked the fresh durable output ACK".into());
+                    }
+                    failure["prefix_sequence"] = serde_json::json!(before.last_sequence);
+                    failure["post_failure_sequence"] = serde_json::json!(after.last_sequence);
+                    failure["prefix_revision"] = serde_json::json!(before.commit_revision);
+                    failure["post_failure_revision"] = serde_json::json!(after.commit_revision);
+                    failure["post_failure_ack"] = serde_json::to_value(&ack)?;
+                    failure["post_failure_replay"] = serde_json::to_value(replay.acknowledgement)?;
+                    failure["capture_active"] = serde_json::json!(true);
+                    failure["prefix_unchanged"] = serde_json::json!(true);
+                    failure["writer_ready"] = serde_json::json!(true);
+                    prefix_ack = Some(ack);
+                    query_failure = Some(failure);
+                }
                 if name == "target-replacement" {
                     generation.fetch_add(1, Ordering::AcqRel);
-                } else if matches!(name, "cancel" | "revocation") {
+                } else if matches!(name, "cancel" | "revocation" | "query-failure") {
                     owner.cancel(request.tenant_id, request.request_id, &grant.principal, revoked)?;
                     if revoked && (!matches!(
                         owner.read(request.tenant_id, request.request_id, &access, now),
@@ -1424,6 +1486,26 @@ impl ObservabilityQualification {
                 if node.next_batch(id, 0)?.is_some() {
                     return Err("Node retained an acknowledged upload".into());
                 }
+                if name == "query-failure" {
+                    drop(connection);
+                    server.take().ok_or("Control is absent")?.shutdown().await?;
+                    drop(owner);
+                    drop(data);
+                    drop(control);
+                    drop(reopen_control_store(&tls.path().join("control-store")).await?);
+                    control = Self::trace_control(&tls, key)?;
+                    control.replace_kubernetes_workload_inventory(
+                        request.targets.iter().map(|target| target.fact.clone()).collect(),
+                    )?;
+                    data = control.analysis_store().ok_or("missing reopened query case data")?;
+                    owner = TraceOwner::new(data.clone());
+                    server = Some(tls.start(control.clone()).await?);
+                    let connector = tls.connector(server.as_ref().ok_or("Control is absent")?, "node-a", [7; 16]);
+                    connection = connector.connect(registration.clone(), true, &mut cache).await?;
+                    if connection.exchange_diagnostics(&exchange).await? != first {
+                        return Err("Control reopen changed the terminal upload reply".into());
+                    }
+                }
                 let retained = if revoked {
                     if !matches!(
                         owner.read(request.tenant_id, request.request_id, &access, now),
@@ -1589,18 +1671,42 @@ impl ObservabilityQualification {
                         "original_output_unchanged": true, "original_not_rerun": true,
                     }));
                 }
+                let storage_fault = failed.as_ref().map(|batch| if zero_progress {
+                    serde_json::json!({
+                        "stage": if native_append { "NativeAppend" } else { "BeforeAppend" }, "error_codes": fault_codes,
+                        "fault_input": if native_append {
+                            "native ENOTDIR during segment creation after the input hook returns success; not ENOSPC"
+                        } else { "injected StorageFull error before the raw append" },
+                        "writer_unready": native_append, "active_output_retained": true,
+                        "native_errno": native_append.then_some(20),
+                        "input_restored": native_append, "after_sync_reached": false,
+                        "upload_acknowledged": false, "control_stopped_after_failure": true,
+                        "recovered_prefix": recovered_prefix,
+                        "recovered_receipt": recovered_receipt.as_ref().map(|receipt| serde_json::json!({
+                            "last_sequence": receipt.last_sequence, "output_bytes": receipt.output_bytes,
+                            "commit_revision": receipt.commit_revision, "terminal": receipt.terminal,
+                        })), "data_reopened": true,
+                    })
+                } else { serde_json::json!({
+                    "stage": "AfterSync", "error_codes": fault_codes,
+                    "fault_input": "injected StorageFull error after syncing active Node output",
+                    "writer_unready": true, "active_output_retained": true,
+                    "recovered_prefix": batch, "data_reopened": true,
+                }) });
                 records.push(serde_json::json!({
                     "name": name, "accepted": dispatch.accepted, "target": target,
                     "process_id": pid, "launch_count": launch_count,
                     "process_reaped": true, "terminal_reopen": true,
+                    "control_reopen": name == "query-failure",
                     "control_stopped": name == "partition-expiry" || zero_progress,
                     "partition_before_admission": name == "partition-expiry",
                     "supplied_now": supplied_now,
                     "signed_deadline": dispatch.accepted.deadline_unix_ns,
                     "collection_seconds": request.collection_seconds,
                     "expired_dispatch_rejected": local_expiry,
-                    "initial_acknowledgement": prefix_ack,
+                    "initial_acknowledgement": initial_ack,
                     "terminal_before_upload": early_output.then_some(true), "pre_upload_receipt": pre_upload,
+                    "query_failure": query_failure,
                     "read_revoked": revoked, "retained_read_denied": revoked,
                     "durable_frame_count": page.frames.len(),
                     "map_capacity": (name == "map-exhaustion").then(|| serde_json::json!({
@@ -1608,28 +1714,7 @@ impl ObservabilityQualification {
                         "external_backend_result": true, "kernel_saturation_proved": false,
                     })),
                     "fresh_lifetime": fresh_lifetime,
-                    "storage_fault": failed.as_ref().map(|batch| if zero_progress {
-                        serde_json::json!({
-                            "stage": if native_append { "NativeAppend" } else { "BeforeAppend" }, "error_codes": fault_codes,
-                            "fault_input": if native_append {
-                                "native ENOTDIR during segment creation after the input hook returns success; not ENOSPC"
-                            } else { "injected StorageFull error before the raw append" },
-                            "writer_unready": native_append, "active_output_retained": true,
-                            "native_errno": native_append.then_some(20),
-                            "input_restored": native_append, "after_sync_reached": false,
-                            "upload_acknowledged": false, "control_stopped_after_failure": true,
-                            "recovered_prefix": recovered_prefix,
-                            "recovered_receipt": recovered_receipt.as_ref().map(|receipt| serde_json::json!({
-                                "last_sequence": receipt.last_sequence, "output_bytes": receipt.output_bytes,
-                                "commit_revision": receipt.commit_revision, "terminal": receipt.terminal,
-                            })), "data_reopened": true,
-                        })
-                    } else { serde_json::json!({
-                        "stage": "AfterSync", "error_codes": fault_codes,
-                        "fault_input": "injected StorageFull error after syncing active Node output",
-                        "writer_unready": true, "active_output_retained": true,
-                        "recovered_prefix": batch, "data_reopened": true,
-                    }) }),
+                    "storage_fault": storage_fault,
                     "acknowledgement": ack, "replay_ack": replay.acknowledgement,
                     "retained": retained, "receipt": {
                         "identity": receipt.identity, "last_sequence": receipt.last_sequence,

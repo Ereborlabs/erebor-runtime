@@ -18,6 +18,7 @@ use araphor_data::{
     ValidatedEvidenceBatchV1, QUERY_SCHEMA_VERSION,
 };
 use duckdb::types::{TimeUnit, Value};
+use futures_util::StreamExt as _;
 use mithril_control::ControlStore;
 use prost::Message as _;
 use serde_json::json;
@@ -545,7 +546,9 @@ impl QueryFollowQualification {
         self.replacement(&owner, &moving, &initial, &[vec![Value::BigInt(2)]])?;
         self.check(
             initial.results[0].input_rows == 2
-                && initial.results[0].scanned_bytes <= limits.scan_bytes,
+                && initial.results[0]
+                    .scanned_bytes
+                    .is_some_and(|bytes| bytes <= limits.scan_bytes),
             "time selection extracted unrelated history",
         )?;
         commit(&store, &source, 67, 608 * MINUTE, records(67, 1, 7))?;
@@ -865,6 +868,7 @@ impl QueryFollowQualification {
         self.check(
             tokio::time::timeout(Duration::from_secs(10), stream.next())
                 .await?
+                .transpose()?
                 .is_none(),
             "failed query stream did not close",
         )?;
@@ -1095,6 +1099,7 @@ impl QueryFollowQualification {
         self.check(
             tokio::time::timeout(Duration::from_secs(10), stream.next())
                 .await?
+                .transpose()?
                 .is_none(),
             "output-timeout stream did not close after its queued metadata",
         )?;
@@ -1125,13 +1130,12 @@ impl QueryFollowQualification {
     ) -> Result<QueryFrame> {
         let frame = tokio::time::timeout(Duration::from_secs(10), stream.next())
             .await?
-            .ok_or("query stream closed before its expected frame")?;
+            .ok_or("query stream closed before its expected frame")??;
         self.check(
             frame.schema_version == QUERY_SCHEMA_VERSION
                 && frame.operation == operation
                 && frame.store_uuid != [0; 16]
-                && frame.recovery_epoch > 0
-                && frame.frame_id != [0; 32],
+                && frame.recovery_epoch > 0,
             "query frame header is invalid",
         )?;
         Ok(frame)
@@ -1232,6 +1236,7 @@ impl QueryFollowQualification {
                     return self.check(
                         tokio::time::timeout(Duration::from_secs(10), stream.next())
                             .await?
+                            .transpose()?
                             .is_none(),
                         "cancelled stream did not close",
                     );

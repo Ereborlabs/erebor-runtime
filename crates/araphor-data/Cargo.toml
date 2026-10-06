@@ -12,6 +12,7 @@ test-fixtures = []
 crc32c.workspace = true
 duckdb = { workspace = true, features = ["vtab"] }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+futures-core = "0.3"
 minicbor.workspace = true
 prost.workspace = true
 rustix = { version = "1.1.4", features = ["fs"] }
@@ -29,6 +30,7 @@ uuid.workspace = true
 prost-build.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
 tempfile = "3.23.0"
 
 [lints]

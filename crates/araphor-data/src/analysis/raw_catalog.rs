@@ -5,7 +5,7 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::raw::{RawIdentity, RawJournal, RawReceipt, RawSource, TraceOutputReceiptV1};
-use super::{source_key, AnalysisSourceReceiptV1, AnalysisStore};
+use super::{AnalysisSourceReceiptV1, AnalysisStore};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
 
 #[cfg(test)]
@@ -26,14 +26,13 @@ mod tests {
 
         for tenant in [1u8, 2] {
             writer.execute(
-                "INSERT INTO traces VALUES (?, ?, ?, ?, '[]', ?, 1, 2, false, ?, 1, false, false)",
+                "INSERT INTO traces VALUES (?, ?, ?, ?, '[]', ?, 1, 2, false, 1, false, false)",
                 params![
                     [tenant; 16].as_slice(),
                     [3u8; 16].as_slice(),
                     [1u8, 2, 3].as_slice(),
                     [0u8; 32].as_slice(),
                     [1u8, 2].as_slice(),
-                    [0u8; 32].as_slice(),
                 ],
             )?;
         }
@@ -46,13 +45,12 @@ mod tests {
         for tenant in [1u8, 5, 6] {
             writer.execute(
                 "INSERT INTO context_versions VALUES (?, 'p', ?, ?, 1, 1, NULL,
-                 'Tenant', ?, ?, 1)",
+                 'Tenant', ?, 1)",
                 params![
                     [tenant; 16].as_slice(),
                     [1u8].as_slice(),
                     [1u8].as_slice(),
                     [1u8, 2, 3].as_slice(),
-                    [0u8; 32].as_slice(),
                 ],
             )?;
         }
@@ -64,7 +62,7 @@ mod tests {
                     [tenant; 16].as_slice(),
                     [1u8].as_slice(),
                     [1u8].as_slice(),
-                    [0u8; 32].as_slice(),
+                    1u64,
                 ],
             )?;
         }
@@ -136,12 +134,12 @@ mod tests {
                 64
             );
             assert_eq!(
-                AnalysisStore::read_receipt_from(writer, &root, &identity, &source_key(&identity))?
+                AnalysisStore::read_receipt_from(writer, &root, &identity, &identity.key())?
                     .ok_or("receipt absent")?
                     .contiguous_cursor,
                 64
             );
-            assert_eq!(raw.sources[&source_key(&identity)].receipt.cursor(), 65);
+            assert_eq!(raw.sources[&identity.key()].receipt.cursor(), 65);
         }
         drop(store);
         let store = AnalysisStore::open(&root)?;
@@ -193,12 +191,12 @@ mod tests {
 pub(super) struct RawBudget {
     pub usage: BTreeMap<[u8; 16], u64>,
     pub total: u64,
-    pub required: BTreeMap<[u8; 32], u64>,
+    pub required: BTreeMap<Vec<u8>, u64>,
     pub protected: BTreeMap<[u8; 16], u64>,
-    pub oldest: BTreeMap<[u8; 32], u64>,
+    pub oldest: BTreeMap<Vec<u8>, u64>,
     pub pins: BTreeMap<u64, ([u8; 16], u64)>,
     pub contexts: BTreeMap<[u8; 16], u64>,
-    pub expired: BTreeMap<([u8; 32], u64), u64>,
+    pub expired: BTreeMap<(Vec<u8>, u64), u64>,
     pub diagnostics: BTreeMap<[u8; 16], u64>,
     pub diagnostic_total: u64,
     pub trace_reserve: u64,
@@ -308,7 +306,7 @@ impl AnalysisStore {
 }
 
 impl RawJournal {
-    fn validate_catalog(&self, writer: &Connection) -> Result<()> {
+    pub(super) fn validate_catalog(&self, writer: &Connection) -> Result<()> {
         let revision = AnalysisStore::read_meta_from(writer, &self.root)?.commit_revision;
         {
             let mut statement = writer.prepare("SELECT segment_id, committed_end, identity_json, cpu_id, file_name, stream_kind FROM segments")
@@ -385,16 +383,16 @@ impl RawJournal {
             let (key, json, accepted, floor, kind) = row.context(AnalysisDatabaseSnafu {
                 operation: "decode raw source validation",
             })?;
-            let key: [u8; 32] = key
-                .try_into()
-                .map_err(|_| self.invalid("the raw source key is invalid"))?;
             let identity = RawIdentity::parse(&kind, &json, &self.root)?;
+            if !identity.valid() || key != identity.key() {
+                return Err(self.invalid("the raw source key is invalid"));
+            }
             let expired: u64 = writer.query_row(
                 "SELECT COALESCE(SUM(last_cursor::HUGEINT - first_cursor + 1), 0)::UBIGINT FROM expired_ranges WHERE stream_key = ?",
                 params![key.as_slice()], |row| row.get(0)
             ).context(AnalysisDatabaseSnafu { operation: "count expired raw ranges" })?;
             if self
-                .record_count(key, 1, accepted, revision)
+                .record_count(&key, 1, accepted, revision)
                 .checked_add(expired)
                 != Some(accepted)
             {
@@ -439,10 +437,10 @@ impl RawJournal {
             let (key, first, last) = row.context(AnalysisDatabaseSnafu {
                 operation: "decode expiry overlap validation",
             })?;
-            let key = key
-                .try_into()
-                .map_err(|_| self.invalid("the expired source key is invalid"))?;
-            if self.record_count(key, first, last, revision) != 0 {
+            if !RawIdentity::valid_key(&key) {
+                return Err(self.invalid("the expired source key is invalid"));
+            }
+            if self.record_count(&key, first, last, revision) != 0 {
                 return Err(self.invalid("an expired raw range is still live"));
             }
         }
@@ -466,10 +464,10 @@ impl RawJournal {
             let (key, cursor, segment) = row.context(AnalysisDatabaseSnafu {
                 operation: "decode raw witness validation",
             })?;
-            let key = key
-                .try_into()
-                .map_err(|_| self.invalid("the raw witness key is invalid"))?;
-            let (entry, index) = self.locate(key, cursor, revision)?;
+            if !RawIdentity::valid_key(&key) {
+                return Err(self.invalid("the raw witness key is invalid"));
+            }
+            let (entry, index) = self.locate(&key, cursor, revision)?;
             if entry.reference.id != segment {
                 return Err(self.invalid("the retained witness segment differs"));
             }
@@ -573,11 +571,10 @@ impl RawJournal {
                 let (key, cursor) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode raw processor floor",
                 })?;
-                budget.required.insert(
-                    key.try_into()
-                        .map_err(|_| self.invalid("the raw processor key is invalid"))?,
-                    cursor,
-                );
+                if key.first() != Some(&0) || !RawIdentity::valid_key(&key) {
+                    return Err(self.invalid("the raw processor key is invalid"));
+                }
+                budget.required.insert(key, cursor);
             }
         }
         {
@@ -631,14 +628,10 @@ impl RawJournal {
                 let (key, first, last) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode raw expired range",
                 })?;
-                budget.expired.insert(
-                    (
-                        key.try_into()
-                            .map_err(|_| self.invalid("the raw expiry key is invalid"))?,
-                        first,
-                    ),
-                    last,
-                );
+                if !RawIdentity::valid_key(&key) {
+                    return Err(self.invalid("the raw expiry key is invalid"));
+                }
+                budget.expired.insert((key, first), last);
             }
         }
         let ids: BTreeSet<u64> = {
@@ -686,7 +679,7 @@ impl RawJournal {
                 if span.first <= contiguous {
                     budget
                         .oldest
-                        .entry(key)
+                        .entry(key.clone())
                         .and_modify(|time| *time = (*time).min(entry.commit.intake))
                         .or_insert(entry.commit.intake);
                 }
@@ -803,7 +796,7 @@ impl RawJournal {
                         operation: "publish raw segment",
                     })?;
                 *charges.entry(entry.identity.tenant()).or_default() +=
-                    256 + json.len() as i64 + entry.reference.offset as i64;
+                    256 + key.len() as i64 + json.len() as i64 + entry.reference.offset as i64;
             }
         }
         for (key, first_revision) in sources {
@@ -857,8 +850,8 @@ impl RawJournal {
             )?
             .map_or(0, |receipt| receipt.contiguous_cursor);
             for (_, &(revision, index)) in self.ranges.range((
-                std::ops::Bound::Excluded((key, contiguous)),
-                std::ops::Bound::Included((key, u64::MAX)),
+                std::ops::Bound::Excluded((key.clone(), contiguous)),
+                std::ops::Bound::Included((key.clone(), u64::MAX)),
             )) {
                 let span = &self.entries[&revision].commit.spans[index];
                 if revision > group_revision || span.first > contiguous.saturating_add(1) {
@@ -894,7 +887,8 @@ impl RawJournal {
                     .context(AnalysisDatabaseSnafu {
                         operation: "publish raw receipt",
                     })?;
-                *charges.entry(receipt.identity.tenant_id).or_default() += 256 + json.len() as i64;
+                *charges.entry(receipt.identity.tenant_id).or_default() +=
+                    256 + key.len() as i64 + json.len() as i64;
             }
         }
         self.project_paths(&transaction)?;
@@ -969,7 +963,7 @@ impl RawJournal {
                     operation: "read raw retained floor",
                 })?,
             };
-            let key = source_key(&receipt.identity);
+            let key = receipt.identity.key();
             if let Some(source) = self.sources.get_mut(&key) {
                 let RawReceipt::Evidence(saved) = &mut source.receipt else {
                     return AnalysisStore::reject_path(

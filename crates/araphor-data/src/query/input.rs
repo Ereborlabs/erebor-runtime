@@ -159,7 +159,6 @@ const CONTEXTS: InputSchema = InputSchema {
         InputField("valid_until_utc_ns", UBigint, "exclusive UTC nanoseconds", "The owner did not provide an end time."),
         InputField("sensitivity", Varchar, "public, tenant, or host_restricted", ""),
         InputField("body", Blob, "unchanged owner body bytes", ""),
-        InputField("content_sha256", Blob, "SHA-256 of the complete owner context version", ""),
     ],
     join_keys: "tenant_id,owner_id,entity_key,lifetime_key,owner_revision",
     owner: "araphor-data.AnalysisStore",
@@ -355,7 +354,7 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
                 row.0.resize(EVENTS.columns.len(), Value::Null);
                 Ok(row)
             }
-            AnalysisInputV1::Context(context) => Self::try_from(context),
+            AnalysisInputV1::Context(context) => Ok(Self::from(context)),
             AnalysisInputV1::Result { .. } => crate::QueryUnsupportedSnafu {
                 relation: "results",
             }
@@ -364,14 +363,9 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
     }
 }
 
-impl TryFrom<&AnalysisContextVersionV1> for InputRow {
-    type Error = crate::Error;
-
-    fn try_from(context: &AnalysisContextVersionV1) -> Result<Self> {
-        let digest = context
-            .content_digest()
-            .map_err(|source| crate::QueryEncodingSnafu.into_error(source))?;
-        Ok(Self(vec![
+impl From<&AnalysisContextVersionV1> for InputRow {
+    fn from(context: &AnalysisContextVersionV1) -> Self {
+        Self(vec![
             Value::Blob(context.key.tenant_id.to_vec()),
             Value::Text(context.key.owner_id.clone()),
             Value::Blob(context.key.entity_key.clone()),
@@ -385,8 +379,7 @@ impl TryFrom<&AnalysisContextVersionV1> for InputRow {
                 .map_or(Value::Null, Value::UBigInt),
             Value::Text(<&str>::from(context.sensitivity).into()),
             Value::Blob(context.body.clone()),
-            Value::Blob(digest.to_vec()),
-        ]))
+        ])
     }
 }
 
@@ -495,7 +488,9 @@ impl InputRow {
 }
 
 pub(super) struct InputRelations {
-    tables: [Arc<InputTable>; 4],
+    tables: Vec<Arc<InputTable>>,
+    schemas: Vec<&'static InputSchema>,
+    bytes: usize,
 }
 
 impl InputRelations {
@@ -554,7 +549,9 @@ impl InputRelations {
                 tables[index].rows.push(row.0);
             }
         }
-        if matches!(template, QueryTemplate::Coverage) {
+        if matches!(template, QueryTemplate::Coverage)
+            || matches!(template, QueryTemplate::Client(sql) if sql.dependencies().contains("coverage"))
+        {
             for source in &extraction.sources {
                 let report = Self::report(source)?;
                 Self::push(
@@ -601,7 +598,9 @@ impl InputRelations {
                 }
             }
         }
-        if matches!(template, QueryTemplate::Catalog) {
+        if matches!(template, QueryTemplate::Catalog)
+            || matches!(template, QueryTemplate::Client(sql) if sql.dependencies().contains("catalog"))
+        {
             for schema in SCHEMAS {
                 for (ordinal, field) in schema.columns.iter().enumerate() {
                     Self::push(
@@ -627,18 +626,118 @@ impl InputRelations {
         }
         extraction.input_bytes = bytes;
         Ok(Self {
-            tables: tables.map(Arc::new),
+            tables: tables.into_iter().map(Arc::new).collect(),
+            schemas: vec![&EVENTS, &COVERAGE, &CONTEXTS, &CATALOG],
+            bytes,
         })
     }
 
+    pub(super) fn append_positions(mut self, limit: usize) -> Result<Self> {
+        Self::charge(&mut self.bytes, 0, limit)?;
+        for (table, schema) in self.tables.iter_mut().zip(&self.schemas) {
+            if !matches!(schema.name, "events" | "trace_output") {
+                continue;
+            }
+            let invalid = || {
+                crate::QueryInvalidSnafu {
+                    field: "append input",
+                }
+                .build()
+            };
+            let table = Arc::get_mut(table).ok_or_else(invalid)?;
+            if table.columns.len() != schema.columns.len()
+                || table
+                    .columns
+                    .iter()
+                    .zip(schema.columns)
+                    .any(|(column, field)| column.0 != field.0 || column.1 != field.1)
+            {
+                return Err(invalid());
+            }
+            let revision = table
+                .columns
+                .iter()
+                .position(|column| column.0 == "commit_revision")
+                .ok_or_else(invalid)?;
+            let ordinal = table
+                .columns
+                .iter()
+                .position(|column| column.0 == "ordinal")
+                .ok_or_else(invalid)?;
+            let width = table.columns.len();
+            let needed =
+                (width + 2).saturating_sub(table.columns.capacity()) * size_of::<InputColumn>();
+            Self::charge(&mut self.bytes, needed, limit)?;
+            let previous = table.columns.capacity();
+            table.columns.try_reserve_exact(2).map_err(|_| {
+                crate::QueryLimitSnafu {
+                    resource: "query input bytes",
+                    limit,
+                }
+                .build()
+            })?;
+            Self::charge(
+                &mut self.bytes,
+                (table.columns.capacity() - previous) * size_of::<InputColumn>() - needed,
+                limit,
+            )?;
+            table.columns.extend([
+                InputColumn("__araphor_commit_revision", UBigint),
+                InputColumn("__araphor_ordinal", UInteger),
+            ]);
+            for row in &mut table.rows {
+                if row.len() != width {
+                    return Err(invalid());
+                }
+                let (Value::UBigInt(revision), Value::UInt(ordinal)) =
+                    (&row[revision], &row[ordinal])
+                else {
+                    return Err(invalid());
+                };
+                let positions = [Value::UBigInt(*revision), Value::UInt(*ordinal)];
+                let needed = (width + 2).saturating_sub(row.capacity()) * size_of::<Value>();
+                Self::charge(&mut self.bytes, needed, limit)?;
+                let previous = row.capacity();
+                row.try_reserve_exact(2).map_err(|_| {
+                    crate::QueryLimitSnafu {
+                        resource: "query input bytes",
+                        limit,
+                    }
+                    .build()
+                })?;
+                Self::charge(
+                    &mut self.bytes,
+                    (row.capacity() - previous) * size_of::<Value>() - needed,
+                    limit,
+                )?;
+                row.extend(positions);
+            }
+        }
+        Ok(self)
+    }
+
+    pub(super) fn allocation_bytes(&self) -> usize {
+        self.bytes
+    }
+
     pub(super) fn register(&self, connection: &Connection) -> Result<()> {
-        for (table, (function, view)) in self.tables.iter().zip([
-            ("_query_events", "events"),
-            ("_query_coverage", "coverage"),
-            ("_query_contexts", "context_versions"),
-            ("_query_catalog", "catalog"),
-        ]) {
-            table.register(connection, function, view)?;
+        for (table, schema) in self.tables.iter().zip(&self.schemas) {
+            let function = match schema.name {
+                "events" => "_query_events",
+                "coverage" => "_query_coverage",
+                "context_versions" => "_query_contexts",
+                "catalog" => "_query_catalog",
+                "traces" => "_query_traces",
+                "trace_output" => "_query_trace_output",
+                "trace_measurements" => "_query_trace_measurements",
+                _ => {
+                    return crate::QueryInvalidSnafu {
+                        field: "query relation",
+                    }
+                    .fail()
+                }
+            };
+            table.register(connection, function, schema.name)?;
         }
         Ok(())
     }
@@ -767,6 +866,115 @@ mod tests {
     };
 
     type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+    #[test]
+    fn query_input_append_positions() -> TestResult {
+        let mut extraction = empty_input();
+        let mut row = event(&EvidenceRecord {
+            operation: 7,
+            ..Default::default()
+        })?;
+        row.0[43] = Value::Blob(vec![42; 8192]);
+        add_page(&mut extraction, AnalysisRelationV1::Events, row)?;
+        let input = InputRelations::new(
+            &mut extraction,
+            1_000_000,
+            &QueryTemplate::Events { operation: None },
+        )?;
+        let before = input.allocation_bytes();
+        let columns = input.tables[0].columns.capacity();
+        let capacity = input.tables[0].rows[0].capacity();
+        let Value::Blob(blob) = &input.tables[0].rows[0][43] else {
+            return Err("catalog bytes are absent".into());
+        };
+        let address = blob.as_ptr();
+        let input = input.append_positions(1_000_000)?;
+        let bound = input.allocation_bytes();
+        assert_eq!(
+            bound - before,
+            (input.tables[0].columns.capacity() - columns) * size_of::<InputColumn>()
+                + (input.tables[0].rows[0].capacity() - capacity) * size_of::<Value>()
+        );
+        let Value::Blob(blob) = &input.tables[0].rows[0][43] else {
+            return Err("catalog bytes are absent".into());
+        };
+        assert_eq!(blob.as_ptr(), address);
+        assert_eq!(blob, &vec![42; 8192]);
+        assert_eq!(input.tables[0].rows[0].len(), EVENTS.columns.len() + 2);
+        let connection = Connection::open_in_memory()?;
+        input.register(&connection)?;
+        let values = connection.query_row(
+            "SELECT operation, __araphor_commit_revision, __araphor_ordinal FROM events",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u32>(2)?,
+                ))
+            },
+        )?;
+        assert_eq!(values, (7, 8, 9));
+        drop(connection);
+        drop(input);
+        for limit in [bound, bound - 1] {
+            let mut extraction = empty_input();
+            let mut row = event(&EvidenceRecord {
+                operation: 7,
+                ..Default::default()
+            })?;
+            row.0[43] = Value::Blob(vec![42; 8192]);
+            add_page(&mut extraction, AnalysisRelationV1::Events, row)?;
+            let input = InputRelations::new(
+                &mut extraction,
+                limit,
+                &QueryTemplate::Events { operation: None },
+            )?;
+            let result = input.append_positions(limit);
+            if limit == bound {
+                assert_eq!(result?.allocation_bytes(), bound);
+            } else {
+                assert!(
+                    matches!(result, Err(crate::Error::QueryLimit { limit: found, .. }) if found == limit)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn query_input_append_rejects() -> TestResult {
+        for mode in 0..5 {
+            let mut extraction = empty_input();
+            add_page(
+                &mut extraction,
+                AnalysisRelationV1::Events,
+                event(&EvidenceRecord::default())?,
+            )?;
+            let mut input = InputRelations::new(
+                &mut extraction,
+                1_000_000,
+                &QueryTemplate::Events { operation: None },
+            )?;
+            let table = Arc::get_mut(&mut input.tables[0]).ok_or("input is shared")?;
+            match mode {
+                0 => {
+                    table.rows[0].pop();
+                }
+                1 => table.rows[0][8] = Value::Null,
+                2 => table.rows[0][9] = Value::UBigInt(9),
+                3 => table.columns[8].0 = "changed",
+                _ => {
+                    input = input.append_positions(1_000_000)?;
+                }
+            }
+            assert!(matches!(
+                input.append_positions(1_000_000),
+                Err(crate::Error::QueryInvalid { .. })
+            ));
+        }
+        Ok(())
+    }
 
     fn identity() -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
@@ -1062,6 +1270,11 @@ mod tests {
     fn query_input_context_pages() -> TestResult {
         let context = context();
         let mapped = InputRow::try_from(AnalysisInputV1::Context(&context))?;
+        assert_eq!(CONTEXTS.columns.len(), 9);
+        assert!(!CONTEXTS
+            .columns
+            .iter()
+            .any(|field| field.0 == "content_sha256"));
         assert_eq!(
             mapped.0,
             vec![
@@ -1074,7 +1287,6 @@ mod tests {
                 Value::Null,
                 Value::Text("host_restricted".into()),
                 Value::Blob(vec![0, 128, 255]),
-                Value::Blob(context.content_digest()?.to_vec()),
             ]
         );
         let expected = mapped.0.clone();
@@ -1314,6 +1526,24 @@ mod tests {
                 .map(|schema| schema.columns.len())
                 .sum::<usize>()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn query_client_catalog_keys() -> TestResult {
+        let template = QueryTemplate::Client(super::super::QuerySql::admit(
+            "SELECT relation, column_name, join_keys FROM catalog",
+            Vec::new(),
+            false,
+        )?);
+        let mut extraction = empty_input();
+        let input = InputRelations::new(&mut extraction, 1_000_000, &template)?;
+        let mut extraction = empty_input();
+        let trusted = InputRelations::new(&mut extraction, 1_000_000, &QueryTemplate::Catalog)?;
+        assert_eq!(input.tables[3].rows, trusted.tables[3].rows);
+        assert!(input.tables[3].rows.iter().any(|row| {
+            matches!(value(&CATALOG, row, "join_keys"), Ok(Value::Text(keys)) if !keys.is_empty())
+        }));
         Ok(())
     }
 

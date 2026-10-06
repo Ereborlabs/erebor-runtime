@@ -2,9 +2,8 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use duckdb::types::{TimeUnit, Value};
+use duckdb::types::Value;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::IntoError as _;
 
 use super::budget::QueryLease;
@@ -134,7 +133,6 @@ pub struct QueryCheckpoint {
     schema_version: u32,
     store_uuid: [u8; 16],
     recovery_epoch: u64,
-    binding: [u8; 32],
     operation: QueryOperation,
     position: Option<StorePositionV1>,
     read_revision: u64,
@@ -150,7 +148,6 @@ impl QueryCheckpoint {
             schema_version: QUERY_SCHEMA_VERSION,
             store_uuid: *meta.store_uuid.as_bytes(),
             recovery_epoch: meta.recovery_epoch,
-            binding: plan.binding()?,
             operation: plan.operation(),
             position: (plan.operation() == QueryOperation::Append).then_some(position),
             read_revision: meta.commit_revision,
@@ -172,7 +169,6 @@ impl QueryCheckpoint {
         self.check()?;
         if self.store_uuid != *meta.store_uuid.as_bytes()
             || self.recovery_epoch != meta.recovery_epoch
-            || self.binding != plan.binding()?
             || self.operation != plan.operation()
             || self.read_revision > meta.commit_revision
         {
@@ -262,8 +258,6 @@ pub struct QueryColumn {
 #[derive(Debug)]
 pub struct QueryMetadata {
     pub columns: Vec<QueryColumn>,
-    pub binding: [u8; 32],
-    pub result_digest: [u8; 32],
     pub evaluated_utc_ns: u64,
     pub dependency_revision: u64,
     pub row_limit: usize,
@@ -284,6 +278,7 @@ pub enum QueryErrorCode {
     Cancelled,
     DeadlineExceeded,
     Busy,
+    Denied,
     StorageUnavailable,
     OutputTimeout,
     EvaluationFailed,
@@ -292,7 +287,7 @@ pub enum QueryErrorCode {
 impl QueryErrorCode {
     pub fn reason(self) -> &'static str {
         match self {
-            Self::InvalidQuery => "The trusted query is invalid.",
+            Self::InvalidQuery => "The query is invalid.",
             Self::InvalidCheckpoint => "The checkpoint does not match this query or store.",
             Self::Unsupported => "A required query relation is unavailable.",
             Self::InputTooLarge => "The complete query input exceeds its bound.",
@@ -301,6 +296,7 @@ impl QueryErrorCode {
             Self::Cancelled => "The query was cancelled.",
             Self::DeadlineExceeded => "The query reached its deadline.",
             Self::Busy => "Query admission is full.",
+            Self::Denied => "Query disclosure is not authorized.",
             Self::StorageUnavailable => "Query storage is unavailable.",
             Self::OutputTimeout => "The query output wait reached its deadline.",
             Self::EvaluationFailed => "The query evaluation failed.",
@@ -315,6 +311,7 @@ impl From<&crate::Error> for QueryErrorCode {
                 Self::InvalidCheckpoint
             }
             crate::Error::QueryInvalid { .. } => Self::InvalidQuery,
+            crate::Error::QueryDenied { .. } => Self::Denied,
             crate::Error::QueryUnsupported { .. } => Self::Unsupported,
             crate::Error::AnalysisInputTooLarge { .. } => Self::InputTooLarge,
             crate::Error::QueryLimit { resource, .. } if resource.contains("input") => {
@@ -342,16 +339,35 @@ pub enum QueryTerminalReason {
     Closed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueryHealth {
+    pub write_ready: bool,
+    pub retention_healthy: bool,
+    pub intake_capacity: bool,
+    pub maintenance_capacity: bool,
+    pub usage: Option<crate::StorageUsageV1>,
+}
+
+impl From<crate::StorageHealthV1> for QueryHealth {
+    fn from(health: crate::StorageHealthV1) -> Self {
+        Self {
+            write_ready: health.write_ready,
+            retention_healthy: health.retention_healthy,
+            intake_capacity: health.intake_capacity,
+            maintenance_capacity: health.maintenance_capacity,
+            usage: Some(health.usage),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum QueryPayload {
     Metadata(QueryMetadata),
     Append {
         result: QueryResult,
-        digest: [u8; 32],
     },
     Replace {
         result: QueryResult,
-        digest: [u8; 32],
     },
     Checkpoint {
         checkpoint: QueryCheckpoint,
@@ -359,7 +375,7 @@ pub enum QueryPayload {
     },
     Health {
         dependency_revision: u64,
-        storage_health: crate::StorageHealthV1,
+        storage_health: QueryHealth,
         coverage: Option<Arc<QueryCoverageRows>>,
     },
     Error {
@@ -382,7 +398,6 @@ pub struct QueryFrame {
     pub store_uuid: [u8; 16],
     pub recovery_epoch: u64,
     pub read_revision: u64,
-    pub frame_id: [u8; 32],
     pub clock_changed: bool,
     pub payload: QueryPayload,
     _lease: Option<QueryLease>,
@@ -486,27 +501,21 @@ impl QueryFrame {
         dependency_revision: u64,
     ) -> Result<Self> {
         let bytes = Self::metadata_bytes(result, limits)?;
-        let binding = plan.binding()?;
-        let digest = result.digest()?;
+        result.check_rows()?;
         let mut columns = Vec::with_capacity(result.columns.len());
         for (name, data_type) in result.columns.iter().zip(&result.types) {
             columns.push(QueryColumn::new(plan, name, data_type)?);
         }
-        let mut frame = Self::new(
+        let frame = Self::new(
             plan,
             &result.meta,
-            0,
-            &digest,
             QueryPayload::Metadata(QueryMetadata {
                 columns,
-                binding,
-                result_digest: digest,
                 evaluated_utc_ns: result.evaluated_utc_ns,
                 dependency_revision,
                 row_limit: limits.output_rows,
                 byte_limit: limits.output_bytes,
-                moving_resolution_ns: matches!(plan.template, QueryTemplate::MovingCount { .. })
-                    .then_some(1_000_000_000),
+                moving_resolution_ns: plan.moving_seconds().map(|_| 1_000_000_000),
                 resume_semantics: match plan.operation() {
                     QueryOperation::Append => {
                         "Replay later retained positions; delivery is at least once."
@@ -517,7 +526,7 @@ impl QueryFrame {
                 },
                 coverage: result.sources.clone(),
             }),
-        )?;
+        );
         if frame.owned_bytes() > bytes || frame.total_bytes()? > limits.output_bytes {
             return crate::QueryLimitSnafu {
                 resource: "query metadata output bytes",
@@ -525,65 +534,44 @@ impl QueryFrame {
             }
             .fail();
         }
-        let mut hash = Sha256::new();
-        hash.update(frame.frame_id);
-        hash.update(dependency_revision.to_be_bytes());
-        hash.update(result.evaluated_utc_ns.to_be_bytes());
-        frame.frame_id = hash.finalize().into();
         Ok(frame)
     }
 
     pub(super) fn data(plan: &QueryPlan, result: QueryResult) -> Result<Self> {
-        let digest = result.digest()?;
+        result.check_rows()?;
         let meta = result.meta.clone();
-        let mut hash = Self::identity(plan.binding()?, &meta, 1);
-        hash.update(digest);
         let payload = match plan.operation() {
             QueryOperation::Append => {
                 result.check_positions()?;
-                QueryPayload::Append { result, digest }
+                QueryPayload::Append { result }
             }
             QueryOperation::Replace => {
-                if result.limited {
+                if result.limited
+                    && !matches!(&plan.template, QueryTemplate::Client(sql) if !sql.follow())
+                {
                     return crate::QueryLimitSnafu {
                         resource: "complete replacement output",
                         limit: result.output_bytes,
                     }
                     .fail();
                 }
-                hash.update(meta.commit_revision.to_be_bytes());
-                hash.update(result.evaluated_utc_ns.to_be_bytes());
-                QueryPayload::Replace { result, digest }
+                QueryPayload::Replace { result }
             }
         };
-        Ok(Self {
-            schema_version: QUERY_SCHEMA_VERSION,
-            operation: plan.operation(),
-            store_uuid: *meta.store_uuid.as_bytes(),
-            recovery_epoch: meta.recovery_epoch,
-            read_revision: meta.commit_revision,
-            frame_id: hash.finalize().into(),
-            clock_changed: false,
-            payload,
-            _lease: None,
-        })
+        Ok(Self::new(plan, &meta, payload))
     }
 
     pub(super) fn checkpoint(
         checkpoint: QueryCheckpoint,
         coverage: Option<Arc<QueryCoverageRows>>,
     ) -> Result<Self> {
-        let encoded = checkpoint.encode()?;
-        let mut hash = Sha256::new();
-        hash.update(b"ARAPHOR-QUERY-CHECKPOINT-FRAME-V1\0");
-        hash.update(encoded);
+        checkpoint.check()?;
         Ok(Self {
             schema_version: QUERY_SCHEMA_VERSION,
             operation: checkpoint.operation,
             store_uuid: checkpoint.store_uuid,
             recovery_epoch: checkpoint.recovery_epoch,
             read_revision: checkpoint.read_revision,
-            frame_id: hash.finalize().into(),
             clock_changed: false,
             payload: QueryPayload::Checkpoint {
                 checkpoint,
@@ -601,32 +589,19 @@ impl QueryFrame {
         storage_health: crate::StorageHealthV1,
         clock_changed: bool,
     ) -> Result<Self> {
-        let mut extra = dependency_revision.to_be_bytes().to_vec();
-        extra.extend([
-            u8::from(clock_changed),
-            u8::from(storage_health.write_ready),
-            u8::from(storage_health.retention_healthy),
-            u8::from(storage_health.intake_capacity),
-            u8::from(storage_health.maintenance_capacity),
-        ]);
-        for value in [
-            storage_health.usage.file_bytes,
-            storage_health.usage.allocated_bytes,
-            storage_health.usage.available_bytes,
-        ] {
-            extra.extend(value.to_be_bytes());
+        let mut storage_health = QueryHealth::from(storage_health);
+        if plan.grant.is_some() {
+            storage_health.usage = None;
         }
         let mut frame = Self::new(
             plan,
             meta,
-            3,
-            &extra,
             QueryPayload::Health {
                 dependency_revision,
                 storage_health,
                 coverage,
             },
-        )?;
+        );
         frame.clock_changed = clock_changed;
         Ok(frame)
     }
@@ -638,22 +613,19 @@ impl QueryFrame {
         last_checkpoint: Option<QueryCheckpoint>,
         coverage: Option<Arc<QueryCoverageRows>>,
     ) -> Result<Self> {
-        let mut extra = code.reason().as_bytes().to_vec();
         if let Some(checkpoint) = &last_checkpoint {
-            extra.extend(checkpoint.encode()?);
+            checkpoint.check()?;
         }
-        Self::new(
+        Ok(Self::new(
             plan,
             meta,
-            4,
-            &extra,
             QueryPayload::Error {
                 code,
                 reason: code.reason(),
                 last_checkpoint,
                 coverage,
             },
-        )
+        ))
     }
 
     pub(super) fn terminal(
@@ -663,65 +635,63 @@ impl QueryFrame {
         last_checkpoint: Option<QueryCheckpoint>,
         coverage: Option<Arc<QueryCoverageRows>>,
     ) -> Result<Self> {
-        let tag = match reason {
-            QueryTerminalReason::Cancelled => 0,
-            QueryTerminalReason::OutputTimeout => 1,
-            QueryTerminalReason::Closed => 2,
-        };
-        let mut extra = vec![tag];
         if let Some(checkpoint) = &last_checkpoint {
-            extra.extend(checkpoint.encode()?);
+            checkpoint.check()?;
         }
-        Self::new(
+        Ok(Self::new(
             plan,
             meta,
-            5,
-            &extra,
             QueryPayload::Terminal {
                 reason,
                 last_checkpoint,
                 coverage,
             },
-        )
+        ))
     }
 
-    fn new(
-        plan: &QueryPlan,
-        meta: &AnalysisStoreMetaV1,
-        tag: u8,
-        extra: &[u8],
-        payload: QueryPayload,
-    ) -> Result<Self> {
-        let mut hash = Self::identity(plan.binding()?, meta, tag);
-        hash.update(meta.commit_revision.to_be_bytes());
-        hash.update(extra);
-        Ok(Self {
+    fn new(plan: &QueryPlan, meta: &AnalysisStoreMetaV1, payload: QueryPayload) -> Self {
+        Self {
             schema_version: QUERY_SCHEMA_VERSION,
             operation: plan.operation(),
             store_uuid: *meta.store_uuid.as_bytes(),
             recovery_epoch: meta.recovery_epoch,
             read_revision: meta.commit_revision,
-            frame_id: hash.finalize().into(),
             clock_changed: false,
             payload,
             _lease: None,
-        })
-    }
-
-    fn identity(binding: [u8; 32], meta: &AnalysisStoreMetaV1, tag: u8) -> Sha256 {
-        let mut hash = Sha256::new();
-        hash.update(b"ARAPHOR-QUERY-FRAME-V1\0");
-        hash.update(QUERY_SCHEMA_VERSION.to_be_bytes());
-        hash.update(binding);
-        hash.update(meta.store_uuid.as_bytes());
-        hash.update(meta.recovery_epoch.to_be_bytes());
-        hash.update([tag]);
-        hash
+        }
     }
 }
 
 impl QueryColumn {
     fn new(plan: &QueryPlan, name: &str, data_type: &str) -> Result<Self> {
+        if let QueryTemplate::Client(sql) = &plan.template {
+            let (units, null_meaning, join_keys, owner, readiness) = match sql.source_column(name) {
+                Some((schema, field)) => (
+                    field.2,
+                    field.3,
+                    schema.join_keys,
+                    schema.owner,
+                    schema.readiness,
+                ),
+                _ => (
+                    "SQL-derived value; source field units are not inferred",
+                    "SQL expression can return NULL",
+                    "",
+                    "araphor-data.QueryOwner",
+                    "available",
+                ),
+            };
+            return Ok(Self {
+                name: name.into(),
+                data_type: data_type.into(),
+                units,
+                null_meaning,
+                join_keys,
+                owner,
+                readiness,
+            });
+        }
         let relation = match plan.template {
             QueryTemplate::Coverage => "coverage",
             QueryTemplate::RevisionDifference | QueryTemplate::ContextVersions => {
@@ -769,23 +739,13 @@ impl QueryColumn {
 }
 
 impl QueryResult {
-    pub(super) fn digest(&self) -> Result<[u8; 32]> {
+    fn check_rows(&self) -> Result<()> {
         if self.columns.len() != self.types.len() {
             return crate::QueryInvalidSnafu {
                 field: "result schema",
             }
             .fail();
         }
-        let mut hash = Sha256::new();
-        hash.update(b"ARAPHOR-QUERY-ROWS-V1\0");
-        hash.update((self.columns.len() as u64).to_be_bytes());
-        for field in self.columns.iter().zip(&self.types) {
-            for value in [field.0, field.1] {
-                hash.update((value.len() as u64).to_be_bytes());
-                hash.update(value.as_bytes());
-            }
-        }
-        hash.update((self.rows.len() as u64).to_be_bytes());
         for row in &self.rows {
             if row.len() != self.columns.len() {
                 return crate::QueryInvalidSnafu {
@@ -794,52 +754,66 @@ impl QueryResult {
                 .fail();
             }
             for value in row {
-                match value {
-                    Value::Null => hash.update([0]),
-                    Value::Boolean(value) => hash.update([1, u8::from(*value)]),
-                    Value::UInt(value) => {
-                        hash.update([2]);
-                        hash.update(value.to_be_bytes());
+                if !matches!(
+                    value,
+                    Value::Null
+                        | Value::Boolean(_)
+                        | Value::TinyInt(_)
+                        | Value::SmallInt(_)
+                        | Value::Int(_)
+                        | Value::BigInt(_)
+                        | Value::HugeInt(_)
+                        | Value::UHugeInt(_)
+                        | Value::UTinyInt(_)
+                        | Value::USmallInt(_)
+                        | Value::UInt(_)
+                        | Value::UBigInt(_)
+                        | Value::Float(_)
+                        | Value::Double(_)
+                        | Value::Decimal(_)
+                        | Value::Timestamp(..)
+                        | Value::Text(_)
+                        | Value::Blob(_)
+                        | Value::Date32(_)
+                        | Value::Time64(..)
+                        | Value::Interval { .. }
+                ) {
+                    return crate::QueryUnsupportedSnafu {
+                        relation: "query value type",
                     }
-                    Value::UBigInt(value) => {
-                        hash.update([3]);
-                        hash.update(value.to_be_bytes());
-                    }
-                    Value::Int(value) => {
-                        hash.update([4]);
-                        hash.update(value.to_be_bytes());
-                    }
-                    Value::BigInt(value) => {
-                        hash.update([5]);
-                        hash.update(value.to_be_bytes());
-                    }
-                    Value::Text(value) => {
-                        hash.update([6]);
-                        hash.update((value.len() as u64).to_be_bytes());
-                        hash.update(value.as_bytes());
-                    }
-                    Value::Blob(value) => {
-                        hash.update([7]);
-                        hash.update((value.len() as u64).to_be_bytes());
-                        hash.update(value);
-                    }
-                    Value::Timestamp(TimeUnit::Microsecond, value) => {
-                        hash.update([8]);
-                        hash.update(value.to_be_bytes());
-                    }
-                    _ => {
-                        return crate::QueryInvalidSnafu {
-                            field: "result value",
-                        }
-                        .fail()
-                    }
+                    .fail();
                 }
             }
         }
-        Ok(hash.finalize().into())
+        Ok(())
     }
 
     fn check_positions(&self) -> Result<()> {
+        if !self.positions.is_empty() {
+            if self.positions.len() != self.rows.len() {
+                return crate::QueryInvalidSnafu {
+                    field: "append position",
+                }
+                .fail();
+            }
+            let mut previous = None;
+            for position in &self.positions {
+                if previous.is_some_and(|previous| previous >= *position)
+                    || *position > self.scanned_through
+                    || position.commit_revision > self.meta.commit_revision
+                {
+                    return crate::QueryInvalidSnafu {
+                        field: "append order",
+                    }
+                    .fail();
+                }
+                previous = Some(*position);
+            }
+            return Ok(());
+        }
+        if self.rows.is_empty() {
+            return Ok(());
+        }
         let revision = self
             .columns
             .iter()
@@ -884,6 +858,8 @@ impl QueryResult {
 mod tests {
     use std::ops::Bound;
     use std::sync::Arc;
+
+    use duckdb::types::TimeUnit;
 
     use super::*;
     use crate::query::budget::QueryBudget;
@@ -957,9 +933,9 @@ mod tests {
                 meta: self.meta.clone(),
                 sources,
                 missing_contexts: Vec::new(),
-                scanned_bytes: 64,
+                scanned_bytes: Some(64),
                 input_rows: 1,
-                input_bytes: 128,
+                input_bytes: Some(128),
                 output_bytes: 0,
                 evaluated_utc_ns: 10_000_000_000,
                 scanned_through: StorePositionV1 {
@@ -969,6 +945,7 @@ mod tests {
                 exhausted: true,
                 limited: false,
                 next_expiry_ns: None,
+                positions: Vec::new(),
                 _lease: lease,
             };
             result.output_bytes = result.allocation_bytes()?;
@@ -980,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn query_follow_checkpoint_binding() -> TestResult {
+    fn query_follow_checkpoint_bounds() -> TestResult {
         let fixture = FrameFixture::new()?;
         let position = StorePositionV1 {
             commit_revision: 3,
@@ -1006,17 +983,16 @@ mod tests {
                 if rejected == position && captured == floor
         ));
 
-        for change in 0..5 {
+        for change in 0..3 {
             let mut plan = fixture.plan.clone();
             match change {
                 0 => plan.template = QueryTemplate::Events { operation: Some(7) },
                 1 => plan.selection.sources[0].source_epoch += 1,
-                2 => plan.selection.received_from = Bound::Excluded(10),
-                3 => plan.selection.sources[0].tenant_id = [9; 16],
-                _ => plan.template = QueryTemplate::OperationCounts,
+                _ => plan.selection.received_from = Bound::Excluded(10),
             }
-            assert!(
-                checkpoint.validate(&plan, &fixture.meta, None).is_err(),
+            assert_eq!(
+                checkpoint.validate(&plan, &fixture.meta, None)?,
+                Some(position),
                 "{change}"
             );
         }
@@ -1040,6 +1016,7 @@ mod tests {
         );
         let mut replace = fixture.plan.clone();
         replace.template = QueryTemplate::OperationCounts;
+        assert!(checkpoint.validate(&replace, &current, None).is_err());
         let replacement = QueryCheckpoint::new(&replace, &fixture.meta, position)?;
         assert_eq!(replacement.validate(&replace, &current, Some(floor))?, None);
 
@@ -1062,22 +1039,57 @@ mod tests {
             }
             assert!(invalid.encode().is_err());
             assert!(QueryCheckpoint::try_from(serde_json::to_vec(&invalid)?.as_slice()).is_err());
+            assert!(QueryFrame::checkpoint(invalid.clone(), None).is_err());
+            assert!(QueryFrame::error(
+                &fixture.plan,
+                &fixture.meta,
+                QueryErrorCode::EvaluationFailed,
+                Some(invalid.clone()),
+                None,
+            )
+            .is_err());
+            assert!(QueryFrame::terminal(
+                &fixture.plan,
+                &fixture.meta,
+                QueryTerminalReason::Closed,
+                Some(invalid),
+                None,
+            )
+            .is_err());
         }
         Ok(())
     }
 
     #[test]
-    fn query_follow_frame_ids() -> TestResult {
+    fn query_follow_frame_rows() -> TestResult {
         let fixture = FrameFixture::new()?;
         let first = QueryFrame::data(&fixture.plan, fixture.result()?)?;
-        let first_id = first.frame_id;
+        assert_eq!(first.schema_version, QUERY_SCHEMA_VERSION);
+        assert_eq!(first.operation, QueryOperation::Append);
+        assert_eq!(first.store_uuid, *fixture.meta.store_uuid.as_bytes());
+        assert_eq!(first.recovery_epoch, fixture.meta.recovery_epoch);
+        assert_eq!(first.read_revision, fixture.meta.commit_revision);
+        let QueryPayload::Append { result } = &first.payload else {
+            return Err("append absent".into());
+        };
+        let rows = result.rows.clone();
+        let scanned = result.scanned_through;
         drop(first);
         let mut same = fixture.result()?;
         same.meta.commit_revision += 1;
         same.evaluated_utc_ns += 100;
         same.scanned_through.commit_revision += 1;
         let same = QueryFrame::data(&fixture.plan, same)?;
-        assert_eq!(same.frame_id, first_id);
+        assert_eq!(same.read_revision, fixture.meta.commit_revision + 1);
+        let QueryPayload::Append { result } = &same.payload else {
+            return Err("append absent".into());
+        };
+        assert_eq!(result.rows, rows);
+        assert_eq!(result.scanned_through.ordinal, scanned.ordinal);
+        assert_eq!(
+            result.scanned_through.commit_revision,
+            scanned.commit_revision + 1
+        );
         drop(same);
         for change in 0..3 {
             let mut result = fixture.result()?;
@@ -1086,15 +1098,15 @@ mod tests {
                 1 => result.rows[0][2] = Value::UInt(5),
                 _ => result.meta.recovery_epoch += 1,
             }
+            let rows = result.rows.clone();
+            let epoch = result.meta.recovery_epoch;
             let frame = QueryFrame::data(&fixture.plan, result)?;
-            assert_ne!(frame.frame_id, first_id, "{change}");
+            assert_eq!(frame.recovery_epoch, epoch);
+            let QueryPayload::Append { result } = &frame.payload else {
+                return Err("append absent".into());
+            };
+            assert_eq!(result.rows, rows);
         }
-        let mut filtered = fixture.plan.clone();
-        filtered.template = QueryTemplate::Events { operation: Some(7) };
-        assert_ne!(
-            QueryFrame::data(&filtered, fixture.result()?)?.frame_id,
-            first_id
-        );
         let mut unordered = fixture.result()?;
         unordered.rows.push(unordered.rows[0].clone());
         assert!(QueryFrame::data(&fixture.plan, unordered).is_err());
@@ -1107,9 +1119,6 @@ mod tests {
 
         let mut replace = fixture.plan.clone();
         replace.template = QueryTemplate::OperationCounts;
-        let first = QueryFrame::data(&replace, fixture.result()?)?;
-        let first_id = first.frame_id;
-        drop(first);
         for change in 0..2 {
             let mut result = fixture.result()?;
             if change == 0 {
@@ -1117,7 +1126,16 @@ mod tests {
             } else {
                 result.evaluated_utc_ns += 1;
             }
-            assert_ne!(QueryFrame::data(&replace, result)?.frame_id, first_id);
+            let revision = result.meta.commit_revision;
+            let evaluated = result.evaluated_utc_ns;
+            let frame = QueryFrame::data(&replace, result)?;
+            assert_eq!(frame.operation, QueryOperation::Replace);
+            assert_eq!(frame.read_revision, revision);
+            let QueryPayload::Replace { result } = &frame.payload else {
+                return Err("replacement absent".into());
+            };
+            assert_eq!(result.evaluated_utc_ns, evaluated);
+            assert_eq!(result.rows, rows);
         }
         let mut partial = fixture.result()?;
         partial.limited = true;
@@ -1139,46 +1157,113 @@ mod tests {
     }
 
     #[test]
-    fn query_input_frame_digest() -> TestResult {
+    fn query_follow_frame_validation() -> TestResult {
         let fixture = FrameFixture::new()?;
-        let mut result = fixture.result()?;
-        result.rows = vec![vec![
+        for change in 0..3 {
+            let mut result = fixture.result()?;
+            let expected = match change {
+                0 => {
+                    result.types.pop();
+                    "result schema"
+                }
+                1 => {
+                    result.rows[0].pop();
+                    "result row"
+                }
+                _ => {
+                    result.rows[0][0] = Value::List(vec![Value::Null]);
+                    "query value type"
+                }
+            };
+            assert!(matches!(
+                QueryFrame::metadata(&fixture.plan, &result, &QueryLimits::default(), 7),
+                Err(crate::Error::QueryInvalid { field, .. }
+                    | crate::Error::QueryUnsupported { relation: field, .. }) if field == expected
+            ));
+            assert!(matches!(
+                QueryFrame::data(&fixture.plan, result),
+                Err(crate::Error::QueryInvalid { field, .. }
+                    | crate::Error::QueryUnsupported { relation: field, .. }) if field == expected
+            ));
+        }
+        for value in [
             Value::Null,
             Value::Boolean(true),
-            Value::UInt(u32::MAX),
-            Value::UBigInt(u64::MAX),
+            Value::TinyInt(i8::MIN),
+            Value::SmallInt(i16::MIN),
             Value::Int(i32::MIN),
             Value::BigInt(i64::MIN),
+            Value::HugeInt(i128::MIN),
+            Value::UHugeInt(u128::MAX),
+            Value::UTinyInt(u8::MAX),
+            Value::USmallInt(u16::MAX),
+            Value::UInt(u32::MAX),
+            Value::UBigInt(u64::MAX),
+            Value::Float(f32::INFINITY),
+            Value::Double(f64::NAN),
+            Value::Decimal(duckdb::types::Decimal::new(38, 5, -12345)?),
+            Value::Timestamp(TimeUnit::Nanosecond, i64::MIN),
             Value::Text("a\0b".into()),
             Value::Blob(vec![0, 255]),
-            Value::Timestamp(TimeUnit::Microsecond, i64::MIN),
-        ]];
-        result.columns = (0..result.rows[0].len())
-            .map(|index| index.to_string())
-            .collect();
-        result.types = vec!["fixed".into(); result.columns.len()];
-        let digest = result.digest()?;
-        assert_eq!(result.digest()?, digest);
-        result.rows[0][0] = Value::BigInt(0);
-        assert_ne!(result.digest()?, digest);
-        result.rows[0][0] = Value::Double(0.0);
-        assert!(result.digest().is_err());
-        result.rows[0][0] = Value::Timestamp(TimeUnit::Nanosecond, 0);
-        assert!(result.digest().is_err());
+            Value::Date32(i32::MIN),
+            Value::Time64(TimeUnit::Microsecond, i64::MAX),
+            Value::Interval {
+                months: i32::MIN,
+                days: i32::MAX,
+                nanos: i64::MIN,
+            },
+        ] {
+            let mut result = fixture.result()?;
+            result.rows[0][0] = value;
+            QueryFrame::metadata(&fixture.plan, &result, &QueryLimits::default(), 7)?;
+            QueryFrame::data(&fixture.plan, result)?;
+        }
+        Ok(())
+    }
 
+    #[test]
+    fn query_frame_borrowed_rows() -> TestResult {
+        let fixture = FrameFixture::new()?;
+        let mut result = fixture.result()?;
         result.columns = vec!["a".into(), "b".into()];
-        result.types = vec!["Varchar".into(), "Varchar".into()];
-        result.rows = vec![vec![Value::Text("ab".into()), Value::Text("c".into())]];
-        let left = result.digest()?;
-        result.rows = vec![vec![Value::Text("a".into()), Value::Text("bc".into())]];
-        assert_ne!(result.digest()?, left);
-        let text = result.digest()?;
-        result.rows[0][0] = Value::Blob(vec![b'a']);
-        assert_ne!(result.digest()?, text);
+        result.types = vec!["Varchar".into(), "Blob".into()];
+        result.rows = vec![vec![Value::Text("a\0b".into()), Value::Blob(vec![0, 255])]];
+        let rows = result.rows.as_ptr();
+        let [Value::Text(text), Value::Blob(blob)] = result.rows[0].as_slice() else {
+            return Err("row values absent".into());
+        };
+        let owned = (text.as_ptr(), blob.as_ptr());
+        result.check_rows()?;
+        assert_eq!(result.rows.as_ptr(), rows);
+        let [Value::Text(text), Value::Blob(blob)] = result.rows[0].as_slice() else {
+            return Err("row values absent".into());
+        };
+        assert_eq!((text.as_ptr(), blob.as_ptr()), owned);
+        result.rows[0][0] = Value::List(vec![Value::Null]);
+        assert!(matches!(
+            result.check_rows(),
+            Err(crate::Error::QueryUnsupported {
+                relation: "query value type",
+                ..
+            })
+        ));
+        result.rows[0][0] = Value::Null;
         result.rows[0].pop();
-        assert!(result.digest().is_err());
+        assert!(matches!(
+            result.check_rows(),
+            Err(crate::Error::QueryInvalid {
+                field: "result row",
+                ..
+            })
+        ));
         result.types.pop();
-        assert!(result.digest().is_err());
+        assert!(matches!(
+            result.check_rows(),
+            Err(crate::Error::QueryInvalid {
+                field: "result schema",
+                ..
+            })
+        ));
         Ok(())
     }
 
@@ -1373,7 +1458,7 @@ mod tests {
             assert!(health.clock_changed);
             assert_eq!(health.coverage()[0].state, QueryCoverageState::Unknown);
             assert!(
-                matches!(health.payload, QueryPayload::Health { dependency_revision: 7, storage_health: captured, .. } if captured == storage_health)
+                matches!(health.payload, QueryPayload::Health { dependency_revision: 7, storage_health: captured, .. } if captured == QueryHealth::from(storage_health))
             );
             let raw = crate::AnalysisStateSnafu {
                 path: std::path::Path::new("/private/store"),

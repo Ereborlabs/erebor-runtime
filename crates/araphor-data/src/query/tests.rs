@@ -1,5 +1,6 @@
 use std::ops::Bound;
 
+use duckdb::{params_from_iter, Config, Connection};
 use prost::Message as _;
 
 use super::*;
@@ -46,7 +47,7 @@ impl QueryFixture {
         self.commit_as(&self.source, 0, cursor, received_ns, record)
     }
 
-    fn commit_as(
+    pub(super) fn commit_as(
         &self,
         source: &EvidenceIntakeIdentityV1,
         cpu_id: u32,
@@ -258,29 +259,39 @@ fn query_input_windows() -> TestResult {
 }
 
 #[test]
-fn query_scope_plan_binding() -> TestResult {
+fn query_scope_plan_validation() -> TestResult {
     let fixture = QueryFixture::new()?;
+    fixture.event(1, 10, 7)?;
+    fixture.event(2, 20, 8)?;
+    fixture.event(3, 30, 7)?;
+    let owner = fixture.owner(QueryLimits::default())?;
     let plan = fixture.plan(QueryTemplate::Events { operation: Some(7) })?;
-    let binding = plan.binding()?;
-    assert_eq!(plan.clone().binding()?, binding);
-    assert_ne!(
-        fixture
-            .plan(QueryTemplate::Events { operation: Some(8) })?
-            .binding()?,
-        binding
-    );
+    let result = owner.query_at(&plan, 40)?;
+    let operation = result
+        .columns
+        .iter()
+        .position(|name| name == "operation")
+        .ok_or("operation column absent")?;
+    assert_eq!(result.rows.len(), 2);
+    assert!(result
+        .rows
+        .iter()
+        .all(|row| row[operation] == Value::UInt(7)));
+    let changed = fixture.plan(QueryTemplate::Events { operation: Some(8) })?;
+    let result = owner.query_at(&changed, 40)?;
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][operation], Value::UInt(8));
     let mut selection = plan.selection.clone();
-    selection.received_from = Bound::Included(0);
-    assert_ne!(
-        QueryPlan::new(selection, plan.template.clone())?.binding()?,
-        binding
-    );
+    selection.received_from = Bound::Included(20);
+    let bounded = QueryPlan::new(selection, plan.template.clone())?;
+    let result = owner.query_at(&bounded, 40)?;
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][operation], Value::UInt(7));
+    assert_eq!(bounded.dependencies(40)?.received_from, Bound::Included(20));
     let mut selection = plan.selection.clone();
     selection.sources[0].source_epoch += 1;
-    assert_ne!(
-        QueryPlan::new(selection, plan.template.clone())?.binding()?,
-        binding
-    );
+    let changed = QueryPlan::new(selection.clone(), plan.template.clone())?;
+    assert_eq!(changed.dependencies(40)?.sources, selection.sources);
     let mut selection = plan.selection.clone();
     selection.sources[0].tenant_id = [9; 16];
     assert!(QueryPlan::new(selection, plan.template.clone()).is_err());
@@ -304,9 +315,9 @@ fn query_input_output_bounds() -> TestResult {
     let owner = fixture.owner(QueryLimits::default())?;
     let result = owner.query_at(&plan, 0)?;
     let (input_bytes, output_bytes, scan_bytes) = (
-        result.input_bytes,
+        result.input_bytes.ok_or("input counter absent")?,
         result.output_bytes,
-        result.scanned_bytes,
+        result.scanned_bytes.ok_or("scan counter absent")?,
     );
     drop(result);
     for (field, limit) in [
@@ -368,7 +379,13 @@ fn query_follow_append_pages() -> TestResult {
     let mut after = None;
     let mut cursors = Vec::new();
     for expected in [2_u64, 4, 5] {
-        let result = owner.evaluate(&plan, 6, after, true, &AnalysisReadControl::default())?;
+        let result = owner.evaluate(
+            &plan,
+            6,
+            QueryRead::Append(after),
+            &AnalysisReadControl::default(),
+            owner.reserve(&plan)?,
+        )?;
         let column = result
             .columns
             .iter()
@@ -381,7 +398,13 @@ fn query_follow_append_pages() -> TestResult {
         assert_eq!(result.exhausted, expected == 5);
     }
     assert_eq!(cursors, vec![2, 4, 5]);
-    let result = owner.evaluate(&plan, 6, after, true, &AnalysisReadControl::default())?;
+    let result = owner.evaluate(
+        &plan,
+        6,
+        QueryRead::Append(after),
+        &AnalysisReadControl::default(),
+        owner.reserve(&plan)?,
+    )?;
     assert!(result.rows.is_empty());
     assert!(result.exhausted);
     Ok(())
@@ -398,7 +421,7 @@ fn query_scope_bounded_history() -> TestResult {
     let result = fixture
         .owner(QueryLimits::default())?
         .query_at(&plan, 20_000)?;
-    let limit = result.scanned_bytes;
+    let limit = result.scanned_bytes.ok_or("scan counter absent")?;
     assert_eq!(result.rows, vec![vec![Value::UInt(7), Value::BigInt(2)]]);
     assert_eq!(result.rows, fixture.baseline(&plan, 20_000)?);
     drop(result);
@@ -721,7 +744,7 @@ fn query_scope_revision_difference() -> TestResult {
             ]]
         );
         assert!(result.missing_contexts.is_empty());
-        assert_eq!(result.scanned_bytes, 0);
+        assert_eq!(result.scanned_bytes, Some(0));
         assert_eq!(result.input_rows, 2);
         assert_eq!(result.rows, fixture.baseline(&plan, 1_000)?);
     }
@@ -745,7 +768,7 @@ fn query_scope_revision_difference() -> TestResult {
     let result = owner.query_at(&versions, 1_000)?;
     assert_eq!(result.rows, fixture.baseline(&versions, 1_000)?);
     assert_eq!(result.missing_contexts, vec![missing]);
-    assert_eq!(result.scanned_bytes, 0);
+    assert_eq!(result.scanned_bytes, Some(0));
     assert_eq!(result.input_rows, 3);
     assert!(result.sources.is_empty());
     let index = |name| {
@@ -808,7 +831,7 @@ fn query_input_catalog() -> TestResult {
             .map(|schema| schema.columns.len())
             .sum::<usize>()
     );
-    assert_eq!(result.scanned_bytes, 0);
+    assert_eq!(result.scanned_bytes, Some(0));
     assert_eq!(result.input_rows, 0);
     assert!(result.sources.is_empty());
     let index = |name| {
@@ -917,7 +940,7 @@ fn query_scope_coverage() -> TestResult {
     assert_eq!(complete.sources[0].receipt.identity, fixture.source);
     assert_eq!(complete.sources[0].state, QueryCoverageState::Gapped);
     assert_eq!(complete.sources[0].receipt.contiguous_cursor, 0);
-    assert_eq!(complete.scanned_bytes, 0);
+    assert_eq!(complete.scanned_bytes, Some(0));
     assert_eq!(complete.input_rows, 0);
     assert_eq!(complete.rows.len(), 3);
     let index = |name| {
@@ -956,7 +979,7 @@ fn query_scope_coverage() -> TestResult {
         assert_eq!(result.rows, complete.rows);
         assert_eq!(result.rows, fixture.baseline(&plan, 100)?);
         assert_eq!(&result.sources[..], &complete.sources[..]);
-        assert_eq!(result.scanned_bytes, 0);
+        assert_eq!(result.scanned_bytes, Some(0));
     }
     drop(complete);
     fixture.event(1, 10, 7)?;

@@ -9,9 +9,9 @@ const GLOBAL_REVISIONS: u64 = 4_096;
 pub(super) const TRACE_RESERVE: u64 = 16 * 1024;
 pub(super) const TRACE_CHARGES: &str = "SELECT tenant_id,
     256 + octet_length(source) + octet_length(encode(bindings)) + octet_length(authority) AS bytes FROM traces
-    UNION ALL SELECT tenant_id, 256 + octet_length(encode(identity_json))
+    UNION ALL SELECT tenant_id, 256 + octet_length(stream_key) + octet_length(encode(identity_json))
         + CASE WHEN terminal IS NULL THEN 16 * 1024 ELSE octet_length(encode(terminal)) END FROM trace_receipts
-    UNION ALL SELECT tenant_id, 256 + committed_end + octet_length(encode(identity_json))
+    UNION ALL SELECT tenant_id, 256 + octet_length(stream_key) + committed_end + octet_length(encode(identity_json))
         FROM segments WHERE stream_kind = 'diagnostic'";
 
 #[derive(Default)]
@@ -116,16 +116,13 @@ impl AnalysisStore {
         let mut charge = 0;
         for binding in &intent.bindings {
             let identity = super::raw::RawIdentity::Diagnostic(binding.identity.clone());
+            let key = identity.key();
             let json = identity.json(&self.root)?;
             let changed = transaction
                 .execute(
                     "INSERT INTO trace_receipts VALUES (?, ?, ?, 0, 0, NULL, 0, 0)
                  ON CONFLICT DO NOTHING",
-                    params![
-                        identity.key().as_slice(),
-                        json,
-                        identity.tenant().as_slice()
-                    ],
+                    params![key.as_slice(), json, identity.tenant().as_slice()],
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "reserve diagnostic terminal state",
@@ -133,7 +130,7 @@ impl AnalysisStore {
             if changed != 1 {
                 return crate::AnalysisConflictSnafu.fail();
             }
-            charge += 256 + json.len() as i64 + TRACE_RESERVE as i64;
+            charge += 256 + key.len() as i64 + json.len() as i64 + TRACE_RESERVE as i64;
         }
         UsageChange::from(charge).apply(transaction, &intent.tenant_id)?;
         let (total, scoped): (u64, u64) = transaction.query_row(
@@ -239,10 +236,10 @@ impl AnalysisStore {
             let (key, cursor, segment) = row.context(AnalysisDatabaseSnafu {
                 operation: "decode witness record size",
             })?;
-            let key = key
-                .try_into()
-                .map_err(|_| self.state_error("the witness key is invalid"))?;
-            let (entry, index) = raw.locate(key, cursor, usage.read_revision)?;
+            if !super::raw::RawIdentity::valid_key(&key) {
+                return self.reject("the witness key is invalid");
+            }
+            let (entry, index) = raw.locate(&key, cursor, usage.read_revision)?;
             if entry.reference.id != segment {
                 return self.reject("the witness segment differs");
             }
@@ -271,36 +268,36 @@ impl AnalysisStore {
 
     const USAGE_CHARGES: &'static str = "WITH charges AS (
                     SELECT tenant_id, 'segments' AS family,
-                        256 + committed_end + octet_length(encode(identity_json)) AS bytes FROM segments
+                        256 + octet_length(stream_key) + committed_end + octet_length(encode(identity_json)) AS bytes FROM segments
                     UNION ALL SELECT tenant_id, 'coverage',
-                        256 + octet_length(report) FROM coverage
+                        256 + octet_length(stream_key) + octet_length(report) FROM coverage
                     UNION ALL SELECT tenant_id, 'receipts',
-                        256 + octet_length(encode(identity_json)) FROM source_receipts
-                    UNION ALL SELECT tenant_id, 'bindings', 256 FROM source_bindings
+                        256 + octet_length(stream_key) + octet_length(encode(identity_json)) FROM source_receipts
+                    UNION ALL SELECT tenant_id, 'bindings', 256 + octet_length(epoch_key) FROM source_bindings
                     UNION ALL SELECT tenant_id, 'context',
                         256 + octet_length(encode(owner_id)) + octet_length(entity_key)
                         + octet_length(lifetime_key) + octet_length(body) FROM context_versions
                     UNION ALL SELECT tenant_id, 'progress',
-                        256 + octet_length(encode(processor_id)) + octet_length(encode(retirement_id))
+                        256 + octet_length(stream_key) + octet_length(encode(processor_id)) + octet_length(encode(retirement_id))
                         + octet_length(encode(retirement_reason)) FROM processor_progress
                     UNION ALL SELECT tenant_id, 'witnesses',
-                        256 + octet_length(encode(ref_id)) FROM evidence_refs
+                        256 + octet_length(stream_key) + octet_length(encode(ref_id)) FROM evidence_refs
                     UNION ALL SELECT tenant_id, 'context_refs',
                         256 + octet_length(encode(ref_id)) + octet_length(encode(owner_id))
                         + octet_length(entity_key) + octet_length(lifetime_key) FROM context_refs
                     UNION ALL SELECT tenant_id, 'results',
                         256 + octet_length(encode(result_id)) + octet_length(encode(processor_id))
-                        + octet_length(body) FROM analysis_results
+                        + octet_length(body) + octet_length(request_meta) FROM analysis_results
                     UNION ALL SELECT tenant_id, 'processor_gaps',
-                        256 + octet_length(encode(processor_id)) FROM processor_gaps
-                    UNION ALL SELECT tenant_id, 'recovery_gaps', 256 FROM recovery_gaps
-                    UNION ALL SELECT tenant_id, 'expired_ranges', 256 FROM expired_ranges
+                        256 + octet_length(stream_key) + octet_length(encode(processor_id)) FROM processor_gaps
+                    UNION ALL SELECT tenant_id, 'recovery_gaps', 256 + octet_length(stream_key) FROM recovery_gaps
+                    UNION ALL SELECT tenant_id, 'expired_ranges', 256 + octet_length(stream_key) FROM expired_ranges
                     UNION ALL SELECT tenant_id, 'replay_floors', 256 FROM replay_floors
                     UNION ALL SELECT tenant_id, 'traces',
                         256 + octet_length(source) + octet_length(encode(bindings))
                         + octet_length(authority) FROM traces
                     UNION ALL SELECT tenant_id, 'trace_receipts',
-                        256 + octet_length(encode(identity_json))
+                        256 + octet_length(stream_key) + octet_length(encode(identity_json))
                         + CASE WHEN terminal IS NULL THEN 16 * 1024
                             ELSE octet_length(encode(terminal)) END FROM trace_receipts
                 ) SELECT tenant_id, SUM(bytes)::UBIGINT AS logical_bytes,
@@ -702,10 +699,11 @@ mod tests {
     #[test]
     fn analysis_store_witness_limits() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let mut store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let root = directory.path().join("analysis");
+        let mut store = AnalysisStore::open(&root)?;
         let identity = EvidenceIntakeIdentityV1 {
             tenant_id: [1; 16],
-            node_id: "n".into(),
+            node_id: "n".repeat(128),
             node_boot_id: [2; 16],
             label_epoch: 1,
             source_id: [3; 16],
@@ -722,12 +720,31 @@ mod tests {
                 frame_ends: vec![5],
             },
         )?;
+        let key_bytes = identity.key().len() as u64;
+        let epoch_bytes = identity.epoch_key().len() as u64;
+        let json_bytes = serde_json::to_vec(&identity)?.len() as u64;
+        let file_bytes =
+            std::fs::metadata(super::super::segments::SegmentRange::path(&root, 1))?.len();
+        assert_eq!((key_bytes, epoch_bytes), (195, 170));
+        let raw_bytes = file_bytes + 768 + 2 * json_bytes + 2 * key_bytes + epoch_bytes;
+        assert_eq!(
+            store.raw.lock().map_err(|_| "raw poisoned")?.budget.total,
+            raw_bytes
+        );
         let scope = ProcessorScopeV1 {
             processor_id: "p".into(),
             method_version: 1,
             identity: identity.clone(),
         };
         store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            raw_bytes + 256 + scope.processor_id.len() as u64 + key_bytes
+        );
         let context = context(1, 1);
         let context_revision = store.commit_context(&context)?;
         let input = AnalysisResultCommitV1 {
@@ -745,7 +762,7 @@ mod tests {
                 expires_utc_ns: 100,
             }],
             context_refs: vec![AnalysisContextRefV1 {
-                content_sha256: context.content_digest()?,
+                commit_revision: context_revision,
                 key: context.key,
             }],
         };
@@ -776,10 +793,19 @@ mod tests {
             })
         ));
         assert_eq!(store.meta()?, before);
-        store.storage.tenant_max_bytes = current_bytes + 776;
-        let witness_bytes =
-            std::fs::metadata(super::super::segments::SegmentRange::path(&store.root, 1))?.len()
-                + 260;
+        let request_bytes = input.request_meta()?.len() as u64;
+        let result_bytes = 776 + request_bytes + key_bytes;
+        store.storage.tenant_max_bytes = current_bytes + result_bytes - 1;
+        assert!(matches!(
+            store.commit_result(&input),
+            Err(crate::Error::StorageCapacity {
+                resource: "tenant logical bytes",
+                ..
+            })
+        ));
+        assert_eq!(store.meta()?, before);
+        store.storage.tenant_max_bytes = current_bytes + result_bytes;
+        let witness_bytes = file_bytes + 260;
         store.storage.witness_max_bytes = witness_bytes - 1;
         let before = store.meta()?;
         assert!(matches!(
@@ -795,6 +821,19 @@ mod tests {
         let receipt = store.commit_result(&input)?;
         {
             let reader = store.reader()?;
+            let stored_bytes: u64 = reader.get()?.query_row(
+                "SELECT octet_length(request_meta) FROM analysis_results WHERE result_id = ?",
+                params![input.result_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(stored_bytes, request_bytes);
+            let charged: u64 = reader.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage WHERE tenant_id = ?",
+                params![input.scope.identity.tenant_id.as_slice()],
+                |row| row.get(0),
+            )?;
+            assert_eq!(charged, current_bytes + result_bytes);
+            AnalysisStore::validate_usage(reader.get()?, &store.root)?;
             let plan: String = reader.get()?.query_row(
                 &format!("EXPLAIN {}", AnalysisStore::WITNESS_USAGE),
                 params![[1_u8; 16].as_slice(), 2_u64, [1_u8; 16].as_slice()],
@@ -806,6 +845,14 @@ mod tests {
             );
         }
         assert_eq!(store.commit_result(&input)?, receipt);
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            current_bytes + result_bytes
+        );
         let mut second = input;
         second.expected_cursor = 1;
         second.result_id = "s".into();
@@ -866,6 +913,15 @@ mod tests {
             }
         }
         store.storage.witness_max_bytes = witness_bytes;
+        let before_bytes = store.writer()?.get()?.query_row(
+            "SELECT logical_bytes FROM tenant_usage",
+            [],
+            |row| row.get::<_, u64>(0),
+        )?;
+        assert_eq!(
+            before_bytes,
+            current_bytes + result_bytes + 776 + second.request_meta()?.len() as u64 + key_bytes
+        );
         store.storage.tenant_max_bytes = 1;
         let retention = crate::EvidenceRetentionOwner::new(&store);
         assert_eq!(
@@ -879,7 +935,29 @@ mod tests {
             1
         );
         assert_eq!(store.read_result([1; 16], "s")?, Some(vec![1]));
+        let retained_bytes = before_bytes + (256 + key_bytes) + 256
+            - 2 * (257 + key_bytes)
+            - (file_bytes + 256 + json_bytes + key_bytes);
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            retained_bytes
+        );
         AnalysisStore::validate_usage(store.writer()?.get()?, &store.root)?;
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(
+            store.writer()?.get()?.query_row(
+                "SELECT logical_bytes FROM tenant_usage",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            retained_bytes
+        );
+        AnalysisStore::validate_usage(store.writer()?.get()?, &root)?;
         Ok(())
     }
 
@@ -997,7 +1075,7 @@ mod tests {
         for tenant in 1_u8..=4 {
             transaction.execute(
                 "INSERT INTO context_versions SELECT ?, 'p', 'e'::BLOB, 'l'::BLOB, i,
-                 1, NULL, 'tenant', 'b'::BLOB, 'digest'::BLOB, 1 FROM range(1, 1025) t(i)",
+                 1, NULL, 'tenant', 'b'::BLOB, 1 FROM range(1, 1025) t(i)",
                 params![[tenant; 16].as_slice()],
             )?;
             UsageChange {
@@ -1010,7 +1088,7 @@ mod tests {
         }
         transaction.execute(
             "INSERT INTO context_versions VALUES (?, 'p', 'e'::BLOB, 'l'::BLOB, 1025,
-             1, NULL, 'tenant', 'b'::BLOB, 'digest'::BLOB, 1)",
+             1, NULL, 'tenant', 'b'::BLOB, 1)",
             params![[4_u8; 16].as_slice()],
         )?;
         UsageChange {

@@ -1,13 +1,17 @@
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures_core::{stream::FusedStream, Stream};
 use tokio::sync::{mpsc, watch};
 
+use super::authorization::QuerySession;
 use super::budget::QueryLease;
 use super::frame::{
     QueryCheckpoint, QueryCoverageRows, QueryErrorCode, QueryFrame, QueryTerminalReason,
 };
-use super::{QueryOperation, QueryOwner, QueryPlan, QueryTemplate};
+use super::{QueryAuthorization, QueryOperation, QueryOwner, QueryPlan, QueryTemplate};
 use crate::{AnalysisReadControl, AnalysisStoreMetaV1, Result};
 
 /// A host clock. A clock-change signal is optional; expiry timers also sample it.
@@ -40,18 +44,67 @@ pub struct QueryStream {
     receiver: mpsc::Receiver<QueryFrame>,
     control: Arc<AnalysisReadControl>,
     stop: watch::Sender<bool>,
+    session: Option<QuerySession>,
+    done: bool,
     #[cfg(test)]
     pub(super) task: tokio::task::JoinHandle<()>,
 }
 
 impl QueryStream {
-    pub async fn next(&mut self) -> Option<QueryFrame> {
-        self.receiver.recv().await
+    #[cfg(test)]
+    pub(super) fn queued(&self) -> usize {
+        self.receiver.len()
     }
 
     pub fn cancel(&self) -> Result<()> {
         self.stop.send_replace(true);
         self.control.cancel()
+    }
+
+    fn close(&mut self) {
+        self.done = true;
+        self.receiver.close();
+        while let Ok(frame) = self.receiver.try_recv() {
+            drop(frame);
+        }
+        let _cancelled = self.cancel();
+    }
+}
+
+impl Stream for QueryStream {
+    type Item = Result<QueryFrame>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+        if let Some(session) = &self.session {
+            if let Err(error) = session.check() {
+                self.close();
+                return Poll::Ready(Some(Err(error)));
+            }
+        }
+        let frame = self.receiver.poll_recv(context);
+        if let Some(session) = &self.session {
+            if let Err(error) = session.check() {
+                self.close();
+                return Poll::Ready(Some(Err(error)));
+            }
+        }
+        match frame {
+            Poll::Ready(Some(frame)) => Poll::Ready(Some(Ok(frame))),
+            Poll::Ready(None) => {
+                self.done = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl FusedStream for QueryStream {
+    fn is_terminated(&self) -> bool {
+        self.done
     }
 }
 
@@ -74,6 +127,8 @@ struct QueryFollow {
     checkpoint: Option<QueryCheckpoint>,
     meta: AnalysisStoreMetaV1,
     coverage: Option<Arc<QueryCoverageRows>>,
+    session: Option<QuerySession>,
+    auth_changes: Option<watch::Receiver<u64>>,
     _lease: QueryLease,
 }
 
@@ -92,6 +147,52 @@ impl QueryOwner {
         checkpoint: Option<QueryCheckpoint>,
         clock: Arc<dyn QueryClock>,
     ) -> Result<QueryStream> {
+        if plan.grant.is_some() {
+            return crate::QueryDeniedSnafu.fail();
+        }
+        self.follow_inner(plan, checkpoint, clock, None)
+    }
+
+    pub fn follow_client(
+        self: &Arc<Self>,
+        plan: QueryPlan,
+        checkpoint: Option<QueryCheckpoint>,
+        authority: Arc<dyn QueryAuthorization>,
+    ) -> Result<QueryStream> {
+        self.follow_client_clock(plan, checkpoint, authority, Arc::new(SystemQueryClock))
+    }
+
+    pub fn follow_client_clock(
+        self: &Arc<Self>,
+        plan: QueryPlan,
+        checkpoint: Option<QueryCheckpoint>,
+        authority: Arc<dyn QueryAuthorization>,
+        clock: Arc<dyn QueryClock>,
+    ) -> Result<QueryStream> {
+        if !matches!(&plan.template, QueryTemplate::Client(sql) if sql.follow()) {
+            return crate::QueryDeniedSnafu.fail();
+        }
+        let grant = plan
+            .grant
+            .clone()
+            .ok_or_else(|| crate::QueryDeniedSnafu.build())?;
+        authority.check(&grant)?;
+        self.limits.client_capacity()?;
+        self.follow_inner(
+            plan,
+            checkpoint,
+            clock,
+            Some(QuerySession { authority, grant }),
+        )
+    }
+
+    fn follow_inner(
+        self: &Arc<Self>,
+        plan: QueryPlan,
+        checkpoint: Option<QueryCheckpoint>,
+        clock: Arc<dyn QueryClock>,
+        session: Option<QuerySession>,
+    ) -> Result<QueryStream> {
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "query follow runtime",
@@ -105,6 +206,7 @@ impl QueryOwner {
         let (sender, receiver) = mpsc::channel(1);
         let (stop, stopped) = watch::channel(false);
         let control = Arc::new(AnalysisReadControl::default());
+        let auth_changes = session.as_ref().map(|session| session.authority.changes());
         let follow = QueryFollow {
             owner: self.clone(),
             plan,
@@ -117,6 +219,8 @@ impl QueryOwner {
             checkpoint,
             meta: self.identity.clone(),
             coverage: None,
+            session: session.clone(),
+            auth_changes,
             _lease: lease,
         };
         let _task = runtime.spawn(follow.run());
@@ -124,6 +228,8 @@ impl QueryOwner {
             receiver,
             control,
             stop,
+            session,
+            done: false,
             #[cfg(test)]
             task: _task,
         })
@@ -140,6 +246,10 @@ impl QueryFollow {
             &result,
             Ok(QueryTerminalReason::OutputTimeout | QueryTerminalReason::Closed)
         );
+        if matches!(result, Err(crate::Error::QueryDenied { .. })) {
+            self.coverage = None;
+            self.checkpoint = None;
+        }
         let permit = if stalled {
             self.sender.try_reserve().ok()
         } else {
@@ -151,6 +261,9 @@ impl QueryFollow {
         let Some(permit) = permit else {
             return;
         };
+        if self.check_auth().is_err() {
+            return;
+        }
         let Ok(lease) = self.owner.budget.output(std::mem::size_of::<QueryFrame>()) else {
             return;
         };
@@ -175,6 +288,9 @@ impl QueryFollow {
             self.owner.check_output(frame.total_bytes()?)?;
             frame.attach_lease(lease)
         }) {
+            if self.check_auth().is_err() {
+                return;
+            }
             permit.send(frame);
         }
     }
@@ -203,6 +319,7 @@ impl QueryFollow {
         let mut clock_sample = None;
         let mut clock_signal = false;
         loop {
+            self.check_auth()?;
             if *self.stop.borrow() {
                 return Ok(QueryTerminalReason::Cancelled);
             }
@@ -220,12 +337,12 @@ impl QueryFollow {
                 });
             clock_sample = Some((now_ns, now));
             clock_signal = false;
-            let moving = matches!(self.plan.template(), QueryTemplate::MovingCount { .. });
+            let moving = self.plan.moving_seconds().is_some();
             if moving && (clock_changed || next_expiry.is_some_and(|expiry| now_ns >= expiry)) {
                 dirty = true;
             }
             let owner = self.owner.clone();
-            let selection = self.plan.dependencies(now_ns);
+            let selection = self.plan.dependencies(now_ns)?;
             let control = self.control.stage(self.owner.limits.extract_timeout)?;
             let (meta, revision) = tokio::task::spawn_blocking(move || {
                 owner.store.dependency_revision(&selection, &control)
@@ -247,16 +364,9 @@ impl QueryFollow {
                 let plan = self.plan.clone();
                 let control = self.control.stage(self.owner.limits.extract_timeout)?;
                 let paged = plan.operation() == QueryOperation::Append;
-                let result = tokio::task::spawn_blocking(move || {
-                    owner.evaluate(&plan, now_ns, after, paged, &control)
-                })
-                .await
-                .map_err(|_| {
-                    crate::QueryInvalidSnafu {
-                        field: "query evaluation task",
-                    }
-                    .build()
-                })??;
+                let result = owner
+                    .evaluate_async(plan, now_ns, after, paged, Arc::new(control))
+                    .await?;
                 let checkpoint = QueryCheckpoint::from_result(&self.plan, &result)?;
                 self.meta = result.meta.clone();
                 self.coverage = Some(result.sources.clone());
@@ -345,6 +455,13 @@ impl QueryFollow {
                 continue;
             }
             let mut wake = next_health;
+            if let Some(expiry) = self
+                .session
+                .as_ref()
+                .and_then(|session| session.authority.expires_ns())
+            {
+                wake = wake.min(now + Duration::from_nanos(expiry.saturating_sub(now_ns)));
+            }
             if dirty {
                 if let Some(last) = last_eval {
                     wake = wake.min(last + self.owner.limits.replace_interval);
@@ -360,6 +477,14 @@ impl QueryFollow {
                 _ = self.sender.closed() => return Ok(QueryTerminalReason::Closed),
                 changed = self.changes.changed() => {
                     if changed.is_err() { return Ok(QueryTerminalReason::Closed); }
+                },
+                changed = async {
+                    match self.auth_changes.as_mut() {
+                        Some(changes) => changes.changed().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if changed.is_err() { return crate::QueryDeniedSnafu.fail(); }
                 },
                 changed = async {
                     match self.clock_changes.as_mut() {
@@ -385,6 +510,7 @@ impl QueryFollow {
     }
 
     async fn send(&self, bytes: usize, frame: impl FnOnce() -> Result<QueryFrame>) -> Result<bool> {
+        self.check_auth()?;
         if *self.stop.borrow() {
             return Ok(false);
         }
@@ -394,6 +520,7 @@ impl QueryFollow {
             result = tokio::time::timeout(self.owner.limits.output_timeout, self.sender.reserve()) => {
                 match result {
                     Ok(Ok(permit)) => {
+                        self.check_auth()?;
                         let lease = self.owner.budget.output(bytes)?;
                         let frame = frame()?;
                         self.owner.check_output(frame.total_bytes()?)?;
@@ -404,5 +531,12 @@ impl QueryFollow {
                 }
             },
         }
+    }
+
+    fn check_auth(&self) -> Result<()> {
+        if let Some(session) = &self.session {
+            session.check()?;
+        }
+        Ok(())
     }
 }

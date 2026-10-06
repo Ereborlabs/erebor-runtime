@@ -1,15 +1,15 @@
 use duckdb::{params, OptionalExt as _};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{source_key, AnalysisContextKeyV1, AnalysisStore};
+use super::{AnalysisContextKeyV1, AnalysisStore};
 use crate::{
     AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStreamIdentityV1,
     EvidenceIntakeIdentityV1, JsonSnafu, Result,
 };
 
 const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RESULT_META_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESULT_REFS: usize = 8_192;
 const MAX_CONTEXT_REFS: usize = 256;
 const MAX_WITNESS_AGE_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
@@ -59,7 +59,7 @@ pub struct AnalysisWitnessV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AnalysisContextRefV1 {
     pub key: AnalysisContextKeyV1,
-    pub content_sha256: [u8; 32],
+    pub commit_revision: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -74,6 +74,22 @@ pub struct AnalysisResultCommitV1 {
     pub created_utc_ns: u64,
     pub witnesses: Vec<AnalysisWitnessV1>,
     pub context_refs: Vec<AnalysisContextRefV1>,
+}
+
+impl AnalysisResultCommitV1 {
+    pub(super) fn request_meta(&self) -> std::result::Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(&(
+            &self.scope,
+            self.expected_cursor,
+            self.consumed_cursor,
+            self.coverage_revision,
+            self.context_revision,
+            &self.result_id,
+            self.created_utc_ns,
+            &self.witnesses,
+            &self.context_refs,
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,16 +128,21 @@ impl AnalysisStore {
         if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
             return self.reject("the analysis result identity is invalid");
         }
-        let stored: Option<(Vec<u8>, Vec<u8>)> = connection.query_row(
-            "SELECT body, body_sha256 FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
-            params![tenant.as_slice(), result_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional().context(AnalysisDatabaseSnafu { operation: "read retained analysis result" })?;
-        let Some((body, digest)) = stored else {
+        let stored: Option<Vec<u8>> = connection
+            .query_row(
+                "SELECT body FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+                params![tenant.as_slice(), result_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read retained analysis result",
+            })?;
+        let Some(body) = stored else {
             return Ok(None);
         };
-        if body.len() > MAX_RESULT_BYTES || Sha256::digest(&body).as_slice() != digest {
-            return self.reject("the retained analysis result digest or size is invalid");
+        if body.is_empty() || body.len() > MAX_RESULT_BYTES {
+            return self.reject("the retained analysis result size is invalid");
         }
         Ok(Some(body))
     }
@@ -135,7 +156,7 @@ impl AnalysisStore {
         if !scope.valid() || start_cursor == 0 {
             return self.reject("the processor scope or start cursor is invalid");
         }
-        let key = source_key(&scope.identity);
+        let key = scope.identity.key();
         let mut writer_guard = self.writer()?;
         let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
@@ -194,7 +215,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "register processor",
             })?;
-        super::quota::UsageChange::from(256 + scope.processor_id.len() as i64)
+        super::quota::UsageChange::from(256 + key.len() as i64 + scope.processor_id.len() as i64)
             .apply(&transaction, &scope.identity.tenant_id)?;
         self.check_logical(&transaction, scope.identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
@@ -211,7 +232,7 @@ impl AnalysisStore {
         if !scope.valid() {
             return self.reject("the optional processor scope is invalid");
         }
-        let key = source_key(&scope.identity);
+        let key = scope.identity.key();
         let mut writer_guard = self.maintenance_writer()?;
         let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
@@ -287,7 +308,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "record optional missing range",
             })?;
-        super::quota::UsageChange::from(256 + scope.processor_id.len() as i64)
+        super::quota::UsageChange::from(256 + key.len() as i64 + scope.processor_id.len() as i64)
             .apply(&transaction, &scope.identity.tenant_id)?;
         transaction
             .execute(
@@ -327,6 +348,7 @@ impl AnalysisStore {
         if !input.scope.valid()
             || input.result_id.is_empty()
             || input.result_id.len() > 256
+            || input.body.is_empty()
             || input.body.len() > MAX_RESULT_BYTES
             || input.created_utc_ns == 0
             || input.witnesses.len() > MAX_RESULT_REFS
@@ -340,7 +362,9 @@ impl AnalysisStore {
                 .windows(2)
                 .any(|pair| pair[0].key >= pair[1].key)
             || input.context_refs.iter().any(|reference| {
-                !reference.key.valid() || reference.key.tenant_id != input.scope.identity.tenant_id
+                !reference.key.valid()
+                    || reference.key.tenant_id != input.scope.identity.tenant_id
+                    || reference.commit_revision == 0
             })
         {
             return self.reject("the analysis result or progress bounds are invalid");
@@ -359,27 +383,35 @@ impl AnalysisStore {
             return self.reject("the result has a foreign or invalid witness");
         }
         let path = self.root.join("analysis.duckdb");
-        let request = serde_json::to_vec(input).context(JsonSnafu { path: &path })?;
-        let request_digest: [u8; 32] = Sha256::digest(&request).into();
-        let body_digest: [u8; 32] = Sha256::digest(&input.body).into();
-        let key = source_key(&input.scope.identity);
+        let request = input.request_meta().context(JsonSnafu { path: &path })?;
+        if request.len() > MAX_RESULT_META_BYTES {
+            return self.reject("the analysis result metadata exceeds its byte bound");
+        }
+        let key = input.scope.identity.key();
         let mut writer_guard = self.maintenance_writer()?;
         let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin analysis result",
         })?;
-        let existing: Option<(Vec<u8>, Vec<u8>, u64)> = transaction
+        let existing = transaction
             .query_row(
-                "SELECT tenant_id, request_sha256, commit_revision FROM analysis_results WHERE result_id = ?",
+                "SELECT tenant_id, request_meta, body, commit_revision FROM analysis_results WHERE result_id = ?",
                 params![input.result_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, u64>(3)?,
+                    ))
+                },
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read immutable result",
             })?;
-        if let Some((tenant, digest, revision)) = existing {
-            if tenant != input.scope.identity.tenant_id || digest != request_digest {
+        if let Some((tenant, stored, body, revision)) = existing {
+            if tenant != input.scope.identity.tenant_id || stored != request || body != input.body {
                 return AnalysisConflictSnafu.fail();
             }
             return Ok(AnalysisResultReceiptV1 {
@@ -423,7 +455,7 @@ impl AnalysisStore {
             .lock()
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
             .record_count(
-                key,
+                &key,
                 input.expected_cursor.saturating_add(1),
                 input.consumed_cursor,
                 revision,
@@ -433,17 +465,13 @@ impl AnalysisStore {
         }
         let mut context_revision = 0;
         for reference in &input.context_refs {
-            let Some((version, revision)) =
+            let Some((_, revision)) =
                 Self::read_context_from(&transaction, &self.root, &reference.key)?
             else {
                 return self.reject("the result context version is absent");
             };
-            if version
-                .content_digest()
-                .context(JsonSnafu { path: &path })?
-                != reference.content_sha256
-            {
-                return self.reject("the result context digest differs");
+            if revision != reference.commit_revision {
+                return self.reject("the result context commit revision differs");
             }
             context_revision = context_revision.max(revision);
         }
@@ -493,14 +521,13 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
         transaction
             .execute(
-                "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?)",
                 params![
                     input.result_id,
                     input.scope.identity.tenant_id.as_slice(),
                     input.scope.processor_id,
                     input.body.as_slice(),
-                    body_digest.as_slice(),
-                    request_digest.as_slice(),
+                    request.as_slice(),
                     revision,
                 ],
             )
@@ -508,8 +535,11 @@ impl AnalysisStore {
                 operation: "insert analysis result",
             })?;
         let mut usage = super::quota::UsageChange {
-            bytes: (256 + input.result_id.len() + input.scope.processor_id.len() + input.body.len())
-                as i64,
+            bytes: (256
+                + input.result_id.len()
+                + input.scope.processor_id.len()
+                + input.body.len()
+                + request.len()) as i64,
             results: 1,
             ..Default::default()
         };
@@ -529,7 +559,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert exact witness",
                 })?;
-            usage.bytes += 256 + input.result_id.len() as i64;
+            usage.bytes += 256 + witness.identity.key().len() as i64 + input.result_id.len() as i64;
         }
         for reference in &input.context_refs {
             transaction
@@ -542,7 +572,7 @@ impl AnalysisStore {
                         reference.key.entity_key.as_slice(),
                         reference.key.lifetime_key.as_slice(),
                         reference.key.owner_revision,
-                        reference.content_sha256.as_slice(),
+                        reference.commit_revision,
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -688,9 +718,15 @@ mod tests {
             }],
             context_refs: vec![AnalysisContextRefV1 {
                 key: context.key.clone(),
-                content_sha256: context.content_digest()?,
+                commit_revision: context_revision,
             }],
         };
+        let mut invalid = input.clone();
+        invalid.body.clear();
+        assert!(store.commit_result(&invalid).is_err());
+        invalid = input.clone();
+        invalid.context_refs[0].commit_revision = 0;
+        assert!(store.commit_result(&invalid).is_err());
         let receipt = store.commit_result(&input)?;
         assert_eq!(receipt.commit_revision, 4);
         assert_eq!(receipt.consumed_cursor, 1);
@@ -702,6 +738,67 @@ mod tests {
         assert_eq!(store.read_result([1; 16], "missing")?, None);
         assert_eq!(store.commit_result(&input)?, receipt);
         assert_eq!(store.meta()?.commit_revision, 4);
+        {
+            let reader = store.reader()?;
+            let (request, body): (Vec<u8>, Vec<u8>) = reader.get()?.query_row(
+                "SELECT request_meta, body FROM analysis_results WHERE result_id = ?",
+                params![input.result_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(request, input.request_meta()?);
+            assert_eq!(body, input.body);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&request)?,
+                serde_json::json!([
+                    input.scope,
+                    input.expected_cursor,
+                    input.consumed_cursor,
+                    input.coverage_revision,
+                    input.context_revision,
+                    input.result_id,
+                    input.created_utc_ns,
+                    input.witnesses,
+                    input.context_refs,
+                ])
+            );
+        }
+        for change in 0..16 {
+            let mut changed = input.clone();
+            match change {
+                0 => changed.scope.processor_id.push('x'),
+                1 => changed.scope.method_version += 1,
+                2 => changed.scope.identity.node_id.push('x'),
+                3 => changed.expected_cursor += 1,
+                4 => changed.consumed_cursor += 1,
+                5 => changed.coverage_revision += 1,
+                6 => changed.context_revision += 1,
+                7 => changed.body.push(0),
+                8 => changed.created_utc_ns += 1,
+                9 => changed.witnesses[0].expires_utc_ns += 1,
+                10 => changed.witnesses[0].cursor += 1,
+                11 => changed.witnesses.clear(),
+                12 => changed.context_refs[0].commit_revision += 1,
+                13 => changed.context_refs[0].key.owner_revision += 1,
+                14 => changed.context_refs.clear(),
+                _ => {
+                    changed.scope.identity.tenant_id = [4; 16];
+                    changed.witnesses.clear();
+                    changed.context_refs.clear();
+                }
+            }
+            assert!(
+                matches!(
+                    store.commit_result(&changed),
+                    Err(crate::Error::AnalysisConflict { .. })
+                ),
+                "changed request component {change}"
+            );
+            assert_eq!(store.meta()?.commit_revision, 4);
+        }
+        let path = directory.path().join("analysis");
+        drop(store);
+        let store = AnalysisStore::open(path)?;
+        assert_eq!(store.commit_result(&input)?, receipt);
         input.result_id = "finding-2".into();
         assert!(matches!(
             store.commit_result(&input),
@@ -709,15 +806,15 @@ mod tests {
         ));
         assert_eq!(store.meta()?.commit_revision, 4);
         input.expected_cursor = 1;
-        input.context_refs[0].content_sha256[0] ^= 1;
+        input.context_refs[0].commit_revision += 1;
         assert!(store.commit_result(&input).is_err());
-        input.context_refs[0].content_sha256[0] ^= 1;
+        input.context_refs[0].commit_revision -= 1;
         input.witnesses[0].identity = identity(4).into();
         assert!(store.commit_result(&input).is_err());
         assert_eq!(store.meta()?.commit_revision, 4);
         store.writer()?.get()?.execute(
             "UPDATE analysis_results SET body = ? WHERE result_id = ?",
-            params![b"changed".as_slice(), "finding-1"],
+            params![b"".as_slice(), "finding-1"],
         )?;
         assert!(matches!(
             store.read_result([1; 16], "finding-1"),
