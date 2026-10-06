@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -23,6 +22,7 @@ pub enum TraceErrorCodeV1 {
     Capacity,
     Invalid,
     Integrity,
+    Unsupported,
 }
 
 impl TraceErrorCodeV1 {
@@ -35,35 +35,12 @@ impl TraceErrorCodeV1 {
     }
 }
 
+// Control supplies the current tenant permission, not request JSON.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct TraceExecutionGrantV1 {
+pub struct TraceAccessV1 {
     pub tenant_id: [u8; 16],
-    pub grant_id: [u8; 16],
     pub principal: String,
-    pub namespace_uids: BTreeSet<String>,
-    pub node_ids: BTreeSet<String>,
-    pub recipe_digests: BTreeSet<DiscoveryDigestV1>,
-    pub host_diagnostic: bool,
-    pub valid_until_unix_ns: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TraceApprovalV1 {
-    pub approval_id: [u8; 16],
-    pub request_digest: DiscoveryDigestV1,
-    pub grant_digest: DiscoveryDigestV1,
-    pub valid_until_unix_ns: u64,
-}
-
-// The authenticated caller supplies current read authority, not request JSON.
-#[derive(Clone, Debug)]
-pub struct TraceReadAccessV1 {
-    pub tenant_id: [u8; 16],
-    pub namespace_uids: BTreeSet<String>,
-    pub node_ids: BTreeSet<String>,
-    pub host_sensitive: bool,
     pub valid_until_unix_ns: u64,
     pub revoked: bool,
 }
@@ -72,8 +49,7 @@ pub struct TraceReadAccessV1 {
 #[serde(deny_unknown_fields)]
 pub struct TraceAcceptedV1 {
     pub request: TraceRequestV1,
-    pub grant: TraceExecutionGrantV1,
-    pub approval: Option<TraceApprovalV1>,
+    pub access: TraceAccessV1,
     pub accepted_unix_ns: u64,
     pub deadline_unix_ns: u64,
     pub recipe: Option<TraceRecipeV1>,
@@ -85,9 +61,10 @@ struct StoredTrace {
     targets: Vec<TraceTargetV1>,
     unresolved: Vec<TraceParticipantV1>,
     collection_seconds: u16,
-    grant: TraceExecutionGrantV1,
-    approval: Option<TraceApprovalV1>,
+    access: TraceAccessV1,
     recipe: Option<TraceRecipeV1>,
+    selection: Option<crate::TraceSelectionV1>,
+    finding_reference: Option<String>,
 }
 
 #[derive(Clone)]
@@ -164,12 +141,11 @@ impl TraceOwner {
     pub fn accept(
         &self,
         request: TraceRequestV1,
-        grant: TraceExecutionGrantV1,
-        approval: Option<TraceApprovalV1>,
+        access: TraceAccessV1,
         now: u64,
     ) -> Result<TraceStateV1> {
         request.validate()?;
-        let recipe = grant.authorize(&request, now)?;
+        access.validate(request.tenant_id, now)?;
         if let Some((state, intent)) = self
             .store
             .trace_intent(request.tenant_id, request.request_id)?
@@ -177,12 +153,13 @@ impl TraceOwner {
             let accepted = TraceAcceptedV1::try_from(intent)?;
             TraceErrorCodeV1::Conflict.require(
                 accepted.request == request
-                    && accepted.grant == grant
-                    && accepted.approval == approval,
+                    && accepted.access.tenant_id == access.tenant_id
+                    && accepted.access.principal == access.principal,
                 "trace request ID names different inputs",
             )?;
             return Ok(state);
         }
+        let recipe = request.recipe()?;
         let deadline = now
             .checked_add((u64::from(request.collection_seconds) + 15) * 1_000_000_000)
             .ok_or_else(|| {
@@ -194,8 +171,7 @@ impl TraceOwner {
             })?;
         let accepted = TraceAcceptedV1 {
             request,
-            grant,
-            approval,
+            access,
             recipe,
             accepted_unix_ns: now,
             deadline_unix_ns: deadline,
@@ -207,8 +183,8 @@ impl TraceOwner {
                 let (state, stored) = self.accepted(intent.tenant_id, intent.request_id)?;
                 TraceErrorCodeV1::Conflict.require(
                     stored.request == accepted.request
-                        && stored.grant == accepted.grant
-                        && stored.approval == accepted.approval,
+                        && stored.access.tenant_id == accepted.access.tenant_id
+                        && stored.access.principal == accepted.access.principal,
                     "trace request ID names different inputs",
                 )?;
                 Ok(state)
@@ -221,7 +197,7 @@ impl TraceOwner {
         &self,
         tenant: [u8; 16],
         request: [u8; 16],
-        access: &TraceReadAccessV1,
+        access: &TraceAccessV1,
         now: u64,
     ) -> Result<(TraceStateV1, TraceAcceptedV1)> {
         let (state, accepted) = self.accepted(tenant, request)?;
@@ -254,14 +230,12 @@ impl TraceOwner {
         &self,
         tenant: [u8; 16],
         request: [u8; 16],
-        principal: &str,
+        access: &TraceAccessV1,
+        now: u64,
         revoke_read: bool,
     ) -> Result<TraceStateV1> {
         let (mut state, accepted) = self.accepted(tenant, request)?;
-        TraceErrorCodeV1::Denied.require(
-            accepted.grant.principal == principal,
-            "trace cancellation requires the execution principal",
-        )?;
+        access.validate(accepted.request.tenant_id, now)?;
         if state.cancel_requested && (!revoke_read || state.read_revoked) {
             return Ok(state);
         }
@@ -310,7 +284,7 @@ impl TraceOwner {
         tenant: [u8; 16],
         request: [u8; 16],
         target_index: u16,
-        access: &TraceReadAccessV1,
+        access: &TraceAccessV1,
         now: u64,
         after: u64,
     ) -> Result<Vec<TraceBatchV1>> {
@@ -343,47 +317,23 @@ impl TraceOwner {
     }
 }
 
-impl TraceExecutionGrantV1 {
-    fn authorize(&self, request: &TraceRequestV1, now: u64) -> Result<Option<TraceRecipeV1>> {
+impl TraceAccessV1 {
+    pub fn validate(&self, tenant: [u8; 16], now: u64) -> Result<()> {
         use TraceErrorCodeV1 as Code;
         Code::Denied.require(
-            self.tenant_id == request.tenant_id
-                && self.grant_id != [0; 16]
+            self.tenant_id == tenant
+                && tenant != [0; 16]
+                && !self.revoked
                 && !self.principal.is_empty()
                 && self.principal.len() <= 256
-                && self.namespace_uids.len() <= 256
-                && self.node_ids.len() <= 256
-                && self.recipe_digests.len() <= 16
-                && self
-                    .namespace_uids
-                    .iter()
-                    .chain(&self.node_ids)
-                    .all(|id| !id.is_empty() && id.len() <= 256),
-            "trace execution grant is invalid",
+                && !self.principal.chars().any(char::is_control),
+            "trace tenant permission is invalid or revoked",
         )?;
         Code::Expired.require(
             now < self.valid_until_unix_ns,
-            "trace execution grant expired",
+            "trace tenant permission expired",
         )?;
-        let recipe = TraceRecipeV1::identify(&request.source)?;
-        for target in &request.targets {
-            Code::Denied.require(
-                self.node_ids.contains(&target.fact.node_id)
-                    && (self.host_diagnostic
-                        || self.namespace_uids.contains(&target.fact.namespace_uid)),
-                "trace execution target is outside the grant",
-            )?;
-        }
-        if !self.host_diagnostic {
-            Code::Denied.require(
-                recipe
-                    .map(|recipe| recipe.digest())
-                    .transpose()?
-                    .is_some_and(|digest| self.recipe_digests.contains(&digest)),
-                "changed source requires host-diagnostic authority",
-            )?;
-        }
-        Ok(recipe)
+        Ok(())
     }
 }
 
@@ -391,32 +341,18 @@ impl TraceAcceptedV1 {
     pub fn validate(&self) -> Result<()> {
         use TraceErrorCodeV1 as Code;
         self.request.validate()?;
-        let recipe = self.grant.authorize(&self.request, self.accepted_unix_ns)?;
+        self.access
+            .validate(self.request.tenant_id, self.accepted_unix_ns)?;
+        let recipe = self.request.recipe()?;
         Code::Integrity.require(
             recipe == self.recipe
                 && self.accepted_unix_ns > 0
                 && self.deadline_unix_ns > self.accepted_unix_ns
                 && self.deadline_unix_ns - self.accepted_unix_ns
                     == (u64::from(self.request.collection_seconds) + 15) * 1_000_000_000
-                && self.deadline_unix_ns <= self.grant.valid_until_unix_ns,
+                && self.deadline_unix_ns <= self.access.valid_until_unix_ns,
             "trace accepted bounds changed",
         )?;
-        if recipe.is_none() {
-            let approval = self.approval.as_ref().ok_or_else(|| {
-                ObservabilitySnafu {
-                    code: Code::Denied,
-                    reason: "host source requires exact approval",
-                }
-                .build()
-            })?;
-            Code::Denied.require(
-                approval.approval_id != [0; 16]
-                    && approval.request_digest == self.request.digest()?
-                    && approval.grant_digest == DiscoveryDigestV1::of(&self.grant)?
-                    && self.deadline_unix_ns <= approval.valid_until_unix_ns,
-                "trace approval is stale or names different inputs",
-            )?;
-        }
         Ok(())
     }
 
@@ -435,7 +371,7 @@ impl TraceAcceptedV1 {
         Ok(id)
     }
 
-    fn binding(&self, index: u16) -> Result<TraceBindingV1> {
+    pub fn binding(&self, index: u16) -> Result<TraceBindingV1> {
         let execution_id = self.execution_id(index)?;
         let target = &self.request.targets[index as usize];
         Ok(TraceBindingV1 {
@@ -448,22 +384,12 @@ impl TraceAcceptedV1 {
                 source_sha256: self.request.source.sha256,
             },
             namespace_uid: target.fact.namespace_uid.clone(),
+            binding_id: target.binding_id,
         })
     }
 
-    pub fn authorize_read(&self, access: &TraceReadAccessV1, now: u64) -> Result<()> {
-        TraceErrorCodeV1::Denied.require(
-            !access.revoked
-                && access.valid_until_unix_ns > now
-                && access.tenant_id == self.request.tenant_id
-                && (self.recipe.is_some() || access.host_sensitive)
-                && self.request.targets.iter().all(|target| {
-                    access.node_ids.contains(&target.fact.node_id)
-                        && (access.host_sensitive
-                            || access.namespace_uids.contains(&target.fact.namespace_uid))
-                }),
-            "trace output is outside current read authority",
-        )
+    pub fn authorize_read(&self, access: &TraceAccessV1, now: u64) -> Result<()> {
+        access.validate(self.request.tenant_id, now)
     }
 }
 
@@ -476,9 +402,10 @@ impl TryFrom<&TraceAcceptedV1> for TraceIntentV1 {
             targets: accepted.request.targets.clone(),
             unresolved: accepted.request.unresolved.clone(),
             collection_seconds: accepted.request.collection_seconds,
-            grant: accepted.grant.clone(),
-            approval: accepted.approval.clone(),
+            access: accepted.access.clone(),
             recipe: accepted.recipe,
+            selection: accepted.request.selection.clone(),
+            finding_reference: accepted.request.finding_reference.clone(),
         };
         let authority =
             rmp_serde::to_vec_named(&stored).context(crate::error::TraceEncodingSnafu)?;
@@ -515,9 +442,10 @@ impl TryFrom<TraceIntentV1> for TraceAcceptedV1 {
                 targets: stored.targets,
                 unresolved: stored.unresolved,
                 collection_seconds: stored.collection_seconds,
+                selection: stored.selection,
+                finding_reference: stored.finding_reference,
             },
-            grant: stored.grant,
-            approval: stored.approval,
+            access: stored.access,
             recipe: stored.recipe,
             accepted_unix_ns: intent.accepted_unix_ns,
             deadline_unix_ns: intent.deadline_unix_ns,
@@ -574,6 +502,8 @@ pub mod test_support {
         };
         Ok(TraceRequestV1 {
             unresolved: Vec::new(),
+            selection: None,
+            finding_reference: None,
             tenant_id: [1; 16],
             request_id: [6; 16],
             source: TraceRecipeV1::SyscallErrors.manifest()?.source,
@@ -582,25 +512,10 @@ pub mod test_support {
         })
     }
 
-    pub fn grant() -> Result<TraceExecutionGrantV1> {
-        Ok(TraceExecutionGrantV1 {
+    pub fn access() -> TraceAccessV1 {
+        TraceAccessV1 {
             tenant_id: [1; 16],
-            grant_id: [7; 16],
             principal: "operator".into(),
-            namespace_uids: ["namespace".into()].into(),
-            node_ids: ["node-a".into()].into(),
-            recipe_digests: [TraceRecipeV1::SyscallErrors.digest()?].into(),
-            host_diagnostic: false,
-            valid_until_unix_ns: 100_000_000_000,
-        })
-    }
-
-    pub fn access() -> TraceReadAccessV1 {
-        TraceReadAccessV1 {
-            tenant_id: [1; 16],
-            namespace_uids: ["namespace".into()].into(),
-            node_ids: ["node-a".into()].into(),
-            host_sensitive: false,
             valid_until_unix_ns: 100_000_000_000,
             revoked: false,
         }
@@ -609,16 +524,17 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{access, grant, request};
+    use super::test_support::{access, request};
     use super::*;
     use crate::{TraceFrameKindV1, TraceFrameV1, TraceSourceV1, TraceTerminalV1};
+    use std::collections::BTreeSet;
 
     #[test]
     fn observability_recovery_source_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
-        let state = owner.accept(request()?, grant()?, None, 1)?;
+        let state = owner.accept(request()?, access(), 1)?;
         let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
         let (stored, intent) = store
             .trace_intent([1; 16], [6; 16])?
@@ -635,9 +551,8 @@ mod tests {
         assert_eq!(
             fields,
             BTreeSet::from([
-                "approval",
                 "collection_seconds",
-                "grant",
+                "access",
                 "recipe",
                 "targets",
                 "unresolved"
@@ -679,14 +594,14 @@ mod tests {
         for key in 1..=17 {
             let mut request = request()?;
             request.request_id = [key; 16];
-            owner.accept(request, grant()?, None, 1)?;
+            owner.accept(request, access(), 1)?;
             if key == 17 {
                 retained = owner
                     .read([1; 16], [key; 16], &access(), 2)?
                     .1
                     .execution_id(0)?;
             }
-            owner.cancel([1; 16], [key; 16], "operator", false)?;
+            owner.cancel([1; 16], [key; 16], &access(), 2, false)?;
         }
         let work = owner.node_work([1; 16], "node-a", [2; 16], 3, &[retained])?;
         assert!(work.pending.is_none());
@@ -707,7 +622,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
-        owner.accept(request()?, grant()?, None, 1)?;
+        owner.accept(request()?, access(), 1)?;
         let execution_id = owner
             .read([1; 16], [6; 16], &access(), 2)?
             .1
@@ -746,7 +661,7 @@ mod tests {
             |scope| -> std::result::Result<(), Box<dyn std::error::Error>> {
                 let reader = scope.spawn(|| owner.output([1; 16], [6; 16], 0, &access(), 3, 0));
                 ready.recv_timeout(Duration::from_secs(5))?;
-                let cancelled = owner.cancel([1; 16], [6; 16], "operator", true);
+                let cancelled = owner.cancel([1; 16], [6; 16], &access(), 3, true);
                 release.send(())?;
                 let result = reader
                     .join()
@@ -771,7 +686,7 @@ mod tests {
         let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
             directory.path().join("data"),
         )?));
-        owner.accept(request()?, grant()?, None, 1)?;
+        owner.accept(request()?, access(), 1)?;
         for now in [2, u64::MAX - 1] {
             let mut access = access();
             access.valid_until_unix_ns = now + 1;
@@ -779,7 +694,7 @@ mod tests {
             assert!(matches!(
                 owner.output([1; 16], [6; 16], 0, &access, now, 0),
                 Err(crate::Error::Observability {
-                    code: TraceErrorCodeV1::Denied,
+                    code: TraceErrorCodeV1::Denied | TraceErrorCodeV1::Expired,
                     ..
                 })
             ));
@@ -793,7 +708,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
-        owner.accept(request()?, grant()?, None, 1)?;
+        owner.accept(request()?, access(), 1)?;
         let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
         let execution_id = accepted.execution_id(0)?;
         let frames: Vec<_> = (1..=2)
@@ -852,8 +767,11 @@ mod tests {
         revoked.revoked = true;
         assert!(owner.read([1; 16], [6; 16], &revoked, 3).is_err());
         assert!(owner.output([1; 16], [6; 16], 0, &revoked, 3, 0).is_err());
-        let cancelled = owner.cancel([1; 16], [6; 16], "operator", true)?;
-        assert_eq!(owner.cancel([1; 16], [6; 16], "operator", true)?, cancelled);
+        let cancelled = owner.cancel([1; 16], [6; 16], &access(), 3, true)?;
+        assert_eq!(
+            owner.cancel([1; 16], [6; 16], &access(), 3, true)?,
+            cancelled
+        );
         assert!(owner.output([1; 16], [6; 16], 0, &access(), 4, 0).is_err());
         assert!(!directory.path().join("discovery-index.sqlite").exists());
         Ok(())
@@ -875,64 +793,145 @@ mod tests {
             state: crate::TraceParticipantStateV1::Disappeared,
             target: None,
         });
-        owner.accept(request.clone(), grant()?, None, 1)?;
+        owner.accept(request.clone(), access(), 1)?;
         let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
         assert_eq!(accepted.request, request);
         assert!(accepted.execution_id(1).is_err());
         request.unresolved.clear();
         request.targets.push(unavailable);
-        assert!(owner.accept(request, grant()?, None, 3).is_err());
+        assert!(owner.accept(request, access(), 3).is_err());
         assert_eq!(owner.read([1; 16], [6; 16], &access(), 4)?.1, accepted);
         Ok(())
     }
 
     #[test]
-    fn observability_target_grants() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_tenant_access() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
             directory.path().join("data"),
         )?));
         let mut request = request()?;
-        let grant = grant()?;
+        let permission = access();
         request.tenant_id = [9; 16];
         assert!(owner
-            .accept(request.clone(), grant.clone(), None, 1)
+            .accept(request.clone(), permission.clone(), 1)
             .is_err());
-        request.tenant_id = grant.tenant_id;
-        request.targets[0].fact.namespace_uid = "foreign".into();
+        request.tenant_id = permission.tenant_id;
+        request.targets[0].fact.namespace_uid = "another-namespace".into();
+        request.targets[0].fact.node_id = "another-node".into();
         request.targets[0].fact_digest = DiscoveryDigestV1::of(&request.targets[0].fact)?;
-        assert!(owner
-            .accept(request.clone(), grant.clone(), None, 1)
-            .is_err());
-        request.targets[0].fact.namespace_uid = "namespace".into();
-        request.targets[0].fact_digest = DiscoveryDigestV1::of(&request.targets[0].fact)?;
-        request.source = TraceSourceV1::new(b"BEGIN { printf(\"host\"); }".to_vec())?;
-        assert!(owner
-            .accept(request.clone(), grant.clone(), None, 1)
-            .is_err());
-        let mut host = grant;
-        host.host_diagnostic = true;
-        assert!(owner
-            .accept(request.clone(), host.clone(), None, 1)
-            .is_err());
-        let approval = TraceApprovalV1 {
-            approval_id: [8; 16],
-            request_digest: request.digest()?,
-            grant_digest: DiscoveryDigestV1::of(&host)?,
-            valid_until_unix_ns: host.valid_until_unix_ns,
-        };
-        let mut changed = request.clone();
-        changed.source = TraceSourceV1::new(b"BEGIN { printf(\"other\"); }".to_vec())?;
-        assert!(owner
-            .accept(changed, host.clone(), Some(approval.clone()), 1)
-            .is_err());
-        owner.accept(request, host, Some(approval), 1)?;
-        assert!(owner.read([1; 16], [6; 16], &access(), 2).is_err());
-        let mut wide = access();
-        wide.host_sensitive = true;
-        owner.read([1; 16], [6; 16], &wide, 2)?;
-        wide.revoked = true;
-        assert!(owner.read([1; 16], [6; 16], &wide, 2).is_err());
+        request.source = TraceRecipeV1::FailedOpens.manifest()?.source;
+        let mut denied = permission.clone();
+        denied.revoked = true;
+        assert!(owner.accept(request.clone(), denied, 1).is_err());
+        let mut denied = permission.clone();
+        denied.valid_until_unix_ns = 1;
+        assert!(owner.accept(request.clone(), denied, 1).is_err());
+        for principal in [String::new(), "invalid\nprincipal".into(), "x".repeat(257)] {
+            let mut denied = permission.clone();
+            denied.principal = principal;
+            assert!(owner.accept(request.clone(), denied, 1).is_err());
+        }
+        owner.accept(request, permission, 1)?;
+        let mut other = access();
+        other.principal = "another-investigator".into();
+        owner.read([1; 16], [6; 16], &other, 2)?;
+        let mut denied = other.clone();
+        denied.tenant_id = [9; 16];
+        assert!(owner.read([1; 16], [6; 16], &denied, 2).is_err());
+        assert!(owner.cancel([1; 16], [6; 16], &denied, 2, false).is_err());
+        let mut denied = other.clone();
+        denied.valid_until_unix_ns = 2;
+        assert!(owner.read([1; 16], [6; 16], &denied, 2).is_err());
+        assert!(owner.cancel([1; 16], [6; 16], &denied, 2, false).is_err());
+        let mut denied = other.clone();
+        denied.revoked = true;
+        assert!(owner.read([1; 16], [6; 16], &denied, 2).is_err());
+        assert!(owner.cancel([1; 16], [6; 16], &denied, 2, false).is_err());
+        owner.cancel([1; 16], [6; 16], &other, 2, false)?;
+        owner.read([1; 16], [6; 16], &other, 3)?;
+        assert_eq!(
+            owner.read([1; 16], [6; 16], &other, 3)?.1.access.principal,
+            "operator"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn observability_source_capability() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
+            directory.path().join("data"),
+        )?));
+        for (index, source) in [
+            b"BEGIN { $i = 0; while ($i < 8192) { @full[$i] = 1; $i++; } } interval:s:2 { exit(); }".as_slice(),
+            b"interval:hz:10000 { printf(\"bounded diagnostic output\\n\"); }".as_slice(),
+        ].into_iter().enumerate() {
+            let mut request = request()?;
+            request.request_id = [index as u8 + 7; 16];
+            request.source = TraceSourceV1::new(source.to_vec())?;
+            owner.accept(request.clone(), access(), 1)?;
+            let accepted = owner.read([1; 16], request.request_id, &access(), 2)?.1;
+            assert_eq!(accepted.request.source, request.source);
+            assert!(accepted.recipe.is_none());
+        }
+        for source in [
+            b"BEGIN { printf(\"host\"); }".as_slice(),
+            b"tracepoint:syscalls:sys_exit_openat { @errors[args.ret] = count(); }".as_slice(),
+            b"interval:hz:10000 { printf(\"%s\", comm); }".as_slice(),
+        ] {
+            let mut request = request()?;
+            request.source = TraceSourceV1::new(source.to_vec())?;
+            assert!(matches!(
+                owner.accept(request, access(), 1),
+                Err(crate::Error::Observability {
+                    code: TraceErrorCodeV1::Unsupported,
+                    ..
+                })
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_renewed_retry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = TraceOwner::new(Arc::new(AnalysisStore::open(
+            directory.path().join("data"),
+        )?));
+        let request = request()?;
+        let state = owner.accept(request.clone(), access(), 1)?;
+        let accepted = owner.read([1; 16], [6; 16], &access(), 2)?.1;
+        let mut renewed = access();
+        renewed.valid_until_unix_ns += 10_000_000_000;
+        assert_eq!(state, owner.accept(request.clone(), renewed.clone(), 3)?);
+        assert_eq!(accepted, owner.read([1; 16], [6; 16], &renewed, 4)?.1);
+        let mut other = renewed.clone();
+        other.principal = "another-investigator".into();
+        assert!(matches!(
+            owner.accept(request.clone(), other, 3),
+            Err(crate::Error::Observability {
+                code: TraceErrorCodeV1::Conflict,
+                ..
+            })
+        ));
+        for field in 0..3 {
+            let mut changed = request.clone();
+            match field {
+                0 => changed.source = TraceRecipeV1::FailedOpens.manifest()?.source,
+                1 => changed.targets[0].binding_nonce = [9; 16],
+                _ => changed.collection_seconds += 1,
+            }
+            assert!(matches!(
+                owner.accept(changed, renewed.clone(), 3),
+                Err(crate::Error::Observability {
+                    code: TraceErrorCodeV1::Conflict,
+                    ..
+                })
+            ));
+        }
+        renewed.revoked = true;
+        assert!(owner.accept(request, renewed, 3).is_err());
         Ok(())
     }
 
@@ -942,7 +941,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
-        owner.accept(request()?, grant()?, None, 1)?;
+        owner.accept(request()?, access(), 1)?;
         let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
         let id = accepted.execution_id(0)?;
         let frames: Vec<_> = (1..=3)
@@ -997,8 +996,8 @@ mod tests {
         let store = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
         let owner = TraceOwner::new(store.clone());
         let request = request()?;
-        let head = owner.accept(request.clone(), grant()?, None, 1)?;
-        assert_eq!(head, owner.accept(request.clone(), grant()?, None, 2)?);
+        let head = owner.accept(request.clone(), access(), 1)?;
+        assert_eq!(head, owner.accept(request.clone(), access(), 2)?);
         let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
         let execution_id = accepted.execution_id(0)?;
         let batch = TraceBatchV1 {
@@ -1037,10 +1036,12 @@ mod tests {
         );
         let mut changed = request;
         changed.targets[0].binding_nonce = [8; 16];
-        assert!(owner.accept(changed, grant()?, None, 3).is_err());
+        assert!(owner.accept(changed, access(), 3).is_err());
         assert!(!directory.path().join("discovery-index.sqlite").exists());
-        assert!(owner.cancel([1; 16], [6; 16], "foreign", true).is_err());
-        owner.cancel([1; 16], [6; 16], "operator", true)?;
+        let mut denied = access();
+        denied.tenant_id = [9; 16];
+        assert!(owner.cancel([1; 16], [6; 16], &denied, 3, true).is_err());
+        owner.cancel([1; 16], [6; 16], &access(), 3, true)?;
         assert!(owner.output([1; 16], [6; 16], 0, &access(), 4, 0).is_err());
         Ok(())
     }

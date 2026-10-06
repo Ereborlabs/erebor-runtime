@@ -1,52 +1,9 @@
 use super::*;
-use araphor_data::{
-    AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, QueryAuthorization, QueryGrant,
-    QueryLimits, QueryOwner, QueryPlan, QuerySql,
-};
-use std::sync::Arc;
-use tokio::sync::watch;
-
-struct QueryPermit {
-    grant: QueryGrant,
-    until: u64,
-    changes: watch::Sender<u64>,
-}
-
-impl QueryAuthorization for QueryPermit {
-    fn check(&self, grant: &QueryGrant) -> araphor_data::Result<()> {
-        let expected = &self.grant;
-        let selection = &grant.selection;
-        let scope = &expected.selection;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .and_then(|time| u64::try_from(time.as_nanos()).ok());
-        if now.is_none_or(|now| now >= self.until)
-            || *self.changes.borrow() != expected.revision
-            || grant.principal != expected.principal
-            || grant.revision != expected.revision
-            || selection.tenant_id != scope.tenant_id
-            || selection.sources != scope.sources
-            || selection.contexts != scope.contexts
-            || selection.results != scope.results
-            || selection.received_from != scope.received_from
-            || selection.received_until != scope.received_until
-        {
-            return Err(araphor_data::Error::QueryDenied {
-                location: snafu::Location::default(),
-            });
-        }
-        Ok(())
-    }
-
-    fn changes(&self) -> watch::Receiver<u64> {
-        self.changes.subscribe()
-    }
-
-    fn expires_ns(&self) -> Option<u64> {
-        Some(self.until)
-    }
-}
+use crate::control_fixture::{free_address, oidc::OidcFixture, ControlServerFixture, MtlsFixture};
+use erebor_runtime_client::{AraphorClient, AraphorProfile};
+use erebor_runtime_ipc::araphor::{self as proto, query_frame::Payload, query_value::Kind};
+use mithril_control::{ClientGrpcConfig, ClientListener, ClientListenerConfig, ControlPlane};
+use std::io::Write as _;
 
 impl ObservabilityQualification {
     pub(super) fn trace_inputs(
@@ -54,10 +11,10 @@ impl ObservabilityQualification {
         now: u64,
     ) -> ProofResult<(
         mithril_control::TraceRequestV1,
-        mithril_control::TraceExecutionGrantV1,
+        mithril_control::TraceAccessV1,
     )> {
         use mithril_control::{
-            DiscoveryDigestV1, TraceExecutionGrantV1, TraceRecipeV1, TraceRequestV1, TraceTargetV1,
+            DiscoveryDigestV1, TraceAccessV1, TraceRecipeV1, TraceRequestV1, TraceTargetV1,
         };
 
         let tenant = *uuid::Uuid::parse_str(crate::control_fixture::OUTAGE_TENANT_ID)?.as_bytes();
@@ -73,19 +30,17 @@ impl ObservabilityQualification {
             container_generation: 1,
             label_epoch: 1,
         };
-        let grant = TraceExecutionGrantV1 {
+        let grant = TraceAccessV1 {
             tenant_id: tenant,
-            grant_id: [7; 16],
             principal: "qualification".into(),
-            namespace_uids: [target.fact.namespace_uid.clone()].into(),
-            node_ids: ["node-a".into()].into(),
-            recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-            host_diagnostic: false,
             valid_until_unix_ns: now
                 .checked_add(120_000_000_000)
                 .ok_or("fixture grant overflows")?,
+            revoked: false,
         };
         let request = TraceRequestV1 {
+            selection: None,
+            finding_reference: None,
             tenant_id: tenant,
             request_id: [6; 16],
             source: TraceRecipeV1::FailedOpens.manifest()?.source,
@@ -123,63 +78,113 @@ impl ObservabilityQualification {
         record["schema_version"] = serde_json::json!(1);
         record["case"] = serde_json::json!("query-upload");
         record["discovery_enabled"] = serde_json::json!(false);
-        record["proof_boundary"] = serde_json::json!("Production QueryOwner runs admitted SQL in process through its asynchronous API. A catalog value causes a native conversion error. The same owner then completes a valid query. Production Node capture emits a new frame after the query error. Control commits that frame before its mTLS ACK. Cancellation, Node spool reopen, Control reopen, retained output and ACK replay use production owners. The backend and binding inputs are external fixtures. This case does not prove native interruption, process-crash isolation, BPF cleanup, enforcement or performance.");
+        record["proof_boundary"] = serde_json::json!(
+            "The production TLS Query RPC authenticates a service credential through an external HTTPS OIDC provider. QueryOwner runs admitted SQL in process through its asynchronous API. A catalog conversion query returns EvaluationFailed and gRPC INTERNAL. A valid query then completes on the same client service. Production Node capture emits a new frame after the query error. Control commits that frame before its mTLS ACK. Cancellation, Node spool reopen, Control reopen, retained output and ACK replay use production owners. The backend and binding inputs are external fixtures. This case does not prove native interruption, process-crash isolation, BPF cleanup, enforcement or performance."
+        );
         self.write("result.json", &record)
     }
 
     pub(super) async fn fail_query(
-        data: Arc<AnalysisStore>,
+        control: ControlPlane,
+        tls: &MtlsFixture,
         tenant: [u8; 16],
-        now: u64,
-        until: u64,
     ) -> ProofResult<serde_json::Value> {
-        let grant = QueryGrant {
-            principal: "query-qualification".into(),
-            revision: 1,
-            selection: AnalysisSelectionV1::new(tenant, Vec::new()),
+        let provider = OidcFixture::start(&tls.files, "query-qualification").await?;
+        let address = free_address()?;
+        let origin = format!("https://localhost:{}", address.port());
+        let config = ClientListenerConfig {
+            listen: address,
+            tls_certificate_path: tls.files.server_certificate.clone(),
+            tls_private_key_path: tls.files.server_key.clone(),
+            auth: provider.auth(&origin, Some(tenant), tls.files.ca.clone()),
+            administrative: None,
+            investigation: Some(ClientGrpcConfig::default()),
+            assets: None,
         };
-        let sql = QuerySql::admit(
-            "SELECT CAST(relation AS BIGINT) AS value FROM catalog LIMIT 1",
-            Vec::new(),
-            false,
-        )?;
-        let plan = QueryPlan::client(grant.clone(), sql)?;
-        let (changes, _) = watch::channel(grant.revision);
-        let authority: Arc<dyn QueryAuthorization> = Arc::new(QueryPermit {
-            grant: grant.clone(),
-            until,
-            changes,
-        });
-        let owner = Arc::new(QueryOwner::new(data, QueryLimits::default())?);
-        let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(5))?);
-        let (operation, error) = match owner
-            .query_client(plan, authority.clone(), now, control)
-            .await
-        {
-            Err(araphor_data::Error::AnalysisDatabase {
-                operation: operation @ ("execute query evaluation" | "read query evaluation"),
-                source,
-                ..
-            }) => (operation, source.to_string()),
-            result => {
-                return Err(
-                    format!("native query returned an unexpected result: {result:?}").into(),
-                )
-            }
-        };
-        let sql = QuerySql::admit("SELECT relation FROM catalog LIMIT 1", Vec::new(), false)?;
-        let plan = QueryPlan::client(grant, sql)?;
-        let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(5))?);
-        let result = owner.query_client(plan, authority, now, control).await?;
-        if result.rows.len() != 1 || result.columns != ["relation"] || result.limited {
-            return Err("the query owner did not recover after the native error".into());
+        let listener = ClientListener::load(config, control).await?;
+        let server = ControlServerFixture::client(listener, address).await?;
+        let mut credential = tempfile::NamedTempFile::new_in(tls.path())?;
+        credential.write_all(b"fixture-access")?;
+        let result = async {
+            let client = AraphorClient::connect(AraphorProfile {
+                endpoint: origin,
+                tenant_id: uuid::Uuid::from_bytes(tenant).to_string(),
+                credential_file: credential.path().to_path_buf(),
+                ca_file: Some(tls.files.ca.clone()),
+            })
+            .await?;
+            Self::query_failure(&client).await
         }
-        Ok(serde_json::json!({
-            "execution": "in-process", "query_failure": "AnalysisDatabase",
-            "query_operation": operation, "query_error": error,
-            "query_recovered": true, "catalog_rows": result.rows.len(),
-            "native_interruption_proved": false, "process_isolation_proved": false,
-        }))
+        .await;
+        let server_stop = server.shutdown().await;
+        let provider_stop = provider.shutdown().await;
+        let record = result?;
+        server_stop?;
+        provider_stop?;
+        Ok(record)
+    }
+
+    pub(crate) async fn query_failure(client: &AraphorClient) -> ProofResult<serde_json::Value> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut failed = client
+                .query(proto::QueryRequest {
+                    sql: "SELECT CAST(relation AS BIGINT) AS value FROM catalog LIMIT 1".into(),
+                    ..Default::default()
+                })
+                .await?;
+            let failure = failed.message().await?.ok_or("query has no error frame")?;
+            let Some(Payload::Error(error)) = &failure.payload else {
+                return Err("conversion query did not return an error frame".into());
+            };
+            if failure.schema_version != 1
+                || failure.store_uuid.len() != 16
+                || failure.recovery_epoch == 0
+                || error.code != "EvaluationFailed"
+                || !error.last_checkpoint.is_empty()
+            {
+                return Err("conversion query returned an unexpected error envelope".into());
+            }
+            match failed.message().await {
+                Err(status) if status.code() == tonic::Code::Internal => {}
+                _ => return Err("conversion query has no gRPC INTERNAL status".into()),
+            }
+            let mut recovered = client
+                .query(proto::QueryRequest {
+                    sql: "SELECT relation FROM catalog LIMIT 1".into(),
+                    ..Default::default()
+                })
+                .await?;
+            let metadata = recovered.message().await?.ok_or("query has no metadata")?;
+            let rows = recovered.message().await?.ok_or("query has no rows")?;
+            let checkpoint = recovered.message().await?.ok_or("query has no checkpoint")?;
+            let terminal = recovered.message().await?.ok_or("query has no terminal")?;
+            let (Some(Payload::Metadata(schema)), Some(Payload::Rows(data)),
+                Some(Payload::Checkpoint(bookmark)), Some(Payload::Terminal(done))) =
+                (&metadata.payload, &rows.payload, &checkpoint.payload, &terminal.payload)
+            else {
+                return Err("the recovered query changed its frame order".into());
+            };
+            if [&metadata, &rows, &checkpoint, &terminal].into_iter().any(|frame| {
+                frame.schema_version != 1 || frame.store_uuid != failure.store_uuid
+                    || frame.recovery_epoch != failure.recovery_epoch
+                    || frame.operation != proto::QueryOperation::Replace as i32
+                    || frame.read_revision != metadata.read_revision
+            }) || schema.columns.len() != 1 || schema.columns[0].name != "relation"
+                || data.rows.len() != 1 || data.rows[0].values.len() != 1 || data.limited
+                || !matches!(&data.rows[0].values[0].kind,
+                    Some(Kind::Text(value)) if value.parse::<i64>().is_err())
+                || bookmark.is_empty() || done.reason != "Completed"
+                || done.last_checkpoint != *bookmark || recovered.message().await?.is_some()
+            {
+                return Err("the public query did not recover after the conversion error".into());
+            }
+            Ok(serde_json::json!({
+                "execution": "in-process", "query_transport": "native-grpc-tls",
+                "query_failure": error.code, "query_error": error.reason,
+                "query_grpc_code": "Internal", "query_recovered": true, "catalog_rows": data.rows.len(),
+                "native_interruption_proved": false, "process_isolation_proved": false,
+            }))
+        }).await?
     }
 }
 
@@ -211,15 +216,15 @@ mod tests {
             "capture_active",
             "prefix_unchanged",
             "writer_ready",
+            "durable_receipt_advanced",
+            "post_failure_acknowledged",
         ] {
             assert_eq!(failure[field], true, "{field}");
         }
         assert_eq!(failure["execution"], "in-process");
-        assert_eq!(failure["query_failure"], "AnalysisDatabase");
-        assert!(matches!(
-            failure["query_operation"].as_str(),
-            Some("execute query evaluation" | "read query evaluation")
-        ));
+        assert_eq!(failure["query_transport"], "native-grpc-tls");
+        assert_eq!(failure["query_failure"], "EvaluationFailed");
+        assert_eq!(failure["query_grpc_code"], "Internal");
         assert_eq!(failure["catalog_rows"], 1);
         assert_eq!(failure["native_interruption_proved"], false);
         assert_eq!(failure["process_isolation_proved"], false);
@@ -227,6 +232,9 @@ mod tests {
         assert_eq!(failure["post_failure_sequence"], 3);
         assert_eq!(failure["post_failure_ack"], failure["post_failure_replay"]);
         assert!(failure["post_failure_revision"].as_u64() > failure["prefix_revision"].as_u64());
+        assert!(
+            failure["post_failure_output_bytes"].as_u64() > failure["prefix_output_bytes"].as_u64()
+        );
         assert_eq!(case["launch_count"], 1);
         assert_eq!(case["process_reaped"], true);
         assert_eq!(case["terminal_reopen"], true);

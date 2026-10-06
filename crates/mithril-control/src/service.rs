@@ -935,7 +935,7 @@ impl ControlPlane {
         })
     }
 
-    fn evidence_tenant(&self, node_id: &str) -> Result<[u8; 16], Status> {
+    pub(crate) fn evidence_tenant(&self, node_id: &str) -> Result<[u8; 16], Status> {
         let enrolled = self.allowed_nodes.get(node_id).ok_or_else(|| {
             Status::permission_denied("node identity is not enrolled for evidence")
         })?;
@@ -1771,8 +1771,7 @@ impl ControlPlane {
     pub fn accept_trace(
         &self,
         request: crate::TraceRequestV1,
-        grant: crate::TraceExecutionGrantV1,
-        approval: Option<crate::TraceApprovalV1>,
+        access: crate::TraceAccessV1,
     ) -> Result<araphor_data::TraceStateV1, Status> {
         let owner = self.trace_owner()?;
         // Retried acceptance uses its frozen inputs even if the live inventory changed.
@@ -1813,20 +1812,22 @@ impl ControlPlane {
             }
         }
         owner
-            .accept(request, grant, approval, utc_now_ns()? as u64)
+            .accept(request, access, utc_now_ns()? as u64)
             .map_err(trace_status)
     }
 
     pub async fn resolve_trace_targets(
         &self,
         facts: Vec<crate::WorkloadTargetFactV1>,
-        grant: &crate::TraceExecutionGrantV1,
+        access: &crate::TraceAccessV1,
     ) -> Result<Vec<crate::TraceParticipantV1>, Status> {
         self.trace_owner()?;
-        if facts.is_empty() || facts.len() > 16 || grant.valid_until_unix_ns <= utc_now_ns()? as u64
-        {
+        access
+            .validate(access.tenant_id, utc_now_ns()? as u64)
+            .map_err(trace_status)?;
+        if facts.is_empty() || facts.len() > 16 {
             return Err(Status::invalid_argument(
-                "diagnostic resolution requires 1..16 targets and a current grant",
+                "diagnostic resolution requires 1..16 targets and current access",
             ));
         }
         let inventory = self.workload_inventory();
@@ -1834,10 +1835,7 @@ impl ControlPlane {
         let mut participants = Vec::new();
         for fact in facts {
             let digest = crate::DiscoveryDigestV1::of(&fact).map_err(trace_status)?;
-            let status = if !grant.node_ids.contains(&fact.node_id)
-                || !(grant.host_diagnostic || grant.namespace_uids.contains(&fact.namespace_uid))
-                || self.evidence_tenant(&fact.node_id).ok() != Some(grant.tenant_id)
-            {
+            let status = if self.evidence_tenant(&fact.node_id).ok() != Some(access.tenant_id) {
                 Some(crate::TraceParticipantStateV1::Denied)
             } else if !inventory.contains(&fact) {
                 Some(crate::TraceParticipantStateV1::Disappeared)
@@ -2061,6 +2059,7 @@ fn trace_status(error: impl Into<crate::Error>) -> Status {
                 crate::TraceErrorCodeV1::Missing => tonic::Code::NotFound,
                 crate::TraceErrorCodeV1::Capacity => tonic::Code::ResourceExhausted,
                 crate::TraceErrorCodeV1::Invalid => tonic::Code::InvalidArgument,
+                crate::TraceErrorCodeV1::Unsupported => tonic::Code::Unimplemented,
                 crate::TraceErrorCodeV1::Integrity => tonic::Code::DataLoss,
             },
             araphor_observability::Error::InvalidConfiguration { .. } => {
@@ -2988,7 +2987,7 @@ mod tests {
     #[tokio::test]
     async fn observability_recovery_session_dispatch_ack_and_revocation() -> TestResult {
         use crate::{TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceUploadV1};
-        use araphor_observability::test_support::{access, grant, request};
+        use araphor_observability::test_support::{access, request};
         let directory = TempDir::new()?;
         let store = crate::ControlStore::open(directory.path())?;
         let key = SigningKey::from_bytes(&[23; 32]);
@@ -3039,15 +3038,15 @@ mod tests {
         )?;
         let now = super::utc_now_ns()? as u64;
         let request = request()?;
-        let mut grant = grant()?;
-        grant.valid_until_unix_ns = now + 60_000_000_000;
+        let mut trace_access = access();
+        trace_access.valid_until_unix_ns = now + 60_000_000_000;
         control
             .lock_state()?
             .sessions
             .get_mut("node-a")
             .ok_or("missing session")?
             .workload_targets = vec![request.targets[0].fact.clone()];
-        control.accept_trace(request.clone(), grant, None)?;
+        control.accept_trace(request.clone(), trace_access)?;
         let reply = control.exchange_trace("node-a", &context, TraceExchangeV1::default())?;
         let dispatch = reply.dispatch.ok_or("missing dispatch")?;
         dispatch.verify(
@@ -3123,7 +3122,7 @@ mod tests {
         assert!(control.exchange_trace("node-a", &context, changed).is_err());
         control
             .trace_owner()?
-            .cancel([1; 16], request.request_id, "operator", true)?;
+            .cancel([1; 16], request.request_id, &access, now, true)?;
         assert_eq!(
             control
                 .exchange_trace(

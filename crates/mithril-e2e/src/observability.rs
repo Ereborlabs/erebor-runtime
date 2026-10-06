@@ -14,6 +14,7 @@ use erebor_interceptor::diagnostic::{
 use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
 use serde::{Deserialize, Serialize};
 
+mod client;
 mod lifecycle;
 #[cfg(test)]
 mod plain;
@@ -547,8 +548,7 @@ impl ObservabilityQualification {
         use ed25519_dalek::SigningKey;
         use mithril_control::{
             ControlStore, TraceBatchV1, TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1,
-            TraceFrameV1, TraceOwner, TraceReadAccessV1, TraceTerminalReasonV1, TraceTerminalV1,
-            TraceUploadV1,
+            TraceFrameV1, TraceOwner, TraceTerminalReasonV1, TraceTerminalV1, TraceUploadV1,
         };
         use mithril_node::TrustCache;
 
@@ -583,22 +583,15 @@ impl ObservabilityQualification {
                 )?;
                 let (request, grant) = Self::trace_inputs(fact, now)?;
                 let tenant = request.tenant_id;
-                let access = TraceReadAccessV1 {
-                    tenant_id: tenant,
-                    namespace_uids: grant.namespace_uids.clone(),
-                    node_ids: grant.node_ids.clone(),
-                    host_sensitive: false,
-                    valid_until_unix_ns: grant.valid_until_unix_ns,
-                    revoked: false,
-                };
+                let access = grant.clone();
                 connection.report_readiness(true, true).await?;
-                let state = control.accept_trace(request.clone(), grant.clone(), None)?;
-                if control.accept_trace(request.clone(), grant.clone(), None)? != state {
+                let state = control.accept_trace(request.clone(), grant.clone())?;
+                if control.accept_trace(request.clone(), grant.clone())? != state {
                     return Err("acceptance retry changed durable state".into());
                 }
                 let mut changed = request.clone();
                 changed.collection_seconds += 1;
-                let conflict = control.accept_trace(changed, grant.clone(), None)
+                let conflict = control.accept_trace(changed, grant.clone())
                     .err().ok_or("changed request was accepted")?;
                 if conflict.code() != tonic::Code::AlreadyExists {
                     return Err(format!("changed request failed for another reason: {conflict}").into());
@@ -750,12 +743,12 @@ impl ObservabilityQualification {
         tls: &crate::control_fixture::MtlsFixture,
         key: &ed25519_dalek::SigningKey,
         mut request: mithril_control::TraceRequestV1,
-        mut grant: mithril_control::TraceExecutionGrantV1,
+        mut grant: mithril_control::TraceAccessV1,
     ) -> ProofResult<serde_json::Value> {
         use crate::control_fixture::{reopen_control_store, OutagePolicyFixture};
         use mithril_control::{
             TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceOwner,
-            TraceReadAccessV1, TraceUploadV1,
+            TraceUploadV1,
         };
         use mithril_node::TrustCache;
 
@@ -766,14 +759,7 @@ impl ObservabilityQualification {
                 .as_nanos(),
         )?;
         grant.valid_until_unix_ns = now + 120_000_000_000;
-        let access = TraceReadAccessV1 {
-            tenant_id: request.tenant_id,
-            namespace_uids: grant.namespace_uids.clone(),
-            node_ids: grant.node_ids.clone(),
-            host_sensitive: false,
-            valid_until_unix_ns: grant.valid_until_unix_ns,
-            revoked: false,
-        };
+        let access = grant.clone();
         let control = Self::trace_control(tls, key)?;
         let data = control.analysis_store().ok_or("missing analysis store")?;
         control.replace_kubernetes_workload_inventory(
@@ -793,7 +779,7 @@ impl ObservabilityQualification {
                 .connect(registration.clone(), true, &mut cache)
                 .await?;
             connection.report_readiness(true, true).await?;
-            control.accept_trace(request.clone(), grant, None)?;
+            control.accept_trace(request.clone(), grant)?;
             let dispatch = connection
                 .exchange_diagnostics(&TraceExchangeV1::default())
                 .await?
@@ -911,14 +897,14 @@ impl ObservabilityQualification {
         &self,
         key: &ed25519_dalek::SigningKey,
         request: mithril_control::TraceRequestV1,
-        grant: mithril_control::TraceExecutionGrantV1,
+        grant: mithril_control::TraceAccessV1,
         query: bool,
     ) -> ProofResult<serde_json::Value> {
         use crate::control_fixture::{reopen_control_store, MtlsFixture, OutagePolicyFixture};
         use erebor_interceptor_abi::{BindingLifecycleStateV1, ExecutionSetBindingStateV1};
         use mithril_control::{
-            DiscoveryDigestV1, TraceApprovalV1, TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1,
-            TraceOwner, TraceReadAccessV1, TraceSourceV1, TraceTerminalReasonV1, TraceUploadV1,
+            DiscoveryDigestV1, TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1, TraceOwner,
+            TraceSourceV1, TraceTerminalReasonV1, TraceUploadV1,
         };
         use mithril_node::{NodeTraceOwner, TraceTargetLeaseV1, TrustCache};
         use std::os::unix::fs::MetadataExt as _;
@@ -969,7 +955,7 @@ impl ObservabilityQualification {
                 let zero_progress = before_append || native_append;
                 let local_expiry = matches!(name, "partition-expiry" | "store-failure" | "store-before-append" | "store-native-append");
                 let early_output = name == "output-before-upload";
-                let host_source = matches!(name, "map-exhaustion" | "output-limit" | "output-before-upload");
+                let fault_source = matches!(name, "map-exhaustion" | "output-limit" | "output-before-upload");
                 let revoked = name == "revocation";
                 let expected_frames = if matches!(name, "map-exhaustion" | "query-failure") { 3 } else { 2 };
                 let mut query_failure = None;
@@ -1048,33 +1034,22 @@ impl ObservabilityQualification {
                 connection.report_readiness(true, true).await?;
                 let now = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())?;
                 grant.valid_until_unix_ns = now + 120_000_000_000;
-                let approval = if host_source {
+                if fault_source {
                     request.source = TraceSourceV1::new(if name == "map-exhaustion" {
                         b"BEGIN { $i = 0; while ($i < 8192) { @full[$i] = 1; $i++; } } interval:s:2 { exit(); }".to_vec()
                     } else {
                         b"interval:hz:10000 { printf(\"bounded diagnostic output\\n\"); }".to_vec()
                     })?;
-                    grant.host_diagnostic = true;
-                    Some(TraceApprovalV1 {
-                        approval_id: [8; 16], request_digest: request.digest()?,
-                        grant_digest: DiscoveryDigestV1::of(&grant)?,
-                        valid_until_unix_ns: grant.valid_until_unix_ns,
-                    })
-                } else { None };
-                let access = TraceReadAccessV1 {
-                    tenant_id: request.tenant_id, namespace_uids: grant.namespace_uids.clone(),
-                    node_ids: grant.node_ids.clone(), host_sensitive: host_source,
-                    valid_until_unix_ns: grant.valid_until_unix_ns, revoked: false,
-                };
-                control.accept_trace(request.clone(), grant.clone(), approval)?;
+                }
+                let access = grant.clone();
+                control.accept_trace(request.clone(), grant.clone())?;
                 let dispatch = connection.exchange_diagnostics(&TraceExchangeV1::default()).await?
                     .dispatch.ok_or("missing Node capture dispatch")?;
                 if dispatch.accepted.request != request {
                     return Err("Node capture dispatch changed the accepted request".into());
                 }
-                if name == "query-failure" && (dispatch.accepted.grant != grant
-                    || dispatch.accepted.recipe != Some(mithril_control::TraceRecipeV1::FailedOpens)
-                    || dispatch.accepted.approval.is_some())
+                if name == "query-failure" && (dispatch.accepted.access != grant
+                    || dispatch.accepted.recipe != Some(mithril_control::TraceRecipeV1::FailedOpens))
                 {
                     return Err("query case changed its accepted source authority".into());
                 }
@@ -1146,8 +1121,7 @@ impl ObservabilityQualification {
                     let before = data.trace_receipt(identity)?.ok_or("missing active query case receipt")?;
                     let retained = owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?;
                     let mut failure = Self::fail_query(
-                        data.clone(),
-                        request.tenant_id, now, grant.valid_until_unix_ns,
+                        control.clone(), &tls, request.tenant_id,
                     ).await?;
                     node.reap()?;
                     if node.terminal(id)?.is_some() || launches.load(Ordering::Acquire) != 1
@@ -1208,6 +1182,9 @@ impl ObservabilityQualification {
                     failure["post_failure_sequence"] = serde_json::json!(after.last_sequence);
                     failure["prefix_revision"] = serde_json::json!(before.commit_revision);
                     failure["post_failure_revision"] = serde_json::json!(after.commit_revision);
+                    failure["prefix_output_bytes"] = serde_json::json!(before.output_bytes);
+                    failure["post_failure_output_bytes"] = serde_json::json!(after.output_bytes);
+                    failure["durable_receipt_advanced"] = serde_json::json!(true);
                     failure["post_failure_ack"] = serde_json::to_value(&ack)?;
                     failure["post_failure_replay"] = serde_json::to_value(replay.acknowledgement)?;
                     failure["capture_active"] = serde_json::json!(true);
@@ -1219,7 +1196,7 @@ impl ObservabilityQualification {
                 if name == "target-replacement" {
                     generation.fetch_add(1, Ordering::AcqRel);
                 } else if matches!(name, "cancel" | "revocation" | "query-failure") {
-                    owner.cancel(request.tenant_id, request.request_id, &grant.principal, revoked)?;
+                    owner.cancel(request.tenant_id, request.request_id, &access, now, revoked)?;
                     if revoked && (!matches!(
                         owner.read(request.tenant_id, request.request_id, &access, now),
                         Err(araphor_observability::Error::Observability {
@@ -1350,7 +1327,7 @@ impl ObservabilityQualification {
                     failed = Some(batch);
                 } else if name == "retirement" {
                     generation.store(0, Ordering::Release);
-                } else if host_source && !early_output {
+                } else if fault_source && !early_output {
                     fs::write(&finish_path, b"finish")?;
                 }
                 drop(connection);
@@ -1386,8 +1363,8 @@ impl ObservabilityQualification {
                     if prefix_ack.is_some() || receipt.last_sequence != 0 || receipt.output_bytes != 0
                         || receipt.commit_revision != 0 || receipt.terminal.is_some()
                         || !owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?.is_empty()
-                        || dispatch.accepted.request != request || dispatch.accepted.grant != grant
-                        || dispatch.accepted.recipe.is_some() || dispatch.accepted.approval.is_none()
+                        || dispatch.accepted.request != request || dispatch.accepted.access != grant
+                        || dispatch.accepted.recipe.is_some()
                     {
                         return Err("immediate output failure uploaded a prefix or changed its frozen inputs".into());
                     }
@@ -1399,11 +1376,11 @@ impl ObservabilityQualification {
                 if name == "map-exhaustion" {
                     let output: serde_json::Value = serde_json::from_slice(&batch.frames[2].bytes)?;
                     if output["data"]["@full"].as_object().map(|map| map.len()) != Some(4096)
-                        || dispatch.accepted.recipe.is_some() || !dispatch.accepted.grant.host_diagnostic
-                        || dispatch.accepted.approval.is_none() || terminal.exit_code != Some(0)
+                        || dispatch.accepted.recipe.is_some() || dispatch.accepted.access != grant
+                        || dispatch.accepted.request != request || terminal.exit_code != Some(0)
                         || terminal.forced_kill
                     {
-                        return Err("bounded host-source result changed its capacity or completion".into());
+                        return Err("bounded fault source changed its capacity or completion".into());
                     }
                 }
                 drop(node);
@@ -1579,11 +1556,11 @@ impl ObservabilityQualification {
                     };
                     let fresh_lease = TraceTargetLeaseV1::fixture(replacement.clone(), target_path, move || Ok(Some(fresh_state)))?;
                     control.replace_kubernetes_workload_inventory(vec![replacement.fact.clone()])?;
-                    control.accept_trace(request.clone(), grant.clone(), None)?;
+                    control.accept_trace(request.clone(), grant.clone())?;
                     let mut fresh = request.clone();
                     fresh.request_id = [18; 16];
                     fresh.targets = vec![replacement.clone()];
-                    control.accept_trace(fresh.clone(), grant.clone(), None)?;
+                    control.accept_trace(fresh.clone(), grant.clone())?;
                     let fresh_dispatch = connection.exchange_diagnostics(&TraceExchangeV1 {
                         retained: vec![id], ..Default::default()
                     }).await?.dispatch.ok_or("missing fresh lifetime dispatch")?;
@@ -1611,7 +1588,7 @@ impl ObservabilityQualification {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                     let fresh_pid: u32 = fs::read_to_string(&pid_path)?.parse()?;
-                    owner.cancel(fresh.tenant_id, fresh.request_id, &grant.principal, false)?;
+                    owner.cancel(fresh.tenant_id, fresh.request_id, &access, now, false)?;
                     let cancelled = connection.exchange_diagnostics(&TraceExchangeV1 {
                         retained: vec![id, fresh_id], ..Default::default()
                     }).await?;
@@ -1693,6 +1670,9 @@ impl ObservabilityQualification {
                     "writer_unready": true, "active_output_retained": true,
                     "recovered_prefix": batch, "data_reopened": true,
                 }) });
+                if let Some(failure) = &mut query_failure {
+                    failure["post_failure_acknowledged"] = serde_json::json!(true);
+                }
                 records.push(serde_json::json!({
                     "name": name, "accepted": dispatch.accepted, "target": target,
                     "process_id": pid, "launch_count": launch_count,
@@ -2457,7 +2437,12 @@ mod tests {
         let map = &cases[6];
         assert_eq!(map["name"], "map-exhaustion");
         assert!(map["accepted"]["recipe"].is_null());
-        assert_eq!(map["accepted"]["grant"]["host_diagnostic"], true);
+        assert_eq!(map["accepted"]["access"]["principal"], "qualification");
+        assert_eq!(map["accepted"]["access"]["revoked"], false);
+        assert_eq!(
+            map["accepted"]["request"]["source"]["bytes"],
+            serde_json::json!(b"BEGIN { $i = 0; while ($i < 8192) { @full[$i] = 1; $i++; } } interval:s:2 { exit(); }".to_vec())
+        );
         assert_eq!(map["map_capacity"]["source_requested_keys"], 8192);
         assert_eq!(map["map_capacity"]["retained_keys"], 4096);
         assert_eq!(map["map_capacity"]["external_backend_result"], true);
@@ -2474,12 +2459,22 @@ mod tests {
         let limited = &cases[7];
         assert_eq!(limited["name"], "output-limit");
         assert!(limited["accepted"]["recipe"].is_null());
-        assert_eq!(limited["accepted"]["grant"]["host_diagnostic"], true);
+        assert_eq!(limited["accepted"]["access"]["principal"], "qualification");
+        assert_eq!(
+            limited["accepted"]["access"]["tenant_id"],
+            map["accepted"]["access"]["tenant_id"]
+        );
+        assert_eq!(
+            limited["accepted"]["request"]["source"]["bytes"],
+            serde_json::json!(
+                b"interval:hz:10000 { printf(\"bounded diagnostic output\\n\"); }".to_vec()
+            )
+        );
         let retired = &cases[8];
         assert_eq!(retired["name"], "retirement");
-        assert_eq!(retired["accepted"]["grant"]["host_diagnostic"], false);
+        assert_eq!(retired["accepted"]["access"]["principal"], "qualification");
         assert!(!retired["accepted"]["recipe"].is_null());
-        assert!(retired["accepted"]["approval"].is_null());
+        assert!(retired["accepted"].get("approval").is_none());
         let fresh = &retired["fresh_lifetime"];
         assert_eq!(fresh["launch_count"], 1);
         assert_eq!(fresh["process_reaped"], true);
@@ -2532,7 +2527,7 @@ mod tests {
                     .ok_or("missing native admission time")?,
             5_000_000_000
         );
-        assert_eq!(native["accepted"]["grant"]["host_diagnostic"], false);
+        assert_eq!(native["accepted"]["access"]["principal"], "qualification");
         assert!(!native["accepted"]["recipe"].is_null());
         assert_eq!(native["acknowledgement"], native["replay_ack"]);
         assert_eq!(native["acknowledgement"]["last_sequence"], 2);
@@ -2586,9 +2581,9 @@ mod tests {
             early["accepted"]["request"]["source"],
             limited["accepted"]["request"]["source"]
         );
-        assert_eq!(early["accepted"]["grant"]["host_diagnostic"], true);
+        assert_eq!(early["accepted"]["access"]["principal"], "qualification");
         assert!(early["accepted"]["recipe"].is_null());
-        assert!(!early["accepted"]["approval"].is_null());
+        assert!(early["accepted"].get("approval").is_none());
         assert_eq!(early["acknowledgement"], early["replay_ack"]);
         assert_eq!(early["acknowledgement"]["last_sequence"], 2);
         assert_eq!(

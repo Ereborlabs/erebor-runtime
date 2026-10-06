@@ -245,9 +245,9 @@ impl ObservabilityQualification {
         use crate::control_fixture::{MtlsFixture, OutagePolicyFixture, OUTAGE_TENANT_ID};
         use ed25519_dalek::SigningKey;
         use mithril_control::{
-            ControlStore, DiscoveryDigestV1, TraceBatchV1, TraceCleanupV1, TraceExchangeV1,
-            TraceExecutionGrantV1, TraceOwner, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1,
-            TraceTargetV1, TraceTerminalReasonV1, TraceUploadV1,
+            ControlStore, DiscoveryDigestV1, TraceAccessV1, TraceBatchV1, TraceCleanupV1,
+            TraceExchangeV1, TraceOwner, TraceRecipeV1, TraceRequestV1, TraceTargetV1,
+            TraceTerminalReasonV1, TraceUploadV1,
         };
         use mithril_node::TrustCache;
         use std::os::unix::fs::MetadataExt as _;
@@ -297,25 +297,16 @@ impl ObservabilityQualification {
                     .as_nanos(),
             )?;
             let tenant = *uuid::Uuid::parse_str(OUTAGE_TENANT_ID)?.as_bytes();
-            let grant = TraceExecutionGrantV1 {
+            let grant = TraceAccessV1 {
                 tenant_id: tenant,
-                grant_id: [7; 16],
                 principal: "qualification".into(),
-                namespace_uids: [target.fact.namespace_uid.clone()].into(),
-                node_ids: ["node-a".into()].into(),
-                recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-                host_diagnostic: false,
                 valid_until_unix_ns: now + 120_000_000_000,
-            };
-            let access = TraceReadAccessV1 {
-                tenant_id: tenant,
-                namespace_uids: grant.namespace_uids.clone(),
-                node_ids: grant.node_ids.clone(),
-                host_sensitive: false,
-                valid_until_unix_ns: grant.valid_until_unix_ns,
                 revoked: false,
             };
+            let access = grant.clone();
             let request = TraceRequestV1 {
+                selection: None,
+                finding_reference: None,
                 tenant_id: tenant,
                 request_id: [request_id; 16],
                 source: TraceRecipeV1::FailedOpens.manifest()?.source,
@@ -323,7 +314,7 @@ impl ObservabilityQualification {
                 unresolved: Vec::new(),
                 collection_seconds: 30,
             };
-            control.accept_trace(request.clone(), grant, None)?;
+            control.accept_trace(request.clone(), grant)?;
             let now = u64::try_from(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)?

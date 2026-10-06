@@ -9,6 +9,7 @@ repository.workspace = true
 futures-util.workspace = true
 hyper-util.workspace = true
 prost.workspace = true
+serde.workspace = true
 tokio.workspace = true
 tonic.workspace = true
 tower.workspace = true

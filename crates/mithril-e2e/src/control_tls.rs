@@ -317,8 +317,8 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
 async fn observability_recovery_mtls_reconnect_preserves_dispatch_and_output(
 ) -> Result<(), Box<dyn StdError>> {
     use mithril_control::{
-        DiscoveryDigestV1, DiscoveryOwner, PolicySignerTrustV1, TraceBatchV1, TraceCleanupV1,
-        TraceExchangeV1, TraceExecutionGrantV1, TraceFrameKindV1, TraceFrameV1, TraceRecipeV1,
+        DiscoveryDigestV1, DiscoveryOwner, PolicySignerTrustV1, TraceAccessV1, TraceBatchV1,
+        TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceRecipeV1,
         TraceRequestV1, TraceTargetV1, TraceTerminalReasonV1, TraceTerminalV1, TraceUploadV1,
     };
     let tls = MtlsFixture::new(false)?;
@@ -372,17 +372,15 @@ async fn observability_recovery_mtls_reconnect_preserves_dispatch_and_output(
         container_generation: 1,
         label_epoch: 1,
     };
-    let grant = TraceExecutionGrantV1 {
+    let grant = TraceAccessV1 {
         tenant_id: tenant,
-        grant_id: [7; 16],
         principal: "operator".into(),
-        namespace_uids: [target.fact.namespace_uid.clone()].into(),
-        node_ids: ["node-a".into()].into(),
-        recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-        host_diagnostic: false,
         valid_until_unix_ns: now + 120_000_000_000,
+        revoked: false,
     };
     let request = TraceRequestV1 {
+        selection: None,
+        finding_reference: None,
         tenant_id: tenant,
         request_id: [6; 16],
         source: TraceRecipeV1::FailedOpens.manifest()?.source,
@@ -393,14 +391,14 @@ async fn observability_recovery_mtls_reconnect_preserves_dispatch_and_output(
     connection.report_readiness(true, false).await?;
     assert_eq!(
         control
-            .accept_trace(request.clone(), grant.clone(), None)
+            .accept_trace(request.clone(), grant.clone())
             .err()
             .ok_or("an unready node must reject new capture")?
             .code(),
         tonic::Code::Unavailable
     );
     connection.report_readiness(true, true).await?;
-    control.accept_trace(request.clone(), grant, None)?;
+    control.accept_trace(request.clone(), grant)?;
     let dispatch = connection
         .exchange_diagnostics(&TraceExchangeV1::default())
         .await?

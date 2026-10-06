@@ -76,8 +76,8 @@ impl Host {
         use araphor_data::AnalysisCommitStage;
         use mithril_control::{
             TraceBatchV1, TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1,
-            TraceOwner, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1, TraceTerminalReasonV1,
-            TraceTerminalV1, TraceUploadV1,
+            TraceOwner, TraceRecipeV1, TraceRequestV1, TraceTerminalReasonV1, TraceTerminalV1,
+            TraceUploadV1,
         };
         use std::io::Write as _;
         use std::sync::{
@@ -174,30 +174,21 @@ impl Host {
             )?)
         };
         let (control, fact) = env.shared.diagnostic_context()?;
-        let grant = mithril_control::TraceExecutionGrantV1 {
+        let grant = mithril_control::TraceAccessV1 {
             tenant_id: *uuid::Uuid::parse_str(super::shared::TENANT_ID)?.as_bytes(),
-            grant_id: [7; 16],
             principal: "qualification".into(),
-            namespace_uids: [fact.namespace_uid.clone()].into(),
-            node_ids: [fact.node_id.clone()].into(),
-            recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-            host_diagnostic: false,
             valid_until_unix_ns: now()? + 600_000_000_000,
-        };
-        let access = TraceReadAccessV1 {
-            tenant_id: grant.tenant_id,
-            namespace_uids: grant.namespace_uids.clone(),
-            node_ids: grant.node_ids.clone(),
-            host_sensitive: false,
-            valid_until_unix_ns: grant.valid_until_unix_ns,
             revoked: false,
         };
+        let access = grant.clone();
         let targets = runtime.block_on(control.resolve_trace_targets(vec![fact], &grant))?;
         let target = targets
             .first()
             .and_then(|item| item.target.clone())
             .ok_or("the diagnostic storage target is unavailable")?;
         let request = TraceRequestV1 {
+            selection: None,
+            finding_reference: None,
             tenant_id: grant.tenant_id,
             request_id: *uuid::Uuid::new_v4().as_bytes(),
             source: TraceRecipeV1::FailedOpens.manifest()?.source,
@@ -206,7 +197,7 @@ impl Host {
             collection_seconds: 30,
         };
         env.shared.partition_diagnostics(true)?;
-        control.accept_trace(request.clone(), grant, None)?;
+        control.accept_trace(request.clone(), grant)?;
         let data = control.analysis_store().ok_or("missing analysis store")?;
         let owner = TraceOwner::new(data.clone());
         let (_, accepted) = owner.read(request.tenant_id, request.request_id, &access, now()?)?;
@@ -558,8 +549,8 @@ impl Host {
     fn qualify_restart() -> TestResult<()> {
         use crate::observability::ResourceSnapshot;
         use mithril_control::{
-            TraceCleanupV1, TraceExecutionGrantV1, TraceFrameKindV1, TraceOwner, TraceReadAccessV1,
-            TraceRecipeV1, TraceRequestV1, TraceTerminalReasonV1,
+            TraceAccessV1, TraceCleanupV1, TraceFrameKindV1, TraceOwner, TraceRecipeV1,
+            TraceRequestV1, TraceTerminalReasonV1,
         };
         use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
         use std::os::unix::process::ExitStatusExt as _;
@@ -623,24 +614,13 @@ impl Host {
             )?)
         };
         let tenant = *uuid::Uuid::parse_str(super::shared::TENANT_ID)?.as_bytes();
-        let grant = TraceExecutionGrantV1 {
+        let grant = TraceAccessV1 {
             tenant_id: tenant,
-            grant_id: [7; 16],
             principal: "qualification".into(),
-            namespace_uids: [fact.namespace_uid.clone()].into(),
-            node_ids: [fact.node_id.clone()].into(),
-            recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-            host_diagnostic: false,
             valid_until_unix_ns: now()? + 600_000_000_000,
-        };
-        let access = TraceReadAccessV1 {
-            tenant_id: tenant,
-            namespace_uids: grant.namespace_uids.clone(),
-            node_ids: grant.node_ids.clone(),
-            host_sensitive: false,
-            valid_until_unix_ns: grant.valid_until_unix_ns,
             revoked: false,
         };
+        let access = grant.clone();
         let targets = runtime.block_on(control.resolve_trace_targets(vec![fact], &grant))?;
         let target = targets
             .first()
@@ -657,6 +637,8 @@ impl Host {
         )?];
         let baseline = ResourceSnapshot::read()?;
         let request = TraceRequestV1 {
+            selection: None,
+            finding_reference: None,
             tenant_id: tenant,
             request_id: *uuid::Uuid::new_v4().as_bytes(),
             source: TraceRecipeV1::FailedOpens.manifest()?.source,
@@ -666,7 +648,7 @@ impl Host {
         };
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            match control.accept_trace(request.clone(), grant.clone(), None) {
+            match control.accept_trace(request.clone(), grant.clone()) {
                 Ok(_) => break,
                 Err(error)
                     if error.code() == tonic::Code::Unavailable && Instant::now() < deadline =>
@@ -846,9 +828,8 @@ impl Host {
     fn qualify_diagnostic_failures() -> TestResult<()> {
         use crate::observability::ResourceSnapshot;
         use mithril_control::{
-            DiscoveryDigestV1, TraceApprovalV1, TraceCleanupV1, TraceExecutionGrantV1,
-            TraceFrameKindV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1, TraceSourceV1,
-            TraceTerminalReasonV1, TraceTerminalV1,
+            TraceAccessV1, TraceCleanupV1, TraceFrameKindV1, TraceRecipeV1, TraceRequestV1,
+            TraceSourceV1, TraceTerminalReasonV1, TraceTerminalV1,
         };
         use std::io;
         use std::sync::mpsc;
@@ -887,24 +868,13 @@ impl Host {
             )?)
         };
         let tenant = *uuid::Uuid::parse_str(super::shared::TENANT_ID)?.as_bytes();
-        let grant = TraceExecutionGrantV1 {
+        let grant = TraceAccessV1 {
             tenant_id: tenant,
-            grant_id: [7; 16],
             principal: "qualification".into(),
-            namespace_uids: [fact.namespace_uid.clone()].into(),
-            node_ids: [fact.node_id.clone()].into(),
-            recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-            host_diagnostic: false,
             valid_until_unix_ns: now()? + 600_000_000_000,
-        };
-        let mut access = TraceReadAccessV1 {
-            tenant_id: tenant,
-            namespace_uids: grant.namespace_uids.clone(),
-            node_ids: grant.node_ids.clone(),
-            host_sensitive: false,
-            valid_until_unix_ns: grant.valid_until_unix_ns,
             revoked: false,
         };
+        let access = grant.clone();
         let targets = runtime.block_on(control.resolve_trace_targets(vec![fact], &grant))?;
         let target = targets
             .first()
@@ -940,6 +910,8 @@ impl Host {
                 let mut coverage = initial.clone();
                 let request_id = *uuid::Uuid::new_v4().as_bytes();
                 let mut request = TraceRequestV1 {
+                    selection: None,
+                    finding_reference: None,
                     tenant_id: tenant,
                     request_id,
                     source: TraceRecipeV1::FailedOpens.manifest()?.source,
@@ -947,24 +919,13 @@ impl Host {
                     unresolved: Vec::new(),
                     collection_seconds: 30,
                 };
-                let mut execution_grant = grant.clone();
-                let approval = if matches!(case, "map-exhaustion" | "output-limit") {
+                if matches!(case, "map-exhaustion" | "output-limit") {
                     request.source = TraceSourceV1::new(if case == "map-exhaustion" {
                         b"BEGIN { $i = 0; while ($i < 8192) { @full[$i] = 1; $i++; } } interval:s:2 { exit(); }".to_vec()
                     } else {
                         b"interval:hz:10000 { printf(\"bounded diagnostic output\\n\"); }".to_vec()
                     })?;
-                    execution_grant.host_diagnostic = true;
-                    access.host_sensitive = true;
-                    Some(TraceApprovalV1 {
-                        approval_id: [8; 16],
-                        request_digest: request.digest()?,
-                        grant_digest: DiscoveryDigestV1::of(&execution_grant)?,
-                        valid_until_unix_ns: execution_grant.valid_until_unix_ns,
-                    })
-                } else {
-                    None
-                };
+                }
                 if case == "partition" {
                     env.shared.partition_diagnostics(true)?;
                 }
@@ -1016,7 +977,7 @@ impl Host {
                         }
                     }
                 });
-                control.accept_trace(request, execution_grant, approval)?;
+                control.accept_trace(request, grant.clone())?;
                 let (_, accepted) = owner.read(tenant, request_id, &access, now()?)?;
                 let id = accepted.execution_id(0)?;
                 let spool = env.shared.diagnostic_spool(id);
@@ -1058,7 +1019,7 @@ impl Host {
                 match case {
                     "partition" => env.shared.partition_diagnostics(true)?,
                     "revocation" => {
-                        owner.cancel(tenant, request_id, "qualification", true)?;
+                        owner.cancel(tenant, request_id, &access, now()?, true)?;
                         assert!(owner
                             .output(tenant, request_id, 0, &access, now()?, after)
                             .is_err());
@@ -1702,8 +1663,7 @@ impl Host {
     fn qualify_diagnostics() -> TestResult<()> {
         use crate::observability::{PlainCapture, ResourceSnapshot};
         use mithril_control::{
-            TraceExecutionGrantV1, TraceReadAccessV1, TraceRecipeV1, TraceRequestV1,
-            TraceTerminalReasonV1,
+            TraceAccessV1, TraceRecipeV1, TraceRequestV1, TraceTerminalReasonV1,
         };
         use mithril_node::TraceQualificationPairV1;
         use sha2::{Digest as _, Sha256};
@@ -1758,24 +1718,13 @@ impl Host {
             )?)
         };
         let tenant = *uuid::Uuid::parse_str(super::shared::TENANT_ID)?.as_bytes();
-        let grant = TraceExecutionGrantV1 {
+        let grant = TraceAccessV1 {
             tenant_id: tenant,
-            grant_id: [7; 16],
             principal: "qualification".into(),
-            namespace_uids: [fact.namespace_uid.clone()].into(),
-            node_ids: [fact.node_id.clone()].into(),
-            recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-            host_diagnostic: false,
             valid_until_unix_ns: now()? + 1_200_000_000_000,
-        };
-        let access = TraceReadAccessV1 {
-            tenant_id: tenant,
-            namespace_uids: grant.namespace_uids.clone(),
-            node_ids: grant.node_ids.clone(),
-            host_sensitive: false,
-            valid_until_unix_ns: grant.valid_until_unix_ns,
             revoked: false,
         };
+        let access = grant.clone();
         let node = fact.node_id.clone();
         let targets = runtime.block_on(control.resolve_trace_targets(vec![fact], &grant))?;
         let target = targets
@@ -1819,6 +1768,8 @@ impl Host {
                 env.node_ready()?;
                 control.accept_trace(
                     TraceRequestV1 {
+                        selection: None,
+                        finding_reference: None,
                         tenant_id: tenant,
                         request_id,
                         source: TraceRecipeV1::FailedOpens.manifest()?.source,
@@ -1827,7 +1778,6 @@ impl Host {
                         collection_seconds: Self::CAPTURE_SECONDS,
                     },
                     grant.clone(),
-                    None,
                 )?;
                 let deadline = Instant::now() + Duration::from_secs(15);
                 loop {

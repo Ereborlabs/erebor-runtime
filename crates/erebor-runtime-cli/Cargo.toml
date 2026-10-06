@@ -24,11 +24,16 @@ snafu.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
+tonic.workspace = true
 uuid.workspace = true
 
 [[bin]]
 name = "erebor"
 path = "src/main.rs"
+
+[[bin]]
+name = "araphor"
+path = "src/bin/araphor.rs"
 
 [lints]
 workspace = true

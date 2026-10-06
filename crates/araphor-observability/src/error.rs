@@ -100,6 +100,7 @@ impl ErrorExt for Error {
                 crate::TraceErrorCodeV1::Capacity => StatusCode::Unavailable,
                 crate::TraceErrorCodeV1::Invalid => StatusCode::InvalidArguments,
                 crate::TraceErrorCodeV1::Integrity => StatusCode::IllegalState,
+                crate::TraceErrorCodeV1::Unsupported => StatusCode::Unsupported,
             },
         }
     }

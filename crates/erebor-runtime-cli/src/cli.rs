@@ -10,6 +10,7 @@ use crate::{
 
 mod agent;
 mod approval;
+pub(crate) mod araphor;
 mod audit;
 pub(super) mod config_paths;
 mod daemon;
@@ -97,6 +98,18 @@ impl Cli {
             Command::Approval(args) => approval::ApprovalCommandOwner::new(args, &client).execute(),
             Command::Filesystem(args) => filesystem::execute(args, &client),
             Command::Daemon(args) => daemon::DaemonCommandOwner::new(args, &client).execute(),
+            Command::Araphor(args) => {
+                if self.daemon_socket.socket.is_some() {
+                    return Err(CliError::Araphor {
+                        source: Box::new(araphor::error::AraphorCommandError::Invalid {
+                            field: "a local daemon socket cannot select an Araphor endpoint",
+                            location: snafu::Location::default(),
+                        }),
+                        location: snafu::Location::default(),
+                    });
+                }
+                araphor::AraphorCommandOwner::new(args).execute()
+            }
         }
     }
 }
@@ -128,6 +141,8 @@ enum Command {
     Filesystem(filesystem::FilesystemArgs),
     /// Inspect or administer the local Erebor daemon.
     Daemon(daemon::DaemonArgs),
+    /// Query retained tenant data or run a supported finite trace over TLS.
+    Araphor(araphor::AraphorArgs),
 }
 
 impl fmt::Display for Command {
@@ -145,6 +160,7 @@ impl fmt::Display for Command {
             Self::Approval(args) => formatter.write_str(&args.display()),
             Self::Filesystem(args) => formatter.write_str(&args.display()),
             Self::Daemon(_) => formatter.write_str("daemon"),
+            Self::Araphor(_) => formatter.write_str("araphor"),
         }
     }
 }

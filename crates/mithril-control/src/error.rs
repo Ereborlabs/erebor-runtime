@@ -8,6 +8,38 @@ use snafu::{IntoError as _, Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Client listener operation {operation} failed"))]
+    ClientListener {
+        operation: &'static str,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Client authentication failed: {reason}"))]
+    ClientUnauthenticated {
+        reason: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("The client has no current tenant investigate permission"))]
+    ClientDenied {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Client authentication state is unavailable: {reason}"))]
+    ClientState {
+        reason: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Client OIDC operation {operation} failed"))]
+    ClientOidc {
+        operation: &'static str,
+        unauthenticated: bool,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Araphor data store failed: {source}"))]
     DataStore {
         #[snafu(source(from(araphor_data::Error, Box::new)))]
@@ -161,6 +193,15 @@ impl From<araphor_observability::Error> for Error {
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::ClientUnauthenticated { .. }
+            | Self::ClientDenied { .. }
+            | Self::ClientOidc {
+                unauthenticated: true,
+                ..
+            } => StatusCode::PermissionDenied,
+            Self::ClientState { .. } | Self::ClientOidc { .. } | Self::ClientListener { .. } => {
+                StatusCode::Unavailable
+            }
             Self::DataStore { source, .. }
                 if matches!(
                     source.as_ref(),
@@ -199,6 +240,18 @@ impl ErrorExt for Error {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::ClientState { .. }
+            | Self::ClientListener { .. }
+            | Self::ClientOidc {
+                unauthenticated: false,
+                ..
+            } => RetryHint::Retryable,
+            Self::ClientUnauthenticated { .. }
+            | Self::ClientDenied { .. }
+            | Self::ClientOidc {
+                unauthenticated: true,
+                ..
+            } => RetryHint::NonRetryable,
             Self::DataStore { source, .. }
                 if matches!(
                     source.as_ref(),

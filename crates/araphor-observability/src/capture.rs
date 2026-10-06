@@ -1078,7 +1078,7 @@ impl TraceSpool {
 mod tests {
     use super::*;
     use crate::{
-        ContainerKindV1, DiscoveryDigestV1, TraceAcceptedV1, TraceExecutionGrantV1, TraceRecipeV1,
+        ContainerKindV1, DiscoveryDigestV1, TraceAcceptedV1, TraceAccessV1, TraceRecipeV1,
         TraceRequestV1, TraceTargetV1, WorkloadTargetFactV1,
     };
 
@@ -1113,27 +1113,24 @@ mod tests {
         };
         let request = TraceRequestV1 {
             unresolved: Vec::new(),
+            selection: None,
+            finding_reference: None,
             tenant_id: [1; 16],
             request_id: [6; 16],
             source: TraceRecipeV1::SyscallErrors.manifest()?.source,
             targets: vec![target],
             collection_seconds: 1,
         };
-        let grant = TraceExecutionGrantV1 {
+        let access = TraceAccessV1 {
             tenant_id: [1; 16],
-            grant_id: [7; 16],
             principal: "operator".into(),
-            namespace_uids: ["namespace".into()].into(),
-            node_ids: ["node-a".into()].into(),
-            recipe_digests: [TraceRecipeV1::SyscallErrors.digest()?].into(),
-            host_diagnostic: false,
             valid_until_unix_ns: 100_000_000_000,
+            revoked: false,
         };
         Ok(TraceDispatchV1::sign(
             TraceAcceptedV1 {
                 request,
-                grant,
-                approval: None,
+                access,
                 accepted_unix_ns: 1,
                 deadline_unix_ns: 16_000_000_001,
                 recipe: Some(TraceRecipeV1::SyscallErrors),

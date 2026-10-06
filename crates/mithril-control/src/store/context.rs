@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::ops::Bound::{Excluded, Unbounded};
+use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::sync::Arc;
 
 use araphor_data::{
@@ -21,6 +21,7 @@ enum ContextCursor {
     Policy(Option<String>),
     Trust(Option<u64>),
     Rollout(Option<PolicyRolloutKeyV1>),
+    Target(Option<String>, usize, usize),
     End,
 }
 
@@ -164,7 +165,7 @@ impl ControlStore {
             ContextCursor::Rollout(after) => {
                 let bounds = (after.as_ref().map_or(Unbounded, Excluded), Unbounded);
                 let Some((key, rollout)) = inner.state.rollout_states.range(bounds).next() else {
-                    return Ok((None, ContextCursor::End));
+                    return Ok((None, ContextCursor::Target(None, 0, 0)));
                 };
                 let next = ContextCursor::Rollout(Some(key.clone()));
                 let record = matches(&rollout.target.tenant_id).then(|| {
@@ -178,6 +179,63 @@ impl ControlStore {
                             owner_revision: rollout.transition_version,
                         },
                         rollout,
+                    )
+                });
+                (record, next)
+            }
+            ContextCursor::Target(after, target_index, fact_index) => {
+                let bounds = (after.as_ref().map_or(Unbounded, Included), Unbounded);
+                let Some((id, snapshot)) = inner
+                    .state
+                    .target_snapshots
+                    .range::<String, _>(bounds)
+                    .next()
+                else {
+                    return Ok((None, ContextCursor::End));
+                };
+                let (target_index, fact_index) = if after.as_ref() == Some(id) {
+                    (*target_index, *fact_index)
+                } else {
+                    (0, 0)
+                };
+                let Some(target) = snapshot.targets.get(target_index) else {
+                    let next = inner
+                        .state
+                        .target_snapshots
+                        .range::<String, _>((Excluded(id), Unbounded))
+                        .next()
+                        .map_or(ContextCursor::End, |(id, _)| {
+                            ContextCursor::Target(Some(id.clone()), 0, 0)
+                        });
+                    return Ok((None, next));
+                };
+                let Some(fact) = target.workload_targets.get(fact_index) else {
+                    return Ok((
+                        None,
+                        ContextCursor::Target(Some(id.clone()), target_index + 1, 0),
+                    ));
+                };
+                let next = ContextCursor::Target(Some(id.clone()), target_index, fact_index + 1);
+                let record = matches(&target.tenant_id).then(|| {
+                    let entity = fact
+                        .kubernetes
+                        .as_ref()
+                        .map_or(fact.execution_set_id.as_str(), |identity| {
+                            identity.binding_id.as_str()
+                        });
+                    Self::encode_context(
+                        &inner.root,
+                        AnalysisContextKeyV1 {
+                            tenant_id: tenant,
+                            owner_id: "mithril-control/target".into(),
+                            entity_key: entity.as_bytes().to_vec(),
+                            lifetime_key: fact
+                                .workload_binding_generation_digest
+                                .as_bytes()
+                                .to_vec(),
+                            owner_revision: 1,
+                        },
+                        fact,
                     )
                 });
                 (record, next)
@@ -207,8 +265,133 @@ impl ControlStore {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::{
+        kubernetes_target, rollout_transaction, signed_artifact, source_revision,
+    };
     use super::*;
     use crate::TrustGenerationV1;
+
+    #[test]
+    fn control_context_retained_targets() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store_path = directory.path().join("control");
+        let data_path = directory.path().join("data");
+        let store = ControlStore::open(&store_path)?;
+        let data = Arc::new(AnalysisStore::open(&data_path)?);
+        let document = crate::PolicyDocumentV1::parse(
+            std::path::Path::new("policy-v1.yaml"),
+            include_bytes!("../../tests/fixtures/policy-v1.yaml"),
+        )?;
+        let source = source_revision(&document, crate::PolicySourceStateV1::Accepted, 1, '8')?;
+        let artifact = signed_artifact(&document, 1)?;
+        store.accept_compiled_source_revision(
+            source.clone(),
+            document.clone(),
+            artifact.clone(),
+        )?;
+        let mut target = kubernetes_target(
+            &source,
+            &document,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            1,
+            1,
+        )?;
+        let base = target.workload_targets[0].clone();
+        target.workload_targets.clear();
+        for index in 1..=18_u128 {
+            let mut fact = base.clone();
+            let id = uuid::Uuid::from_u128(index).to_string();
+            fact.execution_set_id = id.clone();
+            fact.pod_uid = id.clone();
+            fact.container_id = format!("containerd://{index}");
+            fact.kubernetes
+                .as_mut()
+                .ok_or("missing identity")?
+                .binding_id = id;
+            fact.workload_binding_generation_digest = crate::workload_target_fact_digest(&fact)?;
+            target.workload_targets.push(fact);
+        }
+        target.workload_targets.sort_by(|left, right| {
+            left.workload_binding_generation_digest
+                .cmp(&right.workload_binding_generation_digest)
+        });
+        target.workload_binding_generation_digests = target
+            .workload_targets
+            .iter()
+            .map(|fact| fact.workload_binding_generation_digest.clone())
+            .collect();
+        let facts = target.workload_targets.clone();
+        let rollout = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(target, None)],
+            crate::PolicyDeliveryOperationV1::Activate,
+            1,
+            1,
+            &ed25519_dalek::SigningKey::from_bytes(&[7; 32]),
+        )?;
+        store.create_rollout(
+            rollout.target_snapshot,
+            rollout.bundles,
+            rollout.rollout_states,
+        )?;
+        let authority = store.commit_index();
+        let tenant = uuid::Uuid::parse_str(&source.tenant_id)?.into_bytes();
+        let allowed = [AllowedNodeIdentity {
+            node_id: "node-a".into(),
+            certificate_sha256: "a".repeat(64),
+            tenant_id: source.tenant_id,
+        }];
+        let key = |fact: &crate::WorkloadTargetFactV1| -> std::result::Result<AnalysisContextKeyV1, Box<dyn std::error::Error>> {
+            Ok(AnalysisContextKeyV1 {
+                tenant_id: tenant,
+                owner_id: "mithril-control/target".into(),
+                entity_key: fact.kubernetes.as_ref().ok_or("missing identity")?.binding_id.as_bytes().to_vec(),
+                lifetime_key: fact.workload_binding_generation_digest.as_bytes().to_vec(),
+                owner_revision: 1,
+            })
+        };
+        let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
+        assert!(owner.reconcile()? <= 16);
+        assert!(data
+            .context_version(&key(facts.last().ok_or("missing fact")?)?)?
+            .is_none());
+        for _ in 0..4 {
+            assert!(owner.reconcile()? <= 16);
+        }
+        for fact in &facts {
+            let context = data
+                .context_version(&key(fact)?)?
+                .ok_or("missing retained target")?;
+            assert_eq!(
+                serde_json::from_slice::<crate::WorkloadTargetFactV1>(&context.body)?,
+                *fact
+            );
+            assert_eq!(context.sensitivity, ContextSensitivityV1::Tenant);
+            assert_eq!(context.valid_from_utc_ns, None);
+            assert_eq!(context.valid_until_utc_ns, None);
+            let mut foreign = context.key.clone();
+            foreign.tenant_id = [9; 16];
+            assert!(data.context_version(&foreign)?.is_none());
+        }
+        let before = data.meta()?;
+        assert_eq!(store.commit_index(), authority);
+        drop(owner);
+        drop(store);
+        drop(data);
+        let store = ControlStore::open(store_path)?;
+        let data = Arc::new(AnalysisStore::open(data_path)?);
+        let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
+        for _ in 0..4 {
+            assert!(owner.reconcile()? <= 16);
+        }
+        assert_eq!(data.meta()?, before);
+        assert_eq!(store.commit_index(), authority);
+        for fact in &facts {
+            assert!(data.context_version(&key(fact)?)?.is_some());
+        }
+        Ok(())
+    }
 
     #[test]
     fn control_context_retries_write() -> std::result::Result<(), Box<dyn std::error::Error>> {

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use erebor_telemetry::{error, info, init_stderr_logging, warn};
 use mithril_control::{
-    serve, serve_administrative_http, ControlConfig, ControlRuntimeParts, KubernetesAdmissionOwner,
+    serve, ClientListener, ControlConfig, ControlRuntimeParts, KubernetesAdmissionOwner,
 };
 
 #[derive(Parser)]
@@ -32,7 +32,7 @@ async fn run() -> mithril_control::Result<()> {
         listen: address,
         tls,
         control,
-        administrative_exec,
+        client,
         kubernetes_nodes,
         kubernetes_admission,
         data_error,
@@ -84,23 +84,27 @@ async fn run() -> mithril_control::Result<()> {
     };
     tokio::pin!(admission_server);
     // Required policy owner exits stop Control.
-    if let Some(administrative_exec) = administrative_exec {
+    if let Some(client) = client {
         let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let control_shutdown = shutdown.clone();
-        let administrative_shutdown = shutdown.clone();
+        let client_shutdown = shutdown.clone();
         let control_result = serve(address, &tls, control.clone(), async move {
             control_shutdown.notified().await;
         });
-        let administrative_result =
-            serve_administrative_http(administrative_exec, control, async move {
-                administrative_shutdown.notified().await;
-            });
+        let client_result = async move {
+            ClientListener::load(client, control)
+                .await?
+                .serve(async move {
+                    client_shutdown.notified().await;
+                })
+                .await
+        };
         tokio::select! {
             result = control_result => {
                 shutdown.notify_waiters();
                 result
             },
-            result = administrative_result => {
+            result = client_result => {
                 shutdown.notify_waiters();
                 result
             },

@@ -67,6 +67,14 @@ impl TraceTargetV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct TraceSelectionV1 {
+    pub target: String,
+    pub cluster: String,
+    pub container: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TraceRequestV1 {
     pub tenant_id: [u8; 16],
     pub request_id: [u8; 16],
@@ -75,6 +83,8 @@ pub struct TraceRequestV1 {
     #[serde(default)]
     pub unresolved: Vec<crate::TraceParticipantV1>,
     pub collection_seconds: u16,
+    pub selection: Option<TraceSelectionV1>,
+    pub finding_reference: Option<String>,
 }
 
 impl TraceRequestV1 {
@@ -91,6 +101,23 @@ impl TraceRequestV1 {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(selection) = &self.selection {
+            Self::require(!selection.target.is_empty(), "trace selection is empty")?;
+            for value in [&selection.target, &selection.cluster, &selection.container] {
+                Self::require(
+                    value.len() <= 256 && !value.chars().any(char::is_control),
+                    "trace selection is invalid",
+                )?;
+            }
+        }
+        if let Some(reference) = &self.finding_reference {
+            Self::require(
+                !reference.is_empty()
+                    && reference.len() <= 256
+                    && !reference.chars().any(char::is_control),
+                "trace finding reference is invalid",
+            )?;
+        }
         Self::require(
             self.tenant_id != [0; 16]
                 && self.request_id != [0; 16]

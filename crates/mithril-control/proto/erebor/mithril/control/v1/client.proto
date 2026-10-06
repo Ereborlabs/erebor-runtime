@@ -1,0 +1,367 @@
+syntax = "proto3";
+
+package erebor.mithril.control.v1;
+
+service AraphorClientService {
+  rpc Query(QueryRequest) returns (stream QueryFrame);
+  rpc SubmitTrace(SubmitTraceRequest) returns (TraceReceipt);
+  rpc GetTrace(GetTraceRequest) returns (TraceDetail);
+  rpc WatchTrace(WatchTraceRequest) returns (stream TraceFrame);
+  rpc CancelTrace(CancelTraceRequest) returns (CancelTraceReceipt);
+}
+
+service AraphorAdministrativeService {
+  rpc CreateAdministrativeExecRequest(AdministrativeExecDraftRequest) returns (AdministrativeExecDraft);
+  rpc PollAdministrativeExecRequest(AdministrativeExecPollRequest) returns (AdministrativeExecPoll);
+  rpc GetAdministrativeExecActivation(GetAdministrativeExecActivationRequest) returns (AdministrativeExecActivation);
+  rpc ApproveAdministrativeExec(ApproveAdministrativeExecRequest) returns (AdministrativeExecApproval);
+  rpc SubmitNodeDecommission(SubmitNodeDecommissionRequest) returns (ClientDecommissionStatus);
+  rpc GetNodeDecommission(GetNodeDecommissionRequest) returns (ClientDecommissionStatus);
+}
+
+message QueryRequest {
+  string sql = 1;
+  repeated QueryValue parameters = 2;
+  InputSelection selection = 3;
+  bool follow = 4;
+  bytes bookmark = 5;
+  optional uint64 duration_ns = 6 [jstype = JS_STRING];
+}
+
+message InputSelection {
+  string target = 1;
+  string cluster = 2;
+  string container = 3;
+  repeated string node_ids = 4;
+}
+
+message QueryValue {
+  oneof kind {
+    bool null = 1;
+    bool boolean = 2;
+    sint64 signed = 3 [jstype = JS_STRING];
+    uint64 unsigned = 4 [jstype = JS_STRING];
+    double real = 5;
+    string text = 6;
+    bytes binary = 7;
+    string integer128 = 8;
+    QueryDecimal decimal = 9;
+    QueryTimestamp timestamp = 10;
+    sint32 date = 11;
+    QueryTimestamp time = 12;
+    QueryInterval interval = 13;
+    string unsigned128 = 17;
+  }
+}
+
+message QueryTimestamp {
+  sint64 value = 1 [jstype = JS_STRING];
+  string unit = 2;
+}
+
+message QueryDecimal {
+  uint32 width = 1;
+  uint32 scale = 2;
+  string unscaled = 3;
+}
+
+message QueryInterval {
+  sint32 months = 1;
+  sint32 days = 2;
+  sint64 nanoseconds = 3 [jstype = JS_STRING];
+}
+
+enum QueryOperation {
+  QUERY_OPERATION_UNSPECIFIED = 0;
+  QUERY_OPERATION_APPEND = 1;
+  QUERY_OPERATION_REPLACE = 2;
+}
+
+message StorePosition {
+  uint64 commit_revision = 1 [jstype = JS_STRING];
+  uint32 ordinal = 2;
+}
+
+message QueryFrame {
+  uint32 schema_version = 1;
+  QueryOperation operation = 2;
+  bytes store_uuid = 3;
+  uint64 recovery_epoch = 4 [jstype = JS_STRING];
+  uint64 read_revision = 5 [jstype = JS_STRING];
+  bool clock_changed = 6;
+  repeated QueryCoverage coverage = 7;
+  oneof payload {
+    QueryMetadata metadata = 8;
+    QueryRows rows = 9;
+    bytes checkpoint = 10;
+    QueryHealth health = 11;
+    QueryError error = 12;
+    QueryTerminal terminal = 13;
+  }
+}
+
+message QueryColumn {
+  string name = 1;
+  string data_type = 2;
+  string units = 3;
+  string null_meaning = 4;
+  string join_keys = 5;
+  string owner = 6;
+  string readiness = 7;
+}
+
+message QueryMetadata {
+  repeated QueryColumn columns = 1;
+  uint64 evaluated_utc_ns = 2 [jstype = JS_STRING];
+  uint64 dependency_revision = 3 [jstype = JS_STRING];
+  uint64 row_limit = 4 [jstype = JS_STRING];
+  uint64 byte_limit = 5 [jstype = JS_STRING];
+  optional uint64 moving_resolution_ns = 6 [jstype = JS_STRING];
+  string resume_semantics = 7;
+}
+
+message QueryRow { repeated QueryValue values = 1; }
+message QueryRows {
+  repeated QueryRow rows = 1;
+  repeated StorePosition positions = 2;
+  bool limited = 3;
+  uint64 evaluated_utc_ns = 4 [jstype = JS_STRING];
+  repeated ContextKey missing_contexts = 5;
+}
+
+message ContextKey {
+  string owner_id = 1;
+  bytes entity_key = 2;
+  bytes lifetime_key = 3;
+  uint64 owner_revision = 4 [jstype = JS_STRING];
+}
+
+message SourceIdentity {
+  bytes tenant_id = 1;
+  string node_id = 2;
+  bytes node_boot_id = 3;
+  uint64 label_epoch = 4 [jstype = JS_STRING];
+  bytes source_id = 5;
+  uint64 source_epoch = 6 [jstype = JS_STRING];
+}
+
+message SourceGap {
+  uint64 first_cursor = 1 [jstype = JS_STRING];
+  uint64 last_cursor = 2 [jstype = JS_STRING];
+  uint64 commit_revision = 3 [jstype = JS_STRING];
+}
+
+message QueryCoverage {
+  SourceIdentity source = 1;
+  uint32 cpu_id = 2;
+  uint64 contiguous_cursor = 3 [jstype = JS_STRING];
+  uint64 coverage_revision = 4 [jstype = JS_STRING];
+  uint64 retained_floor = 5 [jstype = JS_STRING];
+  string state = 6;
+  repeated SourceGap expired = 7;
+  repeated SourceGap recovery = 8;
+  repeated SourceGap pending = 9;
+}
+
+message QueryHealth {
+  uint64 dependency_revision = 1 [jstype = JS_STRING];
+  bool write_ready = 2;
+  bool retention_healthy = 3;
+  bool intake_capacity = 4;
+  bool maintenance_capacity = 5;
+}
+
+message QueryError {
+  string code = 1;
+  string reason = 2;
+  bytes last_checkpoint = 3;
+  StorePosition position = 4;
+  StorePosition floor = 5;
+}
+
+message QueryTerminal {
+  string reason = 1;
+  bytes last_checkpoint = 2;
+}
+
+message SubmitTraceRequest {
+  bytes idempotency_key = 1;
+  InputSelection selection = 2;
+  oneof source {
+    bytes script = 3;
+    string recipe = 4;
+  }
+  uint32 collection_seconds = 5;
+  string finding_reference = 6;
+}
+
+message TraceReceipt {
+  bytes trace_id = 1;
+  bytes source_sha256 = 2;
+  uint64 accepted_unix_ns = 3 [jstype = JS_STRING];
+  uint64 deadline_unix_ns = 4 [jstype = JS_STRING];
+  bool cancel_requested = 5;
+}
+
+message GetTraceRequest { bytes trace_id = 1; }
+message TraceDetail {
+  TraceReceipt receipt = 1;
+  bytes source = 2;
+  string recipe = 3;
+  uint32 collection_seconds = 4;
+  string principal = 5;
+  repeated TraceTarget targets = 6;
+  repeated TraceParticipant unresolved = 7;
+  InputSelection requested = 8;
+  string finding_reference = 9;
+  TraceLimits limits = 10;
+}
+
+message TraceLimits {
+  uint32 source_bytes = 1;
+  uint32 frame_bytes = 2;
+  uint32 output_bytes = 3;
+  uint32 frame_count = 4;
+  uint32 target_count = 5;
+  uint32 collection_seconds = 6;
+}
+
+message TraceTarget {
+  uint32 index = 1;
+  string node_id = 2;
+  bytes node_boot_id = 3;
+  string cluster_uid = 4;
+  string namespace_uid = 5;
+  string pod_uid = 6;
+  string container_id = 7;
+  string container_name = 8;
+  bytes binding_id = 9;
+  uint64 cgroup_id = 10 [jstype = JS_STRING];
+  uint64 container_generation = 11 [jstype = JS_STRING];
+  uint64 label_epoch = 12 [jstype = JS_STRING];
+  string namespace_name = 13;
+  string pod_name = 14;
+}
+
+message TraceParticipant {
+  bytes fact_digest = 1;
+  string state = 2;
+}
+
+message WatchTraceRequest {
+  bytes trace_id = 1;
+  bytes bookmark = 2;
+}
+
+message TraceFrame {
+  uint32 schema_version = 1;
+  bytes trace_id = 2;
+  uint64 commit_revision = 3 [jstype = JS_STRING];
+  uint32 ordinal = 4;
+  bytes execution_id = 5;
+  uint64 sequence = 6 [jstype = JS_STRING];
+  uint32 target_index = 7;
+  bytes bookmark = 8;
+  bytes store_uuid = 16;
+  uint64 recovery_epoch = 17 [jstype = JS_STRING];
+  uint64 read_revision = 18 [jstype = JS_STRING];
+  repeated QueryCoverage coverage = 19;
+  oneof payload {
+    TraceDetail metadata = 9;
+    TraceOutput output = 10;
+    TraceTerminal terminal = 11;
+    TraceResult result = 12;
+    TraceCheckpoint checkpoint = 13;
+    QueryError error = 14;
+    QueryHealth health = 15;
+  }
+}
+
+message TraceCheckpoint {}
+
+message TraceOutput {
+  string kind = 1;
+  bytes bytes = 2;
+}
+
+message TraceTerminal {
+  string reason = 1;
+  bool output_incomplete = 2;
+  optional uint64 kernel_lost_events = 3 [jstype = JS_STRING];
+  optional uint64 ready_at_unix_ns = 4 [jstype = JS_STRING];
+  optional sint32 exit_code = 5;
+  bool forced_kill = 6;
+  string cleanup = 7;
+  uint64 last_sequence = 8 [jstype = JS_STRING];
+  uint64 output_bytes = 9 [jstype = JS_STRING];
+}
+
+message TraceResult {
+  bool complete = 1;
+  bool output_incomplete = 2;
+  bool cleanup_complete = 3;
+  repeated uint32 missing_targets = 4;
+}
+
+message CancelTraceRequest { bytes trace_id = 1; }
+message CancelTraceReceipt {
+  bytes trace_id = 1;
+  bool cancel_requested = 2;
+}
+
+message AdministrativeExecDraftRequest {
+  string namespace = 1;
+  string pod = 2;
+  string container = 3;
+  repeated string argv = 4;
+  bool stdin = 5;
+  bool stdout = 6;
+  bool stderr = 7;
+  bool tty = 8;
+  string approved_role_id = 9;
+}
+
+message AdministrativeExecDraft {
+  string activation_url = 1;
+  string activation_code = 2;
+  string poll_token = 3;
+  sint64 expires_at_utc_ns = 4 [jstype = JS_STRING];
+}
+
+message AdministrativeExecPollRequest { string poll_token = 1; }
+message AdministrativeExecPoll {
+  string state = 1;
+  optional string credential = 2;
+  optional string approval_id = 3;
+  optional sint64 expires_at_utc_ns = 4 [jstype = JS_STRING];
+}
+
+message GetAdministrativeExecActivationRequest { string activation_token = 1; }
+message AdministrativeExecActivation {
+  string namespace = 1;
+  string pod = 2;
+  string container = 3;
+  repeated string argv = 4;
+  string state = 5;
+  sint64 expires_at_utc_ns = 6 [jstype = JS_STRING];
+  bool authenticated = 7;
+  string approver = 8;
+  string cluster_uid = 9;
+  string pod_uid = 10;
+  string resolved_executable = 11;
+  string stream_flags = 12;
+  string approved_role_id = 13;
+}
+
+message ApproveAdministrativeExecRequest {
+  string activation_token = 1;
+}
+
+message AdministrativeExecApproval { bool approved = 1; }
+message SubmitNodeDecommissionRequest { bytes artifact = 1; }
+message GetNodeDecommissionRequest { string artifact_sha256 = 1; }
+message ClientDecommissionStatus {
+  string artifact_sha256 = 1;
+  string state = 2;
+  string reason_code = 3;
+}

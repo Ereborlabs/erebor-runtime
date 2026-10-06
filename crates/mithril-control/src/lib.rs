@@ -1,5 +1,8 @@
 mod administrative_exec;
 mod administrative_http;
+mod client_auth;
+mod client_grpc;
+mod client_listener;
 mod config;
 mod decommission;
 mod discovery;
@@ -15,15 +18,20 @@ mod trust;
 pub use administrative_exec::*;
 pub use administrative_http::*;
 pub use araphor_observability::{
-    TraceAcceptedV1, TraceAcknowledgementV1, TraceApprovalV1, TraceBatchV1, TraceCleanupV1,
-    TraceDispatchV1, TraceErrorCodeV1, TraceExchangeReplyV1, TraceExchangeV1,
-    TraceExecutionGrantV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1, TraceMeasurementV1,
-    TraceOwner, TraceParticipantStateV1, TraceParticipantV1, TraceReadAccessV1,
-    TraceRecipeManifestV1, TraceRecipeV1, TraceRequestV1, TraceResolveV1, TraceResolvedV1,
-    TraceSourceV1, TraceTargetV1, TraceTerminalReasonV1, TraceTerminalV1, TraceUploadV1,
-    MAX_TRACE_FRAME_BYTES, MAX_TRACE_GRPC_MESSAGE_BYTES, MAX_TRACE_OUTPUT_BYTES,
-    MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
+    TraceAcceptedV1, TraceAccessV1, TraceAcknowledgementV1, TraceBatchV1, TraceCleanupV1,
+    TraceDispatchV1, TraceErrorCodeV1, TraceExchangeReplyV1, TraceExchangeV1, TraceFrameKindV1,
+    TraceFrameV1, TraceIdentityV1, TraceMeasurementV1, TraceOwner, TraceParticipantStateV1,
+    TraceParticipantV1, TraceRecipeManifestV1, TraceRecipeV1, TraceRequestV1, TraceResolveV1,
+    TraceResolvedV1, TraceSelectionV1, TraceSourceV1, TraceTargetV1, TraceTerminalReasonV1,
+    TraceTerminalV1, TraceUploadV1, MAX_TRACE_FRAME_BYTES, MAX_TRACE_GRPC_MESSAGE_BYTES,
+    MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
 };
+pub use client_auth::{
+    ClientAccess, ClientAuth, ClientAuthConfig, ClientLogin, ClientSession, InvestigateGrant,
+    OidcConfig, OidcOwner, ServiceAuthConfig,
+};
+pub use client_grpc::{ClientGrpcConfig, ClientGrpcOwner, ClientStream};
+pub use client_listener::{ClientListener, ClientListenerConfig};
 pub use config::{ControlConfig, ControlRuntimeParts, EvidenceAdmissionLimits};
 pub use decommission::*;
 pub use discovery::*;

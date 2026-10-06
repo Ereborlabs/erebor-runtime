@@ -4546,7 +4546,7 @@ mod tests {
         Ok(())
     }
 
-    fn signed_artifact(
+    pub(super) fn signed_artifact(
         document: &PolicyDocumentV1,
         issuer_sequence: u64,
     ) -> crate::Result<ProfileCandidateArtifactV1> {
@@ -4574,7 +4574,7 @@ mod tests {
         )
     }
 
-    fn source_revision(
+    pub(super) fn source_revision(
         document: &PolicyDocumentV1,
         state: PolicySourceStateV1,
         generation: u64,
@@ -4609,7 +4609,7 @@ mod tests {
         }
     }
 
-    fn kubernetes_target(
+    pub(super) fn kubernetes_target(
         source: &PolicySourceRevisionV1,
         document: &PolicyDocumentV1,
         kubernetes_node_uid: &str,
@@ -4843,7 +4843,7 @@ mod tests {
         Ok((state, advance, candidate_ids))
     }
 
-    fn rollout_transaction(
+    pub(super) fn rollout_transaction(
         source: &PolicySourceRevisionV1,
         artifact: &ProfileCandidateArtifactV1,
         targets: Vec<(PolicyTargetV1, Option<String>)>,

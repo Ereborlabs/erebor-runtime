@@ -1,13 +1,5 @@
-use std::sync::Arc;
-
 use crate::error::DecommissionSnafu;
 use crate::{ControlPlane, Result, SignatureAlgorithmV1};
-use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use minicbor::{Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -57,11 +49,6 @@ pub struct NodeDecommissionStatusV1 {
 pub(crate) struct NodeDecommissionHttpOwner {
     cluster_uid: [u8; 16],
     control: ControlPlane,
-}
-
-#[derive(Serialize)]
-struct NodeDecommissionProblemV1 {
-    error: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -119,49 +106,6 @@ impl NodeDecommissionHttpOwner {
         artifact_sha256: &str,
     ) -> std::result::Result<NodeDecommissionStatusV1, tonic::Status> {
         self.control.node_decommission_status(artifact_sha256)
-    }
-
-    pub(crate) fn router(self: Arc<Self>) -> Router {
-        Router::new()
-            .route("/v1/node-decommissions", post(Self::create))
-            .route("/v1/node-decommissions/:artifact_sha256", get(Self::get))
-            .layer(DefaultBodyLimit::max(MAX_DECOMMISSION_ARTIFACT_BYTES))
-            .with_state(self)
-    }
-
-    async fn create(State(owner): State<Arc<Self>>, artifact: Bytes) -> Response {
-        match owner.submit(artifact.to_vec()).await {
-            Ok(status) => (StatusCode::ACCEPTED, Json(status)).into_response(),
-            Err(status) => Self::tonic_response(status),
-        }
-    }
-
-    async fn get(State(owner): State<Arc<Self>>, Path(artifact_sha256): Path<String>) -> Response {
-        match owner.status(&artifact_sha256) {
-            Ok(status) => (StatusCode::OK, Json(status)).into_response(),
-            Err(status) => Self::tonic_response(status),
-        }
-    }
-
-    fn tonic_response(status: tonic::Status) -> Response {
-        let http_status = match status.code() {
-            tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
-            tonic::Code::PermissionDenied => StatusCode::FORBIDDEN,
-            tonic::Code::Unauthenticated => StatusCode::UNAUTHORIZED,
-            tonic::Code::NotFound => StatusCode::NOT_FOUND,
-            tonic::Code::AlreadyExists | tonic::Code::FailedPrecondition => StatusCode::CONFLICT,
-            tonic::Code::Unavailable | tonic::Code::DeadlineExceeded => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        (
-            http_status,
-            Json(NodeDecommissionProblemV1 {
-                error: status.message().to_owned(),
-            }),
-        )
-            .into_response()
     }
 }
 

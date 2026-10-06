@@ -1,64 +1,46 @@
 use std::collections::BTreeMap;
-use std::future::Future;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use axum_server::tls_rustls::RustlsConfig;
 use erebor_interceptor_abi::Id128V1;
+use erebor_runtime_ipc::araphor::{
+    AdministrativeExecActivation, AdministrativeExecDraft, AdministrativeExecDraftRequest,
+    AdministrativeExecPoll,
+};
 use k8s_openapi::api::authentication::v1::{TokenReview, TokenReviewStatus, UserInfo};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::Api;
 use kube::core::admission::{AdmissionResponse, AdmissionReview, Operation};
 use kube::core::DynamicObject;
 use kube::{Client, ResourceExt as _};
-use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
-use openidconnect::{
-    AccessTokenHash, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
-    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, OAuth2TokenResponse as _, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope,
-};
+use openidconnect::RedirectUrl;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ensure;
 use uuid::Uuid;
 
+use crate::client_auth::OidcFlow as OidcProof;
 use crate::error::AdministrativeApprovalSnafu;
 use crate::{
     AdministrativeApprovalConfigV1, AdministrativeApprovalOwner, AdministrativeExecCredentialV1,
-    AdministrativeExecRequestV1, AdministrativeExecResolution, ControlPlane,
-    NodeDecommissionHttpOwner, Result,
+    AdministrativeExecRequestV1, AdministrativeExecResolution, ClientAuth, ClientListener,
+    ControlPlane, NodeDecommissionHttpOwner, OidcOwner, Result,
 };
+
+mod grpc;
 
 const APPROVAL_EXTRA_KEY: &str = "mithril.ereborlabs.com/approval-id";
 const MAX_PENDING_REQUESTS: usize = 4096;
 
-type ConfiguredOidcClient = CoreClient<
-    EndpointSet,
-    EndpointNotSet,
-    EndpointNotSet,
-    EndpointNotSet,
-    EndpointMaybeSet,
-    EndpointMaybeSet,
->;
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AdministrativeHttpConfigV1 {
-    pub listen: SocketAddr,
-    pub public_base_url: String,
-    pub tls_certificate_path: PathBuf,
-    pub tls_private_key_path: PathBuf,
-    pub oidc_issuer_url: String,
-    pub oidc_client_id: String,
-    pub oidc_client_secret_path: Option<PathBuf>,
-    pub oidc_ca_path: Option<PathBuf>,
+pub struct AdministrativeConfig {
     pub kubernetes_audience: String,
     pub kubernetes_webhook_token_path: PathBuf,
     pub node_ids_by_kubernetes_name: BTreeMap<String, String>,
@@ -66,24 +48,10 @@ pub struct AdministrativeHttpConfigV1 {
     pub approval: AdministrativeApprovalConfigV1,
 }
 
-impl AdministrativeHttpConfigV1 {
+impl AdministrativeConfig {
     pub(crate) fn validate(&self) -> Result<()> {
-        let public_url = reqwest::Url::parse(&self.public_base_url).ok();
         ensure!(
-            public_url.as_ref().is_some_and(|url| {
-                url.scheme() == "https"
-                    && url.host_str().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.path() == "/"
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-            }) && !self.public_base_url.ends_with('/')
-                && !self.oidc_client_id.is_empty()
-                && self
-                    .oidc_ca_path
-                    .as_ref()
-                    .is_none_or(|path| path.is_absolute())
+            self.kubernetes_webhook_token_path.is_absolute()
                 && !self.kubernetes_audience.is_empty()
                 && !self.node_ids_by_kubernetes_name.is_empty()
                 && (1..=300).contains(&self.request_lifetime_seconds)
@@ -94,46 +62,11 @@ impl AdministrativeHttpConfigV1 {
                             .is_ok_and(|uuid| uuid.hyphenated().to_string() == *id)
                 }),
             AdministrativeApprovalSnafu {
-                reason: "administrative HTTPS configuration is invalid",
+                reason: "administrative configuration is invalid",
             }
         );
         Ok(())
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdministrativeExecDraftRequestV1 {
-    pub namespace: String,
-    pub pod: String,
-    pub container: String,
-    pub argv: Vec<String>,
-    pub stdin: bool,
-    pub stdout: bool,
-    pub stderr: bool,
-    pub tty: bool,
-    pub approved_role_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdministrativeExecDraftResponseV1 {
-    pub activation_url: String,
-    pub activation_code: String,
-    pub poll_token: String,
-    pub expires_at_utc_ns: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdministrativeExecPollResponseV1 {
-    pub state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approval_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at_utc_ns: Option<i64>,
 }
 
 pub struct AdministrativeHttpOwner {
@@ -141,17 +74,14 @@ pub struct AdministrativeHttpOwner {
     approval: AdministrativeApprovalOwner,
     decommission: Arc<NodeDecommissionHttpOwner>,
     kube: Client,
-    provider: CoreProviderMetadata,
-    http: reqwest::Client,
+    oidc: Arc<OidcOwner>,
     state: Mutex<HttpState>,
 }
 
 struct PreparedHttpConfig {
     public_base_url: String,
     cluster_uid: String,
-    oidc_client_id: String,
-    oidc_client_secret: Option<String>,
-    redirect_url: String,
+    redirect_url: RedirectUrl,
     kubernetes_audience: String,
     kubernetes_webhook_token: String,
     node_ids_by_kubernetes_name: BTreeMap<String, String>,
@@ -167,11 +97,15 @@ struct HttpState {
 }
 
 struct Draft {
+    pod_name: String,
     request: AdministrativeExecRequestV1,
     resolution: AdministrativeExecResolution,
     expires_at_utc_ns: i64,
     credential: Option<AdministrativeExecCredentialV1>,
     authenticated_principal: Option<Id128V1>,
+    approver: Option<String>,
+    browser: Option<String>,
+    csrf: Option<String>,
     authentication_started: bool,
     approval_started: bool,
     delivered: bool,
@@ -180,13 +114,13 @@ struct Draft {
 struct OidcFlow {
     draft_id: Id128V1,
     activation_token: String,
-    nonce: String,
-    pkce_verifier: String,
+    proof: OidcProof,
+    browser: String,
 }
 
 struct OidcCompletion {
     activation_token: String,
-    display: String,
+    csrf: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,50 +164,27 @@ struct AdmissionIdentity {
 }
 
 impl AdministrativeHttpOwner {
-    pub async fn load(config: &AdministrativeHttpConfigV1, control: ControlPlane) -> Result<Self> {
+    pub async fn load(
+        config: &AdministrativeConfig,
+        control: ControlPlane,
+        oidc: Arc<OidcOwner>,
+        origin: &str,
+    ) -> Result<Self> {
         config.validate()?;
-        let mut http = reqwest::ClientBuilder::new().redirect(reqwest::redirect::Policy::none());
-        if let Some(path) = &config.oidc_ca_path {
-            let pem = std::fs::read(path).map_err(|error| {
-                approval_error(format!("read OIDC CA `{}`: {error}", path.display()))
-            })?;
-            let certificate = reqwest::Certificate::from_pem(&pem)
-                .map_err(|error| approval_error(format!("parse OIDC CA: {error}")))?;
-            http = http.add_root_certificate(certificate);
-        }
-        let http = http
-            .build()
-            .map_err(|error| approval_error(format!("build OIDC HTTP client: {error}")))?;
-        let provider = CoreProviderMetadata::discover_async(
-            IssuerUrl::new(config.oidc_issuer_url.clone())
-                .map_err(|error| approval_error(format!("OIDC issuer URL is invalid: {error}")))?,
-            &http,
-        )
-        .await
-        .map_err(|error| approval_error(format!("OIDC discovery failed: {error}")))?;
-        let oidc_client_secret = config
-            .oidc_client_secret_path
-            .as_ref()
-            .map(|path| {
-                std::fs::read_to_string(path)
-                    .map(|value| value.trim().to_owned())
-                    .map_err(|error| {
-                        approval_error(format!(
-                            "read OIDC client secret `{}`: {error}",
-                            path.display()
-                        ))
-                    })
-            })
-            .transpose()?;
-        if oidc_client_secret.as_deref().is_some_and(str::is_empty) {
-            return AdministrativeApprovalSnafu {
-                reason: "OIDC client secret is empty",
-            }
-            .fail();
-        }
         let kube = Client::try_default()
             .await
             .map_err(|error| approval_error(format!("load Kubernetes client: {error}")))?;
+        Self::from_client(config, control, oidc, origin, kube)
+    }
+
+    pub fn from_client(
+        config: &AdministrativeConfig,
+        control: ControlPlane,
+        oidc: Arc<OidcOwner>,
+        origin: &str,
+        kube: Client,
+    ) -> Result<Self> {
+        config.validate()?;
         let kubernetes_webhook_token =
             std::fs::read_to_string(&config.kubernetes_webhook_token_path)
                 .map(|value| value.trim().to_owned())
@@ -294,11 +205,11 @@ impl AdministrativeHttpOwner {
         );
         Ok(Self {
             config: PreparedHttpConfig {
-                public_base_url: config.public_base_url.clone(),
+                public_base_url: origin.to_owned(),
                 cluster_uid: config.approval.cluster_uid.clone(),
-                oidc_client_id: config.oidc_client_id.clone(),
-                oidc_client_secret,
-                redirect_url: format!("{}/oidc/callback", config.public_base_url),
+                redirect_url: RedirectUrl::new(format!("{origin}/oidc/callback")).map_err(
+                    |error| approval_error(format!("OIDC redirect URL is invalid: {error}")),
+                )?,
                 kubernetes_audience: config.kubernetes_audience.clone(),
                 kubernetes_webhook_token,
                 node_ids_by_kubernetes_name: config.node_ids_by_kubernetes_name.clone(),
@@ -313,63 +224,39 @@ impl AdministrativeHttpOwner {
                 control,
             )?),
             kube,
-            provider,
-            http,
+            oidc,
             state: Mutex::new(HttpState::default()),
         })
     }
 
-    fn router(self: Arc<Self>) -> Router {
-        let decommission = self.decommission.clone().router();
+    pub(crate) fn callbacks(self: Arc<Self>) -> Router {
         let authentication_path = format!(
             "/kubernetes/{}/authenticate",
             self.config.kubernetes_webhook_token
         );
         let admission_path = format!("/kubernetes/{}/admit", self.config.kubernetes_webhook_token);
         Router::new()
-            .route(
-                "/v1/administrative-exec/requests",
-                post(Self::create_request),
-            )
-            .route(
-                "/v1/administrative-exec/requests/:poll_token",
-                get(Self::poll_request),
-            )
             .route("/activate/:activation_token", get(Self::activation_page))
             .route(
                 "/activate/:activation_token/authorize",
                 get(Self::begin_authorization),
-            )
-            .route(
-                "/activate/:activation_token/approve",
-                post(Self::approve_request),
             )
             .route("/oidc/callback", get(Self::oidc_callback))
             .route(&authentication_path, post(Self::token_review))
             .route(&admission_path, post(Self::admission_review))
             .layer(DefaultBodyLimit::max(64 * 1024))
             .with_state(self)
-            .merge(decommission)
-    }
-
-    async fn create_request(
-        State(owner): State<Arc<Self>>,
-        Json(request): Json<AdministrativeExecDraftRequestV1>,
-    ) -> Response {
-        match owner.create_draft(request).await {
-            Ok(response) => (StatusCode::CREATED, Json(response)).into_response(),
-            Err(error) => problem(StatusCode::BAD_REQUEST, error),
-        }
     }
 
     async fn create_draft(
         &self,
-        request: AdministrativeExecDraftRequestV1,
-    ) -> Result<AdministrativeExecDraftResponseV1> {
+        request: AdministrativeExecDraftRequest,
+    ) -> Result<AdministrativeExecDraft> {
         validate_draft(&request)?;
         let target = self
             .live_pod_target(&request.namespace, &request.pod, &request.container)
             .await?;
+        let pod_name = request.pod.clone();
         let request = AdministrativeExecRequestV1 {
             node_id: target.node_id,
             namespace: target.namespace,
@@ -414,17 +301,21 @@ impl AdministrativeHttpOwner {
         state.drafts.insert(
             draft_id,
             Draft {
+                pod_name,
                 request,
                 resolution,
                 expires_at_utc_ns,
                 credential: None,
                 authenticated_principal: None,
+                approver: None,
+                browser: None,
+                csrf: None,
                 authentication_started: false,
                 approval_started: false,
                 delivered: false,
             },
         );
-        Ok(AdministrativeExecDraftResponseV1 {
+        Ok(AdministrativeExecDraft {
             activation_url: format!(
                 "{}/activate/{activation_token}",
                 self.config.public_base_url
@@ -435,69 +326,47 @@ impl AdministrativeHttpOwner {
         })
     }
 
-    async fn poll_request(
-        State(owner): State<Arc<Self>>,
-        Path(poll_token): Path<String>,
-    ) -> Response {
-        let now = match current_utc_ns() {
-            Ok(value) => value,
-            Err(error) => return problem(StatusCode::INTERNAL_SERVER_ERROR, error),
-        };
-        let mut state = match owner.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                return problem(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    approval_error("administrative HTTP state is poisoned"),
-                );
-            }
-        };
+    fn poll_draft(
+        &self,
+        token: &str,
+    ) -> std::result::Result<AdministrativeExecPoll, tonic::Status> {
+        let now = current_utc_ns().map_err(Self::status)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| tonic::Status::unavailable("administrative state is unavailable"))?;
         state.retain_live(now);
-        let Some(draft_id) = state
+        let id = state
             .poll_tokens
-            .get(&digest(poll_token.as_bytes()))
+            .get(&digest(token.as_bytes()))
             .copied()
-        else {
-            return problem(
-                StatusCode::NOT_FOUND,
-                approval_error("administrative request is missing or expired"),
-            );
-        };
-        let Some(draft) = state.drafts.get_mut(&draft_id) else {
-            return problem(
-                StatusCode::NOT_FOUND,
-                approval_error("administrative request is missing"),
-            );
-        };
+            .ok_or_else(|| {
+                tonic::Status::not_found("administrative request is absent or expired")
+            })?;
+        let draft = state
+            .drafts
+            .get_mut(&id)
+            .ok_or_else(|| tonic::Status::not_found("administrative request is absent"))?;
         if draft.delivered {
-            return problem(
-                StatusCode::GONE,
-                approval_error("administrative credential was already delivered"),
-            );
+            return Err(tonic::Status::failed_precondition(
+                "administrative credential was already delivered",
+            ));
         }
         let Some(credential) = draft.credential.take() else {
-            return (
-                StatusCode::ACCEPTED,
-                Json(AdministrativeExecPollResponseV1 {
-                    state: "PENDING".to_owned(),
-                    credential: None,
-                    approval_id: None,
-                    expires_at_utc_ns: Some(draft.expires_at_utc_ns),
-                }),
-            )
-                .into_response();
+            return Ok(AdministrativeExecPoll {
+                state: "PENDING".into(),
+                credential: None,
+                approval_id: None,
+                expires_at_utc_ns: Some(draft.expires_at_utc_ns),
+            });
         };
         draft.delivered = true;
-        (
-            StatusCode::OK,
-            Json(AdministrativeExecPollResponseV1 {
-                state: "APPROVED".to_owned(),
-                credential: Some(credential.credential),
-                approval_id: Some(id_string(credential.approval_id)),
-                expires_at_utc_ns: Some(credential.expires_at_utc_ns),
-            }),
-        )
-            .into_response()
+        Ok(AdministrativeExecPoll {
+            state: "APPROVED".into(),
+            credential: Some(credential.credential),
+            approval_id: Some(id_string(credential.approval_id)),
+            expires_at_utc_ns: Some(credential.expires_at_utc_ns),
+        })
     }
 
     async fn activation_page(
@@ -510,52 +379,79 @@ impl AdministrativeHttpOwner {
         }
     }
 
-    fn render_activation(&self, activation_token: &str) -> Result<String> {
-        let now = current_utc_ns()?;
+    fn render_activation(&self, token: &str) -> Result<String> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| approval_error("administrative HTTP state is poisoned"))?;
-        state.retain_live(now);
-        let draft_id = state
+            .map_err(|_| approval_error("administrative state is unavailable"))?;
+        state.retain_live(current_utc_ns()?);
+        ensure!(
+            state
+                .activation_tokens
+                .contains_key(&digest(token.as_bytes())),
+            AdministrativeApprovalSnafu {
+                reason: "administrative activation is absent or expired"
+            }
+        );
+        Ok(format!(
+            "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Araphor approval</title>\
+             <link rel=stylesheet href=\"/assets/administrative.css\">\
+             <main id=administrative-root><h1>Review one administrative exec</h1>\
+             <p>Loading the exact approved request.</p>\
+             <p><a href=\"/activate/{}/authorize\">Sign in to review</a></p></main>\
+             <script type=module src=\"/assets/administrative.js\"></script></html>",
+            html_escape(token),
+        ))
+    }
+
+    fn activation(
+        &self,
+        token: &str,
+        headers: &HeaderMap,
+    ) -> std::result::Result<AdministrativeExecActivation, tonic::Status> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| tonic::Status::unavailable("administrative state is unavailable"))?;
+        state.retain_live(current_utc_ns().map_err(Self::status)?);
+        let id = state
             .activation_tokens
-            .get(&digest(activation_token.as_bytes()))
+            .get(&digest(token.as_bytes()))
             .copied()
-            .ok_or_else(|| approval_error("administrative activation is missing or expired"))?;
+            .ok_or_else(|| {
+                tonic::Status::not_found("administrative activation is absent or expired")
+            })?;
         let draft = state
             .drafts
-            .get(&draft_id)
-            .ok_or_else(|| approval_error("administrative draft is missing"))?;
+            .get(&id)
+            .ok_or_else(|| tonic::Status::not_found("administrative draft is absent"))?;
+        if draft.authenticated_principal.is_some() {
+            draft.browser(headers, &self.config.public_base_url, false)?;
+        }
         let resolution = &draft.resolution;
-        let argv = resolution
-            .argv
-            .iter()
-            .map(|value| html_escape(&String::from_utf8_lossy(value)))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let path = resolution
-            .resolved_executable
-            .as_ref()
-            .map(|value| html_escape(&String::from_utf8_lossy(&value.resolved_display_path)))
-            .unwrap_or_else(|| "unavailable".to_owned());
-        Ok(format!(
-            "<!doctype html><meta charset=utf-8><title>Mithril administrative exec</title>\
-             <h1>Review one administrative exec</h1>\
-             <dl><dt>Cluster</dt><dd>{}</dd><dt>Namespace</dt><dd>{}</dd><dt>Pod UID</dt><dd>{}</dd>\
-             <dt>Container</dt><dd>{}</dd><dt>Command</dt><dd><code>{argv}</code></dd>\
-             <dt>Resolved executable</dt><dd><code>{path}</code></dd>\
-             <dt>Streams</dt><dd>{}</dd><dt>Role</dt><dd>{}</dd></dl>\
-             <p>Risk: the first restricted runtime root with the same live container, executable, and arguments can consume the approval. Linux cannot compare the Kubernetes stream settings.</p>\
-             <p>Sign in first. The next page shows the authenticated approver before approval.</p>\
-             <p><a href=\"/activate/{}/authorize\">Sign in to review</a></p>",
-            html_escape(&self.config.cluster_uid),
-            html_escape(&String::from_utf8_lossy(&resolution.namespace)),
-            html_escape(&String::from_utf8_lossy(&resolution.pod_uid)),
-            html_escape(&String::from_utf8_lossy(&resolution.container_name)),
-            resolution.stream_flags,
-            html_escape(&resolution.approved_role_id),
-            html_escape(activation_token),
-        ))
+        Ok(AdministrativeExecActivation {
+            namespace: String::from_utf8_lossy(&resolution.namespace).into_owned(),
+            pod: draft.pod_name.clone(),
+            pod_uid: String::from_utf8_lossy(&resolution.pod_uid).into_owned(),
+            container: String::from_utf8_lossy(&resolution.container_name).into_owned(),
+            argv: resolution
+                .argv
+                .iter()
+                .map(|value| String::from_utf8_lossy(value).into_owned())
+                .collect(),
+            state: draft.activation_state().into(),
+            expires_at_utc_ns: draft.expires_at_utc_ns,
+            authenticated: draft.authenticated_principal.is_some(),
+            approver: draft.approver.clone().unwrap_or_default(),
+            cluster_uid: self.config.cluster_uid.clone(),
+            resolved_executable: resolution
+                .resolved_executable
+                .as_ref()
+                .map(|value| String::from_utf8_lossy(&value.resolved_display_path).into_owned())
+                .unwrap_or_else(|| "unavailable".into()),
+            stream_flags: resolution.stream_flags.to_string(),
+            approved_role_id: resolution.approved_role_id.clone(),
+        })
     }
 
     async fn begin_authorization(
@@ -563,12 +459,19 @@ impl AdministrativeHttpOwner {
         Path(activation_token): Path<String>,
     ) -> Response {
         match owner.authorization_url(&activation_token) {
-            Ok(url) => Redirect::to(&url).into_response(),
+            Ok((url, browser)) => {
+                let mut response = Redirect::to(&url).into_response();
+                match ClientListener::cookie(&mut response, "araphor-approval", &browser, true, 300)
+                {
+                    Ok(()) => response,
+                    Err(error) => problem(StatusCode::INTERNAL_SERVER_ERROR, error),
+                }
+            }
             Err(error) => problem(StatusCode::BAD_REQUEST, error),
         }
     }
 
-    fn authorization_url(&self, activation_token: &str) -> Result<String> {
+    fn authorization_url(&self, activation_token: &str) -> Result<(String, String)> {
         let now = current_utc_ns()?;
         let draft_id = {
             let mut state = self
@@ -582,16 +485,7 @@ impl AdministrativeHttpOwner {
                 .copied()
                 .ok_or_else(|| approval_error("administrative activation is missing or expired"))?
         };
-        let client = self.oidc_client()?;
-        let csrf = CsrfToken::new(random_secret());
-        let nonce = Nonce::new(random_secret());
-        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-        let (url, csrf, nonce) = client
-            .authorize_url(CoreAuthenticationFlow::AuthorizationCode, || csrf, || nonce)
-            .add_scope(Scope::new("email".to_owned()))
-            .add_scope(Scope::new("profile".to_owned()))
-            .set_pkce_challenge(challenge)
-            .url();
+        let (url, csrf, proof) = self.oidc.begin(&self.config.redirect_url);
         let mut state = self
             .state
             .lock()
@@ -615,96 +509,97 @@ impl AdministrativeHttpOwner {
             }
         );
         draft.authentication_started = true;
+        let browser = random_secret();
+        draft.browser = Some(browser.clone());
         state.oidc_flows.insert(
             csrf.secret().clone(),
             OidcFlow {
                 draft_id,
                 activation_token: activation_token.to_owned(),
-                nonce: nonce.secret().clone(),
-                pkce_verifier: verifier.secret().clone(),
+                proof,
+                browser: browser.clone(),
             },
         );
-        Ok(url.to_string())
+        Ok((url, browser))
     }
 
     async fn oidc_callback(
         State(owner): State<Arc<Self>>,
+        headers: HeaderMap,
         Query(query): Query<OidcCallbackQuery>,
     ) -> Response {
-        match owner.complete_oidc(query).await {
-            Ok(completion) => owner
-                .render_confirmation(&completion.activation_token, &completion.display)
-                .map(Html)
-                .map(IntoResponse::into_response)
-                .unwrap_or_else(|error| problem(StatusCode::BAD_REQUEST, error)),
+        let browser = match ClientAuth::cookie(&headers, "araphor-approval") {
+            Ok(Some(value)) => value,
+            _ => return StatusCode::UNAUTHORIZED.into_response(),
+        };
+        match owner.complete_oidc(query, browser).await {
+            Ok(completion) => {
+                let mut response =
+                    Redirect::to(&format!("/activate/{}", completion.activation_token))
+                        .into_response();
+                match ClientListener::cookie(
+                    &mut response,
+                    "araphor-approval-csrf",
+                    &completion.csrf,
+                    false,
+                    300,
+                ) {
+                    Ok(()) => response,
+                    Err(error) => problem(StatusCode::INTERNAL_SERVER_ERROR, error),
+                }
+            }
             Err(error) => problem(StatusCode::BAD_REQUEST, error),
         }
     }
 
-    async fn complete_oidc(&self, query: OidcCallbackQuery) -> Result<OidcCompletion> {
+    async fn complete_oidc(
+        &self,
+        query: OidcCallbackQuery,
+        browser: &str,
+    ) -> Result<OidcCompletion> {
         ensure!(
             query.error.is_none(),
             AdministrativeApprovalSnafu {
-                reason: format!(
-                    "OIDC authorization failed: {}",
-                    query.error.unwrap_or_default()
-                ),
+                reason: "OIDC authorization failed"
             }
         );
-        let state_value = query
+        let key = query
             .state
             .ok_or_else(|| approval_error("OIDC callback has no state"))?;
-        let flow = self
-            .state
-            .lock()
-            .map_err(|_| approval_error("administrative HTTP state is poisoned"))?
-            .oidc_flows
-            .remove(&state_value)
-            .ok_or_else(|| approval_error("OIDC state is missing or replayed"))?;
+        let flow = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| approval_error("administrative state is unavailable"))?;
+            state.retain_live(current_utc_ns()?);
+            ensure!(
+                key.len() <= 256
+                    && state
+                        .oidc_flows
+                        .get(&key)
+                        .is_some_and(|flow| flow.browser == browser),
+                AdministrativeApprovalSnafu {
+                    reason: "OIDC state is absent or bound to another browser"
+                }
+            );
+            state
+                .oidc_flows
+                .remove(&key)
+                .ok_or_else(|| approval_error("OIDC state was consumed"))?
+        };
         let code = query
             .code
             .ok_or_else(|| approval_error("OIDC callback has no authorization code"))?;
-        let client = self.oidc_client()?;
-        let token = client
-            .exchange_code(AuthorizationCode::new(code))
-            .map_err(|error| {
-                approval_error(format!("OIDC token endpoint is unavailable: {error}"))
-            })?
-            .set_pkce_verifier(PkceCodeVerifier::new(flow.pkce_verifier))
-            .request_async(&self.http)
-            .await
-            .map_err(|error| approval_error(format!("OIDC code exchange failed: {error}")))?;
-        let id_token = token
-            .extra_fields()
-            .id_token()
-            .ok_or_else(|| approval_error("OIDC provider returned no ID token"))?;
-        let verifier = client.id_token_verifier();
-        let claims = id_token
-            .claims(&verifier, &Nonce::new(flow.nonce))
-            .map_err(|error| approval_error(format!("OIDC ID token is invalid: {error}")))?;
-        if let Some(expected) = claims.access_token_hash() {
-            let actual = AccessTokenHash::from_token(
-                token.access_token(),
-                id_token.signing_alg().map_err(|error| {
-                    approval_error(format!("OIDC signing algorithm is invalid: {error}"))
-                })?,
-                id_token.signing_key(&verifier).map_err(|error| {
-                    approval_error(format!("OIDC signing key is invalid: {error}"))
-                })?,
-            )
-            .map_err(|error| approval_error(format!("OIDC access-token hash failed: {error}")))?;
-            ensure!(
-                &actual == expected,
-                AdministrativeApprovalSnafu {
-                    reason: "OIDC access token does not match the ID token",
-                }
-            );
-        }
-        let principal = principal_id(self.provider.issuer().as_str(), claims.subject().as_str());
+        let identity = self
+            .oidc
+            .complete(&self.config.redirect_url, code, flow.proof)
+            .await?;
+        let principal = principal_id(&identity.issuer, &identity.subject);
+        let csrf = random_secret();
         let mut state = self
             .state
             .lock()
-            .map_err(|_| approval_error("administrative HTTP state is poisoned"))?;
+            .map_err(|_| approval_error("administrative state is unavailable"))?;
         state.retain_live(current_utc_ns()?);
         let draft = state
             .drafts
@@ -713,127 +608,84 @@ impl AdministrativeHttpOwner {
         ensure!(
             draft.authentication_started
                 && draft.authenticated_principal.is_none()
-                && !draft.approval_started,
+                && !draft.approval_started
+                && draft.browser.as_deref() == Some(browser),
             AdministrativeApprovalSnafu {
-                reason: "administrative authentication was already completed",
+                reason: "administrative authentication was completed or changed"
+            }
+        );
+        let expiry = i64::try_from(identity.expires_ns)
+            .map_err(|_| approval_error("OIDC identity expiry is invalid"))?;
+        draft.expires_at_utc_ns = draft.expires_at_utc_ns.min(expiry);
+        ensure!(
+            current_utc_ns()? < draft.expires_at_utc_ns,
+            AdministrativeApprovalSnafu {
+                reason: "administrative identity expired during OIDC"
             }
         );
         draft.authenticated_principal = Some(principal);
+        draft.approver = Some(identity.display);
+        draft.csrf = Some(csrf.clone());
         Ok(OidcCompletion {
             activation_token: flow.activation_token,
-            display: claims
-                .email()
-                .map_or_else(|| claims.subject().as_str(), |email| email.as_str())
-                .to_owned(),
+            csrf,
         })
     }
 
-    fn render_confirmation(&self, activation_token: &str, approver: &str) -> Result<String> {
-        let now = current_utc_ns()?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| approval_error("administrative HTTP state is poisoned"))?;
-        state.retain_live(now);
-        let draft_id = state
-            .activation_tokens
-            .get(&digest(activation_token.as_bytes()))
-            .copied()
-            .ok_or_else(|| approval_error("administrative activation is missing or expired"))?;
-        let draft = state
-            .drafts
-            .get(&draft_id)
-            .ok_or_else(|| approval_error("administrative draft is missing"))?;
-        ensure!(
-            draft.authenticated_principal.is_some() && !draft.approval_started,
-            AdministrativeApprovalSnafu {
-                reason: "administrative draft is not ready for approval",
-            }
-        );
-        let resolution = &draft.resolution;
-        let argv = resolution
-            .argv
-            .iter()
-            .map(|value| html_escape(&String::from_utf8_lossy(value)))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let path = resolution
-            .resolved_executable
-            .as_ref()
-            .map(|value| html_escape(&String::from_utf8_lossy(&value.resolved_display_path)))
-            .unwrap_or_else(|| "unavailable".to_owned());
-        Ok(format!(
-            "<!doctype html><meta charset=utf-8><title>Mithril approval</title>\
-             <h1>Approve one administrative exec</h1>\
-             <dl><dt>Approver</dt><dd>{}</dd><dt>Cluster</dt><dd>{}</dd>\
-             <dt>Namespace</dt><dd>{}</dd><dt>Pod UID</dt><dd>{}</dd>\
-             <dt>Container</dt><dd>{}</dd><dt>Command</dt><dd><code>{argv}</code></dd>\
-             <dt>Resolved executable</dt><dd><code>{path}</code></dd>\
-             <dt>Streams</dt><dd>{}</dd><dt>Role</dt><dd>{}</dd></dl>\
-             <p>Another restricted runtime root with the same live container, executable, and arguments can consume this one-use slot first. Stream settings are checked here but are not a Linux-task match field.</p>\
-             <form method=post action=\"/activate/{}/approve\"><button type=submit>I accept this race and approve once</button></form>",
-            html_escape(approver),
-            html_escape(&self.config.cluster_uid),
-            html_escape(&String::from_utf8_lossy(&resolution.namespace)),
-            html_escape(&String::from_utf8_lossy(&resolution.pod_uid)),
-            html_escape(&String::from_utf8_lossy(&resolution.container_name)),
-            resolution.stream_flags,
-            html_escape(&resolution.approved_role_id),
-            html_escape(activation_token),
-        ))
-    }
-
-    async fn approve_request(
-        State(owner): State<Arc<Self>>,
-        Path(activation_token): Path<String>,
-    ) -> Response {
-        match owner.approve_draft(&activation_token) {
-            Ok(()) => Html(
-                "<!doctype html><meta charset=utf-8><title>Mithril approval complete</title>\
-                 <h1>Administrative exec approved</h1><p>Return to the terminal.</p>",
-            )
-            .into_response(),
-            Err(error) => problem(StatusCode::BAD_REQUEST, error),
-        }
-    }
-
-    fn approve_draft(&self, activation_token: &str) -> Result<()> {
+    fn approve_draft(
+        &self,
+        activation_token: &str,
+        headers: &HeaderMap,
+    ) -> std::result::Result<(), tonic::Status> {
         let draft_id = {
-            let now = current_utc_ns()?;
+            let now = current_utc_ns().map_err(Self::status)?;
             let mut state = self
                 .state
                 .lock()
-                .map_err(|_| approval_error("administrative HTTP state is poisoned"))?;
+                .map_err(|_| tonic::Status::unavailable("administrative state is unavailable"))?;
             state.retain_live(now);
             state
                 .activation_tokens
                 .get(&digest(activation_token.as_bytes()))
                 .copied()
-                .ok_or_else(|| approval_error("administrative activation is missing or expired"))?
+                .ok_or_else(|| {
+                    tonic::Status::not_found("administrative activation is absent or expired")
+                })?
         };
-        let (principal, request, resolution) = self
-            .state
-            .lock()
-            .map_err(|_| approval_error("administrative HTTP state is poisoned"))?
-            .begin_approval(draft_id, current_utc_ns()?)?;
+        let (principal, request, resolution) = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| tonic::Status::unavailable("administrative state is unavailable"))?;
+            let draft = state
+                .drafts
+                .get(&draft_id)
+                .ok_or_else(|| tonic::Status::not_found("administrative draft is absent"))?;
+            draft.browser(headers, &self.config.public_base_url, true)?;
+            state
+                .begin_approval(draft_id, current_utc_ns().map_err(Self::status)?)
+                .map_err(Self::status)?
+        };
         let pending = self
             .approval
-            .request_resolved(principal, request, resolution)?;
-        let credential = self.approval.approve(pending.request_id, principal)?;
+            .request_resolved(principal, request, resolution)
+            .map_err(Self::status)?;
+        let credential = self
+            .approval
+            .approve(pending.request_id, principal)
+            .map_err(Self::status)?;
         let mut state = self
             .state
             .lock()
-            .map_err(|_| approval_error("administrative HTTP state is poisoned"))?;
-        let draft = state
-            .drafts
-            .get_mut(&draft_id)
-            .ok_or_else(|| approval_error("administrative draft disappeared after approval"))?;
-        ensure!(
-            draft.credential.replace(credential).is_none(),
-            AdministrativeApprovalSnafu {
-                reason: "administrative draft was approved twice",
-            }
-        );
+            .map_err(|_| tonic::Status::unavailable("administrative state is unavailable"))?;
+        let draft = state.drafts.get_mut(&draft_id).ok_or_else(|| {
+            tonic::Status::internal("administrative draft disappeared after approval")
+        })?;
+        if draft.credential.replace(credential).is_some() {
+            return Err(tonic::Status::internal(
+                "administrative draft was approved twice",
+            ));
+        }
         Ok(())
     }
 
@@ -977,23 +829,45 @@ impl AdministrativeHttpOwner {
             &self.config.node_ids_by_kubernetes_name,
         )
     }
+}
 
-    fn oidc_client(&self) -> Result<ConfiguredOidcClient> {
-        let secret = self
-            .config
-            .oidc_client_secret
-            .as_ref()
-            .map(|value| ClientSecret::new(value.clone()));
-        Ok(CoreClient::from_provider_metadata(
-            self.provider.clone(),
-            ClientId::new(self.config.oidc_client_id.clone()),
-            secret,
-        )
-        .set_redirect_uri(
-            RedirectUrl::new(self.config.redirect_url.clone()).map_err(|error| {
-                approval_error(format!("OIDC redirect URL is invalid: {error}"))
-            })?,
-        ))
+impl Draft {
+    fn activation_state(&self) -> &'static str {
+        if self.delivered {
+            "DELIVERED"
+        } else if self.credential.is_some() {
+            "APPROVED"
+        } else if self.approval_started {
+            "ATTEMPTED"
+        } else {
+            "PENDING"
+        }
+    }
+
+    fn browser(
+        &self,
+        headers: &HeaderMap,
+        origin: &str,
+        mutation: bool,
+    ) -> std::result::Result<(), tonic::Status> {
+        let mut origins = headers.get_all(axum::http::header::ORIGIN).iter();
+        let supplied = origins.next();
+        let browser = ClientAuth::cookie(headers, "araphor-approval")
+            .map_err(AdministrativeHttpOwner::status)?;
+        let mut values = headers.get_all("x-araphor-csrf").iter();
+        let csrf = values.next().and_then(|value| value.to_str().ok());
+        if supplied.is_none_or(|value| value != origin)
+            || origins.next().is_some()
+            || browser.is_none()
+            || browser != self.browser.as_deref()
+            || (mutation
+                && (csrf.is_none() || csrf != self.csrf.as_deref() || values.next().is_some()))
+        {
+            return Err(tonic::Status::permission_denied(
+                "administrative browser binding or CSRF is invalid",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1037,31 +911,6 @@ impl HttpState {
         self.oidc_flows
             .retain(|_, flow| live.contains(&flow.draft_id));
     }
-}
-
-pub async fn serve_administrative_http(
-    config: AdministrativeHttpConfigV1,
-    control: ControlPlane,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-) -> Result<()> {
-    let owner = Arc::new(AdministrativeHttpOwner::load(&config, control).await?);
-    let tls =
-        RustlsConfig::from_pem_file(&config.tls_certificate_path, &config.tls_private_key_path)
-            .await
-            .map_err(|error| {
-                approval_error(format!("load administrative TLS identity: {error}"))
-            })?;
-    let handle = axum_server::Handle::new();
-    let shutdown_handle = handle.clone();
-    tokio::spawn(async move {
-        shutdown.await;
-        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
-    });
-    axum_server::bind_rustls(config.listen, tls)
-        .handle(handle)
-        .serve(owner.router().into_make_service())
-        .await
-        .map_err(|error| approval_error(format!("administrative HTTPS server failed: {error}")))
 }
 
 fn live_pod_target(
@@ -1117,7 +966,7 @@ fn live_pod_target(
     })
 }
 
-fn validate_draft(request: &AdministrativeExecDraftRequestV1) -> Result<()> {
+fn validate_draft(request: &AdministrativeExecDraftRequest) -> Result<()> {
     ensure!(
         (1..=253).contains(&request.namespace.len())
             && (1..=253).contains(&request.pod.len())
@@ -1448,12 +1297,13 @@ mod tests {
     }
 
     #[test]
-    fn one_draft_starts_only_one_approval() {
+    fn one_draft_starts_only_one_approval() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let draft_id = Id128V1::new(1, 1);
         let mut state = HttpState::default();
         state.drafts.insert(
             draft_id,
             Draft {
+                pod_name: "pod".into(),
                 request: AdministrativeExecRequestV1 {
                     node_id: "00000000-0000-0000-0000-000000000001".to_owned(),
                     namespace: b"default".to_vec(),
@@ -1469,13 +1319,53 @@ mod tests {
                 expires_at_utc_ns: 10,
                 credential: None,
                 authenticated_principal: Some(Id128V1::new(2, 2)),
+                approver: Some("operator".into()),
+                browser: Some("a".repeat(64)),
+                csrf: Some("b".repeat(64)),
                 authentication_started: true,
                 approval_started: false,
                 delivered: false,
             },
         );
+        let draft = state.drafts.get(&draft_id).ok_or("draft is absent")?;
+        assert_eq!(draft.activation_state(), "PENDING");
+        let mut headers = axum::http::HeaderMap::new();
+        assert!(draft
+            .browser(&headers, "https://control.example", true)
+            .is_err());
+        headers.insert("origin", "https://control.example".parse()?);
+        headers.insert(
+            "cookie",
+            format!("araphor-approval={}", "a".repeat(64)).parse()?,
+        );
+        draft.browser(&headers, "https://control.example", false)?;
+        assert!(draft
+            .browser(&headers, "https://control.example", true)
+            .is_err());
+        headers.insert("x-araphor-csrf", "b".repeat(64).parse()?);
+        draft.browser(&headers, "https://control.example", true)?;
+        assert!(draft
+            .browser(&headers, "https://foreign.example", true)
+            .is_err());
+        headers.append("x-araphor-csrf", "b".repeat(64).parse()?);
+        assert!(draft
+            .browser(&headers, "https://control.example", true)
+            .is_err());
+        headers.remove("x-araphor-csrf");
+        headers.insert(
+            "cookie",
+            format!("araphor-approval={}", "c".repeat(64)).parse()?,
+        );
+        assert!(draft
+            .browser(&headers, "https://control.example", false)
+            .is_err());
         assert!(state.begin_approval(draft_id, 1).is_ok());
         assert!(state.begin_approval(draft_id, 1).is_err());
+        let draft = state.drafts.get_mut(&draft_id).ok_or("draft is absent")?;
+        assert_eq!(draft.activation_state(), "ATTEMPTED");
+        draft.delivered = true;
+        assert_eq!(draft.activation_state(), "DELIVERED");
+        Ok(())
     }
 
     #[test]

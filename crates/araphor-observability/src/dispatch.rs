@@ -158,8 +158,7 @@ mod tests {
         let key = SigningKey::from_bytes(&[23; 32]);
         let accepted = TraceAcceptedV1 {
             request: crate::test_support::request()?,
-            grant: crate::test_support::grant()?,
-            approval: None,
+            access: crate::test_support::access(),
             accepted_unix_ns: 1,
             deadline_unix_ns: 16_000_000_001,
             recipe: Some(crate::TraceRecipeV1::SyscallErrors),

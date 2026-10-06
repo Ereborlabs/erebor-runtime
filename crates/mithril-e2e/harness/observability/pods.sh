@@ -29,6 +29,8 @@ export MITHRIL_TRACE_RUNTIME="$runtime_bundle"
 export MITHRIL_TRACE_PROOF="$output/result.json"
 "$test_binary" observability::tests::observability_owned_upload \
   --exact --nocapture >"$output/lightweight.log" 2>&1
+"$test_binary" observability::query::tests::observability_query_upload \
+  --exact --nocapture >"$output/lightweight-query.log" 2>&1
 "$test_binary" platform::kubernetes::observability_pod_finish \
   --exact --nocapture >"$output/lightweight-finish.log" 2>&1
 "$test_binary" platform::kubernetes::observability_pod_replacement \
@@ -42,6 +44,22 @@ jq -e --arg admission "${MITHRIL_TRACE_TEST_ADMISSION:-}" '
     and (has("qualification") | not)
   else true end)
   and .original_retry == true and .original_output_unchanged == true
+  and .query_failure.execution == "in-process"
+  and .query_failure.query_transport == "native-grpc-tls"
+  and .query_failure.query_failure == "EvaluationFailed"
+  and .query_failure.query_grpc_code == "Internal"
+  and .query_failure.query_recovered == true and .query_failure.catalog_rows == 1
+  and .query_failure.capture_active == true and .query_failure.prefix_unchanged == true
+  and .query_failure.writer_ready == true and .query_failure.durable_receipt_advanced == true
+  and .query_failure.post_failure_acknowledged == true
+  and .query_failure.native_interruption_proved == false
+  and .query_failure.process_isolation_proved == false
+  and .query_failure.post_failure_sequence > .query_failure.prefix_sequence
+  and .query_failure.post_failure_revision > .query_failure.prefix_revision
+  and .query_failure.post_failure_output_bytes > .query_failure.prefix_output_bytes
+  and .query_failure.post_failure_count > .query_failure.prefix_count
+  and .query_failure.node_acknowledgement == .original.terminal
+  and .query_failure.node_acknowledgement.last_sequence >= .query_failure.post_failure_sequence
   and .cleanup_observed == true and .enforcement_resources_unchanged == true
   and .resources.initial == .resources.final
   and (.physical_denials | length == 2 and all(.errno == 13 and .size == 0

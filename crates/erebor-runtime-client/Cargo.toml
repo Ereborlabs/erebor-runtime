@@ -10,10 +10,12 @@ erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 prost.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 tokio.workspace = true
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls-native-roots"] }
+uuid.workspace = true
 
 [lints]
 workspace = true

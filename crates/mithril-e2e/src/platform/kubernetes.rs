@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, File};
+use std::io::{Read as _, Write as _};
 use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
+use erebor_runtime_client::{AraphorClient, AraphorProfile};
 use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{
@@ -22,10 +24,9 @@ use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::{Api, Client, Config, ResourceExt as _};
 use mithril_control::{
     ControlConfig, ControlPlane, KubernetesConditionStatusV1, PolicySignerTrustV1, TraceAcceptedV1,
-    TraceBatchV1, TraceExecutionGrantV1, TraceOwner, TraceReadAccessV1, TraceRecipeV1,
-    TraceRequestV1, TraceTerminalReasonV1, TrustGenerationV1, WorkloadProtectionException,
-    WorkloadProtectionExceptionStateV1, WorkloadProtectionPolicy,
-    KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
+    TraceAccessV1, TraceBatchV1, TraceOwner, TraceRecipeV1, TraceRequestV1, TraceTerminalReasonV1,
+    TrustGenerationV1, WorkloadProtectionException, WorkloadProtectionExceptionStateV1,
+    WorkloadProtectionPolicy, KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
     KUBERNETES_NODE_ID_ANNOTATION, KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT,
     KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
 };
@@ -54,6 +55,7 @@ struct PodCapture {
     namespace: String,
     pod_name: String,
     tenant_id: [u8; 16],
+    query_profile: AraphorProfile,
 }
 
 const READY_LIMIT: Duration = Duration::from_secs(180);
@@ -176,12 +178,29 @@ impl KubernetesState {
         let pod = self.pod().map(|pod| pod.status);
         let logs = self.logs(&self.namespace, &format!("pod/{}", self.actor_name));
         let node = self.logs(&self.system, "daemonset/mithril-node");
+        let control = self.logs(&self.system, "deployment/mithril-control");
+        let previous = self.log_history(&self.system, "deployment/mithril-control", true);
+        let status = self
+            .runtime
+            .block_on(
+                Api::<Pod>::namespaced(self.client.clone(), &self.system).list(
+                    &ListParams::default()
+                        .labels("app.kubernetes.io/name=mithril-control")
+                        .limit(2),
+                ),
+            )
+            .map(|list| {
+                list.items
+                    .into_iter()
+                    .map(|pod| (pod.metadata.name, pod.metadata.uid, pod.status))
+                    .collect::<Vec<_>>()
+            });
         let events = self.snapshot().map(|mut snapshot| {
             snapshot.recent_effects.reverse();
             snapshot.recent_effects.truncate(16);
             snapshot.recent_effects
         });
-        format!("Pod: {pod:?}; logs: {logs:?}; Node logs: {node:?}; effects: {events:?}")
+        format!("Pod: {pod:?}; logs: {logs:?}; Node logs: {node:?}; Control status: {status:?}; Control logs: {control:?}; Previous Control logs: {previous:?}; effects: {events:?}")
     }
 
     fn fixture(&self, name: &str) -> PathBuf {
@@ -237,6 +256,10 @@ impl KubernetesState {
     }
 
     fn logs(&self, namespace: &str, target: &str) -> TestResult<String> {
+        self.log_history(namespace, target, false)
+    }
+
+    fn log_history(&self, namespace: &str, target: &str, previous: bool) -> TestResult<String> {
         let mut command = Command::new(&self.k3s_path);
         command
             .arg("kubectl")
@@ -244,6 +267,9 @@ impl KubernetesState {
             .arg(&self.kube_path)
             .args(["-n", namespace, "logs", target])
             .args(["--all-containers=true", "--tail=200"]);
+        if previous {
+            command.arg("--previous");
+        }
         Self::run(&mut command, "read Kubernetes logs")
     }
 
@@ -298,7 +324,7 @@ impl KubernetesState {
                             path,
                             reason: format!("Kubernetes exception read failed: {source}"),
                         }
-                        .fail()
+                        .fail();
                     }
                 };
                 *last.borrow_mut() = format!("{:?}", current.status);
@@ -621,11 +647,11 @@ impl KubernetesState {
                 Value::String(self.system.clone()),
             ),
             (
-                "/administrative_exec/oidc_issuer_url",
+                "/client/auth/oidc/issuer_url",
                 Value::String(self.approval()?.issuer()),
             ),
             (
-                "/administrative_exec/node_ids_by_kubernetes_name",
+                "/client/administrative/node_ids_by_kubernetes_name",
                 serde_json::to_value(BTreeMap::from([(self.node_name.clone(), NODE_ID)]))?,
             ),
         ] {
@@ -2243,6 +2269,71 @@ impl Kubernetes {
         )?)
     }
 
+    fn capture_ack(&self, result: &Value, sequence: u64) -> TestResult<Value> {
+        let terminal: mithril_control::TraceTerminalV1 =
+            serde_json::from_value(result["terminal"].clone())?;
+        terminal.validate()?;
+        if terminal.last_sequence < sequence {
+            return Err("the terminal does not cover the output after the query error".into());
+        }
+        let directory = self
+            .state_path
+            .join("diagnostics")
+            .join(hex::encode(terminal.execution_id));
+        let path = directory.join("ack.json");
+        let ack = wait_for(
+            &path,
+            "Node durable diagnostic acknowledgement",
+            READY_LIMIT,
+            || {
+                let file = match File::open(&path) {
+                    Ok(file) => file,
+                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(None);
+                    }
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                let mut bytes = Vec::new();
+                file.take(4097)
+                    .read_to_end(&mut bytes)
+                    .context(IoSnafu { path: &path })?;
+                if bytes.len() > 4096 {
+                    return Err(InvalidInputSnafu {
+                        path: &path,
+                        reason: "the Node acknowledgement exceeds its byte bound",
+                    }
+                    .build());
+                }
+                let ack: mithril_control::TraceTerminalV1 = serde_json::from_slice(&bytes)
+                    .map_err(|source| {
+                        InvalidInputSnafu {
+                            path: &path,
+                            reason: format!("invalid Node acknowledgement: {source}"),
+                        }
+                        .build()
+                    })?;
+                if ack != terminal {
+                    return Err(InvalidInputSnafu {
+                        path: &path,
+                        reason: "the Node acknowledgement differs from the Control terminal",
+                    }
+                    .build());
+                }
+                let output = directory.join("output.jsonl");
+                if fs::metadata(&output)
+                    .context(IoSnafu { path: &output })?
+                    .len()
+                    != 0
+                {
+                    return Ok(None);
+                }
+                Ok(Some(ack))
+            },
+            || self.diagnostics(),
+        )?;
+        Ok(serde_json::to_value(ack)?)
+    }
+
     fn capture_denial(&mut self, actor: &mut ProcessFixture, name: &str) -> TestResult<Value> {
         actor.send(b"/fixtures/policy_replace.py\n")?;
         let text = actor.wait_text(&self.work_path.join(name).join("0.json"), "protected read")?;
@@ -2426,100 +2517,142 @@ impl Kubernetes {
             return Err("the bundled backend differs from its pinned configuration".into());
         }
         let mut env = Self::setup("observability-pods")?;
-        env.configure_capture(&config)?;
-        env.start_control()?;
-        env.mount_capture(&bundle, config.qualification.logical_cpus)?;
-        let labels = env.install_policy("multi_policy_deny.json")?;
-        env.start_node()?;
-        let preflight = env.prepare_runtime(&bundle, &libraries)?;
-        env.start_capture()?;
-        env.node_ready()?;
-        let mut actor = env.start_actor("read_path.py", &["before"], &labels)?;
-        env.wait_workload_ready()?;
-        env.running(actor.id())?;
-        let initial = crate::observability::ResourceSnapshot::capture_baseline()?;
-        let enforcement = crate::observability::ResourceSnapshot::owned(&env.pin_path)?;
-        let original_uid = env
-            .pod()?
-            .metadata
-            .uid
-            .ok_or("the original Pod has no UID")?;
-        env.capture_input(
-            "start-0.json",
-            &json!({"pod_uid": original_uid, "request_id": uuid::Uuid::new_v4().as_bytes()}),
-        )?;
-        let original = env.capture_record("ready-0.json")?;
-        env.capture_identity(&original, &original_uid)?;
-        let active = env.capture_resources(&initial, &enforcement)?;
-        let before = env.capture_denial(&mut actor, "before")?;
-        env.delete_capture(&mut actor)?;
-        env.capture_record("done-0.json")?;
-        env.capture_cleanup(&enforcement, &active)?;
+        let capture = env.state_path.with_file_name("capture");
+        let result = (|| {
+            env.configure_capture(&config)?;
+            env.start_control()?;
+            env.mount_capture(&bundle, config.qualification.logical_cpus)?;
+            let labels = env.install_policy("multi_policy_deny.json")?;
+            env.start_node()?;
+            let preflight = env.prepare_runtime(&bundle, &libraries)?;
+            env.start_capture()?;
+            env.node_ready()?;
+            let mut actor = env.start_actor("read_path.py", &["before"], &labels)?;
+            env.wait_workload_ready()?;
+            env.running(actor.id())?;
+            let initial = crate::observability::ResourceSnapshot::capture_baseline()?;
+            let enforcement = crate::observability::ResourceSnapshot::owned(&env.pin_path)?;
+            let original_uid = env
+                .pod()?
+                .metadata
+                .uid
+                .ok_or("the original Pod has no UID")?;
+            env.capture_input(
+                "start-0.json",
+                &json!({"pod_uid": original_uid, "request_id": uuid::Uuid::new_v4().as_bytes()}),
+            )?;
+            let original = env.capture_record("ready-0.json")?;
+            env.capture_identity(&original, &original_uid)?;
+            let active = env.capture_resources(&initial, &enforcement)?;
+            env.capture_record("query-failed-0.json")?;
+            let before = env.capture_denial(&mut actor, "before")?;
+            let mut failure = env.capture_record("query-after-0.json")?;
+            env.delete_capture(&mut actor)?;
+            let completed = env.capture_record("done-0.json")?;
+            let sequence = failure["post_failure_sequence"]
+                .as_u64()
+                .ok_or("the query case has no new output sequence")?;
+            failure["node_acknowledgement"] = env.capture_ack(&completed, sequence)?;
+            failure["post_failure_acknowledged"] = json!(true);
+            env.capture_cleanup(&enforcement, &active)?;
 
-        let mut actor = env.start_actor("read_path.py", &["after"], &labels)?;
-        env.wait_workload_ready()?;
-        env.running(actor.id())?;
-        let baseline = crate::observability::ResourceSnapshot::capture_baseline()?;
-        let replacement_uid = env
-            .pod()?
-            .metadata
-            .uid
-            .ok_or("the replacement Pod has no UID")?;
-        if replacement_uid == original_uid || env.actor_name != ACTOR {
-            return Err("the fixture did not replace the same Pod name with a new UID".into());
+            let mut actor = env.start_actor("read_path.py", &["after"], &labels)?;
+            env.wait_workload_ready()?;
+            env.running(actor.id())?;
+            let baseline = crate::observability::ResourceSnapshot::capture_baseline()?;
+            let replacement_uid = env
+                .pod()?
+                .metadata
+                .uid
+                .ok_or("the replacement Pod has no UID")?;
+            if replacement_uid == original_uid || env.actor_name != ACTOR {
+                return Err("the fixture did not replace the same Pod name with a new UID".into());
+            }
+            env.capture_input(
+                "start-1.json",
+                &json!({"pod_uid": replacement_uid, "request_id": uuid::Uuid::new_v4().as_bytes()}),
+            )?;
+            let replacement = env.capture_record("ready-1.json")?;
+            env.capture_identity(&replacement, &replacement_uid)?;
+            let active_after = env.capture_resources(&baseline, &enforcement)?;
+            let after = env.capture_denial(&mut actor, "after")?;
+            env.capture_input("stop-1.json", &json!({"stop": true}))?;
+            let mut record = env.capture_record("result.json")?;
+            env.capture_cleanup(&enforcement, &active_after)?;
+            let pods = Api::<Pod>::namespaced(env.client.clone(), &env.system);
+            let control =
+                env.runtime
+                    .block_on(pods.list(
+                        &ListParams::default().labels("app.kubernetes.io/name=mithril-control"),
+                    ))?
+                    .items;
+            if control.len() != 1
+                || control[0]
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.container_statuses.as_ref())
+                    .is_none_or(|statuses| statuses.len() != 1 || statuses[0].restart_count != 0)
+            {
+                return Err("the finite Control child restarted during the case".into());
+            }
+            record["physical"] = json!(true);
+            record["query_failure"] = failure;
+            record["physical_denials"] = json!([before, after]);
+            record["runtime_preflight"] = preflight;
+            if test_admission {
+                record["diagnostic_admission"] = json!("synthetic-test-only");
+                record["performance_qualified"] = json!(false);
+                record["performance_claim"] = json!(false);
+            } else {
+                record["diagnostic_admission"] = json!("qualified-config");
+                record["qualification"] = serde_json::to_value(config)?;
+            }
+            record["enforcement_resources_unchanged"] = json!(true);
+            record["cleanup_observed"] = json!(true);
+            record["diagnostic_resources"] =
+                json!({"original": active, "replacement": active_after});
+            record["resources"] = json!({"initial": enforcement, "final": crate::observability::ResourceSnapshot::owned(&env.pin_path)?});
+            actor.stop()?;
+            let finish = env.state_path.with_file_name("capture").join("finish.json");
+            let temporary = finish.with_extension("tmp");
+            fs::write(
+                &temporary,
+                serde_json::to_vec_pretty(&json!({"finish": true}))?,
+            )?;
+            Self::capture_finish(&mut env, &temporary, &finish, |env| env.clean_test())?;
+            fs::write(proof, serde_json::to_vec_pretty(&record)?)?;
+            Ok(())
+        })();
+        Self::capture_result(&capture, result)
+    }
+
+    fn capture_result(path: &Path, result: TestResult<()>) -> TestResult<()> {
+        if let Err(error) = &result {
+            if path.exists() {
+                let retained = path
+                    .parent()
+                    .ok_or("the capture directory has no parent")?
+                    .with_extension("capture-failed");
+                if retained.exists() {
+                    return Err(format!(
+                        "{error}; the retained capture directory already exists: {}",
+                        retained.display()
+                    )
+                    .into());
+                }
+                fs::rename(path, &retained).map_err(|source| {
+                    format!(
+                        "{error}; capture evidence could not be retained at {}: {source}",
+                        retained.display()
+                    )
+                })?;
+                erebor_telemetry::info!(
+                    "retained failed capture evidence",
+                    path = %retained.display()
+                );
+            }
         }
-        env.capture_input(
-            "start-1.json",
-            &json!({"pod_uid": replacement_uid, "request_id": uuid::Uuid::new_v4().as_bytes()}),
-        )?;
-        let replacement = env.capture_record("ready-1.json")?;
-        env.capture_identity(&replacement, &replacement_uid)?;
-        let active_after = env.capture_resources(&baseline, &enforcement)?;
-        let after = env.capture_denial(&mut actor, "after")?;
-        env.capture_input("stop-1.json", &json!({"stop": true}))?;
-        let mut record = env.capture_record("result.json")?;
-        env.capture_cleanup(&enforcement, &active_after)?;
-        let pods = Api::<Pod>::namespaced(env.client.clone(), &env.system);
-        let control = env
-            .runtime
-            .block_on(
-                pods.list(&ListParams::default().labels("app.kubernetes.io/name=mithril-control")),
-            )?
-            .items;
-        if control.len() != 1
-            || control[0]
-                .status
-                .as_ref()
-                .and_then(|status| status.container_statuses.as_ref())
-                .is_none_or(|statuses| statuses.len() != 1 || statuses[0].restart_count != 0)
-        {
-            return Err("the finite Control child restarted during the case".into());
-        }
-        record["physical"] = json!(true);
-        record["physical_denials"] = json!([before, after]);
-        record["runtime_preflight"] = preflight;
-        if test_admission {
-            record["diagnostic_admission"] = json!("synthetic-test-only");
-            record["performance_qualified"] = json!(false);
-            record["performance_claim"] = json!(false);
-        } else {
-            record["diagnostic_admission"] = json!("qualified-config");
-            record["qualification"] = serde_json::to_value(config)?;
-        }
-        record["enforcement_resources_unchanged"] = json!(true);
-        record["cleanup_observed"] = json!(true);
-        record["diagnostic_resources"] = json!({"original": active, "replacement": active_after});
-        record["resources"] = json!({"initial": enforcement, "final": crate::observability::ResourceSnapshot::owned(&env.pin_path)?});
-        actor.stop()?;
-        let finish = env.state_path.with_file_name("capture").join("finish.json");
-        let temporary = finish.with_extension("tmp");
-        fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(&json!({"finish": true}))?,
-        )?;
-        Self::capture_finish(&mut env, &temporary, &finish, |env| env.clean_test())?;
-        fs::write(proof, serde_json::to_vec_pretty(&record)?)?;
-        Ok(())
+        result
     }
 
     fn capture_finish<P: Platform>(
@@ -2590,16 +2723,12 @@ impl PodCapture {
             if facts.len() > 1 {
                 return Err("capture inventory has more than one matching container".into());
             }
-            if let Some(fact) = facts.first() {
-                let grant = TraceExecutionGrantV1 {
+            if !facts.is_empty() {
+                let grant = TraceAccessV1 {
                     tenant_id: self.tenant_id,
-                    grant_id: *uuid::Uuid::new_v4().as_bytes(),
                     principal: "pod-qualification".to_owned(),
-                    namespace_uids: [fact.namespace_uid.clone()].into(),
-                    node_ids: [fact.node_id.clone()].into(),
-                    recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
-                    host_diagnostic: false,
                     valid_until_unix_ns: Self::now()? + 900_000_000_000,
+                    revoked: false,
                 };
                 let participants = self.control.resolve_trace_targets(facts, &grant).await?;
                 if let [participant] = participants.as_slice() {
@@ -2611,12 +2740,13 @@ impl PodCapture {
                             targets: vec![target.clone()],
                             unresolved: Vec::new(),
                             collection_seconds: 120,
+                            selection: None,
+                            finding_reference: None,
                         };
-                        self.control.accept_trace(request, grant.clone(), None)?;
-                        let access = Self::access(&grant);
+                        self.control.accept_trace(request, grant.clone())?;
                         return Ok(self
                             .traces
-                            .read(self.tenant_id, request_id, &access, Self::now()?)?
+                            .read(self.tenant_id, request_id, &grant, Self::now()?)?
                             .1);
                     }
                 }
@@ -2628,19 +2758,7 @@ impl PodCapture {
         }
     }
 
-    fn access(grant: &TraceExecutionGrantV1) -> TraceReadAccessV1 {
-        TraceReadAccessV1 {
-            tenant_id: grant.tenant_id,
-            namespace_uids: grant.namespace_uids.clone(),
-            node_ids: grant.node_ids.clone(),
-            host_sensitive: false,
-            valid_until_unix_ns: grant.valid_until_unix_ns,
-            revoked: false,
-        }
-    }
-
     fn output(&self, accepted: &TraceAcceptedV1) -> TestResult<Vec<TraceBatchV1>> {
-        let access = Self::access(&accepted.grant);
         let mut after = 0;
         let mut retained = Vec::new();
         loop {
@@ -2648,7 +2766,7 @@ impl PodCapture {
                 self.tenant_id,
                 accepted.request.request_id,
                 0,
-                &access,
+                &accepted.access,
                 Self::now()?,
                 after,
             )?;
@@ -2666,6 +2784,139 @@ impl PodCapture {
                 return Err("capture output did not advance within its frame bound".into());
             }
             after = next;
+        }
+    }
+
+    fn receipt(
+        &self,
+        accepted: &TraceAcceptedV1,
+    ) -> TestResult<araphor_data::TraceOutputReceiptV1> {
+        let data = self
+            .control
+            .analysis_store()
+            .ok_or("capture store is absent")?;
+        let execution = accepted.execution_id(0)?;
+        let (_, intent) = data
+            .trace_intent(self.tenant_id, accepted.request.request_id)?
+            .ok_or("capture intent is absent")?;
+        let binding = intent
+            .bindings
+            .iter()
+            .find(|binding| binding.identity.execution_id == execution)
+            .ok_or("capture binding is absent")?;
+        Ok(data
+            .trace_receipt(&binding.identity)?
+            .ok_or("capture receipt is absent")?)
+    }
+
+    async fn query_capture(&self, accepted: &TraceAcceptedV1) -> TestResult<Value> {
+        let before = self.receipt(accepted)?;
+        let prefix = self.output(accepted)?;
+        let prior = prefix
+            .iter()
+            .flat_map(|batch| &batch.frames)
+            .filter(|frame| frame.sequence <= before.last_sequence)
+            .collect::<Vec<_>>();
+        if before.terminal.is_some()
+            || prefix.iter().any(|batch| batch.terminal.is_some())
+            || prior.last().map(|frame| frame.sequence) != Some(before.last_sequence)
+        {
+            return Err("the query case has no active durable capture prefix".into());
+        }
+        let client = AraphorClient::connect(self.query_profile.clone()).await?;
+        let mut failure =
+            crate::observability::ObservabilityQualification::query_failure(&client).await?;
+        let baseline = self.receipt(accepted)?;
+        let retained = self.output(accepted)?;
+        let current = retained
+            .iter()
+            .flat_map(|batch| &batch.frames)
+            .filter(|frame| frame.sequence <= before.last_sequence)
+            .collect::<Vec<_>>();
+        let data = self
+            .control
+            .analysis_store()
+            .ok_or("capture store is absent")?;
+        if baseline.terminal.is_some()
+            || baseline.identity != before.identity
+            || baseline.last_sequence < before.last_sequence
+            || retained.iter().any(|batch| batch.terminal.is_some())
+            || current != prior
+            || !data.storage_health()?.write_ready
+            || self
+                .traces
+                .read(
+                    self.tenant_id,
+                    accepted.request.request_id,
+                    &accepted.access,
+                    Self::now()?,
+                )?
+                .1
+                != *accepted
+        {
+            return Err("the public query error changed the capture or durable prefix".into());
+        }
+        let count = retained
+            .iter()
+            .flat_map(|batch| &batch.frames)
+            .filter(|frame| frame.sequence <= baseline.last_sequence)
+            .filter_map(|frame| TraceRecipeV1::FailedOpens.measurements(frame))
+            .flatten()
+            .filter(|row| row.errno == -i64::from(libc::EACCES))
+            .map(|row| row.count)
+            .max()
+            .unwrap_or(0);
+        failure["prefix_sequence"] = json!(baseline.last_sequence);
+        failure["prefix_revision"] = json!(baseline.commit_revision);
+        failure["prefix_output_bytes"] = json!(baseline.output_bytes);
+        failure["prefix_count"] = json!(count);
+        failure["capture_active"] = json!(true);
+        failure["prefix_unchanged"] = json!(true);
+        failure["writer_ready"] = json!(true);
+        self.write("query-failed-0.json", &failure)?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let receipt = self.receipt(accepted)?;
+            let output = self.output(accepted)?;
+            if receipt.terminal.is_some()
+                || output.iter().any(|batch| batch.terminal.is_some())
+                || receipt.identity != baseline.identity
+            {
+                return Err("capture stopped before new output after the query error".into());
+            }
+            let next = output
+                .iter()
+                .flat_map(|batch| &batch.frames)
+                .filter(|frame| {
+                    frame.sequence > baseline.last_sequence
+                        && frame.sequence <= receipt.last_sequence
+                })
+                .find_map(|frame| {
+                    TraceRecipeV1::FailedOpens
+                        .measurements(frame)?
+                        .into_iter()
+                        .find(|row| row.errno == -i64::from(libc::EACCES) && row.count > count)
+                        .map(|row| (frame.sequence, row.count))
+                });
+            if let Some((sequence, count)) = next {
+                if receipt.commit_revision <= baseline.commit_revision
+                    || receipt.output_bytes <= baseline.output_bytes
+                    || !data.storage_health()?.write_ready
+                {
+                    return Err("new capture output has no advanced durable receipt".into());
+                }
+                failure["post_failure_sequence"] = json!(sequence);
+                failure["post_failure_revision"] = json!(receipt.commit_revision);
+                failure["post_failure_output_bytes"] = json!(receipt.output_bytes);
+                failure["post_failure_count"] = json!(count);
+                failure["durable_receipt_advanced"] = json!(true);
+                self.write("query-after-0.json", &failure)?;
+                return Ok(failure);
+            }
+            if Instant::now() >= deadline {
+                return Err("capture has no new denied-open output after the query error".into());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -2721,7 +2972,7 @@ impl PodCapture {
                     .read(
                         self.tenant_id,
                         accepted.request.request_id,
-                        &Self::access(&accepted.grant),
+                        &accepted.access,
                         Self::now()?,
                     )?
                     .1
@@ -2738,23 +2989,7 @@ impl PodCapture {
                 {
                     return Err("the reviewed capture has no denied-open measurement".into());
                 }
-                let (_, intent) = self
-                    .control
-                    .analysis_store()
-                    .ok_or("capture store is absent")?
-                    .trace_intent(self.tenant_id, accepted.request.request_id)?
-                    .ok_or("capture intent is absent")?;
-                let identity = &intent
-                    .bindings
-                    .first()
-                    .ok_or("capture binding is absent")?
-                    .identity;
-                let receipt = self
-                    .control
-                    .analysis_store()
-                    .ok_or("capture store is absent")?
-                    .trace_receipt(identity)?
-                    .ok_or("capture receipt is absent")?;
+                let receipt = self.receipt(accepted)?;
                 if receipt.terminal.as_ref() != Some(terminal)
                     || receipt.last_sequence != terminal.last_sequence
                 {
@@ -2778,6 +3013,7 @@ impl PodCapture {
         let original = self.submit(&self.input("start-0.json").await?).await?;
         self.ready(&original).await?;
         self.write("ready-0.json", &original)?;
+        self.query_capture(&original).await?;
         let original_result = self
             .terminal(&original, TraceTerminalReasonV1::TargetChanged)
             .await?;
@@ -2799,14 +3035,15 @@ impl PodCapture {
         self.traces.cancel(
             self.tenant_id,
             replacement.request.request_id,
-            &replacement.grant.principal,
+            &replacement.access,
+            Self::now()?,
             false,
         )?;
         let replacement_result = self
             .terminal(&replacement, TraceTerminalReasonV1::Cancelled)
             .await?;
         self.control
-            .accept_trace(original.request.clone(), original.grant.clone(), None)?;
+            .accept_trace(original.request.clone(), original.access.clone())?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         if serde_json::to_value(self.output(&original)?)? != original_result["output"] {
             return Err("the original execution acquired output after Pod replacement".into());
@@ -2842,6 +3079,32 @@ impl PodCapture {
             policy.signer.distribution_sequence_epoch,
             ed25519_dalek::SigningKey::from_bytes(&signing),
         )?;
+        let directory = PathBuf::from(KubernetesState::required("MITHRIL_TRACE_DIRECTORY")?);
+        let tenant_id = *uuid::Uuid::parse_str(&policy.tenant_id)?.as_bytes();
+        let tls = MtlsFixture::in_directory(tempfile::tempdir_in(&directory)?, false)?;
+        let provider =
+            crate::control_fixture::oidc::OidcFixture::start(&tls.files, "pod-query-qualification")
+                .await?;
+        let mut client = parts
+            .client
+            .take()
+            .ok_or("the fixture has no shared client listener")?;
+        let client_ca = client
+            .auth
+            .oidc
+            .ca_path
+            .clone()
+            .ok_or("the fixture has no client TLS trust file")?;
+        client.auth = provider.auth(&client.auth.origin, Some(tenant_id), tls.files.ca.clone());
+        client.investigation = Some(mithril_control::ClientGrpcConfig::default());
+        let mut credential = tempfile::NamedTempFile::new_in(&directory)?;
+        credential.write_all(b"fixture-access")?;
+        let query_profile = AraphorProfile {
+            endpoint: format!("https://localhost:{}", client.listen.port()),
+            tenant_id: uuid::Uuid::from_bytes(tenant_id).to_string(),
+            credential_file: credential.path().to_path_buf(),
+            ca_file: Some(client_ca),
+        };
         let owner = Self {
             traces: TraceOwner::new(
                 parts
@@ -2850,10 +3113,11 @@ impl PodCapture {
                     .ok_or("capture store is absent")?,
             ),
             control: parts.control,
-            directory: PathBuf::from(KubernetesState::required("MITHRIL_TRACE_DIRECTORY")?),
+            directory,
             namespace: KubernetesState::required("MITHRIL_TRACE_NAMESPACE")?,
             pod_name: KubernetesState::required("MITHRIL_TRACE_POD")?,
-            tenant_id: *uuid::Uuid::parse_str(&policy.tenant_id)?.as_bytes(),
+            tenant_id,
+            query_profile,
         };
         let policies = owner
             .control
@@ -2865,10 +3129,7 @@ impl PodCapture {
         let admission = parts
             .kubernetes_admission
             .ok_or("the fixture has no admission listener")?;
-        let administrative = parts
-            .administrative_exec
-            .ok_or("the fixture has no administrative listener")?;
-        tokio::select! {
+        let result = tokio::select! {
             result = owner.capture() => result,
             result = mithril_control::serve(parts.listen, &parts.tls, owner.control.clone(), std::future::pending::<()>()) => {
                 result?; Err("the Control listener stopped before fixture completion".into())
@@ -2878,12 +3139,58 @@ impl PodCapture {
             result = mithril_control::KubernetesAdmissionOwner::serve(admission, owner.control.clone(), policies, nodes, std::future::pending::<()>()) => {
                 result?; Err("the admission listener stopped".into())
             },
-            result = mithril_control::serve_administrative_http(administrative, owner.control.clone(), std::future::pending::<()>()) => {
-                result?; Err("the administrative listener stopped".into())
+            result = async {
+                mithril_control::ClientListener::load(client, owner.control.clone()).await?
+                    .serve(std::future::pending::<()>()).await
+            } => {
+                result?; Err("the shared client listener stopped".into())
             },
             _ = tokio::time::sleep(Duration::from_secs(900)) => Err("the Control fixture exceeded its lifetime".into()),
+        };
+        let stopped = provider.shutdown().await;
+        result?;
+        stopped?;
+        Ok(())
+    }
+}
+
+#[test]
+fn observability_capture_cleanup() -> TestResult<()> {
+    let directory = tempfile::tempdir()?;
+    for failed in [false, true] {
+        let path = directory
+            .path()
+            .join(if failed { "failed" } else { "success" });
+        let out = ProbeDirectory::create(&path)?;
+        let capture = path.join("capture");
+        fs::create_dir(&capture)?;
+        fs::write(capture.join("ready-1.json"), b"retained capture prefix")?;
+        fs::write(path.join("unrelated"), b"scenario input")?;
+        let result = Kubernetes::capture_result(
+            &capture,
+            if failed {
+                Err("the capture child failed".into())
+            } else {
+                Ok(())
+            },
+        );
+        assert_eq!(result.is_err(), failed);
+        if let Err(error) = result {
+            assert_eq!(error.to_string(), "the capture child failed");
+        }
+        drop(out);
+        assert!(!path.exists());
+        let retained = path.with_extension("capture-failed");
+        assert_eq!(retained.exists(), failed);
+        if failed {
+            assert_eq!(
+                fs::read(retained.join("ready-1.json"))?,
+                b"retained capture prefix"
+            );
+            assert!(!retained.join("unrelated").exists());
         }
     }
+    Ok(())
 }
 
 #[test]

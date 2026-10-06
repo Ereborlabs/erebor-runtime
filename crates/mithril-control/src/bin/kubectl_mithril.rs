@@ -4,18 +4,20 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use erebor_runtime_ipc::araphor::{
+    araphor_administrative_service_client::AraphorAdministrativeServiceClient,
+    AdministrativeExecDraftRequest, AdministrativeExecPollRequest, GetNodeDecommissionRequest,
+    SubmitNodeDecommissionRequest,
+};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, AttachParams};
 use kube::{Client, Config};
-use mithril_control::{
-    AdministrativeExecDraftRequestV1, AdministrativeExecDraftResponseV1,
-    AdministrativeExecPollResponseV1, NodeDecommissionStateV1, NodeDecommissionStatusV1,
-};
 use secrecy::SecretString;
 use tokio::io;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
 #[derive(Parser)]
-#[command(about = "Operate Mithril through Control HTTPS")]
+#[command(about = "Operate Mithril through Control gRPC")]
 struct Cli {
     #[arg(long)]
     control_url: String,
@@ -82,57 +84,72 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+impl Cli {
+    async fn connect(
+        endpoint: &str,
+        ca: Option<&std::path::Path>,
+    ) -> Result<AraphorAdministrativeServiceClient<Channel>, Box<dyn std::error::Error>> {
+        let url = reqwest::Url::parse(endpoint)?;
+        if url.scheme() != "https"
+            || url.origin().ascii_serialization() != endpoint
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("--control-url must be one HTTPS origin without a trailing slash".into());
+        }
+        let mut tls = ClientTlsConfig::new().with_enabled_roots();
+        if let Some(path) = ca {
+            tls = tls.ca_certificate(Certificate::from_pem(std::fs::read(path)?));
+        }
+        let channel = Endpoint::from_shared(endpoint.to_owned())?
+            .tls_config(tls)?
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .connect()
+            .await?;
+        Ok(AraphorAdministrativeServiceClient::new(channel))
+    }
+}
+
 impl DecommissionArgs {
     async fn run(
         self,
         control_url: &str,
         control_ca: Option<&std::path::Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if !control_url.starts_with("https://") || control_url.ends_with('/') {
-            return Err("--control-url must be one HTTPS origin without a trailing slash".into());
-        }
-        let mut client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
-        if let Some(path) = control_ca {
-            client =
-                client.add_root_certificate(reqwest::Certificate::from_pem(&std::fs::read(path)?)?);
-        }
-        let client = client.build()?;
-        let response = client
-            .post(format!("{control_url}/v1/node-decommissions"))
-            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-            .body(std::fs::read(self.artifact)?)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(
-                format!("node decommission submission failed with {status}: {body}").into(),
-            );
-        }
-        let mut status: NodeDecommissionStatusV1 = response.json().await?;
-        let status_url = format!(
-            "{control_url}/v1/node-decommissions/{}",
-            status.artifact_sha256
-        );
+        let mut client = Cli::connect(control_url, control_ca).await?;
+        let mut status = client
+            .submit_node_decommission(SubmitNodeDecommissionRequest {
+                artifact: std::fs::read(self.artifact)?,
+            })
+            .await?
+            .into_inner();
+        let digest = status.artifact_sha256.clone();
         loop {
-            println!("{} {:?}", status.artifact_sha256, status.state);
-            match status.state {
-                NodeDecommissionStateV1::Completed => return Ok(()),
-                NodeDecommissionStateV1::Rejected => {
+            if status.artifact_sha256 != digest {
+                return Err("decommission response has another artifact identity".into());
+            }
+            println!("{} {}", status.artifact_sha256, status.state);
+            match status.state.as_str() {
+                "COMPLETED" => return Ok(()),
+                "REJECTED" => {
                     return Err(
                         format!("node rejected decommission: {}", status.reason_code).into(),
                     )
                 }
-                _ => tokio::time::sleep(Duration::from_millis(250)).await,
+                "SUBMITTED" | "ACCEPTED" | "QUARANTINED" => {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                _ => return Err("decommission response has an unsupported state".into()),
             }
             status = client
-                .get(&status_url)
-                .send()
+                .get_node_decommission(GetNodeDecommissionRequest {
+                    artifact_sha256: digest.clone(),
+                })
                 .await?
-                .error_for_status()?
-                .json()
-                .await?;
+                .into_inner();
         }
     }
 }
@@ -142,21 +159,12 @@ async fn run_exec(
     control_ca: Option<&std::path::Path>,
     args: ExecArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if !control_url.starts_with("https://") || control_url.ends_with('/') {
-        return Err("--control-url must be one HTTPS origin without a trailing slash".into());
-    }
     if args.tty && !args.stdin {
         return Err("--tty requires --stdin".into());
     }
-    let mut client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
-    if let Some(path) = control_ca {
-        client =
-            client.add_root_certificate(reqwest::Certificate::from_pem(&std::fs::read(path)?)?);
-    }
-    let client = client.build()?;
-    let response = client
-        .post(format!("{control_url}/v1/administrative-exec/requests"))
-        .json(&AdministrativeExecDraftRequestV1 {
+    let mut client = Cli::connect(control_url, control_ca).await?;
+    let draft = client
+        .create_administrative_exec_request(AdministrativeExecDraftRequest {
             namespace: args.namespace.clone(),
             pod: args.pod.clone(),
             container: args.container.clone(),
@@ -167,14 +175,8 @@ async fn run_exec(
             tty: args.tty,
             approved_role_id: args.approved_role_id,
         })
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("administrative draft request failed with {status}: {body}").into());
-    }
-    let draft: AdministrativeExecDraftResponseV1 = response.json().await?;
+        .await?
+        .into_inner();
     println!("Approval required for:");
     println!("  namespace: {}", args.namespace);
     println!("  pod:       {}", args.pod);
@@ -187,21 +189,23 @@ async fn run_exec(
     println!();
     println!("Waiting for approval...");
     open_browser(&draft.activation_url);
-    let poll_url = format!(
-        "{control_url}/v1/administrative-exec/requests/{}",
-        draft.poll_token
-    );
     let credential = loop {
         if current_utc_ns()? > draft.expires_at_utc_ns {
             return Err("administrative approval expired".into());
         }
-        let response = client.get(&poll_url).send().await?;
-        if response.status() == reqwest::StatusCode::ACCEPTED {
+        let response = client
+            .poll_administrative_exec_request(AdministrativeExecPollRequest {
+                poll_token: draft.poll_token.clone(),
+            })
+            .await?
+            .into_inner();
+        if response.state == "PENDING" {
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
-        let response: AdministrativeExecPollResponseV1 =
-            response.error_for_status()?.json().await?;
+        if response.state != "APPROVED" {
+            return Err("administrative response has an unsupported state".into());
+        }
         let credential = response
             .credential
             .ok_or("approved response contains no credential")?;

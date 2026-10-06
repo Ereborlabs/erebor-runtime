@@ -9,6 +9,13 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub(crate) enum CliError {
+    #[snafu(display("{source}"))]
+    Araphor {
+        #[snafu(source(from(crate::cli::araphor::error::AraphorCommandError, Box::new)))]
+        source: Box<crate::cli::araphor::error::AraphorCommandError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to read runtime config `{}`: {source}", path.display()))]
     ReadConfig {
         path: PathBuf,
@@ -103,6 +110,7 @@ pub(crate) enum CliError {
 impl ErrorExt for CliError {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::Araphor { source, .. } => source.status_code(),
             Self::ReadConfig { .. }
             | Self::ReadPolicy { .. }
             | Self::ReadEvent { .. }
@@ -122,6 +130,7 @@ impl ErrorExt for CliError {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::Araphor { source, .. } => source.retry_hint(),
             Self::ReadConfig { source, .. }
             | Self::ReadPolicy { source, .. }
             | Self::ReadEvent { source, .. }
@@ -149,6 +158,7 @@ impl ErrorExt for CliError {
                 format!("Internal error: {}", self.status_code().as_u32())
             }
             _ => match self {
+                Self::Araphor { source, .. } => source.to_string(),
                 Self::InvalidConfig { source, .. } => source.to_string(),
                 Self::Runtime { source, .. } => source.to_string(),
                 Self::SessionExecution { source, .. } => source.to_string(),
@@ -164,6 +174,15 @@ impl ErrorExt for CliError {
                 | Self::DaemonClient { .. }
                 | Self::DaemonRuntime { .. } => self.to_string(),
             },
+        }
+    }
+}
+
+impl CliError {
+    pub(crate) fn exit_code(&self) -> i32 {
+        match self {
+            Self::Araphor { source, .. } => source.exit_code(),
+            _ => 1,
         }
     }
 }

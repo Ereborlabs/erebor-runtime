@@ -2,6 +2,7 @@
 
 mod agent;
 mod approvals;
+mod araphor;
 mod error;
 mod filesystem;
 mod mithril;
@@ -23,6 +24,7 @@ use erebor_runtime_ipc::{
 use tonic::{metadata::MetadataValue, transport::Channel, Request, Status};
 
 pub use approvals::{ApprovalPage, ApprovalRecord};
+pub use araphor::{AraphorClient, AraphorError, AraphorProfile, AraphorResult};
 pub use erebor_runtime_ipc::v1::{
     PolicyPackageListResponse, PolicyPackageRecord, PolicySetListResponse, PolicySetRecord,
     PolicyTestResponse, SurfaceListResponse, SurfaceRecord,

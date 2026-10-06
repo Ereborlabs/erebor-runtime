@@ -90,7 +90,7 @@ fn control_config(directory: &TempDir, store: &std::path::Path) -> TestResultWit
             "policy_issuer_sequence_epoch": 0,
             "policy_signers": []
         },
-        "administrative_exec": null,
+        "client": null,
         "evidence_directory": store,
         "control_store_directory": store,
         "kubernetes_policy": null,

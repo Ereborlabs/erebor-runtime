@@ -36,6 +36,8 @@ use tokio::sync::oneshot;
 
 use crate::physical::wait_for_async;
 
+pub(crate) mod oidc;
+
 pub(crate) fn control_store_lease_ready<T>(
     result: mithril_control::Result<T>,
 ) -> crate::Result<Option<T>> {
@@ -502,6 +504,17 @@ impl MtlsFixture {
 }
 
 impl ControlServerFixture {
+    pub(crate) async fn client(
+        listener: mithril_control::ClientListener,
+        address: SocketAddr,
+    ) -> Result<Self, Box<dyn StdError>> {
+        let (shutdown, receiver) = oneshot::channel();
+        let server = tokio::spawn(listener.serve(async move {
+            let _result = receiver.await;
+        }));
+        Self::from_running(address, shutdown, server).await
+    }
+
     #[cfg(test)]
     pub(crate) async fn admission(
         files: &CertificateFiles,
@@ -620,7 +633,6 @@ impl ControlServerFixture {
         }
     }
 
-    #[cfg(test)]
     pub(crate) async fn from_running(
         address: SocketAddr,
         shutdown: oneshot::Sender<()>,

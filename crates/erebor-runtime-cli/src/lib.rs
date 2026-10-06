@@ -12,6 +12,12 @@ pub fn run() {
     exit_on_error(cli.execute());
 }
 
+pub fn run_araphor() {
+    let cli = cli::araphor::AraphorCli::parse();
+    logging::init_tracing(&cli.logging);
+    exit_on_error(cli::araphor::AraphorCommandOwner::new(&cli.args).execute());
+}
+
 fn exit_on_error(result: Result<(), error::CliError>) {
     if let Err(error) = result {
         let status_code = error.status_code();
@@ -23,6 +29,6 @@ fn exit_on_error(result: Result<(), error::CliError>) {
             retry_hint = %retry_hint
         );
         eprintln!("{}", error.output_msg());
-        std::process::exit(1);
+        std::process::exit(error.exit_code());
     }
 }

@@ -29,9 +29,11 @@ control:
   logFilter: info,mithril_control=debug
   nodeSelector:
     kubernetes.io/hostname: replace
-  administrativeExec:
+  client:
     enabled: true
     port: 9444
+  administrativeExec:
+    enabled: true
     webhookToken: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     webhookCABundle: replace
   admission:

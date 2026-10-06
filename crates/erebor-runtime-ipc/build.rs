@@ -22,5 +22,14 @@ fn main() -> Result<(), io::Error> {
         .file_descriptor_set_path(descriptor_path)
         .compile_protos(&protos, &[PathBuf::from("proto")])?;
 
+    let clients = PathBuf::from("../mithril-control/proto");
+    let client = clients.join("erebor/mithril/control/v1/client.proto");
+    println!("cargo:rerun-if-changed={}", client.display());
+    tonic_build::configure()
+        .build_client(true)
+        .build_server(true)
+        .type_attribute(".", "#[derive(serde::Serialize)]")
+        .compile_protos(&[client], &[clients])?;
+
     Ok(())
 }

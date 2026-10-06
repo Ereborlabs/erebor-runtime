@@ -8,6 +8,7 @@ enum Case {
     BackendLifecycle,
     OwnedCapture,
     QueryUpload,
+    QueryTraceClient,
 }
 
 #[derive(Parser)]
@@ -27,11 +28,35 @@ struct Cli {
     parent_fixture: bool,
     #[arg(long, conflicts_with_all = ["parent_fixture", "retained_pin_root"])]
     pod_cgroup: Option<PathBuf>,
+    #[arg(long, requires = "case")]
+    client_executable: Option<PathBuf>,
+    #[arg(long, conflicts_with = "client_executable", requires = "assets")]
+    browser_fixture: bool,
+    #[arg(long, requires = "browser_fixture")]
+    assets: Option<PathBuf>,
 }
 
 impl Cli {
     fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let owner = mithril_e2e::ObservabilityQualification::new(self.output_directory);
+        if self.case == Case::QueryTraceClient {
+            if self.executable.is_some()
+                || self.sha256.is_some()
+                || self.retained_pin_root.is_some()
+                || self.parent_fixture
+                || self.pod_cgroup.is_some()
+            {
+                return Err("client qualification does not accept physical-backend options".into());
+            }
+            return owner.query_trace_client(
+                self.client_executable,
+                self.assets,
+                self.browser_fixture,
+            );
+        }
+        if self.client_executable.is_some() || self.browser_fixture || self.assets.is_some() {
+            return Err("client options require query-trace-client".into());
+        }
         if matches!(self.case, Case::OwnedCapture | Case::QueryUpload) {
             if self.executable.is_some()
                 || self.sha256.is_some()
@@ -183,6 +208,40 @@ mod tests {
             let cli = Cli::try_parse_from(args.into_iter().chain(options))?;
             assert!(cli.run().is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn observability_client_cli() -> Result<(), Box<dyn std::error::Error>> {
+        let args = [
+            "test",
+            "--case",
+            "query-trace-client",
+            "--output-directory",
+            "/tmp/proof",
+        ];
+        assert_eq!(Cli::try_parse_from(args)?.case, Case::QueryTraceClient);
+        assert!(Cli::try_parse_from(args)?.run().is_err());
+        assert!(Cli::try_parse_from(args.into_iter().chain(["--browser-fixture"])).is_err());
+        assert!(Cli::try_parse_from(args.into_iter().chain([
+            "--browser-fixture",
+            "--assets",
+            "/missing/assets",
+            "--client-executable",
+            "/missing/araphor",
+        ]))
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "test",
+            "--case",
+            "query-upload",
+            "--output-directory",
+            "/tmp/proof",
+            "--client-executable",
+            "/missing/araphor",
+        ])?
+        .run()
+        .is_err());
         Ok(())
     }
 }

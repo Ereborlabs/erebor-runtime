@@ -11,7 +11,7 @@ use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::{
-    AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
+    AllowedNodeIdentity, ClientListenerConfig, ControlPlane, ControlServerTls, ControlStore,
     EvidenceIntakeOwner, KubernetesAdmissionHttpConfigV1, KubernetesNodeControlConfigV1,
     KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, Result,
     SystemIntakeClock, TrustGenerationV1,
@@ -53,7 +53,7 @@ pub struct ControlConfig {
     pub tls: ControlServerTls,
     pub allowed_nodes: Vec<AllowedNodeIdentity>,
     pub trust: TrustGenerationV1,
-    pub administrative_exec: Option<AdministrativeHttpConfigV1>,
+    pub client: Option<ClientListenerConfig>,
     pub evidence_directory: PathBuf,
     #[serde(default)]
     pub evidence_admission: EvidenceAdmissionLimits,
@@ -77,7 +77,7 @@ pub struct ControlRuntimeParts {
     pub listen: SocketAddr,
     pub tls: ControlServerTls,
     pub control: ControlPlane,
-    pub administrative_exec: Option<AdministrativeHttpConfigV1>,
+    pub client: Option<ClientListenerConfig>,
     pub kubernetes_nodes: Option<KubernetesNodeReadinessOwner>,
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
     pub data_error: Option<crate::Error>,
@@ -142,7 +142,7 @@ impl ControlConfig {
             listen: self.listen,
             tls: self.tls,
             control,
-            administrative_exec: self.administrative_exec,
+            client: self.client,
             kubernetes_nodes,
             kubernetes_admission: self.kubernetes_admission,
             data_error,
@@ -249,7 +249,7 @@ impl ControlConfig {
                 }
             );
         }
-        if let Some(config) = &self.administrative_exec {
+        if let Some(config) = &self.client {
             config.validate()?;
         }
         Ok(())
@@ -309,7 +309,7 @@ mod tests {
             }],
             "trust": { "generation": 1, "bundle_digest": "b".repeat(64),
                 "policy_issuer_sequence_epoch": 0, "policy_signers": [] },
-            "administrative_exec": null,
+            "client": null,
             "evidence_directory": directory.path()
         });
         fs::write(&path, serde_json::to_vec(&source)?)?;

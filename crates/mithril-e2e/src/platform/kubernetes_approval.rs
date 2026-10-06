@@ -6,9 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use mithril_control::{AdministrativeExecDraftRequestV1, AdministrativeExecDraftResponseV1};
+use erebor_runtime_ipc::araphor::{
+    araphor_administrative_service_client::AraphorAdministrativeServiceClient,
+    AdministrativeExecDraftRequest, AdministrativeExecPollRequest,
+    ApproveAdministrativeExecRequest, GetAdministrativeExecActivationRequest,
+};
 use reqwest::{redirect::Policy, Certificate, Client, RequestBuilder, Response, StatusCode};
 use serde_json::json;
+use tonic::transport::{ClientTlsConfig, Endpoint};
 
 use super::TestResult;
 use crate::error::InvalidInputSnafu;
@@ -287,6 +292,18 @@ impl KubernetesApproval {
         Ok(response)
     }
 
+    fn cookie(response: &Response, name: &str) -> TestResult<String> {
+        response
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .filter_map(|value| value.split(';').next())
+            .find(|value| value.split_once('=').is_some_and(|(key, _)| key == name))
+            .map(str::to_owned)
+            .ok_or_else(|| format!("response omitted {name} cookie").into())
+    }
+
     fn redirect(
         &mut self,
         runtime: &tokio::runtime::Runtime,
@@ -316,11 +333,22 @@ impl KubernetesApproval {
             .chain(args.iter().copied())
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        let response = self.send(
-            runtime,
-            client
-                .post(format!("{ADMIN_URL}/v1/administrative-exec/requests"))
-                .json(&AdministrativeExecDraftRequestV1 {
+        let channel =
+            runtime.block_on(async {
+                Endpoint::from_static(ADMIN_URL)
+                    .tls_config(ClientTlsConfig::new().ca_certificate(
+                        tonic::transport::Certificate::from_pem(fs::read(CA_PATH)?),
+                    ))?
+                    .connect_timeout(Duration::from_secs(5))
+                    .timeout(Duration::from_secs(10))
+                    .connect()
+                    .await
+                    .map_err(Box::<dyn std::error::Error>::from)
+            })?;
+        let mut rpc = AraphorAdministrativeServiceClient::new(channel);
+        let draft = runtime
+            .block_on(
+                rpc.create_administrative_exec_request(AdministrativeExecDraftRequest {
                     namespace: namespace.to_owned(),
                     pod: "pid-reuse".to_owned(),
                     container: "worker".to_owned(),
@@ -331,26 +359,48 @@ impl KubernetesApproval {
                     tty: false,
                     approved_role_id: "runtime-external-administrative".to_owned(),
                 }),
-            StatusCode::CREATED,
-            "administrative draft",
-        )?;
-        let draft: AdministrativeExecDraftResponseV1 = runtime.block_on(response.json())?;
-        let activation = self.send(
+            )?
+            .into_inner();
+        let token = draft
+            .activation_url
+            .rsplit('/')
+            .next()
+            .ok_or("activation URL has no token")?
+            .to_owned();
+        self.send(
             runtime,
             client.get(&draft.activation_url),
             StatusCode::OK,
             "activation page",
         )?;
-        let page = runtime.block_on(activation.text())?;
-        if !page.contains(&argv.join(" ")) {
-            return Err("activation page changed the approved command".into());
+        let detail = runtime
+            .block_on(rpc.get_administrative_exec_activation(
+                GetAdministrativeExecActivationRequest {
+                    activation_token: token.clone(),
+                },
+            ))?
+            .into_inner();
+        if detail.argv != argv
+            || detail.namespace != namespace
+            || detail.pod != "pid-reuse"
+            || detail.pod_uid.is_empty()
+            || detail.authenticated
+        {
+            return Err("activation changed the approved request".into());
         }
-        let authorize = self.redirect(
+        let authorization = self.send(
             runtime,
             client.get(format!("{}/authorize", draft.activation_url)),
             StatusCode::SEE_OTHER,
             "OIDC authorization",
         )?;
+        let cookie = Self::cookie(&authorization, "araphor-approval")?;
+        let authorize = authorization
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .ok_or("OIDC authorization omitted its redirect")?
+            .to_str()?
+            .to_owned();
         let callback = self.redirect(
             runtime,
             client.get(authorize),
@@ -359,32 +409,66 @@ impl KubernetesApproval {
         )?;
         let confirmation = self.send(
             runtime,
-            client.get(callback),
-            StatusCode::OK,
+            client
+                .get(callback)
+                .header(reqwest::header::COOKIE, &cookie),
+            StatusCode::SEE_OTHER,
             "OIDC callback",
         )?;
-        let page = runtime.block_on(confirmation.text())?;
-        if !page.contains("operator@mithril.invalid")
-            || !page.contains("I accept this race and approve once")
+        let csrf = Self::cookie(&confirmation, "araphor-approval-csrf")?
+            .split_once('=')
+            .ok_or("CSRF cookie has no value")?
+            .1
+            .to_owned();
+        let mut request = tonic::Request::new(GetAdministrativeExecActivationRequest {
+            activation_token: token.clone(),
+        });
+        request.metadata_mut().insert("origin", ADMIN_URL.parse()?);
+        request.metadata_mut().insert("cookie", cookie.parse()?);
+        let detail = runtime
+            .block_on(rpc.get_administrative_exec_activation(request))?
+            .into_inner();
+        if !detail.authenticated
+            || detail.approver != "operator@mithril.invalid"
+            || detail.argv != argv
+            || detail.resolved_executable.is_empty()
+            || detail.cluster_uid.is_empty()
+            || detail.approved_role_id != "runtime-external-administrative"
         {
-            return Err("approval confirmation omitted the authenticated risk statement".into());
+            return Err("approval confirmation omitted authenticated request fields".into());
         }
-        let approved = self.send(
-            runtime,
-            client.post(format!("{}/approve", draft.activation_url)),
-            StatusCode::OK,
-            "administrative approval",
-        )?;
+        let mut request = tonic::Request::new(ApproveAdministrativeExecRequest {
+            activation_token: token.clone(),
+        });
+        request.metadata_mut().insert("origin", ADMIN_URL.parse()?);
+        request.metadata_mut().insert("cookie", cookie.parse()?);
+        let denied = runtime.block_on(rpc.approve_administrative_exec(request));
+        if !matches!(denied, Err(ref error) if error.code() == tonic::Code::PermissionDenied) {
+            return Err("administrative approval did not reject missing CSRF".into());
+        }
+        let mut request = tonic::Request::new(ApproveAdministrativeExecRequest {
+            activation_token: token.clone(),
+        });
+        request.metadata_mut().insert("origin", ADMIN_URL.parse()?);
+        request.metadata_mut().insert("cookie", cookie.parse()?);
+        request
+            .metadata_mut()
+            .insert("x-araphor-csrf", csrf.parse()?);
         if !runtime
-            .block_on(approved.text())?
-            .contains("Administrative exec approved")
+            .block_on(rpc.approve_administrative_exec(request))?
+            .into_inner()
+            .approved
         {
             return Err("Control did not confirm administrative approval".into());
         }
-        let poll = format!(
-            "{ADMIN_URL}/v1/administrative-exec/requests/{}",
-            draft.poll_token
+        let wrong = runtime.block_on(
+            rpc.poll_administrative_exec_request(AdministrativeExecPollRequest {
+                poll_token: token,
+            }),
         );
+        if !matches!(wrong, Err(ref error) if error.code() == tonic::Code::NotFound) {
+            return Err("activation token was accepted as a poll token".into());
+        }
         let path = work.join("administrative-kubeconfig.json");
         let last = RefCell::new(String::from("<absent>"));
         let credential = wait_for(
@@ -392,44 +476,51 @@ impl KubernetesApproval {
             "administrative credential",
             READY_LIMIT,
             || {
-                let response = match runtime.block_on(async { client.get(&poll).send().await }) {
-                    Ok(response) => response,
-                    Err(source) => {
-                        *last.borrow_mut() = source.to_string();
+                let response = match runtime.block_on(rpc.poll_administrative_exec_request(
+                    AdministrativeExecPollRequest {
+                        poll_token: draft.poll_token.clone(),
+                    },
+                )) {
+                    Ok(value) => value.into_inner(),
+                    Err(error) if error.code() == tonic::Code::Unavailable => {
+                        *last.borrow_mut() = error.code().to_string();
                         return Ok(None);
                     }
+                    Err(error) => {
+                        return InvalidInputSnafu {
+                            path: &path,
+                            reason: format!("credential poll failed: {}", error.code()),
+                        }
+                        .fail()
+                    }
                 };
-                let status = response.status();
-                let body = runtime.block_on(response.text()).map_err(|source| {
-                    InvalidInputSnafu {
-                        path: &path,
-                        reason: source.to_string(),
-                    }
-                    .build()
-                })?;
-                *last.borrow_mut() = format!("{status}: {body}");
-                if status == StatusCode::ACCEPTED {
-                    return Ok(None);
-                }
-                if status != StatusCode::OK {
-                    return InvalidInputSnafu {
-                        path: &path,
-                        reason: format!("credential poll returned {status}: {body}"),
-                    }
-                    .fail();
-                }
-                let response: mithril_control::AdministrativeExecPollResponseV1 =
-                    serde_json::from_str(&body).map_err(|source| {
+                *last.borrow_mut() = response.state.clone();
+                match response.state.as_str() {
+                    "PENDING" => Ok(None),
+                    "APPROVED" => response.credential.map(Some).ok_or_else(|| {
                         InvalidInputSnafu {
                             path: &path,
-                            reason: source.to_string(),
+                            reason: "approved poll omitted its one-use credential",
                         }
                         .build()
-                    })?;
-                Ok(response.credential)
+                    }),
+                    _ => InvalidInputSnafu {
+                        path: &path,
+                        reason: "credential poll returned an unknown state",
+                    }
+                    .fail(),
+                }
             },
             || format!("last response: {}", last.borrow()),
         )?;
+        let repeated = runtime.block_on(rpc.poll_administrative_exec_request(
+            AdministrativeExecPollRequest {
+                poll_token: draft.poll_token,
+            },
+        ));
+        if !matches!(repeated, Err(ref error) if error.code() == tonic::Code::FailedPrecondition) {
+            return Err("administrative credential was delivered more than once".into());
+        }
         let config = json!({
             "apiVersion": "v1",
             "kind": "Config",
