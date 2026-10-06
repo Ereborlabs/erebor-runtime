@@ -275,8 +275,9 @@ Status: **Not done**. Implementation uses the primary `main` checkout.
 The shared TLS listener, typed administrative migration, native CLI and
 generated browser client are implemented. The investigation login membership
 check remains required. Native and live-browser checks pass at their recorded
-source revisions. The latest physical check fails before capture. Complete
-qualification is not finished. Do not enable public SQL from this partial result.
+source revisions. One physical run fails before capture. The diagnostic rerun
+passes with the same failed-run images; the cause remains unknown. The later
+release images are not qualified. Do not enable public SQL from this partial result.
 
 The data crate changes use the closed SQL binder, tenant-selected input and
 current-authority checks for query and follow. The approved rewrite removes
@@ -376,14 +377,15 @@ as a checked private test input. Diagnostic admission was synthetic-test-only;
 performance remains unqualified. The receipt is
 `/tmp/araphor-pod-retry.d6g9SNwz/result.json`.
 
-The latest physical case failed before capture. Python startup returned
+The physical case at the final client build failed before capture. Python startup returned
 `EACCES` for `/usr/local/lib/python3.13/encodings/aliases.py`. The cause is
 unknown. No capture receipt was produced. The three lightweight prerequisites
 passed; the physical case failed. The retained log is
 `/tmp/araphor-pod-final-close.eUKgZKea/test.log`. The earlier physical pass does
 not qualify this later source. No security setting or protected-start owner
-was changed after this failure. Investigation into protected-start owners
-requires the pending scope decision.
+was changed after this failure. The user approved investigation into
+protected-start owners. This approval does not authorize an enforcement change.
+The diagnostic result is recorded below.
 
 The first physical run failed after its Control child exited 101. Its error
 text was lost during teardown; the cause remains unknown. The second run
@@ -406,7 +408,8 @@ browser connection or capture.
 
 ### Current client qualification
 
-Implementation source: `878de63e`. Status: **Not done**. The remaining gate is
+Production implementation source: `878de63e`. Diagnostic source: `13816cbb`.
+Status: **Not done**. The remaining gate is
 physical qualification. Shared listener, typed administrative migration,
 in-process SQL, asynchronous follow, CLI and live console checks pass.
 The login membership check remains required. Administrative approval remains
@@ -414,11 +417,12 @@ separate from the tenant investigate permission.
 
 | Check | Result on 2026-10-06 |
 | --- | --- |
-| Final Rust procedure | PASS. Formatting, workspace check, all-target/all-feature clippy and workspace tests pass. The top-level suites report 1,615 passed, zero failed and 545 ignored. Data: 247; shared trace: 23; Control: 205; Mithril e2e: 164; CLI: 53. Ignored cases are not passes. |
+| Final Rust procedure | PASS at `13816cbb`. Formatting, workspace check, all-target/all-feature clippy and workspace tests pass. The top-level suites report 1,616 passed, zero failed and 545 ignored. Data: 247; shared trace: 23; Control: 205; Mithril e2e: 165; CLI: 53. Ignored cases are not passes. |
 | Built native client | PASS. All ten receipt checks pass with the rebuilt CLI and fixture. Natural completion preserves complete output and unknown cleanup. Cancellation and viewer interruption remain distinct. This fixture does not prove native BPF cleanup. |
 | UI and live browser | PASS. Type check, production build, 23 unit tests, 24 layout/accessibility tests and one live Control test pass. Non-member login returns 403 without a session. Streaming, reconnect, CSRF and quiet revocation pass. No page or content-security-policy error occurs. |
 | Helm and release images | PASS. Existing lint/template checks pass. Control, Node and client images build. Read-only, network-disabled startup and native-library checks pass. Control and client keep UID 65532. Console assets are present. No image was imported into the VM in this refresh. |
-| Latest physical client case | FAIL. Three lightweight prerequisites pass. Python startup fails before capture with the error recorded above. The cause is unknown. No capture receipt exists. |
+| Physical client failure at the final build | FAIL. Three lightweight prerequisites pass. Python startup fails before capture with the error recorded above. The cause is unknown. No capture receipt exists for that run. |
+| Protected-start diagnostic rerun | PASS. The same failed-run production images and pinned actor complete the case in 203.23 seconds. Both captures report Verified cleanup. This rerun does not establish the earlier failure cause. |
 | Performance | UNQUALIFIED. No new performance test or benchmark ran. Diagnostic deployment remains disabled. |
 
 The final Rust command is:
@@ -429,8 +433,9 @@ CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
   bash .github/scripts/verify-rust-ci.sh
 ```
 
-Read `/tmp/araphor-client-final-rust-ci.log`. This procedure ran after the
-last Rust edit. Commit `878de63e` contains exactly that Rust source.
+Read `/tmp/araphor-startup-rust-ci.log`. This procedure returns exit zero after
+the last Rust edit. Commit `13816cbb` contains that Rust source. The earlier
+`/tmp/araphor-client-final-rust-ci.log` covers implementation commit `878de63e`.
 The recovery test now includes the approved `selection` and `finding_reference`
 fields. Its source-copy exclusion, round-trip and binding checks remain.
 The owner review finds no new service, queue, store or payload copy.
@@ -486,7 +491,54 @@ Node 24.15.0, npm 11.12.1, TypeScript 7.0.2, Vite 8.2.2, Vitest 4.1.11,
 Playwright 1.62.1, Chromium 151.0.7922.34, gRPC-Web 2.0.2, protobuf 4.0.3,
 protoc 3.21.12 and Helm 3.8.0. The earlier physical platform and private
 bpftrace version remain as recorded above. Those versions do not convert
-the latest physical failure into a pass.
+the recorded physical failure into a pass.
+
+### Protected-start investigation
+
+Diagnostic source: `13816cbb`. Result: **Not done**. The original failure cause
+is not identified. The diagnostic owner and its correctness tests are complete.
+The final Rust procedure passes at this source with 1,616 enabled tests,
+zero failures and 545 ignored tests. Read `/tmp/araphor-startup-rust-ci.log`.
+
+The pinned Python image starts without Mithril on the same VM. Python
+3.13.15 reads all 16,011 bytes of `encodings/aliases.py` and exits zero.
+The diagnostic Pod uses the same interpreter and container security settings.
+The fixture removes this Pod after the check. This check does not prove
+protected startup or the cause of the earlier denial.
+
+The retained failure log shows policy activation and declared-entry approval
+before the failed Python startup. Earlier policy-pending responses do not
+release that startup. The original diagnostics retain only 16 recent effects;
+those effects are allows. The first denied read is not available.
+
+`Kubernetes::capture_result` now saves the full bounded Node snapshot and health
+in `node-snapshot.pb` before failure cleanup. It saves the original error in
+`capture-failure.txt`. An unavailable observer produces
+`node-snapshot-error.txt`; the original failure remains the returned error.
+The owner uses the existing snapshot API. It adds no kernel reader.
+`observability_startup_failure` passes on the host and VM without Kubernetes.
+This test proves diagnostic retention for a failure before a capture receipt.
+It does not reproduce the kernel denial. The existing capture cleanup test
+also passes.
+
+The protected diagnostic rerun uses Node and Control tags
+`20261006-final-close`, not the later `20261006-verified-close` images.
+The actor remains pinned to
+`docker.io/library/python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285`.
+All three lightweight prerequisites and the physical case pass. Both intended
+denials have errno 13, zero read bytes and `EXACT_POLICY_DENY`. The receipt
+reports unchanged enforcement resources, query recovery and Verified cleanup
+for both captures. The fixture removes its Pods and Mithril links.
+Read `/tmp/araphor-startup-investigation.GoAtyn/result.json`, `test.log` and
+`startup-effects-20261006.log`. The observer stops when cleanup closes its
+socket. Its bounded snapshots do not prove the absence of an earlier denial.
+
+No Node, kernel, policy or authorization code changes in this investigation.
+A mount-cache failure is a candidate cause, not a result. A matching denied
+event must identify its reason and `operation_argument` before an enforcement
+fix is selected. Complete client qualification remains **Not done**. The
+earlier failure remains unexplained, and this diagnostic run does not qualify
+the later release images. Performance remains **UNQUALIFIED**.
 
 ## Stop point
 

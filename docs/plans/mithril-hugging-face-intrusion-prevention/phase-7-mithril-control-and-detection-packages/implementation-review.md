@@ -24,8 +24,9 @@ and keeps ControlStore for policy authority.
 Diagnostic contracts, execution, transport, and projection are implemented.
 Public SQL, trace CLI/API and the shared client listener are implemented.
 Native and live-browser checks pass at the recorded source revisions. Complete
-client qualification remains **Not done** because the latest physical check
-fails before capture. Assessment submission, classification, proposal
+client qualification remains **Not done**. A diagnostic physical rerun passes,
+but the earlier startup failure is unexplained and later images are unqualified.
+Assessment submission, classification, proposal
 generation and declarative captures are not delivered by these changes.
 
 ## Linked implementation flows
@@ -460,8 +461,9 @@ external fixtures. The command is
 native interruption, process-crash containment, native BPF cleanup or
 performance. The lightweight case passed at `55b804b3`.
 
-An earlier paired physical query-upload run passed. The latest physical client
-run failed before capture at Python startup. The cause is unknown. The physical
+An earlier paired physical query-upload run passed. One physical client
+run failed before capture at Python startup. The diagnostic rerun passes with
+those same production images. The cause of the earlier failure is unknown. The physical
 Control Pod keeps UID 65532 and its current security settings. The shared
 listener, administrative route migration, CLI and console are implemented.
 This section does not claim complete public-client qualification.
@@ -4071,7 +4073,7 @@ membership check. Administrative approval remains a separate authority.
 The final owner review finds no extra service, queue, store or payload copy.
 The guide's local source and document paths are checked against this checkout.
 
-The final Rust procedure passes after the last Rust edit: 1,615 tests pass,
+At `878de63e`, the final Rust procedure passes: 1,615 tests pass,
 zero fail and 545 are ignored across the top-level suites. Ignored cases are
 not passes. The native built-client case passes all ten receipt checks. Its
 exact committed wrapper passes one test. The live Control-backed browser case
@@ -4081,10 +4083,38 @@ Read the
 [current qualification record](../../araphor-observability/phase-3-cli-api-and-console.md#current-client-qualification)
 for commands, artifact identities, versions and logs.
 
-Complete client qualification is **Not done**. The latest physical case fails
+Complete client qualification is **Not done**. One physical case fails
 before capture. Python cannot read `/usr/local/lib/python3.13/encodings/aliases.py`
-at startup. The cause is unknown, and no capture receipt exists. The earlier
-physical pass does not qualify this later source. The pending scope decision
-controls investigation into protected-start owners. Performance remains
+at startup. The cause is unknown, and that run has no capture receipt.
+The approved diagnostic rerun passes with the same failed-run production
+images. This result does not explain the failure or qualify the later release
+images. No Node, kernel, policy or authorization change is part of the
+investigation. Performance remains
 **UNQUALIFIED**. Declarative capture, remote deployment, assessment and model
 integration are not included in this client result.
+
+### Startup failure evidence
+
+[Kubernetes::start_group](../../../../crates/mithril-e2e/src/platform/kubernetes/actor.rs) The actor exits before a capture receipt.
+-> [Kubernetes::capture_result](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) The fixture reads the existing bounded Node snapshot.
+-> [Kubernetes::capture_result](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) The fixture saves the full protobuf snapshot and health, or an explicit observer error.
+-> [Kubernetes::capture_result](../../../../crates/mithril-e2e/src/platform/kubernetes.rs) The fixture retains the failure files and returns the original error.
+-> [Lifecycle::tear_down](../../../../crates/mithril-e2e/src/platform/lifecycle.rs) The existing owner removes the scenario resources.
+
+The startup error path reads the snapshot while Node is live. A later cleanup
+failure can find Node already stopped; that path records observer unavailability.
+The files are `node-snapshot.pb`, `node-snapshot-error.txt` and
+`capture-failure.txt`. The first two files are alternatives.
+The same-file `observability_startup_failure` test preserves a synthetic denial
+outside the last 16 effects, all snapshot fields, health and the original
+pre-receipt error. It also checks observer failure. This test proves retention,
+not the real kernel cause. The existing `observability_capture_cleanup` test
+still proves success and failure cleanup. The snapshot reader does not consume
+the kernel ring buffer or change observation authorization.
+
+Diagnostic source: `13816cbb`. The final Rust procedure returns exit zero
+after the last Rust edit: 1,616 tests pass, zero fail and 545 are ignored
+across 77 top-level suites. Read `/tmp/araphor-startup-rust-ci.log`.
+The paired diagnostic run passes with the failed-run production images.
+Read the [investigation record](../../araphor-observability/phase-3-cli-api-and-console.md#protected-start-investigation)
+for its exact inputs and limits. The original startup cause remains unknown.
