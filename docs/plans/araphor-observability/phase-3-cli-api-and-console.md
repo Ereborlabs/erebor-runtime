@@ -131,6 +131,11 @@ Status: **Not done**.
    stalled-output limits. Trace cancellation is a mutation;
    query cancellation only ends a read. Close DB readers before network I/O.
    Cursor identity, source digest, and target references must survive retries.
+   Before a native read-revocation check, reserve one existing AnalysisStore
+   reader slot. Keep that slot until the check and cleanup return. Do not
+   charge this fixed metadata read as a client SQL evaluation. If a read
+   ends after rows but before their checkpoint, report a partial result;
+   do not report completion with an older checkpoint.
 3. Add SQL and Trace command parsing/rendering to the existing
    `erebor-runtime-cli` command tree. Provide the `araphor` entry point without
    copying the tree. Put the generated Control gRPC client in a focused module of

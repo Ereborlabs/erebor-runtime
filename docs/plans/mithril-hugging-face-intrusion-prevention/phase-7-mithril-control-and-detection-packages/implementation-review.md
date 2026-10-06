@@ -280,6 +280,13 @@ subscription store.
 QueryTransport and TraceTransport retain the latest native checkpoint as a
 read guard. A local deadline or final result checks that guard and current
 tenant access after the wait. The guard contains no drained output page.
+QueryReadScope reserves one existing AnalysisStore reader slot before its
+blocking task. The native connection retains that same slot through cleanup.
+This fixed read checks current trace revocation; it does not reserve client
+SQL input, output or evaluation capacity. A dropped check future requests
+interruption but cannot release the running task's reader or output leases.
+QueryTransport reports a deadline error if delivered rows have no complete
+checkpoint. The CLI and browser cannot treat these rows as completed output.
 `observability_grpc_result_revocation`,
 `observability_grpc_deadline_revocation` and
 `observability_grpc_duration_revocation` check read revocation before these
