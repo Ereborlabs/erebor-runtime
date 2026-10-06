@@ -8558,6 +8558,16 @@ setup, production actions, assertions, and focused test.
     - [ ] Commit Kubernetes registration after its exact case and normal
       cleanup pass. The case suffix is `node_restart_kubernetes`. Reproduce
       any new Kubernetes condition in lightweight before a fix or rerun.
+      The first case failed in 79.92 seconds on 2026-10-06. The external
+      actor exited with status 120 before `label-read-ok`. The Node restart
+      was not reached. See `/var/tmp/mithril-external-restart-kube-20261006.log`
+      in the retained Kubernetes VM. The trial registration is removed.
+      The actor uses the host mount namespace. Live containerd specifications
+      show a separate hostname bind mount for each Pod. The direct-runc
+      fixture has no such mount. First reproduce this physical difference
+      with a separate hostname bind mount in direct runc. Report a failed
+      read errno in the shared actor process name. Do not change a security
+      assertion, readiness limit, Platform API, or production implementation.
     - [ ] Compare the four legacy Node-specific fields and restart block
       with baseline `95775f48`, then remove only their matched checks.
       Keep label-loss setup and its recovered snapshot while the separate
