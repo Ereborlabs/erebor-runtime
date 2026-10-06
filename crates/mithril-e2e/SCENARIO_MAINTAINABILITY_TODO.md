@@ -3929,7 +3929,26 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Direct runc: both modes passed in 183.38 seconds on 2026-10-06.
       The body, fixture inputs, production code, and deadlines are unchanged.
       Log: `/var/tmp/mithril-generation-runc-20261006.log` in the retained VM.
-    - [ ] Kubernetes: run the same body after lightweight passes, then commit.
+    - [x] Kubernetes: both modes passed in 129.73 seconds on 2026-10-06.
+      The first Node became ready in 38 seconds with zero restarts. The test
+      body, policy inputs, production source, and startup deadline are unchanged.
+      Log: `/var/tmp/mithril-generation-kube-isolated-20261006.log`.
+      The first run failed before actor startup in 215.82 seconds on
+      2026-10-06. The first Node container was stopped after 60 seconds and
+      killed after its ten-second grace period. Later starts rejected stale
+      pins. The interval matches Helm's startup probe; its event and first
+      Node log were removed by container cleanup. Do not claim probe expiry
+      or CPU contention as a proven first cause. Log:
+      `/var/tmp/mithril-generation-kube-20261006.log` in the retained VM.
+      Lightweight reproduced startup interruption before the next physical
+      run. With the Host VM temporarily CPU-limited, the real Node owner had
+      no admission socket at 60 seconds. Killing that owner left empty pin
+      directories. A fresh Node rejected those directories with the same
+      stale-state error in 1.66 seconds. The original CPU setting is restored.
+      Logs: `/var/tmp/mithril-startup-deadline-host-20261006.log` and
+      `/var/tmp/mithril-startup-retained-host-20261006.log` in the Host VM.
+      The passing focused rerun had no concurrent workspace CI. This result
+      does not prove which operation delayed the first run's Node.
     - [ ] Retire only the matched pre-saturation legacy checks.
     - [ ] Replace last-holder retirement after ring loss and WAL saturation.
       Keep `old_generation_deleted_after_last_holder` until this condition passes.
@@ -3952,6 +3971,10 @@ test does not close a row when its physical condition or an assertion changed.
     The runc registration passed the same compile and lint checks. Its CI gate
     stopped at the same Araphor deadline: 168 passed, one failed, five ignored.
     Log: `/tmp/mithril-refactor-generation-runc-ci-20261006.log`.
+    Kubernetes registration passed formatting, workspace check, and strict
+    Clippy. The CI gate stopped in five unchanged Araphor tests: 164 passed,
+    five failed, five ignored. Log:
+    `/tmp/mithril-refactor-generation-kube-ci-20261006.log`.
   - [ ] Replace the exact benign-file read control with a small platform test.
     The baseline installs an external-role exact Allow and leaves the initial
     root unarmed. Its read assertion does not check a root-class name. Keep
