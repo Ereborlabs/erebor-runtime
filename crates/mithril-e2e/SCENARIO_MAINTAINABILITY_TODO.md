@@ -2785,9 +2785,12 @@ test does not close a row when its physical condition or an assertion changed.
         cleanup passed. Focused lightweight effect checks passed 28 tests.
         The all-feature workspace build passed. No production or Platform
         implementation changed.
-      - [ ] Pass direct runc and commit its registration. Run final Rust CI
-        after the final registration edit. Do not repeat the physical matrix
-        for this scenario-only change.
+      - [x] Pass direct runc and commit its registration. The same 87-line
+        body passed both modes on one actor in 79.15 seconds. Output, pin,
+        lease, and cgroup cleanup passed. The all-feature workspace build
+        passed. No assertion, policy, timeout, or production change was needed.
+      - [ ] Run final Rust CI after the final registration edit. Do not
+        repeat the physical matrix for this scenario-only change.
       - [ ] Revisit Kubernetes only after approval. Keep the old late-bind
         decision, snapshot assertions, result fields, and helpers until the
         paired physical replacement passes. Do not count Host or runc as
@@ -2804,6 +2807,11 @@ test does not close a row when its physical condition or an assertion changed.
       Run `effect::file_mount_snapshot::bind_rebuilds_ready_cache::mount_alias_host`
       in the mounted standard Rust test executable with
       `--exact --ignored --nocapture --test-threads=1`.
+      Use the `mount_alias_runc` suffix for direct runc. The focused logs are
+      `/var/tmp/mithril-bind-snapshot-host-20261006.log` and
+      `/var/tmp/mithril-bind-snapshot-runc-20261006.log` in the retained
+      qualification VM. Source review matches `95775f48`. Kubernetes remains
+      unqualified; the original snapshot block is unchanged.
     - [x] Replace the Protect-mode overmount and restoration pair with
       `mount_replacement_stays_closed`. Keep one small shared Rust test below
       100 lines. Reuse `exception.py`, the qualified bind/recovery setup,

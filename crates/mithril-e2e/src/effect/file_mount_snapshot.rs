@@ -7,7 +7,7 @@ use super::check::EffectCheck;
 use crate::physical::mount_cache::MountCache;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = mount_alias]
 fn bind_rebuilds_ready_cache<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("file-mount-snapshot")?;
