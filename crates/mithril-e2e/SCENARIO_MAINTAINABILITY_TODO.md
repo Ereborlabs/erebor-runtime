@@ -2898,6 +2898,15 @@ test does not close a row when its physical condition or an assertion changed.
           unused alias mount after all three platforms pass. Keep the source
           resolver for policy publication and the propagation checks. The
           old runner still fails its pre-policy baseline before this block.
+        - [ ] Remove the unused `allowed-bind-source` file, its signed
+          `manual-benign-bind` selector, and its exact-object setup. No
+          remaining legacy action reads that file. The propagation actions
+          and their peer setup were retired separately below. Keep the
+          original secret, benign, device, and mount-change objects. Pass
+          `allowed_bind_keeps_exact_allow` on Host, runc, and Kubernetes,
+          related effect checks, harness checks, and final Rust CI before
+          committing this deletion. Do not change the shared test or repair
+          the old pre-policy baseline failure.
     - [x] Remove only the duplicate protected-alias resolver comparison from
       the old effect probe. The shared Protect and Observe tests resolve the
       original file and both aliases. They require distinct mount IDs and
