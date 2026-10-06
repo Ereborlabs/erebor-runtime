@@ -2023,6 +2023,16 @@ test does not close a row when its physical condition or an assertion changed.
       failed link files. An earlier retry hit an unrelated data-read deadline;
       the unchanged exact test then passed. Use two test workers for the final
       complete CI run. Do not change its assertions or deadline.
+  - [ ] Replace the moved-root first-open denial with the existing shared
+    `clone_cgroup.py` actor and `ProcessFixture`. Keep the root's exact binding
+    role, creator-free restricted identity, and runnable state before movement.
+    Move the root with the existing `move_task` API. Keep identity stable,
+    require `FailClosedUnknown`, and check both placement-mismatch increases.
+    Require the actual first open to return `EACCES`. Check normal process
+    removal. Keep one test file below 100 lines. Qualify Host, direct `runc`,
+    and Kubernetes before removing the old case, its first-open methods, and
+    its unused root-open branch. Keep the other clone cases. Add no Platform
+    API, actor change, policy change, or production change.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields
