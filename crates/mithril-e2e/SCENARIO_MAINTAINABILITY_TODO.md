@@ -2625,7 +2625,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Use a fresh name and UID for each request. Keep both requests within
     the one-use policy limit. Read the first kernel authority and require
     Active, maximum uses one, and consumed uses zero before the second request.
-  - [ ] Require the exact Control `overlapping live grant` rejection or the
+  - [x] Require the exact Control `overlapping live grant` rejection or the
     real Kubernetes Failed and ReconcileRejected status. Require no new
     authority or receipt key. Require the first authority to remain unchanged.
   - [x] Keep the ungranted denial, first allowed write, and exhausted denial
@@ -2642,8 +2642,12 @@ test does not close a row when its physical condition or an assertion changed.
     Local VM copies without debug sections have identical loadable contents
     and test registrations. With those copies, Node initialized in 26 seconds.
     No scenario, production code, assertion, or readiness limit changed.
-  - [ ] Pass real Kubernetes and commit its registration.
-    The exact case failed in 203.15 seconds before actor startup. Node rejected
+  - [x] Pass real Kubernetes and commit its registration. The same 99-line
+    scenario passed in 85.53 seconds after the lightweight interruption check
+    passed. Actor files, owned namespaces, pins, sockets, and lease cleanup
+    passed. The current Node image, assertions, and startup limits are unchanged.
+    The log is `/var/tmp/mithril-exception-overlap-kube-light-20261006.log`.
+    The first exact case failed in 203.15 seconds before actor startup. Node rejected
     `/sys/fs/bpf/mithril-pid-1546442-414106001` because it contained stale state.
     The cause of that state is not yet proved. The log is
     `/var/tmp/mithril-exception-overlap-kube-20261006.log` in the retained K3s VM.
@@ -2683,6 +2687,8 @@ test does not close a row when its physical condition or an assertion changed.
     -> [Shared](src/platform/shared.rs) calls the production exception
     reconciler. [ControlStore](../mithril-control/src/store.rs) rejects the
     second request while the first grant is live.
+    -> [Kubernetes](src/platform/kubernetes.rs) creates the real CRD and
+    requires its current-generation Failed and ReconcileRejected status.
     -> [Python actor](fixtures/process/exception.py) makes the denied write,
     one allowed write, and the exhausted write.
     -> [EffectCheck](src/effect/check.rs) reads fresh attributed results for
@@ -2698,7 +2704,8 @@ test does not close a row when its physical condition or an assertion changed.
   `/var/tmp/mithril-refactor-runtime-tools-20261006`. Infrastructure copies
   these artifacts with the existing provider. Keep the originals and verify
   identical loadable contents before removing debug sections from a copy.
-  Host and direct runc qualification are done. Kubernetes is not done.
+  Host, direct runc, and Kubernetes qualification are done. Legacy retirement
+  and the final repository Rust CI check remain.
   Startup review route:
   [fixture check](src/platform/shared/startup.rs) starts real Control through
   [Shared](src/platform/shared.rs) and owns the real Node child through
