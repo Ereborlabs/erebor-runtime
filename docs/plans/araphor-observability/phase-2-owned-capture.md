@@ -37,7 +37,7 @@ TraceOwner accepts an authorized request
   -> AnalysisStore commits source, grant, target snapshot, and dispatch identities
   -> authenticated node-control service sends the bounded execution grant
   -> Node records intent and revalidates each lifetime before attachment
-  -> Interceptor runs the reviewed or separately privileged script
+  -> Interceptor runs the supported script
   -> Node appends output to its bounded diagnostic spool
   -> AnalysisStore syncs self-contained output commits and publishes its raw receipt
   -> Control returns an output ACK after the durable segment commit
@@ -81,9 +81,10 @@ Control or Node restarts after dispatch
    hooks, output schema and cost limits. No arbitrary path or memory argument
    is a safe parameter merely because its type is string. Prevent parameter
    values from broadening collection. Preserve raw source for inspection.
-6. New source uses the separately granted host-diagnostic path described in
-   the parent. Do not expose arbitrary source under a namespace-only grant.
-   Pin complete approved inputs; reject stale approvals and changed source.
+6. Require the current tenant investigate permission for each supported source.
+   Validate exact source capabilities separately from that user permission.
+   A Pod locator does not confine an arbitrary script. Reject unsupported
+   source/target combinations. Freeze source and target inputs; reject changed retries.
 7. Add `traces`, `trace_output` and `trace_measurements` to AnalysisStore in
    `araphor-data`. Move the existing model, owner, dispatch and recipe code to
    `araphor-observability`.

@@ -178,16 +178,17 @@ for the final source revision, commands, and verification limits.
 
 ### Public query boundary review
 
-This section covers the working-tree changes on `main`, after `dae9053`.
+This section covers the working-tree changes on `main`, after `55b804b3`.
 The intended result is the
 [public query boundary](../../araphor-observability/phase-3-cli-api-and-console.md#query-boundary-before-client-access).
 The data owner accepts client SQL only after admission and tenant checks. Public
-transport remains **Not implemented**. Asynchronous execution remains
-**Not done** until current tests pass. Query execution
+transport, CLI and console code are present. Their complete end-to-end
+qualification is **Not done**. Query execution
 uses the existing Tokio runtime. No query process or new BPF program is part
 of this boundary.
 
-Not implemented: ClientGrpcOwner authenticates a public caller and checks the tenant investigate permission.<br>
+[ClientAuth::authenticate](../../../../crates/mithril-control/src/client_auth.rs) The shared authentication owner checks a browser session or service credential and the current tenant investigate permission.<br>
+-> [ClientGrpcOwner](../../../../crates/mithril-control/src/client_grpc.rs) The transport owner selects query or trace behavior without a second permission system.<br>
 -> [QuerySql::admit](../../../../crates/araphor-data/src/query/admission.rs) The binder resolves columns against the available schemas and rejects unsupported SQL.<br>
 -> [QueryPlan::client](../../../../crates/araphor-data/src/query/plan.rs) The plan retains the principal, authority revision and tenant input selection.<br>
 -> [QueryOwner::query_client](../../../../crates/araphor-data/src/query/mod.rs) The owner checks current authority before extraction.<br>
@@ -198,7 +199,9 @@ Not implemented: ClientGrpcOwner authenticates a public caller and checks the te
 -> [QueryEvaluation::run](../../../../crates/araphor-data/src/query/evaluation.rs) The shared in-memory evaluator returns bounded rows or a typed failure.<br>
 -> [QueryResult](../../../../crates/araphor-data/src/query/mod.rs) The result returns rows, read metadata, coverage and limits without a signature or content hash.<br>
 -> [QueryOwner::query_client](../../../../crates/araphor-data/src/query/mod.rs) The owner checks current authority before it returns the result.<br>
--> Not implemented: The shared client listener sends protobuf frames to the CLI or console.
+-> [ClientListener](../../../../crates/mithril-control/src/client_listener.rs) One optional TLS listener sends protobuf frames through native gRPC or gRPC-Web.<br>
+-> [AraphorClient](../../../../crates/erebor-runtime-client/src/araphor.rs) The native client reads current credentials for each RPC.<br>
+-> [Investigation](../../../../ui/mithril-console/src/Investigation.tsx) The existing console uses the generated gRPC-Web client and applies complete checkpoints.
 
 [QueryOwner::follow_client_clock](../../../../crates/araphor-data/src/query/follow.rs) Client follow is requested.<br>
 -> [QuerySession](../../../../crates/araphor-data/src/query/authorization.rs) The session retains the exact grant and a current-authorization provider.<br>
@@ -213,9 +216,10 @@ Not implemented: ClientGrpcOwner authenticates a public caller and checks the te
 
 The host creates one QueryOwner with an AnalysisStore and QueryLimits.
 The trusted query entry point rejects a client plan. QueryAuthorization is
-the host seam for current grants, revocation notifications and expiry. Control
-does not implement that seam yet. QueryGrant has a principal, authority
-revision and tenant selection. The host must check its current investigate
+the host seam for current grants, revocation notifications and expiry.
+QueryGrant has a principal, authority
+revision and tenant selection. ClientAccess implements that seam in Control.
+The host must check its current investigate
 permission. Bookmarks create no permission, durable subscription or history pin.
 The follow task checks cancellation and signals AnalysisReadControl.
 The native evaluation task retains its reservations until evaluation and
@@ -257,6 +261,26 @@ lease until the reader drops that frame. Authorization failure discards queued
 frames, returns one error and ends the stream. This flow uses the notification,
 evaluation-future and stream pattern from Mangroves; it adds no task queue or
 subscription store.
+
+[TraceOwner](../../../../crates/araphor-observability/src/owner.rs) Control accepts one supported source under the tenant investigate permission.<br>
+-> [ClientGrpcOwner::watch](../../../../crates/mithril-control/src/client_grpc/trace.rs) The owner reads terminal receipts before it starts the query snapshot.<br>
+-> [QueryOwner::stream_client](../../../../crates/araphor-data/src/query/mod.rs) Trace output uses the same retained positions and bounded stream as SQL.<br>
+-> [QueryFrame::check_read](../../../../crates/araphor-data/src/query/frame.rs) A held output page rechecks read revocation before each row.<br>
+-> [TraceTransport](../../../../crates/mithril-control/src/client_grpc/trace.rs) A complete result requires an exhausted checkpoint and all selected terminal receipts. EOF is not success.
+
+The listener registers exactly five query/trace methods and six administrative
+methods. Unknown paths do not select a business handler. Administrative OIDC
+callbacks, admission callbacks and assets keep their required HTTPS paths.
+Investigation login requires configured subject membership. Administrative
+login does not create an investigation session. Browser mutations require
+the exact Origin and CSRF value. Logout removes only the caller's session.
+The approval owner keeps its separate authority and one-use delivery rules.
+
+The catalog exposes code-owned relation fields and recipes. `targets` reads
+retained policy snapshots, not complete live inventory. Control publishes
+these contexts through its existing context owner. Recipe capability remains
+Unknown until the selected Node checks its backend. Catalog reads do not
+start capture. Signed Node leases and exact target lifetimes remain required.
 
 #### Digest removal review
 
@@ -360,10 +384,11 @@ starts. Append replay, timer replacement, full-column SQL, tenant isolation, qui
 revocation and buffered revocation use the same production owner.
 [Follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs) check
 ordered frames, backpressure, cancellation and fused stream closure.
-All 85 query owner tests pass on the current working tree. The required final
-workspace procedure passed on 2026-10-05 after the last Rust edit: format,
+The 85 query owner tests passed at `55b804b3`. The required final
+workspace procedure passed on 2026-10-05 at that source: format,
 workspace check, all-feature clippy with warnings denied, and all-target,
-all-feature workspace tests. Public transport, CLI, console and
+all-feature workspace tests. This result does not cover the later client
+integration changes. Public transport, CLI, console and
 paired physical client proof remain unqualified.
 
 The enabled
@@ -376,7 +401,7 @@ Node spool reopen and Control/data reopen. The backend and binding inputs are
 external fixtures. The command is
 `mithril-observability-test --case query-upload`. This case does not prove
 native interruption, process-crash containment, native BPF cleanup or
-performance. The lightweight case passes on the current working tree.
+performance. The lightweight case passed at `55b804b3`.
 
 The query-upload case still needs paired physical proof. The physical Control Pod keeps UID
 65532 and its current security settings.

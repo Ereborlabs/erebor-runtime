@@ -112,6 +112,10 @@ Status: **Not done**.
    query and trace methods remain disabled. Enable those methods only with
    their configuration and the same investigate permission. Enabling admin callbacks does not grant
    query or trace access.
+   Keep the investigation browser login membership check. Administrative
+   activation keeps its existing request-bound OIDC flow and separate
+   approval rules. Both flows use the same OIDC validation owner. An
+   administrative login does not create an investigation session.
 2. Implement the parent plan's five query/trace RPCs. Use server-streaming
    protobuf frames for one-shot queries, follow and trace output. Implement native gRPC
    for CLI/service clients and gRPC-Web `grpcwebtext` server streaming for the
@@ -257,9 +261,10 @@ stream does not pass.
 
 ## Implementation result
 
-Status: **Not done**. Current changes use primary `main` based on `cec19dd0`.
-The client listener, administrative gRPC migration, CLI and console are not
-implemented. Do not enable public SQL from this partial result.
+Status: **Not done**. Current changes use primary `main` based on `55b804b3`.
+The shared TLS listener, typed administrative migration, native CLI and
+generated browser client are implemented. Their complete qualification is
+not finished. Do not enable public SQL from this partial result.
 
 The data crate changes use the closed SQL binder, tenant-selected input and
 current-authority checks for query and follow. The approved rewrite removes
@@ -267,12 +272,10 @@ column and target grants, query signatures and result hashes. The
 asynchronous execution and standard stream changes pass the 85 query owner
 tests. All available columns are readable; the `policy_rule_id = 42`
 aggregate passes without a column grant. Foreign-tenant sources reject.
-No client listener, administrative gRPC migration, CLI or console result is
-proved by these partial changes.
-The existing trace owner still uses scoped execution/read grants and custom
-source approval. Replace those user permission checks with the shared tenant
-investigate authority during client integration. Keep signed Node leases,
-source validation, exact target lifetimes, bounds and cleanup checks.
+These earlier query tests do not qualify the later transport integration.
+The trace owner now uses the shared tenant investigate permission for reads,
+cancellation and supported source submission. Signed Node leases, source
+validation, exact target lifetimes, bounds and cleanup checks remain required.
 
 The query-failure trace-upload case must call the production in-process
 QueryOwner, TraceOwner, Node capture and mTLS upload with discovery disabled.
@@ -282,16 +285,35 @@ followed by new output, durable ACK, exact replay and reopen checks. The paired
 physical case must keep Control's non-root user and security settings.
 No process-isolation or performance result is required by this query design.
 
-The final Rust CI procedure passed on the current source on 2026-10-05:
+The final Rust CI procedure passed at `55b804b3` on 2026-10-05:
 format check, workspace check, all-feature clippy with warnings denied, and
 all-target, all-feature workspace tests. The data crate passed 216 tests,
 including the 85 query tests; the shared trace crate passed 23 tests. The
 lightweight query-failure trace-upload case also passed in this procedure.
+This result does not cover later client integration edits.
 Ignored physical and performance cases did not run. The paired physical client case,
 shared listener, route migration, CLI and console remain unqualified. The
 [implementation review](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/implementation-review.md#public-query-boundary-review)
 links the present owners and tests. Continue with public client work only
 after the query boundary passes.
+
+The current browser source passed its type check, 16 unit tests and production
+build on 2026-10-06. Generated clients use the shared protobuf schema,
+gRPC-Web 2.0.2 and `grpcwebtext`. Assets include
+`assets/administrative.js` and `assets/administrative.css`. The strict content
+security policy remains unchanged. Unit tests do not prove TLS, OIDC login,
+browser streaming or live trace execution. Those checks remain required.
+
+The current Helm lint and template checks passed on 2026-10-06. They check
+the shared client port, administrative enablement and query-only deployment
+shape. They do not prove a running deployment.
+
+The browser asset Docker stage passed on 2026-10-06 on Linux x86_64 with
+Node 24.15.0 and protoc 3.21.12. It regenerates the clients from the shared
+schema and builds the assets without host `node_modules`. Control packages
+these assets at `/usr/share/araphor/console`; configure `client.assets` with
+that absolute path. The separate CLI image and native image builds remain
+unqualified. The asset build does not qualify a browser connection.
 
 ## Stop point
 
