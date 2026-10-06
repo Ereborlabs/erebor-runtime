@@ -2548,10 +2548,14 @@ test does not close a row when its physical condition or an assertion changed.
   the exception CRD state `Failed`. Keep that rejection. Use the existing
   `exception` lifecycle, actor, policy, and installation API. Keep the shared
   test below 100 lines. Do not add a Platform API or change production code.
-  - [ ] Make Kubernetes exception readiness report a current-generation
+  - [x] Make Kubernetes exception readiness report a current-generation
     terminal `Failed` status with its actual conditions. Preserve API errors
     and the bounded timeout. A timeout is not a rejected request.
-    Verify existing exception activation and cleanup before committing tooling.
+    The existing five Kubernetes exception cases passed together in 208.84
+    seconds. Generic process checks passed 14 tests with one privileged case
+    ignored. The fixture-path test, VM harness checks, formatting, workspace
+    build, and strict all-feature Clippy passed. The new negative request
+    still needs physical qualification. No production or Platform API changed.
   - [ ] Derive an owned typed request from `one_use_exception.json`. Request
     two uses of `expired-write`, whose policy limit is one. Use a distinct
     name and UID. Require the exact Control rejection or the observed

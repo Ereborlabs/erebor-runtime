@@ -302,6 +302,21 @@ impl KubernetesState {
                     }
                 };
                 *last.borrow_mut() = format!("{:?}", current.status);
+                if let Some(status) = &current.status {
+                    if status.state == WorkloadProtectionExceptionStateV1::Failed
+                        && current
+                            .metadata
+                            .generation
+                            .and_then(|generation| u64::try_from(generation).ok())
+                            == Some(status.observed_generation)
+                    {
+                        return InvalidInputSnafu {
+                            path,
+                            reason: format!("Kubernetes exception rejected: {status:?}"),
+                        }
+                        .fail();
+                    }
+                }
                 Ok(current
                     .status
                     .is_some_and(|status| {
