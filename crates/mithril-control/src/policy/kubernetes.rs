@@ -42,7 +42,6 @@ pub const MAX_POLICY_SCHEMA_MAP_ENTRIES: u64 = 4_096;
 const SOURCE_REVISION_DOMAIN: &[u8] = b"MITHRIL-POLICY-SOURCE-REVISION-V1\0";
 const TARGET_SNAPSHOT_DOMAIN: &[u8] = b"MITHRIL-POLICY-TARGET-SNAPSHOT-V1\0";
 const CANDIDATE_DOMAIN: &[u8] = b"MITHRIL-POLICY-CANDIDATE-V1\0";
-const ACKNOWLEDGEMENT_DOMAIN: &[u8] = b"MITHRIL-POLICY-ACTIVATION-ACK-V1\0";
 
 #[derive(CustomResource, Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[kube(
@@ -672,7 +671,6 @@ pub enum PolicyActivationStateV1 {
 #[serde(deny_unknown_fields)]
 /// Records a node result after mTLS session identity is added by Control.
 pub struct PolicyActivationAcknowledgementV1 {
-    pub acknowledgement_content_id: String,
     pub tenant_id: String,
     pub node_id: String,
     pub node_boot_id: Vec<u8>,
@@ -687,7 +685,6 @@ pub struct PolicyActivationAcknowledgementV1 {
     pub probe_result_digest: Option<String>,
     pub reason_code: Option<String>,
     pub observed_utc_ns: i64,
-    pub authenticated_channel_receipt_digest: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -710,7 +707,7 @@ pub struct PolicyRolloutStateV1 {
     pub target: PolicyTargetV1,
     pub desired_candidate_content_id: String,
     pub state: PolicyRolloutStatusV1,
-    pub latest_acknowledgement_content_id: Option<String>,
+    pub latest_acknowledgement_version: Option<u64>,
     pub transition_version: u64,
     pub updated_utc_ns: i64,
 }
@@ -2444,16 +2441,6 @@ impl PolicyDeliveryCandidateV1 {
 }
 
 impl PolicyActivationAcknowledgementV1 {
-    pub fn finalize(mut self) -> Result<Self> {
-        self.validate()?;
-        self.acknowledgement_content_id.clear();
-        self.acknowledgement_content_id = domain_digest(
-            ACKNOWLEDGEMENT_DOMAIN,
-            &canonical_cbor(&self.candidate_content_id, &self)?,
-        );
-        Ok(self)
-    }
-
     pub fn validate(&self) -> Result<()> {
         // ACTIVE carries positive readback proof. REJECTED carries only a bounded reason.
         let active = self.state == PolicyActivationStateV1::Active;
@@ -2467,7 +2454,6 @@ impl PolicyActivationAcknowledgementV1 {
                 && valid_sha256(&self.candidate_content_id)
                 && valid_sha256(&self.policy_source_revision_id)
                 && valid_sha256(&self.target_snapshot_digest)
-                && valid_sha256(&self.authenticated_channel_receipt_digest)
                 && (!active
                     || (self
                         .node_bound_generation_digest

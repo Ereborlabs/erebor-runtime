@@ -931,7 +931,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_state() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        for schema in [4, 5, 6, STORE_SCHEMA_VERSION, STORE_SCHEMA_VERSION + 1] {
+        for schema in [4, 5, 6, 7, STORE_SCHEMA_VERSION, STORE_SCHEMA_VERSION + 1] {
             let directory = tempfile::tempdir()?;
             let encoded = rmp_serde::to_vec_named(&DurableControlStateV1 {
                 schema_version: schema,

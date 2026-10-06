@@ -23,7 +23,6 @@ use crate::Result;
 
 const EXCEPTION_SOURCE_DOMAIN: &[u8] = b"MITHRIL-EXCEPTION-SOURCE-REVISION-V1\0";
 const EXCEPTION_CANDIDATE_DOMAIN: &[u8] = b"MITHRIL-EXCEPTION-CANDIDATE-V1\0";
-const EXCEPTION_ACKNOWLEDGEMENT_DOMAIN: &[u8] = b"MITHRIL-EXCEPTION-ACKNOWLEDGEMENT-V1\0";
 pub const MAX_EXCEPTION_CANDIDATE_BYTES: usize = 64 * 1_024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -119,7 +118,6 @@ impl From<ExceptionActivationStateV1> for WorkloadProtectionExceptionStateV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExceptionActivationAcknowledgementV1 {
-    pub acknowledgement_content_id: String,
     pub tenant_id: String,
     pub node_id: String,
     pub node_boot_id: Vec<u8>,
@@ -131,7 +129,6 @@ pub struct ExceptionActivationAcknowledgementV1 {
     pub transition_version: u64,
     pub observed_utc_ns: i64,
     pub reason_code: Option<String>,
-    pub authenticated_channel_receipt_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -141,7 +138,7 @@ pub struct ExceptionRolloutStateV1 {
     pub candidate_content_id: String,
     pub node_id: String,
     pub state: WorkloadProtectionExceptionStateV1,
-    pub latest_acknowledgement_content_id: Option<String>,
+    pub latest_acknowledgement_version: Option<u64>,
     pub transition_version: u64,
     pub updated_utc_ns: i64,
 }
@@ -470,27 +467,6 @@ impl ExceptionDeliveryCandidateV1 {
 }
 
 impl ExceptionActivationAcknowledgementV1 {
-    pub fn finalize(mut self) -> Result<Self> {
-        self.validate()?;
-        self.acknowledgement_content_id.clear();
-        self.acknowledgement_content_id = self.content_id()?;
-        Ok(self)
-    }
-
-    pub(crate) fn repeats_transition(&self, other: &Self) -> bool {
-        self.tenant_id == other.tenant_id
-            && self.node_id == other.node_id
-            && self.node_boot_id == other.node_boot_id
-            && self.label_epoch == other.label_epoch
-            && self.candidate_content_id == other.candidate_content_id
-            && self.exception_source_revision_id == other.exception_source_revision_id
-            && self.state == other.state
-            && self.consumed_uses == other.consumed_uses
-            && self.transition_version == other.transition_version
-            && self.observed_utc_ns == other.observed_utc_ns
-            && self.reason_code == other.reason_code
-    }
-
     pub fn validate(&self) -> Result<()> {
         let rejected = matches!(
             self.state,
@@ -506,32 +482,19 @@ impl ExceptionActivationAcknowledgementV1 {
                 && valid_sha256(&self.exception_source_revision_id)
                 && self.transition_version > 0
                 && self.observed_utc_ns > 0
-                && valid_sha256(&self.authenticated_channel_receipt_digest)
                 && (!rejected
                     || self
                         .reason_code
                         .as_ref()
                         .is_some_and(|reason| !reason.is_empty()))
-                && (rejected || self.reason_code.is_none())
-                && (self.acknowledgement_content_id.is_empty()
-                    || self.acknowledgement_content_id == self.content_id()?),
+                && (rejected || self.reason_code.is_none()),
             PolicyValidationSnafu {
                 policy_id: &self.exception_source_revision_id,
                 code: "CFG_EXCEPTION_ACKNOWLEDGEMENT",
-                reason:
-                    "the exception acknowledgement identity, state, or channel proof is invalid",
+                reason: "the exception acknowledgement identity or state is invalid",
             }
         );
         Ok(())
-    }
-
-    fn content_id(&self) -> Result<String> {
-        let mut unsigned = self.clone();
-        unsigned.acknowledgement_content_id.clear();
-        Ok(domain_digest(
-            EXCEPTION_ACKNOWLEDGEMENT_DOMAIN,
-            &canonical_cbor(&self.candidate_content_id, &unsigned)?,
-        ))
     }
 }
 
@@ -949,7 +912,7 @@ impl PolicyRolloutOwner {
             candidate_content_id: candidate.candidate_content_id.clone(),
             node_id: candidate.exact_target.node_id.clone(),
             state: WorkloadProtectionExceptionStateV1::Pending,
-            latest_acknowledgement_content_id: None,
+            latest_acknowledgement_version: None,
             transition_version: 0,
             updated_utc_ns: now_utc_ns,
         };
@@ -1010,9 +973,7 @@ impl PolicyRolloutOwner {
             candidate_content_id: current.candidate_content_id,
             node_id: current.node_id,
             state: acknowledgement.state.into(),
-            latest_acknowledgement_content_id: Some(
-                acknowledgement.acknowledgement_content_id.clone(),
-            ),
+            latest_acknowledgement_version: Some(acknowledgement.transition_version),
             transition_version,
             updated_utc_ns: acknowledgement.observed_utc_ns,
         };

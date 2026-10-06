@@ -220,8 +220,7 @@ fn acknowledgement(
         .kubernetes
         .as_ref()
         .ok_or("the policy target has no Kubernetes identity")?;
-    Ok(PolicyActivationAcknowledgementV1 {
-        acknowledgement_content_id: String::new(),
+    let acknowledgement = PolicyActivationAcknowledgementV1 {
         tenant_id: TENANT_ID.to_owned(),
         node_id: bundle.candidate.exact_target.node_id.clone(),
         node_boot_id: hex::decode(&identity.node_boot_id)?,
@@ -236,9 +235,9 @@ fn acknowledgement(
         probe_result_digest: active.then(|| "3".repeat(64)),
         reason_code: (!active).then(|| "CANDIDATE_REJECTED".to_owned()),
         observed_utc_ns,
-        authenticated_channel_receipt_digest: "4".repeat(64),
-    }
-    .finalize()?)
+    };
+    acknowledgement.validate()?;
+    Ok(acknowledgement)
 }
 
 fn kubernetes_inventory(
@@ -302,8 +301,7 @@ fn exception_acknowledgement(
         .kubernetes
         .as_ref()
         .ok_or("the exception target has no Kubernetes identity")?;
-    Ok(ExceptionActivationAcknowledgementV1 {
-        acknowledgement_content_id: String::new(),
+    let acknowledgement = ExceptionActivationAcknowledgementV1 {
         tenant_id: TENANT_ID.to_owned(),
         node_id: candidate.exact_target.node_id.clone(),
         node_boot_id: hex::decode(&identity.node_boot_id)?,
@@ -319,9 +317,9 @@ fn exception_acknowledgement(
         transition_version,
         observed_utc_ns,
         reason_code: rejected.then(|| "EXCEPTION_REJECTED".to_owned()),
-        authenticated_channel_receipt_digest: "5".repeat(64),
-    }
-    .finalize()?)
+    };
+    acknowledgement.validate()?;
+    Ok(acknowledgement)
 }
 
 struct PreparedException {
@@ -747,6 +745,55 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
 }
 
 #[test]
+fn policy_ack_replays_history() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy_resource = resource(&policy()?, "profile", OBJECT_UID, 1, false)?;
+    let initial = owner.reconcile(
+        &policy_resource,
+        NAMESPACE_UID,
+        &inventory_for_resource(&policy_resource, &"1".repeat(64))?,
+        NOW,
+    )?;
+    let first_ack = acknowledgement(
+        &initial.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 1,
+    )?;
+    let first = owner.rollout_owner().acknowledge(first_ack.clone())?;
+    assert_eq!(first.rollout_state.latest_acknowledgement_version, Some(1));
+    let next_ack = PolicyActivationAcknowledgementV1 {
+        observed_utc_ns: NOW + 2,
+        ..first_ack.clone()
+    };
+    let next = owner.rollout_owner().acknowledge(next_ack.clone())?;
+    assert_eq!(next.rollout_state.latest_acknowledgement_version, Some(2));
+    let committed = store.commit_index();
+    assert_eq!(owner.rollout_owner().acknowledge(first_ack.clone())?, first);
+    assert_eq!(store.commit_index(), committed);
+    let altered = PolicyActivationAcknowledgementV1 {
+        target_snapshot_digest: "f".repeat(64),
+        ..first_ack.clone()
+    };
+    assert!(owner.rollout_owner().acknowledge(altered).is_err());
+    assert_eq!(store.commit_index(), committed);
+    drop(owner);
+    drop(store);
+
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened.clone());
+    assert_eq!(restarted.rollout_owner().acknowledge(first_ack)?, first);
+    assert_eq!(restarted.rollout_owner().acknowledge(next_ack)?, next);
+    assert_eq!(
+        reopened.rollout_state(&initial.bundles[0].candidate.candidate_content_id, "node-a")?,
+        Some(next.rollout_state)
+    );
+    assert_eq!(reopened.commit_index(), committed);
+    Ok(())
+}
+
+#[test]
 fn exception_acknowledgement_reuses_a_durable_transition_after_response_loss() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
@@ -762,20 +809,8 @@ fn exception_acknowledgement_reuses_a_durable_transition_after_response_loss() -
         .rollout_owner()
         .acknowledge_exception(acknowledgement.clone())?;
     let committed = store.commit_index();
-    let replay = ExceptionActivationAcknowledgementV1 {
-        acknowledgement_content_id: String::new(),
-        authenticated_channel_receipt_digest: "6".repeat(64),
-        ..acknowledgement.clone()
-    }
-    .finalize()?;
-
-    assert_ne!(
-        replay.acknowledgement_content_id,
-        accepted
-            .latest_acknowledgement_content_id
-            .clone()
-            .unwrap_or_default()
-    );
+    let replay = acknowledgement.clone();
+    assert_eq!(accepted.latest_acknowledgement_version, Some(1));
     assert_eq!(
         prepared
             .owner
@@ -785,18 +820,35 @@ fn exception_acknowledgement_reuses_a_durable_transition_after_response_loss() -
     );
     assert_eq!(store.commit_index(), committed);
     let conflicting_replay = ExceptionActivationAcknowledgementV1 {
-        acknowledgement_content_id: String::new(),
-        authenticated_channel_receipt_digest: "7".repeat(64),
         observed_utc_ns: NOW + 5,
-        ..acknowledgement
-    }
-    .finalize()?;
+        ..acknowledgement.clone()
+    };
     assert!(prepared
         .owner
         .rollout_owner()
         .acknowledge_exception(conflicting_replay)
         .is_err());
     assert_eq!(store.commit_index(), committed);
+    drop(prepared);
+    drop(store);
+
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened.clone());
+    assert_eq!(
+        restarted
+            .rollout_owner()
+            .acknowledge_exception(acknowledgement.clone())?,
+        accepted
+    );
+    let altered = ExceptionActivationAcknowledgementV1 {
+        consumed_uses: 1,
+        ..acknowledgement
+    };
+    assert!(restarted
+        .rollout_owner()
+        .acknowledge_exception(altered)
+        .is_err());
+    assert_eq!(reopened.commit_index(), committed);
     Ok(())
 }
 
@@ -1892,9 +1944,9 @@ fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
     let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
     let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
     let bundle = &first.bundles[0];
-    owner.rollout_owner().acknowledge(
-        PolicyActivationAcknowledgementV1 {
-            acknowledgement_content_id: String::new(),
+    owner
+        .rollout_owner()
+        .acknowledge(PolicyActivationAcknowledgementV1 {
             tenant_id: TENANT_ID.to_owned(),
             node_id: "node-a".to_owned(),
             node_boot_id: vec![1; 16],
@@ -1909,10 +1961,7 @@ fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
             probe_result_digest: Some("3".repeat(64)),
             reason_code: None,
             observed_utc_ns: NOW + 1,
-            authenticated_channel_receipt_digest: "4".repeat(64),
-        }
-        .finalize()?,
-    )?;
+        })?;
 
     let refreshed = owner.reconcile(
         &resource,
@@ -1947,9 +1996,9 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
         store.next_bundle_for_node("node-a", &[])?,
         Some(bundle.clone())
     );
-    owner.rollout_owner().acknowledge(
-        PolicyActivationAcknowledgementV1 {
-            acknowledgement_content_id: String::new(),
+    owner
+        .rollout_owner()
+        .acknowledge(PolicyActivationAcknowledgementV1 {
             tenant_id: TENANT_ID.to_owned(),
             node_id: "node-a".to_owned(),
             node_boot_id: vec![1; 16],
@@ -1964,10 +2013,7 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
             probe_result_digest: None,
             reason_code: Some("CAPABILITY_REJECTED".to_owned()),
             observed_utc_ns: NOW + 1,
-            authenticated_channel_receipt_digest: "4".repeat(64),
-        }
-        .finalize()?,
-    )?;
+        })?;
 
     assert!(store.next_bundle_for_node("node-a", &[])?.is_none());
     let refreshed = owner.reconcile(

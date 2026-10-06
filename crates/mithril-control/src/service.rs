@@ -2249,8 +2249,6 @@ impl NodePolicy for ControlPlane {
         request: Request<PolicyAcknowledgementRequest>,
     ) -> Result<Response<PolicyAcknowledgementAccepted>, Status> {
         let node_id = self.authenticated_node(&request)?;
-        // Bind the acknowledgement bytes to the certificate on this authenticated channel.
-        let channel_receipt_digest = authenticated_channel_receipt_digest(&request)?;
         let request = request.into_inner();
         let context = request
             .session
@@ -2264,7 +2262,6 @@ impl NodePolicy for ControlPlane {
             .ok_or_else(|| Status::invalid_argument("policy acknowledgement is required"))?;
         let state = parse_policy_activation_state(&acknowledgement.state)?;
         let acknowledgement = crate::PolicyActivationAcknowledgementV1 {
-            acknowledgement_content_id: String::new(),
             tenant_id: acknowledgement.tenant_id,
             node_id: node_id.clone(),
             node_boot_id: context.node_boot_id.clone(),
@@ -2280,10 +2277,8 @@ impl NodePolicy for ControlPlane {
             probe_result_digest: nonempty(acknowledgement.probe_result_digest),
             reason_code: nonempty(acknowledgement.reason_code),
             observed_utc_ns: acknowledgement.observed_utc_ns,
-            authenticated_channel_receipt_digest: channel_receipt_digest,
-        }
-        .finalize()
-        .map_err(invalid_policy_status)?;
+        };
+        acknowledgement.validate().map_err(invalid_policy_status)?;
         let rollout = self
             .policy_rollout
             .as_ref()
@@ -2379,8 +2374,6 @@ impl NodePolicy for ControlPlane {
         request: Request<ExceptionAcknowledgementRequest>,
     ) -> Result<Response<PolicyAcknowledgementAccepted>, Status> {
         let node_id = self.authenticated_node(&request)?;
-        // The receipt binds the reported runtime state to this authenticated request.
-        let channel_receipt_digest = authenticated_channel_receipt_digest(&request)?;
         let request = request.into_inner();
         let context = request
             .session
@@ -2393,7 +2386,6 @@ impl NodePolicy for ControlPlane {
             .acknowledgement
             .ok_or_else(|| Status::invalid_argument("exception acknowledgement is required"))?;
         let acknowledgement = crate::ExceptionActivationAcknowledgementV1 {
-            acknowledgement_content_id: String::new(),
             tenant_id: acknowledgement.tenant_id,
             node_id: node_id.clone(),
             node_boot_id: context.node_boot_id.clone(),
@@ -2405,10 +2397,8 @@ impl NodePolicy for ControlPlane {
             transition_version: acknowledgement.transition_version,
             observed_utc_ns: acknowledgement.observed_utc_ns,
             reason_code: nonempty(acknowledgement.reason_code),
-            authenticated_channel_receipt_digest: channel_receipt_digest,
-        }
-        .finalize()
-        .map_err(invalid_policy_status)?;
+        };
+        acknowledgement.validate().map_err(invalid_policy_status)?;
         let rollout = self
             .policy_rollout
             .as_ref()
@@ -2609,19 +2599,6 @@ impl NodeDecommission for ControlPlane {
         });
         Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
     }
-}
-
-fn authenticated_channel_receipt_digest<M: prost::Message>(
-    request: &Request<M>,
-) -> Result<String, Status> {
-    let certificate = request
-        .peer_certs()
-        .and_then(|certificates| certificates.first().cloned())
-        .ok_or_else(|| Status::unauthenticated("mTLS client certificate is required"))?;
-    let mut digest = Sha256::new();
-    digest.update(certificate.as_ref());
-    digest.update(request.get_ref().encode_to_vec());
-    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn trust_generation_message(trust: &TrustGenerationV1) -> TrustGeneration {

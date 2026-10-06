@@ -840,7 +840,7 @@ impl PolicyRolloutOwner {
                 target: target.clone(),
                 desired_candidate_content_id: candidate_id,
                 state: PolicyRolloutStatusV1::Pending,
-                latest_acknowledgement_content_id: None,
+                latest_acknowledgement_version: None,
                 transition_version: 0,
                 updated_utc_ns: now_utc_ns,
             });
@@ -852,6 +852,7 @@ impl PolicyRolloutOwner {
         &self,
         acknowledgement: PolicyActivationAcknowledgementV1,
     ) -> Result<PolicyAcknowledgementResultV1> {
+        acknowledgement.validate()?;
         ensure!(
             self.store.current_node_session_matches(
                 &acknowledgement.node_id,
@@ -943,9 +944,7 @@ impl PolicyRolloutOwner {
         })?;
         let next = PolicyRolloutStateV1 {
             state,
-            latest_acknowledgement_content_id: Some(
-                acknowledgement.acknowledgement_content_id.clone(),
-            ),
+            latest_acknowledgement_version: Some(transition_version),
             transition_version,
             updated_utc_ns: acknowledgement.observed_utc_ns,
             ..current

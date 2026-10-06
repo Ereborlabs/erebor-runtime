@@ -24,7 +24,7 @@ use crate::{
     StoredNodeDecommissionV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
 };
 
-const STORE_SCHEMA_VERSION: u32 = 7;
+const STORE_SCHEMA_VERSION: u32 = 8;
 
 mod discovery;
 pub use discovery::*;
@@ -342,12 +342,14 @@ struct ControlStoreState {
     bundles: BTreeMap<String, PolicyBundleV1>,
     rollout_states: BTreeMap<PolicyRolloutKeyV1, PolicyRolloutStateV1>,
     // Keep the complete result so a retry can reproduce the durable response.
-    policy_acknowledgement_results: BTreeMap<String, PolicyAcknowledgementTransactionV1>,
+    policy_acknowledgement_results:
+        BTreeMap<(PolicyRolloutKeyV1, u64), PolicyAcknowledgementTransactionV1>,
     exception_source_revisions: BTreeMap<String, ExceptionSourceRevisionV1>,
     latest_exception_sources: BTreeMap<PolicyObjectKeyV1, String>,
     exception_candidates: BTreeMap<String, ExceptionDeliveryCandidateV1>,
     exception_rollout_states: BTreeMap<PolicyRolloutKeyV1, ExceptionRolloutStateV1>,
-    exception_acknowledgements: BTreeMap<String, ExceptionActivationAcknowledgementV1>,
+    exception_acknowledgements:
+        BTreeMap<(PolicyRolloutKeyV1, u64), ExceptionActivationAcknowledgementV1>,
     exception_consumed_uses: BTreeMap<PolicyRolloutKeyV1, u32>,
     node_sessions: BTreeMap<String, DurableNodeSessionV1>,
     node_session_history: BTreeMap<NodePhysicalEpochV1, DurableNodeSessionV1>,
@@ -1163,17 +1165,11 @@ impl ControlStore {
             }
             .fail();
         }
-        if let Some(existing) = inner
-            .state
-            .policy_acknowledgement_results
-            .get(&acknowledgement.acknowledgement_content_id)
-        {
-            if existing.acknowledgement == acknowledgement {
-                return Ok((
-                    existing.rollout_state.clone(),
-                    existing.terminal_chain_closure_authorized,
-                ));
-            }
+        if let Some(existing) = inner.state.policy_acknowledgement(&acknowledgement) {
+            return Ok((
+                existing.rollout_state.clone(),
+                existing.terminal_chain_closure_authorized,
+            ));
         }
         let terminal_chain_closure_authorized =
             terminal_chain_closure_can_be_authorized(&inner.state, &acknowledgement);
@@ -1203,9 +1199,7 @@ impl ControlStore {
         Ok(self
             .lock()?
             .state
-            .policy_acknowledgement_results
-            .get(&acknowledgement.acknowledgement_content_id)
-            .filter(|result| result.acknowledgement == *acknowledgement)
+            .policy_acknowledgement(acknowledgement)
             .map(|result| {
                 (
                     result.rollout_state.clone(),
@@ -1282,10 +1276,14 @@ impl ControlStore {
             }
             .fail();
         }
+        let key = PolicyRolloutKeyV1 {
+            candidate_content_id: acknowledgement.candidate_content_id.clone(),
+            node_id: acknowledgement.node_id.clone(),
+        };
         if inner
             .state
             .exception_acknowledgements
-            .get(&acknowledgement.acknowledgement_content_id)
+            .get(&(key, acknowledgement.transition_version))
             == Some(&acknowledgement)
         {
             return Ok(inner.state.commit_index);
@@ -1308,20 +1306,20 @@ impl ControlStore {
         acknowledgement: &ExceptionActivationAcknowledgementV1,
     ) -> Result<Option<ExceptionRolloutStateV1>> {
         let inner = self.lock()?;
-        let rollout = inner
-            .state
-            .exception_rollout_states
-            .get(&PolicyRolloutKeyV1 {
-                candidate_content_id: acknowledgement.candidate_content_id.clone(),
-                node_id: acknowledgement.node_id.clone(),
-            });
+        let key = PolicyRolloutKeyV1 {
+            candidate_content_id: acknowledgement.candidate_content_id.clone(),
+            node_id: acknowledgement.node_id.clone(),
+        };
+        let rollout = inner.state.exception_rollout_states.get(&key);
         Ok(rollout.and_then(|rollout| {
-            let accepted = rollout
-                .latest_acknowledgement_content_id
-                .as_ref()
-                .and_then(|id| inner.state.exception_acknowledgements.get(id));
+            let accepted = rollout.latest_acknowledgement_version.and_then(|version| {
+                inner
+                    .state
+                    .exception_acknowledgements
+                    .get(&(key.clone(), version))
+            });
             accepted
-                .is_some_and(|accepted| accepted.repeats_transition(acknowledgement))
+                .is_some_and(|accepted| accepted == acknowledgement)
                 .then(|| rollout.clone())
         }))
     }
@@ -1513,9 +1511,16 @@ impl ControlStore {
                     return None;
                 }
                 let acknowledgement = rollout
-                    .latest_acknowledgement_content_id
-                    .as_ref()
-                    .and_then(|id| inner.state.policy_acknowledgement_results.get(id))?
+                    .latest_acknowledgement_version
+                    .and_then(|version| {
+                        inner.state.policy_acknowledgement_results.get(&(
+                            PolicyRolloutKeyV1 {
+                                candidate_content_id: rollout.desired_candidate_content_id.clone(),
+                                node_id: rollout.target.node_id.clone(),
+                            },
+                            version,
+                        ))
+                    })?
                     .acknowledgement
                     .clone();
                 Some((bundle.clone(), acknowledgement))
@@ -2865,7 +2870,13 @@ fn apply_transaction(
             } = result.as_ref();
             validate_policy_acknowledgement(state, result, path)?;
             state.policy_acknowledgement_results.insert(
-                acknowledgement.acknowledgement_content_id.clone(),
+                (
+                    PolicyRolloutKeyV1 {
+                        candidate_content_id: acknowledgement.candidate_content_id.clone(),
+                        node_id: acknowledgement.node_id.clone(),
+                    },
+                    rollout_state.transition_version,
+                ),
                 result.as_ref().clone(),
             );
             state.rollout_states.insert(
@@ -2902,7 +2913,13 @@ fn apply_transaction(
         ControlTransactionV1::ExceptionAcknowledged { result } => {
             validate_exception_acknowledgement(state, result, path)?;
             state.exception_acknowledgements.insert(
-                result.acknowledgement.acknowledgement_content_id.clone(),
+                (
+                    PolicyRolloutKeyV1 {
+                        candidate_content_id: result.acknowledgement.candidate_content_id.clone(),
+                        node_id: result.acknowledgement.node_id.clone(),
+                    },
+                    result.acknowledgement.transition_version,
+                ),
                 result.acknowledgement.clone(),
             );
             state.exception_rollout_states.insert(
@@ -3250,9 +3267,16 @@ fn validate_exception_desired(
     let base_rollout = state.exception_base_rollout(candidate);
     let base_acknowledgement = base_rollout.and_then(|entry| {
         entry
-            .latest_acknowledgement_content_id
-            .as_ref()
-            .and_then(|id| state.policy_acknowledgement_results.get(id))
+            .latest_acknowledgement_version
+            .and_then(|version| {
+                state.policy_acknowledgement_results.get(&(
+                    PolicyRolloutKeyV1 {
+                        candidate_content_id: entry.desired_candidate_content_id.clone(),
+                        node_id: entry.target.node_id.clone(),
+                    },
+                    version,
+                ))
+            })
             .map(|result| &result.acknowledgement)
     });
     let grant_is_valid = base_document.is_some_and(|document| {
@@ -3309,7 +3333,7 @@ fn validate_exception_desired(
         && rollout.candidate_content_id == candidate.candidate_content_id
         && rollout.node_id == candidate.exact_target.node_id
         && rollout.state == crate::WorkloadProtectionExceptionStateV1::Pending
-        && rollout.latest_acknowledgement_content_id.is_none()
+        && rollout.latest_acknowledgement_version.is_none()
         && rollout.transition_version == 0
         && rollout.updated_utc_ns == candidate.issued_utc_ns;
     let overlaps_live_grant = candidate.operation == ExceptionDeliveryOperationV1::Activate
@@ -3386,6 +3410,20 @@ fn exception_grant_covers_request(
 }
 
 impl ControlStoreState {
+    fn policy_acknowledgement(
+        &self,
+        acknowledgement: &PolicyActivationAcknowledgementV1,
+    ) -> Option<&PolicyAcknowledgementTransactionV1> {
+        let key = PolicyRolloutKeyV1 {
+            candidate_content_id: acknowledgement.candidate_content_id.clone(),
+            node_id: acknowledgement.node_id.clone(),
+        };
+        self.policy_acknowledgement_results
+            .range((key.clone(), 0)..=(key, u64::MAX))
+            .map(|(_, result)| result)
+            .find(|result| result.acknowledgement == *acknowledgement)
+    }
+
     fn exception_base_rollout(
         &self,
         candidate: &ExceptionDeliveryCandidateV1,
@@ -3427,8 +3465,7 @@ fn validate_policy_acknowledgement(
             && rollout.desired_candidate_content_id == current.desired_candidate_content_id
     }) && expected_transition == Some(rollout.transition_version)
         && rollout.state == expected_state
-        && rollout.latest_acknowledgement_content_id.as_deref()
-            == Some(acknowledgement.acknowledgement_content_id.as_str())
+        && rollout.latest_acknowledgement_version == Some(rollout.transition_version)
         && rollout.updated_utc_ns == acknowledgement.observed_utc_ns;
     let acknowledgement_is_bound = state
         .bundles
@@ -3560,8 +3597,7 @@ fn validate_exception_acknowledgement(
         && rollout.candidate_content_id == acknowledgement.candidate_content_id
         && rollout.node_id == acknowledgement.node_id
         && rollout.state == crate::WorkloadProtectionExceptionStateV1::from(acknowledgement.state)
-        && rollout.latest_acknowledgement_content_id.as_deref()
-            == Some(acknowledgement.acknowledgement_content_id.as_str())
+        && rollout.latest_acknowledgement_version == Some(acknowledgement.transition_version)
         && rollout.transition_version == acknowledgement.transition_version
         && rollout.updated_utc_ns == acknowledgement.observed_utc_ns;
     let current_session_is_valid = node_session_matches_acknowledgement(
@@ -4788,7 +4824,7 @@ mod tests {
                     } else {
                         WorkloadProtectionExceptionStateV1::Pending
                     },
-                    latest_acknowledgement_content_id: None,
+                    latest_acknowledgement_version: None,
                     transition_version: 1,
                     updated_utc_ns: 1,
                 },
@@ -4855,7 +4891,7 @@ mod tests {
                 target,
                 desired_candidate_content_id: candidate.candidate_content_id,
                 state: PolicyRolloutStatusV1::Pending,
-                latest_acknowledgement_content_id: None,
+                latest_acknowledgement_version: None,
                 transition_version: 1,
                 updated_utc_ns: 1,
             });
@@ -4873,7 +4909,6 @@ mod tests {
         terminal_chain_closure_authorized: bool,
     ) -> crate::Result<super::PolicyAcknowledgementTransactionV1> {
         let acknowledgement = PolicyActivationAcknowledgementV1 {
-            acknowledgement_content_id: String::new(),
             tenant_id: bundle.candidate.tenant_id.clone(),
             node_id: bundle.candidate.exact_target.node_id.clone(),
             node_boot_id: vec![1; 16],
@@ -4888,15 +4923,12 @@ mod tests {
             probe_result_digest: Some("3".repeat(64)),
             reason_code: None,
             observed_utc_ns: 2,
-            authenticated_channel_receipt_digest: "4".repeat(64),
-        }
-        .finalize()?;
+        };
+        acknowledgement.validate()?;
         Ok(super::PolicyAcknowledgementTransactionV1 {
             rollout_state: PolicyRolloutStateV1 {
                 state: PolicyRolloutStatusV1::Active,
-                latest_acknowledgement_content_id: Some(
-                    acknowledgement.acknowledgement_content_id.clone(),
-                ),
+                latest_acknowledgement_version: Some(rollout.transition_version + 1),
                 transition_version: rollout.transition_version + 1,
                 updated_utc_ns: acknowledgement.observed_utc_ns,
                 ..rollout.clone()
@@ -4911,7 +4943,6 @@ mod tests {
         rollout: &PolicyRolloutStateV1,
     ) -> crate::Result<super::PolicyAcknowledgementTransactionV1> {
         let acknowledgement = PolicyActivationAcknowledgementV1 {
-            acknowledgement_content_id: String::new(),
             tenant_id: bundle.candidate.tenant_id.clone(),
             node_id: bundle.candidate.exact_target.node_id.clone(),
             node_boot_id: vec![1; 16],
@@ -4926,15 +4957,12 @@ mod tests {
             probe_result_digest: None,
             reason_code: Some("CANDIDATE_REJECTED".to_owned()),
             observed_utc_ns: 3,
-            authenticated_channel_receipt_digest: "4".repeat(64),
-        }
-        .finalize()?;
+        };
+        acknowledgement.validate()?;
         Ok(super::PolicyAcknowledgementTransactionV1 {
             rollout_state: PolicyRolloutStateV1 {
                 state: PolicyRolloutStatusV1::Rejected,
-                latest_acknowledgement_content_id: Some(
-                    acknowledgement.acknowledgement_content_id.clone(),
-                ),
+                latest_acknowledgement_version: Some(rollout.transition_version + 1),
                 transition_version: rollout.transition_version + 1,
                 updated_utc_ns: acknowledgement.observed_utc_ns,
                 ..rollout.clone()
@@ -5425,20 +5453,29 @@ mod tests {
             &initial_bundle.candidate.candidate_content_id,
             &rebound_bundle.candidate.candidate_content_id,
         ] {
-            assert_eq!(
-                store
-                    .rollout_state(candidate_id, "node-a")?
-                    .ok_or_else(|| crate::error::ControlStoreSnafu {
+            let settled = store
+                .rollout_state(candidate_id, "node-a")?
+                .ok_or_else(|| {
+                    crate::error::ControlStoreSnafu {
                         path: Path::new("session-test").to_owned(),
                         reason: "a stale rollout is absent".to_owned(),
                     }
-                    .build())?
-                    .state,
-                PolicyRolloutStatusV1::Stale
-            );
+                    .build()
+                })?;
+            assert_eq!(settled.state, PolicyRolloutStatusV1::Stale);
+            if candidate_id == &initial_bundle.candidate.candidate_content_id {
+                assert_eq!(settled.transition_version, 3);
+                assert_eq!(settled.latest_acknowledgement_version, Some(2));
+            } else {
+                assert_eq!(settled.transition_version, 2);
+                assert_eq!(settled.latest_acknowledgement_version, None);
+            }
         }
         assert!(store
-            .acknowledge_policy(initial_ack.acknowledgement, initial_ack.rollout_state)
+            .acknowledge_policy(
+                initial_ack.acknowledgement.clone(),
+                initial_ack.rollout_state.clone(),
+            )
             .is_err());
         assert!(store
             .policy_inventory_for_node_session(
@@ -5498,6 +5535,25 @@ mod tests {
         let replayed = super::ControlStore::open(directory.path())?;
         assert_eq!(replayed.commit_index(), committed);
         assert_eq!(
+            replayed.policy_acknowledgement_result(&initial_ack.acknowledgement)?,
+            Some((initial_ack.rollout_state.clone(), false))
+        );
+        let settled = replayed
+            .rollout_state(&initial_bundle.candidate.candidate_content_id, "node-a")?
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("session-test").to_owned(),
+                    reason: "the settled rollout was not retained".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(settled.transition_version, 3);
+        assert_eq!(settled.latest_acknowledgement_version, Some(2));
+        assert!(replayed
+            .acknowledge_policy(initial_ack.acknowledgement, initial_ack.rollout_state)
+            .is_err());
+        assert_eq!(replayed.commit_index(), committed);
+        assert_eq!(
             replayed.policy_inventory_for_node_session("node-a", &[2; 16], 2, &[])?,
             (
                 Some(restarted_bundle.clone()),
@@ -5512,7 +5568,43 @@ mod tests {
 
     #[test]
     fn physical_reset_settles_exception_authority_by_proven_terminal_reason() -> crate::Result<()> {
-        let (state, advance, candidate_ids) = exception_session_advance_fixture()?;
+        let (mut state, _advance, candidate_ids) = exception_session_advance_fixture()?;
+        let key = super::PolicyRolloutKeyV1 {
+            candidate_content_id: candidate_ids[0].clone(),
+            node_id: "node-a".to_owned(),
+        };
+        let candidate = &state.exception_candidates[&candidate_ids[0]];
+        let acknowledgement = crate::ExceptionActivationAcknowledgementV1 {
+            tenant_id: candidate.tenant_id.clone(),
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            label_epoch: 1,
+            candidate_content_id: candidate.candidate_content_id.clone(),
+            exception_source_revision_id: candidate.exception_source_revision_id.clone(),
+            state: crate::ExceptionActivationStateV1::Active,
+            consumed_uses: 0,
+            transition_version: 2,
+            observed_utc_ns: 2,
+            reason_code: None,
+        };
+        let rollout = ExceptionRolloutStateV1 {
+            latest_acknowledgement_version: Some(2),
+            transition_version: 2,
+            updated_utc_ns: 2,
+            ..state.exception_rollout_states[&key].clone()
+        };
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::ExceptionAcknowledged {
+                result: Box::new(super::ExceptionAcknowledgementTransactionV1 {
+                    acknowledgement: acknowledgement.clone(),
+                    rollout_state: rollout,
+                }),
+            },
+            Path::new("active-exception-ack"),
+        )?;
+        let advance =
+            super::node_session_advance(&state, durable_session(2, 2), 100, Path::new("advance"))?;
         let settlements = advance
             .exception_settlements
             .iter()
@@ -5563,6 +5655,17 @@ mod tests {
             live.exception_consumed_uses,
             replayed.exception_consumed_uses
         );
+        for state in [&live, &replayed] {
+            assert_eq!(state.exception_rollout_states[&key].transition_version, 3);
+            assert_eq!(
+                state.exception_rollout_states[&key].latest_acknowledgement_version,
+                Some(2)
+            );
+            assert_eq!(
+                state.exception_acknowledgements.get(&(key.clone(), 2)),
+                Some(&acknowledgement)
+            );
+        }
         Ok(())
     }
 
@@ -5670,6 +5773,8 @@ mod tests {
         })?;
         let terminal = terminal_transaction.bundles[0].clone();
         let terminal_rollout = terminal_transaction.rollout_states[0].clone();
+        let acknowledgement =
+            active_acknowledgement_transaction(&terminal, &terminal_rollout, true)?;
         super::apply_transaction(
             &mut state,
             &super::ControlTransactionV1::TargetSetReconciled {
@@ -5680,11 +5785,7 @@ mod tests {
         super::apply_transaction(
             &mut state,
             &super::ControlTransactionV1::Acknowledged {
-                result: Box::new(active_acknowledgement_transaction(
-                    &terminal,
-                    &terminal_rollout,
-                    true,
-                )?),
+                result: Box::new(acknowledgement.clone()),
             },
             Path::new("terminal-acknowledgement"),
         )?;
@@ -5727,6 +5828,15 @@ mod tests {
             },
             Path::new("root-activation"),
         )?;
+        assert_eq!(
+            state.policy_acknowledgement(&acknowledgement.acknowledgement),
+            Some(&acknowledgement)
+        );
+        let altered = PolicyActivationAcknowledgementV1 {
+            observed_utc_ns: 3,
+            ..acknowledgement.acknowledgement
+        };
+        assert!(state.policy_acknowledgement(&altered).is_none());
         Ok(())
     }
 
@@ -6173,7 +6283,7 @@ mod tests {
                     target: first_target,
                     desired_candidate_content_id: first_candidate.candidate_content_id.clone(),
                     state: PolicyRolloutStatusV1::Pending,
-                    latest_acknowledgement_content_id: None,
+                    latest_acknowledgement_version: None,
                     transition_version: 1,
                     updated_utc_ns: 1,
                 }],
@@ -6233,7 +6343,7 @@ mod tests {
                     target: second_target,
                     desired_candidate_content_id: second_candidate.candidate_content_id,
                     state: PolicyRolloutStatusV1::Pending,
-                    latest_acknowledgement_content_id: None,
+                    latest_acknowledgement_version: None,
                     transition_version: 1,
                     updated_utc_ns: 2,
                 }],
