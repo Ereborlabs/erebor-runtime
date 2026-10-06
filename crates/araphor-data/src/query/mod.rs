@@ -402,7 +402,6 @@ impl QueryOwner {
         } else {
             Some(Arc::new(frame::QueryReadScope::new(
                 self.store.clone(),
-                self.budget.clone(),
                 selection.tenant_id,
                 requests,
                 self.limits.extract_timeout,

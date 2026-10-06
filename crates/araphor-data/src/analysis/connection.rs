@@ -5,7 +5,7 @@ use std::sync::{atomic::Ordering, MutexGuard, RwLockReadGuard, TryLockError};
 
 use duckdb::{Config, Connection};
 use snafu::ResultExt as _;
-use tokio::sync::SemaphorePermit;
+use tokio::sync::OwnedSemaphorePermit;
 
 use super::{AnalysisReadControl, AnalysisStore};
 use crate::{AnalysisBusySnafu, AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, Result};
@@ -83,7 +83,7 @@ pub(super) struct AnalysisConnection<'a> {
     root: &'a Path,
     dirty: Option<&'a std::sync::atomic::AtomicBool>,
     _snapshot: Option<RwLockReadGuard<'a, ()>>,
-    _permit: Option<SemaphorePermit<'a>>,
+    _permit: Option<OwnedSemaphorePermit>,
 }
 
 impl AnalysisConnection<'_> {
@@ -301,24 +301,31 @@ impl AnalysisStore {
 
     #[cfg(test)]
     pub(super) fn reader(&self) -> Result<AnalysisConnection<'_>> {
-        self.reader_wait(None)
+        self.reader_wait(None, self.reserve_reader()?)
     }
 
     pub(super) fn reader_until(
         &self,
         control: &AnalysisReadControl,
     ) -> Result<AnalysisConnection<'_>> {
-        self.reader_wait(Some(control))
+        self.reader_wait(Some(control), self.reserve_reader()?)
     }
 
-    fn reader_wait(&self, control: Option<&AnalysisReadControl>) -> Result<AnalysisConnection<'_>> {
+    pub(crate) fn reserve_reader(&self) -> Result<OwnedSemaphorePermit> {
+        self.read_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| AnalysisBusySnafu { resource: "reader" }.build())
+    }
+
+    pub(super) fn reader_wait(
+        &self,
+        control: Option<&AnalysisReadControl>,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<AnalysisConnection<'_>> {
         if self.raw_pending.load(Ordering::Acquire) {
             drop(self.writer_wait(control, true)?);
         }
-        let permit = self
-            .read_slots
-            .try_acquire()
-            .map_err(|_| AnalysisBusySnafu { resource: "reader" }.build())?;
         let snapshot = match control {
             Some(control) => control.lock(|| self.maintenance.try_read())?,
             None => self

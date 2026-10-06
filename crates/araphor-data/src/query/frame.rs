@@ -7,7 +7,7 @@ use duckdb::types::Value;
 use serde::{Deserialize, Serialize};
 use snafu::IntoError as _;
 
-use super::budget::{QueryBudget, QueryLease};
+use super::budget::QueryLease;
 use super::input::SCHEMAS;
 use super::{
     QueryLimits, QueryOperation, QueryPlan, QueryResult, QueryTemplate, QUERY_SCHEMA_VERSION,
@@ -21,7 +21,6 @@ pub const QUERY_CHECKPOINT_BYTES: usize = 1024;
 
 pub(super) struct QueryReadScope {
     store: Arc<AnalysisStore>,
-    budget: Arc<QueryBudget>,
     tenant: [u8; 16],
     requests: Vec<[u8; 16]>,
     timeout: Duration,
@@ -44,7 +43,6 @@ impl QueryReadScope {
 
     pub(super) fn new(
         store: Arc<AnalysisStore>,
-        budget: Arc<QueryBudget>,
         tenant: [u8; 16],
         requests: Vec<[u8; 16]>,
         timeout: Duration,
@@ -53,7 +51,6 @@ impl QueryReadScope {
         let bytes = Self::allocation_for(&requests);
         Ok(Self {
             store,
-            budget,
             tenant,
             requests,
             timeout,
@@ -73,7 +70,7 @@ impl QueryReadScope {
             .build()
         })?;
         let control = Arc::new(AnalysisReadControl::with_timeout(self.timeout)?);
-        let lease = self.budget.evaluate(self.tenant)?;
+        let permit = self.store.reserve_reader()?;
         let scope = self.clone();
         let stage = control.clone();
         let mut task = super::QueryTask {
@@ -82,11 +79,10 @@ impl QueryReadScope {
         };
         let result = runtime
             .spawn_blocking(move || {
-                let _lease = lease;
                 let _stream = stream;
                 scope
                     .store
-                    .check_trace_reads(scope.tenant, &scope.requests, &stage)
+                    .check_trace_reads(scope.tenant, &scope.requests, &stage, permit)
             })
             .await;
         task.running = false;

@@ -95,11 +95,12 @@ impl AnalysisStore {
         tenant: [u8; 16],
         requests: &[[u8; 16]],
         control: &AnalysisReadControl,
+        permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<()> {
         if tenant == [0; 16] || requests.len() > 1024 || requests.iter().any(|id| *id == [0; 16]) {
             return crate::QueryDeniedSnafu.fail();
         }
-        let mut reader = self.reader_until(control)?;
+        let mut reader = self.reader_wait(Some(control), permit)?;
         control.run(&mut reader, |snapshot| {
             let mut statement = snapshot
                 .prepare("SELECT read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?")

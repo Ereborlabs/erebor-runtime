@@ -861,6 +861,131 @@ async fn query_trace_revocation() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_trace_read_admission() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let intent = fixture.trace(10)?;
+    let plan = fixture.plan("SELECT execution_id FROM traces", Vec::new(), false)?;
+    let result = fixture.query(&plan).await?;
+    let frame = QueryFrame::data(&plan, result)?;
+    let _query = fixture
+        .owner
+        .budget
+        .evaluate(fixture.grant.selection.tenant_id)?;
+    let _other = fixture.owner.budget.evaluate([99; 16])?;
+    frame.check_read().await?;
+
+    let mut readers = (0..16)
+        .map(|_| fixture.data.store.reserve_reader())
+        .collect::<Result<Vec<_>>>()?;
+    let error = frame
+        .check_read()
+        .await
+        .expect_err("the reader pool is full");
+    assert!(matches!(
+        error,
+        crate::Error::AnalysisBusy {
+            resource: "reader",
+            ..
+        }
+    ));
+    assert_eq!(QueryErrorCode::from(&error), QueryErrorCode::Busy);
+    drop(readers.pop());
+    frame.check_read().await?;
+    drop(readers);
+
+    let (mut state, _) = fixture
+        .data
+        .store
+        .trace_intent(intent.tenant_id, intent.request_id)?
+        .ok_or("trace absent")?;
+    state.cancel_requested = true;
+    state.read_revoked = true;
+    fixture.data.store.update_trace(&state)?;
+    assert!(matches!(
+        frame.check_read().await,
+        Err(crate::Error::QueryDenied { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn query_trace_read_drop() -> TestResult {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()?;
+    runtime.block_on(async {
+        let mut fixture = ClientFixture::local()?;
+        fixture.tenant();
+        let _intent = fixture.trace(10)?;
+        let plan = fixture.plan("SELECT execution_id FROM traces", Vec::new(), false)?;
+        let result = fixture.query(&plan).await?;
+        let frame = Arc::new(QueryFrame::data(&plan, result)?);
+        let scope = Arc::downgrade(frame.reads.as_ref().ok_or("trace read scope is absent")?);
+        let lease = Arc::new(
+            fixture
+                .owner
+                .budget
+                .stream(fixture.grant.selection.tenant_id)?,
+        );
+        let stream = Arc::downgrade(&lease);
+        let _readers = (0..15)
+            .map(|_| fixture.data.store.reserve_reader())
+            .collect::<Result<Vec<_>>>()?;
+        let (entered, entering) = oneshot::channel();
+        let (release, released) = mpsc::channel();
+        let blocking = tokio::task::spawn_blocking(move || {
+            let _entered = entered.send(());
+            released.recv_timeout(WAIT)
+        });
+        tokio::time::timeout(WAIT, entering).await??;
+        let held = frame.clone();
+        let check = tokio::spawn(async move { held.check_stream(Some(lease)).await });
+        tokio::time::timeout(WAIT, async {
+            loop {
+                match fixture.data.store.reserve_reader() {
+                    Ok(permit) => drop(permit),
+                    Err(crate::Error::AnalysisBusy {
+                        resource: "reader", ..
+                    }) => {
+                        return Ok::<_, crate::Error>(());
+                    }
+                    Err(error) => return Err(error),
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        check.abort();
+        assert!(tokio::time::timeout(WAIT, check)
+            .await?
+            .unwrap_err()
+            .is_cancelled());
+        drop(frame);
+        assert!(scope.upgrade().is_some());
+        assert!(stream.upgrade().is_some());
+        assert!(matches!(
+            fixture.data.store.reserve_reader(),
+            Err(crate::Error::AnalysisBusy {
+                resource: "reader",
+                ..
+            })
+        ));
+        release.send(())?;
+        tokio::time::timeout(WAIT, blocking).await???;
+        tokio::time::timeout(WAIT, async {
+            while scope.upgrade().is_some() || stream.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        drop(fixture.data.store.reserve_reader()?);
+        Ok(())
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn query_trace_read_runtime() -> TestResult {
     use futures_util::FutureExt as _;
     let mut fixture = ClientFixture::local()?;

@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
@@ -93,7 +93,7 @@ pub struct AnalysisStore {
     raw: Mutex<raw::RawJournal>,
     raw_dirty: AtomicBool,
     raw_pending: AtomicBool,
-    read_slots: tokio::sync::Semaphore,
+    read_slots: Arc<tokio::sync::Semaphore>,
     read_next: AtomicUsize,
     maintenance: RwLock<()>,
     revision: watch::Sender<u64>,
@@ -486,7 +486,7 @@ impl AnalysisStore {
             raw_dirty: AtomicBool::new(false),
             raw_pending: AtomicBool::new(false),
             readers,
-            read_slots: tokio::sync::Semaphore::new(16),
+            read_slots: Arc::new(tokio::sync::Semaphore::new(16)),
             read_next: AtomicUsize::new(0),
             maintenance: RwLock::new(()),
             revision,
