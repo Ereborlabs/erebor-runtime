@@ -123,6 +123,8 @@ mod poststart_hook_exec;
 #[cfg(test)]
 mod probe_entries;
 #[cfg(test)]
+mod probe_mount_view;
+#[cfg(test)]
 mod recovered_order;
 #[cfg(test)]
 mod recovery_tasks;

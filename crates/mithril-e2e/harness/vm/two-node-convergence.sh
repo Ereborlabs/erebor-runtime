@@ -3012,18 +3012,6 @@ jq -n --argjson before "$concurrent_mount_before" \
   --argjson after "$concurrent_mount_after" \
   '{before: $before, after: $after}' \
   >"$output_directory/concurrent-exec-mount-topology.json"
-jq -e --argjson before "$concurrent_mount_before" \
-  --argjson after "$concurrent_mount_after" '
-  ($before.mount_namespace_inode == $after.mount_namespace_inode) and
-  ($before.mountinfo_sha256 == $after.mountinfo_sha256) and
-  ($before.security_view_epoch == $after.security_view_epoch) and
-  ($before.cache_generation == $after.cache_generation) and
-  ($before.ready_snapshot_keys == $after.ready_snapshot_keys) and
-  ($after.activity_sequence > $before.activity_sequence)
-' <<<null >/dev/null || {
-  echo "detached containerd exec preparation changed the protected mount view" >&2
-  exit 1
-}
 "$provider" run "$selected_vm" sudo touch \
   /var/lib/mithril-convergence/markers/protected.concurrent-recursive-stop \
   /var/lib/mithril-convergence/markers/protected.concurrent-startup-gate

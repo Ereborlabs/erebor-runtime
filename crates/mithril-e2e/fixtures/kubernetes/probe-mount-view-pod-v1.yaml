@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe-mount-view
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: worker
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      env:
+        - name: PATH
+          value: /work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      stdin: true
+      stdinOnce: true
+      startupProbe:
+        exec:
+          command:
+            - cat
+            - /work/mount-result.json
+            - /work/mount/team/blue/secret/blocked
+            - /work/probe-ready
+        periodSeconds: 1
+        timeoutSeconds: 1
+        failureThreshold: 120
+      securityContext:
+        privileged: true
+        appArmorProfile: {type: Unconfined}
+        seccompProfile: {type: Unconfined}
+      volumeMounts:
+        - {name: fixtures, mountPath: /fixtures, readOnly: true}
+        - {name: work, mountPath: /work}
+  volumes:
+    - name: fixtures
+      hostPath: {path: MITHRIL_TEST_FIXTURE_PATH, type: Directory}
+    - name: work
+      hostPath: {path: MITHRIL_TEST_WORK_PATH, type: Directory}

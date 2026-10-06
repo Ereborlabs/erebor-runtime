@@ -7425,7 +7425,7 @@ setup, production actions, assertions, and focused test.
       Kubernetes actor and shell assertions until this condition passes in
       the shared Rust test. Use existing physical setup and `add_actor`.
       Do not add a Platform API or a second runner.
-      - [ ] Qualify `probe_keeps_mount_view` as one Kubernetes Rust test below
+      - [x] Qualify `probe_keeps_mount_view` as one Kubernetes Rust test below
         100 lines. Reuse `mount_alias.py` in `overlap` mode. Use a Pod fixture
         with a real StartupProbe `cat` command and a distinct signed policy.
         The probe reads the ready input, the secret, and an absent final file.
@@ -7436,9 +7436,42 @@ setup, production actions, assertions, and focused test.
         Create the final file after the requests. Require Pod readiness before
         stopping the actor. Retain attributed denial and loss-aware evidence
         checks. The paired direct-runc overlap is already qualified.
+        The first native run kept namespace, mountinfo, epoch, and generation,
+        but READY keys increased from one to two. Declared `cat` exec alone
+        did not reproduce this on Host or runc, including runc after exit.
+        The unchanged `cold_runtime_builds_cache` case passed on runc in
+        30.30 seconds. A cold runtime lookup added exactly one READY row while
+        the protected actor's namespace, mountinfo, epoch, and generation
+        stayed unchanged. Require the native probe's attributed secret read
+        before the overlap baseline. Keep exact equality after the requests.
+        The failed diagnostic draft was removed; it added no baseline coverage.
+        The 99-line native case passed in 77.09 seconds on 2026-10-06.
+        All 32 exec requests were denied. The worker had positive denied reads,
+        zero allowed reads, and zero other errors. The final file made the Pod
+        Ready before the worker stopped. Exact cache equality, one security
+        view, increased mount activity, complete delivery, no unresolved result,
+        and normal cleanup passed. No production or Platform API changed.
+        Logs: `/var/tmp/mithril-native-cold-proof-runc-20261006.log` in the
+        lightweight VM; `/var/tmp/mithril-probe-ready-kube-20261006.log` in K3s.
+        Review [the shared test](src/identity/scenarios/probe_mount_view.rs):
+        [the Pod fixture](fixtures/kubernetes/probe-mount-view-pod-v1.yaml)
+        runs the native probe under
+        [the signed policy](fixtures/process/mount_probe_policy.json).
+        -> [EffectCheck](src/effect/check.rs) confirms the attributed probe read.
+        -> [MountCache](src/physical/mount_cache.rs) reads the existing map ABI.
+        -> [the actor](fixtures/process/mount_alias.py) runs protected reads
+        during 32 real exec requests. The test opens the gate and stops normally.
+        The replacement is qualified. Full-suite qualification remains open.
+        The three capture checks, VM harness checks, and shell syntax passed.
+        Final format, workspace check, strict Clippy, and workspace tests passed.
+        See `/tmp/mithril-native-probe-final-ci-20261006.log`. This gate covers
+        the final 99-line test and matching shell assertion removal.
       - [ ] Remove only the matching shell overlap checks after this native
         probe passes. Keep the mount-cache collector setup and assertions
         until their independent platform replacement passes.
+        The duplicate six-field cache comparison is removed. The snapshots,
+        exec helper, read loop, and gate still prepare the collector and its
+        failure diagnostics. Keep those inputs until the collector qualifies.
     - [ ] Revisit concurrent Host entry setup. The Host trial timed out at
       actor exit and was removed from the attribute. Do not claim Host support
       or change production to make this trial pass. The old overlap check

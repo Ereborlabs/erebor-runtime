@@ -1,0 +1,118 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "mount-probe",
+    "namespace": "default",
+    "uid": "10000000-0000-4000-8000-000000000160",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {"app.kubernetes.io/name": "pid-reuse"},
+      "matchExpressions": []
+    },
+    "mode": "Protect",
+    "containers": [
+      {
+        "names": ["worker"],
+        "kinds": ["Application"],
+        "images": [
+          "fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "applicationEntry": {"executionRule": "python", "role": "worker"},
+        "additionalEntries": [
+          {
+            "name": "startup",
+            "kind": "StartupProbe",
+            "executionRule": "cat",
+            "role": "probe"
+          }
+        ],
+        "administrativeEntry": {"role": "restricted"},
+        "externalRole": "restricted"
+      }
+    ],
+    "roles": [
+      {
+        "name": "worker",
+        "files": [
+          {
+            "name": "allow-open",
+            "path": "/work/mount/allowed/open",
+            "recursive": false,
+            "operations": ["OpenRead"],
+            "action": "Allow"
+          },
+          {
+            "name": "allow-result",
+            "path": "/work/mount-result.json",
+            "recursive": false,
+            "operations": ["OpenWrite", "Write"],
+            "action": "Allow"
+          }
+        ],
+        "pathTreeDenials": [
+          {
+            "name": "deny-secret-tree",
+            "path": "/work/mount/**/secret",
+            "operations": ["OpenRead"]
+          }
+        ],
+        "execution": [
+          {
+            "name": "python",
+            "path": "/usr/bin/python3",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "capabilities": [
+          {
+            "name": "allow-sys-admin",
+            "capabilities": ["SysAdmin"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "probe",
+        "files": [
+          {
+            "name": "allow-probe-secret",
+            "path": "/work/mount/team/blue/secret/blocked",
+            "recursive": false,
+            "operations": ["OpenRead", "Read"],
+            "action": "Allow"
+          }
+        ],
+        "execution": [
+          {
+            "name": "cat",
+            "path": "/usr/bin/cat",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "restricted",
+        "files": [],
+        "execution": [],
+        "network": {"destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      }
+    ],
+    "exceptionGrants": []
+  }
+}
