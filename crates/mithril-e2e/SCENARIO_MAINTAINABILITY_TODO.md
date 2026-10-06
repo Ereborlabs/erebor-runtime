@@ -8584,6 +8584,42 @@ setup, production actions, assertions, and focused test.
       the container. The shared case moves a Host actor into that cgroup
       but does not enter its mount namespace. Compare this physical setup
       before a policy or production change. It is not a proven cause yet.
+      The private-launcher case passed all unchanged runc assertions in
+      52.02 seconds. The external actor entered the Host mount namespace
+      before placement. Normal cleanup passed. The launcher namespace
+      inode was `4026532678`; the Host inode was `4026531841`. This split
+      alone did not reproduce the failure. The temporary actor diagnostic
+      flag is removed. Three lightweight inputs did not reproduce the
+      Kubernetes read failure. Await direction before a new hypothesis.
+      Keep the read-errno and failed-read observation diagnostics. Verify
+      them with the Host case, the related orphan-reference case, focused
+      checks, and final Rust CI before their separate commit.
+      The Host external-restart case passed in 60.91 seconds with normal
+      cleanup. The related Host orphan-reference case failed its same
+      actor read in 52.47 seconds. It captured `label-read-13` (`EACCES`).
+      See `/var/tmp/mithril-diagnostics-orphan-reference-host-20261006.log`
+      in the retained lightweight VM. This is a lightweight denied-read
+      result, not proof of the Kubernetes cause. No assertion is relaxed.
+      Final Rust CI stopped in the unrelated Araphor raw-recovery check
+      with `AnalysisReadDeadline`: 168 passed, one failed, five ignored.
+      Its exact check then passed in 1.22 seconds. No Araphor source or
+      deadline is changed. Rerun the same CI procedure with four ordinary
+      Rust test workers. Do not skip a check or change a timeout.
+      The four-worker CI procedure passed formatting, workspace check,
+      strict Clippy, and all ordinary workspace checks. Mithril e2e passed
+      160 checks, with 539 privileged checks ignored. Node passed 265.
+      See `/tmp/mithril-read-diagnostics-final-ci-20261006.log` in the
+      refactor worktree host. This does not qualify ignored physical cases.
+      The failed Host orphan-reference case removed its output, pin, lease,
+      actor cgroup, Node cgroup, and actor process. Its read denial remains
+      open. Keep both diagnostic source edits uncommitted while this related
+      physical check is red. No old identity check is removed.
+      The legacy CRI shell command at `src/identity.rs:3343` reads the
+      hostname, then stops without a read-status check. It asserts fresh
+      restricted identity and restart stability. The shared Python case
+      adds a successful-read requirement. Do not remove that requirement
+      without approval. Ask whether to retain the extra allow check or
+      use an explicit denied-read policy for the original identity behavior.
     - [ ] Compare the four legacy Node-specific fields and restart block
       with baseline `95775f48`, then remove only their matched checks.
       Keep label-loss setup and its recovered snapshot while the separate
