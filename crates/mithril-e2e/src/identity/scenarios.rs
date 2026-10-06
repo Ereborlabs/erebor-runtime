@@ -15,6 +15,8 @@ mod clone_child;
 #[cfg(test)]
 mod clone_exec;
 #[cfg(test)]
+mod clone_fork;
+#[cfg(test)]
 mod clone_move;
 #[cfg(test)]
 mod clone_open;

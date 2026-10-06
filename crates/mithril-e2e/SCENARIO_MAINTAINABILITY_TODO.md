@@ -2104,7 +2104,7 @@ test does not close a row when its physical condition or an assertion changed.
       zero. The log is `/tmp/mithril-clone-child-final-ci-20261006.log`.
       The lightweight crate passed 159 tests; 546 physical tests were ignored.
       The nine focused physical cases passed separately as recorded above.
-  - [ ] Replace the remaining moved-parent fork Rust fixture with the shared
+  - [x] Replace the remaining moved-parent fork Rust fixture with the shared
     `clone_cgroup.py` actor and `ProcessFixture`. Keep the Node-first order,
     exact external binding role, creator-free restricted identity, stable
     cookie/class/role after movement, fail-closed coordinate, both mismatch
@@ -2115,6 +2115,42 @@ test does not close a row when its physical condition or an assertion changed.
     and Kubernetes before removing the old fork case, status poller, and its
     actor-only status test. Keep moved-root cleanup and namespace exec. Add no
     Platform API, policy change, or production change.
+    - [x] Pass `clone_fork::moved_parent_fork_denied` and all three existing
+      clone-actor cases on every platform. Host: four passed in 50.54 seconds.
+      Direct `runc`: four passed in 51.92 seconds. Kubernetes: four passed in
+      137.78 seconds. The new test is 83 lines. Compare with baseline
+      `95775f48:700–758`. Keep every denial and identity check. Add the exact
+      binding role, real fork return, and process-removal checks.
+    - [x] Remove only the matched legacy fork test, status poller, and its
+      status-only fixture test. Keep the used clone constructor, moved-root
+      cleanup, namespace entry, and their lifecycle/cleanup operations.
+    - Source review: [clone_fork](src/identity/scenarios/clone_fork.rs) starts
+      Control, Node, the signed policy, and the initial actor in that order.
+      -> [clone_cgroup.py](fixtures/process/clone_cgroup.py) creates and holds
+      the root in the initial actor's cgroup before the requested fork.
+      -> [move_task](src/platform.rs) changes physical placement. The test
+      checks fail closed, stable identity, and the first mismatch increase.
+      -> The actor calls native fork, records its return in shared memory,
+      reaps the root, and writes the observed return before launcher exit.
+      The test requires `EACCES`, return `-1`, and the second mismatch increase.
+      -> [ProcessFixture::stop](src/process.rs) completes cleanup. The test
+      checks root removal before it stops the initial actor and environment.
+      No production, policy fixture, or Platform change.
+    - [x] Pass both remaining legacy clone Host cases after deletion.
+      `cgroup_fork::moved_root_stops` passed in 38.30 seconds.
+      `clone_exec::child_enters_mount_ns` passed in 42.45 seconds. Keep their
+      separate owner lifecycles. The legacy test and fixture shrink by 146
+      lines; net Rust reduction is 61 lines. The remaining fixture is 585 lines.
+    - [x] Pass the existing process checks: 14 passed, one privileged case
+      ignored. Local VM harness checks and strict workspace clippy passed.
+    - [x] Pass final repository Rust CI after the matched legacy deletions.
+      Run `env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2
+      bash .github/scripts/verify-rust-ci.sh`. The command exited with status
+      zero. The log is `/tmp/mithril-clone-fork-final-ci-20261006.log`.
+      The lightweight crate passed 158 tests; 548 physical tests were ignored.
+      The 12 focused physical cases passed separately as recorded above.
+      Remove the old status-only fixture test only because the real fork
+      return and `EACCES` checks now pass on all three platforms.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields

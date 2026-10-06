@@ -350,52 +350,6 @@ impl CloneIntoCgroupFixture {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(super) fn moved_parent_fork_denied(&mut self) -> Result<Option<()>> {
-        let mut status = 0;
-        // SAFETY: root_pid is this process's child and status is writable.
-        let result =
-            unsafe { libc::waitpid(self.root_pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
-        if result < 0 {
-            return Err(invalid_state(format!(
-                "wait for moved-parent root exit: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        if result == self.root_pid as libc::pid_t {
-            if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == libc::EACCES {
-                return Ok(Some(()));
-            }
-            let reason = if libc::WIFEXITED(status) {
-                format!("exit status {}", libc::WEXITSTATUS(status))
-            } else if libc::WIFSIGNALED(status) {
-                format!("signal {}", libc::WTERMSIG(status))
-            } else {
-                format!("wait status {status}")
-            };
-            return Err(invalid_state(format!(
-                "moved-parent ordinary fork did not fail with EACCES: {reason}"
-            )));
-        }
-
-        let path = PathBuf::from(format!("/proc/{0}/task/{0}/children", self.root_pid));
-        let children = match std::fs::read_to_string(&path) {
-            Ok(children) => children,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(source).context(IoSnafu { path }),
-        };
-        if let Some(raw) = children.split_ascii_whitespace().next() {
-            let child_pid = raw.parse::<u32>().map_err(|error| {
-                invalid_state(format!("invalid moved-parent child PID `{raw}`: {error}"))
-            })?;
-            self.child_pidfd = Some(open_pidfd(child_pid)?);
-            return Err(invalid_state(
-                "moved-parent ordinary fork created a child before the denial",
-            ));
-        }
-        Ok(None)
-    }
-
     pub(super) fn stop(&mut self) -> Result<()> {
         let child = self.stop_child();
         let root = self.stop_root();
@@ -628,46 +582,4 @@ fn close_inherited_fds(keep: Option<i32>) -> bool {
         low = fd.saturating_add(1);
     }
     unsafe { libc::syscall(libc::SYS_close_range, low, u32::MAX, 0) == 0 }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::thread;
-    use std::time::Duration;
-
-    use super::{invalid_state, open_pidfd, CloneIntoCgroupFixture};
-
-    #[test]
-    fn clone_into_cgroup_fixture_recognizes_childless_eacces_exit() -> crate::Result<()> {
-        let raw_pid = unsafe { libc::fork() };
-        if raw_pid == 0 {
-            unsafe { libc::_exit(libc::EACCES) }
-        }
-        if raw_pid < 0 {
-            return Err(invalid_state(format!(
-                "fork fixture status child: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        let root_pid = u32::try_from(raw_pid)
-            .map_err(|error| invalid_state(format!("fixture status PID: {error}")))?;
-        let mut fixture = CloneIntoCgroupFixture {
-            cgroup_path: std::path::PathBuf::from("/sys/fs/cgroup"),
-            root_pid,
-            root_pidfd: open_pidfd(root_pid)?,
-            root_gate: None,
-            child_pidfd: None,
-            namespace_target: None,
-            namespace_target_pipe: None,
-        };
-        for _ in 0..100 {
-            if fixture.moved_parent_fork_denied()?.is_some() {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        Err(invalid_state(
-            "fixture did not observe the childless EACCES exit",
-        ))
-    }
 }
