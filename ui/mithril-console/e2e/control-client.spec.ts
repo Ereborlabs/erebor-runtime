@@ -37,6 +37,8 @@ type Reply = {
   node_ids?: string[];
   detail?: { targets: Record<string, unknown>[] };
   result?: { complete: boolean; output_incomplete: boolean; cleanup_complete: boolean; missing_targets: number[] };
+  sql?: string;
+  durable_ack?: boolean;
 };
 
 class ControlFixture {
@@ -220,13 +222,53 @@ test('Control serves authenticated SQL follow and trace through the built browse
   expect(policy).not.toMatch(/unsafe-inline|unsafe-eval/);
   const panel = page.getByRole('region', { name: 'Investigate with SQL and Trace' });
   await panel.getByLabel('Tenant UUID').fill(ready.tenant_id);
+  const query = panel.getByRole('region', { name: 'Retained SQL' });
+  const trace = panel.getByRole('region', { name: 'Bounded trace' });
+  const timed = await control.command('window');
+  expect(timed.durable_ack).toBe(true);
+  expect(timed.sql).toBeTruthy();
+  await query.getByRole('textbox', { name: 'SQL', exact: true }).fill(timed.sql!);
+  await page.keyboard.press('Tab');
+  await expect(query.getByLabel('Parameters (JSON array)')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(query.getByLabel('Follow committed changes')).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(query.getByLabel('Follow committed changes')).toBeChecked();
+  await page.keyboard.press('Tab');
+  await expect(query.getByRole('button', { name: 'Run SQL', exact: true })).toBeFocused();
+  const timing = page.waitForRequest((value) => value.url().endsWith(`${service}Query`));
+  await page.keyboard.press('Enter');
+  const timedRequest = await timing;
+  const table = query.getByRole('table');
+  await expect(table.locator('th')).toHaveText(['count']);
+  await expect(table.locator('tbody td').first()).toHaveText('1');
+  const initial = Date.now();
+  const revision = (await query.getByText(/^Operation: Complete replacement\./).textContent())!;
+  expect(ended.has(timedRequest)).toBe(false);
+  await expect(table.locator('tbody td').first()).toHaveText('0', { timeout: 15_000 });
+  const expired = Date.now();
+  expect(expired).toBeGreaterThan(initial);
+  await expect(query.getByText(/^Operation: Complete replacement\./)).toHaveText(revision);
+  expect(ended.has(timedRequest)).toBe(false);
+  await info.attach('timer-only-window', { body: JSON.stringify({ count_initial: 1, count_expired: 0, observed_initial_ms: initial, observed_expired_ms: expired, revision, durable_ack: timed.durable_ack }), contentType: 'application/json' });
+  await page.keyboard.press('Tab');
+  await expect(query.getByRole('button', { name: 'Stop SQL read' })).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(query.getByRole('status')).toHaveText('Query read stopped. No capture was cancelled.');
+  await expect.poll(() => ended.has(timedRequest)).toBe(true);
+
   await panel.getByLabel('Target', { exact: true }).fill(ready.target.target);
   await panel.getByLabel('Cluster', { exact: true }).fill(ready.target.cluster);
   await panel.getByLabel('Container', { exact: true }).fill(ready.target.container);
-  const query = panel.getByRole('region', { name: 'Retained SQL' });
-  const trace = panel.getByRole('region', { name: 'Bounded trace' });
   await query.getByRole('textbox', { name: 'SQL', exact: true }).fill(ready.sql);
-  await query.getByRole('button', { name: 'Run SQL', exact: true }).click();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await expect(query.getByLabel('Follow committed changes')).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(query.getByLabel('Follow committed changes')).not.toBeChecked();
+  await page.keyboard.press('Tab');
+  await expect(query.getByRole('button', { name: 'Run SQL', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
   await ControlFixture.rows(query.getByRole('table'), ready.expected_columns, ready.expected_rows);
   await expect(query.getByRole('status')).toHaveText('Read ended with an explicit final record.');
 
@@ -234,7 +276,11 @@ test('Control serves authenticated SQL follow and trace through the built browse
   await trace.getByRole('combobox', { name: 'Source', exact: true }).selectOption('');
   await trace.getByRole('textbox', { name: 'Script', exact: true }).fill(source);
   await trace.getByLabel('Collection seconds').fill('120');
-  await trace.getByRole('button', { name: 'Run trace', exact: true }).click();
+  await page.keyboard.press('Tab');
+  await expect(trace.getByLabel('Finding reference (optional)')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(trace.getByRole('button', { name: 'Run trace', exact: true })).toBeFocused();
+  await page.keyboard.press('Space');
   await expect(trace.getByText('Accepted source and scope', { exact: true })).toBeVisible();
   const id = await trace.getByLabel('Trace UUID', { exact: true }).inputValue();
   const state = await control.command('trace-state', id);
@@ -283,7 +329,12 @@ test('Control serves authenticated SQL follow and trace through the built browse
   expect(retry.headers()['x-araphor-tenant']).toBe(ready.tenant_id);
   expect(ended.has(retry)).toBe(false);
 
-  await trace.getByRole('button', { name: 'Stop viewer only' }).click();
+  await trace.getByLabel('Finding reference (optional)').focus();
+  await page.keyboard.press('Tab');
+  await expect(trace.getByRole('button', { name: 'Stop capture', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(trace.getByRole('button', { name: 'Stop viewer only' })).toBeFocused();
+  await page.keyboard.press('Space');
   const output = await trace.locator('.live-output').textContent();
   const second = await control.command('commit');
   await ControlFixture.rows(query.getByRole('table'), second.expected_columns, second.expected_rows);
@@ -307,7 +358,10 @@ test('Control serves authenticated SQL follow and trace through the built browse
   await expect(trace.locator('.live-output')).not.toHaveText('No committed output received.');
   expect((await control.command('trace-state', id)).cancel_requested).toBe(false);
   const cancel = page.waitForRequest((value) => value.url().endsWith(`${service}CancelTrace`));
-  await trace.getByRole('button', { name: 'Stop capture', exact: true }).click();
+  await trace.getByLabel('Finding reference (optional)').focus();
+  await page.keyboard.press('Tab');
+  await expect(trace.getByRole('button', { name: 'Stop capture', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
   const mutation = await cancel;
   expect(Boolean(mutation.headers()['x-araphor-csrf'])).toBe(true);
   await expect.poll(async () => (await control.command('trace-state', id)).cancel_requested).toBe(true);

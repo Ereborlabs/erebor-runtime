@@ -39,7 +39,13 @@ use crate::control_fixture::{
 
 const SQL: &str = "SELECT count(*) AS count FROM trace_output";
 const WINDOW: &str = "SELECT count(*) AS count FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '5 seconds'";
+const BROWSER_WINDOW: &str = "SELECT count(*) AS count FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '10 seconds'";
 const WAIT: Duration = Duration::from_secs(10);
+
+enum CaptureCommand {
+    Seed([u8; 16], oneshot::Sender<Result<(), String>>),
+    Stop,
+}
 
 struct ClientFixture {
     tls: MtlsFixture,
@@ -57,7 +63,7 @@ struct ClientFixture {
     target: proto::InputSelection,
     accepted: Arc<Mutex<Vec<TraceAcceptedV1>>>,
     acknowledged: Arc<Mutex<BTreeMap<[u8; 16], u64>>>,
-    stop: Option<oneshot::Sender<()>>,
+    commands: mpsc::Sender<CaptureCommand>,
     driver: tokio::task::JoinHandle<Result<(), String>>,
 }
 
@@ -227,10 +233,10 @@ impl ClientFixture {
             accepted: Arc::clone(&accepted),
             acknowledged: Arc::clone(&acknowledged),
         };
-        let (stop, stopped) = oneshot::channel();
+        let (sender, commands) = mpsc::channel(1);
         let driver = tokio::spawn(async move {
             capture
-                .run(stopped)
+                .run(commands)
                 .await
                 .map_err(|error| error.to_string())
         });
@@ -293,7 +299,7 @@ impl ClientFixture {
             target: selection,
             accepted,
             acknowledged,
-            stop: Some(stop),
+            commands: sender,
             driver,
         };
         let rows = fixture.query_rows().await?;
@@ -664,6 +670,28 @@ impl ClientFixture {
                     json!({})
                 }
                 "commit" => self.commit().await?,
+                "window" => {
+                    if self.root.join("event-wal").exists()
+                        || !self
+                            .accepted
+                            .lock()
+                            .map_err(|_| "capture fixture lock failed")?
+                            .is_empty()
+                    {
+                        return Err("the browser window must be seeded once before capture".into());
+                    }
+                    let tenant =
+                        *uuid::Uuid::parse_str(&AraphorProfile::read(&self.profile)?.tenant_id)?
+                            .as_bytes();
+                    let (sender, completed) = oneshot::channel();
+                    self.commands
+                        .send(CaptureCommand::Seed(tenant, sender))
+                        .await?;
+                    tokio::time::timeout(WAIT, completed)
+                        .await??
+                        .map_err(std::io::Error::other)?;
+                    json!({"sql": BROWSER_WINDOW, "durable_ack": true})
+                }
                 "finish" => {
                     self.finish().await?;
                     json!({"durable_ack": true})
@@ -1049,9 +1077,7 @@ impl ClientFixture {
     }
 
     async fn shutdown(mut self) -> ProofResult<()> {
-        if let Some(stop) = self.stop.take() {
-            let _sent = stop.send(());
-        }
+        let _sent = self.commands.try_send(CaptureCommand::Stop);
         let driver = match tokio::time::timeout(WAIT, &mut self.driver).await {
             Ok(result) => result?.map_err(std::io::Error::other),
             Err(error) => {
@@ -1075,12 +1101,24 @@ impl ClientFixture {
 }
 
 impl CaptureFixture {
-    async fn run(mut self, mut stop: oneshot::Receiver<()>) -> ProofResult<()> {
+    async fn run(mut self, mut commands: mpsc::Receiver<CaptureCommand>) -> ProofResult<()> {
         let mut resolved = None;
         let mut cursors = BTreeMap::new();
         loop {
             tokio::select! {
-                _ = &mut stop => break,
+                command = commands.recv() => match command {
+                    Some(CaptureCommand::Seed(tenant, sender)) => {
+                        let result = ClientFixture::seed(
+                            &mut self.connection,
+                            self.path.parent().ok_or("capture target has no parent")?,
+                            tenant,
+                        ).await;
+                        let _sent = sender.send(result.as_ref().map_err(ToString::to_string).copied());
+                        result?;
+                        continue;
+                    }
+                    Some(CaptureCommand::Stop) | None => break,
+                },
                 _ = tokio::time::sleep(Duration::from_millis(20)) => {}
             }
             self.node.reap()?;
