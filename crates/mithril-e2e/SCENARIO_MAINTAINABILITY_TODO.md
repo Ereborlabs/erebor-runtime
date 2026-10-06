@@ -2619,19 +2619,21 @@ test does not close a row when its physical condition or an assertion changed.
   second valid exception for the same live grant and target. The first grant
   is Active. The second CRD must become Failed. This condition is distinct
   from several threads consuming one bounded exception.
-  - [ ] Reuse the `exception` lifecycle, `exception.py`,
+  - [x] Reuse the `exception` lifecycle, `exception.py`,
     `exception_policy.json`, and `one_use_exception.json`. Keep one shared
     test below 100 lines. Add no Platform API, policy copy, or production change.
-  - [ ] Use a fresh name and UID for each request. Keep both requests within
+  - [x] Use a fresh name and UID for each request. Keep both requests within
     the one-use policy limit. Read the first kernel authority and require
     Active, maximum uses one, and consumed uses zero before the second request.
   - [ ] Require the exact Control `overlapping live grant` rejection or the
     real Kubernetes Failed and ReconcileRejected status. Require no new
     authority or receipt key. Require the first authority to remain unchanged.
-  - [ ] Keep the ungranted denial, first allowed write, and exhausted denial
+  - [x] Keep the ungranted denial, first allowed write, and exhausted denial
     explicit. Match fresh File/OpenWrite evidence to the same protected path
     atom, task, role, entry, and generation. Use normal actor and platform stop.
-  - [ ] Pass Host and commit it.
+  - [x] Pass Host and commit it. The 99-line test passed in 42.96 seconds.
+    Output, pin, lease, and cgroup cleanup passed. The all-feature workspace
+    build, formatting, diff checks, and strict Clippy passed.
   - [ ] Pass direct runc and commit its registration.
   - [ ] Pass real Kubernetes and commit its registration.
   - [ ] Remove only the matched overlap request and
@@ -2639,9 +2641,22 @@ test does not close a row when its physical condition or an assertion changed.
     Keep adjacent consumption, expiry, deletion, and RBAC checks.
   - [ ] Pass formatting, strict Clippy, harness checks, and the final repository
     Rust CI procedure after the last source edit.
-  Planned reading route: shared test -> existing platform installation ->
-  Control live-grant validation -> real actor writes -> fresh attributed
-  evidence -> normal resource cleanup. Physical qualification is not done.
+  Review route:
+  [shared test](src/effect/exception_overlap.rs) submits two valid requests
+  with different names and UIDs.
+    -> [Shared](src/platform/shared.rs) calls the production exception
+    reconciler. [ControlStore](../mithril-control/src/store.rs) rejects the
+    second request while the first grant is live.
+    -> [Python actor](fixtures/process/exception.py) makes the denied write,
+    one allowed write, and the exhausted write.
+    -> [EffectCheck](src/effect/check.rs) reads fresh attributed results for
+    the same protected path atom. The existing typed-map reader checks the
+    first authority and receipt keys. Normal stop calls remove owned resources.
+  Run `effect::exception_overlap::overlapping_grants_are_rejected::exception_host`
+  in the mounted standard Rust test executable with
+  `--exact --ignored --nocapture --test-threads=1`. The log is
+  `/var/tmp/mithril-exception-overlap-host-20261006.log` in the retained VM.
+  Host qualification is done. Direct runc and Kubernetes are not done.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
   - [ ] Repair the old Observe probe's baseline setup. The current VM run

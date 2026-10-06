@@ -22,6 +22,8 @@ mod exception_limit;
 #[cfg(test)]
 mod exception_once;
 #[cfg(test)]
+mod exception_overlap;
+#[cfg(test)]
 mod exec_allow;
 #[cfg(test)]
 mod exec_at_deny;
