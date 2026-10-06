@@ -1,22 +1,98 @@
 use std::mem::size_of;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
 use duckdb::types::Value;
 use serde::{Deserialize, Serialize};
 use snafu::IntoError as _;
 
-use super::budget::QueryLease;
+use super::budget::{QueryBudget, QueryLease};
 use super::input::SCHEMAS;
 use super::{
     QueryLimits, QueryOperation, QueryPlan, QueryResult, QueryTemplate, QUERY_SCHEMA_VERSION,
 };
 use crate::{
-    AnalysisGapV1, AnalysisSourceReceiptV1, AnalysisSourceSnapshotV1, AnalysisStoreMetaV1, Result,
-    StorePositionV1,
+    AnalysisGapV1, AnalysisReadControl, AnalysisSourceReceiptV1, AnalysisSourceSnapshotV1,
+    AnalysisStore, AnalysisStoreMetaV1, Result, StorePositionV1,
 };
 
 pub const QUERY_CHECKPOINT_BYTES: usize = 1024;
+
+pub(super) struct QueryReadScope {
+    store: Arc<AnalysisStore>,
+    budget: Arc<QueryBudget>,
+    tenant: [u8; 16],
+    requests: Vec<[u8; 16]>,
+    timeout: Duration,
+    _lease: QueryLease,
+}
+
+impl std::fmt::Debug for QueryReadScope {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QueryReadScope")
+            .field("requests", &self.requests.len())
+            .finish()
+    }
+}
+
+impl QueryReadScope {
+    pub(super) fn allocation_for(requests: &Vec<[u8; 16]>) -> usize {
+        size_of::<Self>() + 2 * size_of::<usize>() + requests.capacity() * size_of::<[u8; 16]>()
+    }
+
+    pub(super) fn new(
+        store: Arc<AnalysisStore>,
+        budget: Arc<QueryBudget>,
+        tenant: [u8; 16],
+        requests: Vec<[u8; 16]>,
+        timeout: Duration,
+        lease: QueryLease,
+    ) -> Result<Self> {
+        let bytes = Self::allocation_for(&requests);
+        Ok(Self {
+            store,
+            budget,
+            tenant,
+            requests,
+            timeout,
+            _lease: lease.output(bytes)?,
+        })
+    }
+
+    pub(super) fn allocation_bytes(&self) -> usize {
+        Self::allocation_for(&self.requests)
+    }
+
+    pub(super) async fn check(self: &Arc<Self>, stream: Option<Arc<QueryLease>>) -> Result<()> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "query read runtime",
+            }
+            .build()
+        })?;
+        let control = Arc::new(AnalysisReadControl::with_timeout(self.timeout)?);
+        let lease = self.budget.evaluate(self.tenant)?;
+        let scope = self.clone();
+        let stage = control.clone();
+        let mut task = super::QueryTask {
+            control,
+            running: true,
+        };
+        let result = runtime
+            .spawn_blocking(move || {
+                let _lease = lease;
+                let _stream = stream;
+                scope
+                    .store
+                    .check_trace_reads(scope.tenant, &scope.requests, &stage)
+            })
+            .await;
+        task.running = false;
+        result.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueryCoverageState {
@@ -334,6 +410,7 @@ impl From<&crate::Error> for QueryErrorCode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueryTerminalReason {
+    Completed,
     Cancelled,
     OutputTimeout,
     Closed,
@@ -371,6 +448,7 @@ pub enum QueryPayload {
     },
     Checkpoint {
         checkpoint: QueryCheckpoint,
+        exhausted: bool,
         coverage: Option<Arc<QueryCoverageRows>>,
     },
     Health {
@@ -381,6 +459,8 @@ pub enum QueryPayload {
     Error {
         code: QueryErrorCode,
         reason: &'static str,
+        position: Option<StorePositionV1>,
+        floor: Option<StorePositionV1>,
         last_checkpoint: Option<QueryCheckpoint>,
         coverage: Option<Arc<QueryCoverageRows>>,
     },
@@ -400,10 +480,23 @@ pub struct QueryFrame {
     pub read_revision: u64,
     pub clock_changed: bool,
     pub payload: QueryPayload,
+    pub(super) reads: Option<Arc<QueryReadScope>>,
     _lease: Option<QueryLease>,
 }
 
 impl QueryFrame {
+    /// Check current trace read state before each disclosure from this frame.
+    pub async fn check_read(&self) -> Result<()> {
+        self.check_stream(None).await
+    }
+
+    pub(super) async fn check_stream(&self, stream: Option<Arc<QueryLease>>) -> Result<()> {
+        if let Some(scope) = &self.reads {
+            scope.check(stream).await?;
+        }
+        Ok(())
+    }
+
     pub fn coverage(&self) -> &[QueryCoverage] {
         self.coverage_owner().map_or(&[], Deref::deref)
     }
@@ -454,7 +547,11 @@ impl QueryFrame {
                 .transpose()?
                 .unwrap_or(0),
         };
-        Ok(self.owned_bytes().saturating_add(shared))
+        Ok(self.owned_bytes().saturating_add(shared).saturating_add(
+            self.reads
+                .as_ref()
+                .map_or(0, |scope| scope.allocation_bytes()),
+        ))
     }
 
     pub(super) fn attach_lease(mut self, lease: QueryLease) -> Result<Self> {
@@ -484,7 +581,16 @@ impl QueryFrame {
             ),
             |bytes, field| bytes.saturating_add(field.len()),
         );
-        if bytes.saturating_add(result.sources.allocation_bytes()?) > limits.output_bytes {
+        if bytes
+            .saturating_add(result.sources.allocation_bytes()?)
+            .saturating_add(
+                result
+                    .reads
+                    .as_ref()
+                    .map_or(0, |scope| scope.allocation_bytes()),
+            )
+            > limits.output_bytes
+        {
             return crate::QueryLimitSnafu {
                 resource: "query metadata output bytes",
                 limit: limits.output_bytes,
@@ -506,7 +612,7 @@ impl QueryFrame {
         for (name, data_type) in result.columns.iter().zip(&result.types) {
             columns.push(QueryColumn::new(plan, name, data_type)?);
         }
-        let frame = Self::new(
+        let mut frame = Self::new(
             plan,
             &result.meta,
             QueryPayload::Metadata(QueryMetadata {
@@ -527,6 +633,7 @@ impl QueryFrame {
                 coverage: result.sources.clone(),
             }),
         );
+        frame.reads = result.reads.clone();
         if frame.owned_bytes() > bytes || frame.total_bytes()? > limits.output_bytes {
             return crate::QueryLimitSnafu {
                 resource: "query metadata output bytes",
@@ -540,6 +647,7 @@ impl QueryFrame {
     pub(super) fn data(plan: &QueryPlan, result: QueryResult) -> Result<Self> {
         result.check_rows()?;
         let meta = result.meta.clone();
+        let reads = result.reads.clone();
         let payload = match plan.operation() {
             QueryOperation::Append => {
                 result.check_positions()?;
@@ -558,12 +666,15 @@ impl QueryFrame {
                 QueryPayload::Replace { result }
             }
         };
-        Ok(Self::new(plan, &meta, payload))
+        let mut frame = Self::new(plan, &meta, payload);
+        frame.reads = reads;
+        Ok(frame)
     }
 
     pub(super) fn checkpoint(
         checkpoint: QueryCheckpoint,
         coverage: Option<Arc<QueryCoverageRows>>,
+        exhausted: bool,
     ) -> Result<Self> {
         checkpoint.check()?;
         Ok(Self {
@@ -576,8 +687,10 @@ impl QueryFrame {
             payload: QueryPayload::Checkpoint {
                 checkpoint,
                 coverage,
+                exhausted,
             },
             _lease: None,
+            reads: None,
         })
     }
 
@@ -609,19 +722,28 @@ impl QueryFrame {
     pub(super) fn error(
         plan: &QueryPlan,
         meta: &AnalysisStoreMetaV1,
-        code: QueryErrorCode,
+        error: &crate::Error,
         last_checkpoint: Option<QueryCheckpoint>,
         coverage: Option<Arc<QueryCoverageRows>>,
     ) -> Result<Self> {
         if let Some(checkpoint) = &last_checkpoint {
             checkpoint.check()?;
         }
+        let code = QueryErrorCode::from(error);
+        let (position, floor) = match error {
+            crate::Error::QueryCursorExpired {
+                position, floor, ..
+            } => (Some(*position), Some(*floor)),
+            _ => (None, None),
+        };
         Ok(Self::new(
             plan,
             meta,
             QueryPayload::Error {
                 code,
                 reason: code.reason(),
+                position,
+                floor,
                 last_checkpoint,
                 coverage,
             },
@@ -659,6 +781,7 @@ impl QueryFrame {
             clock_changed: false,
             payload,
             _lease: None,
+            reads: None,
         }
     }
 }
@@ -946,6 +1069,7 @@ mod tests {
                 limited: false,
                 next_expiry_ns: None,
                 positions: Vec::new(),
+                reads: None,
                 _lease: lease,
             };
             result.output_bytes = result.allocation_bytes()?;
@@ -1039,11 +1163,14 @@ mod tests {
             }
             assert!(invalid.encode().is_err());
             assert!(QueryCheckpoint::try_from(serde_json::to_vec(&invalid)?.as_slice()).is_err());
-            assert!(QueryFrame::checkpoint(invalid.clone(), None).is_err());
+            assert!(QueryFrame::checkpoint(invalid.clone(), None, false).is_err());
             assert!(QueryFrame::error(
                 &fixture.plan,
                 &fixture.meta,
-                QueryErrorCode::EvaluationFailed,
+                &crate::QueryInvalidSnafu {
+                    field: "checkpoint"
+                }
+                .build(),
                 Some(invalid.clone()),
                 None,
             )
@@ -1327,6 +1454,7 @@ mod tests {
         let checkpoint = QueryFrame::checkpoint(
             QueryCheckpoint::from_result(&fixture.plan, &result)?,
             Some(result.sources.clone()),
+            result.exhausted,
         )?;
         let checkpoint_bytes = checkpoint.owned_bytes();
         assert_eq!(checkpoint_bytes, size_of::<QueryFrame>());
@@ -1426,7 +1554,11 @@ mod tests {
             .is_err());
 
             let checkpoint = QueryCheckpoint::from_result(&fixture.plan, &result)?;
-            let frame = QueryFrame::checkpoint(checkpoint.clone(), Some(result.sources.clone()))?;
+            let frame = QueryFrame::checkpoint(
+                checkpoint.clone(),
+                Some(result.sources.clone()),
+                result.exhausted,
+            )?;
             assert_eq!(frame.coverage(), &**result.sources);
             let QueryPayload::Checkpoint {
                 checkpoint: captured,
@@ -1468,13 +1600,15 @@ mod tests {
             let error = QueryFrame::error(
                 &fixture.plan,
                 &fixture.meta,
-                QueryErrorCode::from(&raw),
+                &raw,
                 Some(checkpoint.clone()),
                 Some(result.sources.clone()),
             )?;
             let QueryPayload::Error {
                 code,
                 reason,
+                position,
+                floor,
                 last_checkpoint,
                 ..
             } = error.payload
@@ -1484,6 +1618,7 @@ mod tests {
             assert_eq!(code, QueryErrorCode::EvaluationFailed);
             assert_eq!(reason, code.reason());
             assert!(!reason.contains("private"));
+            assert_eq!((position, floor), (None, None));
             assert_eq!(last_checkpoint, Some(checkpoint.clone()));
             let terminal = QueryFrame::terminal(
                 &fixture.plan,

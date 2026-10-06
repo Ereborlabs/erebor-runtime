@@ -304,6 +304,66 @@ gRPC-Web 2.0.2 and `grpcwebtext`. Assets include
 security policy remains unchanged. Unit tests do not prove TLS, OIDC login,
 browser streaming or live trace execution. Those checks remain required.
 
+The current source passed 24 existing browser layout and accessibility tests
+on 2026-10-06. These tests use the production asset build, but do not connect
+to Control. They do not qualify live gRPC-Web or OIDC behavior.
+
+The current TLS fixtures passed `observability_oidc_login`,
+`observability_query_upload` and `https_decommission_keeps_status` on
+2026-10-06. Each command passed one enabled test. The first two commands
+failed before the fixture set its standard socket to nonblocking mode.
+The production listener needed no socket change. The decommission test
+checks native TLS gRPC and absent JSON business routes. The authentication
+suite passed 12 tests, including `client_auth_membership`. A non-member
+cannot create a session. Removed membership prevents a new session.
+The administrative HTTP owner suite passed seven tests. These checks do not
+replace the built-CLI, live-browser or paired physical cases.
+`control_context_retained_targets` also passed one test. It checks retained
+target contexts, exact input selection, duplicate publication and reopen.
+
+The current shared transport filter passed nine tests on 2026-10-06.
+`observability_grpc_missing_data` also passed as an exact single-test command.
+It opens the real configuration fallback with a corrupt temporary data store.
+All five investigation RPCs return `UNAVAILABLE` after authentication. Missing
+credentials, missing mutation CSRF and removed membership still reject.
+The policy owner remains available. The corrupt input file remains unchanged.
+
+The built-CLI `query-trace-client` case passed on 2026-10-06. The exact
+`observability_cli_client` test also passed: one enabled test, zero failures.
+It checks fixed submitted source, identical retry, durable output ACK, SQL
+replacement, viewer interruption without capture cancellation, and initiating
+interruption with cancellation. SIGINT returns 130. The retained terminal
+has `complete: true`, `cleanup_complete: false` and `output_incomplete: true`.
+This is not proof of verified native BPF cleanup. A prior run reached a query
+deadline. The unchanged rerun passed; no deadline limit changed. The fixture
+now rejects an unexpected typed error before an expected startup frame.
+Normal completion, window expiry, reconnect and cursor-expiry checks remain
+required, as does the live browser case.
+
+The current data-owner suite passed 239 enabled tests on 2026-10-06. Five
+tests were ignored. Two ignored process-isolation tests were then removed;
+they do not test the approved in-process query owner. The remaining ignored
+tests are performance qualification cases. No performance case ran. The
+current Control owner suite passed 204 tests with zero failures and two
+ignored tests. These runs do not replace the final workspace procedure.
+
+The paired VM run passed all three lightweight prerequisites and the
+physical Pod replacement case on 2026-10-06. The harness returned exit zero,
+including its receipt checks and teardown. Both captures reported Verified
+cleanup. Original output remained unchanged after replacement and retry.
+A native TLS SQL error was followed by fresh output and durable ACK.
+The query ran in-process with discovery disabled. The platform was Linux
+x86_64, kernel 6.8.0-142 and K3s v1.35.5+k3s1, with stock bpftrace 0.20.2
+as a checked private test input. Diagnostic admission was synthetic-test-only;
+performance remains unqualified. The receipt is
+`/tmp/araphor-pod-retry.d6g9SNwz/result.json`.
+
+The first physical run failed after its Control child exited 101. Its error
+text was lost during teardown; the cause remains unknown. The second run
+used the same images and limits. Its fixture adds bounded current/previous
+Control logs and preserves failed capture files. The exact
+`observability_capture_cleanup` regression passed one test before that run.
+
 The current Helm lint and template checks passed on 2026-10-06. They check
 the shared client port, administrative enablement and query-only deployment
 shape. They do not prove a running deployment.
@@ -312,8 +372,10 @@ The browser asset Docker stage passed on 2026-10-06 on Linux x86_64 with
 Node 24.15.0 and protoc 3.21.12. It regenerates the clients from the shared
 schema and builds the assets without host `node_modules`. Control packages
 these assets at `/usr/share/araphor/console`; configure `client.assets` with
-that absolute path. The separate CLI image and native image builds remain
-unqualified. The asset build does not qualify a browser connection.
+that absolute path. Current Control, Node and CLI release images also built
+on 2026-10-06. Each image returned exit code zero for `--help`. These checks
+prove packaging and executable startup. They do not qualify a deployment,
+browser connection or capture.
 
 ## Stop point
 

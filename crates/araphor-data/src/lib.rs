@@ -29,8 +29,9 @@ pub use query::{
 };
 pub use trace::{
     TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
-    TraceMeasurementV1, TraceSourceV1, TraceTerminalReasonV1, TraceTerminalV1,
-    MAX_TRACE_FRAME_BYTES, MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
+    TraceMeasurementV1, TraceRecipeManifestV1, TraceRecipeV1, TraceSourceV1, TraceTerminalReasonV1,
+    TraceTerminalV1, MAX_TRACE_FRAME_BYTES, MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES,
+    MAX_TRACE_TARGETS,
 };
 pub use workload::{ContainerKindV1, KubernetesWorkloadIdentityV1, WorkloadTargetFactV1};
 

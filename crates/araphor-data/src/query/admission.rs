@@ -49,6 +49,9 @@ pub struct QueryBinding {
 }
 
 impl QuerySql {
+    pub const PARAMETER_COUNT: usize = PARAMETER_COUNT;
+    pub const PARAMETER_BYTES: usize = PARAMETER_BYTES;
+
     pub fn admit(sql: &str, parameters: Vec<Value>, follow: bool) -> Result<Self> {
         if sql.is_empty() || sql.len() > SQL_BYTES {
             return Err(Binder::invalid("SQL length"));
@@ -254,10 +257,11 @@ impl QuerySql {
     }
 
     fn append_shape(query: &Query) -> bool {
-        let Some((select, _)) = TimeTest::direct_events(query) else {
+        let Some((select, _, relation)) = TimeTest::direct_table(query) else {
             return false;
         };
-        query.limit_clause.is_none()
+        matches!(relation.as_str(), "events" | "trace_output")
+            && query.limit_clause.is_none()
             && query.order_by.is_none()
             && select.distinct.is_none()
             && select.having.is_none()
@@ -265,9 +269,12 @@ impl QuerySql {
     }
 
     fn append_positions(query: &mut Query) -> Result<()> {
-        let Some((_, alias)) = TimeTest::direct_events(query) else {
+        let Some((_, alias, relation)) = TimeTest::direct_table(query) else {
             return Err(Binder::invalid("append SQL shape"));
         };
+        if !matches!(relation.as_str(), "events" | "trace_output") {
+            return Err(Binder::invalid("append SQL shape"));
+        }
         let SetExpr::Select(select) = query.body.as_mut() else {
             return Err(Binder::invalid("append SQL shape"));
         };
@@ -1206,6 +1213,11 @@ struct TimeTest {
 
 impl TimeTest {
     fn direct_events(query: &Query) -> Option<(&Select, String)> {
+        let (select, alias, relation) = Self::direct_table(query)?;
+        (relation == "events").then_some((select, alias))
+    }
+
+    fn direct_table(query: &Query) -> Option<(&Select, String, String)> {
         if query.with.is_some() {
             return None;
         }
@@ -1221,19 +1233,20 @@ impl TimeTest {
         let TableFactor::Table { name, alias, .. } = &from.relation else {
             return None;
         };
-        if Binder::name(name).ok()?.as_str() != "events"
-            || alias
-                .as_ref()
-                .is_some_and(|alias| !alias.columns.is_empty())
+        let relation = Binder::name(name).ok()?;
+        if alias
+            .as_ref()
+            .is_some_and(|alias| !alias.columns.is_empty())
         {
             return None;
         }
         Some((
             select,
             alias.as_ref().map_or_else(
-                || "events".to_owned(),
+                || relation.clone(),
                 |alias| alias.name.value.to_ascii_lowercase(),
             ),
+            relation,
         ))
     }
 

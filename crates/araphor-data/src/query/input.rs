@@ -12,7 +12,8 @@ use super::QueryTemplate;
 use crate::{
     AnalysisContextVersionV1, AnalysisExtractionV1, AnalysisGapV1, AnalysisInputV1,
     AnalysisRelationV1, AnalysisSourceSnapshotV1, CoverageCounters, CoverageInterval,
-    CoverageReport, EvidenceIntakeIdentityV1, EvidenceRecord, Result,
+    CoverageReport, EvidenceIntakeIdentityV1, EvidenceRecord, Result, TraceRecipeManifestV1,
+    TraceRecipeV1,
 };
 
 pub(super) struct InputField(
@@ -51,47 +52,197 @@ const EVENTS: InputSchema = InputSchema {
         InputField("source_cursor", UBigint, "source cursor", ""),
         InputField("commit_revision", UBigint, "store revision", ""),
         InputField("ordinal", UInteger, "record index within commit", ""),
-        InputField("received_utc_ns", UBigint, "Control intake UTC nanoseconds", ""),
-        InputField("received_at", Timestamp, "Control intake UTC microseconds; nanoseconds truncated", ""),
-        InputField("observed_boottime_ns", UBigint, "Node boot-relative nanoseconds", ""),
-        InputField("ingested_utc_ns", Bigint, "Node ingestion UTC nanoseconds", ""),
+        InputField(
+            "received_utc_ns",
+            UBigint,
+            "Control intake UTC nanoseconds",
+            "",
+        ),
+        InputField(
+            "received_at",
+            Timestamp,
+            "Control intake UTC microseconds; nanoseconds truncated",
+            "",
+        ),
+        InputField(
+            "observed_boottime_ns",
+            UBigint,
+            "Node boot-relative nanoseconds",
+            "",
+        ),
+        InputField(
+            "ingested_utc_ns",
+            Bigint,
+            "Node ingestion UTC nanoseconds",
+            "",
+        ),
         InputField("coverage_interval_id", Blob, "exact interval ID", ""),
-        InputField("profile_generation_ref_id", UBigint, "profile generation reference", "No profile reference is present."),
+        InputField(
+            "profile_generation_ref_id",
+            UBigint,
+            "profile generation reference",
+            "No profile reference is present.",
+        ),
         InputField("task_cookie", UBigint, "boot-local task cookie", ""),
-        InputField("process_lineage_id", Blob, "ID bytes; empty means absent", ""),
-        InputField("authority_domain_id", Blob, "ID bytes; empty means absent", ""),
+        InputField(
+            "process_lineage_id",
+            Blob,
+            "ID bytes; empty means absent",
+            "",
+        ),
+        InputField(
+            "authority_domain_id",
+            Blob,
+            "ID bytes; empty means absent",
+            "",
+        ),
         InputField("execution_set_id", Blob, "ID bytes; empty means absent", ""),
         InputField("exact_object_id", Blob, "ID bytes; empty means absent", ""),
-        InputField("destination_id", UBigint, "destination ID; zero means absent", ""),
-        InputField("policy_rule_id", UBigint, "policy rule ID; zero means absent", ""),
-        InputField("reason", UInteger, "wire reason code; unknown values retained", ""),
-        InputField("decision", UInteger, "wire decision code; unknown values retained", ""),
-        InputField("effect_family", UInteger, "wire family code; unknown values retained", ""),
-        InputField("operation", UInteger, "wire operation code; unknown values retained", ""),
+        InputField(
+            "destination_id",
+            UBigint,
+            "destination ID; zero means absent",
+            "",
+        ),
+        InputField(
+            "policy_rule_id",
+            UBigint,
+            "policy rule ID; zero means absent",
+            "",
+        ),
+        InputField(
+            "reason",
+            UInteger,
+            "wire reason code; unknown values retained",
+            "",
+        ),
+        InputField(
+            "decision",
+            UInteger,
+            "wire decision code; unknown values retained",
+            "",
+        ),
+        InputField(
+            "effect_family",
+            UInteger,
+            "wire family code; unknown values retained",
+            "",
+        ),
+        InputField(
+            "operation",
+            UInteger,
+            "wire operation code; unknown values retained",
+            "",
+        ),
         InputField("configured_errno", Integer, "configured errno", ""),
         InputField("kernel_result", Integer, "kernel return value", ""),
-        InputField("temporal_coverage", Integer, "wire coverage enum; 0 unknown, 1 complete, 2 gapped; other values retained", ""),
-        InputField("target_task_cookie", UBigint, "boot-local target task cookie", "No target task cookie is present."),
-        InputField("operation_argument", UInteger, "operation-specific argument", "No operation argument is present."),
-        InputField("context_schema_version", UInteger, "decision context version", CONTEXT_ABSENT),
-        InputField("kernel_sequence", UBigint, "original kernel sequence, not source cursor", CONTEXT_ABSENT),
-        InputField("process_instance_id", Blob, "ID bytes; empty means absent", CONTEXT_ABSENT),
-        InputField("entry_instance_id", Blob, "ID bytes; empty means absent", CONTEXT_ABSENT),
-        InputField("binding_id", Blob, "ID bytes; empty means absent", CONTEXT_ABSENT),
-        InputField("context_profile_generation_ref_id", UBigint, "context profile generation reference", CONTEXT_ABSENT),
+        InputField(
+            "temporal_coverage",
+            Integer,
+            "wire coverage enum; 0 unknown, 1 complete, 2 gapped; other values retained",
+            "",
+        ),
+        InputField(
+            "target_task_cookie",
+            UBigint,
+            "boot-local target task cookie",
+            "No target task cookie is present.",
+        ),
+        InputField(
+            "operation_argument",
+            UInteger,
+            "operation-specific argument",
+            "No operation argument is present.",
+        ),
+        InputField(
+            "context_schema_version",
+            UInteger,
+            "decision context version",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "kernel_sequence",
+            UBigint,
+            "original kernel sequence, not source cursor",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "process_instance_id",
+            Blob,
+            "ID bytes; empty means absent",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "entry_instance_id",
+            Blob,
+            "ID bytes; empty means absent",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "binding_id",
+            Blob,
+            "ID bytes; empty means absent",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "context_profile_generation_ref_id",
+            UBigint,
+            "context profile generation reference",
+            CONTEXT_ABSENT,
+        ),
         InputField("role_id", UInteger, "role ID", CONTEXT_ABSENT),
         InputField("state_id", UInteger, "state ID", CONTEXT_ABSENT),
         InputField("entry_rule_id", UInteger, "entry rule ID", CONTEXT_ABSENT),
-        InputField("exact_object_key_id", UBigint, "exact object handle", CONTEXT_ABSENT),
-        InputField("composite_atom_id", UBigint, "composite atom ID", CONTEXT_ABSENT),
-        InputField("catalog_json", Blob, "unchanged catalog bytes", CONTEXT_ABSENT),
-        InputField("catalog_state", Varchar, "unchanged catalog state", CONTEXT_ABSENT),
-        InputField("exact_profile_generation_ref_id", UBigint, "file object profile generation reference", OBJECT_ABSENT),
+        InputField(
+            "exact_object_key_id",
+            UBigint,
+            "exact object handle",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "composite_atom_id",
+            UBigint,
+            "composite atom ID",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "catalog_json",
+            Blob,
+            "unchanged catalog bytes",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "catalog_state",
+            Varchar,
+            "unchanged catalog state",
+            CONTEXT_ABSENT,
+        ),
+        InputField(
+            "exact_profile_generation_ref_id",
+            UBigint,
+            "file object profile generation reference",
+            OBJECT_ABSENT,
+        ),
         InputField("mount_id_unique", UBigint, "unique mount ID", OBJECT_ABSENT),
         InputField("inode", UBigint, "inode number", OBJECT_ABSENT),
-        InputField("inode_generation", UBigint, "inode generation", OBJECT_ABSENT),
-        InputField("mount_namespace_inode", UInteger, "mount namespace inode", OBJECT_ABSENT),
-        InputField("filesystem_device", UInteger, "filesystem device", OBJECT_ABSENT),
+        InputField(
+            "inode_generation",
+            UBigint,
+            "inode generation",
+            OBJECT_ABSENT,
+        ),
+        InputField(
+            "mount_namespace_inode",
+            UInteger,
+            "mount namespace inode",
+            OBJECT_ABSENT,
+        ),
+        InputField(
+            "filesystem_device",
+            UInteger,
+            "filesystem device",
+            OBJECT_ABSENT,
+        ),
     ],
     join_keys: "Event identity: tenant_id,node_id,node_boot_id,label_epoch,source_id,source_epoch,cpu_id,source_cursor. Store order: commit_revision,ordinal within the result store UUID and recovery epoch. Coverage: full source identity plus coverage_interval_id=interval_id. Context requires an exact owner/entity/lifetime/revision key; names and time are not join keys.",
     owner: "araphor-data.AnalysisStore",
@@ -109,37 +260,132 @@ const COVERAGE: InputSchema = InputSchema {
         InputField("source_id", Blob, "16-byte ID", ""),
         InputField("source_epoch", UBigint, "receipt source epoch", ""),
         InputField("cpu_id", UInteger, "CPU ID", ""),
-        InputField("contiguous_cursor", UBigint, "durable contiguous ACK cursor", ""),
-        InputField("coverage_revision", UBigint, "captured report revision; zero means no report", ""),
-        InputField("retained_floor", UBigint, "retained source cursor floor", ""),
-        InputField("kind", Varchar, "receipt, expired, recovery, pending, or interval", ""),
-        InputField("state", Varchar, "unchanged interval state; receipt is reported or unknown", ""),
-        InputField("first_cursor", UBigint, "inclusive source gap cursor", "This row is not a source gap."),
-        InputField("last_cursor", UBigint, "inclusive source gap cursor", "This row is not a source gap."),
-        InputField("commit_revision", UBigint, "source gap store revision", "This row is not a source gap."),
-        InputField("interval_id", Blob, "exact report interval ID", INTERVAL_ABSENT),
-        InputField("interval_source_epoch", UBigint, "report interval source epoch", INTERVAL_ABSENT),
-        InputField("interval_revision", UBigint, "report interval revision", INTERVAL_ABSENT),
-        InputField("first_sequence", UBigint, "first kernel sequence, not source cursor", INTERVAL_ABSENT),
-        InputField("last_sequence", UBigint, "last kernel sequence, not source cursor", "The interval is open or this row is not an interval."),
-        InputField("current", Boolean, "current report interval", INTERVAL_ABSENT),
-        InputField("gap_reasons", Varchar, "JSON array of unchanged reason strings", INTERVAL_ABSENT),
+        InputField(
+            "contiguous_cursor",
+            UBigint,
+            "durable contiguous ACK cursor",
+            "",
+        ),
+        InputField(
+            "coverage_revision",
+            UBigint,
+            "captured report revision; zero means no report",
+            "",
+        ),
+        InputField(
+            "retained_floor",
+            UBigint,
+            "retained source cursor floor",
+            "",
+        ),
+        InputField(
+            "kind",
+            Varchar,
+            "receipt, expired, recovery, pending, or interval",
+            "",
+        ),
+        InputField(
+            "state",
+            Varchar,
+            "unchanged interval state; receipt is reported or unknown",
+            "",
+        ),
+        InputField(
+            "first_cursor",
+            UBigint,
+            "inclusive source gap cursor",
+            "This row is not a source gap.",
+        ),
+        InputField(
+            "last_cursor",
+            UBigint,
+            "inclusive source gap cursor",
+            "This row is not a source gap.",
+        ),
+        InputField(
+            "commit_revision",
+            UBigint,
+            "source gap store revision",
+            "This row is not a source gap.",
+        ),
+        InputField(
+            "interval_id",
+            Blob,
+            "exact report interval ID",
+            INTERVAL_ABSENT,
+        ),
+        InputField(
+            "interval_source_epoch",
+            UBigint,
+            "report interval source epoch",
+            INTERVAL_ABSENT,
+        ),
+        InputField(
+            "interval_revision",
+            UBigint,
+            "report interval revision",
+            INTERVAL_ABSENT,
+        ),
+        InputField(
+            "first_sequence",
+            UBigint,
+            "first kernel sequence, not source cursor",
+            INTERVAL_ABSENT,
+        ),
+        InputField(
+            "last_sequence",
+            UBigint,
+            "last kernel sequence, not source cursor",
+            "The interval is open or this row is not an interval.",
+        ),
+        InputField(
+            "current",
+            Boolean,
+            "current report interval",
+            INTERVAL_ABSENT,
+        ),
+        InputField(
+            "gap_reasons",
+            Varchar,
+            "JSON array of unchanged reason strings",
+            INTERVAL_ABSENT,
+        ),
         InputField("opening_attempted", UBigint, "counter", OPENING_ABSENT),
         InputField("opening_suppressed", UBigint, "counter", OPENING_ABSENT),
         InputField("opening_requested", UBigint, "counter", OPENING_ABSENT),
         InputField("opening_emitted", UBigint, "counter", OPENING_ABSENT),
         InputField("opening_lost", UBigint, "counter", OPENING_ABSENT),
-        InputField("opening_classifier_miss_count", UBigint, "counter", OPENING_ABSENT),
+        InputField(
+            "opening_classifier_miss_count",
+            UBigint,
+            "counter",
+            OPENING_ABSENT,
+        ),
         InputField("opening_unresolved", UBigint, "counter", OPENING_ABSENT),
-        InputField("opening_next_sequence", UBigint, "next kernel sequence", OPENING_ABSENT),
+        InputField(
+            "opening_next_sequence",
+            UBigint,
+            "next kernel sequence",
+            OPENING_ABSENT,
+        ),
         InputField("closing_attempted", UBigint, "counter", CLOSING_ABSENT),
         InputField("closing_suppressed", UBigint, "counter", CLOSING_ABSENT),
         InputField("closing_requested", UBigint, "counter", CLOSING_ABSENT),
         InputField("closing_emitted", UBigint, "counter", CLOSING_ABSENT),
         InputField("closing_lost", UBigint, "counter", CLOSING_ABSENT),
-        InputField("closing_classifier_miss_count", UBigint, "counter", CLOSING_ABSENT),
+        InputField(
+            "closing_classifier_miss_count",
+            UBigint,
+            "counter",
+            CLOSING_ABSENT,
+        ),
         InputField("closing_unresolved", UBigint, "counter", CLOSING_ABSENT),
-        InputField("closing_next_sequence", UBigint, "next kernel sequence", CLOSING_ABSENT),
+        InputField(
+            "closing_next_sequence",
+            UBigint,
+            "next kernel sequence",
+            CLOSING_ABSENT,
+        ),
     ],
     join_keys: SOURCE_KEY,
     owner: "araphor-data.AnalysisStore",
@@ -154,10 +400,30 @@ const CONTEXTS: InputSchema = InputSchema {
         InputField("owner_id", Varchar, "exact owner ID", ""),
         InputField("entity_key", Blob, "exact entity key", ""),
         InputField("lifetime_key", Blob, "exact lifetime key", ""),
-        InputField("owner_revision", UBigint, "owner revision, not store revision", ""),
-        InputField("valid_from_utc_ns", UBigint, "inclusive UTC nanoseconds", "The owner did not provide time bounds."),
-        InputField("valid_until_utc_ns", UBigint, "exclusive UTC nanoseconds", "The owner did not provide an end time."),
-        InputField("sensitivity", Varchar, "public, tenant, or host_restricted", ""),
+        InputField(
+            "owner_revision",
+            UBigint,
+            "owner revision, not store revision",
+            "",
+        ),
+        InputField(
+            "valid_from_utc_ns",
+            UBigint,
+            "inclusive UTC nanoseconds",
+            "The owner did not provide time bounds.",
+        ),
+        InputField(
+            "valid_until_utc_ns",
+            UBigint,
+            "exclusive UTC nanoseconds",
+            "The owner did not provide an end time.",
+        ),
+        InputField(
+            "sensitivity",
+            Varchar,
+            "public, tenant, or host_restricted",
+            "",
+        ),
         InputField("body", Blob, "unchanged owner body bytes", ""),
     ],
     join_keys: "tenant_id,owner_id,entity_key,lifetime_key,owner_revision",
@@ -175,11 +441,21 @@ const CATALOG: InputSchema = InputSchema {
         InputField("data_type", Varchar, "DuckDB logical type", ""),
         InputField("units", Varchar, "field units and representation", ""),
         InputField("nullable", Boolean, "whether the column can be NULL", ""),
-        InputField("null_meaning", Varchar, "NULL meaning; empty for required fields", ""),
+        InputField(
+            "null_meaning",
+            Varchar,
+            "NULL meaning; empty for required fields",
+            "",
+        ),
         InputField("join_keys", Varchar, "exact keys and join restrictions", ""),
         InputField("owner", Varchar, "data owner", ""),
         InputField("readiness", Varchar, "available or unavailable", ""),
-        InputField("description", Varchar, "relation meaning and proof limits", ""),
+        InputField(
+            "description",
+            Varchar,
+            "relation meaning and proof limits",
+            "",
+        ),
     ],
     join_keys: "relation,ordinal",
     owner: "araphor-data.QueryOwner",
@@ -187,8 +463,6 @@ const CATALOG: InputSchema = InputSchema {
     description: "Code-owned schemas for this internal evaluator. An unavailable relation is not registered as an empty table. This catalog grants no client access.",
 };
 
-// Trace schemas use portable data contracts and Control's reviewed measurement decoder.
-// Public query authorization and registration are not part of diagnostic capture.
 const TRACES: InputSchema = InputSchema {
     name: "traces",
     columns: &[
@@ -198,30 +472,86 @@ const TRACES: InputSchema = InputSchema {
         InputField("execution_id", Blob, "16-byte frozen execution ID", ""),
         InputField("node_id", Varchar, "exact Node ID", ""),
         InputField("node_boot_id", Blob, "16-byte original Node boot ID", ""),
+        InputField("binding_id", Blob, "16-byte frozen runtime binding ID", ""),
         InputField("namespace_uid", Varchar, "exact namespace UID", ""),
         InputField("source", Blob, "unchanged accepted source bytes", ""),
-        InputField("source_sha256", Blob, "SHA-256 of accepted source; not a raw batch digest", ""),
+        InputField(
+            "source_sha256",
+            Blob,
+            "SHA-256 of accepted source; not a raw batch digest",
+            "",
+        ),
         InputField("trace_schema_version", UInteger, "trace schema version", ""),
-        InputField("request_revision", UBigint, "metadata revision for cancellation and read revocation", ""),
+        InputField(
+            "request_revision",
+            UBigint,
+            "metadata revision for cancellation and read revocation",
+            "",
+        ),
         InputField("accepted_unix_ns", UBigint, "UTC nanoseconds", ""),
         InputField("deadline_unix_ns", UBigint, "UTC nanoseconds", ""),
         InputField("last_sequence", UBigint, "trace frame sequence", ""),
         InputField("output_bytes", UBigint, "bytes", ""),
-        InputField("retained_floor", UBigint, "expired diagnostic record cursor; terminal uses last_sequence plus one", ""),
-        InputField("cancel_requested", Boolean, "request cancellation state", ""),
+        InputField(
+            "retained_floor",
+            UBigint,
+            "expired diagnostic record cursor; terminal uses last_sequence plus one",
+            "",
+        ),
+        InputField(
+            "cancel_requested",
+            Boolean,
+            "request cancellation state",
+            "",
+        ),
         InputField("read_revoked", Boolean, "read authority state", ""),
-        InputField("terminal_reason", Varchar, "terminal reason", "No terminal result is present."),
-        InputField("output_incomplete", Boolean, "terminal output completeness", "No terminal result is present."),
-        InputField("kernel_lost_events", UBigint, "lost event count", "The loss count is unknown or no terminal result is present."),
-        InputField("ready_at_unix_ns", UBigint, "UTC nanoseconds", "Readiness was not observed."),
-        InputField("exit_code", Integer, "process exit code", "No exit code is present."),
-        InputField("forced_kill", Boolean, "terminal forced-kill state", "No terminal result is present."),
-        InputField("cleanup", Varchar, "terminal cleanup proof", "No terminal result is present."),
+        InputField(
+            "terminal_reason",
+            Varchar,
+            "terminal reason",
+            "No terminal result is present.",
+        ),
+        InputField(
+            "output_incomplete",
+            Boolean,
+            "terminal output completeness",
+            "No terminal result is present.",
+        ),
+        InputField(
+            "kernel_lost_events",
+            UBigint,
+            "lost event count",
+            "The loss count is unknown or no terminal result is present.",
+        ),
+        InputField(
+            "ready_at_unix_ns",
+            UBigint,
+            "UTC nanoseconds",
+            "Readiness was not observed.",
+        ),
+        InputField(
+            "exit_code",
+            Integer,
+            "process exit code",
+            "No exit code is present.",
+        ),
+        InputField(
+            "forced_kill",
+            Boolean,
+            "terminal forced-kill state",
+            "No terminal result is present.",
+        ),
+        InputField(
+            "cleanup",
+            Varchar,
+            "terminal cleanup proof",
+            "No terminal result is present.",
+        ),
     ],
     join_keys: "tenant_id,request_id,execution_id. The target index selects the immutable accepted binding. Original Node boot and source digest must match; names do not identify a target lifetime.",
-    owner: "araphor-data.AnalysisStore; Control.TraceOwner authorizes disclosure",
-    readiness: "unavailable",
-    description: "One execution's intent, request state and output receipt. Not registered with QueryOwner. Source lives once in shared metadata. A closed stream is not a terminal result; receipt counters do not prove raw output remains retained.",
+    owner: "araphor-data.AnalysisStore",
+    readiness: "available",
+    description: "One execution's retained intent, request state and output receipt. A closed stream is not a terminal result. Receipt counters do not prove raw output remains retained.",
 };
 
 const TRACE_OUTPUT: InputSchema = InputSchema {
@@ -232,17 +562,28 @@ const TRACE_OUTPUT: InputSchema = InputSchema {
         InputField("execution_id", Blob, "16-byte execution ID", ""),
         InputField("node_id", Varchar, "exact Node ID", ""),
         InputField("node_boot_id", Blob, "16-byte original Node boot ID", ""),
-        InputField("source_sha256", Blob, "SHA-256 of accepted source; not a raw batch digest", ""),
+        InputField(
+            "source_sha256",
+            Blob,
+            "SHA-256 of accepted source; not a raw batch digest",
+            "",
+        ),
+        InputField("target_index", UInteger, "accepted target index", ""),
         InputField("sequence", UBigint, "trace frame sequence", ""),
         InputField("commit_revision", UBigint, "raw store revision", ""),
         InputField("ordinal", UInteger, "record index within raw commit", ""),
-        InputField("kind", Varchar, "trace frame kind", ""),
+        InputField(
+            "kind",
+            Varchar,
+            "metadata, data, diagnostic, or terminal",
+            "",
+        ),
         InputField("bytes", Blob, "unchanged raw output bytes", ""),
     ],
     join_keys: "tenant_id,request_id,execution_id,sequence. Store order: commit_revision,ordinal within the result store UUID and recovery epoch. Match original Node boot and source digest.",
-    owner: "araphor-data.AnalysisStore; Control.TraceOwner authorizes disclosure",
-    readiness: "unavailable",
-    description: "Portable TraceFrameV1 with exact shared segment positions. Not registered with QueryOwner. Terminal state is not a data frame. Empty output does not prove absence of activity; expired output is not an empty successful read.",
+    owner: "araphor-data.AnalysisStore",
+    readiness: "available",
+    description: "Retained raw output with exact shared segment positions. Terminal bytes are unchanged TraceTerminalV1 JSON at last_sequence plus one. Empty output does not prove absence of activity. Expired output is not an empty successful read.",
 };
 
 const TRACE_MEASUREMENTS: InputSchema = InputSchema {
@@ -250,10 +591,20 @@ const TRACE_MEASUREMENTS: InputSchema = InputSchema {
     columns: &[
         InputField("tenant_id", Blob, "16-byte ID", ""),
         InputField("request_id", Blob, "16-byte request ID", ""),
-        InputField("execution_id", Blob, "16-byte execution ID; reset epoch", ""),
+        InputField(
+            "execution_id",
+            Blob,
+            "16-byte execution ID; reset epoch",
+            "",
+        ),
         InputField("sequence", UBigint, "source trace frame sequence", ""),
         InputField("ordinal", UInteger, "measurement index within frame", ""),
-        InputField("syscall_id", UInteger, "syscall number", "The recipe has no exact syscall ID."),
+        InputField(
+            "syscall_id",
+            UInteger,
+            "syscall number",
+            "The recipe has no exact syscall ID.",
+        ),
         InputField("errno", Bigint, "negative errno", ""),
         InputField("count", UBigint, "recipe unit", ""),
         InputField("cumulative", Boolean, "cumulative or interval count", ""),
@@ -261,9 +612,179 @@ const TRACE_MEASUREMENTS: InputSchema = InputSchema {
         InputField("unit", Varchar, "reviewed recipe unit", ""),
     ],
     join_keys: "tenant_id,request_id,execution_id,sequence,ordinal. The sequence identifies the source trace_output frame; ordinal identifies a measurement within that frame, not a store ordinal.",
-    owner: "araphor-data.TraceMeasurementV1; Control.TraceRecipeV1 decodes reviewed schemas",
-    readiness: "unavailable",
-    description: "Reviewed measurements decoded from retained raw frames. Not registered with QueryOwner. Do not sum cumulative snapshots. The execution ID separates reset epochs. Sampling and loss are not inferred from these rows.",
+    owner: "araphor-data.TraceRecipeV1",
+    readiness: "available",
+    description: "Reviewed measurements decoded from retained raw frames. Do not sum cumulative snapshots. The execution ID separates reset epochs. Sampling and loss are not inferred from these rows.",
+};
+
+const TARGETS: InputSchema = InputSchema {
+    name: "targets",
+    columns: &[
+        InputField("tenant_id", Blob, "16-byte ID", ""),
+        InputField("entity_key", Blob, "exact retained context entity key", ""),
+        InputField(
+            "lifetime_key",
+            Blob,
+            "exact retained context lifetime key",
+            "",
+        ),
+        InputField("owner_revision", UBigint, "immutable context version", ""),
+        InputField("node_id", Varchar, "exact Node ID", ""),
+        InputField(
+            "node_boot_id",
+            Blob,
+            "16-byte original Node boot ID",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "label_epoch",
+            UBigint,
+            "original label epoch",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "binding_id",
+            Blob,
+            "16-byte exact runtime binding ID",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "workload_binding_generation_digest",
+            Varchar,
+            "existing signed fact generation identity",
+            "",
+        ),
+        InputField("execution_set_id", Varchar, "exact execution set ID", ""),
+        InputField("cluster_uid", Varchar, "exact cluster UID", ""),
+        InputField("namespace_uid", Varchar, "exact namespace UID", ""),
+        InputField("controller_uid", Varchar, "exact controller UID", ""),
+        InputField(
+            "service_account_uid",
+            Varchar,
+            "exact service account UID",
+            "",
+        ),
+        InputField("pod_uid", Varchar, "exact Pod UID", ""),
+        InputField("container_id", Varchar, "exact runtime container ID", ""),
+        InputField(
+            "container_name",
+            Varchar,
+            "container name; not a lifetime key",
+            "",
+        ),
+        InputField(
+            "container_kind",
+            Varchar,
+            "INIT, SIDECAR, APPLICATION, or EPHEMERAL",
+            "",
+        ),
+        InputField("image_digest", Varchar, "retained image identity", ""),
+        InputField("pod_labels", Blob, "JSON object of retained labels", ""),
+        InputField(
+            "namespace_name",
+            Varchar,
+            "retained namespace name",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "pod_name",
+            Varchar,
+            "retained Pod name; not a lifetime key",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "profile_id",
+            Varchar,
+            "exact profile ID",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "policy_source_revision_id",
+            Varchar,
+            "existing policy source identity",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "protected_scope_id",
+            Varchar,
+            "exact protected scope ID",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "workload_selector_id",
+            Varchar,
+            "exact workload selector ID",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "kubernetes_node_name",
+            Varchar,
+            "retained Kubernetes Node name",
+            "No Kubernetes identity is present.",
+        ),
+        InputField(
+            "kubernetes_node_uid",
+            Varchar,
+            "exact Kubernetes Node UID",
+            "No Kubernetes identity is present.",
+        ),
+    ],
+    join_keys: "tenant_id,entity_key,lifetime_key,owner_revision. Join events or traces by tenant_id,node_id,node_boot_id,binding_id. Names do not identify a target lifetime.",
+    owner: "mithril-control.ControlContextOwner",
+    readiness: "available",
+    description: "Retained policy target inventory from committed immutable snapshots. This relation is not complete live inventory and does not assert current attachment, policy readiness, or trace capability. Trace submission resolves the current exact lifetime.",
+};
+
+const TRACE_RECIPES: InputSchema = InputSchema {
+    name: "trace_recipes",
+    columns: &[
+        InputField("recipe", Varchar, "exact public recipe selector", ""),
+        InputField("version", UInteger, "reviewed recipe version", ""),
+        InputField("source", Blob, "unchanged reviewed bpftrace source", ""),
+        InputField("source_sha256", Blob, "SHA-256 of reviewed source", ""),
+        InputField(
+            "parameter",
+            Varchar,
+            "Node-owned parameter; not a client override",
+            "",
+        ),
+        InputField("attribution", Varchar, "recipe attribution boundary", ""),
+        InputField("sensitivity", Varchar, "output sensitivity", ""),
+        InputField("hook", Varchar, "required kernel hook", ""),
+        InputField(
+            "measurement_keys",
+            Blob,
+            "JSON array of measurement keys",
+            "",
+        ),
+        InputField("unit", Varchar, "measurement unit", ""),
+        InputField("cumulative", Boolean, "cumulative or interval count", ""),
+        InputField("atomic_snapshot", Boolean, "snapshot atomicity", ""),
+        InputField("maximum_probes", UInteger, "probe limit", ""),
+        InputField("maximum_map_keys", UInteger, "map key limit", ""),
+        InputField(
+            "return_code_semantics",
+            Varchar,
+            "kernel return code meaning",
+            "",
+        ),
+        InputField(
+            "capability_status",
+            Varchar,
+            "unknown; backend readiness was not checked",
+            "",
+        ),
+        InputField(
+            "example",
+            Varchar,
+            "CLI example; target names require current resolution",
+            "",
+        ),
+    ],
+    join_keys: "recipe,version. source_sha256 binds the exact reviewed source. A recipe row grants no execution authority.",
+    owner: "araphor-data.TraceRecipeV1",
+    readiness: "available",
+    description: "Code-owned reviewed recipes, not stored copies. Capability status is unknown until the selected Node admits the request. This relation does not enable a backend or assert performance qualification.",
 };
 
 pub(super) const SCHEMAS: &[InputSchema] = &[
@@ -274,6 +795,8 @@ pub(super) const SCHEMAS: &[InputSchema] = &[
     TRACES,
     TRACE_OUTPUT,
     TRACE_MEASUREMENTS,
+    TARGETS,
+    TRACE_RECIPES,
 ];
 
 #[derive(Debug)]
@@ -355,6 +878,179 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
                 Ok(row)
             }
             AnalysisInputV1::Context(context) => Ok(Self::from(context)),
+            AnalysisInputV1::Target { context, fact } => {
+                let entity = fact
+                    .kubernetes
+                    .as_ref()
+                    .map_or(fact.execution_set_id.as_str(), |identity| {
+                        identity.binding_id.as_str()
+                    });
+                if context.key.owner_id != "mithril-control/target"
+                    || context.key.entity_key != entity.as_bytes()
+                    || context.key.lifetime_key
+                        != fact.workload_binding_generation_digest.as_bytes()
+                    || context.key.owner_revision != 1
+                    || !crate::node_id_is_valid(&fact.node_id)
+                {
+                    return crate::QueryInvalidSnafu {
+                        field: "target context",
+                    }
+                    .fail();
+                }
+                let identity = fact.kubernetes.as_ref();
+                let id = |value: &str| {
+                    uuid::Uuid::parse_str(value)
+                        .ok()
+                        .filter(|id| !id.is_nil())
+                        .map(|id| Value::Blob(id.as_bytes().to_vec()))
+                        .ok_or_else(|| {
+                            crate::QueryInvalidSnafu {
+                                field: "target identity",
+                            }
+                            .build()
+                        })
+                };
+                let kind = match fact.container_kind {
+                    crate::ContainerKindV1::Init => "INIT",
+                    crate::ContainerKindV1::Sidecar => "SIDECAR",
+                    crate::ContainerKindV1::Application => "APPLICATION",
+                    crate::ContainerKindV1::Ephemeral => "EPHEMERAL",
+                };
+                let labels = serde_json::to_vec(&fact.pod_labels)
+                    .map_err(|source| crate::QueryEncodingSnafu.into_error(source))?;
+                let mut row = Self(vec![
+                    Value::Blob(context.key.tenant_id.to_vec()),
+                    Value::Blob(context.key.entity_key.clone()),
+                    Value::Blob(context.key.lifetime_key.clone()),
+                    Value::UBigInt(context.key.owner_revision),
+                    Value::Text(fact.node_id.clone()),
+                    identity
+                        .map(|identity| id(&identity.node_boot_id))
+                        .transpose()?
+                        .unwrap_or(Value::Null),
+                    identity.map_or(Value::Null, |identity| Value::UBigInt(identity.label_epoch)),
+                    identity
+                        .map(|identity| id(&identity.binding_id))
+                        .transpose()?
+                        .unwrap_or(Value::Null),
+                    Value::Text(fact.workload_binding_generation_digest.clone()),
+                    Value::Text(fact.execution_set_id.clone()),
+                    Value::Text(fact.cluster_uid.clone()),
+                    Value::Text(fact.namespace_uid.clone()),
+                    Value::Text(fact.controller_uid.clone()),
+                    Value::Text(fact.service_account_uid.clone()),
+                    Value::Text(fact.pod_uid.clone()),
+                    Value::Text(fact.container_id.clone()),
+                    Value::Text(fact.container_name.clone()),
+                    Value::Text(kind.into()),
+                    Value::Text(fact.image_digest.clone()),
+                    Value::Blob(labels),
+                ]);
+                if let Some(identity) = identity {
+                    row.0.extend([
+                        Value::Text(identity.namespace_name.clone()),
+                        Value::Text(identity.pod_name.clone()),
+                        Value::Text(identity.profile_id.clone()),
+                        Value::Text(identity.policy_source_revision_id.clone()),
+                        Value::Text(identity.protected_scope_id.clone()),
+                        Value::Text(identity.workload_selector_id.clone()),
+                        Value::Text(identity.kubernetes_node_name.clone()),
+                        Value::Text(identity.kubernetes_node_uid.clone()),
+                    ]);
+                }
+                row.0.resize(TARGETS.columns.len(), Value::Null);
+                Ok(row)
+            }
+            AnalysisInputV1::Trace {
+                state,
+                intent,
+                target_index,
+                receipt,
+            } => {
+                let binding = intent.bindings.get(target_index as usize).ok_or_else(|| {
+                    crate::QueryInvalidSnafu {
+                        field: "trace target index",
+                    }
+                    .build()
+                })?;
+                let identity = &binding.identity;
+                let terminal = receipt.terminal.as_ref();
+                Ok(Self(vec![
+                    Value::Blob(intent.tenant_id.to_vec()),
+                    Value::Blob(intent.request_id.to_vec()),
+                    Value::UInt(target_index),
+                    Value::Blob(identity.execution_id.to_vec()),
+                    Value::Text(identity.node_id.clone()),
+                    Value::Blob(identity.node_boot_id.to_vec()),
+                    Value::Blob(binding.binding_id.to_vec()),
+                    Value::Text(binding.namespace_uid.clone()),
+                    Value::Blob(intent.source.bytes.clone()),
+                    Value::Blob(intent.source.sha256.to_vec()),
+                    Value::UInt(1),
+                    Value::UBigInt(state.revision),
+                    Value::UBigInt(intent.accepted_unix_ns),
+                    Value::UBigInt(intent.deadline_unix_ns),
+                    Value::UBigInt(receipt.last_sequence),
+                    Value::UBigInt(receipt.output_bytes),
+                    Value::UBigInt(receipt.retained_floor),
+                    Value::Boolean(state.cancel_requested),
+                    Value::Boolean(state.read_revoked),
+                    terminal.map_or(Value::Null, |value| {
+                        Value::Text(format!("{:?}", value.reason))
+                    }),
+                    terminal.map_or(Value::Null, |value| Value::Boolean(value.output_incomplete)),
+                    terminal
+                        .and_then(|value| value.kernel_lost_events)
+                        .map_or(Value::Null, Value::UBigInt),
+                    terminal
+                        .and_then(|value| value.ready_at_unix_ns)
+                        .map_or(Value::Null, Value::UBigInt),
+                    terminal
+                        .and_then(|value| value.exit_code)
+                        .map_or(Value::Null, Value::Int),
+                    terminal.map_or(Value::Null, |value| Value::Boolean(value.forced_kill)),
+                    terminal.map_or(Value::Null, |value| {
+                        Value::Text(format!("{:?}", value.cleanup))
+                    }),
+                ]))
+            }
+            AnalysisInputV1::TraceOutput {
+                identity,
+                target_index,
+                sequence,
+                position,
+                kind,
+                bytes,
+            } => Ok(Self(vec![
+                Value::Blob(identity.tenant_id.to_vec()),
+                Value::Blob(identity.request_id.to_vec()),
+                Value::Blob(identity.execution_id.to_vec()),
+                Value::Text(identity.node_id.clone()),
+                Value::Blob(identity.node_boot_id.to_vec()),
+                Value::Blob(identity.source_sha256.to_vec()),
+                Value::UInt(target_index),
+                Value::UBigInt(sequence),
+                Value::UBigInt(position.commit_revision),
+                Value::UInt(position.ordinal),
+                Value::Text(kind.into()),
+                Value::Blob(bytes.to_vec()),
+            ])),
+            AnalysisInputV1::TraceMeasurement {
+                identity,
+                measurement,
+            } => Ok(Self(vec![
+                Value::Blob(identity.tenant_id.to_vec()),
+                Value::Blob(identity.request_id.to_vec()),
+                Value::Blob(identity.execution_id.to_vec()),
+                Value::UBigInt(measurement.sequence),
+                Value::UInt(u32::from(measurement.ordinal)),
+                measurement.syscall_id.map_or(Value::Null, Value::UInt),
+                Value::BigInt(measurement.errno),
+                Value::UBigInt(measurement.count),
+                Value::Boolean(measurement.cumulative),
+                Value::Boolean(measurement.atomic_snapshot),
+                Value::Text(measurement.unit.clone()),
+            ])),
             AnalysisInputV1::Result { .. } => crate::QueryUnsupportedSnafu {
                 relation: "results",
             }
@@ -383,6 +1079,40 @@ impl From<&AnalysisContextVersionV1> for InputRow {
     }
 }
 
+impl TryFrom<TraceRecipeManifestV1> for InputRow {
+    type Error = crate::Error;
+
+    fn try_from(recipe: TraceRecipeManifestV1) -> Result<Self> {
+        let name = match recipe.recipe {
+            TraceRecipeV1::SyscallErrors => "syscall-errors@1",
+            TraceRecipeV1::FailedOpens => "failed-opens@1",
+        };
+        let keys = serde_json::to_vec(&recipe.measurement_keys)
+            .map_err(|source| crate::QueryEncodingSnafu.into_error(source))?;
+        Ok(Self(vec![
+            Value::Text(name.into()),
+            Value::UInt(recipe.version),
+            Value::Blob(recipe.source.bytes),
+            Value::Blob(recipe.source.sha256.into()),
+            Value::Text(recipe.parameter),
+            Value::Text(recipe.attribution),
+            Value::Text(recipe.sensitivity),
+            Value::Text(recipe.hook),
+            Value::Blob(keys),
+            Value::Text(recipe.unit),
+            Value::Boolean(recipe.cumulative),
+            Value::Boolean(recipe.atomic_snapshot),
+            Value::UInt(u32::from(recipe.maximum_probes)),
+            Value::UInt(recipe.maximum_map_keys),
+            Value::Text(recipe.return_code_semantics),
+            Value::Text("unknown".into()),
+            Value::Text(format!(
+                "araphor trace --target pod/default/workload --recipe {name} --duration 30s"
+            )),
+        ]))
+    }
+}
+
 impl InputRow {
     pub(super) fn allocation_bytes(&self) -> Result<usize> {
         let mut bytes = self.0.capacity().checked_mul(size_of::<Value>());
@@ -401,7 +1131,7 @@ impl InputRow {
                     return crate::QueryInvalidSnafu {
                         field: "input row value",
                     }
-                    .fail()
+                    .fail();
                 }
             };
             bytes = bytes.and_then(|bytes| bytes.checked_add(owned));
@@ -501,7 +1231,7 @@ impl InputRelations {
     ) -> Result<Self> {
         let mut bytes = extraction.input_bytes;
         Self::charge(&mut bytes, 0, limit)?;
-        let mut counts = [0_usize; 2];
+        let mut counts = [0_usize; 9];
         if !extraction.missing_results.is_empty() {
             return crate::QueryUnsupportedSnafu {
                 relation: "results",
@@ -511,7 +1241,11 @@ impl InputRelations {
         for page in &extraction.pages {
             let index = match page.relation {
                 AnalysisRelationV1::Events => 0,
-                AnalysisRelationV1::Context => 1,
+                AnalysisRelationV1::Context => 2,
+                AnalysisRelationV1::Traces => 4,
+                AnalysisRelationV1::TraceOutput => 5,
+                AnalysisRelationV1::TraceMeasurements => 6,
+                AnalysisRelationV1::Targets => 7,
                 AnalysisRelationV1::Results => {
                     return crate::QueryUnsupportedSnafu {
                         relation: "results",
@@ -530,14 +1264,23 @@ impl InputRelations {
         let mut tables = [
             Self::table(&EVENTS, counts[0], &mut bytes, limit)?,
             Self::table(&COVERAGE, 0, &mut bytes, limit)?,
-            Self::table(&CONTEXTS, counts[1], &mut bytes, limit)?,
+            Self::table(&CONTEXTS, counts[2], &mut bytes, limit)?,
             Self::table(&CATALOG, 0, &mut bytes, limit)?,
+            Self::table(&TRACES, counts[4], &mut bytes, limit)?,
+            Self::table(&TRACE_OUTPUT, counts[5], &mut bytes, limit)?,
+            Self::table(&TRACE_MEASUREMENTS, counts[6], &mut bytes, limit)?,
+            Self::table(&TARGETS, counts[7], &mut bytes, limit)?,
+            Self::table(&TRACE_RECIPES, 0, &mut bytes, limit)?,
         ];
         Self::charge(&mut bytes, size_of::<Self>(), limit)?;
         for page in &mut extraction.pages {
             let index = match page.relation {
                 AnalysisRelationV1::Events => 0,
                 AnalysisRelationV1::Context => 2,
+                AnalysisRelationV1::Traces => 4,
+                AnalysisRelationV1::TraceOutput => 5,
+                AnalysisRelationV1::TraceMeasurements => 6,
+                AnalysisRelationV1::Targets => 7,
                 AnalysisRelationV1::Results => {
                     return crate::QueryUnsupportedSnafu {
                         relation: "results",
@@ -624,10 +1367,21 @@ impl InputRelations {
                 }
             }
         }
+        if matches!(template, QueryTemplate::Client(sql) if sql.dependencies().contains("trace_recipes"))
+        {
+            for recipe in [TraceRecipeV1::SyscallErrors, TraceRecipeV1::FailedOpens] {
+                Self::push(
+                    &mut tables[8],
+                    InputRow::try_from(recipe.manifest()?)?,
+                    &mut bytes,
+                    limit,
+                )?;
+            }
+        }
         extraction.input_bytes = bytes;
         Ok(Self {
             tables: tables.into_iter().map(Arc::new).collect(),
-            schemas: vec![&EVENTS, &COVERAGE, &CONTEXTS, &CATALOG],
+            schemas: SCHEMAS.iter().collect(),
             bytes,
         })
     }
@@ -730,11 +1484,13 @@ impl InputRelations {
                 "traces" => "_query_traces",
                 "trace_output" => "_query_trace_output",
                 "trace_measurements" => "_query_trace_measurements",
+                "targets" => "_query_targets",
+                "trace_recipes" => "_query_trace_recipes",
                 _ => {
                     return crate::QueryInvalidSnafu {
                         field: "query relation",
                     }
-                    .fail()
+                    .fail();
                 }
             };
             table.register(connection, function, schema.name)?;
@@ -882,7 +1638,11 @@ mod tests {
             &QueryTemplate::Events { operation: None },
         )?;
         let before = input.allocation_bytes();
-        let columns = input.tables[0].columns.capacity();
+        let columns: Vec<_> = input
+            .tables
+            .iter()
+            .map(|table| table.columns.capacity())
+            .collect();
         let capacity = input.tables[0].rows[0].capacity();
         let Value::Blob(blob) = &input.tables[0].rows[0][43] else {
             return Err("catalog bytes are absent".into());
@@ -892,7 +1652,13 @@ mod tests {
         let bound = input.allocation_bytes();
         assert_eq!(
             bound - before,
-            (input.tables[0].columns.capacity() - columns) * size_of::<InputColumn>()
+            input
+                .tables
+                .iter()
+                .zip(columns)
+                .map(|(table, before)| (table.columns.capacity() - before)
+                    * size_of::<InputColumn>())
+                .sum::<usize>()
                 + (input.tables[0].rows[0].capacity() - capacity) * size_of::<Value>()
         );
         let Value::Blob(blob) = &input.tables[0].rows[0][43] else {
@@ -1037,6 +1803,7 @@ mod tests {
             scanned_bytes: 0,
             projected_bytes: 0,
             input_bytes: size_of::<AnalysisExtractionV1<InputRow>>(),
+            trace_reads: Vec::new(),
             limits: Default::default(),
         }
     }
@@ -1609,7 +2376,7 @@ mod tests {
                     found = true;
                     assert_eq!(
                         value(&CATALOG, row, "readiness")?,
-                        &Value::Text("unavailable".into())
+                        &Value::Text("available".into())
                     );
                 }
             }
@@ -1625,11 +2392,38 @@ mod tests {
         }
         let connection = Connection::open_in_memory()?;
         input.register(&connection)?;
-        assert!(connection.prepare("SELECT * FROM trace_output").is_err());
+        assert_eq!(
+            connection.query_row("SELECT count(*) FROM trace_output", [], |row| row
+                .get::<_, u64>(0))?,
+            0
+        );
         assert_eq!(
             connection.query_row("SELECT count(*) FROM catalog", [], |row| row
                 .get::<_, u64>(0))?,
             rows.len() as u64
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn query_recipe_input_bounds() -> TestResult {
+        let template = QueryTemplate::Client(super::super::QuerySql::admit(
+            "SELECT * FROM trace_recipes",
+            Vec::new(),
+            false,
+        )?);
+        let mut extraction = empty_input();
+        let input = InputRelations::new(&mut extraction, 1_000_000, &template)?;
+        assert!(input.tables[7].rows.is_empty());
+        assert_eq!(input.tables[8].rows.len(), 2);
+        let bound = extraction.input_bytes;
+        drop(input);
+        let mut exact = empty_input();
+        InputRelations::new(&mut exact, bound, &template)?;
+        assert_eq!(exact.input_bytes, bound);
+        let mut limited = empty_input();
+        assert!(
+            matches!(InputRelations::new(&mut limited, bound - 1, &template), Err(crate::Error::QueryLimit { limit, .. }) if limit == bound - 1)
         );
         Ok(())
     }

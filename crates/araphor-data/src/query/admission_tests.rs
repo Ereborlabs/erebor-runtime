@@ -183,6 +183,24 @@ fn query_admission_fields() -> TestResult {
 }
 
 #[test]
+fn query_catalog_admission() -> TestResult {
+    for relation in ["targets", "trace_recipes"] {
+        let sql = Fixture::admit(&format!("SELECT * FROM {relation}"), vec![])?;
+        assert_eq!(sql.operation(), super::super::QueryOperation::Replace);
+        assert_eq!(
+            sql.dependencies(),
+            &std::collections::BTreeSet::from([relation.to_owned()])
+        );
+        let bound = sql.bind_at(100)?;
+        assert_eq!(bound.received_from, Bound::Unbounded);
+        assert_eq!(bound.received_until, Bound::Unbounded);
+        assert!(bound.parameters.is_empty());
+        assert!(Fixture::admit(&format!("SELECT missing_field FROM {relation}"), vec![]).is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn query_admission_closed_shapes() -> TestResult {
     for sql in [
         "DELETE FROM events",
@@ -208,8 +226,37 @@ fn query_admission_closed_shapes() -> TestResult {
     ] {
         assert!(Fixture::admit(sql, vec![]).is_err(), "{sql}");
     }
-    for relation in ["traces", "trace_output", "trace_measurements", "unknown"] {
-        assert!(Fixture::admit(&format!("SELECT * FROM {relation}"), vec![]).is_err());
+    assert!(Fixture::admit("SELECT * FROM unknown", vec![]).is_err());
+    Ok(())
+}
+
+#[test]
+fn query_trace_admission() -> TestResult {
+    for (sql, operation) in [
+        (
+            "SELECT sequence FROM trace_output WHERE request_id = ?",
+            QueryOperation::Append,
+        ),
+        (
+            "SELECT sequence FROM trace_output ORDER BY sequence",
+            QueryOperation::Replace,
+        ),
+        (
+            "SELECT count FROM trace_measurements",
+            QueryOperation::Replace,
+        ),
+        ("SELECT execution_id FROM traces", QueryOperation::Replace),
+    ] {
+        let parameters = if sql.contains('?') {
+            vec![Value::Blob(vec![1; 16])]
+        } else {
+            Vec::new()
+        };
+        let admitted = QuerySql::admit(sql, parameters, true)?;
+        assert_eq!(admitted.operation(), operation);
+        let binding = admitted.bind_at(100)?;
+        assert_eq!(binding.received_from, Bound::Unbounded);
+        assert_eq!(binding.received_until, Bound::Unbounded);
     }
     Ok(())
 }

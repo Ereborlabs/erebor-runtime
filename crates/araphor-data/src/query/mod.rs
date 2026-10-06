@@ -41,7 +41,8 @@ pub use frame::{
 use input::{InputRelations, InputRow};
 pub use plan::{QueryOperation, QueryPlan, QueryTemplate, QUERY_SCHEMA_VERSION};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct QueryLimits {
     pub scan_bytes: usize,
     pub input_bytes: usize,
@@ -143,6 +144,7 @@ pub struct QueryResult {
     pub limited: bool,
     pub next_expiry_ns: Option<u64>,
     pub positions: Vec<StorePositionV1>,
+    reads: Option<Arc<frame::QueryReadScope>>,
     _lease: QueryLease,
 }
 
@@ -237,6 +239,10 @@ impl QueryOwner {
             .evaluate_async(plan, now_ns, None, false, control)
             .await?;
         authority.check(&grant)?;
+        if let Some(scope) = &result.reads {
+            scope.check(None).await?;
+        }
+        authority.check(&grant)?;
         Ok(result)
     }
 
@@ -292,6 +298,19 @@ impl QueryOwner {
     ) -> Result<QueryResult> {
         let selection = plan.dependencies(now_ns)?;
         let project = |input: crate::AnalysisInputV1<'_>| {
+            let relation = match &input {
+                crate::AnalysisInputV1::Event { .. } => "events",
+                crate::AnalysisInputV1::Context(_) => "context_versions",
+                crate::AnalysisInputV1::Target { .. } => "targets",
+                crate::AnalysisInputV1::Trace { .. } => "traces",
+                crate::AnalysisInputV1::TraceOutput { .. } => "trace_output",
+                crate::AnalysisInputV1::TraceMeasurement { .. } => "trace_measurements",
+                crate::AnalysisInputV1::Result { .. } => "results",
+            };
+            if matches!(&plan.template, QueryTemplate::Client(sql) if !sql.dependencies().contains(relation))
+            {
+                return Ok(None);
+            }
             let row = InputRow::try_from(input)?;
             let bytes = row.allocation_bytes()?;
             Ok(Some((row, bytes)))
@@ -304,7 +323,7 @@ impl QueryOwner {
         let mut page = if let QueryRead::Append(after) = read {
             self.store
                 .position_rows(&selection, after, bounds, control, project)?
-        } else if plan.reads_events() {
+        } else if plan.reads_raw() {
             self.store
                 .extract_rows(&selection, bounds, control, project)?
         } else {
@@ -372,7 +391,25 @@ impl QueryOwner {
             sources,
             lease.split(coverage_bytes)?,
         )?);
-        let mut summary_bytes = coverage_bytes + std::mem::size_of::<QueryFrame>();
+        let requests = std::mem::take(&mut page.extraction.trace_reads);
+        let read_bytes = if requests.is_empty() {
+            0
+        } else {
+            frame::QueryReadScope::allocation_for(&requests)
+        };
+        let reads = if requests.is_empty() {
+            None
+        } else {
+            Some(Arc::new(frame::QueryReadScope::new(
+                self.store.clone(),
+                self.budget.clone(),
+                selection.tenant_id,
+                requests,
+                self.limits.extract_timeout,
+                lease.split(read_bytes)?,
+            )?))
+        };
+        let mut summary_bytes = coverage_bytes + read_bytes + std::mem::size_of::<QueryFrame>();
         summary_bytes = summary_bytes.saturating_add(
             page.extraction
                 .missing_contexts
@@ -441,12 +478,14 @@ impl QueryOwner {
             limited,
             next_expiry_ns,
             positions,
+            reads,
             _lease: lease,
         };
         result.output_bytes = result.allocation_bytes()?;
         self.check_output(result.output_bytes)?;
         let owned = result.output_bytes
             - coverage_bytes
+            - read_bytes
             - (std::mem::size_of::<QueryFrame>() - std::mem::size_of::<QueryResult>());
         result._lease = result._lease.output(owned)?;
         Ok(result)
@@ -582,6 +621,11 @@ impl QueryResult {
                 .saturating_mul(std::mem::size_of::<StorePositionV1>()),
         );
         bytes = bytes.saturating_add(self.sources.allocation_bytes()?);
+        bytes = bytes.saturating_add(
+            self.reads
+                .as_ref()
+                .map_or(0, |scope| scope.allocation_bytes()),
+        );
         bytes = bytes.saturating_add(
             self.missing_contexts
                 .capacity()

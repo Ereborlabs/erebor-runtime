@@ -4,7 +4,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use duckdb::params;
+use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
 use super::{AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS};
@@ -244,51 +244,62 @@ impl AnalysisStore {
         {
             return self.reject("the source page tenant or cursor is invalid");
         }
-        let after = after.map(EvidenceIntakeIdentityV1::key);
         let control = AnalysisReadControl::default();
         let mut reader_guard = self.reader_until(&control)?;
         control.run(&mut reader_guard, |reader| {
-            let mut statement = reader
-                .prepare(
-                    "SELECT stream_key, identity_json FROM source_receipts
+            self.source_page_from(reader, tenant_id, after, &control)
+        })
+    }
+
+    pub(super) fn source_page_from(
+        &self,
+        reader: &Connection,
+        tenant_id: [u8; 16],
+        after: Option<&EvidenceIntakeIdentityV1>,
+        control: &AnalysisReadControl,
+    ) -> Result<Vec<EvidenceIntakeIdentityV1>> {
+        control.check()?;
+        let after = after.map(EvidenceIntakeIdentityV1::key);
+        let mut statement = reader
+            .prepare(
+                "SELECT stream_key, identity_json FROM source_receipts
                  WHERE tenant_id = ? AND (CAST(? AS BLOB) IS NULL OR stream_key > ?)
                  ORDER BY stream_key LIMIT ?",
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare source page",
-                })?;
-            let rows = statement
-                .query_map(
-                    params![
-                        tenant_id.as_slice(),
-                        after.as_deref(),
-                        after.as_deref(),
-                        MAX_ANALYSIS_PAGE_RECORDS as u32,
-                    ],
-                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read source page",
-                })?;
-            let mut sources = Vec::new();
-            for row in rows {
-                control.check()?;
-                let (key, json) = row.context(AnalysisDatabaseSnafu {
-                    operation: "decode source page",
-                })?;
-                let identity: EvidenceIntakeIdentityV1 =
-                    serde_json::from_str(&json).context(crate::JsonSnafu { path: &self.root })?;
-                if identity.tenant_id != tenant_id
-                    || !identity.valid()
-                    || identity.key().as_slice() != key
-                {
-                    return self
-                        .reject("the source page identity does not match its key or tenant");
-                }
-                sources.push(identity);
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare source page",
+            })?;
+        let rows = statement
+            .query_map(
+                params![
+                    tenant_id.as_slice(),
+                    after.as_deref(),
+                    after.as_deref(),
+                    MAX_ANALYSIS_PAGE_RECORDS as u32,
+                ],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read source page",
+            })?;
+        let mut sources = Vec::new();
+        for row in rows {
+            control.check()?;
+            let (key, json) = row.context(AnalysisDatabaseSnafu {
+                operation: "decode source page",
+            })?;
+            let identity: EvidenceIntakeIdentityV1 =
+                serde_json::from_str(&json).context(crate::JsonSnafu { path: &self.root })?;
+            if identity.tenant_id != tenant_id
+                || !identity.valid()
+                || identity.key().as_slice() != key
+            {
+                return self.reject("the source page identity does not match its key or tenant");
             }
-            Ok(sources)
-        })
+            sources.push(identity);
+        }
+        control.check()?;
+        Ok(sources)
     }
 
     pub fn read_page(

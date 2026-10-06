@@ -214,6 +214,15 @@ of this boundary.
 
 #### Owners and limits
 
+ClientGrpcOwner holds one optional data state with the existing store and query
+owner. If data startup fails, the shared listener and policy owner remain
+available. Authentication runs before investigation RPCs return `UNAVAILABLE`.
+[The missing-data test](../../../../crates/mithril-control/src/client_grpc/tests.rs)
+uses the real configuration fallback and all five generated RPCs through the
+shared router. It also checks the policy owner and unchanged corrupt input.
+The exact test passed. The current shared transport filter passed nine tests
+on 2026-10-06. These checks do not replace live-client qualification.
+
 The host creates one QueryOwner with an AnalysisStore and QueryLimits.
 The trusted query entry point rejects a client plan. QueryAuthorization is
 the host seam for current grants, revocation notifications and expiry.
@@ -268,6 +277,14 @@ subscription store.
 -> [QueryFrame::check_read](../../../../crates/araphor-data/src/query/frame.rs) A held output page rechecks read revocation before each row.<br>
 -> [TraceTransport](../../../../crates/mithril-control/src/client_grpc/trace.rs) A complete result requires an exhausted checkpoint and all selected terminal receipts. EOF is not success.
 
+QueryTransport and TraceTransport retain the latest native checkpoint as a
+read guard. A local deadline or final result checks that guard and current
+tenant access after the wait. The guard contains no drained output page.
+`observability_grpc_result_revocation`,
+`observability_grpc_deadline_revocation` and
+`observability_grpc_duration_revocation` check read revocation before these
+transport-generated results.
+
 The listener registers exactly five query/trace methods and six administrative
 methods. Unknown paths do not select a business handler. Administrative OIDC
 callbacks, admission callbacks and assets keep their required HTTPS paths.
@@ -275,6 +292,9 @@ Investigation login requires configured subject membership. Administrative
 login does not create an investigation session. Browser mutations require
 the exact Origin and CSRF value. Logout removes only the caller's session.
 The approval owner keeps its separate authority and one-use delivery rules.
+`client_auth_membership` checks denied non-member login and removed
+membership. `one_draft_starts_only_one_approval` checks that an approval
+attempt without a credential remains Attempted, not Approved.
 
 The catalog exposes code-owned relation fields and recipes. `targets` reads
 retained policy snapshots, not complete live inventory. Control publishes
@@ -408,6 +428,29 @@ The query-upload case still needs paired physical proof. The physical Control Po
 The shared listener, administrative route migration,
 CLI, console, built-client end-to-end case and a final workspace gate for those changes remain
 required. This section does not claim public SQL is qualified.
+
+On 2026-10-06, the current working tree passed the native TLS
+`observability_query_upload` and OIDC `observability_oidc_login` tests.
+The OIDC fixture sets its socket to nonblocking mode before Tokio takes
+ownership. The native TLS `https_decommission_keeps_status` test also passed.
+The authentication suite passed 12 tests. The administrative HTTP owner suite
+passed seven tests. `control_context_retained_targets` passed one test.
+These focused checks do not qualify the complete client boundary.
+
+Read the shared client qualification in this order:
+[ClientFixture](../../../../crates/mithril-e2e/src/observability/client.rs)
+starts the production Control, private Node mTLS and public client owners.
+[OidcFixture](../../../../crates/mithril-e2e/src/control_fixture/oidc.rs)
+supplies the external TLS identity provider. The native case invokes the
+built CLI as a client. It does not start a SQL worker process.
+[The live browser case](../../../../ui/mithril-console/e2e/control-client.spec.ts)
+uses this same fixture, built assets and generated gRPC-Web client. It does
+not replace network calls with browser responses. The native case and its
+exact ignored wrapper passed on 2026-10-06. They check submitted source,
+retry, durable output, SQL replacement and distinct interruption behavior.
+The live browser case and the remaining completion, expiry and reconnect
+checks are not yet qualified. A native fixture failure must preserve its
+typed error; cancellation output must not satisfy a startup assertion.
 
 ### Storage owner review
 
@@ -1993,7 +2036,7 @@ bytes across two sources, exact retry, and gap repair. All use temporary stores.
 [inspect_read_only_shape](../../../../crates/araphor-data/src/analysis/admission.rs) DuckDB-dialect parser rejects unauthorized SQL shape and external access.<br>
 -> [ReadOnlyGuard::parse](../../../../crates/araphor-data/src/analysis/admission.rs) The bound check reuses the admitted syntax tree; it does not parse the statement a second time.<br>
 -> [safe_received_at_bound](../../../../crates/araphor-data/src/analysis/admission.rs) Optimization keeps a lower bound only when the predicate implies it; tests compare with full authorized input.<br>
--> [analysis_sql_worker_isolation](../../../../crates/araphor-data/src/analysis/mod.rs) Separate-process test checks an OS-limited in-memory worker without opening the data store. This is not QueryOwner or a public SQL API.
+-> [QueryOwner::query_client](../../../../crates/araphor-data/src/query/mod.rs) The asynchronous owner evaluates bounded input in the host Tokio runtime. See the public query boundary review for cancellation, capacity and authority checks.
 
 ### Durable evidence, profiles, and context
 
@@ -2655,7 +2698,7 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | [context.rs tests](../../../../crates/mithril-control/src/discovery/context.rs), [feed.rs tests](../../../../crates/mithril-control/src/discovery/index/feed.rs) | Cutoffs, disclosure, conflicts, context replay, and stable revision positions. |
 | [roundtrip.rs](../../../../crates/mithril-e2e/src/discovery/roundtrip.rs) | `discovery_context_roundtrip_uses_verified_catalog_wal_and_mtls` and `discovery_derivation_profile_restart_uses_wal_and_mtls` use production owners with synthetic external inputs. |
 | [storage.rs](../../../../crates/mithril-e2e/src/discovery/storage.rs) | Native SQLite bounds and isolated query-worker qualification. This is not a shipped arbitrary-SQL API. |
-| [storage_contract.rs](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs), [analysis/mod.rs tests](../../../../crates/araphor-data/src/analysis/mod.rs), [admission.rs tests](../../../../crates/araphor-data/src/analysis/admission.rs) | Offline DuckDB commits, duplicate rejection, reopen, coverage digest, post-commit process exit, SQL admission, authorized-input equivalence, and isolated worker. No live intake or QueryOwner proof. |
+| [storage_contract.rs](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs), [analysis/mod.rs tests](../../../../crates/araphor-data/src/analysis/mod.rs), [admission.rs tests](../../../../crates/araphor-data/src/analysis/admission.rs) | Offline DuckDB commits, duplicate rejection, reopen, coverage digest, post-commit process exit, SQL admission and authorized-input equivalence. No live intake or QueryOwner proof. |
 | [context.rs tests](../../../../crates/araphor-data/src/analysis/context.rs), [retention.rs tests](../../../../crates/araphor-data/src/analysis/retention.rs), [progress.rs tests](../../../../crates/araphor-data/src/analysis/progress.rs), [backup.rs tests](../../../../crates/araphor-data/src/analysis/backup.rs) | Temporary databases prove exact context versions and corrupt-body rejection, required-progress protection, exact witness expiry, byte-pressure cleanup, optional gaps, bounded restart state, result progress, and backup/restore. These tests do not prove production intake or physical disk reuse. |
 
 ### Diagnostic tests and physical harnesses

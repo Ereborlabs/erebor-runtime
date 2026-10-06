@@ -13,7 +13,12 @@ use super::{
     QueryLimits, QueryOperation, QueryOwner, QueryPayload, QueryPlan, QueryResult, QuerySql,
     QueryStream, QueryTerminalReason,
 };
-use crate::{AnalysisReadControl, AnalysisSelectionV1, EvidenceRecord, Result, StorePositionV1};
+use crate::{
+    AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisReadControl, AnalysisSelectionV1,
+    ContextSensitivityV1, EvidenceRecord, EvidenceRetentionOwner, Result, StorePositionV1,
+    TraceBatchV1, TraceBindingV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
+    TraceIntentV1, TraceOutputReceiptV1, TraceRecipeV1, TraceTerminalReasonV1, TraceTerminalV1,
+};
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type ClockGate = (oneshot::Sender<()>, mpsc::Receiver<()>);
@@ -125,6 +130,127 @@ struct ClientFixture {
 }
 
 impl ClientFixture {
+    fn target(&self, index: u8) -> TestResult<AnalysisContextVersionV1> {
+        let binding = uuid::Uuid::from_bytes([index; 16]).to_string();
+        let generation = format!("{index:064x}");
+        let fact = crate::WorkloadTargetFactV1 {
+            node_id: self.data.source.node_id.clone(),
+            workload_binding_generation_digest: generation.clone(),
+            execution_set_id: uuid::Uuid::from_bytes([index; 16]).to_string(),
+            cluster_uid: "cluster-a".into(),
+            namespace_uid: "namespace-a".into(),
+            controller_uid: "controller-a".into(),
+            service_account_uid: "account-a".into(),
+            pod_uid: format!("pod-{index}"),
+            container_id: format!("containerd://{index}"),
+            container_name: "application".into(),
+            container_kind: crate::ContainerKindV1::Application,
+            image_digest: "sha256:retained-image".into(),
+            pod_labels: std::collections::BTreeMap::from([("app".into(), "fixture".into())]),
+            kubernetes: Some(crate::KubernetesWorkloadIdentityV1 {
+                namespace_name: "default".into(),
+                pod_name: format!("workload-{index}"),
+                profile_id: "profile-a".into(),
+                policy_source_revision_id: "source-a".into(),
+                binding_id: binding.clone(),
+                protected_scope_id: "scope-a".into(),
+                workload_selector_id: "selector-a".into(),
+                kubernetes_node_name: "worker-a".into(),
+                kubernetes_node_uid: "worker-uid-a".into(),
+                node_boot_id: uuid::Uuid::from_bytes(self.data.source.node_boot_id).to_string(),
+                label_epoch: self.data.source.label_epoch,
+            }),
+        };
+        Ok(AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: self.data.source.tenant_id,
+                owner_id: "mithril-control/target".into(),
+                entity_key: binding.into_bytes(),
+                lifetime_key: generation.into_bytes(),
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: serde_json::to_vec(&fact)?,
+        })
+    }
+
+    fn trace(&self, request: u8) -> Result<TraceIntentV1> {
+        let source = TraceRecipeV1::FailedOpens.manifest()?.source;
+        let intent = TraceIntentV1 {
+            tenant_id: self.data.source.tenant_id,
+            request_id: [request; 16],
+            bindings: vec![TraceBindingV1 {
+                identity: TraceIdentityV1 {
+                    tenant_id: self.data.source.tenant_id,
+                    request_id: [request; 16],
+                    execution_id: [request; 16],
+                    node_id: self.data.source.node_id.clone(),
+                    node_boot_id: self.data.source.node_boot_id,
+                    source_sha256: source.sha256,
+                },
+                binding_id: [request; 16],
+                namespace_uid: "trace-namespace".into(),
+            }],
+            source,
+            authority: b"opaque Control record".to_vec(),
+            accepted_unix_ns: 100,
+            deadline_unix_ns: 1_000_000_000,
+            host_sensitive: false,
+        };
+        self.data.store.accept_trace(&intent)?;
+        Ok(intent)
+    }
+
+    fn trace_frame(
+        &self,
+        intent: &TraceIntentV1,
+        sequence: u64,
+        bytes: &[u8],
+    ) -> Result<TraceOutputReceiptV1> {
+        let identity = &intent.bindings[0].identity;
+        self.data.store.append_trace(
+            identity,
+            &TraceBatchV1 {
+                execution_id: identity.execution_id,
+                frames: vec![TraceFrameV1 {
+                    execution_id: identity.execution_id,
+                    sequence,
+                    kind: TraceFrameKindV1::Data,
+                    bytes: bytes.to_vec(),
+                }],
+                terminal: None,
+            },
+            101 + sequence,
+        )
+    }
+
+    fn trace_terminal(&self, intent: &TraceIntentV1) -> Result<TraceOutputReceiptV1> {
+        let identity = &intent.bindings[0].identity;
+        let receipt = self.data.store.trace_receipt(identity)?;
+        self.data.store.append_trace(
+            identity,
+            &TraceBatchV1 {
+                execution_id: identity.execution_id,
+                frames: Vec::new(),
+                terminal: Some(TraceTerminalV1 {
+                    execution_id: identity.execution_id,
+                    reason: TraceTerminalReasonV1::Completed,
+                    last_sequence: receipt.as_ref().map_or(0, |value| value.last_sequence),
+                    output_bytes: receipt.as_ref().map_or(0, |value| value.output_bytes),
+                    output_incomplete: false,
+                    kernel_lost_events: None,
+                    ready_at_unix_ns: None,
+                    exit_code: Some(0),
+                    forced_kill: false,
+                    cleanup: TraceCleanupV1::Verified,
+                }),
+            },
+            200,
+        )
+    }
+
     fn local() -> TestResult<Self> {
         Self::new(200, 100)
     }
@@ -230,6 +356,11 @@ impl ClientFixture {
         )
     }
 
+    fn tenant(&mut self) {
+        self.grant.selection = AnalysisSelectionV1::tenant(self.data.source.tenant_id);
+        self.authority = Arc::new(Authority::new(self.grant.clone(), self.clock.now.clone()));
+    }
+
     async fn query(&self, plan: &QueryPlan) -> Result<QueryResult> {
         self.owner
             .query_client(
@@ -244,6 +375,11 @@ impl ClientFixture {
     fn follow(&self, plan: QueryPlan, checkpoint: Option<QueryCheckpoint>) -> Result<QueryStream> {
         self.owner
             .follow_client_clock(plan, checkpoint, self.authority.clone(), self.clock.clone())
+    }
+
+    fn stream(&self, plan: QueryPlan, checkpoint: Option<QueryCheckpoint>) -> Result<QueryStream> {
+        self.owner
+            .stream_client_clock(plan, checkpoint, self.authority.clone(), self.clock.clone())
     }
 
     async fn next(stream: &mut QueryStream) -> TestResult<QueryFrame> {
@@ -316,6 +452,483 @@ impl ClientFixture {
         assert_eq!(result.sources.len(), 1);
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn query_catalog_relations() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let context = fixture.target(1)?;
+    fixture.data.store.commit_context(&context)?;
+    let mut foreign = context.clone();
+    foreign.key.tenant_id = [9; 16];
+    fixture.data.store.commit_context(&foreign)?;
+    let mut unrelated = context.clone();
+    unrelated.key.owner_id = "mithril-control/policy".into();
+    unrelated.body = b"unrelated owner bytes".to_vec();
+    fixture.data.store.commit_context(&unrelated)?;
+    let plan = fixture.plan(
+        "SELECT node_id,node_boot_id,binding_id,pod_name,container_kind FROM targets",
+        vec![],
+        false,
+    )?;
+    let selection = plan.dependencies(100)?;
+    assert!(selection.targets && selection.targets_only && selection.all_contexts);
+    assert!(!selection.all_sources && !selection.all_traces);
+    let result = fixture.query(&plan).await?;
+    assert_eq!(plan.operation(), QueryOperation::Replace);
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            Value::Text(fixture.data.source.node_id.clone()),
+            Value::Blob(fixture.data.source.node_boot_id.to_vec()),
+            Value::Blob(vec![1; 16]),
+            Value::Text("workload-1".into()),
+            Value::Text("APPLICATION".into()),
+        ]]
+    );
+    let plan = fixture.plan(
+        "SELECT COUNT(*) FROM targets t JOIN context_versions c ON t.tenant_id=c.tenant_id AND t.entity_key=c.entity_key AND t.lifetime_key=c.lifetime_key AND t.owner_revision=c.owner_revision WHERE c.owner_id='mithril-control/target'",
+        vec![],
+        false,
+    )?;
+    assert!(!plan.dependencies(100)?.targets_only);
+    assert_eq!(
+        fixture.query(&plan).await?.rows,
+        vec![vec![Value::BigInt(1)]]
+    );
+    let plan = fixture.plan(
+        "SELECT recipe,version,source,source_sha256,parameter,hook,capability_status,example FROM trace_recipes ORDER BY recipe",
+        vec![],
+        false,
+    )?;
+    let selection = plan.dependencies(100)?;
+    assert!(!selection.all_contexts && !selection.all_sources && !selection.all_traces);
+    let result = fixture.query(&plan).await?;
+    assert_eq!(result.rows.len(), 2);
+    for (row, recipe, name) in [
+        (
+            &result.rows[0],
+            TraceRecipeV1::FailedOpens,
+            "failed-opens@1",
+        ),
+        (
+            &result.rows[1],
+            TraceRecipeV1::SyscallErrors,
+            "syscall-errors@1",
+        ),
+    ] {
+        let manifest = recipe.manifest()?;
+        assert_eq!(row[0], Value::Text(name.into()));
+        assert_eq!(row[1], Value::UInt(1));
+        assert_eq!(row[2], Value::Blob(manifest.source.bytes));
+        assert_eq!(row[3], Value::Blob(manifest.source.sha256.to_vec()));
+        assert_eq!(row[4], Value::Text(manifest.parameter));
+        assert_eq!(row[5], Value::Text(manifest.hook));
+        assert_eq!(row[6], Value::Text("unknown".into()));
+        assert!(matches!(&row[7], Value::Text(value) if value.contains(name)));
+    }
+    let plan = fixture.plan(
+        "SELECT relation,COUNT(*) FROM catalog WHERE relation IN ('targets','trace_recipes') GROUP BY relation ORDER BY relation",
+        vec![],
+        false,
+    )?;
+    assert_eq!(
+        fixture.query(&plan).await?.rows,
+        vec![
+            vec![Value::Text("targets".into()), Value::BigInt(28)],
+            vec![Value::Text("trace_recipes".into()), Value::BigInt(17)],
+        ]
+    );
+    fixture.grant.selection.nodes.push("absent-node".into());
+    let plan = fixture.plan("SELECT COUNT(*) FROM targets", vec![], false)?;
+    assert_eq!(
+        fixture.query(&plan).await?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    fixture.grant.selection.nodes.clear();
+    fixture.grant.selection.binding_ids.push([2; 16]);
+    let plan = fixture.plan("SELECT COUNT(*) FROM targets", vec![], false)?;
+    assert_eq!(
+        fixture.query(&plan).await?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    fixture.grant.selection.binding_ids.clear();
+    let mut altered = fixture.target(2)?;
+    altered.key.entity_key = b"altered binding".to_vec();
+    fixture.data.store.commit_context(&altered)?;
+    let plan = fixture.plan("SELECT COUNT(*) FROM targets", vec![], false)?;
+    assert!(matches!(
+        fixture.query(&plan).await,
+        Err(crate::Error::QueryInvalid {
+            field: "target context",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_target_follow() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let plan = fixture.plan("SELECT COUNT(*) FROM targets", vec![], true)?;
+    let mut stream = fixture.stream(plan, None)?;
+    drop(ClientFixture::next(&mut stream).await?);
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert_eq!(
+        ClientFixture::result(&frame, QueryOperation::Replace)?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    drop(frame);
+    drop(ClientFixture::next(&mut stream).await?);
+    fixture.data.store.commit_context(&fixture.target(1)?)?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert_eq!(
+        ClientFixture::result(&frame, QueryOperation::Replace)?.rows,
+        vec![vec![Value::BigInt(1)]]
+    );
+    drop(frame);
+    drop(ClientFixture::next(&mut stream).await?);
+    fixture.authority.revoke();
+    assert!(matches!(
+        tokio::time::timeout(WAIT, stream.next()).await?,
+        Some(Err(crate::Error::QueryDenied { .. }))
+    ));
+    assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+    tokio::time::timeout(WAIT, &mut stream.task).await??;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_trace_relations() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let intent = fixture.trace(7)?;
+    let bytes = br#"{"type":"map","data":{"@errors":{"-13":7}}}"#;
+    fixture.trace_frame(&intent, 1, bytes)?;
+    let receipt = fixture.trace_terminal(&intent)?;
+    let plan = fixture.plan("SELECT target_index,binding_id,last_sequence,output_bytes,kernel_lost_events,terminal_reason FROM traces", vec![], false)?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            Value::UInt(0),
+            Value::Blob(vec![7; 16]),
+            Value::UBigInt(1),
+            Value::UBigInt(bytes.len() as u64),
+            Value::Null,
+            Value::Text("Completed".into())
+        ]]
+    );
+    drop(result);
+    let plan = fixture.plan("SELECT execution_id,sequence,syscall_id,errno,count,cumulative,atomic_snapshot,unit FROM trace_measurements", vec![], false)?;
+    assert_eq!(plan.operation(), QueryOperation::Replace);
+    let result = fixture.query(&plan).await?;
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            Value::Blob(vec![7; 16]),
+            Value::UBigInt(1),
+            Value::Null,
+            Value::BigInt(-13),
+            Value::UBigInt(7),
+            Value::Boolean(true),
+            Value::Boolean(false),
+            Value::Text("count".into())
+        ]]
+    );
+    drop(result);
+    let plan = fixture.plan("SELECT execution_id,target_index,sequence,kind,bytes FROM trace_output WHERE request_id = ?", vec![Value::Blob(vec![7; 16])], false)?;
+    assert_eq!(plan.operation(), QueryOperation::Append);
+    let result = fixture.query(&plan).await?;
+    let raw = fixture.data.store.read_trace(
+        &intent.bindings[0].identity,
+        1,
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(
+        result.positions,
+        raw.positions
+            .iter()
+            .copied()
+            .chain(raw.terminal_position)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(result.rows.len(), 2);
+    assert_eq!(
+        result.rows[0],
+        vec![
+            Value::Blob(vec![7; 16]),
+            Value::UInt(0),
+            Value::UBigInt(1),
+            Value::Text("data".into()),
+            Value::Blob(bytes.to_vec())
+        ]
+    );
+    assert_eq!(
+        result.rows[1],
+        vec![
+            Value::Blob(vec![7; 16]),
+            Value::UInt(0),
+            Value::UBigInt(2),
+            Value::Text("terminal".into()),
+            Value::Blob(serde_json::to_vec(
+                receipt.terminal.as_ref().ok_or("terminal absent")?
+            )?)
+        ]
+    );
+    let explicit = AnalysisSelectionV1::new(fixture.data.source.tenant_id, Vec::new());
+    let grant = QueryGrant {
+        selection: explicit,
+        ..fixture.grant.clone()
+    };
+    let empty = QueryPlan::client(
+        grant,
+        QuerySql::admit("SELECT COUNT(*) FROM trace_output", Vec::new(), false)?,
+    )?;
+    assert_eq!(
+        fixture.query(&empty).await?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    let mut foreign = intent.clone();
+    foreign.tenant_id = [2; 16];
+    foreign.bindings[0].identity.tenant_id = foreign.tenant_id;
+    fixture.data.store.accept_trace(&foreign)?;
+    fixture.trace_terminal(&foreign)?;
+    assert_eq!(fixture.query(&plan).await?.rows.len(), 2);
+    let expected = result.rows.clone();
+    drop(result);
+    let ClientFixture {
+        data,
+        owner,
+        authority,
+        ..
+    } = fixture;
+    drop(owner);
+    let QueryFixture {
+        store,
+        _directory: directory,
+        ..
+    } = data;
+    drop(store);
+    let owner = Arc::new(QueryOwner::new(
+        Arc::new(crate::AnalysisStore::open(
+            directory.path().join("analysis"),
+        )?),
+        QueryLimits::default(),
+    )?);
+    let reopened = owner
+        .query_client(
+            plan,
+            authority,
+            100,
+            Arc::new(AnalysisReadControl::default()),
+        )
+        .await?;
+    assert_eq!(reopened.rows, expected);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_trace_stream() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let plan = fixture.plan(
+        "SELECT execution_id,target_index,sequence,kind,bytes FROM trace_output",
+        vec![],
+        true,
+    )?;
+    let mut stream = fixture.follow(plan.clone(), None)?;
+    assert!(matches!(
+        ClientFixture::next(&mut stream).await?.payload,
+        QueryPayload::Metadata(_)
+    ));
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(ClientFixture::result(&frame, QueryOperation::Append)?
+        .rows
+        .is_empty());
+    drop(frame);
+    let _initial = ClientFixture::next(&mut stream).await?;
+    let intent = fixture.trace(8)?;
+    fixture.trace_terminal(&intent)?;
+    let frame = tokio::time::timeout(WAIT, async {
+        loop {
+            let frame = ClientFixture::next(&mut stream).await?;
+            match &frame.payload {
+                QueryPayload::Append { result } if !result.rows.is_empty() => {
+                    break Ok::<_, Box<dyn std::error::Error + Send + Sync>>(frame);
+                }
+                QueryPayload::Append { .. } | QueryPayload::Checkpoint { .. } => {}
+                _ => return Err("unexpected trace follow frame".into()),
+            }
+        }
+    })
+    .await??;
+    let result = ClientFixture::result(&frame, QueryOperation::Append)?;
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][2], Value::UBigInt(1));
+    assert_eq!(result.rows[0][3], Value::Text("terminal".into()));
+    let terminal = fixture.data.store.read_trace(
+        &intent.bindings[0].identity,
+        1,
+        &AnalysisReadControl::default(),
+    )?;
+    assert_eq!(
+        result.positions,
+        vec![terminal
+            .terminal_position
+            .ok_or("terminal position absent")?]
+    );
+    drop(frame);
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(matches!(
+        frame.payload,
+        QueryPayload::Checkpoint {
+            exhausted: true,
+            ..
+        }
+    ));
+    let checkpoint = ClientFixture::checkpoint(&frame)?;
+    ClientFixture::cancel(&mut stream).await?;
+    let mut resumed = fixture.follow(plan, Some(checkpoint))?;
+    let _metadata = ClientFixture::next(&mut resumed).await?;
+    let frame = ClientFixture::next(&mut resumed).await?;
+    assert!(ClientFixture::result(&frame, QueryOperation::Append)?
+        .rows
+        .is_empty());
+    drop(frame);
+    let _checkpoint = ClientFixture::next(&mut resumed).await?;
+    ClientFixture::cancel(&mut resumed).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_trace_revocation() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let intent = fixture.trace(9)?;
+    fixture.trace_frame(
+        &intent,
+        1,
+        br#"{"type":"map","data":{"@errors":{"-13":1}}}"#,
+    )?;
+    let plan = fixture.plan("SELECT sequence FROM trace_output", vec![], true)?;
+    let mut stream = fixture.follow(plan, None)?;
+    let metadata = ClientFixture::next(&mut stream).await?;
+    tokio::time::timeout(WAIT, async {
+        while stream.queued() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let (mut state, _) = fixture
+        .data
+        .store
+        .trace_intent(intent.tenant_id, intent.request_id)?
+        .ok_or("trace absent")?;
+    state.cancel_requested = true;
+    state = fixture.data.store.update_trace(&state)?;
+    metadata.check_read().await?;
+    state.read_revoked = true;
+    fixture.data.store.update_trace(&state)?;
+    assert!(matches!(
+        metadata.check_read().await,
+        Err(crate::Error::QueryDenied { .. })
+    ));
+    assert!(matches!(
+        tokio::time::timeout(WAIT, stream.next()).await?,
+        Some(Err(crate::Error::QueryDenied { .. }))
+    ));
+    assert!(stream.is_terminated());
+    assert!(stream.next().await.is_none());
+    tokio::time::timeout(WAIT, &mut stream.task).await??;
+    let mut grant = fixture.grant.clone();
+    grant.selection = AnalysisSelectionV1::new(intent.tenant_id, Vec::new());
+    grant
+        .selection
+        .traces
+        .push(intent.bindings[0].identity.clone());
+    let plan = QueryPlan::client(
+        grant,
+        QuerySql::admit("SELECT sequence FROM trace_output", Vec::new(), false)?,
+    )?;
+    assert!(matches!(
+        fixture.query(&plan).await,
+        Err(crate::Error::QueryDenied { .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_trace_read_runtime() -> TestResult {
+    use futures_util::FutureExt as _;
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let _intent = fixture.trace(10)?;
+    let plan = fixture.plan("SELECT execution_id FROM traces", Vec::new(), false)?;
+    let result = fixture.query(&plan).await?;
+    let frame = QueryFrame::data(&plan, result)?;
+    let result = std::thread::spawn(move || frame.check_read().now_or_never())
+        .join()
+        .map_err(|_| "read guard panicked outside Tokio")?;
+    assert!(matches!(
+        result,
+        Some(Err(crate::Error::QueryInvalid {
+            field: "query read runtime",
+            ..
+        }))
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_binding_selection() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    for cursor in 1..=3 {
+        fixture.data.commit(
+            cursor,
+            cursor,
+            EvidenceRecord {
+                operation: cursor as u32,
+                decision_context: (cursor != 3).then(|| crate::EvidenceDecisionContext {
+                    binding_id: vec![cursor as u8; 16],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )?;
+    }
+    let first = fixture.trace(1)?;
+    fixture.trace_terminal(&first)?;
+    let second = fixture.trace(2)?;
+    fixture.trace_terminal(&second)?;
+    fixture
+        .grant
+        .selection
+        .nodes
+        .push(fixture.data.source.node_id.clone());
+    fixture.grant.selection.binding_ids.push([1; 16]);
+    fixture.authority = Arc::new(Authority::new(
+        fixture.grant.clone(),
+        fixture.clock.now.clone(),
+    ));
+    let result = fixture
+        .query(&fixture.plan("SELECT operation FROM events", Vec::new(), false)?)
+        .await?;
+    assert_eq!(result.rows, vec![vec![Value::UInt(1)]]);
+    let result = fixture
+        .query(&fixture.plan("SELECT execution_id FROM traces", Vec::new(), false)?)
+        .await?;
+    assert_eq!(result.rows, vec![vec![Value::Blob(vec![1; 16])]]);
+    fixture.grant.selection.nodes = vec!["absent-node".into()];
+    let plan = fixture.plan("SELECT COUNT(*) FROM events", Vec::new(), false)?;
+    assert_eq!(
+        fixture.query(&plan).await?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    Ok(())
 }
 
 #[test]
@@ -556,14 +1169,22 @@ fn query_client_follow_admission() -> TestResult {
         "SELECT COUNT(*) FROM events WHERE received_at <= CURRENT_TIMESTAMP - INTERVAL '300 seconds'",
     ] {
         let plan = fixture.plan(sql, vec![], false)?;
-        assert!(matches!(
-            fixture.owner.follow_client(plan.clone(), None, fixture.authority.clone()),
-            Err(crate::Error::QueryDenied { .. })
-        ), "{sql}");
-        assert!(matches!(
-            fixture.follow(plan, None),
-            Err(crate::Error::QueryDenied { .. })
-        ), "{sql}");
+        assert!(
+            matches!(
+                fixture
+                    .owner
+                    .follow_client(plan.clone(), None, fixture.authority.clone()),
+                Err(crate::Error::QueryDenied { .. })
+            ),
+            "{sql}"
+        );
+        assert!(
+            matches!(
+                fixture.follow(plan, None),
+                Err(crate::Error::QueryDenied { .. })
+            ),
+            "{sql}"
+        );
     }
     assert!(fixture
         .owner
@@ -985,6 +1606,375 @@ async fn query_client_append_resume() -> TestResult {
     drop(frame);
     let _complete = ClientFixture::checkpoint(&ClientFixture::next(&mut resumed).await?)?;
     ClientFixture::cancel(&mut resumed).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_stream_snapshot() -> TestResult {
+    let mut fixture = ClientFixture::new(2, 100)?;
+    fixture.tenant();
+    for cursor in 1..=3 {
+        fixture.commit(cursor, cursor, cursor as u32, 4)?;
+    }
+    for (sql, operation, rows, limited) in [
+        (
+            "SELECT operation FROM events",
+            QueryOperation::Append,
+            2,
+            true,
+        ),
+        (
+            "SELECT COUNT(*) FROM events",
+            QueryOperation::Replace,
+            1,
+            false,
+        ),
+    ] {
+        let plan = fixture.plan(sql, vec![], false)?;
+        let mut stream = fixture.stream(plan.clone(), None)?;
+        let frame = ClientFixture::next(&mut stream).await?;
+        assert!(matches!(frame.payload, QueryPayload::Metadata(_)));
+        drop(frame);
+        let frame = ClientFixture::next(&mut stream).await?;
+        let result = ClientFixture::result(&frame, operation)?;
+        assert_eq!(result.rows.len(), rows);
+        assert_eq!(result.limited, limited);
+        if operation == QueryOperation::Replace {
+            assert_eq!(result.rows, vec![vec![Value::BigInt(3)]]);
+        }
+        drop(frame);
+        let checkpoint = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+        assert!(matches!(
+            fixture.stream(plan, Some(checkpoint.clone())),
+            Err(crate::Error::QueryInvalid {
+                field: "checkpoint requires follow",
+                ..
+            })
+        ));
+        let frame = ClientFixture::next(&mut stream).await?;
+        assert!(matches!(frame.payload, QueryPayload::Terminal {
+            reason: QueryTerminalReason::Completed,
+            last_checkpoint: Some(ref captured), ..
+        } if captured == &checkpoint));
+        drop(frame);
+        assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+        assert!(stream.is_terminated());
+        assert!(stream.next().await.is_none());
+        tokio::time::timeout(WAIT, &mut stream.task).await??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_stream_empty() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
+    let mut stream = fixture.stream(plan, None)?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(matches!(frame.payload, QueryPayload::Metadata(_)));
+    drop(frame);
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert_eq!(
+        ClientFixture::result(&frame, QueryOperation::Replace)?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    drop(frame);
+    assert!(matches!(
+        ClientFixture::next(&mut stream).await?.payload,
+        QueryPayload::Checkpoint { .. }
+    ));
+    assert!(matches!(
+        ClientFixture::next(&mut stream).await?.payload,
+        QueryPayload::Terminal {
+            reason: QueryTerminalReason::Completed,
+            ..
+        }
+    ));
+    assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+    tokio::time::timeout(WAIT, &mut stream.task).await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_tenant_retained_boots() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    fixture.commit(1, 10, 7, 4)?;
+    let mut current = fixture.data.source.clone();
+    current.node_boot_id = [4; 16];
+    current.source_id = [5; 16];
+    fixture.data.commit_as(
+        &current,
+        0,
+        1,
+        20,
+        EvidenceRecord {
+            operation: 8,
+            policy_rule_id: 42,
+            ..Default::default()
+        },
+    )?;
+    let mut other = current.clone();
+    other.node_id = "other-node".into();
+    other.source_id = [6; 16];
+    fixture.data.commit_as(
+        &other,
+        0,
+        1,
+        30,
+        EvidenceRecord {
+            operation: 9,
+            policy_rule_id: 42,
+            ..Default::default()
+        },
+    )?;
+    let mut foreign = other.clone();
+    foreign.tenant_id = [9; 16];
+    foreign.source_id = [7; 16];
+    fixture.data.commit_as(
+        &foreign,
+        0,
+        1,
+        40,
+        EvidenceRecord {
+            operation: 10,
+            policy_rule_id: 42,
+            ..Default::default()
+        },
+    )?;
+    let plan = fixture.plan(
+        "SELECT operation FROM events WHERE policy_rule_id = 42 ORDER BY operation",
+        vec![],
+        false,
+    )?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![Value::UInt(7)],
+            vec![Value::UInt(8)],
+            vec![Value::UInt(9)]
+        ]
+    );
+    assert_eq!(result.sources.len(), 3);
+    assert!(result
+        .sources
+        .iter()
+        .any(|source| source.receipt.identity == fixture.data.source));
+    assert!(result
+        .sources
+        .iter()
+        .any(|source| source.receipt.identity == current));
+    drop(result);
+    fixture.grant.selection.nodes.push(current.node_id.clone());
+    let result = fixture
+        .query(&fixture.plan(
+            "SELECT operation FROM events WHERE received_utc_ns >= 20 ORDER BY operation",
+            vec![],
+            false,
+        )?)
+        .await?;
+    assert_eq!(result.rows, vec![vec![Value::UInt(8)]]);
+    assert_eq!(result.sources.len(), 2);
+    drop(result);
+    fixture.grant.selection = AnalysisSelectionV1::new(current.tenant_id, vec![]);
+    assert_eq!(
+        fixture
+            .query(&fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?)
+            .await?
+            .rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    Ok(())
+}
+
+#[test]
+fn query_tenant_relation_scope() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    fixture
+        .grant
+        .selection
+        .nodes
+        .push(fixture.data.source.node_id.clone());
+    for (sql, sources, contexts, nodes) in [
+        ("SELECT COUNT(*) FROM events", true, false, true),
+        ("SELECT COUNT(*) FROM coverage", true, false, true),
+        ("SELECT COUNT(*) FROM context_versions", false, true, false),
+        ("SELECT COUNT(*) FROM catalog", false, false, false),
+    ] {
+        let plan = fixture.plan(sql, vec![], false)?;
+        let selection = plan.dependencies(100)?;
+        assert_eq!(selection.all_sources, sources, "{sql}");
+        assert_eq!(selection.all_contexts, contexts, "{sql}");
+        assert_eq!(!selection.nodes.is_empty(), nodes, "{sql}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_tenant_new_sources() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let plan = fixture.plan("SELECT operation FROM events", vec![], true)?;
+    let mut stream = fixture.stream(plan.clone(), None)?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(matches!(frame.payload, QueryPayload::Metadata(_)));
+    drop(frame);
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(ClientFixture::result(&frame, QueryOperation::Append)?
+        .rows
+        .is_empty());
+    drop(frame);
+    let _empty = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    fixture.commit(1, 10, 7, 4)?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    let result = ClientFixture::result(&frame, QueryOperation::Append)?;
+    assert_eq!(result.rows, vec![vec![Value::UInt(7)]]);
+    assert_eq!(result.sources[0].receipt.identity, fixture.data.source);
+    drop(frame);
+    let first = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    let mut next = fixture.data.source.clone();
+    next.node_boot_id = [4; 16];
+    next.source_id = [5; 16];
+    fixture.data.commit_as(
+        &next,
+        0,
+        1,
+        20,
+        EvidenceRecord {
+            operation: 8,
+            ..Default::default()
+        },
+    )?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    let result = ClientFixture::result(&frame, QueryOperation::Append)?;
+    assert_eq!(result.rows, vec![vec![Value::UInt(8)]]);
+    assert_eq!(result.positions.len(), 1);
+    assert!(result.positions[0] > first.position().ok_or("first position is absent")?);
+    assert_eq!(result.sources.len(), 2);
+    drop(frame);
+    let second = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    ClientFixture::cancel(&mut stream).await?;
+    let mut stream = fixture.stream(plan, Some(second))?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(matches!(frame.payload, QueryPayload::Metadata(_)));
+    drop(frame);
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(ClientFixture::result(&frame, QueryOperation::Append)?
+        .rows
+        .is_empty());
+    drop(frame);
+    let _checkpoint = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    ClientFixture::cancel(&mut stream).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_tenant_new_contexts() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let plan = fixture.plan("SELECT COUNT(*) FROM context_versions", vec![], true)?;
+    let mut stream = fixture.stream(plan, None)?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(matches!(frame.payload, QueryPayload::Metadata(_)));
+    drop(frame);
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert_eq!(
+        ClientFixture::result(&frame, QueryOperation::Replace)?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    drop(frame);
+    let _empty = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    let context = AnalysisContextVersionV1 {
+        key: AnalysisContextKeyV1 {
+            tenant_id: fixture.data.source.tenant_id,
+            owner_id: "policy".into(),
+            entity_key: vec![1],
+            lifetime_key: vec![2],
+            owner_revision: 1,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: ContextSensitivityV1::Tenant,
+        body: b"context".to_vec(),
+    };
+    let mut foreign = context.clone();
+    foreign.key.tenant_id = [9; 16];
+    fixture.data.store.commit_context(&foreign)?;
+    fixture.data.store.commit_context(&context)?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert_eq!(
+        ClientFixture::result(&frame, QueryOperation::Replace)?.rows,
+        vec![vec![Value::BigInt(1)]]
+    );
+    drop(frame);
+    let _checkpoint = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    stream.cancel()?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(matches!(
+        frame.payload,
+        QueryPayload::Terminal {
+            reason: QueryTerminalReason::Cancelled,
+            ..
+        }
+    ));
+    drop(frame);
+    assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+    tokio::time::timeout(WAIT, &mut stream.task).await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_stream_cursor_floor() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    fixture.commit(1, 1, 7, 4)?;
+    fixture
+        .data
+        .store
+        .backup(&fixture.data.root().join("backups/first"))?;
+    let plan = fixture.plan("SELECT operation FROM events", vec![], true)?;
+    let mut stream = fixture.stream(plan.clone(), None)?;
+    drop(ClientFixture::next(&mut stream).await?);
+    drop(ClientFixture::next(&mut stream).await?);
+    let checkpoint = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    ClientFixture::cancel(&mut stream).await?;
+    fixture.commit(2, 2, 8, 4)?;
+    let retention = EvidenceRetentionOwner::new(&fixture.data.store);
+    let expires = 3 * 24 * 60 * 60 * 1_000_000_000_u64;
+    assert_eq!(
+        retention
+            .retain(&fixture.data.source, expires)?
+            .removed_records,
+        1
+    );
+    assert_eq!(
+        retention
+            .retain(&fixture.data.source, expires)?
+            .removed_records,
+        1
+    );
+    let floor = fixture
+        .data
+        .store
+        .replay_floor(fixture.data.source.tenant_id)?
+        .ok_or("replay floor is absent")?;
+    let position = checkpoint
+        .position()
+        .ok_or("checkpoint position is absent")?;
+    assert!(position < floor);
+    let mut stream = fixture.stream(plan, Some(checkpoint.clone()))?;
+    let frame = ClientFixture::next(&mut stream).await?;
+    assert!(matches!(frame.payload, QueryPayload::Error {
+        code: QueryErrorCode::CursorExpired, position: Some(captured), floor: Some(retained),
+        last_checkpoint: Some(ref last), ..
+    } if captured == position && retained == floor && last == &checkpoint));
+    drop(frame);
+    assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+    assert!(stream.is_terminated());
+    tokio::time::timeout(WAIT, &mut stream.task).await??;
     Ok(())
 }
 

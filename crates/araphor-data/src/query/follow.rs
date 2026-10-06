@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -9,7 +10,7 @@ use tokio::sync::{mpsc, watch};
 use super::authorization::QuerySession;
 use super::budget::QueryLease;
 use super::frame::{
-    QueryCheckpoint, QueryCoverageRows, QueryErrorCode, QueryFrame, QueryTerminalReason,
+    QueryCheckpoint, QueryCoverageRows, QueryFrame, QueryReadScope, QueryTerminalReason,
 };
 use super::{QueryAuthorization, QueryOperation, QueryOwner, QueryPlan, QueryTemplate};
 use crate::{AnalysisReadControl, AnalysisStoreMetaV1, Result};
@@ -46,6 +47,8 @@ pub struct QueryStream {
     stop: watch::Sender<bool>,
     session: Option<QuerySession>,
     done: bool,
+    pending: Option<Pin<Box<dyn Future<Output = Result<QueryFrame>> + Send>>>,
+    lease: Option<Arc<QueryLease>>,
     #[cfg(test)]
     pub(super) task: tokio::task::JoinHandle<()>,
 }
@@ -64,6 +67,8 @@ impl QueryStream {
     fn close(&mut self) {
         self.done = true;
         self.receiver.close();
+        self.pending = None;
+        self.lease = None;
         while let Ok(frame) = self.receiver.try_recv() {
             drop(frame);
         }
@@ -84,7 +89,53 @@ impl Stream for QueryStream {
                 return Poll::Ready(Some(Err(error)));
             }
         }
-        let frame = self.receiver.poll_recv(context);
+        let frame = if let Some(pending) = self.pending.as_mut() {
+            match pending.as_mut().poll(context) {
+                Poll::Ready(result) => {
+                    self.pending = None;
+                    Poll::Ready(Some(result))
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        } else {
+            match self.receiver.poll_recv(context) {
+                Poll::Ready(Some(frame)) if frame.reads.is_some() => {
+                    let lease = self.lease.clone();
+                    let session = self.session.clone();
+                    self.pending = Some(Box::pin(async move {
+                        {
+                            let check = frame.check_stream(lease);
+                            tokio::pin!(check);
+                            let mut changes =
+                                session.as_ref().map(|session| session.authority.changes());
+                            loop {
+                                tokio::select! {
+                                    result = &mut check => { result?; break; },
+                                    changed = async {
+                                        match changes.as_mut() {
+                                            Some(changes) => changes.changed().await,
+                                            None => std::future::pending().await,
+                                        }
+                                    } => {
+                                        if changed.is_err() { return crate::QueryDeniedSnafu.fail(); }
+                                        if let Some(session) = &session { session.check()?; }
+                                    },
+                                }
+                            }
+                        }
+                        if let Some(session) = &session {
+                            session.check()?;
+                        }
+                        Ok(frame)
+                    }));
+                    context.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Poll::Ready(Some(frame)) => Poll::Ready(Some(Ok(frame))),
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            }
+        };
         if let Some(session) = &self.session {
             if let Err(error) = session.check() {
                 self.close();
@@ -92,9 +143,14 @@ impl Stream for QueryStream {
             }
         }
         match frame {
-            Poll::Ready(Some(frame)) => Poll::Ready(Some(Ok(frame))),
+            Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(frame))),
+            Poll::Ready(Some(Err(error))) => {
+                self.close();
+                Poll::Ready(Some(Err(error)))
+            }
             Poll::Ready(None) => {
                 self.done = true;
+                self.lease = None;
                 Poll::Ready(None)
             }
             Poll::Pending => Poll::Pending,
@@ -127,9 +183,11 @@ struct QueryFollow {
     checkpoint: Option<QueryCheckpoint>,
     meta: AnalysisStoreMetaV1,
     coverage: Option<Arc<QueryCoverageRows>>,
+    reads: Option<Arc<QueryReadScope>>,
     session: Option<QuerySession>,
     auth_changes: Option<watch::Receiver<u64>>,
-    _lease: QueryLease,
+    follows: bool,
+    _lease: Arc<QueryLease>,
 }
 
 impl QueryOwner {
@@ -172,6 +230,34 @@ impl QueryOwner {
         if !matches!(&plan.template, QueryTemplate::Client(sql) if sql.follow()) {
             return crate::QueryDeniedSnafu.fail();
         }
+        self.stream_client_clock(plan, checkpoint, authority, clock)
+    }
+
+    pub fn stream_client(
+        self: &Arc<Self>,
+        plan: QueryPlan,
+        checkpoint: Option<QueryCheckpoint>,
+        authority: Arc<dyn QueryAuthorization>,
+    ) -> Result<QueryStream> {
+        self.stream_client_clock(plan, checkpoint, authority, Arc::new(SystemQueryClock))
+    }
+
+    pub fn stream_client_clock(
+        self: &Arc<Self>,
+        plan: QueryPlan,
+        checkpoint: Option<QueryCheckpoint>,
+        authority: Arc<dyn QueryAuthorization>,
+        clock: Arc<dyn QueryClock>,
+    ) -> Result<QueryStream> {
+        let QueryTemplate::Client(sql) = &plan.template else {
+            return crate::QueryDeniedSnafu.fail();
+        };
+        if !sql.follow() && checkpoint.is_some() {
+            return crate::QueryInvalidSnafu {
+                field: "checkpoint requires follow",
+            }
+            .fail();
+        }
         let grant = plan
             .grant
             .clone()
@@ -199,7 +285,7 @@ impl QueryOwner {
             }
             .build()
         })?;
-        let lease = self.budget.stream(plan.selection.tenant_id)?;
+        let lease = Arc::new(self.budget.stream(plan.selection.tenant_id)?);
         // Register before the task can capture its first storage snapshot.
         let changes = self.store.subscribe_revision();
         let clock_changes = clock.changes();
@@ -207,6 +293,10 @@ impl QueryOwner {
         let (stop, stopped) = watch::channel(false);
         let control = Arc::new(AnalysisReadControl::default());
         let auth_changes = session.as_ref().map(|session| session.authority.changes());
+        let follows = match &plan.template {
+            QueryTemplate::Client(sql) => sql.follow(),
+            _ => true,
+        };
         let follow = QueryFollow {
             owner: self.clone(),
             plan,
@@ -219,9 +309,11 @@ impl QueryOwner {
             checkpoint,
             meta: self.identity.clone(),
             coverage: None,
+            reads: None,
             session: session.clone(),
             auth_changes,
-            _lease: lease,
+            follows,
+            _lease: lease.clone(),
         };
         let _task = runtime.spawn(follow.run());
         Ok(QueryStream {
@@ -230,6 +322,8 @@ impl QueryOwner {
             stop,
             session,
             done: false,
+            pending: None,
+            lease: Some(lease),
             #[cfg(test)]
             task: _task,
         })
@@ -248,6 +342,7 @@ impl QueryFollow {
         );
         if matches!(result, Err(crate::Error::QueryDenied { .. })) {
             self.coverage = None;
+            self.reads = None;
             self.checkpoint = None;
         }
         let permit = if stalled {
@@ -279,12 +374,13 @@ impl QueryFollow {
             Err(ref error) => QueryFrame::error(
                 &self.plan,
                 meta,
-                QueryErrorCode::from(error),
+                error,
                 self.checkpoint.clone(),
                 std::mem::take(&mut self.coverage),
             ),
         };
-        if let Ok(frame) = frame.and_then(|frame| {
+        if let Ok(frame) = frame.and_then(|mut frame| {
+            frame.reads = self.reads.clone();
             self.owner.check_output(frame.total_bytes()?)?;
             frame.attach_lease(lease)
         }) {
@@ -363,13 +459,15 @@ impl QueryFollow {
                 let owner = self.owner.clone();
                 let plan = self.plan.clone();
                 let control = self.control.stage(self.owner.limits.extract_timeout)?;
-                let paged = plan.operation() == QueryOperation::Append;
+                let paged = self.follows && plan.operation() == QueryOperation::Append;
                 let result = owner
                     .evaluate_async(plan, now_ns, after, paged, Arc::new(control))
                     .await?;
                 let checkpoint = QueryCheckpoint::from_result(&self.plan, &result)?;
+                let exhausted = result.exhausted;
                 self.meta = result.meta.clone();
                 self.coverage = Some(result.sources.clone());
+                self.reads = result.reads.clone();
                 next_expiry = result.next_expiry_ns;
                 dirty = paged && !result.exhausted;
                 if initial {
@@ -407,7 +505,7 @@ impl QueryFollow {
                 }
                 if !self
                     .send(std::mem::size_of::<QueryFrame>(), || {
-                        QueryFrame::checkpoint(checkpoint.clone(), self.coverage.clone())
+                        QueryFrame::checkpoint(checkpoint.clone(), self.coverage.clone(), exhausted)
                     })
                     .await?
                 {
@@ -417,6 +515,9 @@ impl QueryFollow {
                 self.checkpoint = Some(checkpoint);
                 seen = Some(revision);
                 last_eval = Some(tokio::time::Instant::now());
+                if !self.follows {
+                    return Ok(QueryTerminalReason::Completed);
+                }
                 evaluated = true;
             }
             if !initial && (tokio::time::Instant::now() >= next_health || clock_changed) {
@@ -522,7 +623,8 @@ impl QueryFollow {
                     Ok(Ok(permit)) => {
                         self.check_auth()?;
                         let lease = self.owner.budget.output(bytes)?;
-                        let frame = frame()?;
+                        let mut frame = frame()?;
+                        frame.reads = self.reads.clone();
                         self.owner.check_output(frame.total_bytes()?)?;
                         permit.send(frame.attach_lease(lease)?);
                         Ok(true)

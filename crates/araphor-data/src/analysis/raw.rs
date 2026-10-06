@@ -138,13 +138,13 @@ impl From<ValidatedEvidenceBatchV1> for RawBatch {
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
-struct TraceRecord {
+pub(super) struct TraceRecord {
     #[prost(oneof = "TracePayload", tags = "1, 2, 3, 4")]
     payload: Option<TracePayload>,
 }
 
 #[derive(Clone, PartialEq, prost::Oneof)]
-enum TracePayload {
+pub(super) enum TracePayload {
     #[prost(bytes, tag = "1")]
     Metadata(Vec<u8>),
     #[prost(bytes, tag = "2")]
@@ -156,7 +156,7 @@ enum TracePayload {
 }
 
 impl TraceRecord {
-    fn read(bytes: &[u8], root: &Path) -> Result<TracePayload> {
+    pub(super) fn read(bytes: &[u8], root: &Path) -> Result<TracePayload> {
         let record = Self::decode(bytes).map_err(|_| {
             crate::AnalysisStateSnafu {
                 path: root,
@@ -176,7 +176,7 @@ impl TraceRecord {
         })
     }
 
-    fn terminal(bytes: &[u8], root: &Path) -> Result<crate::TraceTerminalV1> {
+    pub(super) fn terminal(bytes: &[u8], root: &Path) -> Result<crate::TraceTerminalV1> {
         if bytes.len() > 4096 {
             return AnalysisStore::reject_path(root, "the trace terminal exceeds its reserve");
         }
@@ -1373,9 +1373,6 @@ impl RawJournal {
         revision: u64,
         control: &super::AnalysisReadControl,
     ) -> Result<u64> {
-        let Some((from, until)) = selection.time_range() else {
-            return Ok(0);
-        };
         let mut latest = 0;
         for identity in &selection.sources {
             control.check()?;
@@ -1387,8 +1384,22 @@ impl RawJournal {
                 }
                 let entry = &self.entries[&id];
                 if &entry.identity == identity
-                    && entry.commit.intake >= from
-                    && entry.commit.intake <= until
+                    && selection.time_range().is_some_and(|(from, until)| {
+                        entry.commit.intake >= from && entry.commit.intake <= until
+                    })
+                {
+                    latest = id;
+                }
+            }
+        }
+        for identity in &selection.traces {
+            control.check()?;
+            let key = RawIdentity::Diagnostic(identity.clone()).key();
+            for (_, &(id, _)) in self.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
+                control.check()?;
+                if id <= revision
+                    && id > latest
+                    && self.entries[&id].identity == RawIdentity::Diagnostic(identity.clone())
                 {
                     latest = id;
                 }
@@ -1404,23 +1415,23 @@ impl RawJournal {
         revision: u64,
         limit: usize,
         control: &super::AnalysisReadControl,
-    ) -> Result<Option<(EvidenceIntakeIdentityV1, u32, super::segments::SegmentRange)>> {
-        let Some((from, until)) = selection.time_range() else {
-            return Ok(None);
-        };
-        if selection.sources.is_empty() || limit == 0 {
+    ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::SegmentRange)>> {
+        if (selection.sources.is_empty() && selection.traces.is_empty()) || limit == 0 {
             return Ok(None);
         }
         let first = after.map_or(0, |position| position.commit_revision);
         for (&id, entry) in self.entries.range(first..=revision) {
             control.check()?;
-            if !entry
-                .identity
-                .evidence()
-                .is_some_and(|identity| selection.sources.contains(identity))
-                || entry.commit.intake < from
-                || entry.commit.intake > until
-            {
+            let selected = match &entry.identity {
+                RawIdentity::Evidence(identity) => {
+                    selection.sources.contains(identity)
+                        && selection.time_range().is_some_and(|(from, until)| {
+                            entry.commit.intake >= from && entry.commit.intake <= until
+                        })
+                }
+                RawIdentity::Diagnostic(identity) => selection.traces.contains(identity),
+            };
+            if !selected {
                 continue;
             }
             for (index, span) in entry.commit.spans.iter().enumerate() {
@@ -1439,16 +1450,8 @@ impl RawJournal {
                 let first = span.first + skipped;
                 let last = span.last.min(first.saturating_add(limit as u64 - 1));
                 return Ok(Some((
-                    entry
-                        .identity
-                        .evidence()
-                        .cloned()
-                        .ok_or_else(|| self.invalid("the selected source is not evidence"))?,
-                    entry
-                        .commit
-                        .kind
-                        .cpu()
-                        .ok_or_else(|| self.invalid("the evidence CPU is absent"))?,
+                    entry.identity.clone(),
+                    entry.commit.kind.cpu(),
                     super::segments::SegmentRange {
                         segment_id: entry.reference.id,
                         byte_start: entry.body_start + u64::from(span.start),
@@ -2164,6 +2167,7 @@ pub(super) mod tests {
             tenant_id: [1; 16],
             request_id: [3; 16],
             bindings: vec![super::super::TraceBindingV1 {
+                binding_id: [9; 16],
                 identity: crate::TraceIdentityV1 {
                     tenant_id: [1; 16],
                     node_id: "node-a".into(),

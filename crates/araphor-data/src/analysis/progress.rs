@@ -871,6 +871,7 @@ mod tests {
             request_id: diagnostic.request_id,
             source,
             bindings: vec![TraceBindingV1 {
+                binding_id: [9; 16],
                 identity: diagnostic.clone(),
                 namespace_uid: "namespace-a".into(),
             }],

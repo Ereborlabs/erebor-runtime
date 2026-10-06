@@ -14,7 +14,7 @@ type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Sen
 pub(super) struct QueryFixture {
     pub(super) store: Arc<AnalysisStore>,
     pub(super) source: EvidenceIntakeIdentityV1,
-    _directory: tempfile::TempDir,
+    pub(super) _directory: tempfile::TempDir,
 }
 
 impl QueryFixture {
@@ -109,8 +109,19 @@ impl QueryFixture {
             QueryTemplate::Catalog => (QueryTemplate::Catalog, "catalog"),
             _ => (QueryTemplate::Events { operation: None }, "events"),
         };
+        let limits = QueryLimits {
+            output_rows: if matches!(template, QueryTemplate::Catalog) {
+                input::SCHEMAS
+                    .iter()
+                    .map(|schema| schema.columns.len())
+                    .sum()
+            } else {
+                QueryLimits::default().output_rows
+            },
+            ..Default::default()
+        };
         let result = self
-            .owner(QueryLimits::default())?
+            .owner(limits)?
             .query_at(&QueryPlan::new(selection, template)?, now_ns)?;
         assert!(!result.limited);
         let schema = input::SCHEMAS
@@ -819,7 +830,13 @@ fn query_scope_revision_difference() -> TestResult {
 #[test]
 fn query_input_catalog() -> TestResult {
     let fixture = QueryFixture::new()?;
-    let owner = fixture.owner(QueryLimits::default())?;
+    let owner = fixture.owner(QueryLimits {
+        output_rows: input::SCHEMAS
+            .iter()
+            .map(|schema| schema.columns.len())
+            .sum(),
+        ..Default::default()
+    })?;
     let selection = AnalysisSelectionV1::new(fixture.source.tenant_id, Vec::new());
     let plan = QueryPlan::new(selection.clone(), QueryTemplate::Catalog)?;
     let result = owner.query_at(&plan, 0)?;
@@ -862,12 +879,7 @@ fn query_input_catalog() -> TestResult {
     for (row, (name, position)) in result.rows.iter().zip(expected) {
         assert_eq!(row[relation], Value::Text(name.into()));
         assert_eq!(row[ordinal], Value::UInt(position));
-        let state = if name.starts_with("trace") {
-            "unavailable"
-        } else {
-            "available"
-        };
-        assert_eq!(row[readiness], Value::Text(state.into()));
+        assert_eq!(row[readiness], Value::Text("available".into()));
     }
     let kernel = result
         .rows

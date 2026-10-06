@@ -17,9 +17,13 @@ impl AnalysisStore {
                 .reject("the dependency selection is invalid or includes unsupported results");
         }
         let coordinator = self.read_coordinator(control)?;
+        let all_traces = selection.all_traces;
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
+            let (selection, _) =
+                self.resolve_selection(snapshot, selection, control, 64 * 1024 * 1024)?;
+            let selection = selection.as_ref();
             drop(coordinator);
             let mut revision = self.selected_revision(selection, meta.commit_revision, control)?;
             let mut sources = snapshot
@@ -89,6 +93,46 @@ impl AnalysisStore {
                     })?;
                 revision = revision.max(changed.unwrap_or(0));
             }
+            let mut traces = snapshot
+                .prepare(
+                    "SELECT MAX(revision) FROM traces WHERE tenant_id = ?
+                 AND (CAST(? AS BLOB) IS NULL OR request_id = ?)",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare trace dependencies",
+                })?;
+            if all_traces {
+                let changed: Option<u64> = traces
+                    .query_row(
+                        params![
+                            selection.tenant_id.as_slice(),
+                            Option::<&[u8]>::None,
+                            Option::<&[u8]>::None
+                        ],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read tenant trace dependencies",
+                    })?;
+                revision = revision.max(changed.unwrap_or(0));
+            } else {
+                for identity in &selection.traces {
+                    control.check()?;
+                    let changed: Option<u64> = traces
+                        .query_row(
+                            params![
+                                selection.tenant_id.as_slice(),
+                                identity.request_id.as_slice(),
+                                identity.request_id.as_slice()
+                            ],
+                            |row| row.get(0),
+                        )
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "read trace dependencies",
+                        })?;
+                    revision = revision.max(changed.unwrap_or(0));
+                }
+            }
             control.check()?;
             Ok((meta, revision))
         })
@@ -155,6 +199,48 @@ mod tests {
         store
             .dependency_revision(selection, &AnalysisReadControl::default())
             .map(|(meta, revision)| (meta.commit_revision, revision))
+    }
+
+    #[test]
+    fn query_tenant_dependencies() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let first = identity(1, 1);
+        let mut selection = AnalysisSelectionV1::tenant(first.tenant_id);
+        assert_eq!(read(&store, &selection)?, (0, 0));
+        store.accept_validated_batch(first.clone(), batch(1, 10))?;
+        assert_eq!(read(&store, &selection)?, (1, 1));
+        store.accept_validated_batch(identity(2, 2), batch(1, 10))?;
+        assert_eq!(read(&store, &selection)?, (2, 1));
+        let mut next = identity(1, 3);
+        next.node_boot_id = [3; 16];
+        next.node_id = "next-node".into();
+        store.accept_validated_batch(next, batch(1, 20))?;
+        assert_eq!(read(&store, &selection)?, (3, 3));
+        selection.nodes.push(first.node_id.clone());
+        assert_eq!(read(&store, &selection)?, (3, 1));
+        let context = AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: first.tenant_id,
+                owner_id: "policy".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![2],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: b"context".to_vec(),
+        };
+        store.commit_context(&context)?;
+        assert_eq!(read(&store, &selection)?, (4, 4));
+        selection.all_contexts = false;
+        assert_eq!(read(&store, &selection)?, (4, 1));
+        selection.received_from = Bound::Included(11);
+        assert_eq!(read(&store, &selection)?, (4, 0));
+        let empty = AnalysisSelectionV1::new(first.tenant_id, vec![]);
+        assert_eq!(read(&store, &empty)?, (4, 0));
+        Ok(())
     }
 
     #[test]

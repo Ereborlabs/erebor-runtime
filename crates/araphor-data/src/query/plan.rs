@@ -140,7 +140,16 @@ impl QueryPlan {
         }
     }
 
-    pub(super) fn reads_events(&self) -> bool {
+    pub(super) fn reads_raw(&self) -> bool {
+        if let QueryTemplate::Client(sql) = &self.template {
+            return ["events", "trace_output", "trace_measurements"]
+                .iter()
+                .any(|relation| sql.dependencies().contains(*relation));
+        }
+        self.reads_events()
+    }
+
+    fn reads_events(&self) -> bool {
         if let QueryTemplate::Client(sql) = &self.template {
             return sql.dependencies().contains("events");
         }
@@ -155,6 +164,15 @@ impl QueryPlan {
 
     pub(super) fn dependencies(&self, now_ns: u64) -> Result<AnalysisSelectionV1> {
         let mut selection = self.selection(now_ns);
+        let trace_sql = matches!(&self.template, QueryTemplate::Client(sql) if ["traces", "trace_output", "trace_measurements"].iter().any(|relation| sql.dependencies().contains(*relation)));
+        let target_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("targets"));
+        selection.targets = target_sql;
+        selection.targets_only = matches!(&self.template, QueryTemplate::Client(sql) if target_sql && !sql.dependencies().contains("context_versions"));
+        if !trace_sql {
+            selection.traces.clear();
+            selection.all_traces = false;
+            selection.measurements = false;
+        }
         match &self.template {
             QueryTemplate::Client(sql) => {
                 let bound = sql.bind_at(now_ns)?;
@@ -175,20 +193,33 @@ impl QueryPlan {
                     && !sql.dependencies().contains("coverage")
                 {
                     selection.sources.clear();
+                    selection.all_sources = false;
+                    if !trace_sql && !target_sql {
+                        selection.nodes.clear();
+                        selection.binding_ids.clear();
+                    }
                 }
-                if !sql.dependencies().contains("context_versions") {
+                if !sql.dependencies().contains("context_versions") && !target_sql {
                     selection.contexts.clear();
+                    selection.all_contexts = false;
                 }
+                selection.measurements = sql.dependencies().contains("trace_measurements");
             }
             QueryTemplate::Catalog => {
                 selection.sources.clear();
                 selection.contexts.clear();
+                selection.all_sources = false;
+                selection.all_contexts = false;
+                selection.nodes.clear();
             }
             QueryTemplate::ContextVersions | QueryTemplate::RevisionDifference => {
-                selection.sources.clear()
+                selection.sources.clear();
+                selection.all_sources = false;
+                selection.nodes.clear();
             }
             QueryTemplate::Coverage => {
                 selection.contexts.clear();
+                selection.all_contexts = false;
                 selection.received_from = Bound::Unbounded;
                 selection.received_until = Bound::Unbounded;
             }

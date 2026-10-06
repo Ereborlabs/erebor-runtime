@@ -18,6 +18,7 @@ const TRACE_PAGE_ROWS: usize = 16;
 #[serde(deny_unknown_fields)]
 pub struct TraceBindingV1 {
     pub identity: TraceIdentityV1,
+    pub binding_id: [u8; 16],
     pub namespace_uid: String,
 }
 
@@ -57,6 +58,7 @@ impl TraceIntentV1 {
             binding.identity.validate()?;
             ensure!(
                 binding.identity.tenant_id == self.tenant_id
+                    && binding.binding_id != [0; 16]
                     && binding.identity.request_id == self.request_id
                     && binding.identity.source_sha256 == self.source.sha256
                     && executions.insert(binding.identity.execution_id)
@@ -88,6 +90,132 @@ pub struct TraceIntentPageV1 {
 }
 
 impl AnalysisStore {
+    pub(crate) fn check_trace_reads(
+        &self,
+        tenant: [u8; 16],
+        requests: &[[u8; 16]],
+        control: &AnalysisReadControl,
+    ) -> Result<()> {
+        if tenant == [0; 16] || requests.len() > 1024 || requests.iter().any(|id| *id == [0; 16]) {
+            return crate::QueryDeniedSnafu.fail();
+        }
+        let mut reader = self.reader_until(control)?;
+        control.run(&mut reader, |snapshot| {
+            let mut statement = snapshot
+                .prepare("SELECT read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare current trace reads",
+                })?;
+            for request in requests {
+                control.check()?;
+                let mut rows = statement
+                    .query(params![tenant.as_slice(), request.as_slice()])
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read current trace state",
+                    })?;
+                let row = rows.next().context(AnalysisDatabaseSnafu {
+                    operation: "read current trace row",
+                })?;
+                let Some(row) = row else {
+                    return crate::QueryDeniedSnafu.fail();
+                };
+                let revoked: bool = row.get(0).context(AnalysisDatabaseSnafu {
+                    operation: "decode current trace state",
+                })?;
+                if revoked {
+                    return crate::QueryDeniedSnafu.fail();
+                }
+            }
+            control.check()
+        })
+    }
+
+    pub(super) fn read_trace_receipt(
+        &self,
+        snapshot: &Connection,
+        identity: &TraceIdentityV1,
+    ) -> Result<super::TraceOutputReceiptV1> {
+        let mut statement = snapshot.prepare(
+            "SELECT identity_json, last_sequence, output_bytes, terminal, retained_floor, commit_revision
+             FROM trace_receipts WHERE stream_key = ?",
+        ).context(AnalysisDatabaseSnafu { operation: "prepare trace input receipt" })?;
+        let mut rows = statement
+            .query(params![super::raw::RawIdentity::Diagnostic(
+                identity.clone()
+            )
+            .key()
+            .as_slice()])
+            .context(AnalysisDatabaseSnafu {
+                operation: "read trace input receipt",
+            })?;
+        let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+            operation: "read trace receipt row",
+        })?
+        else {
+            return Ok(super::TraceOutputReceiptV1 {
+                identity: identity.clone(),
+                last_sequence: 0,
+                output_bytes: 0,
+                terminal: None,
+                retained_floor: 0,
+                commit_revision: 0,
+            });
+        };
+        let (json, sequence, bytes, terminal, floor, revision): (
+            String,
+            u64,
+            u64,
+            Option<String>,
+            u64,
+            u64,
+        ) = (
+            row.get(0).context(AnalysisDatabaseSnafu {
+                operation: "decode trace receipt identity",
+            })?,
+            row.get(1).context(AnalysisDatabaseSnafu {
+                operation: "decode trace receipt sequence",
+            })?,
+            row.get(2).context(AnalysisDatabaseSnafu {
+                operation: "decode trace receipt bytes",
+            })?,
+            row.get(3).context(AnalysisDatabaseSnafu {
+                operation: "decode trace receipt terminal",
+            })?,
+            row.get(4).context(AnalysisDatabaseSnafu {
+                operation: "decode trace receipt floor",
+            })?,
+            row.get(5).context(AnalysisDatabaseSnafu {
+                operation: "decode trace receipt revision",
+            })?,
+        );
+        let stored: TraceIdentityV1 =
+            serde_json::from_str(&json).context(JsonSnafu { path: &self.root })?;
+        let terminal = terminal
+            .as_deref()
+            .map(|json| super::raw::TraceRecord::terminal(json.as_bytes(), &self.root))
+            .transpose()?;
+        if stored != *identity
+            || sequence > 4096
+            || bytes > crate::MAX_TRACE_OUTPUT_BYTES
+            || floor > sequence + u64::from(terminal.is_some())
+            || terminal.as_ref().is_some_and(|value| {
+                value.execution_id != identity.execution_id
+                    || value.last_sequence != sequence
+                    || value.output_bytes != bytes
+            })
+        {
+            return self.reject("the selected trace receipt differs from its identity or limits");
+        }
+        Ok(super::TraceOutputReceiptV1 {
+            identity: stored,
+            last_sequence: sequence,
+            output_bytes: bytes,
+            terminal,
+            retained_floor: floor,
+            commit_revision: revision,
+        })
+    }
+
     pub(super) const TRACE_SCHEMA: &'static str = "CREATE TABLE traces (
         tenant_id BLOB NOT NULL,
         request_id BLOB NOT NULL,
@@ -503,6 +631,7 @@ mod tests {
             tenant_id: [1; 16],
             request_id: [request; 16],
             bindings: vec![TraceBindingV1 {
+                binding_id: [9; 16],
                 identity: TraceIdentityV1 {
                     tenant_id: [1; 16],
                     node_id: "node-a".into(),

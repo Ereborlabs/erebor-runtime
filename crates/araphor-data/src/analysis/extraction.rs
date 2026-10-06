@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::mem::size_of;
 use std::ops::Bound;
@@ -5,13 +6,18 @@ use std::ops::Bound;
 use duckdb::{params, Connection};
 use snafu::ResultExt as _;
 
+use super::raw::{RawIdentity, TracePayload, TraceRecord};
 use super::segments::SegmentRange;
 use super::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl,
     AnalysisRecordV1, AnalysisSourceReceiptV1, AnalysisStore, AnalysisStoreMetaV1, StorePositionV1,
     MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
 };
-use crate::{AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, Result};
+use crate::{
+    AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, Result,
+    TraceFrameKindV1, TraceFrameV1, TraceIdentityV1, TraceIntentV1, TraceMeasurementV1,
+    TraceOutputReceiptV1, TraceRecipeV1, TraceStateV1,
+};
 
 const MAX_EXTRACT_KEYS: usize = 1024;
 const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
@@ -36,11 +42,21 @@ impl Default for AnalysisExtractLimits {
     }
 }
 
-/// Trusted selection after authorization. An empty source list selects no events.
+/// Input selection after tenant authorization. An empty explicit list selects no events.
 #[derive(Clone, Debug)]
 pub struct AnalysisSelectionV1 {
     pub tenant_id: [u8; 16],
     pub sources: Vec<EvidenceIntakeIdentityV1>,
+    pub all_sources: bool,
+    pub all_contexts: bool,
+    pub(crate) targets: bool,
+    pub(crate) targets_only: bool,
+    pub traces: Vec<TraceIdentityV1>,
+    pub all_traces: bool,
+    pub(crate) measurements: bool,
+    /// Node IDs narrow evidence, coverage, and targets, not context versions.
+    pub nodes: Vec<String>,
+    pub binding_ids: Vec<[u8; 16]>,
     pub received_from: Bound<u64>,
     pub received_until: Bound<u64>,
     pub contexts: Vec<AnalysisContextKeyV1>,
@@ -52,6 +68,15 @@ impl AnalysisSelectionV1 {
         Self {
             tenant_id,
             sources,
+            all_sources: false,
+            all_contexts: false,
+            targets: false,
+            targets_only: false,
+            traces: Vec::new(),
+            all_traces: false,
+            measurements: false,
+            nodes: Vec::new(),
+            binding_ids: Vec::new(),
             received_from: Bound::Unbounded,
             received_until: Bound::Unbounded,
             contexts: Vec::new(),
@@ -59,11 +84,37 @@ impl AnalysisSelectionV1 {
         }
     }
 
+    pub fn tenant(tenant_id: [u8; 16]) -> Self {
+        Self {
+            all_sources: true,
+            all_contexts: true,
+            all_traces: true,
+            ..Self::new(tenant_id, Vec::new())
+        }
+    }
+
     pub(crate) fn valid(&self) -> bool {
         self.tenant_id != [0; 16]
+            && (!self.targets_only || self.targets)
+            && (!self.all_sources || self.sources.is_empty())
+            && (!self.all_contexts || self.contexts.is_empty())
+            && (!self.all_traces || self.traces.is_empty())
+            && self.nodes.len() <= MAX_EXTRACT_KEYS
+            && self.nodes.iter().all(|node| crate::node_id_is_valid(node))
+            && self.nodes.iter().collect::<BTreeSet<_>>().len() == self.nodes.len()
             && self.sources.len() <= MAX_EXTRACT_KEYS
             && self.contexts.len() <= MAX_EXTRACT_KEYS - self.sources.len()
             && self.results.len() <= MAX_EXTRACT_KEYS - self.sources.len() - self.contexts.len()
+            && self.traces.len()
+                <= MAX_EXTRACT_KEYS - self.sources.len() - self.contexts.len() - self.results.len()
+            && self.binding_ids.len()
+                <= MAX_EXTRACT_KEYS
+                    - self.sources.len()
+                    - self.contexts.len()
+                    - self.results.len()
+                    - self.traces.len()
+            && self.binding_ids.iter().all(|id| *id != [0; 16])
+            && self.binding_ids.iter().collect::<BTreeSet<_>>().len() == self.binding_ids.len()
             && self
                 .sources
                 .iter()
@@ -79,6 +130,53 @@ impl AnalysisSelectionV1 {
             && self.sources.iter().collect::<BTreeSet<_>>().len() == self.sources.len()
             && self.contexts.iter().collect::<BTreeSet<_>>().len() == self.contexts.len()
             && self.results.iter().collect::<BTreeSet<_>>().len() == self.results.len()
+            && self
+                .traces
+                .iter()
+                .all(|identity| identity.tenant_id == self.tenant_id && identity.validate().is_ok())
+            && self.traces.iter().collect::<BTreeSet<_>>().len() == self.traces.len()
+    }
+
+    fn allocation_bytes(&self) -> usize {
+        let mut bytes = size_of::<Self>()
+            .saturating_add(
+                self.sources
+                    .capacity()
+                    .saturating_mul(size_of::<EvidenceIntakeIdentityV1>()),
+            )
+            .saturating_add(
+                self.contexts
+                    .capacity()
+                    .saturating_mul(size_of::<AnalysisContextKeyV1>()),
+            )
+            .saturating_add(self.nodes.capacity().saturating_mul(size_of::<String>()))
+            .saturating_add(self.results.capacity().saturating_mul(size_of::<String>()));
+        bytes = bytes.saturating_add(
+            self.traces
+                .capacity()
+                .saturating_mul(size_of::<TraceIdentityV1>()),
+        );
+        bytes = bytes.saturating_add(
+            self.binding_ids
+                .capacity()
+                .saturating_mul(size_of::<[u8; 16]>()),
+        );
+        for source in &self.sources {
+            bytes = bytes.saturating_add(source.node_id.capacity());
+        }
+        for key in &self.contexts {
+            bytes = bytes
+                .saturating_add(key.owner_id.capacity())
+                .saturating_add(key.entity_key.capacity())
+                .saturating_add(key.lifetime_key.capacity());
+        }
+        for key in self.nodes.iter().chain(&self.results) {
+            bytes = bytes.saturating_add(key.capacity());
+        }
+        for identity in &self.traces {
+            bytes = bytes.saturating_add(identity.node_id.capacity());
+        }
+        bytes
     }
 
     pub(crate) fn time_range(&self) -> Option<(u64, u64)> {
@@ -105,6 +203,28 @@ pub enum AnalysisInputV1<'a> {
         record: &'a AnalysisRecordV1,
     },
     Context(&'a AnalysisContextVersionV1),
+    Target {
+        context: &'a AnalysisContextVersionV1,
+        fact: &'a crate::WorkloadTargetFactV1,
+    },
+    Trace {
+        state: &'a TraceStateV1,
+        intent: &'a TraceIntentV1,
+        target_index: u32,
+        receipt: &'a TraceOutputReceiptV1,
+    },
+    TraceOutput {
+        identity: &'a TraceIdentityV1,
+        target_index: u32,
+        sequence: u64,
+        position: StorePositionV1,
+        kind: &'static str,
+        bytes: &'a [u8],
+    },
+    TraceMeasurement {
+        identity: &'a TraceIdentityV1,
+        measurement: &'a TraceMeasurementV1,
+    },
     Result {
         result_id: &'a str,
         body: &'a [u8],
@@ -115,7 +235,11 @@ pub enum AnalysisInputV1<'a> {
 pub enum AnalysisRelationV1 {
     Events,
     Context,
+    Targets,
     Results,
+    Traces,
+    TraceOutput,
+    TraceMeasurements,
 }
 
 #[derive(Debug)]
@@ -147,6 +271,7 @@ pub struct AnalysisExtractionV1<T = Box<[u8]>> {
     pub projected_bytes: usize,
     /// Includes projected bytes, row descriptors, page headers, and coverage metadata.
     pub input_bytes: usize,
+    pub(crate) trace_reads: Vec<[u8; 16]>,
     pub(crate) limits: AnalysisExtractLimits,
 }
 
@@ -277,6 +402,200 @@ impl<T> AnalysisExtractionV1<T> {
 }
 
 impl AnalysisStore {
+    pub(super) fn resolve_selection<'a>(
+        &self,
+        snapshot: &Connection,
+        selection: &'a AnalysisSelectionV1,
+        control: &AnalysisReadControl,
+        limit: usize,
+    ) -> Result<(Cow<'a, AnalysisSelectionV1>, usize)> {
+        control.check()?;
+        if !selection.valid() {
+            return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
+        }
+        if !selection.all_sources
+            && !selection.all_contexts
+            && !selection.all_traces
+            && !selection.targets_only
+            && selection.nodes.is_empty()
+        {
+            return Ok((Cow::Borrowed(selection), 0));
+        }
+        let error = || {
+            AnalysisInputTooLargeSnafu {
+                resource: "selected input keys",
+            }
+            .build()
+        };
+        if selection.allocation_bytes() > limit {
+            return Err(error());
+        }
+        let mut resolved = selection.clone();
+        resolved.all_sources = false;
+        resolved.all_contexts = false;
+        resolved.all_traces = false;
+        if selection.targets_only {
+            resolved
+                .contexts
+                .retain(|key| key.owner_id == "mithril-control/target");
+        }
+        resolved
+            .sources
+            .retain(|source| resolved.nodes.is_empty() || resolved.nodes.contains(&source.node_id));
+        resolved.traces.retain(|identity| {
+            resolved.nodes.is_empty() || resolved.nodes.contains(&identity.node_id)
+        });
+        let mut bytes = resolved.allocation_bytes();
+        if bytes > limit {
+            return Err(error());
+        }
+        if selection.all_sources {
+            let mut after = None;
+            loop {
+                control.check()?;
+                let page =
+                    self.source_page_from(snapshot, selection.tenant_id, after.as_ref(), control)?;
+                if page.is_empty() {
+                    break;
+                }
+                after = page.last().cloned();
+                for source in page {
+                    control.check()?;
+                    if !resolved.nodes.is_empty() && !resolved.nodes.contains(&source.node_id) {
+                        continue;
+                    }
+                    if resolved.sources.len()
+                        + resolved.contexts.len()
+                        + resolved.results.len()
+                        + resolved.traces.len()
+                        + resolved.binding_ids.len()
+                        == MAX_EXTRACT_KEYS
+                    {
+                        return Err(error());
+                    }
+                    let added =
+                        AnalysisExtractionV1::<()>::grow(&mut resolved.sources, bytes, limit)?;
+                    bytes = bytes
+                        .checked_add(added)
+                        .and_then(|bytes| bytes.checked_add(source.node_id.capacity()))
+                        .filter(|bytes| *bytes <= limit)
+                        .ok_or_else(error)?;
+                    resolved.sources.push(source);
+                }
+            }
+        }
+        if selection.all_contexts {
+            let remaining = MAX_EXTRACT_KEYS
+                - resolved.sources.len()
+                - resolved.results.len()
+                - resolved.traces.len()
+                - resolved.binding_ids.len();
+            let mut statement = snapshot.prepare(
+                "SELECT owner_id, entity_key, lifetime_key, owner_revision FROM context_versions
+                 WHERE tenant_id = ? AND (NOT ? OR owner_id = 'mithril-control/target')
+                 ORDER BY owner_id, entity_key, lifetime_key, owner_revision LIMIT ?",
+            ).context(AnalysisDatabaseSnafu { operation: "prepare tenant context keys" })?;
+            let rows = statement
+                .query_map(
+                    params![
+                        selection.tenant_id.as_slice(),
+                        selection.targets_only,
+                        (remaining + 1) as u32
+                    ],
+                    |row| {
+                        Ok(AnalysisContextKeyV1 {
+                            tenant_id: selection.tenant_id,
+                            owner_id: row.get(0)?,
+                            entity_key: row.get(1)?,
+                            lifetime_key: row.get(2)?,
+                            owner_revision: row.get(3)?,
+                        })
+                    },
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read tenant context keys",
+                })?;
+            for row in rows {
+                control.check()?;
+                let key = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode tenant context key",
+                })?;
+                if !key.valid() {
+                    return self.reject("the tenant context key is invalid");
+                }
+                if resolved.contexts.len() == remaining {
+                    return Err(error());
+                }
+                let added = AnalysisExtractionV1::<()>::grow(&mut resolved.contexts, bytes, limit)?;
+                bytes = bytes
+                    .checked_add(added)
+                    .and_then(|bytes| bytes.checked_add(key.owner_id.capacity()))
+                    .and_then(|bytes| bytes.checked_add(key.entity_key.capacity()))
+                    .and_then(|bytes| bytes.checked_add(key.lifetime_key.capacity()))
+                    .filter(|bytes| *bytes <= limit)
+                    .ok_or_else(error)?;
+                resolved.contexts.push(key);
+            }
+        }
+        if selection.all_traces {
+            let mut statement = snapshot.prepare(
+                "SELECT request_id FROM traces WHERE tenant_id = ? AND NOT read_revoked ORDER BY request_id LIMIT 257",
+            ).context(AnalysisDatabaseSnafu { operation: "prepare tenant trace keys" })?;
+            let rows = statement
+                .query_map(params![selection.tenant_id.as_slice()], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read tenant trace keys",
+                })?;
+            for row in rows {
+                control.check()?;
+                let request: [u8; 16] = row
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "decode tenant trace key",
+                    })?
+                    .try_into()
+                    .map_err(|_| self.state_error("the tenant trace key is invalid"))?;
+                let (state, intent) =
+                    Self::read_trace_intent(snapshot, &self.root, selection.tenant_id, request)?
+                        .ok_or_else(|| self.state_error("the tenant trace is absent"))?;
+                if state.read_revoked {
+                    return crate::QueryDeniedSnafu.fail();
+                }
+                for binding in intent.bindings {
+                    let identity = binding.identity;
+                    if !resolved.nodes.is_empty() && !resolved.nodes.contains(&identity.node_id) {
+                        continue;
+                    }
+                    if !resolved.binding_ids.is_empty()
+                        && !resolved.binding_ids.contains(&binding.binding_id)
+                    {
+                        continue;
+                    }
+                    if resolved.sources.len()
+                        + resolved.contexts.len()
+                        + resolved.results.len()
+                        + resolved.traces.len()
+                        + resolved.binding_ids.len()
+                        == MAX_EXTRACT_KEYS
+                    {
+                        return Err(error());
+                    }
+                    let added =
+                        AnalysisExtractionV1::<()>::grow(&mut resolved.traces, bytes, limit)?;
+                    bytes = bytes
+                        .checked_add(added)
+                        .and_then(|bytes| bytes.checked_add(identity.node_id.capacity()))
+                        .filter(|bytes| *bytes <= limit)
+                        .ok_or_else(error)?;
+                    resolved.traces.push(identity);
+                }
+            }
+        }
+        control.check()?;
+        Ok((Cow::Owned(resolved), bytes))
+    }
+
     /// Project permitted rows and fields without caller I/O. No partial input escapes an error.
     pub fn extract(
         &self,
@@ -382,9 +701,13 @@ impl AnalysisStore {
             return self.reject("the extraction limits must be positive");
         }
         let coordinator = self.read_coordinator(control)?;
+        let explicit_traces = !selection.all_traces && !selection.traces.is_empty();
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
+            let (selection, key_bytes) =
+                self.resolve_selection(snapshot, selection, control, limits.input_bytes)?;
+            let selection = selection.as_ref();
             let end = StorePositionV1 {
                 commit_revision: meta.commit_revision,
                 ordinal: u32::MAX,
@@ -407,10 +730,12 @@ impl AnalysisStore {
                 scanned_bytes: 0,
                 projected_bytes: 0,
                 input_bytes: 0,
+                trace_reads: Vec::new(),
                 limits,
                 replay_floor: Self::replay_floor_from(snapshot, selection.tenant_id)?,
             };
             output.charge(size_of::<AnalysisExtractionV1<T>>())?;
+            output.charge(key_bytes)?;
             if let (ExtractMode::Page(Some(position)), Some(floor)) = (&mode, output.replay_floor) {
                 if *position < floor {
                     return crate::QueryCursorExpiredSnafu {
@@ -451,6 +776,84 @@ impl AnalysisStore {
                     coverage_report,
                 });
             }
+            let mut trace_info = Vec::new();
+            for identity in &selection.traces {
+                control.check()?;
+                let (state, intent) = Self::read_trace_intent(
+                    snapshot,
+                    &self.root,
+                    identity.tenant_id,
+                    identity.request_id,
+                )?
+                .ok_or_else(|| self.state_error("the selected trace is absent"))?;
+                if state.read_revoked {
+                    return crate::QueryDeniedSnafu.fail();
+                }
+                let index = intent
+                    .bindings
+                    .iter()
+                    .position(|binding| &binding.identity == identity)
+                    .ok_or_else(|| self.state_error("the selected trace binding changed"))?;
+                let selected = selection.binding_ids.is_empty()
+                    || selection
+                        .binding_ids
+                        .contains(&intent.bindings[index].binding_id);
+                let receipt = self.read_trace_receipt(snapshot, identity)?;
+                if receipt.commit_revision > output.meta.commit_revision {
+                    return self.reject("the selected trace receipt exceeds its snapshot");
+                }
+                let added = AnalysisExtractionV1::<T>::grow(
+                    &mut trace_info,
+                    output.input_bytes,
+                    limits.input_bytes,
+                )?;
+                output.charge(added)?;
+                trace_info.push((
+                    index as u32,
+                    selected,
+                    TraceRecipeV1::identify(&intent.source)?,
+                ));
+                if !selected {
+                    continue;
+                }
+                if explicit_traces
+                    && !matches!(mode, ExtractMode::Metadata)
+                    && receipt.retained_floor > 0
+                {
+                    if let Some(floor) = output.replay_floor {
+                        let position = after.unwrap_or(StorePositionV1 {
+                            commit_revision: 0,
+                            ordinal: 0,
+                        });
+                        if position < floor {
+                            return crate::QueryCursorExpiredSnafu { position, floor }.fail();
+                        }
+                    } else {
+                        return crate::RetainedRangeExpiredSnafu {
+                            first_cursor: 1_u64,
+                            last_cursor: receipt.retained_floor,
+                        }
+                        .fail();
+                    }
+                }
+                if !output.trace_reads.contains(&identity.request_id) {
+                    let added = AnalysisExtractionV1::<T>::grow(
+                        &mut output.trace_reads,
+                        output.input_bytes,
+                        limits.input_bytes,
+                    )?;
+                    output.charge(added)?;
+                    output.trace_reads.push(identity.request_id);
+                }
+                if let Some(row) = project(AnalysisInputV1::Trace {
+                    state: &state,
+                    intent: &intent,
+                    target_index: index as u32,
+                    receipt: &receipt,
+                })? {
+                    output.push(AnalysisRelationV1::Traces, row)?;
+                }
+            }
             let mut scanned = 0;
             let mut row_bytes = 0_usize;
             let mut exhausted = false;
@@ -490,12 +893,103 @@ impl AnalysisStore {
                 output.scan(range.scan_bytes)?;
                 for record in range.read(&self.root)? {
                     control.check()?;
-                    if let Some(row) = project(AnalysisInputV1::Event {
-                        identity: &identity,
-                        cpu_id: cpu,
-                        received_utc_ns: range.intake,
-                        record: &record,
-                    })? {
+                    let row = match &identity {
+                        RawIdentity::Evidence(identity) => {
+                            let selected = selection.binding_ids.is_empty()
+                                || crate::EvidenceRecord::try_from(
+                                    record.framed_record.as_slice(),
+                                )?
+                                .decision_context
+                                .as_ref()
+                                .is_some_and(|context| {
+                                    selection
+                                        .binding_ids
+                                        .iter()
+                                        .any(|id| id.as_slice() == context.binding_id.as_slice())
+                                });
+                            if selected {
+                                project(AnalysisInputV1::Event {
+                                    identity,
+                                    cpu_id: cpu.ok_or_else(|| {
+                                        self.state_error("the selected evidence CPU is absent")
+                                    })?,
+                                    received_utc_ns: range.intake,
+                                    record: &record,
+                                })?
+                                .map(|row| (AnalysisRelationV1::Events, row))
+                            } else {
+                                None
+                            }
+                        }
+                        RawIdentity::Diagnostic(identity) => {
+                            let index = selection
+                                .traces
+                                .iter()
+                                .position(|selected| selected == identity)
+                                .ok_or_else(|| {
+                                    self.state_error("the selected trace identity is absent")
+                                })?;
+                            let (target_index, selected, recipe) = trace_info[index];
+                            if !selected {
+                                scanned += 1;
+                                after = Some(record.position);
+                                continue;
+                            }
+                            let payload = TraceRecord::read(&record.framed_record, &self.root)?;
+                            let (kind, bytes) = match &payload {
+                                TracePayload::Metadata(bytes) => ("metadata", bytes),
+                                TracePayload::Data(bytes) => ("data", bytes),
+                                TracePayload::Diagnostic(bytes) => ("diagnostic", bytes),
+                                TracePayload::Terminal(bytes) => {
+                                    let terminal = TraceRecord::terminal(bytes, &self.root)?;
+                                    if terminal.execution_id != identity.execution_id
+                                        || terminal.last_sequence + 1 != record.cursor
+                                    {
+                                        return self.reject(
+                                            "the selected trace terminal identity changed",
+                                        );
+                                    }
+                                    ("terminal", bytes)
+                                }
+                            };
+                            if selection.measurements && kind == "data" {
+                                if let Some(recipe) = recipe {
+                                    let frame = TraceFrameV1 {
+                                        execution_id: identity.execution_id,
+                                        sequence: record.cursor,
+                                        kind: TraceFrameKindV1::Data,
+                                        bytes: bytes.clone(),
+                                    };
+                                    if let Some(measurements) = recipe.measurements(&frame) {
+                                        for measurement in measurements {
+                                            control.check()?;
+                                            if let Some(row) =
+                                                project(AnalysisInputV1::TraceMeasurement {
+                                                    identity,
+                                                    measurement: &measurement,
+                                                })?
+                                            {
+                                                output.push(
+                                                    AnalysisRelationV1::TraceMeasurements,
+                                                    row,
+                                                )?;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            project(AnalysisInputV1::TraceOutput {
+                                identity,
+                                target_index,
+                                sequence: record.cursor,
+                                position: record.position,
+                                kind,
+                                bytes,
+                            })?
+                            .map(|row| (AnalysisRelationV1::TraceOutput, row))
+                        }
+                    };
+                    if let Some((relation, row)) = row {
                         let bytes = row.1.saturating_add(size_of::<T>());
                         if matches!(mode, ExtractMode::Page(_))
                             && row_bytes.saturating_add(bytes) > limits.page_bytes
@@ -508,7 +1002,7 @@ impl AnalysisStore {
                             }
                             break 'scan;
                         }
-                        output.push(AnalysisRelationV1::Events, row)?;
+                        output.push(relation, row)?;
                         row_bytes += bytes;
                     }
                     scanned += 1;
@@ -521,6 +1015,32 @@ impl AnalysisStore {
                     Some((context, _)) => {
                         if let Some(row) = project(AnalysisInputV1::Context(&context))? {
                             output.push(AnalysisRelationV1::Context, row)?;
+                        }
+                        if selection.targets && context.key.owner_id == "mithril-control/target" {
+                            control.check()?;
+                            let fact = serde_json::from_slice::<crate::WorkloadTargetFactV1>(
+                                &context.body,
+                            )
+                            .map_err(|_| {
+                                self.state_error("the retained target context is invalid")
+                            })?;
+                            if (!selection.nodes.is_empty()
+                                && !selection.nodes.contains(&fact.node_id))
+                                || (!selection.binding_ids.is_empty()
+                                    && !fact.kubernetes.as_ref().is_some_and(|identity| {
+                                        uuid::Uuid::parse_str(&identity.binding_id).is_ok_and(
+                                            |id| selection.binding_ids.contains(id.as_bytes()),
+                                        )
+                                    }))
+                            {
+                                continue;
+                            }
+                            if let Some(row) = project(AnalysisInputV1::Target {
+                                context: &context,
+                                fact: &fact,
+                            })? {
+                                output.push(AnalysisRelationV1::Targets, row)?;
+                            }
                         }
                     }
                     None => {
@@ -583,7 +1103,7 @@ impl AnalysisStore {
         revision: u64,
         limit: usize,
         control: &AnalysisReadControl,
-    ) -> Result<Option<(EvidenceIntakeIdentityV1, u32, SegmentRange)>> {
+    ) -> Result<Option<(RawIdentity, Option<u32>, SegmentRange)>> {
         control
             .lock(|| self.raw.try_lock())?
             .select_position(selection, after, revision, limit, control)
@@ -685,6 +1205,33 @@ mod tests {
             source_id: [3; 16],
             source_epoch: 1,
         }
+    }
+
+    #[test]
+    fn analysis_trace_key_limits() {
+        let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
+        selection.traces = (1_u128..=1024)
+            .map(|execution| TraceIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "trace-node".into(),
+                node_boot_id: [2; 16],
+                request_id: [3; 16],
+                execution_id: execution.to_be_bytes(),
+                source_sha256: [4; 32],
+            })
+            .collect();
+        assert!(selection.valid());
+        selection.binding_ids.push([5; 16]);
+        assert!(!selection.valid());
+        selection.traces.pop();
+        assert!(selection.valid());
+        selection.binding_ids.push([5; 16]);
+        assert!(!selection.valid());
+        selection.binding_ids = vec![[0; 16]];
+        assert!(!selection.valid());
+        selection.binding_ids = vec![[5; 16]];
+        selection.traces[0].tenant_id = [2; 16];
+        assert!(!selection.valid());
     }
 
     fn batch(first: u64, count: usize, received: u64) -> ValidatedEvidenceBatchV1 {
@@ -1275,6 +1822,130 @@ mod tests {
     }
 
     #[test]
+    fn analysis_tenant_snapshot() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let first = identity(1);
+        store.accept_validated_batch(first.clone(), batch(1, 1, 10))?;
+        store.accept_validated_batch(identity(2), batch(1, 1, 10))?;
+        let mut next = first.clone();
+        next.source_id = [4; 16];
+        next.node_boot_id = [5; 16];
+        let context = AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: first.tenant_id,
+                owner_id: "policy".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![2],
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: vec![42],
+        };
+        let selection = AnalysisSelectionV1::tenant(first.tenant_id);
+        let before = store.meta()?;
+        let mut calls = 0;
+        let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+            let AnalysisInputV1::Event { identity, .. } = input else {
+                return store.reject("a late context entered the snapshot");
+            };
+            assert_eq!(identity, &first);
+            calls += 1;
+            store.accept_validated_batch(next.clone(), batch(1, 1, 20))?;
+            store.commit_context(&context)?;
+            Ok(Some(vec![7]))
+        })?;
+        assert_eq!(calls, 1);
+        assert_eq!(output.meta, before);
+        assert_eq!(output.sources.len(), 1);
+        assert_eq!(output.pages.len(), 1);
+        assert!(output.missing_contexts.is_empty());
+        let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+            Ok(Some(match input {
+                AnalysisInputV1::Event { identity, .. } => vec![identity.source_id[0]],
+                AnalysisInputV1::Context(context) => context.body.clone(),
+                _ => return store.reject("an unselected result entered the snapshot"),
+            }))
+        })?;
+        assert_eq!(output.sources.len(), 2);
+        assert_eq!(output.pages.len(), 2);
+        assert_eq!(output.pages[0].rows.len(), 2);
+        assert_eq!(output.pages[1].rows[0].as_ref(), &[42]);
+        let empty = AnalysisSelectionV1::new(first.tenant_id, vec![]);
+        assert!(store
+            .extract(&empty, &AnalysisReadControl::default(), |_| {
+                store.reject("an empty explicit list selected input")
+            })?
+            .pages
+            .is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_tenant_key_limits() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let first = identity(1);
+        store.accept_validated_batch(first.clone(), batch(1, 1, 10))?;
+        let mut selection = AnalysisSelectionV1::tenant(first.tenant_id);
+        selection.all_contexts = false;
+        selection.contexts = (0..MAX_EXTRACT_KEYS - 1)
+            .map(|revision| AnalysisContextKeyV1 {
+                tenant_id: first.tenant_id,
+                owner_id: "policy".into(),
+                entity_key: vec![1],
+                lifetime_key: vec![2],
+                owner_revision: revision as u64,
+            })
+            .collect();
+        let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
+        let output = store.extract(&selection, &control, |_| Ok(None))?;
+        assert_eq!(output.sources.len(), 1);
+        assert_eq!(output.missing_contexts.len(), MAX_EXTRACT_KEYS - 1);
+        let mut next = first.clone();
+        next.source_id = [4; 16];
+        store.accept_validated_batch(next, batch(1, 1, 20))?;
+        assert!(matches!(
+            store.extract(&selection, &control, |_| Ok(None)),
+            Err(crate::Error::AnalysisInputTooLarge {
+                resource: "selected input keys",
+                ..
+            })
+        ));
+        let selection = AnalysisSelectionV1::tenant(first.tenant_id);
+        assert!(matches!(
+            store.extract_rows(
+                &selection,
+                AnalysisExtractLimits {
+                    input_bytes: size_of::<AnalysisSelectionV1>() - 1,
+                    ..Default::default()
+                },
+                &control,
+                |_| Ok(None::<((), usize)>)
+            ),
+            Err(crate::Error::AnalysisInputTooLarge { .. })
+        ));
+        let cancelled = AnalysisReadControl::default();
+        cancelled.cancel()?;
+        assert!(matches!(
+            store.extract(&selection, &cancelled, |_| Ok(None)),
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
+        let mut invalid = selection.clone();
+        invalid.sources.push(first.clone());
+        assert!(!invalid.valid());
+        let mut invalid = selection.clone();
+        invalid.nodes = vec![first.node_id.clone(), first.node_id];
+        assert!(!invalid.valid());
+        let mut invalid = selection;
+        invalid.nodes.push(String::new());
+        assert!(!invalid.valid());
+        Ok(())
+    }
+
+    #[test]
     fn analysis_extract_snapshot() -> TestResult {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
@@ -1336,6 +2007,12 @@ mod tests {
                 AnalysisInputV1::Event { record, .. } => vec![record.cursor as u8],
                 AnalysisInputV1::Context(context) => context.body.clone(),
                 AnalysisInputV1::Result { body, .. } => body.to_vec(),
+                AnalysisInputV1::Trace { .. }
+                | AnalysisInputV1::TraceOutput { .. }
+                | AnalysisInputV1::TraceMeasurement { .. }
+                | AnalysisInputV1::Target { .. } => {
+                    return store.reject("unselected input entered an evidence-only snapshot")
+                }
             }))
         })?;
         assert!(output.missing_contexts.is_empty() && output.missing_results.is_empty());
