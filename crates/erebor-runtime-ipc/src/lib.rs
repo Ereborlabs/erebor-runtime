@@ -15,18 +15,17 @@ mod tests {
 
     #[test]
     fn trace_metadata_roundtrip() -> Result<(), prost::DecodeError> {
+        let detail: Box<araphor::TraceDetail> = araphor::TraceDetail {
+            source: b"BEGIN { printf(\"ready\\n\"); }".to_vec(),
+            requested: Some(araphor::InputSelection {
+                target: "pod/ns/name".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+        .into();
         let frame = araphor::TraceFrame {
-            payload: Some(araphor::trace_frame::Payload::Metadata(
-                araphor::TraceDetail {
-                    source: b"BEGIN { printf(\"ready\\n\"); }".to_vec(),
-                    requested: Some(araphor::InputSelection {
-                        target: "pod/ns/name".into(),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-                .into(),
-            )),
+            payload: Some(araphor::trace_frame::Payload::Metadata(detail)),
             ..Default::default()
         };
         let bytes = frame.encode_to_vec();
