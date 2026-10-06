@@ -12,7 +12,7 @@ use super::budget::QueryLease;
 use super::frame::{
     QueryCheckpoint, QueryCoverageRows, QueryFrame, QueryReadScope, QueryTerminalReason,
 };
-use super::{QueryAuthorization, QueryOperation, QueryOwner, QueryPlan, QueryTemplate};
+use super::{QueryAuthorization, QueryOperation, QueryOwner, QueryPlan, QueryRead, QueryTemplate};
 use crate::{AnalysisReadControl, AnalysisStoreMetaV1, Result};
 
 /// A host clock. A clock-change signal is optional; expiry timers also sample it.
@@ -460,8 +460,21 @@ impl QueryFollow {
                 let plan = self.plan.clone();
                 let control = self.control.stage(self.owner.limits.extract_timeout)?;
                 let paged = self.follows && plan.operation() == QueryOperation::Append;
+                let lease = self.reserve(&control).await?;
+                let read = if paged {
+                    QueryRead::Append(after)
+                } else {
+                    QueryRead::Snapshot
+                };
                 let result = owner
-                    .evaluate_async(plan, now_ns, after, paged, Arc::new(control))
+                    .evaluate_reserved(
+                        plan,
+                        now_ns,
+                        read,
+                        Arc::new(control),
+                        lease,
+                        self.session.clone(),
+                    )
                     .await?;
                 let checkpoint = QueryCheckpoint::from_result(&self.plan, &result)?;
                 let exhausted = result.exhausted;
@@ -524,15 +537,22 @@ impl QueryFollow {
                 let owner = self.owner.clone();
                 let plan = self.plan.clone();
                 let control = self.control.stage(self.owner.limits.extract_timeout)?;
-                let (meta, coverage, health) =
-                    tokio::task::spawn_blocking(move || owner.coverage(&plan, now_ns, &control))
-                        .await
-                        .map_err(|_| {
-                            crate::QueryInvalidSnafu {
-                                field: "query health task",
-                            }
-                            .build()
-                        })??;
+                let lease = self.reserve(&control).await?;
+                let session = self.session.clone();
+                let (meta, coverage, health) = tokio::task::spawn_blocking(move || {
+                    control.check()?;
+                    if let Some(session) = &session {
+                        session.check()?;
+                    }
+                    owner.coverage(&plan, now_ns, &control, lease)
+                })
+                .await
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "query health task",
+                    }
+                    .build()
+                })??;
                 self.meta = meta.clone();
                 self.coverage = Some(coverage);
                 if !self
@@ -607,6 +627,43 @@ impl QueryFollow {
             QueryTerminalReason::Closed
         } else {
             QueryTerminalReason::OutputTimeout
+        }
+    }
+
+    async fn reserve(&mut self, control: &AnalysisReadControl) -> Result<QueryLease> {
+        let owner = self.owner.clone();
+        let plan = self.plan.clone();
+        let wait = owner.reserve_wait(&plan);
+        let deadline = tokio::time::sleep(control.remaining()?);
+        tokio::pin!(wait, deadline);
+        loop {
+            self.check_auth()?;
+            control.check()?;
+            if *self.stop.borrow() || self.sender.is_closed() {
+                return crate::AnalysisReadCancelledSnafu.fail();
+            }
+            tokio::select! {
+                result = &mut wait => {
+                    let lease = result?;
+                    self.check_auth()?;
+                    control.check()?;
+                    if *self.stop.borrow() || self.sender.is_closed() {
+                        return crate::AnalysisReadCancelledSnafu.fail();
+                    }
+                    return Ok(lease);
+                },
+                _ = &mut deadline => return crate::AnalysisReadDeadlineSnafu.fail(),
+                _ = self.stop.changed() => return crate::AnalysisReadCancelledSnafu.fail(),
+                _ = self.sender.closed() => return crate::AnalysisReadCancelledSnafu.fail(),
+                changed = async {
+                    match self.auth_changes.as_mut() {
+                        Some(changes) => changes.changed().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if changed.is_err() { return crate::QueryDeniedSnafu.fail(); }
+                },
+            }
         }
     }
 

@@ -60,6 +60,11 @@ Control-to-Node execution leases remain required.
 Committed changes wake follow. An evaluation future returns bounded append
 rows or one complete replacement. The stream returns frames in order, then
 waits for the next relevant commit or expiry. Keep one bounded output channel.
+Existing stream admission bounds the number of capacity waiters. An admitted
+stream waits for evaluation, input and output capacity within its existing
+extraction deadline. Stop, reader closure and authority changes also wake
+this wait. Check current authority and cancellation before native work.
+Direct query admission still returns Busy when its capacity is full.
 Use the notification, evaluation-future and output-stream pattern in
 `mangroves/src/sql/src/execution/subscribe.rs`; do not add DataFusion or copy
 its buffer and error behavior.

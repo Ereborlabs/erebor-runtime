@@ -193,7 +193,7 @@ of this boundary.
 -> [QueryPlan::client](../../../../crates/araphor-data/src/query/plan.rs) The plan retains the principal, authority revision and tenant input selection.<br>
 -> [QueryOwner::query_client](../../../../crates/araphor-data/src/query/mod.rs) The owner checks current authority before extraction.<br>
 -> [QuerySql::bind_at](../../../../crates/araphor-data/src/query/admission.rs) The owner freezes the clock and applies only proved AST time bounds.<br>
--> [QueryOwner::evaluate_async](../../../../crates/araphor-data/src/query/mod.rs) The owner reserves input, output and evaluation capacity before a bounded Tokio blocking task.<br>
+-> [QueryOwner::evaluate_reserved](../../../../crates/araphor-data/src/query/mod.rs) The owner retains reserved input, output and evaluation capacity through a bounded Tokio blocking task.<br>
 -> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) The owner extracts bounded tenant input from selected sources and contexts.<br>
 -> [InputRelations::append_positions](../../../../crates/araphor-data/src/query/input.rs) Client append input adds two private numeric position columns without copying payloads.<br>
 -> [QueryEvaluation::run](../../../../crates/araphor-data/src/query/evaluation.rs) The shared in-memory evaluator returns bounded rows or a typed failure.<br>
@@ -206,7 +206,8 @@ of this boundary.
 [QueryOwner::follow_client_clock](../../../../crates/araphor-data/src/query/follow.rs) Client follow is requested.<br>
 -> [QuerySession](../../../../crates/araphor-data/src/query/authorization.rs) The session retains the exact grant and a current-authorization provider.<br>
 -> [QueryFollow::run_loop](../../../../crates/araphor-data/src/query/follow.rs) The owner registers watches before the snapshot and checks authority after waits.<br>
--> [QueryOwner::evaluate_async](../../../../crates/araphor-data/src/query/mod.rs) One evaluation future returns append rows or one complete replacement.<br>
+-> [QueryFollow::reserve](../../../../crates/araphor-data/src/query/follow.rs) An admitted stream waits within its existing deadline for input, output and evaluation capacity.<br>
+-> [QueryOwner::evaluate_reserved](../../../../crates/araphor-data/src/query/mod.rs) One evaluation future returns append rows or one complete replacement.<br>
 -> [QueryFollow::send](../../../../crates/araphor-data/src/query/follow.rs) One bounded channel retains ordered frames.<br>
 -> [QueryStream](../../../../crates/araphor-data/src/query/follow.rs) The standard Stream implementation checks authority before and after receipt of a queued frame.<br>
 -> [QueryCheckpoint::validate](../../../../crates/araphor-data/src/query/frame.rs) A retry checks the unsigned bookmark's store, epoch, operation, revision and retention floor.<br>
@@ -253,8 +254,9 @@ selection beside this bookmark and clears the bookmark when these inputs
 change. The server does not prove unchanged input. Bookmark edits can skip
 or replay currently authorized rows, but cannot create authorization.
 
-QueryOwner::query_client returns a future. QueryOwner::evaluate_async reserves
-capacity before spawn_blocking. QueryTask signals cancellation if the caller
+QueryOwner::query_client returns a future and reserves capacity before
+spawn_blocking. QueryOwner::evaluate_reserved retains that lease. QueryTask
+signals cancellation if the caller
 drops the future. AnalysisReadControl supplies deadlines and DuckDB interruption.
 QueryEvaluation uses the same temporary table adapter for trusted and client SQL.
 The evaluator disables external access, extension loading and native spill.
@@ -270,6 +272,13 @@ lease until the reader drops that frame. Authorization failure discards queued
 frames, returns one error and ends the stream. This flow uses the notification,
 evaluation-future and stream pattern from Mangroves; it adds no task queue or
 subscription store.
+Admitted streams wait for capacity through QueryBudget's Tokio notification.
+The existing stream limits bound these waiters. Register the notification
+before the capacity check to prevent a lost wake. Lease release wakes the
+waiters after the usage lock is released. The existing extraction deadline,
+cancellation, reader closure and authority checks still bound each wait.
+Direct query admission remains fail-fast. A capacity wait adds no input copy
+and cannot release a running native task's lease.
 
 [TraceOwner](../../../../crates/araphor-observability/src/owner.rs) Control accepts one supported source under the tenant investigate permission.<br>
 -> [ClientGrpcOwner::watch](../../../../crates/mithril-control/src/client_grpc/trace.rs) The owner reads terminal receipts before it starts the query snapshot.<br>

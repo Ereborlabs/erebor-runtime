@@ -87,6 +87,11 @@ impl AnalysisReadControl {
         Ok(())
     }
 
+    pub(crate) fn remaining(&self) -> Result<Duration> {
+        self.check()?;
+        Ok(self.deadline.saturating_duration_since(Instant::now()))
+    }
+
     pub(super) fn lock<T>(&self, mut acquire: impl FnMut() -> TryLockResult<T>) -> Result<T> {
         loop {
             self.check()?;

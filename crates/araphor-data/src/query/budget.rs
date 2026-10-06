@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::Notify;
+
 use super::QueryLimits;
 use crate::Result;
 
@@ -16,6 +18,9 @@ struct Usage {
 pub(super) struct QueryBudget {
     limits: QueryLimits,
     usage: Mutex<Usage>,
+    changed: Notify,
+    #[cfg(test)]
+    pub(super) wait_signal: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -38,6 +43,9 @@ impl QueryBudget {
         Arc::new(Self {
             limits,
             usage: Mutex::new(Usage::default()),
+            changed: Notify::new(),
+            #[cfg(test)]
+            wait_signal: Mutex::new(None),
         })
     }
 
@@ -48,6 +56,34 @@ impl QueryBudget {
             self.limits.output_bytes,
             self.limits.input_bytes,
         )
+    }
+
+    pub(super) async fn wait(self: &Arc<Self>, tenant: [u8; 16]) -> Result<QueryLease> {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            match self.evaluate(tenant) {
+                Ok(lease) => return Ok(lease),
+                Err(crate::Error::AnalysisBusy { .. }) => {}
+                Err(error) => return Err(error),
+            }
+            #[cfg(test)]
+            if let Some(signal) = self
+                .wait_signal
+                .lock()
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "test budget wait signal",
+                    }
+                    .build()
+                })?
+                .take()
+            {
+                let _sent = signal.send(());
+            }
+            changed.await;
+        }
     }
 
     pub(super) fn stream(self: &Arc<Self>, tenant: [u8; 16]) -> Result<QueryLease> {
@@ -180,6 +216,7 @@ impl QueryLease {
         usage.output_bytes -= self.bytes - bytes;
         self.bytes = bytes;
         drop(usage);
+        self.budget.changed.notify_waiters();
         Ok(self)
     }
 }
@@ -210,6 +247,8 @@ impl Drop for QueryLease {
                 usage.tenants.remove(&self.tenant);
             }
         }
+        drop(usage);
+        self.budget.changed.notify_waiters();
     }
 }
 
@@ -222,6 +261,30 @@ impl std::fmt::Debug for QueryLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn query_scope_wakeup() -> Result<()> {
+        use futures_util::FutureExt as _;
+        for output in [true, false] {
+            let budget = QueryBudget::new(QueryLimits::default());
+            let held = budget.evaluate([1; 16])?;
+            let waiting = budget.wait([1; 16]);
+            tokio::pin!(waiting);
+            assert!(waiting.as_mut().now_or_never().is_none());
+            let retained = if output {
+                Some(held.output(1)?)
+            } else {
+                drop(held);
+                None
+            };
+            let lease = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+                .await
+                .expect("budget wait did not wake")?;
+            drop(lease);
+            drop(retained);
+        }
+        Ok(())
+    }
 
     #[test]
     fn query_client_capacity() -> Result<()> {

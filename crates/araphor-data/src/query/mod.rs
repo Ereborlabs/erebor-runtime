@@ -30,6 +30,7 @@ mod plan;
 mod tests;
 
 pub use admission::{QueryBinding, QuerySql};
+use authorization::QuerySession;
 pub use authorization::{QueryAuthorization, QueryGrant};
 use budget::{QueryBudget, QueryLease};
 pub use follow::{QueryClock, QueryStream, SystemQueryClock};
@@ -235,8 +236,20 @@ impl QueryOwner {
             .clone()
             .ok_or_else(|| crate::QueryDeniedSnafu.build())?;
         authority.check(&grant)?;
+        let stage = Arc::new(control.within(self.limits.extract_timeout)?);
+        let lease = self.reserve(&plan)?;
         let result = self
-            .evaluate_async(plan, now_ns, None, false, control)
+            .evaluate_reserved(
+                plan,
+                now_ns,
+                QueryRead::Snapshot,
+                stage,
+                lease,
+                Some(QuerySession {
+                    authority: authority.clone(),
+                    grant: grant.clone(),
+                }),
+            )
             .await?;
         authority.check(&grant)?;
         if let Some(scope) = &result.reads {
@@ -246,13 +259,14 @@ impl QueryOwner {
         Ok(result)
     }
 
-    async fn evaluate_async(
+    async fn evaluate_reserved(
         self: &Arc<Self>,
         plan: QueryPlan,
         now_ns: u64,
-        after: Option<StorePositionV1>,
-        paged: bool,
+        read: QueryRead,
         control: Arc<AnalysisReadControl>,
+        lease: QueryLease,
+        session: Option<QuerySession>,
     ) -> Result<QueryResult> {
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
             crate::QueryInvalidSnafu {
@@ -261,7 +275,6 @@ impl QueryOwner {
             .build()
         })?;
         let stage = control.within(self.limits.extract_timeout)?;
-        let lease = self.reserve(&plan)?;
         let owner = self.clone();
         let mut task = QueryTask {
             control,
@@ -269,11 +282,10 @@ impl QueryOwner {
         };
         let result = runtime
             .spawn_blocking(move || {
-                let read = if paged {
-                    QueryRead::Append(after)
-                } else {
-                    QueryRead::Snapshot
-                };
+                stage.check()?;
+                if let Some(session) = &session {
+                    session.check()?;
+                }
                 owner.evaluate(&plan, now_ns, read, &stage, lease)
             })
             .await;
@@ -286,6 +298,13 @@ impl QueryOwner {
             self.limits.client_capacity()?;
         }
         self.budget.evaluate(plan.selection.tenant_id)
+    }
+
+    async fn reserve_wait(&self, plan: &QueryPlan) -> Result<QueryLease> {
+        if plan.grant.is_some() {
+            self.limits.client_capacity()?;
+        }
+        self.budget.wait(plan.selection.tenant_id).await
     }
 
     fn evaluate(
@@ -506,12 +525,12 @@ impl QueryOwner {
         plan: &QueryPlan,
         now_ns: u64,
         control: &AnalysisReadControl,
+        mut lease: QueryLease,
     ) -> Result<(
         AnalysisStoreMetaV1,
         Arc<QueryCoverageRows>,
         crate::StorageHealthV1,
     )> {
-        let mut lease = self.budget.evaluate(plan.selection.tenant_id)?;
         let mut selection = plan.dependencies(now_ns)?;
         selection.contexts.clear();
         let bounds = crate::analysis::AnalysisExtractLimits {
