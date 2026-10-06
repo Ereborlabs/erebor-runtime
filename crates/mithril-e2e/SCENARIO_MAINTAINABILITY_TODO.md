@@ -2062,7 +2062,7 @@ test does not close a row when its physical condition or an assertion changed.
       zero. The log is `/tmp/mithril-clone-move-final-ci-20261006.log`.
       The lightweight crate passed 159 tests; 544 physical tests were ignored.
       The three physical moved-root cases passed separately as recorded above.
-  - [ ] Replace the remaining native-child first-open Rust fixture with
+  - [x] Replace the remaining native-child first-open Rust fixture with
     `clone_cgroup.py` and `ProcessFixture`. Add one real fork action to the
     shared actor. Use existing `wait_child` and PID tracking. Keep root binding
     role, restricted creator-free identity, root and child runnable state,
@@ -2073,6 +2073,37 @@ test does not close a row when its physical condition or an assertion changed.
     native-child case and its unused constructor, release method, status
     poller, and open branch after qualification. Add no fixture or Platform
     API and no production change. Keep the remaining clone behaviors.
+    - [x] Pass the new `clone_child::child_first_open_allowed` and both
+      existing clone-actor cases on all three platforms. Host: three passed
+      in 43.87 seconds. Direct `runc`: three passed in 42.59 seconds.
+      Kubernetes: three passed in 106.71 seconds. Each group uses the existing
+      shared lifecycle. The new Rust file is 81 lines; the actor is 100 lines.
+    - [x] Preserve baseline `95775f48:2330–2400`. Keep every root/child
+      identity and active-state check. Restore the root's exact binding role.
+      Add root and child process-removal checks. Use standard proc child reads
+      and PID tracking. Do not add actor-only tests or embedded source.
+    - [x] Remove the matched legacy case, its constructor, its release and
+      status methods, and its open branch/helper. Remove only the unreachable
+      status checks whose sole writer was the deleted branch. Keep namespace
+      exec, moved-root cleanup, and moved-parent fork denial. The legacy test
+      and fixture shrink by 138 lines. The net Rust reduction is 55 lines.
+    - Source review: [clone_child](src/identity/scenarios/clone_child.rs) starts
+      Control, Node, the signed policy, and the initial actor.
+      -> [clone_cgroup.py](fixtures/process/clone_cgroup.py) creates a held root
+      in that cgroup, forks on request, and holds the child before file open.
+      -> [ProcessFixture::wait_child](src/process.rs) reads the standard proc
+      child path. The test checks the Node snapshots before requesting open.
+      -> The actor opens and closes the requested file and reaps its child.
+      The test checks success and both process removals before teardown.
+      No production, policy fixture, or Platform change.
+    - [x] Pass the remaining namespace-exec Host case after the deletion.
+      The unchanged `clone_exec::child_enters_mount_ns` passed in 23.11 seconds.
+    - [x] Pass final repository Rust CI after the matched legacy deletions.
+      Run `env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2
+      bash .github/scripts/verify-rust-ci.sh`. The command exited with status
+      zero. The log is `/tmp/mithril-clone-child-final-ci-20261006.log`.
+      The lightweight crate passed 159 tests; 546 physical tests were ignored.
+      The nine focused physical cases passed separately as recorded above.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields

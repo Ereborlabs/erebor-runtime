@@ -11,6 +11,8 @@ mod child_exec;
 #[cfg(test)]
 mod clean_host;
 #[cfg(test)]
+mod clone_child;
+#[cfg(test)]
 mod clone_exec;
 #[cfg(test)]
 mod clone_move;

@@ -1,11 +1,9 @@
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
-use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::Write as _;
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -34,26 +32,17 @@ pub(super) struct CloneIntoCgroupFixture {
 impl CloneIntoCgroupFixture {
     #[cfg(test)]
     pub(super) fn start(cgroup_path: &Path) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None, None)
-    }
-
-    #[cfg(test)]
-    pub(super) fn start_with_native_child_first_effect(
-        cgroup_path: &Path,
-        path: &Path,
-    ) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None, Some(path))
+        Self::start_with_namespace_target(cgroup_path, None)
     }
 
     pub(super) fn start_with_mount_namespace_target(cgroup_path: &Path) -> Result<Self> {
         let target = start_mount_namespace_target()?;
-        Self::start_with_namespace_target(cgroup_path, Some(target), None)
+        Self::start_with_namespace_target(cgroup_path, Some(target))
     }
 
     fn start_with_namespace_target(
         cgroup_path: &Path,
         mut namespace_target: Option<Child>,
-        native_child_first_effect_path: Option<&Path>,
     ) -> Result<Self> {
         let cgroup = match File::open(cgroup_path).context(IoSnafu { path: cgroup_path }) {
             Ok(cgroup) => cgroup,
@@ -104,7 +93,6 @@ impl CloneIntoCgroupFixture {
             run_child(
                 root_gate.as_ptr().cast::<AtomicU32>(),
                 namespace_target_read.as_ref().map(|file| file.as_raw_fd()),
-                native_child_first_effect_path,
             );
         }
         if result < 0 {
@@ -290,13 +278,6 @@ impl CloneIntoCgroupFixture {
             "native child namespace exec",
             Duration::from_secs(5),
             || {
-                let state = self.root_state();
-                if state > 5 {
-                    return Err(invalid_state(format!(
-                        "native child namespace exec failed with errno {}",
-                        state - 5
-                    )));
-                }
                 let namespace = match std::fs::read_link(&path) {
                     Ok(namespace) => namespace,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -353,11 +334,6 @@ impl CloneIntoCgroupFixture {
         self.release_child()
     }
 
-    #[cfg(test)]
-    pub(super) fn release_child_first_effect(&self) -> Result<()> {
-        self.release_child()
-    }
-
     fn release_child(&self) -> Result<()> {
         ensure!(
             self.child_pidfd.is_some() && self.root_state() == 3,
@@ -372,18 +348,6 @@ impl CloneIntoCgroupFixture {
             .ok_or_else(|| invalid_state("CLONE_INTO_CGROUP child has no readiness gate"))?;
         gate(map).store(4, Ordering::Release);
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn native_child_first_effect_allowed(&self) -> Result<Option<()>> {
-        match self.root_state() {
-            0..=4 => Ok(None),
-            5 => Ok(Some(())),
-            state => Err(invalid_state(format!(
-                "native child first effect exited with status {}",
-                state - 5
-            ))),
-        }
     }
 
     #[cfg(test)]
@@ -454,9 +418,6 @@ impl CloneIntoCgroupFixture {
     }
 
     fn stop_child(&self) -> Result<()> {
-        if self.root_state() >= 5 {
-            return Ok(());
-        }
         let Some(pidfd) = &self.child_pidfd else {
             return Ok(());
         };
@@ -596,11 +557,7 @@ fn stop_namespace_target(target: &mut Option<Child>) {
     }
 }
 
-fn run_child(
-    root_gate: *const AtomicU32,
-    namespace_target_fd: Option<i32>,
-    native_child_first_effect_path: Option<&Path>,
-) -> ! {
+fn run_child(root_gate: *const AtomicU32, namespace_target_fd: Option<i32>) -> ! {
     if !close_inherited_fds(namespace_target_fd) {
         unsafe { libc::_exit(124) }
     }
@@ -614,11 +571,6 @@ fn run_child(
         root_gate.store(3, Ordering::Release);
         while root_gate.load(Ordering::Acquire) != 4 {
             unsafe { libc::sched_yield() };
-        }
-        if let Some(path) = native_child_first_effect_path {
-            let status = direct_open(path);
-            root_gate.store(5 + status as u32, Ordering::Release);
-            unsafe { libc::_exit(status) }
         }
         let Some(namespace_target_fd) = namespace_target_fd else {
             unsafe { libc::_exit(0) }
@@ -676,23 +628,6 @@ fn close_inherited_fds(keep: Option<i32>) -> bool {
         low = fd.saturating_add(1);
     }
     unsafe { libc::syscall(libc::SYS_close_range, low, u32::MAX, 0) == 0 }
-}
-
-fn direct_open(path: &Path) -> i32 {
-    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
-        return 126;
-    };
-    let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
-    if descriptor >= 0 {
-        unsafe {
-            libc::close(descriptor);
-        }
-        0
-    } else {
-        std::io::Error::last_os_error()
-            .raw_os_error()
-            .unwrap_or(127)
-    }
 }
 
 #[cfg(test)]
