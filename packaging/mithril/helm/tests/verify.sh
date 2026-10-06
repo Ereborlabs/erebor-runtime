@@ -33,16 +33,18 @@ administrative_ports=$(helm template mithril "$chart_directory" \
   --values "$chart_directory/tests/values.yaml" \
   --show-only templates/control-deployment.yaml \
   --set control.administrativeExec.enabled=true \
+  --set control.client.enabled=true \
   --set-string control.administrativeExec.webhookToken=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --set-string control.administrativeExec.webhookCABundle=dGVzdA==)
-[[ $(grep -Fc "name: administrative" <<<"$administrative_ports") -eq 2 ]]
+[[ $(grep -Fc "name: client" <<<"$administrative_ports") -eq 2 ]]
 grep -Fq "containerPort: 9444" <<<"$administrative_ports"
-grep -Fq "targetPort: administrative" <<<"$administrative_ports"
+grep -Fq "targetPort: client" <<<"$administrative_ports"
 administrative_rbac=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \
   --values "$chart_directory/tests/values.yaml" \
   --show-only templates/administrative-exec.yaml \
   --set control.administrativeExec.enabled=true \
+  --set control.client.enabled=true \
   --set-string control.administrativeExec.webhookToken=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --set-string control.administrativeExec.webhookCABundle=dGVzdA==)
 ! grep -Fq "kind: ServiceAccount" <<<"$administrative_rbac"
@@ -50,6 +52,19 @@ grep -Fq 'resources: ["pods/exec"]' <<<"$administrative_rbac"
 grep -Fq 'verbs: ["get", "create"]' <<<"$administrative_rbac"
 grep -Fq "'mithril:administrative-exec' in request.userInfo.groups" \
   <<<"$administrative_rbac"
+
+query_only=$(helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --set control.client.enabled=true)
+[[ $(grep -Fc "name: client" <<<"$query_only") -eq 2 ]]
+! grep -Fq "mithril-approved-administrative-exec" <<<"$query_only"
+if helm template mithril "$chart_directory" \
+  --values "$chart_directory/tests/values.yaml" \
+  --set control.administrativeExec.enabled=true >/dev/null 2>&1; then
+  echo 'chart accepted administrative exec without its client listener' >&2
+  exit 1
+fi
 
 node_logs=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \

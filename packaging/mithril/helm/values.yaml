@@ -32,9 +32,11 @@ control:
   statePersistentVolumeClaim: mithril-control-state
   grpcPort: 8443
   nodeSelector: {}
-  administrativeExec:
+  client:
     enabled: false
     port: 9444
+  administrativeExec:
+    enabled: false
     webhookToken: ""
     webhookCABundle: ""
   admission:

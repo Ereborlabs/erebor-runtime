@@ -1,4 +1,7 @@
 {{- if and .Values.control.enabled .Values.control.administrativeExec.enabled }}
+{{- if not .Values.control.client.enabled }}
+{{- fail "administrative exec requires control.client.enabled" }}
+{{- end }}
 {{- $token := required "control.administrativeExec.webhookToken is required" .Values.control.administrativeExec.webhookToken }}
 {{- $ca := required "control.administrativeExec.webhookCABundle is required" .Values.control.administrativeExec.webhookCABundle }}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -60,7 +63,7 @@ webhooks:
       service:
         namespace: {{ .Release.Namespace }}
         name: mithril-control
-        port: {{ .Values.control.administrativeExec.port }}
+        port: {{ .Values.control.client.port }}
         path: /kubernetes/{{ $token }}/admit
       caBundle: {{ $ca | quote }}
     matchConditions:
@@ -86,7 +89,7 @@ stringData:
       - name: mithril
         cluster:
           certificate-authority-data: {{ $ca }}
-          server: https://mithril-control.{{ .Release.Namespace }}.svc:{{ .Values.control.administrativeExec.port }}/kubernetes/{{ $token }}/authenticate
+          server: https://mithril-control.{{ .Release.Namespace }}.svc:{{ .Values.control.client.port }}/kubernetes/{{ $token }}/authenticate
     contexts:
       - name: mithril
         context:

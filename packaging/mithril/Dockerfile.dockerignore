@@ -5,3 +5,9 @@
 !bpf/**
 !crates
 !crates/**
+!ui
+!ui/mithril-console
+!ui/mithril-console/**
+ui/mithril-console/node_modules
+ui/mithril-console/dist
+ui/mithril-console/src/generated

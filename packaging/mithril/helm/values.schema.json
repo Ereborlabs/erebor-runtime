@@ -96,6 +96,7 @@
         "statePersistentVolumeClaim",
         "grpcPort",
         "nodeSelector",
+        "client",
         "administrativeExec",
         "admission"
       ],
@@ -113,18 +114,25 @@
         "statePersistentVolumeClaim": {"type": "string", "minLength": 1},
         "grpcPort": {"type": "integer", "minimum": 1, "maximum": 65535},
         "nodeSelector": {"type": "object"},
+        "client": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "port"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+          }
+        },
         "administrativeExec": {
           "type": "object",
           "additionalProperties": false,
           "required": [
             "enabled",
-            "port",
             "webhookToken",
             "webhookCABundle"
           ],
           "properties": {
             "enabled": {"type": "boolean"},
-            "port": {"type": "integer", "minimum": 1, "maximum": 65535},
             "webhookToken": {"type": "string"},
             "webhookCABundle": {"type": "string"}
           }
