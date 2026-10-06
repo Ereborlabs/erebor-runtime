@@ -771,9 +771,10 @@ impl ClientFixture {
         let exit = trace.end().await?;
         if terminal["frame"]["payload"]["Terminal"]["reason"] != "Completed"
             || terminal["frame"]["payload"]["Terminal"]["cleanup"] != "Unknown"
+            || terminal["frame"]["payload"]["Terminal"]["output_incomplete"] != false
             || result["frame"]["payload"]["Result"]["complete"] != true
             || result["frame"]["payload"]["Result"]["cleanup_complete"] != false
-            || result["frame"]["payload"]["Result"]["output_incomplete"] != true
+            || result["frame"]["payload"]["Result"]["output_incomplete"] != false
             || result["frame"]["payload"]["Result"]["missing_targets"] != json!([])
             || exit != Some(4)
         {
