@@ -99,7 +99,7 @@ Initiating CLI receives Ctrl-C
   -> Node's independent deadline still bounds execution
 ```
 
-Status: **Not done**.
+Status: **Done**.
 
 ## Scope, owners, and changes
 
@@ -271,13 +271,15 @@ stream does not pass.
 
 ## Implementation result
 
-Status: **Not done**. Implementation uses the primary `main` checkout.
+Status: **Done**. Implementation uses the primary `main` checkout.
 The shared TLS listener, typed administrative migration, native CLI and
 generated browser client are implemented. The investigation login membership
 check remains required. Native and live-browser checks pass at their recorded
-source revisions. One physical run fails before capture. The diagnostic rerun
-passes with the same failed-run images; the cause remains unknown. The later
-release images are not qualified. Do not enable public SQL from this partial result.
+source revisions. The current release images pass the paired capture case and
+the migrated administrative approval case. An earlier startup failure remains
+unexplained. The final Rust procedure passes at `6cb2de82` after the last
+Rust edit. Performance remains **UNQUALIFIED**. Deployment diagnostics stay
+disabled.
 
 The data crate changes use the closed SQL binder, tenant-selected input and
 current-authority checks for query and follow. The approved rewrite removes
@@ -408,21 +410,25 @@ browser connection or capture.
 
 ### Current client qualification
 
-Production implementation source: `878de63e`. Diagnostic source: `13816cbb`.
-Status: **Not done**. The remaining gate is
-physical qualification. Shared listener, typed administrative migration,
+Production implementation source: `878de63e`. Qualification source: `6cb2de82`.
+Status: **Done**. The final Rust procedure returns zero at this source.
+Shared listener, typed administrative migration,
 in-process SQL, asynchronous follow, CLI and live console checks pass.
 The login membership check remains required. Administrative approval remains
 separate from the tenant investigate permission.
 
 | Check | Result on 2026-10-06 |
 | --- | --- |
-| Final Rust procedure | PASS at `13816cbb`. Formatting, workspace check, all-target/all-feature clippy and workspace tests pass. The top-level suites report 1,616 passed, zero failed and 545 ignored. Data: 247; shared trace: 23; Control: 205; Mithril e2e: 165; CLI: 53. Ignored cases are not passes. |
-| Built native client | PASS. All ten receipt checks pass with the rebuilt CLI and fixture. Natural completion preserves complete output and unknown cleanup. Cancellation and viewer interruption remain distinct. This fixture does not prove native BPF cleanup. |
-| UI and live browser | PASS. Type check, production build, 23 unit tests, 24 layout/accessibility tests and one live Control test pass. Non-member login returns 403 without a session. Streaming, reconnect, CSRF and quiet revocation pass. No page or content-security-policy error occurs. |
-| Helm and release images | PASS. Existing lint/template checks pass. Control, Node and client images build. Read-only, network-disabled startup and native-library checks pass. Control and client keep UID 65532. Console assets are present. No image was imported into the VM in this refresh. |
+| Final Rust procedure | PASS at `6cb2de82`. Format check, workspace check, all-feature Clippy with warnings denied, and all-target, all-feature tests return zero. Across 77 top-level suites, 1,617 tests pass, zero fail and 545 are ignored. Ignored cases are not passes. |
+| Built native client | PASS at `6cb2de82`. All ten receipt checks pass with the current CLI and fixture. Natural completion preserves complete output and unknown cleanup, with exit 4. Cancellation and viewer interruption remain distinct. This fixture does not prove native BPF cleanup. |
+| UI and live browser | PASS. Type check, production build, 23 unit tests, 24 layout/accessibility tests and one live Control test pass. The current live case proves timer-only COUNT expiry and keyboard submit/Stop. Non-member login, streaming, reconnect, CSRF and quiet revocation pass. No page or content-security-policy error occurs. |
+| Helm and release images | PASS. Existing lint/template checks pass. Control, Node and client images build. Read-only, network-disabled startup and native-library checks pass. Control and client keep UID 65532. Console assets are present. The current images are imported into the owned VM. |
 | Physical client failure at the final build | FAIL. Three lightweight prerequisites pass. Python startup fails before capture with the error recorded above. The cause is unknown. No capture receipt exists for that run. |
 | Protected-start diagnostic rerun | PASS. The same failed-run production images and pinned actor complete the case in 203.23 seconds. Both captures report Verified cleanup. This rerun does not establish the earlier failure cause. |
+| Current-image physical capture | PASS. The three lightweight prerequisites and the physical case pass. The harness returns zero after receipt checks and teardown. The physical case takes 205.51 seconds. Both captures report Verified cleanup. Enforcement resources remain unchanged. |
+| Migrated administrative approval | PASS. The cluster-free owner case passes one test. The existing Kubernetes case passes one test in 100.49 seconds on the current images. OIDC, typed approval, missing-CSRF rejection, separate activation/poll tokens, one-use delivery and Kubernetes exec decisions pass. |
+| Query task panic | PASS. Sixteen focused client owner tests pass, including `query_client_panic`. The test proves typed failure, reservation release and a subsequent query on the same owner. No production panic hook exists. |
+| Terminal-agent interaction | PASS. One built SQL-follow command emits metadata, replacement rows and a checkpoint. The agent polls the same terminal handle; the command exits zero. The fixture then exits zero. This interaction does not create a monitoring job. |
 | Performance | UNQUALIFIED. No new performance test or benchmark ran. Diagnostic deployment remains disabled. |
 
 The final Rust command is:
@@ -433,8 +439,11 @@ CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
   bash .github/scripts/verify-rust-ci.sh
 ```
 
-Read `/tmp/araphor-startup-rust-ci.log`. This procedure returns exit zero after
-the last Rust edit. Commit `13816cbb` contains that Rust source. The earlier
+Read `/tmp/araphor-client-completion-ci.log` for the current procedure.
+The data crate passes 248 tests. The shared observability crate passes 23
+tests. The top-level counts exclude nested recovery subprocess summaries.
+The earlier `/tmp/araphor-startup-rust-ci.log` returns exit zero at
+`13816cbb`, before the later qualification edits. The earlier
 `/tmp/araphor-client-final-rust-ci.log` covers implementation commit `878de63e`.
 The recovery test now includes the approved `selection` and `finding_reference`
 fields. Its source-copy exclusion, round-trip and binding checks remain.
@@ -444,23 +453,23 @@ The native command is:
 
 ```sh
 target/debug/mithril-observability-test --case query-trace-client \
-  --output-directory /tmp/araphor-client-final-native.KjAbrVW6 \
+  --output-directory /tmp/araphor-client-count-native.Yq0erazU \
   --client-executable /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/araphor
 ```
 
 The receipt directory must be empty before this command starts. Keep the
 command log outside that directory. Read `result.json` in the named directory
-and `/tmp/araphor-client-final-native.log`. The receipt declares
+and `/tmp/araphor-client-count-native.log`. The receipt declares
 `sql_execution: in-process`, `physical: false` and `performance_claim: false`.
-The committed `observability::client::tests::observability_cli_client` wrapper
-also passes one enabled test with `ARAPHOR_CLI` set to this rebuilt CLI.
+The earlier committed `observability::client::tests::observability_cli_client`
+wrapper passes one enabled test at `878de63e` with `ARAPHOR_CLI` set to that CLI.
 Read `/tmp/araphor-client-final-native-wrapper.log`. Its command uses
 `cargo test --workspace --all-targets --all-features` with that exact test name
 and `-- --exact --ignored`. Other filtered test binaries do not count as proof.
-The rebuilt CLI SHA-256 is
-`99549b36f6a4b6e1f325af54950d49666858af4cf5484bf421ed552b175c3349`.
-The rebuilt fixture SHA-256 is
-`57f523ab2753288d9c36100638dd9716dcea0ae795c723ad90477cec836f1c27`.
+The current CLI SHA-256 is
+`e839ca4800a4fb354b888a2e016da808b6a0f4d1751d90c13de062df22200d06`.
+The current fixture SHA-256 is
+`fed400e04c972e24a9580e7d84977da3b61ff1eec97eb59212fb12ce154d651b`.
 These hashes identify qualification artifacts; the product does not calculate
 query or result hashes.
 
@@ -470,14 +479,62 @@ The UI commands are `npm run check`, `npm run test`, `npm run build` and
 
 ```sh
 ARAPHOR_CLIENT_FIXTURE=/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/mithril-observability-test \
-  npm run test:control -- --output=/tmp/araphor-client-final-browser
+  npm run test:control -- --output=/tmp/araphor-browser-window-keyboard.eccMgKVa/results-final
 ```
 
-Read `/tmp/araphor-client-final-browser.log`. The browser uses built assets,
+Read `/tmp/araphor-browser-window-keyboard.eccMgKVa/control-browser-final.log`.
+The current live case passes one test in 20.7 seconds. The browser uses built assets,
 generated gRPC-Web and real TLS/OIDC fixture endpoints. The browser test does
 not mock page responses or disable HTTPS or content-security-policy checks.
 Fixture shutdown returns zero. Production build warnings from `google-protobuf`
 and chunk size remain explicit; the live test reports no policy error.
+
+The browser sends one acknowledged raw event before capture. COUNT changes
+from 1 to 0 without a new commit. The displayed read revision stays unchanged,
+and the same gRPC-Web request stays open. Tab, Enter and Space operate SQL and
+trace submit/Stop controls. The list reporter does not retain exact timer
+values on success. The native receipt separately records advancing server
+evaluation time at unchanged read revision 2. Retained cursor expiry runs
+through native TLS `WatchTrace`; `observability_cli_exit_codes` checks CLI
+exit 4 for `CursorExpired`. Do not describe that cursor check as a launched
+CLI command.
+
+The terminal-agent command is:
+
+```sh
+target/debug/araphor --profile /tmp/araphor-agent-terminal.rtH304SL/client.json \
+  --output jsonl sql 'SELECT count(*) AS count FROM catalog' \
+  --follow --duration 5s
+```
+
+Read `/tmp/araphor-agent-terminal.rtH304SL/agent-sql-follow.jsonl`. The agent
+uses the normal terminal execution handle and polls that same handle.
+The local read duration ends after a complete checkpoint. No server terminal
+frame is retained for this interaction; this result is not capture completion.
+
+The physical command uses `harness/observability/pods.sh`, the current
+workspace test binary, `--test-admission` and the checked private runtime.
+Node and Control tags are `20261006-verified-close`. Their image IDs are
+`93bff57290eab691ac9dafe1bb2da6fe0e4fc133d7c07d3c91727c137ba5a5e2`
+and `c0590583166696cd9d872ed4432b6d98b534a7000ce2668ca720e4a06c33f0b2`.
+The actor uses the pinned Python digest recorded below. Read
+`/tmp/araphor-release-pods.9KWhYNOX/result.json` and its four case logs.
+After the SQL error, output sequence advances from 2 to 3, read revision from
+19 to 21 and output bytes from 85 to 134. The Node acknowledges that output.
+The receipt proves no process isolation or native query interruption.
+
+The migrated approval case is
+`effect::admin_exec::approved_exec_consumes_once::identity_kubernetes`.
+Read `/tmp/araphor-admin-release-light.log` and
+`/tmp/araphor-admin-release-physical.log`. The case uses the same current
+Node, Control and actor images. Both physical fixtures remove their Pods.
+They do not change enforcement configuration or enable deployment diagnostics.
+
+Earlier qualification attempts are not passes. One browser attempt reaches
+the unchanged filesystem reserve; another uses an unsupported moving-clock
+projection. One native attempt reaches the query deadline during concurrent
+verification. The unchanged standalone native case passes. No reserve,
+deadline, authorization or production SQL rule changes for these reruns.
 
 The packaging command is `bash packaging/mithril/helm/tests/verify.sh`.
 Read `/tmp/araphor-client-final-helm.log` and the `verified-close-*` build and
@@ -536,9 +593,9 @@ socket. Its bounded snapshots do not prove the absence of an earlier denial.
 No Node, kernel, policy or authorization code changes in this investigation.
 A mount-cache failure is a candidate cause, not a result. A matching denied
 event must identify its reason and `operation_argument` before an enforcement
-fix is selected. Complete client qualification remains **Not done**. The
-earlier failure remains unexplained, and this diagnostic run does not qualify
-the later release images. Performance remains **UNQUALIFIED**.
+fix is selected. The earlier failure remains unexplained. This diagnostic
+run alone does not qualify the later release images. The separate current-image
+result is recorded above. Performance remains **UNQUALIFIED**.
 
 ## Stop point
 

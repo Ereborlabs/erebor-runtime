@@ -414,6 +414,13 @@ for the current workspace checks, five paired native routes, source and
 artifact identities, and limits. The zero-increase performance gate is not
 passed. Deployment diagnostics stay disabled.
 
+Phase 3 is **Done** for CLI, API and console at qualification source
+`6cb2de82`. Read its
+[current result](phase-3-cli-api-and-console.md#current-client-qualification)
+for native, browser, paired physical, packaging and final workspace checks.
+Performance remains **UNQUALIFIED**. The earlier protected-start failure
+cause remains unknown; the current passing cases do not identify that cause.
+
 The initial recipe set is syscall errors and failed file opens. Connection
 outcomes and latency follow only with explicit asynchronous/entry-return
 semantics and paired tests. Stacks and selected uprobes/USDT are later recipe

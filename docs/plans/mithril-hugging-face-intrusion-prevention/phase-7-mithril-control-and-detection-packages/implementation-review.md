@@ -23,9 +23,10 @@ proof are implemented. Default Control startup selects AnalysisStore for data
 and keeps ControlStore for policy authority.
 Diagnostic contracts, execution, transport, and projection are implemented.
 Public SQL, trace CLI/API and the shared client listener are implemented.
-Native and live-browser checks pass at the recorded source revisions. Complete
-client qualification remains **Not done**. A diagnostic physical rerun passes,
-but the earlier startup failure is unexplained and later images are unqualified.
+Native, live-browser and current-image physical checks pass at the recorded
+source revisions. Complete client qualification is **Done** at `6cb2de82`.
+The final Rust procedure returns zero. The earlier startup failure
+remains unexplained; the current passing runs do not identify its cause.
 Assessment submission, classification, proposal
 generation and declarative captures are not delivered by these changes.
 
@@ -186,7 +187,7 @@ The intended result is the
 [public query boundary](../../araphor-observability/phase-3-cli-api-and-console.md#query-boundary-before-client-access).
 The data owner accepts client SQL only after admission and tenant checks. Public
 transport, CLI and console code are present. Their complete end-to-end
-qualification is **Not done**. Query execution
+qualification is **Done** at `6cb2de82`. Query execution
 uses the existing Tokio runtime. No query process or new BPF program is part
 of this boundary.
 
@@ -2828,7 +2829,7 @@ future owner exists. UI code and the console-only plan family are excluded.
 | [engine design](engine-design.md), [intelligence design](local-intelligence.md), [console/API contract](console-and-api.md) | Specify one shared context, assessment, query, and governed-action system. These non-UI contracts remain in scope. Model integration and public tool delivery are not implemented by a schema alone. |
 | [research](research-and-demand.md), [verification contract](verification.md) | Record incident-inspired demand, upstream design references, and acceptance requirements. Research is not a claim that upstream runtime code was copied or deployed. |
 | [proposal plan](phase-7-6-methods-and-preview.md), [classification plan](phase-7-7-agent-investigation-and-classification.md), [publication plan](phase-7-8-console-and-publication.md), [final qualification plan](phase-7-10-qualification.md) | Future Discovery work. No production proposal generator, classifier/model runner, assessment publication API, or new response authority exists in this branch. Console-only implementation is excluded from this guide. |
-| [CLI/API plan](../../araphor-observability/phase-3-cli-api-and-console.md), [declarative capture plan](../../araphor-observability/phase-4-declarative-captures.md) | `araphor sql`, `araphor trace` and shared client gRPC are implemented. Complete qualification remains Not done. The optional Kubernetes Trace resource remains future work. |
+| [CLI/API plan](../../araphor-observability/phase-3-cli-api-and-console.md), [declarative capture plan](../../araphor-observability/phase-4-declarative-captures.md) | `araphor sql`, `araphor trace` and shared client gRPC are implemented. Native, browser and current-image physical checks pass. The final Rust procedure passes at `6cb2de82`. The optional Kubernetes Trace resource remains future work. |
 | [Control/detection plan](README.md), [distributed causality plan](../phase-8-kubernetes-distributed-causality.md) | Plan amendments require later detection and graph owners to reuse shared storage and owner-qualified references. These amendments do not implement those owners. |
 | [response plan](../phase-9-local-and-distributed-response.md), [provider plan](../phase-10-provider-connectors-and-recovery.md), [installation/conformance plan](../phase-11-production-installation-and-final-conformance.md) | Plan amendments keep approval, physical response, provider evidence, recovery, and deployment proof distinct. A diagnostic trace cannot substitute for those results. |
 
@@ -4066,7 +4067,8 @@ public API, SQL worker, CRD, remote deployment or next-phase implementation.
 
 ### Shared client verification
 
-This guide's client reading route covers implementation commit `878de63e`.
+This guide's client reading route covers implementation commit `878de63e`
+and qualification commit `6cb2de82`.
 The shared TLS listener, typed administrative methods, in-process query/follow
 owner and native client are implemented. Investigation login retains the
 membership check. Administrative approval remains a separate authority.
@@ -4083,15 +4085,64 @@ Read the
 [current qualification record](../../araphor-observability/phase-3-cli-api-and-console.md#current-client-qualification)
 for commands, artifact identities, versions and logs.
 
-Complete client qualification is **Not done**. One physical case fails
-before capture. Python cannot read `/usr/local/lib/python3.13/encodings/aliases.py`
-at startup. The cause is unknown, and that run has no capture receipt.
-The approved diagnostic rerun passes with the same failed-run production
-images. This result does not explain the failure or qualify the later release
-images. No Node, kernel, policy or authorization change is part of the
+Complete client qualification is **Done** at `6cb2de82`. The final format
+check, workspace check, all-feature Clippy with warnings denied, and
+all-target, all-feature tests return zero. Across 77 top-level suites,
+1,617 tests pass, zero fail and 545 are ignored. These counts exclude nested
+recovery subprocess summaries. Read `/tmp/araphor-client-completion-ci.log`.
+Current release images pass the paired capture case and the migrated
+administrative approval case. The earlier Python startup failure has no capture
+receipt and remains unexplained. The current results do not establish its
+cause. No Node, kernel, policy or authorization change is part of the
 investigation. Performance remains
 **UNQUALIFIED**. Declarative capture, remote deployment, assessment and model
 integration are not included in this client result.
+
+### Final client proof additions
+
+Qualification source: `6cb2de82`. No production owner or transport changes
+follow implementation commit `878de63e`.
+
+[QueryOwner::query_client](../../../../crates/araphor-data/src/query/mod.rs) The caller passes the initial authorization check and reserves input, output and evaluation capacity.<br>
+-> [QueryOwner::evaluate_reserved](../../../../crates/araphor-data/src/query/mod.rs) The test authorization check panics inside the existing Tokio blocking task.<br>
+-> [QueryOwner::evaluate_reserved](../../../../crates/araphor-data/src/query/mod.rs) Tokio returns a panic JoinError; the task drops its reservation.<br>
+-> [QueryErrorCode::from](../../../../crates/araphor-data/src/query/frame.rs) The owner maps the error to EvaluationFailed.<br>
+-> [query_client_panic](../../../../crates/araphor-data/src/query/client_tests.rs) The test reserves full capacity again and completes a subsequent query on the same owner.
+
+The focused client filter passes 16 tests. The panic test does not add a
+production hook. The panic occurs before extraction. This test does not prove
+Control survival after a native process abort.
+
+[ClientFixture::browser](../../../../crates/mithril-e2e/src/observability/client.rs) The browser requests one fresh event before capture.<br>
+-> [CaptureFixture::run](../../../../crates/mithril-e2e/src/observability/client.rs) The existing Node connection sends that event and receives its exact durable ACK.<br>
+-> [Control browser case](../../../../ui/mithril-console/e2e/control-client.spec.ts) Keyboard input starts COUNT follow through the generated gRPC-Web client.<br>
+-> [QueryFollow::run_loop](../../../../crates/araphor-data/src/query/follow.rs) The supported time window expires without a new commit.<br>
+-> [Control browser case](../../../../ui/mithril-console/e2e/control-client.spec.ts) COUNT changes from 1 to 0 at the same read revision while the same request remains open.<br>
+-> [Control browser case](../../../../ui/mithril-console/e2e/control-client.spec.ts) Keyboard input stops the SQL reader and operates trace submit/Stop controls.
+
+The fixture reuses its one bounded capture command channel. It adds no
+production job, owner or subscription store. The current browser case passes
+one enabled test in 20.7 seconds. The exact timer values are not retained by
+the list reporter. The native receipt separately records server evaluation
+time advancement at unchanged revision 2. Cursor expiry uses native TLS
+WatchTrace; the CLI unit test proves exit 4 for that error. These are separate
+proofs, not one launched CLI-expiry command.
+
+Read the [current result](../../araphor-observability/phase-3-cli-api-and-console.md#current-client-qualification)
+for exact commands, artifact identities and limits. The current native case
+passes all ten receipt checks. The terminal-agent case streams metadata,
+replacement rows and a complete checkpoint through one CLI command and one
+terminal handle. Its local duration ends with exit zero; this is not capture
+completion.
+
+The current-image Pod harness passes the three lightweight checks, physical
+case, receipt validation and teardown. Both captures report Verified cleanup.
+After the native SQL error, fresh output is committed and acknowledged.
+Enforcement resources remain unchanged. The migrated Kubernetes approval case
+also passes. This case uses the shared listener for OIDC and typed approval,
+checks missing CSRF, rejects the activation token as a poll token, and checks
+one-use credential delivery and the physical exec decision. No performance,
+remote deployment or declarative capture result follows from these checks.
 
 ### Startup failure evidence
 
