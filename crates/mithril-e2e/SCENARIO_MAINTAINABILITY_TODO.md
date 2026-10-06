@@ -2643,6 +2643,13 @@ test does not close a row when its physical condition or an assertion changed.
     and test registrations. With those copies, Node initialized in 26 seconds.
     No scenario, production code, assertion, or readiness limit changed.
   - [ ] Pass real Kubernetes and commit its registration.
+    The exact case failed in 203.15 seconds before actor startup. Node rejected
+    `/sys/fs/bpf/mithril-pid-1546442-414106001` because it contained stale state.
+    The cause of that state is not yet proved. The log is
+    `/var/tmp/mithril-exception-overlap-kube-20261006.log` in the retained K3s VM.
+    Reproduce the same startup condition with a real production Node in
+    lightweight before an implementation change or another Kubernetes run.
+    Keep the old overlap check until Kubernetes passes. Production is unchanged.
   - [ ] Remove only the matched overlap request and
     `exception_overlap_rejected` result field after all three cases pass.
     Keep adjacent consumption, expiry, deletion, and RBAC checks.
