@@ -2151,6 +2151,15 @@ test does not close a row when its physical condition or an assertion changed.
       The 12 focused physical cases passed separately as recorded above.
       Remove the old status-only fixture test only because the real fork
       return and `EACCES` checks now pass on all three platforms.
+  - [ ] Replace the remaining moved-root cleanup case with the existing
+    `clone_cgroup.py` actor and `ProcessFixture`. Keep Node-first setup,
+    a live held root, physical cgroup movement, fail-closed identity, and
+    bounded normal cleanup. Use the existing single stop call. Check root
+    and launcher removal and keep the initial actor alive until its own stop.
+    Keep the test below 100 lines. Pass Host, direct `runc`, and Kubernetes
+    before removing the old case and its unused no-namespace constructor.
+    Keep namespace-exec coverage. Add no actor, fixture, Platform, policy, or
+    production change.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
   - [x] Remove only the matching native-child first-effect block and fields
