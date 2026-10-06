@@ -1152,6 +1152,83 @@ async fn query_client_in_process() -> TestResult {
 }
 
 #[tokio::test]
+async fn query_client_panic() -> TestResult {
+    struct PanicAuthority {
+        inner: Arc<Authority>,
+        checks: AtomicUsize,
+    }
+
+    impl QueryAuthorization for PanicAuthority {
+        fn check(&self, grant: &QueryGrant) -> Result<()> {
+            self.inner.check(grant)?;
+            assert_eq!(
+                self.checks.fetch_add(1, Ordering::SeqCst),
+                0,
+                "query task panic fixture"
+            );
+            Ok(())
+        }
+
+        fn changes(&self) -> watch::Receiver<u64> {
+            self.inner.changes()
+        }
+
+        fn expires_ns(&self) -> Option<u64> {
+            self.inner.expires_ns()
+        }
+    }
+
+    let fixture = ClientFixture::bounded()?;
+    fixture.commit(1, 1, 7, 4)?;
+    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
+    let before = fixture.data.store.meta()?;
+    let authority = Arc::new(PanicAuthority {
+        inner: fixture.authority.clone(),
+        checks: AtomicUsize::new(0),
+    });
+    let error = tokio::time::timeout(
+        WAIT,
+        fixture.owner.query_client(
+            plan.clone(),
+            authority.clone(),
+            100,
+            Arc::new(AnalysisReadControl::default()),
+        ),
+    )
+    .await?
+    .err()
+    .ok_or("query task panic did not return an error")?;
+    assert!(matches!(
+        &error,
+        crate::Error::QueryExecution { source, .. } if source.is_panic()
+    ));
+    assert_eq!(
+        QueryErrorCode::from(&error),
+        QueryErrorCode::EvaluationFailed
+    );
+    assert_eq!(authority.checks.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.input_count()?, 0);
+    assert_eq!(fixture.data.store.meta()?, before);
+    drop(
+        fixture
+            .owner
+            .budget
+            .evaluate(fixture.grant.selection.tenant_id)?,
+    );
+    drop(
+        fixture
+            .owner
+            .budget
+            .output(fixture.owner.limits.output_bytes)?,
+    );
+    let result = fixture.query(&plan).await?;
+    assert_eq!(result.rows, vec![vec![Value::BigInt(1)]]);
+    drop(result);
+    fixture.inputs(false)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_client_scheduler() -> TestResult {
     let fixture = ClientFixture::bounded()?;
     fixture.commit(1, 1, 7, 4)?;
