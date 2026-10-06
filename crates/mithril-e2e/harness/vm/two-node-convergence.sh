@@ -3844,18 +3844,6 @@ for _attempt in {1..120}; do
   sleep 1
 done
 
-excess=$work_a/exception-excess.yaml
-sed \
-  -e '0,/name: temporary-file-access/s//name: excessive-file-access/' \
-  -e 's/requestedUses: 1/requestedUses: 2/' \
-  "$exception" >"$excess"
-"$provider" put "$vm_a" "$excess" "$remote_a/exception-excess.yaml"
-remote_kubectl --as="$exception_subject" create \
-  -f "$remote_a/exception-excess.yaml" >/dev/null
-wait_exception_state excessive-file-access Failed
-remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
-  workloadprotectionexception excessive-file-access --wait=true --timeout=120s >/dev/null
-
 for node in "$vm_a" "$vm_b"; do
   "$provider" run "$node" sudo mv -- \
     "$runtime_hook_socket" "$held_runtime_socket"
@@ -4310,7 +4298,6 @@ jq -n \
     exception_target_retired: true,
     exception_recreated_with_new_uid: true,
     exception_overlap_rejected: true,
-    exception_excess_bound_rejected: true,
     desired_inventory_cleaned: true,
     deleted_root_not_inspected: true,
     old_root_replay_refused: true,

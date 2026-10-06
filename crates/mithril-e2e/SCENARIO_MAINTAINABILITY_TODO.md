@@ -2582,7 +2582,7 @@ test does not close a row when its physical condition or an assertion changed.
     check incorrectly required removal of the empty output parent. Source
     review confirmed that infrastructure owns that parent. The exact owned
     cleanup check then passed without a test or implementation change.
-  - [ ] Remove only the matched shell request and
+  - [x] Remove only the matched shell request and
     `exception_excess_bound_rejected` result field after all three cases pass.
     Keep the exception wait helper and all other exception and RBAC checks.
   - [ ] Pass the final repository Rust CI procedure after the last source
@@ -2610,7 +2610,9 @@ test does not close a row when its physical condition or an assertion changed.
   Kubernetes uses the `exception_kubernetes` suffix and
   `/var/tmp/mithril-exception-limit-kube-20261006.log` in the retained K3s VM.
   Source review matches baseline `95775f48`. All three cases passed. The
-  shell check is unchanged until its separate retirement commit.
+  matched 11-line shell request and its result flag are removed. The exception
+  wait helper and all other exception and RBAC checks remain. Shell syntax,
+  VM harness behavior checks, formatting, and diff checks passed.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
   - [ ] Repair the old Observe probe's baseline setup. The current VM run
