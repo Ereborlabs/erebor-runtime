@@ -8568,6 +8568,22 @@ setup, production actions, assertions, and focused test.
       with a separate hostname bind mount in direct runc. Report a failed
       read errno in the shared actor process name. Do not change a security
       assertion, readiness limit, Platform API, or production implementation.
+      The hostname-only runc case passed in 53.47 seconds. That mount alone
+      does not reproduce the failure. Live containerd roots use OverlayFS.
+      The owned OverlayFS case reached all read and restart assertions.
+      It failed cleanup because the diagnostic mount kept its root busy.
+      The mount was removed. The 49 MiB of owned diagnostic data was
+      removed after mount and open-file checks. Its log remains. Neither
+      physical input reproduces the Kubernetes read failure. The temporary
+      hostname mount was removed from the runc fixture. The test is 97
+      lines after it adds the public observation to a failed read wait.
+      All identity and lifecycle assertions remain unchanged. Kubernetes
+      has not been rerun. Next compare the installed file rules and the
+      mount namespace of the Node and external actor.
+      The legacy case starts its external actor with direct CRI exec in
+      the container. The shared case moves a Host actor into that cgroup
+      but does not enter its mount namespace. Compare this physical setup
+      before a policy or production change. It is not a proven cause yet.
     - [ ] Compare the four legacy Node-specific fields and restart block
       with baseline `95775f48`, then remove only their matched checks.
       Keep label-loss setup and its recovered snapshot while the separate
