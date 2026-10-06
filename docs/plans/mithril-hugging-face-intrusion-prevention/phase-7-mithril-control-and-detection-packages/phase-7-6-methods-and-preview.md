@@ -16,7 +16,7 @@ active policy or creates an authoritative incident finding.
 ```text
 Configured discovery method evaluates a pinned context
   -> DiscoveryOwner validates the reviewed method, parameters and input revision
-  -> QueryOwner evaluates its admitted SQL and returns a receipt without mutation
+  -> QueryOwner evaluates its admitted SQL and returns read metadata without mutation
   -> DiscoveryOwner checks coverage and records support, counterevidence or Unknown
   -> AnalysisStore commits the method result and its exact input references
 
@@ -138,7 +138,7 @@ Observability 3 can already expose query/trace without these algorithms.
 Add `discovery_proposal_` tests for each transform and the dynamic-exception
 counterexample and `discovery_detection_` tests for the method catalog. Add
 lightweight cases `query-follow`, `detection-context`, `proposal-preview`, and
-`poisoned-window`. Query tests cover a hidden-column predicate, a foreign-row
+`poisoned-window`. Query tests cover available-column predicates, a foreign-tenant row
 aggregate, external table functions, expensive joins, output limits, late
 coverage, empty filtered batches, cursor replay, expiry, and grant revocation.
 The case output must include source/spec digests, old/new dispositions,
@@ -155,7 +155,7 @@ cargo run -p mithril-e2e --bin mithril_discovery_test -- \
 ## Exclusions and stop point
 
 Status becomes Done only after unit tests and the lightweight cases pass with
-nonzero counts and retained result digests. Run the query-follow case again
+nonzero counts, retained result bodies and exact revisions. Run the query-follow case again
 when method views change query dependencies.
 
 No model runtime, detector installation, live source mutation, automatic rollback, or external

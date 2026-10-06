@@ -42,6 +42,9 @@ values. Raw frames retain their CRC32C checks. Current signatures, approvals,
 executable checks, and replay bindings retain their content checks until one
 approved contract replaces each binding. Their later removal must replace
 the complete producer and consumer contract; it must not remove validation.
+Queries use ordinary metadata and unsigned bookmarks, not signatures or
+content hashes. Current tenant investigate permission authorizes SQL and
+supported traces. Policy signatures and signed Node execution leases remain.
 
 ## Implementation flow
 
@@ -87,7 +90,7 @@ replaces a complete bounded query result. It has no public read-job lifecycle.
 | EvidenceIntakeOwner | Existing authenticated source validation and ACK contract | ACK before durable data commit |
 | AnalysisStore | One segment/metadata writer, result/progress transactions, bundle backup and recovery | Change policy/control-state persistence |
 | EvidenceRetentionOwner | Age, quota, required security progress and exact witness checks | Let optional discovery lag pin raw input or stop intake |
-| QueryOwner | SQL admission, scope/disclosure, isolated execution and follow | Mutate policy or attach probes |
+| QueryOwner | SQL admission, tenant-selected input, bounded Tokio execution and follow | Mutate policy or attach probes |
 | DiscoveryOwner | Exact profiles, context, recipes, assessments and proposals | Infer authority from repetition or model labels |
 | GraphAndFindingOwner | Evidence-qualified graph and finding revisions | Infer causality from time or similarity alone |
 | NotificationRouter | Mandatory priority, retries and human receipt deadlines | Let AI silence required escalation |

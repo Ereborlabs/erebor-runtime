@@ -206,9 +206,10 @@ hostile probes belong only in isolated qualification.
 
 ## Data contract
 
-All persistent records have schema version, tenant, immutable ID, revision,
-creation time, producer version, and canonical content digest. Request IDs
-identify retries; content digests identify equal artifacts. Avoid secrets in
+Persistent records use schema version, tenant, exact owner identity, revision,
+creation time and producer version where applicable. Request IDs identify
+retries; retained values determine content equality. Use hashes only at
+the required policy, approval and execution security boundaries. Avoid secrets in
 IDs, logs, metrics, and classifier features.
 
 | Record | Required content |
@@ -223,10 +224,10 @@ IDs, logs, metrics, and classifier features.
 | `ContextDocument` | Tenant, kind, source/owner, revision, validity interval, sensitivity, trust class, payload reference, and approval for use. Supported kinds: runbook, workload ownership, deployment change, reviewed assessment, and supplied threat reference. |
 | `ContextPacket` | Question/trigger; authorized scope and purpose; frozen evidence/catalog revisions; entity/lifetime facts; policy and source health; rule/runbook references; relevant reviewed history; conflicts, missing facts, and bounded evidence references. Each item retains provenance, freshness, and disclosure class. |
 | `DetectionAssessment` | Method ID/version, typed parameters, input digests, window/order basis, matched/not-matched/unknown result, supporting and contradicting record IDs, coverage, and unsupported predicates. Not an incident graph revision. |
-| `ClassificationAssessment` | Context and method-result digests; taxonomy; activity and security disposition; impact/priority reasons; competing hypotheses; claims with support/refutation references; missing facts; method/model provenance; score semantics and abstention. Human confirmation is a separate revision. |
+| `ClassificationAssessment` | Exact context and method-result IDs/revisions; taxonomy; activity and security disposition; impact/priority reasons; competing hypotheses; claims with support/refutation references; missing facts; method/model provenance; score semantics and abstention. Human confirmation is a separate revision. |
 | `Suggestion` | Kind, exact scope/target revision, rationale claim IDs, typed payload, preconditions, risks, expected effect, validation/test references, required permission, and Draft/Rejected/Validated state. Validation does not authorize execution. |
-| `QueryReceipt` | Principal/export-policy revision; query digest; view/schema version; input manifest/read revision; result digest; limits and coverage. No model execution state. |
-| `AssessmentReport` | API-submitted or imported classification/suggestions; subject/finding and input revisions; cited query receipts/evidence IDs; parent reports; completed/missing checks; client model/version/cost, marked unverified; validation errors. No separate case or agent-run state. |
+| `QueryMetadata` | Schema version; store UUID/epoch; read revision; evaluation instant; selected input; limits and coverage. No query signature, result hash or model execution state. |
+| `AssessmentReport` | API-submitted or imported classification/suggestions; subject/finding and input revisions; cited evidence IDs and read metadata; parent reports; completed/missing checks; client model/version/cost, marked unverified; validation errors. No separate case or agent-run state. |
 | `PreviewArtifact` | Proposal/target/compiler versions; proof kind and execution mode; evaluated key set; per-case old/new disposition; unknown reasons; guardrail failures; valid-work failures; source coverage; context replay manifest. |
 | `TestRequest` | Missing behavior or ambiguity; expected evidence contract; approved fixture ID if one exists; scope; expected resource cost; approval needed. No free-form command execution. |
 | `ReviewDecision` | Reviewer and authorization context; proposal/preview/source/target digests; decision; reason; expiry; independence check; publication precondition. |
@@ -893,14 +894,16 @@ same decoder and adapter. AnalysisStore remains the only segment owner.
 ### One query contract
 
 Use `query(sql, follow=false, cursor?, parameters?, scope?)`. CLI and console
-call the same API at the selected deployment. Caller scope only narrows
-authenticated scope.
+call the same API at the selected deployment. One current tenant
+`investigate` permission allows SQL and supported traces. Caller selection
+narrows input within that tenant. Do not add column, Pod, Node, query or
+trace-specific user permission checks.
 No read-job, subscription-registration, start/status/stop protocol is required.
 
 This public contract is delivered in Observability 3. Phase 7.3 delivers its
 trusted internal evaluator and follow engine only. A trusted plan contains a
 code-owned SQL template and checked typed parameters, not caller SQL. Public
-admission, disclosure, authenticated cursors and asynchronous execution must pass before
+admission, tenant authorization, unsigned bookmark validation and asynchronous execution must pass before
 any client can submit SQL. The earlier offline proof is not that release gate.
 
 | View | Contract |
@@ -920,12 +923,13 @@ client calls to table functions. The owner-created input views use only the
 built-in adapter above.
 LIMIT limits output, not work. Freeze the authorized relation set before binding.
 
-Return schema, rows, read revision, receipt, coverage, owner lag and limits.
+Return schema, rows, read revision, metadata, coverage, owner lag and limits.
 Normal results above 200 rows or 1 MiB have an explicit limited state. Never
-truncate aggregate or join input to make a query fit. A receipt binds principal,
-disclosure revision, SQL/parameters, target snapshot, schema, store identity,
-input revision and result digest. Retain cited receipts with assessments,
-not a durable per-reader job. Expired evidence limits replay.
+truncate aggregate or join input to make a query fit. Do not sign query
+results or calculate query/result hashes. An assessment cites exact retained
+evidence and input revisions. The assessment owner checks those references
+against the store; client metadata is not proof of result content.
+Expired evidence limits replay.
 
 ### SQL-derived input bounds
 
@@ -934,14 +938,14 @@ Use [sqlparser-rs](https://docs.rs/sqlparser/0.63.0/sqlparser/) with
 Phase 7.1 pins a compatible parser/engine pair and tests the admitted subset.
 The parser supplies an AST, not authorization, name binding or a sandbox.
 Observability 3 extends the existing syntax/relation guard with production
-column binding against the authorized schema. The current guard is not that
+column binding against the available static schemas. The current guard is not that
 binder. Phase 7.3 uses declared bounds in reviewed templates, not this public
 SQL admission path.
 Do not build a second SQL parser or a general query optimizer.
 
 The SQL predicate is the source of the time bound. No duplicate window flag
-or separate time argument is required. The optional target scope still narrows
-the caller's grant. For the first extraction optimization, accept one direct
+or separate time argument is required. Optional targets select input within
+the tenant; they do not need another grant. For the first extraction optimization, accept one direct
 time-bearing base relation with an optional alias and top-level WHERE
 conjunctions. Match direct received_at comparisons against typed UTC timestamp
 literals/parameters, BETWEEN, or CURRENT_TIMESTAMP minus a literal integer
@@ -966,14 +970,14 @@ WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '600 seconds'
 GROUP BY operation;
 ```
 
-Extract permitted columns and rows in that recognized lower range, not the
+Extract tenant rows in that recognized lower range, not the
 tenant's complete history. Freeze one UTC evaluation instant for both extraction
-and the evaluator's AST parameter. Bind the original SQL, parameters, inferred bounds,
-binder version and read revision to the receipt. Report any unavailable history.
+and the evaluator's AST parameter. Return the evaluation instant, inferred
+bounds and read revision as metadata. Report any unavailable history.
 Do not apply an event-time filter to the creation date of a referenced policy
 or context record; preserve its exact identity and validity.
 
-The proposed 64-MiB extraction budget applies after safe scope/column/range
+The proposed 64-MiB extraction budget applies after safe tenant/selection/range
 selection. Qualify it with measurements; it is not a DuckDB capacity claim. Reject
 overflow before returning any aggregate. Use existing exact behavior buckets
 for supported historical summaries; do not claim raw-query equivalence for
@@ -1051,9 +1055,13 @@ Consumers deduplicate append rows by store position within the same bound
 query and store epoch. Delivery is at least once, not exactly once. Frames
 do not need a digest or a separate frame ID.
 
-A cursor binds SQL/parameters, target snapshot, current scope, disclosure,
-view version, store UUID/epoch and position. It grants no permission and pins
-no history. Changed bindings reject. An append checkpoint below the tenant
+A bookmark contains schema version, store UUID/epoch, operation, read
+revision and position. It is unsigned. Validate its size, structure, store
+identity and future bounds. It grants no permission and pins no history.
+The client saves SQL, parameters and selection with the bookmark and clears
+the bookmark when these inputs change. The server does not prove that the
+request is unchanged. An edited bookmark can replay or skip currently
+authorized rows; it cannot authorize another tenant. An append checkpoint below the tenant
 replay floor returns gRPC `OUT_OF_RANGE` with authorized expiry information.
 This conservative rejection does not prove a matching record was lost.
 Replacement resumption promises current
@@ -1081,8 +1089,8 @@ revision, completeness state and authorized missing ranges.
 
 | Payload | Required fields and meaning |
 | --- | --- |
-| Metadata | Selected `append` or `replace` operation; authorized column names, types, null meanings and units; query receipt; dependency revisions; row/byte limits; owner readiness. Include the one-second resolution for a moving window. |
-| Append | Ordered rows with their store positions. A row belongs to this frame only after its complete bytes are sent. A retry preserves row positions and the cursor binding. |
+| Metadata | Selected `append` or `replace` operation; available column names, types, null meanings and units; read and dependency revisions; row/byte limits; owner readiness. Include the one-second resolution for a moving window. |
+| Append | Ordered rows with their store positions. A row belongs to this frame only after its complete bytes are sent. A retry preserves row positions and store identity. |
 | Replace | One complete ordered result and row count. The client replaces its prior table only after this frame is complete. An oversized result is an error, not a partial table. |
 | Checkpoint | Opaque resume cursor and last completely scanned store position for append, or the read revision for replace. A nonmatching row can advance an append checkpoint. |
 | Health | Current relation revisions, owner readiness and lag. It has no result rows and does not mark missing evidence complete. |
@@ -1175,13 +1183,15 @@ public SQL access. Phase 7.3 proves trusted evaluation only.
 
 Read-only SQL is not a sandbox. Follow [DuckDB security guidance](https://duckdb.org/docs/current/operations_manual/securing_duckdb/overview).
 QueryOwner uses a maintained parser plus a closed relation/function binder.
-Resolve aliases, nested expressions, CTEs and star expansion against authorized
+Resolve aliases, nested expressions, CTEs and star expansion against available
 schemas. Reject unsupported syntax; do not use regex or a SELECT-prefix test.
 
-Trusted bounded extraction applies tenant, lifetime, row scope and
-field disclosure before evaluation. Hidden fields cannot be used in predicates,
-joins, aggregates or errors. Add only the proven SQL-derived time bounds above.
-Export complete bounded authorized relation batches and needed columns from one
+Trusted bounded extraction applies the authenticated tenant and selected
+sources, contexts and time range before evaluation. All available columns
+can enter predicates, joins and aggregates. For example,
+`SELECT COUNT(*) FROM events WHERE policy_rule_id = 42;` does not need a
+column grant. Add only the proven SQL-derived time bounds above.
+Export complete bounded tenant relation batches from one
 metadata/segment snapshot. Over-limit extraction fails and requests a narrower SQL predicate or
 target scope; do not execute arbitrary client expressions in the persistent DB.
 

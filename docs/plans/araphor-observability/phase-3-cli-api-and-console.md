@@ -16,10 +16,12 @@ the trusted internal engine from 7.3. Do not enable public SQL before both pass.
 
 1. Extend `araphor-data` QueryOwner with client SQL admission. Use the pinned
    `sqlparser` DuckDbDialect and a closed relation/function allowlist. Resolve
-   columns and aliases against the permitted schema; the existing syntax
-   guard alone is not a column-authority check. Freeze current tenant, target,
-   row and field grants before extraction. Hidden fields cannot enter a
-   predicate, join, aggregate or error. Apply only the proved AST time bounds
+   columns and aliases against the available relation schemas. Require one
+   current `investigate` permission for the authenticated tenant. This
+   permission allows SQL reads and any supported trace in that tenant.
+   Do not add separate column, Pod, Node, query or trace permissions.
+   Tenant selection remains mandatory. SQL predicates and optional targets
+   select input; they do not create permission checks. Apply only the proved AST time bounds
    in [engine-design.md](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/engine-design.md#sql-derived-input-bounds).
    Keep unsupported shapes explicit; do not implement a general optimizer.
 2. Run queries inside the host's existing Tokio runtime. Make
@@ -27,7 +29,7 @@ the trusted internal engine from 7.3. Do not enable public SQL before both pass.
    input and output capacity before `spawn_blocking`; DuckDB's synchronous
    calls must not block an asynchronous runtime thread. Use the same evaluator
    and temporary table adapter for trusted and client plans. Register only
-   authorized relations and columns. Pass complete bounded input, not segment
+   available relations with tenant-selected rows. Pass complete bounded input, not segment
    paths or a persistent database connection. Disable external access and
    extension loading. Apply DuckDB memory and thread limits and the existing
    deadline and interrupt owner. Future drop and stream cancellation request
@@ -35,17 +37,24 @@ the trusted internal engine from 7.3. Do not enable public SQL before both pass.
    return. Return query errors and task failures as typed errors. A query
    error or cancellation must leave trace output upload available. Do not
    add a query executable, IPC, namespace setup or AppArmor prerequisite.
-3. Add authenticated query receipts and resume tokens. Recheck current grants
-   before every frame and after waits; authorization loss stops disclosure.
-   Bind the exact query, parameters, scope, schema and store identity. Map
+3. Use ordinary result metadata and an unsigned resume bookmark. Recheck the
+   current tenant permission before every frame and after waits; permission
+   loss stops disclosure. A bookmark contains schema version, store UUID,
+   recovery epoch, operation, read revision and position. Validate size,
+   structure, store identity, future positions and retention bounds. A
+   bookmark grants no access. The client saves the exact SQL, parameters and
+   selection with the bookmark and clears the bookmark when these change.
+   Do not add query signing keys, signed receipts or query/result hashes. Map
    the tenant replay-floor failure to `OUT_OF_RANGE`; it means replay is
    unavailable, not proof that this filter lost a matching row. Keep limits
    in the data crate so the optional remote host uses the same contract.
 
 Frames do not need a separate frame ID or result digest. Append replay uses
-exact row positions under the bound query and store epoch. Replacement output
-is one complete bounded result. Signed query receipts retain their current
-result content binding. Do not calculate a second hash for the frame.
+exact row positions within one query and store epoch. Replacement output
+is one complete bounded result. An edited bookmark can replay or skip rows
+that the current caller can read; it cannot grant access. The server does not
+prove that the SQL or selection is unchanged. Policy signatures and signed
+Control-to-Node execution leases remain required.
 
 `QueryStream` implements `futures::Stream<Item = Result<QueryFrame>>`.
 Committed changes wake follow. An evaluation future returns bounded append
@@ -63,14 +72,14 @@ memory limit. This design does not claim process-level crash containment.
 
 ```text
 Caller starts a CLI command or uses the console
-  -> ClientGrpcOwner authenticates the principal and checks current grants
+  -> ClientGrpcOwner authenticates the principal and checks the tenant investigate permission
   -> query requests go to the active QueryOwner; trace requests go to TraceOwner in Control
   -> owner returns bounded data and explicit quality/limit state
   -> CLI renders output or console updates the same selected scope
 
 Follow receives a committed change
   -> server emits append or complete replace protobuf frames on the same gRPC stream
-  -> owner rechecks scope and disclosure before each frame
+  -> owner rechecks the tenant investigate permission before each frame
   -> client applies the declared operation and saves a complete checkpoint
   -> only a broken connection needs a resumed request
 
@@ -80,7 +89,7 @@ Connection drops or authentication expires
   -> read failure cannot be shown as completed execution
 
 Initiating CLI receives Ctrl-C
-  -> CLI requests cancellation under the caller's trace grant
+  -> CLI requests cancellation under the caller's tenant investigate permission
   -> CLI reads the bounded final result or reports cancellation uncertainty
   -> Node's independent deadline still bounds execution
 ```
@@ -97,11 +106,11 @@ Status: **Not done**.
    port. Reuse extracted OIDC validation, not administrative-exec authority.
    Browser sessions need CSRF metadata and exact origin checks on gRPC-Web
    mutations; CLI service tokens
-   need the dedicated audience, scope, and export grant. Recheck reads after
+   need the dedicated audience and tenant investigate permission. Recheck reads after
    waits. Preserve existing administrative enablement. When the existing
    administrative listener is configured, the shared listener can run while
    query and trace methods remain disabled. Enable those methods only with
-   their own configuration and grants. Enabling admin callbacks does not grant
+   their configuration and the same investigate permission. Enabling admin callbacks does not grant
    query or trace access.
 2. Implement the parent plan's five query/trace RPCs. Use server-streaming
    protobuf frames for one-shot queries, follow and trace output. Implement native gRPC
@@ -133,7 +142,7 @@ Status: **Not done**.
    Automatic submit retries reuse a key; a newly invoked command is a new
    request. Return the accepted trace ID before lengthy output.
 5. Extend `catalog` with authorized targets, query fields, recipe source,
-   parameters, capability status and examples. SQL `--target` narrows allowed
+   parameters, capability status and examples. SQL `--target` narrows tenant
    inputs before evaluation, including joins and aggregates. Use this phase's
    AST-derived SQL time bounds; no duplicate window flag is required.
    Follow declares append or replace semantics from Mithril 7.3.
@@ -185,7 +194,7 @@ Status: **Not done**.
 Pass `OBS-CLI`, `OBS-API`, `OBS-CONSOLE`, and existing `DE-QUERY`, `DE-FOLLOW`,
 `DE-AUTH`, `DE-DISCLOSE` cases through production owners. Test invalid/conflicting
 flags, stdin EOF, source edit after submission, empty output with terminal
-success, missing terminal result, JSON escaping, foreign trace reads, revoked
+success, missing terminal result, JSON escaping, foreign-tenant trace reads, revoked
 token, CSRF, read-only resume, duplicate submit, cursor expiry and slow clients.
 API success must not conceal a partial trace or failed cleanup.
 
@@ -193,8 +202,9 @@ Add `query_admission_` and asynchronous execution tests beside the data owner.
 Compare each accepted SQL bound with full authorized-input evaluation in the
 pinned DuckDB. Cover OR, aliases, CTE reuse, self-joins, outer joins, quoted
 and shadowed names, nulls, timestamp offsets/precision and bound endpoints.
-Reject unsupported moving predicates. Check hidden-column predicates and
-foreign-row counts. Reject nested forbidden functions and file/network/extension
+Reject unsupported moving predicates. Accept predicates and aggregates on all
+available columns, including `policy_rule_id`. Check foreign-tenant row counts.
+Use the same permission for recipe and supported script submission. Reject nested forbidden functions and file/network/extension
 access. Test native SQL errors, task panic, deadlines, future drop and stream
 cancellation. Prove that evaluation capacity remains charged until cleanup.
 With discovery analysis disabled, cause an actual native SQL error during a
@@ -251,26 +261,29 @@ Status: **Not done**. Current changes use primary `main` based on `cec19dd0`.
 The client listener, administrative gRPC migration, CLI and console are not
 implemented. Do not enable public SQL from this partial result.
 
-The data crate contains the closed SQL binder, exact client grants, target
-and field filtering, signed receipts and cursors, and current-authority
-checks for query and follow. The asynchronous execution and standard stream
-change is not qualified. No client listener, administrative gRPC migration,
-CLI or console result is proved by these partial changes.
+The data crate changes use the closed SQL binder, tenant-selected input and
+current-authority checks for query and follow. The approved rewrite removes
+column and target grants, query signatures and result hashes. The
+asynchronous execution and standard stream changes pass the 85 query owner
+tests. All available columns are readable; the `policy_rule_id = 42`
+aggregate passes without a column grant. Foreign-tenant sources reject.
+No client listener, administrative gRPC migration, CLI or console result is
+proved by these partial changes.
+The existing trace owner still uses scoped execution/read grants and custom
+source approval. Replace those user permission checks with the shared tenant
+investigate authority during client integration. Keep signed Node leases,
+source validation, exact target lifetimes, bounds and cleanup checks.
 
 The query-failure trace-upload case must call the production in-process
 QueryOwner, TraceOwner, Node capture and mTLS upload with discovery disabled.
-Its external fixtures supply the backend and target identity. The paired
+Its external fixtures supply the backend and target identity. The lightweight
+`observability_query_upload` case passes: a native SQL conversion error is
+followed by new output, durable ACK, exact replay and reopen checks. The paired
 physical case must keep Control's non-root user and security settings.
 No process-isolation or performance result is required by this query design.
 
-The current rewrite is incomplete. The edit approval check blocked the
-authorized-input projection and the unchanged signed-value encoding move.
-`cargo fmt --all -- --check` fails because `query/value.rs` is absent.
-Scoped formatting and `git diff --check` pass. No current compilation or
-runtime test result is claimed. The earlier full workspace pass covers the
-subprocess source snapshot, not this rewrite.
-
-Asynchronous execution and the final Rust CI procedure remain unqualified. The
+The final Rust CI procedure is in progress. The paired physical client case,
+shared listener, route migration, CLI and console remain unqualified. The
 [implementation review](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/implementation-review.md#public-query-boundary-review)
 links the present owners and tests. Continue with public client work only
 after the query boundary passes.

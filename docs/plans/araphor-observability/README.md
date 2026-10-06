@@ -30,9 +30,9 @@ the same owner. Kubernetes is not required for CLI or API use.
 Agent runs araphor sql
   -> CLI reads one statement from an argument, file, or stdin
   -> selected endpoint authenticates the caller and obtains current Control authorization
-  -> active QueryOwner checks disclosure, target scope, and SQL admission
+  -> active QueryOwner checks the tenant investigate permission and SQL admission
   -> QueryOwner evaluates the bounded query through the active data component
-  -> CLI prints rows, receipt, coverage, and limits
+  -> CLI prints rows, metadata, coverage, and limits
   -> --follow receives commit-driven append or replace frames on one response stream
   -> Ctrl-C ends reads; it does not stop evidence collection
 
@@ -79,7 +79,7 @@ Kubernetes reconciles a Trace resource
 | CLI first; API shared with console | [Inspektor Gadget](https://inspektor-gadget.io/docs/latest/api/golang/) separates local and remote runtimes. [Pixie](https://docs.px.dev/reference/api/overview/) uses one API for CLI, UI, and clients. Reuse this separation, not their runtimes or query languages. |
 | Real bpftrace scripts | The [bpftrace CLI](https://bpftrace.org/docs/release_026/cli) accepts files/stdin and emits JSON lines. Pin and qualify one build. Do not implement a compiler, AST rewriter, or script-to-YAML conversion. |
 | Pod selection is not script confinement | [kubectl-trace](https://github.com/iovisor/kubectl-trace#running-against-a-pod-vs-against-a-node) explicitly describes pod selection as context resolution, not containment. A target predicate cannot authorize arbitrary host-memory reads. |
-| Reviewed recipes by digest; arbitrary scripts need wider authority | [Inspektor Gadget restrictions](https://inspektor-gadget.io/docs/latest/reference/restricting-gadgets/) include digest allowlists. [PCP's bpftrace integration](https://raw.githubusercontent.com/performancecopilot/pcp/main/src/pmdas/bpftrace/README.md) distinguishes production scripts from dynamic submission. Araphor uses default-deny grants. |
+| One tenant investigate permission for SQL and trace | Recipes and supported script submissions use the same user permission. Source validation, target lifetimes, signed Node leases and execution limits remain required. Pod selection is not script confinement. |
 | One response stream with bounded frames | QueryOwner wakes on committed table changes. Durable cursors recover missed notifications. No extra streaming service, WebSocket, or agent-job protocol is needed. |
 | State the result operation | Follow appends immutable rows or replaces a complete bounded result. Metadata declares the operation. Aggregate snapshots are never added together. Recompute on relevant commits, not unconditional polling. |
 | Optional finite Trace CRD | [Tetragon](https://tetragon.io/docs/concepts/tracing-policy/) supports CRD, gRPC, and static inputs. Adopt declarative input, but use one execution authority. Do not store output in etcd or make Kubernetes objects mandatory for interactive use. |
@@ -190,16 +190,20 @@ webhook callbacks still require HTTPS; they are not Araphor client data APIs.
 
 | RPC | Contract |
 | --- | --- |
-| `Query(QueryRequest) returns (stream QueryFrame)` | One-shot and follow use one server stream. The request carries SQL, parameters, optional scope, follow flag and resume cursor. Frames carry metadata, append/replace, checkpoint, health, error and terminal results. Optional target scope narrows authorized input before evaluation. |
+| `Query(QueryRequest) returns (stream QueryFrame)` | One-shot and follow use one server stream. The request carries SQL, parameters, optional selection, follow flag and unsigned resume bookmark. Frames carry metadata, append/replace, checkpoint, health, error and terminal results. Optional targets select input inside the authenticated tenant. |
 | `SubmitTrace(SubmitTraceRequest) returns (TraceReceipt)` | Source or recipe, target, duration, parameters, optional finding reference and required idempotency key. The receipt has ID, accepted spec digest and state. The CLI calls `WatchTrace` within the same command. |
 | `GetTrace(GetTraceRequest) returns (TraceDetail)` | Authorized source, resolved scope, accepted limits, per-target state and result references. |
-| `WatchTrace(WatchTraceRequest) returns (stream TraceFrame)` | Optional cursor; replay retained output and follow to terminal state. Use QueryOwner's bounded append reader with trace-specific grants. No SQL text or second user command is needed. |
-| `CancelTrace(CancelTraceRequest) returns (CancelTraceReceipt)` | Idempotent cancellation intent under an execution-owner or administrative grant. Acceptance is not cleanup proof. |
+| `WatchTrace(WatchTraceRequest) returns (stream TraceFrame)` | Optional bookmark; replay retained output and follow to terminal state. Use QueryOwner's bounded append reader with the tenant investigate permission. No SQL text or second user command is needed. |
+| `CancelTrace(CancelTraceRequest) returns (CancelTraceReceipt)` | Idempotent cancellation intent under the tenant investigate permission. Acceptance is not cleanup proof. |
 
 Generate Rust and browser clients from the same protobuf contract. One-shot
 query, follow and trace output use the
 [canonical stream envelope](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/engine-design.md#commit-driven-follow).
-This section defines only trace-specific payloads and grants. Observability 3
+This section defines trace-specific payloads. One current tenant
+`investigate` permission allows SQL, trace submission, detail, output and
+cancellation. Do not add per-column, Pod, Node or recipe user permissions.
+Trace source validation and Node execution authority remain separate from
+this user permission. Observability 3
 also migrates existing administrative-exec and node-decommission client routes
 to `AraphorAdministrativeService` protobuf RPCs on the same Control TLS
 listener. This service is Control-only. Its separate approval and authority
@@ -214,8 +218,9 @@ global causal clock. A terminal frame includes per-target outcomes, source
 quality, output limits, and cleanup state. An absent terminal frame is not
 success. This follows [Pixie's explicit end-of-stream lesson](https://docs.px.dev/reference/api/overview/).
 
-Trace cursors bind the caller's authorized scope, trace ID, output schema,
-export policy, and committed position. Recheck permissions after every wait.
+Trace bookmarks contain trace ID, store identity and committed position.
+Bookmarks are unsigned and grant no access. Recheck the tenant investigate
+permission after every wait. Validate identity, bounds and retention floor.
 Return gRPC `OUT_OF_RANGE` with authorized gap bounds if retained output is no
 longer available. No silent gap skipping.
 Slow readers do not block Node collection or enforcement. Storage exhaustion
@@ -245,17 +250,14 @@ allowed only if authenticated inventory proves its runtime identity. Do not
 create a fake policy binding. Missing inventory means Unsupported. Do not
 interpret a general agent session ID as a traceable process automatically.
 
-The first release has two authority paths through the same trace operation:
-
-1. A reviewed recipe digest plus bounded parameters can have a pod/container
-   grant. Its qualified probes must filter before collection and must not read
-   unrelated memory or emit other tenants' data. Reject unsupported probe/target
-   combinations. Script source supplied inline can use this path only when
-   its exact digest matches a reviewed artifact.
-2. New or changed source requires explicit host-diagnostic authority for each
-   affected node and an exact approval or preauthorization. Pod selection is
-   context, not a reduction of that grant. Its output retains host sensitivity;
-   a pod-only reader cannot retrieve it through SQL, detail, or output APIs.
+The tenant investigate permission authorizes recipes and supported source
+submissions through the same trace operation. Control resolves the target
+from that tenant's inventory. Do not require another user grant for each
+node or source. Keep the source's collection capability explicit: a Pod
+locator alone does not confine a host probe. Reject source/target combinations
+that can collect another tenant's data. Do not claim arbitrary-script tenant
+isolation. Control still issues an exact signed Node execution lease for the
+accepted source, runtime lifetime, deadline and limits.
 
 No AST sandbox is promised. Do not insert predicates with string replacement.
 Pass approved typed parameters as arguments, never as script source. Bind a

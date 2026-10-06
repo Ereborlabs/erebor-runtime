@@ -20,7 +20,7 @@ suggestions, preconditions, risks, and validation state. Expected activity is
 not an instruction to close an alert or allow an operation.
 
 Show context selection, omissions, stale facts, and contradictions. Assessment
-reports link to server query receipts and evidence. Mark client-reported model,
+reports link to exact retained evidence and read revisions. Mark client-reported model,
 cost, and checks as unverified until checked. Missing checks keep the assessment
 incomplete. Do not display hidden chain-of-thought.
 
@@ -184,7 +184,9 @@ retrieves context, evidence, differences, counts, and owner state. One-shot
 and follow return one server-streaming RPC. QueryOwner appends retained immutable rows or
 replaces a complete bounded result on relevant commits. Metadata declares
 the operation, schema, scope and time-window resolution. Checkpoint frames
-support reconnect; no client polling loop is required.
+support reconnect; no client polling loop is required. Bookmarks are unsigned
+and grant no permission. The client saves the request with its bookmark and
+clears the bookmark when SQL, parameters or selection change.
 
 Examples use proposed columns and fixture IDs. These are protobuf request
 fields, not JSON/HTTP bodies:
@@ -201,7 +203,7 @@ Coverage, omissions and owner lag accompany every result. An aggregate with
 follow=true uses replace frames; never add successive counts together.
 
 Use the [query contract](engine-design.md#one-query-contract) for retention,
-cursor expiry, late input, supported SQL, and isolation. SQL-derived bounds use sqlparser-rs DuckDbDialect and the proven-safe AST
+cursor expiry, late input, supported SQL and bounded Tokio execution. SQL-derived bounds use sqlparser-rs DuckDbDialect and the proven-safe AST
 subset in that contract. A window in SQL needs no duplicate flag. Parsing
 alone does not prove safe extraction. No query jobs, subscription registry,
 WebSocket requirement, or separate streaming service.
@@ -226,7 +228,7 @@ retry. Revocation applies to subsequent reads and mutations, not just login.
 Notification delivery and human acknowledgement use NotificationRouter's
 authorized API when that owner is qualified. Acknowledgement records the exact
 finding revision, route, and human principal. It does not approve a response,
-close a finding, or remove policy. Query exposes its receipt and deadline.
+close a finding, or remove policy. Query exposes its read metadata and deadline.
 Do not add a discovery-owned notification state machine or agent-only case DB.
 
 ### Governed changes
@@ -291,7 +293,7 @@ Mithril 10 extends those tools for each qualified provider action. Each phase
 includes its console integration and tests. Later adapters do not block the
 first investigation and policy release.
 
-Default investigators receive query and optional draft submission. A separately
+Default investigators receive tenant SQL and trace access, and optional draft submission. A separately
 authorized defender can receive publication/response tools. Humans approve
 widening; an existing signed preauthorization can permit only the exact bounded
 response it names. The model cannot mint or enlarge it. Tool metadata and
@@ -313,17 +315,18 @@ browser-supplied tenant claim without authenticated membership.
 
 | Permission | Allows | Does not allow |
 | --- | --- | --- |
-| `discovery.read` | Profiles and proposals within scope | Raw sensitive evidence outside the caller's evidence permission |
+| `investigate` | All available tenant query columns; supported trace submission, detail, output and cancellation | Another tenant's data; policy publication; administrative execution or response |
 | `discovery.draft` | Requirements and proposal revisions | Approve or publish |
 | `discovery.review` | Approve/reject permitted changes | Bypass reviewer independence or current source restrictions |
 | `discovery.publish` | Submit an approved exact change to an authorized source | Sign arbitrary artifacts, select another tenant, or mutate Node state |
 | `discovery.context.manage` | Import or approve context/runbook revisions | Publish policy or turn observed text into trusted instructions implicitly |
-| `discovery.export` | Return filtered context to an approved external recipient and purpose | Export all raw evidence or bypass disclosure policy |
 
-Configure grants by exact issuer and subject, tenant, cluster, namespace UID,
-and permitted operations. Default deny applies. These are permission names,
+Configure investigate by exact issuer, subject and tenant. Targets and SQL
+predicates select data; do not require column, Pod, Node or recipe grants.
+Configure mutation grants by exact issuer, subject, tenant, permitted operation
+and its required target scope. Default deny applies. These are permission names,
 not mandatory platform roles. Recheck current grants on each request and
-before publication. Raw evidence needs a separate evidence-read grant. Every
+before publication. Raw evidence uses investigate, not another read grant. Every
 widening requires distinct authorized drafter and reviewer identities.
 Use server-side sessions with a 15-minute maximum lifetime and a 256-session
 process limit. Restart and logout invalidate sessions. Cookie authentication
@@ -333,11 +336,11 @@ Agent clients use a configured OIDC service principal, the Control API audience,
 short-lived bearer tokens, and explicit scoped grants. Reuse issuer/signature/
 audience/expiry validation; do not add an identity provider. Administrative-exec
 tokens and browser cookies are not agent identities. The default investigator profile
-permits reads, approved export, and optional draft assessments. Publication and
+permits tenant reads, traces and optional draft assessments. Publication and
 response require separately configured operation grants and exact approvals.
 Recheck grants before query evaluation and response, including after a follow
-wait. Only a separately configured tenant administrator can approve export
-recipients and data classes.
+wait. External model reports record their recipient and purpose. Query access
+does not add a separate per-field export authorization system.
 HumanConfirmed classifications and reusable reviewed-case context require
 `discovery.review`; an agent's draft or feedback cannot set those states.
 Context approval also needs `discovery.context.manage`. Neither operation
@@ -393,7 +396,7 @@ other tenant's object details in the audit visible to the requester.
 | Benign positive after deployment | Separate predicate match, suggested disposition, release context, and human confirmation |
 | Malicious context or forged citation | Rejected request or unsupported claim; no authority change |
 | Export denied or external agent unavailable | Evidence review remains usable; no automatic provider fallback |
-| Imported hosted-model report | Export recipient, query receipts, and unverified client model/cost fields |
+| Imported hosted-model report | Export recipient, evidence references, and unverified client model/cost fields |
 | Quiet followed stream or expired cursor | Health/checkpoint frames or explicit expiry; never automatic incident closure |
 | Local model refuses a critical investigation | Failed check remains visible; deterministic priority and on-call route continue |
 | Agent submits an assessment, then exits | Console and replacement agent reopen the same report and outstanding obligations |

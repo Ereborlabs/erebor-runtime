@@ -82,12 +82,15 @@ tests here, not keep this phase open until Mithril 10.
 2. **Permissions — same owner.** Extend configured grants keyed by issuer and
    subject, bound to tenant, cluster, namespace UID, and named operations from
    the API design. No grant means deny. Check every object lookup, evidence
-   link, and mutation; recheck grants at publication. Raw evidence requires
-   separate permission. No browser tenant claim or exec role creates a grant.
+   link, and mutation; recheck grants at publication. SQL, raw evidence and
+   traces use the current tenant investigate permission. Do not add column
+   or target read grants. No browser tenant claim or exec role creates a grant.
 3. **API — `ClientGrpcOwner` and `DiscoveryOwner`.** Reuse the bounded `Query`
    RPC and add mutation RPCs in [console-and-api.md](console-and-api.md).
    No read-job API. Limit results to 200 rows/1 MiB; normal overflow is explicit,
-   and follow cursors bind SQL, scope, schema, export policy, and position.
+   and follow uses unsigned store UUID/epoch, operation, revision and position
+   bookmarks. The client saves SQL, parameters and selection with a bookmark
+   and clears that bookmark when the request changes.
    Use the qualified asynchronous query owner and committed content checks. Return
    Pending/Unavailable on owner lag, not an empty list. Close DB readers
    before gRPC output; verify cursors survive ordinary database restart.
@@ -96,7 +99,7 @@ tests here, not keep this phase open until Mithril 10.
    Do not expose Node credentials through this listener. The separate
    administrative gRPC service retains its own authority on Control only.
    Reuse service-principal bearer validation with a dedicated API audience and
-   export-scoped grants for native clients. Browser gRPC-Web calls use the
+   tenant investigate permission for native reads and traces. Browser gRPC-Web calls use the
    bounded session cookie, CSRF metadata, and exact origin check from item 1;
    neither identity inherits administrative-exec authority.
    An optional `src/bin/mithril_discovery_mcp.rs` stdio adapter can use the
@@ -131,7 +134,7 @@ tests here, not keep this phase open until Mithril 10.
    new-behavior/outcome/coverage filters. No global learned exception button.
    Add the shared investigation view: facts, assessment, alternatives, and
    typed next steps. Show counterevidence, missing checks, disclosure destination,
-   query receipts, incomplete checks, and unverified client model/cost fields.
+   evidence references and read revisions, incomplete checks, and unverified client model/cost fields.
    Classification confirmation is separate
    from policy review. UI and agent calls must produce the same owner artifacts.
 7. **Package — `packaging/mithril/Dockerfile`, Helm `values.yaml`,
@@ -145,8 +148,8 @@ tests here, not keep this phase open until Mithril 10.
    Put the embedded DB on the existing single-owner persistent store with a
    qualified local filesystem. Reject an unsupported shared/network filesystem;
    reserve raw segments, metadata database/WAL, temporary work, and complete backup bundles. No external DB Service is added.
-   Package the query worker with qualified OS isolation and no production
-   credentials/mounts/network. No inference-provider secret is required.
+   Reuse the qualified QueryOwner on the existing Tokio runtime. Do not
+   package a query executable or add IPC. No inference-provider secret is required.
    If an optional stdio adapter is delivered, package it as a CLI artifact,
    not another service.
 
@@ -200,7 +203,7 @@ Do not implement later backend owners to finish this phase without approval.
   path used by the defender. Run MCP adapter checks only if that optional
   adapter is delivered. Tool annotations cannot bypass grants. An investigator cannot
   publish or act; a defender requires exact separate authority. Neither can
-  retrieve forbidden fields or use foreign evidence/approval handles.
+  retrieve another tenant's data or use foreign evidence/approval handles.
 - Pass `DE-QUERY`, `DE-FOLLOW`, `DE-DEFENDER`, `DE-ESCALATION`, `DE-LOOP`,
   and available-owner `DE-PROTECTION` cases.
   Self-approval, stale approval, wider response, reused PID, and false readback

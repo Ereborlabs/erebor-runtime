@@ -110,11 +110,14 @@ is still not probability that granting permission is safe. The
 [method research](research-and-demand.md#local-algorithms-and-typed-ai) records
 the distinction and local candidates; Jev is not the architecture requirement.
 
-Retain validated assessment reports by tenant, input revisions, and content
-digest. Repeated unchanged evidence needs no new model request. Control does not
+Retain validated assessment reports by tenant, exact report identity and input
+revisions. Compare retained content for retries. Repeated unchanged evidence
+needs no new model request. Control does not
 own a provider session, model cache, paid-call retry, or agent-run state machine.
-Server query receipts prove what Araphor returned; client-reported calls, costs,
-and model identity remain unverified unless a qualified source supplies them.
+Query metadata is unsigned and does not prove result content. The assessment
+owner checks cited evidence and revisions against retained data.
+Client-reported calls, costs and model identity remain unverified unless a
+qualified source supplies them.
 
 ### One defender workflow
 
@@ -124,7 +127,7 @@ not outside the deployment or an export/import workflow. Local model execution
 must be qualified explicitly; running a CLI locally while it calls a hosted
 model is not local inference.
 
-Console and defender share subject/finding revisions, query receipts, assessments,
+Console and defender share subject/finding revisions, evidence references, assessments,
 approvals, and action results. The agent submits reports directly through the API.
 Its private chat is neither the case record nor a required input for recovery.
 One query interface simplifies investigation, not the enforcement boundary.
@@ -134,7 +137,7 @@ Agent receives a workload or finding question
   -> query returns exact subject, policy, coverage, rule guide, and reviewed context
   -> runbook states required checks, alternatives, useful SQL, and stop criteria
   -> agent queries only missing facts or follows relevant revision records
-  -> query returns evidence, counterevidence, scope, limits, and receipt
+  -> query returns evidence, counterevidence, selection, limits, and read metadata
   -> agent submits an AssessmentReport through submit_assessment
   -> validator checks schema, references, revisions, and unsupported claims
   -> console immediately shows the same report and linked suggestions
@@ -255,8 +258,9 @@ proposals are not proof of benign activity.
 ## Optional external-client evaluation
 
 The operator owns any training, artifact storage, model deployment and rollback
-outside Araphor. Export requires the same scoped disclosure grant as other
-client reads. A local model does not create permission to use private evidence.
+outside Araphor. Client reads require the current tenant investigate
+permission. Record recipient and purpose for model use. A local model does
+not create permission to use private evidence.
 Araphor records reviewed labels and attributed assessments; it neither trains
 from them nor promotes model artifacts.
 
@@ -322,7 +326,7 @@ it does not prove every shutdown path is safe.
 ## External-client and report security
 
 - Keep model execution and provider credentials outside Araphor.
-- Enforce evidence-read and disclosure grants before returning any model input.
+- Check the current tenant investigate permission before returning model input.
 - Validate bounded reports, finite scores, exact revisions and citations.
 - Treat supplied model versions and costs as client claims unless independently
   verified. Do not require hidden provider weight digests.

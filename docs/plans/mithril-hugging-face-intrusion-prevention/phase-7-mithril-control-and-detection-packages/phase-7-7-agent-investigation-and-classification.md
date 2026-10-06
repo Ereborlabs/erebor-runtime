@@ -28,7 +28,7 @@ Required facts or export authority are absent
   -> query returns Unknown, omission, denial, or expiry
   -> assessment keeps the missing check visible
   -> no benign label, proposal, or response gains authority from absent evidence
-  -> a later query has a new receipt; the old report does not change
+  -> a later query has new read metadata; the old report does not change
 
 Engineer compares interfaces
   -> optional client evaluations compare SQL with and without exact context
@@ -40,8 +40,9 @@ Engineer compares interfaces
 ## Scope and owners
 
 Shared Control query code enforces query/export checks. DiscoveryOwner owns
-assessment/suggestion validation. AnalysisStore retains bounded query receipts
-and reports. External agents own
+assessment/suggestion validation. AnalysisStore retains reports and their
+exact evidence references. Query metadata is unsigned and is not proof of
+result content. External agents own
 their loop, provider credentials, budgets, and model choice. Existing policy
 and planned response owners retain execution authority; this phase cannot
 implement their missing runtimes.
@@ -69,7 +70,8 @@ A local-defense or model-quality claim requires its actual measured result.
    `DiscoveryOwner::submit_assessment` and `AssessmentReport::validate`.
    Validate separate activity, detector-relative verdict, security disposition,
    impact, urgency, hypotheses, counterevidence, and missing facts. Check cited
-   server receipts/evidence and exact revisions. Reject fabricated references.
+   retained evidence and exact revisions against AnalysisStore. Reject
+   fabricated references. Do not require a signed query receipt.
    Preserve subject/finding and parent artifact references in every submission;
    the console must retrieve that same report, not a copied summary.
    Preserve Suggested versus HumanConfirmed and all mandatory review.
@@ -77,12 +79,11 @@ A local-defense or model-quality claim requires its actual measured result.
    credential access and deployment drift. Include exact columns, SQL recipes,
    required/optional checks, alternatives, and a stopping checklist. Use the
    context view for predictable lookups; do not requery unchanged facts.
-3. Extend the shared query/export enforcement from Observability 3 with
-   `DisclosurePolicyV1`: approved
-   recipient/purpose, row/field scope, redaction, scoped pseudonyms, and expiry.
-   Filter before evaluation so predicates/counts cannot leak hidden data.
-   Fail closed. Revoke later reads; do not claim recall of prior exports.
-4. Record server-known query receipts separately from client-reported model,
+3. Reuse the tenant investigate permission from Observability 3. Record the
+   recipient and purpose for external model use. Do not add column or target
+   ACLs to SQL. Keep tenant isolation and current-permission checks. Revoke
+   later reads; do not claim recall of prior exports.
+4. Record exact store/evidence references separately from client-reported model,
    checks, tokens, and cost. Bound report size and reject non-finite scores.
    Valid citations do not necessarily support a conclusion; retain reviewer
    errors and evaluate actual support. No hidden chain-of-thought collection.
@@ -170,7 +171,7 @@ It can complete the mandatory Araphor client/assessment contract.
 ### End-to-end deliverable
 
 Add `assessment-loop` to the existing discovery e2e binary. A recorded agent
-uses production gRPC and query/trace CLI, cites server receipts, submits a report,
+uses production gRPC and query/trace CLI, cites retained evidence, submits a report,
 then exits. Another client reads the same report and missing checks. Test forged
 citations, irrelevant support, stale targets, indirect injection, export
 revocation, model refusal and unsupported response. Do not replace owner
