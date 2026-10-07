@@ -480,19 +480,12 @@ impl TraceTransport {
             })
         };
         Ok(proto::TraceFrame {
-            schema_version: 1,
-            trace_id: self.trace.to_vec(),
             commit_revision: position.commit_revision,
             ordinal: position.ordinal,
             execution_id: execution.clone(),
             sequence,
             target_index: index as u32,
-            bookmark: Vec::new(),
-            payload: Some(payload),
-            store_uuid: self.header.store_uuid.clone(),
-            recovery_epoch: self.header.recovery_epoch,
-            read_revision: self.header.read_revision,
-            coverage: self.header.coverage.clone(),
+            ..self.frame(payload)
         })
     }
 }
@@ -675,14 +668,8 @@ impl Stream for TraceTransport {
                                     }
                                     None => Vec::new(),
                                 },
-                                position: position.map(|value| proto::StorePosition {
-                                    commit_revision: value.commit_revision,
-                                    ordinal: value.ordinal,
-                                }),
-                                floor: floor.map(|value| proto::StorePosition {
-                                    commit_revision: value.commit_revision,
-                                    ordinal: value.ordinal,
-                                }),
+                                position: position.map(WireFrame::position),
+                                floor: floor.map(WireFrame::position),
                             };
                             self.pending = Some(QueryTransport::code(code));
                             return Poll::Ready(Some(Ok(

@@ -277,7 +277,7 @@ impl WireFrame {
         }
     }
 
-    fn position(position: StorePositionV1) -> proto::StorePosition {
+    pub(super) fn position(position: StorePositionV1) -> proto::StorePosition {
         proto::StorePosition {
             commit_revision: position.commit_revision,
             ordinal: position.ordinal,
