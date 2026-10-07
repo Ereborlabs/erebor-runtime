@@ -886,13 +886,7 @@ pub fn lower_kubernetes_policy(
     ]);
     let label_requirements = lower_label_selector(&resource.spec.pod_selector);
     let mut workload_selectors = Vec::with_capacity(resource.spec.containers.len());
-    let entry_capacity = resource
-        .spec
-        .containers
-        .iter()
-        .map(|container| container.additional_entries.len() + 3)
-        .sum();
-    let mut entry_role_assignments = Vec::with_capacity(entry_capacity);
+    let mut entry_role_assignments = Vec::new();
     for (index, container) in resource.spec.containers.iter().enumerate() {
         let selector_id = format!("container-{index}");
         workload_selectors.push(WorkloadSelectorV1 {
@@ -920,75 +914,52 @@ pub fn lower_kubernetes_policy(
                     .collect(),
             ),
         });
-        let mut assignments = Vec::with_capacity(container.additional_entries.len() + 3);
-        assignments.push((
-            "application".to_owned(),
-            container.application_entry.role.clone(),
-            EntryKindV1::ContainerStart,
-            RootClassificationV1::ExactInitial,
-            AmbiguityDispositionV1::DenyProtectedEffects,
-            None,
-            Some(container.application_entry.execution_rule.clone()),
-            false,
-        ));
-        assignments.extend(container.additional_entries.iter().map(|entry| {
-            (
-                format!("additional-{}", entry.name),
-                entry.role.clone(),
-                EntryKindV1::from(entry.kind),
-                RootClassificationV1::DeclaredAdditionalEntry,
-                AmbiguityDispositionV1::RestrictExternal,
-                Some(container.external_role.clone()),
-                Some(entry.execution_rule.clone()),
-                false,
-            )
+        let application = EntryRoleAssignmentV1 {
+            assignment_id: format!("container-{index}-application"),
+            workload_selector_ids: vec![selector_id],
+            entry_kinds: vec![EntryKindV1::ContainerStart],
+            container_kinds: workload_selectors[index].container_kinds.clone(),
+            immutable_definition_digests: Vec::new(),
+            accepted_classifications: vec![RootClassificationV1::ExactInitial],
+            required_purpose_source_capability_id: None,
+            required_administrative_exec_approval: false,
+            admission_execution_rule_id: Some(container.application_entry.execution_rule.clone()),
+            resulting_role_id: container.application_entry.role.clone(),
+            on_missing_or_unequal_ambiguity: AmbiguityDispositionV1::DenyProtectedEffects,
+            unknown_restricted_role_id: None,
+        };
+        entry_role_assignments.extend(container.additional_entries.iter().map(|entry| {
+            EntryRoleAssignmentV1 {
+                assignment_id: format!("container-{index}-additional-{}", entry.name),
+                entry_kinds: vec![entry.kind.into()],
+                accepted_classifications: vec![RootClassificationV1::DeclaredAdditionalEntry],
+                admission_execution_rule_id: Some(entry.execution_rule.clone()),
+                resulting_role_id: entry.role.clone(),
+                on_missing_or_unequal_ambiguity: AmbiguityDispositionV1::RestrictExternal,
+                unknown_restricted_role_id: Some(container.external_role.clone()),
+                ..application.clone()
+            }
         }));
-        assignments.push((
-            "administrative".to_owned(),
-            container.administrative_entry.role.clone(),
-            EntryKindV1::ApprovedAdministrativeExec,
-            RootClassificationV1::ApprovedAdministrativeNextMatch,
-            AmbiguityDispositionV1::DenyProtectedEffects,
-            None,
-            None,
-            true,
-        ));
-        assignments.push((
-            "external".to_owned(),
-            container.external_role.clone(),
-            EntryKindV1::ExternalRuntimeUnknown,
-            RootClassificationV1::ConservativeExternalUnknown,
-            AmbiguityDispositionV1::RestrictExternal,
-            Some(container.external_role.clone()),
-            None,
-            false,
-        ));
-        for (
-            suffix,
-            role,
-            entry_kind,
-            classification,
-            ambiguity,
-            restricted,
-            admission_execution_rule_id,
-            required_administrative_exec_approval,
-        ) in assignments
-        {
-            entry_role_assignments.push(EntryRoleAssignmentV1 {
-                assignment_id: format!("container-{index}-{suffix}"),
-                workload_selector_ids: vec![selector_id.clone()],
-                entry_kinds: vec![entry_kind],
-                container_kinds: workload_selectors[index].container_kinds.clone(),
-                immutable_definition_digests: Vec::new(),
-                accepted_classifications: vec![classification],
-                required_purpose_source_capability_id: None,
-                required_administrative_exec_approval,
-                admission_execution_rule_id,
-                resulting_role_id: role,
-                on_missing_or_unequal_ambiguity: ambiguity,
-                unknown_restricted_role_id: restricted,
-            });
-        }
+        entry_role_assignments.push(EntryRoleAssignmentV1 {
+            assignment_id: format!("container-{index}-administrative"),
+            entry_kinds: vec![EntryKindV1::ApprovedAdministrativeExec],
+            accepted_classifications: vec![RootClassificationV1::ApprovedAdministrativeNextMatch],
+            required_administrative_exec_approval: true,
+            admission_execution_rule_id: None,
+            resulting_role_id: container.administrative_entry.role.clone(),
+            ..application.clone()
+        });
+        entry_role_assignments.push(EntryRoleAssignmentV1 {
+            assignment_id: format!("container-{index}-external"),
+            entry_kinds: vec![EntryKindV1::ExternalRuntimeUnknown],
+            accepted_classifications: vec![RootClassificationV1::ConservativeExternalUnknown],
+            admission_execution_rule_id: None,
+            resulting_role_id: container.external_role.clone(),
+            on_missing_or_unequal_ambiguity: AmbiguityDispositionV1::RestrictExternal,
+            unknown_restricted_role_id: Some(container.external_role.clone()),
+            ..application.clone()
+        });
+        entry_role_assignments.push(application);
     }
     entry_role_assignments.sort_by(|left, right| left.assignment_id.cmp(&right.assignment_id));
 
@@ -996,14 +967,12 @@ pub fn lower_kubernetes_policy(
         .iter()
         .map(|selector| selector.workload_selector_id.clone())
         .collect::<Vec<_>>();
-    let mut path_selectors = Vec::new();
-    let mut path_selector_ids = BTreeMap::<(String, bool, bool), String>::new();
+    let mut path_selectors = BTreeMap::new();
     let mut rules = Vec::new();
     let mut path_tree_deny_floors = Vec::new();
     let mut effect_family_defaults = Vec::new();
     let mut destination_policies = Vec::new();
     let mut ipc_relationship_rules = Vec::new();
-    let mut file_rule_actions = BTreeMap::new();
 
     let mut roles = resource.spec.roles.iter().collect::<Vec<_>>();
     roles.sort_by(|left, right| left.name.cmp(&right.name));
@@ -1037,33 +1006,21 @@ pub fn lower_kubernetes_policy(
             definition.role_id.clone(),
         );
         role_definitions.push(definition);
-        for default in &role.default_actions {
-            match default {
-                KubernetesDefaultActionV1::Network { operations, action } => {
-                    let operations = operations.iter().map(|_| "CONNECT").collect::<Vec<_>>();
-                    effect_family_defaults.push(default_rule(
-                        &role.name,
-                        EffectFamilyV1::Network,
-                        &operations,
-                        *action,
-                    ));
-                }
-            }
+        for KubernetesDefaultActionV1::Network { action, .. } in &role.default_actions {
+            effect_family_defaults.push(default_rule(
+                &role.name,
+                EffectFamilyV1::Network,
+                &["CONNECT"],
+                *action,
+            ));
         }
         for file in &role.files {
-            let selector_id = path_selector_id(
-                &mut path_selectors,
-                &mut path_selector_ids,
-                &file.path,
-                file.recursive,
-                file.exact,
-            );
+            let selector_id =
+                path_selector_id(&mut path_selectors, &file.path, file.recursive, file.exact);
             let operations = sorted_unique(
                 file.operations
                     .iter()
-                    .copied()
-                    .map(KubernetesFileOperationV1::internal_name)
-                    .map(str::to_owned)
+                    .map(|operation| operation.internal_name().to_owned())
                     .collect(),
             );
             rules.push(local_rule(
@@ -1076,7 +1033,6 @@ pub fn lower_kubernetes_policy(
                 },
                 file.action,
             ));
-            file_rule_actions.insert(file.name.clone(), (file.action, file.operations.clone()));
         }
         path_tree_deny_floors.extend(role.path_tree_denials.iter().map(|denial| {
             PathTreeDenyFloorV1 {
@@ -1087,9 +1043,7 @@ pub fn lower_kubernetes_policy(
                     denial
                         .operations
                         .iter()
-                        .copied()
-                        .map(KubernetesFileOperationV1::internal_name)
-                        .map(str::to_owned)
+                        .map(|operation| operation.internal_name().to_owned())
                         .collect(),
                 ),
             }
@@ -1097,7 +1051,6 @@ pub fn lower_kubernetes_policy(
         for execution in &role.execution {
             let selector_id = path_selector_id(
                 &mut path_selectors,
-                &mut path_selector_ids,
                 &execution.path,
                 execution.recursive,
                 false,
@@ -1110,9 +1063,7 @@ pub fn lower_kubernetes_policy(
                     execution
                         .operations
                         .iter()
-                        .copied()
-                        .map(KubernetesExecutionOperationV1::internal_name)
-                        .map(str::to_owned)
+                        .map(|operation| operation.internal_name().to_owned())
                         .collect(),
                 ),
                 LocalObjectSelectorV1::PathSelectors {
@@ -1141,18 +1092,11 @@ pub fn lower_kubernetes_policy(
             ));
         }
         for destination in &role.network.destinations {
-            let mut ipv4_prefixes = destination
+            let (mut ipv4_prefixes, mut ipv6_prefixes): (Vec<_>, Vec<_>) = destination
                 .cidrs
                 .iter()
-                .filter(|cidr| !cidr.contains(':'))
                 .cloned()
-                .collect::<Vec<_>>();
-            let mut ipv6_prefixes = destination
-                .cidrs
-                .iter()
-                .filter(|cidr| cidr.contains(':'))
-                .cloned()
-                .collect::<Vec<_>>();
+                .partition(|cidr| !cidr.contains(':'));
             ipv4_prefixes.sort();
             ipv6_prefixes.sort();
             destination_policies.push(DestinationPolicyRecordV1 {
@@ -1187,9 +1131,7 @@ pub fn lower_kubernetes_policy(
                     destination
                         .operations
                         .iter()
-                        .copied()
-                        .map(KubernetesNetworkOperationV1::internal_name)
-                        .map(str::to_owned)
+                        .map(|operation| operation.internal_name().to_owned())
                         .collect(),
                 ),
                 LocalObjectSelectorV1::Destinations {
@@ -1255,6 +1197,7 @@ pub fn lower_kubernetes_policy(
         }
     }
     rules.sort_by(|left, right| left.rule_id.cmp(&right.rule_id));
+    let mut path_selectors = path_selectors.into_values().collect::<Vec<_>>();
     path_selectors.sort_by(|left, right| left.path_selector_id.cmp(&right.path_selector_id));
     destination_policies
         .sort_by(|left, right| left.destination_policy_id.cmp(&right.destination_policy_id));
@@ -1290,43 +1233,40 @@ pub fn lower_kubernetes_policy(
         })
         .collect::<Vec<_>>();
 
-    let file_exception_grants = resource
-        .spec
-        .exception_grants
-        .iter()
-        .map(|grant| {
-            ensure!(
-                grant.file_rules.iter().all(|rule| {
-                    file_rule_actions
-                        .get(rule)
-                        .is_some_and(|(action, operations)| {
-                            *action == KubernetesRuleActionV1::Deny
-                                && operations.iter().all(|operation| {
-                                    matches!(
-                                        operation,
-                                        KubernetesFileOperationV1::OpenRead
-                                            | KubernetesFileOperationV1::OpenWrite
-                                    )
-                                })
-                        })
-                }),
-                PolicyValidationSnafu {
-                    policy_id: object_uid,
-                    code: "CFG_EXCEPTION_GRANT",
-                    reason: format!(
-                        "exception grant `{}` must reference denied file-open rules",
-                        grant.name
-                    ),
-                }
-            );
-            Ok(FileExceptionGrantTemplateV1 {
-                grant_id: grant.name.clone(),
-                denied_file_rule_ids: sorted_unique(grant.file_rules.clone()),
-                maximum_duration_ns: parse_duration_ns(&grant.maximum_duration, object_uid)?,
-                maximum_uses: grant.maximum_uses,
+    let file_exception_grants =
+        resource
+            .spec
+            .exception_grants
+            .iter()
+            .map(|grant| {
+                ensure!(
+                    grant.file_rules.iter().all(|id| {
+                        rules.binary_search_by(|rule| rule.rule_id.cmp(id)).is_ok_and(|index| {
+                        let rule = &rules[index];
+                        rule.requested_disposition == PolicyDispositionV1::Deny
+                            && matches!(&rule.rule_match, RuleMatchV1::LocalPreEffect(effect)
+                                if effect.effect_families == [EffectFamilyV1::File]
+                                    && effect.operation_ids.iter().all(|operation|
+                                        matches!(operation.as_str(), "OPEN_READ" | "OPEN_WRITE")))
+                    })
+                    }),
+                    PolicyValidationSnafu {
+                        policy_id: object_uid,
+                        code: "CFG_EXCEPTION_GRANT",
+                        reason: format!(
+                            "exception grant `{}` must reference denied file-open rules",
+                            grant.name
+                        ),
+                    }
+                );
+                Ok(FileExceptionGrantTemplateV1 {
+                    grant_id: grant.name.clone(),
+                    denied_file_rule_ids: sorted_unique(grant.file_rules.clone()),
+                    maximum_duration_ns: parse_duration_ns(&grant.maximum_duration, object_uid)?,
+                    maximum_uses: grant.maximum_uses,
+                })
             })
-        })
-        .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
     let role_ids = role_definitions
         .iter()
@@ -1338,7 +1278,11 @@ pub fn lower_kubernetes_policy(
             .flat_map(|assignment| assignment.entry_kinds.iter().copied())
             .collect(),
     );
-    let finding = fixed_default_finding();
+    let default_posture = DefaultPostureActionV1 {
+        requested_disposition: PolicyDispositionV1::Deny,
+        finding: fixed_default_finding(),
+        unknown_restricted_role_id: None,
+    };
     let network_policy = (!destination_policies.is_empty()).then_some(NetworkPolicyV1 {
         dns_mode: DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses,
         destination_policies,
@@ -1388,24 +1332,15 @@ pub fn lower_kubernetes_policy(
         authority_behavior_rules: Vec::new(),
         correlation_package_bindings: Vec::new(),
         default_postures: DefaultPosturesV1 {
-            missing_task_identity: DefaultPostureActionV1 {
-                requested_disposition: PolicyDispositionV1::Deny,
-                finding: finding.clone(),
-                unknown_restricted_role_id: None,
-            },
-            required_classifier_unknown: DefaultPostureActionV1 {
-                requested_disposition: PolicyDispositionV1::Deny,
-                finding: finding.clone(),
-                unknown_restricted_role_id: None,
-            },
+            missing_task_identity: default_posture.clone(),
+            required_classifier_unknown: default_posture.clone(),
             unresolved_or_external_root: DefaultPostureActionV1 {
-                requested_disposition: PolicyDispositionV1::Deny,
-                finding,
                 unknown_restricted_role_id: resource
                     .spec
                     .containers
                     .first()
                     .map(|container| container.external_role.clone()),
+                ..default_posture
             },
         },
         notification_routes: Vec::new(),
@@ -1815,27 +1750,27 @@ fn rule_subject(
 }
 
 fn path_selector_id(
-    selectors: &mut Vec<PathSelectorV1>,
-    ids: &mut BTreeMap<(String, bool, bool), String>,
+    selectors: &mut BTreeMap<(String, bool, bool), PathSelectorV1>,
     path: &str,
     recursive: bool,
     exact: bool,
 ) -> String {
-    let key = (path.to_owned(), recursive, exact);
-    if let Some(id) = ids.get(&key) {
-        return id.clone();
-    }
-    let id = format!("path-{}", ids.len());
-    let object_class_id = format!("KUBERNETES_PATH_{}", ids.len());
-    selectors.push(if exact {
-        PathSelectorV1::exact(&id, path, object_class_id)
-    } else if recursive {
-        PathSelectorV1::recursive(&id, path, object_class_id)
-    } else {
-        PathSelectorV1::path(&id, path, object_class_id)
-    });
-    ids.insert(key, id.clone());
-    id
+    let index = selectors.len();
+    selectors
+        .entry((path.to_owned(), recursive, exact))
+        .or_insert_with(|| {
+            let id = format!("path-{index}");
+            let object_class_id = format!("KUBERNETES_PATH_{index}");
+            if exact {
+                PathSelectorV1::exact(id, path, object_class_id)
+            } else if recursive {
+                PathSelectorV1::recursive(id, path, object_class_id)
+            } else {
+                PathSelectorV1::path(id, path, object_class_id)
+            }
+        })
+        .path_selector_id
+        .clone()
 }
 
 fn local_rule(
