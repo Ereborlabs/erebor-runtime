@@ -116,6 +116,10 @@ access, automatic extension loading, and temporary files are disabled.
 These settings are not an operating-system memory or security boundary.
 
 QueryStream owns one pending next-frame future and passive QueryState.
+QueryYield owns the staged result and checkpoint. Its Metadata and Data
+variants hold both values. Data moves the result into the returned frame.
+The Checkpoint variant then holds only the checked checkpoint. The last
+disclosed checkpoint remains separate until authorized yield.
 QueryState has no runtime or driver. A store watch is registered before the
 first poll. Construction starts no SQL. Polling advances one evaluation and
 returns metadata, data and checkpoint frames in order. The same future waits
@@ -187,7 +191,7 @@ Use these source tests to check each owner boundary:
 | Native reader recovery | [read tests](../../../../crates/araphor-data/src/analysis/read.rs): `query_scope_reader_recovery`, `query_input_native_cancel`, `analysis_read_cancel_cleanup`. |
 | Temporary input ownership | [adapter tests](../../../../crates/araphor-data/src/query/adapter.rs): value, repeated-scan, error, and Weak-reference lifetime checks. [input tests](../../../../crates/araphor-data/src/query/input.rs) check generated relations and exact allocation bounds. |
 | Fixed templates | [query tests](../../../../crates/araphor-data/src/query/tests.rs): `QueryFixture::baseline` evaluates complete scoped input through the pinned DuckDB adapter. Each trusted template compares against that result. |
-| Stream lifecycle | [follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs): snapshot race, empty progress, coalesced output, lazy construction, paused demand, drop, and `query_follow_autonomous_expiry` without a clock notification or heartbeat wake. `query_follow_runtime` checks construction outside Tokio and a typed error for polling without a runtime. [frame tests](../../../../crates/araphor-data/src/query/frame.rs) check envelopes, binding, identity, and shared byte reservations. |
+| Stream lifecycle | [follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs): snapshot race, empty progress, coalesced output, lazy construction, paused demand, drop, and `query_follow_autonomous_expiry` without a clock notification or heartbeat wake. `query_follow_staged_cancel` cancels after metadata or data, before a checkpoint. The terminal contains no undisclosed checkpoint. Output, evaluation and stream capacity are available after closure. `query_follow_runtime` checks construction outside Tokio and a typed error for polling without a runtime. [frame tests](../../../../crates/araphor-data/src/query/frame.rs) check envelopes, binding, identity, and shared byte reservations. |
 | Active evaluation cancellation | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): `query_scope_native_cancel` pauses inside a real native input scan, requires native failure after cancellation, and checks input/capacity release and later intake/query. Its barrier and native-error flag are test-only. |
 | Pending frame checks | [client tests](../../../../crates/araphor-data/src/query/client_tests.rs): `query_trace_stream_stop` checks cancel, revoke and drop during a blocked native retained-read check. Reader and stream capacity remain charged until native cleanup. |
 | Maintenance and evidence | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): reader release, held-output deletion, and both pin/delete commit orders. [retention tests](../../../../crates/araphor-data/src/analysis/retention.rs) check floor persistence, recovery, restore, and exact witnesses. |
@@ -284,10 +288,16 @@ error text. Their JSONL records and table layout do not change.
 
 CommandRun keeps one retry transition in each SQL and trace read loop. Each
 loop retains its three-retry limit, delays and interruption checks. SQL also
-retains its duration check. Each new RPC reads the current credential. Only
+retains its duration check. QueryRequest.duration_ns is the only prepared SQL
+duration. CommandRun derives its local deadline once before retries. Each new
+RPC reads the current credential. Only
 follow SQL can resume; an interrupted one-shot query does not run again.
 The trace initiator retains cancellation and final-result draining. Closing
 a viewer read does not cancel trace execution.
+The generated selectors in
+[AraphorCommandError](../../../../crates/araphor-cli/src/cli/araphor/error.rs)
+construct CLI errors. There are no separate error-factory methods in the
+command, input or output owner. Variants, sources and exit-code mapping remain.
 
 [AraphorCommand::prepare](../../../../crates/araphor-cli/src/cli/araphor/args.rs) An operator selects query or trace input.<br>
 -> [TryFrom selector conversion](../../../../crates/araphor-cli/src/cli/araphor/args.rs) TryFrom validates the existing selector bounds.<br>
@@ -371,6 +381,9 @@ and cannot release a running native task's lease.
 QueryTransport and TraceTransport retain the latest native checkpoint as a
 read guard. A local deadline or final result checks that guard and current
 tenant access after the wait. The guard contains no drained output page.
+TraceTransport uses its frame method for output envelopes and WireFrame's
+position conversion for error positions and retention floors. This reuse
+does not change per-row read checks or Error-to-Status ordering.
 QueryTransport derives its final header and bookmark from that guard. It
 does not keep separate header and bookmark copies. Rows after that checkpoint
 cannot change the saved header. TraceBookmark validates the outer bound and
@@ -2987,17 +3000,19 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-The owner-composition links describe source `be7f411c`. This update checks
-the lazy stream, checkpoint transport, CLI retry/replay/output and selection
-bounds. The affected library command passed 513 tests. Both standalone
-qualification commands passed. Read the
-[query result](phase-7-3-query-and-follow.md#owner-composition-result) and
-[client result](../../araphor-observability/phase-3-cli-api-and-console.md#owner-composition-result)
-for source commits, commands and proof limits. The final Rust procedure passed
-at `be7f411c` after the last Rust edit: 1,629 tests passed, zero failed and 544
-existing tests were ignored. Counts exclude nested subprocess helpers.
-Formatting, workspace compilation and strict Clippy also passed. Ignored cases
-remain unqualified. These checks add no performance or physical qualification.
+The accepted simplification links describe source `667209fe`. This update
+checks staged query ownership, trace frame conversions and native CLI errors.
+The focused commands passed 133 query tests, 25 Control adapter tests and
+58 CLI tests. Both standalone qualification commands passed. Read the
+[query result](phase-7-3-query-and-follow.md#accepted-simplification-result) and
+[client result](../../araphor-observability/phase-3-cli-api-and-console.md#accepted-simplification-result)
+for source commits, commands and proof limits. The final Rust procedure passes
+at `667209fe` after the last Rust edit: 1,630 tests pass, zero fail and 544
+existing tests are ignored.
+Counts exclude nested recovery helpers. Formatting, workspace compilation and
+strict Clippy also pass. Read `/tmp/araphor-five-cuts.Gor7fD/rust-ci.log`.
+Ignored cases remain unqualified. These checks add no performance or physical
+qualification.
 
 The shared-capture links describe extraction source `9d570500` and the Node
 error conversion fix at `3248d2a0`. This guide update checks source paths and

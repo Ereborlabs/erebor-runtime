@@ -611,3 +611,40 @@ passed 1,629 tests, with zero failures and 544 existing ignored tests. Counts
 exclude nested subprocess helpers. Read
 `/tmp/araphor-owner-simplify.ht265y/rust-ci-final.log`. The focused test-only
 correction is recorded in `output-test.log` in that directory.
+
+### Accepted simplification result
+
+Source: `667209fe`. The staged-state change is commit `d55d7a75`.
+Status: **Done** for implementation and scoped correctness.
+QueryYield owns each staged result and checked checkpoint. The last disclosed
+checkpoint remains separate. Authorization wakes and native cleanup do not change.
+
+The `query_` filter passes 133 tests. `query_follow_staged_cancel` cancels after
+metadata or data, before a checkpoint. It checks the absent checkpoint, fused
+closure, input release and available output, evaluation and stream capacity.
+The standalone `query-follow` case passes all eight cases. The built native
+client case also passes. The six environment settings above apply.
+Commands:
+
+```sh
+cargo test -p araphor-data --all-features --lib query_ -- --nocapture
+cargo test -p mithril-control --all-features --lib client_grpc:: -- --nocapture
+cargo test -p araphor-cli --all-features --lib
+cargo build -p araphor-cli -p mithril-e2e --all-features --bin araphor --bin mithril-observability-test --bin mithril_discovery_test
+target/debug/mithril_discovery_test --case query-follow --output-directory /tmp/araphor-five-cuts.Gor7fD/query-follow
+target/debug/mithril-observability-test --case query-trace-client --output-directory /tmp/araphor-five-cuts.Gor7fD/native-client --client-executable /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/araphor
+bash .github/scripts/verify-rust-ci.sh
+```
+
+Use new, empty receipt directories for another run.
+Read `/tmp/araphor-five-cuts.Gor7fD/query.log`, `query-follow/result.json` and
+`native-client/result.json`. These checks do not qualify performance or physical
+capture.
+
+The final procedure, `bash .github/scripts/verify-rust-ci.sh`, passes at
+`667209fe` after the last Rust edit. Formatting, workspace compilation, strict
+Clippy and all-target/all-feature tests return zero. Across 76 top-level suites,
+1,630 tests pass, zero fail and 544 existing tests are ignored. Counts exclude
+nested recovery helpers. The affected libraries pass 290 data tests, 166 Control
+tests and 58 CLI tests. Ignored cases remain unqualified. Read
+`/tmp/araphor-five-cuts.Gor7fD/rust-ci.log`.

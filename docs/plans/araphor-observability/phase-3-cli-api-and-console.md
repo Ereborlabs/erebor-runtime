@@ -782,6 +782,31 @@ tests passed: 1,629 passed, zero failed and 544 existing tests were ignored.
 Counts exclude nested subprocess helpers. Ignored cases remain unqualified.
 Read `/tmp/araphor-owner-simplify.ht265y/rust-ci-final.log`.
 
+### Accepted simplification result
+
+Source: `667209fe`. Control reuse is commit `d101aad3`; CLI reuse is commit
+`667209fe`. Status: **Done** for implementation and scoped correctness.
+Trace output uses the existing frame and position conversions. The CLI derives
+one local deadline from QueryRequest.duration_ns. Generated Snafu selectors
+replace seven error-factory methods. Permissions, retries, output and trace
+cancellation rules do not change.
+
+All 25 Control adapter tests and 58 CLI tests pass. The built native client
+case passes all ten receipt checks. Default follow still prints tables through
+a pipe. Reconnect, exact retry, timer expiry, selected output, initiator
+cancellation and read-only interruption pass. Read
+`/tmp/araphor-five-cuts.Gor7fD/control.log`, `cli.log`,
+`native-client/result.json` and `native-client/table.stdout`.
+The [query result](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-3-query-and-follow.md#accepted-simplification-result)
+records the data-owner proof. These are component and lightweight end-to-end
+checks, not physical or performance qualification.
+
+The final Rust procedure passes at `667209fe` after the last Rust edit.
+Formatting, workspace compilation, strict Clippy and all-target/all-feature tests
+return zero: 1,630 tests pass, zero fail and 544 existing tests are ignored.
+Counts exclude nested recovery helpers. Ignored cases remain unqualified.
+Read `/tmp/araphor-five-cuts.Gor7fD/rust-ci.log`.
+
 ## Stop point
 
 Stop before CRD delivery and arbitrary-script tenant isolation claims.
