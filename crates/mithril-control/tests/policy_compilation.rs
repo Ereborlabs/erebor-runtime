@@ -227,7 +227,8 @@ fn relationship_record_checks() -> mithril_control::Result<()> {
         });
     assert_eq!(PolicyCompiler.compile(&document)?.compiled_cells.len(), 2);
 
-    let cases: [(&str, fn(&mut PolicyDocumentV1)); 7] = [
+    type Change = fn(&mut PolicyDocumentV1);
+    let cases: [(&str, Change); 7] = [
         ("CFG_ROLE_REFERENCE", |document| {
             document.entry_role_assignments[0].resulting_role_id = "missing-role".to_owned();
         }),
