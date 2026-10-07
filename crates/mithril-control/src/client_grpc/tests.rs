@@ -25,6 +25,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> TestResult<Self> {
+        Self::with_limits(QueryLimits::default())
+    }
+
+    fn with_limits(limits: QueryLimits) -> TestResult<Self> {
         let directory = TempDir::new()?;
         let key = SigningKey::from_bytes(&[23; 32]);
         let trust = TrustGenerationV1 {
@@ -46,7 +50,7 @@ impl Fixture {
         .with_trace_signer("trace-key".into(), 1, key)?;
         let auth = crate::client_auth::tests::owner()?;
         let session = crate::client_auth::tests::session(&auth)?;
-        let service = ClientGrpcOwner::new(control, auth, ClientGrpcConfig::default())?;
+        let service = ClientGrpcOwner::new(control, auth, ClientGrpcConfig { query: limits })?;
         Ok(Self {
             service,
             session,
@@ -177,6 +181,117 @@ impl Fixture {
             .ok_or("the RPC stream ended")?
             .map_err(Into::into)
     }
+}
+
+#[tokio::test]
+async fn observability_grpc_output_deadline() -> TestResult {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let fixture = Fixture::with_limits(QueryLimits {
+        output_timeout: Duration::from_nanos(1),
+        ..QueryLimits::default()
+    })?;
+    let retained = Arc::new(());
+    let released = Arc::downgrade(&retained);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let polled = calls.clone();
+    let inner = futures_util::stream::unfold(retained, move |retained| {
+        let calls = polled.clone();
+        async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some((Ok::<_, Status>(7_u8), retained))
+        }
+    });
+    let mut stream = fixture.service.output_stream(inner)?;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(released.upgrade().is_some());
+    assert_eq!(Fixture::next(&mut stream).await?, 7);
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    let error = stream.next().await.ok_or("output timeout absent")?;
+    assert_eq!(
+        error.err().map(|error| error.code()),
+        Some(tonic::Code::DeadlineExceeded)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(released.upgrade().is_none());
+    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn observability_grpc_output_wait() -> TestResult {
+    let fixture = Fixture::with_limits(QueryLimits {
+        output_timeout: Duration::from_millis(100),
+        ..QueryLimits::default()
+    })?;
+    let inner = futures_util::stream::once(async { Ok::<_, Status>(1_u8) }).chain(
+        futures_util::stream::once(async {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            Ok::<_, Status>(2_u8)
+        }),
+    );
+    let mut stream = fixture.service.output_stream(inner)?;
+    assert_eq!(Fixture::next(&mut stream).await?, 1);
+    assert_eq!(Fixture::next(&mut stream).await?, 2);
+    assert!(stream.next().await.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn observability_grpc_trace_timeout() -> TestResult {
+    let fixture = Fixture::with_limits(QueryLimits {
+        output_timeout: Duration::from_nanos(1),
+        ..QueryLimits::default()
+    })?;
+    let accepted = fixture.seed([1; 16], 6)?;
+    let owner = TraceOwner::new(fixture.service.data()?.store.clone());
+    let before = owner.read(
+        [1; 16],
+        [6; 16],
+        &fixture.access([1; 16]),
+        ClientGrpcOwner::now()?,
+    )?;
+    let mut stream = fixture
+        .service
+        .watch_trace(fixture.request(
+            proto::WatchTraceRequest {
+                trace_id: vec![6; 16],
+                bookmark: Vec::new(),
+            },
+            false,
+        )?)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        Fixture::next(&mut stream).await?.payload,
+        Some(proto::trace_frame::Payload::Metadata(_))
+    ));
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    let error = stream.next().await.ok_or("trace output timeout absent")?;
+    assert_eq!(
+        error.err().map(|error| error.code()),
+        Some(tonic::Code::DeadlineExceeded)
+    );
+    assert!(stream.next().await.is_none());
+    assert_eq!(
+        owner.read(
+            [1; 16],
+            [6; 16],
+            &fixture.access([1; 16]),
+            ClientGrpcOwner::now()?
+        )?,
+        before
+    );
+    fixture.record(&accepted)?;
+    fixture.finish(&accepted)?;
+    let receipt = fixture
+        .service
+        .data()?
+        .store
+        .trace_receipt(&accepted.binding(0)?.identity)?;
+    assert!(receipt.is_some_and(|receipt| receipt.last_sequence == 1 && receipt.terminal.is_some()));
+    Ok(())
 }
 
 #[tokio::test]

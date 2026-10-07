@@ -879,7 +879,12 @@ fn query_input_catalog() -> TestResult {
     for (row, (name, position)) in result.rows.iter().zip(expected) {
         assert_eq!(row[relation], Value::Text(name.into()));
         assert_eq!(row[ordinal], Value::UInt(position));
-        assert_eq!(row[readiness], Value::Text("available".into()));
+        let state = if name == "behaviors" {
+            "disabled"
+        } else {
+            "available"
+        };
+        assert_eq!(row[readiness], Value::Text(state.into()));
     }
     let kernel = result
         .rows

@@ -5,14 +5,18 @@ use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_core::{stream::FusedStream, Stream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 
 use super::authorization::QuerySession;
 use super::budget::QueryLease;
 use super::frame::{
-    QueryCheckpoint, QueryCoverageRows, QueryFrame, QueryReadScope, QueryTerminalReason,
+    QueryCheckpoint, QueryCoverageRows, QueryFrame, QueryPayload, QueryReadScope,
+    QueryTerminalReason,
 };
-use super::{QueryAuthorization, QueryOperation, QueryOwner, QueryPlan, QueryRead, QueryTemplate};
+use super::{
+    QueryAuthorization, QueryOperation, QueryOwner, QueryPlan, QueryRead, QueryResult,
+    QueryTemplate,
+};
 use crate::{AnalysisReadControl, AnalysisStoreMetaV1, Result};
 
 /// A host clock. A clock-change signal is optional; expiry timers also sample it.
@@ -42,23 +46,17 @@ impl QueryClock for SystemQueryClock {
 }
 
 pub struct QueryStream {
-    receiver: mpsc::Receiver<QueryFrame>,
+    state: Option<QueryState>,
+    next: Option<Pin<Box<dyn Future<Output = (QueryState, Result<Option<QueryFrame>>)> + Send>>>,
     control: Arc<AnalysisReadControl>,
     stop: watch::Sender<bool>,
     session: Option<QuerySession>,
     done: bool,
-    pending: Option<Pin<Box<dyn Future<Output = Result<QueryFrame>> + Send>>>,
+    checking: Option<Pin<Box<dyn Future<Output = Result<QueryFrame>> + Send>>>,
     lease: Option<Arc<QueryLease>>,
-    #[cfg(test)]
-    pub(super) task: tokio::task::JoinHandle<()>,
 }
 
 impl QueryStream {
-    #[cfg(test)]
-    pub(super) fn queued(&self) -> usize {
-        self.receiver.len()
-    }
-
     pub fn cancel(&self) -> Result<()> {
         self.stop.send_replace(true);
         self.control.cancel()
@@ -66,12 +64,10 @@ impl QueryStream {
 
     fn close(&mut self) {
         self.done = true;
-        self.receiver.close();
-        self.pending = None;
+        self.next = None;
+        self.checking = None;
+        self.state = None;
         self.lease = None;
-        while let Ok(frame) = self.receiver.try_recv() {
-            drop(frame);
-        }
         let _cancelled = self.cancel();
     }
 }
@@ -89,20 +85,61 @@ impl Stream for QueryStream {
                 return Poll::Ready(Some(Err(error)));
             }
         }
-        let frame = if let Some(pending) = self.pending.as_mut() {
+        if tokio::runtime::Handle::try_current().is_err() {
+            self.close();
+            return Poll::Ready(Some(
+                crate::QueryInvalidSnafu {
+                    field: "query follow runtime",
+                }
+                .fail(),
+            ));
+        }
+        let frame = if let Some(pending) = self.checking.as_mut() {
             match pending.as_mut().poll(context) {
                 Poll::Ready(result) => {
-                    self.pending = None;
+                    self.checking = None;
                     Poll::Ready(Some(result))
                 }
                 Poll::Pending => Poll::Pending,
             }
         } else {
-            match self.receiver.poll_recv(context) {
-                Poll::Ready(Some(frame)) if frame.reads.is_some() => {
+            if self.next.is_none() {
+                let Some(state) = self.state.take() else {
+                    self.close();
+                    return Poll::Ready(None);
+                };
+                self.next = Some(Box::pin(Self::advance(state)));
+            }
+            let Some(next) = self.next.as_mut() else {
+                self.close();
+                return Poll::Ready(Some(
+                    crate::QueryInvalidSnafu {
+                        field: "query next frame",
+                    }
+                    .fail(),
+                ));
+            };
+            let result = match next.as_mut().poll(context) {
+                Poll::Ready((state, result)) => {
+                    self.next = None;
+                    self.state = Some(state);
+                    result
+                }
+                Poll::Pending => return Poll::Pending,
+            };
+            match result {
+                Ok(Some(frame)) if frame.reads.is_some() => {
                     let lease = self.lease.clone();
                     let session = self.session.clone();
-                    self.pending = Some(Box::pin(async move {
+                    let mut stop = self.stop.subscribe();
+                    let cancelled = matches!(
+                        frame.payload,
+                        QueryPayload::Terminal {
+                            reason: QueryTerminalReason::Cancelled,
+                            ..
+                        }
+                    );
+                    self.checking = Some(Box::pin(async move {
                         {
                             let check = frame.check_stream(lease);
                             tokio::pin!(check);
@@ -110,6 +147,10 @@ impl Stream for QueryStream {
                                 session.as_ref().map(|session| session.authority.changes());
                             loop {
                                 tokio::select! {
+                                    biased;
+                                    _ = stop.changed(), if !cancelled => {
+                                        return crate::AnalysisReadCancelledSnafu.fail();
+                                    },
                                     result = &mut check => { result?; break; },
                                     changed = async {
                                         match changes.as_mut() {
@@ -131,9 +172,9 @@ impl Stream for QueryStream {
                     context.waker().wake_by_ref();
                     Poll::Pending
                 }
-                Poll::Ready(Some(frame)) => Poll::Ready(Some(Ok(frame))),
-                Poll::Ready(None) => Poll::Ready(None),
-                Poll::Pending => Poll::Pending,
+                Ok(Some(frame)) => Poll::Ready(Some(Ok(frame))),
+                Ok(None) => Poll::Ready(None),
+                Err(error) => Poll::Ready(Some(Err(error))),
             }
         };
         if let Some(session) = &self.session {
@@ -143,14 +184,23 @@ impl Stream for QueryStream {
             }
         }
         match frame {
-            Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(frame))),
+            Poll::Ready(Some(Ok(frame))) => {
+                if let QueryPayload::Checkpoint { checkpoint, .. } = &frame.payload {
+                    if let Some(state) = self.state.as_mut() {
+                        state.after = checkpoint.position();
+                        state.checkpoint = Some(checkpoint.clone());
+                        state.seen = Some(state.revision);
+                        state.last_eval = Some(tokio::time::Instant::now());
+                    }
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
             Poll::Ready(Some(Err(error))) => {
                 self.close();
                 Poll::Ready(Some(Err(error)))
             }
             Poll::Ready(None) => {
-                self.done = true;
-                self.lease = None;
+                self.close();
                 Poll::Ready(None)
             }
             Poll::Pending => Poll::Pending,
@@ -171,14 +221,21 @@ impl Drop for QueryStream {
     }
 }
 
-struct QueryFollow {
+#[derive(Clone, Copy)]
+enum QueryYield {
+    Idle,
+    Metadata,
+    Data,
+    Checkpoint,
+}
+
+struct QueryState {
     owner: Arc<QueryOwner>,
     plan: QueryPlan,
     clock: Arc<dyn QueryClock>,
     changes: watch::Receiver<u64>,
     clock_changes: Option<watch::Receiver<()>>,
     stop: watch::Receiver<bool>,
-    sender: mpsc::Sender<QueryFrame>,
     control: Arc<AnalysisReadControl>,
     checkpoint: Option<QueryCheckpoint>,
     meta: AnalysisStoreMetaV1,
@@ -187,7 +244,23 @@ struct QueryFollow {
     session: Option<QuerySession>,
     auth_changes: Option<watch::Receiver<u64>>,
     follows: bool,
-    _lease: Arc<QueryLease>,
+    started: bool,
+    finished: bool,
+    after: Option<crate::StorePositionV1>,
+    dirty: bool,
+    seen: Option<u64>,
+    initial: bool,
+    last_eval: Option<tokio::time::Instant>,
+    next_expiry: Option<u64>,
+    next_health: tokio::time::Instant,
+    clock_sample: Option<(u64, tokio::time::Instant)>,
+    clock_signal: bool,
+    clock_changed: bool,
+    revision: u64,
+    result: Option<QueryResult>,
+    candidate: Option<QueryCheckpoint>,
+    exhausted: bool,
+    yielding: QueryYield,
 }
 
 impl QueryOwner {
@@ -257,17 +330,10 @@ impl QueryOwner {
         clock: Arc<dyn QueryClock>,
         session: Option<QuerySession>,
     ) -> Result<QueryStream> {
-        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
-            crate::QueryInvalidSnafu {
-                field: "query follow runtime",
-            }
-            .build()
-        })?;
         let lease = Arc::new(self.budget.stream(plan.selection.tenant_id)?);
-        // Register before the task can capture its first storage snapshot.
+        // Register before the first poll can capture storage state.
         let changes = self.store.subscribe_revision();
         let clock_changes = clock.changes();
-        let (sender, receiver) = mpsc::channel(1);
         let (stop, stopped) = watch::channel(false);
         let control = Arc::new(AnalysisReadControl::default());
         let auth_changes = session.as_ref().map(|session| session.authority.changes());
@@ -275,14 +341,14 @@ impl QueryOwner {
             QueryTemplate::Client(sql) => sql.follow(),
             _ => true,
         };
-        let follow = QueryFollow {
+        let after = checkpoint.as_ref().and_then(QueryCheckpoint::position);
+        let state = QueryState {
             owner: self.clone(),
             plan,
             clock,
             changes,
             clock_changes,
             stop: stopped,
-            sender,
             control: control.clone(),
             checkpoint,
             meta: self.identity.clone(),
@@ -291,133 +357,179 @@ impl QueryOwner {
             session: session.clone(),
             auth_changes,
             follows,
-            _lease: lease.clone(),
+            after,
+            started: false,
+            finished: false,
+            dirty: true,
+            seen: None,
+            initial: true,
+            last_eval: None,
+            next_expiry: None,
+            next_health: tokio::time::Instant::now() + self.limits.heartbeat,
+            clock_sample: None,
+            clock_signal: false,
+            clock_changed: false,
+            revision: 0,
+            result: None,
+            candidate: None,
+            exhausted: false,
+            yielding: QueryYield::Idle,
         };
-        let _task = runtime.spawn(follow.run());
         Ok(QueryStream {
-            receiver,
+            state: Some(state),
+            next: None,
             control,
             stop,
             session,
             done: false,
-            pending: None,
+            checking: None,
             lease: Some(lease),
-            #[cfg(test)]
-            task: _task,
         })
     }
 }
 
-impl QueryFollow {
-    async fn run(mut self) {
-        let result = match self.run_loop().await {
-            Err(crate::Error::AnalysisReadCancelled { .. }) => Ok(QueryTerminalReason::Cancelled),
+impl QueryStream {
+    async fn advance(mut state: QueryState) -> (QueryState, Result<Option<QueryFrame>>) {
+        if state.finished {
+            return (state, Ok(None));
+        }
+        let mut stop = state.stop.clone();
+        let mut changes = state.auth_changes.clone();
+        let session = state.session.clone();
+        let result = {
+            let next = Self::next_frame(&mut state);
+            tokio::pin!(next);
+            loop {
+                if *stop.borrow() {
+                    break crate::AnalysisReadCancelledSnafu.fail();
+                }
+                if let Some(session) = &session {
+                    if let Err(error) = session.check() {
+                        break Err(error);
+                    }
+                }
+                tokio::select! {
+                    result = &mut next => break result,
+                    _ = stop.changed() => {},
+                    changed = async {
+                        match changes.as_mut() {
+                            Some(changes) => changes.changed().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        if changed.is_err() { break crate::QueryDeniedSnafu.fail(); }
+                    },
+                }
+            }
+        };
+        let result = match result {
+            Err(crate::Error::AnalysisReadCancelled { .. }) => {
+                Self::finish(&mut state, Ok(QueryTerminalReason::Cancelled))
+            }
+            Err(error @ crate::Error::QueryDenied { .. }) => Err(error),
+            Err(error) => Self::finish(&mut state, Err(error)),
             result => result,
         };
-        let stalled = matches!(
-            &result,
-            Ok(QueryTerminalReason::OutputTimeout | QueryTerminalReason::Closed)
-        );
-        if matches!(result, Err(crate::Error::QueryDenied { .. })) {
-            self.coverage = None;
-            self.reads = None;
-            self.checkpoint = None;
-        }
-        let permit = if stalled {
-            self.sender.try_reserve().ok()
-        } else {
-            tokio::time::timeout(self.owner.limits.output_timeout, self.sender.reserve())
-                .await
-                .ok()
-                .and_then(std::result::Result::ok)
-        };
-        let Some(permit) = permit else {
-            return;
-        };
-        if self.check_auth().is_err() {
-            return;
-        }
-        let Ok(lease) = self.owner.budget.output(std::mem::size_of::<QueryFrame>()) else {
-            return;
-        };
-        let meta = &self.meta;
-        let frame = match result {
-            Ok(reason) => QueryFrame::terminal(
-                &self.plan,
-                meta,
-                reason,
-                self.checkpoint.clone(),
-                std::mem::take(&mut self.coverage),
-            ),
-            Err(ref error) => QueryFrame::error(
-                &self.plan,
-                meta,
-                error,
-                self.checkpoint.clone(),
-                std::mem::take(&mut self.coverage),
-            ),
-        };
-        if let Ok(frame) = frame.and_then(|mut frame| {
-            frame.reads = self.reads.clone();
-            self.owner.check_output(frame.total_bytes()?)?;
-            frame.attach_lease(lease)
-        }) {
-            if self.check_auth().is_err() {
-                return;
-            }
-            permit.send(frame);
-        }
+        (state, result)
     }
 
-    async fn run_loop(&mut self) -> Result<QueryTerminalReason> {
-        let owner = self.owner.clone();
-        let meta = tokio::task::spawn_blocking(move || owner.store.meta())
-            .await
-            .map_err(|_| {
-                crate::QueryInvalidSnafu {
-                    field: "query follow task",
-                }
-                .build()
-            })??;
-        self.meta = meta.clone();
-        if let Some(checkpoint) = &self.checkpoint {
-            checkpoint.validate(&self.plan, &meta, None)?;
+    async fn next_frame(state: &mut QueryState) -> Result<Option<QueryFrame>> {
+        if state.finished {
+            return Ok(None);
         }
-        let mut after = self.checkpoint.as_ref().and_then(QueryCheckpoint::position);
-        let mut dirty = true;
-        let mut seen = None;
-        let mut initial = true;
-        let mut last_eval = None;
-        let mut next_expiry = None;
-        let mut next_health = tokio::time::Instant::now() + self.owner.limits.heartbeat;
-        let mut clock_sample = None;
-        let mut clock_signal = false;
+        if !state.started {
+            let owner = state.owner.clone();
+            let meta = tokio::task::spawn_blocking(move || owner.store.meta())
+                .await
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "query follow task",
+                    }
+                    .build()
+                })??;
+            if let Some(checkpoint) = &state.checkpoint {
+                checkpoint.validate(&state.plan, &meta, None)?;
+            }
+            state.meta = meta;
+            state.started = true;
+            state.next_health = tokio::time::Instant::now() + state.owner.limits.heartbeat;
+        }
         loop {
-            self.check_auth()?;
-            if *self.stop.borrow() {
-                return Ok(QueryTerminalReason::Cancelled);
+            Self::check_auth(state)?;
+            match state.yielding {
+                QueryYield::Metadata => {
+                    let result = state.result.as_ref().ok_or_else(|| {
+                        crate::QueryInvalidSnafu {
+                            field: "staged query result",
+                        }
+                        .build()
+                    })?;
+                    let bytes = QueryFrame::metadata_bytes(result, &state.owner.limits)?;
+                    state.yielding = QueryYield::Data;
+                    state.initial = false;
+                    return Self::emit(state, bytes, || {
+                        QueryFrame::metadata(
+                            &state.plan,
+                            result,
+                            &state.owner.limits,
+                            state.revision,
+                        )
+                    });
+                }
+                QueryYield::Data => {
+                    let result = state.result.take().ok_or_else(|| {
+                        crate::QueryInvalidSnafu {
+                            field: "staged query result",
+                        }
+                        .build()
+                    })?;
+                    state.yielding = QueryYield::Checkpoint;
+                    return Self::emit(
+                        state,
+                        std::mem::size_of::<QueryFrame>() - std::mem::size_of::<QueryResult>(),
+                        || {
+                            let mut frame = QueryFrame::data(&state.plan, result)?;
+                            frame.clock_changed = state.clock_changed;
+                            Ok(frame)
+                        },
+                    );
+                }
+                QueryYield::Checkpoint => {
+                    let checkpoint = state.candidate.take().ok_or_else(|| {
+                        crate::QueryInvalidSnafu {
+                            field: "staged query checkpoint",
+                        }
+                        .build()
+                    })?;
+                    state.yielding = QueryYield::Idle;
+                    return Self::emit(state, std::mem::size_of::<QueryFrame>(), || {
+                        QueryFrame::checkpoint(checkpoint, state.coverage.clone(), state.exhausted)
+                    });
+                }
+                QueryYield::Idle => {}
             }
-            if self.sender.is_closed() {
-                return Ok(QueryTerminalReason::Closed);
+            if !state.initial && !state.follows {
+                return Self::finish(state, Ok(QueryTerminalReason::Completed));
             }
-            let _revision = *self.changes.borrow_and_update();
-            let now_ns = self.clock.now_ns()?;
+            let _revision = *state.changes.borrow_and_update();
+            let now_ns = state.clock.now_ns()?;
             let now = tokio::time::Instant::now();
-            let clock_changed = clock_signal
-                || clock_sample.is_some_and(|(time, instant): (u64, tokio::time::Instant)| {
+            let clock_changed = state.clock_signal
+                || state.clock_sample.is_some_and(|(time, instant)| {
                     let elapsed =
                         u64::try_from(now.duration_since(instant).as_nanos()).unwrap_or(u64::MAX);
                     now_ns.abs_diff(time.saturating_add(elapsed)) > 1_000_000_000
                 });
-            clock_sample = Some((now_ns, now));
-            clock_signal = false;
-            let moving = self.plan.moving_seconds().is_some();
-            if moving && (clock_changed || next_expiry.is_some_and(|expiry| now_ns >= expiry)) {
-                dirty = true;
+            state.clock_sample = Some((now_ns, now));
+            state.clock_signal = false;
+            let moving = state.plan.moving_seconds().is_some();
+            if moving && (clock_changed || state.next_expiry.is_some_and(|expiry| now_ns >= expiry))
+            {
+                state.dirty = true;
             }
-            let owner = self.owner.clone();
-            let selection = self.plan.dependencies(now_ns)?;
-            let control = self.control.stage(self.owner.limits.extract_timeout)?;
+            let owner = state.owner.clone();
+            let selection = state.plan.dependencies(now_ns)?;
+            let control = state.control.stage(state.owner.limits.extract_timeout)?;
             let (meta, revision) = tokio::task::spawn_blocking(move || {
                 owner.store.dependency_revision(&selection, &control)
             })
@@ -428,19 +540,20 @@ impl QueryFollow {
                 }
                 .build()
             })??;
-            self.meta = meta;
-            dirty |= seen != Some(revision);
-            let ready = self.plan.operation() == QueryOperation::Append
-                || last_eval.is_none_or(|last| now >= last + self.owner.limits.replace_interval);
-            let mut evaluated = false;
-            if dirty && ready {
-                let owner = self.owner.clone();
-                let plan = self.plan.clone();
-                let control = self.control.stage(self.owner.limits.extract_timeout)?;
-                let paged = self.follows && plan.operation() == QueryOperation::Append;
-                let lease = self.reserve(&control).await?;
+            state.meta = meta;
+            state.dirty |= state.seen != Some(revision);
+            let ready = state.plan.operation() == QueryOperation::Append
+                || state
+                    .last_eval
+                    .is_none_or(|last| now >= last + state.owner.limits.replace_interval);
+            if state.dirty && ready {
+                let owner = state.owner.clone();
+                let plan = state.plan.clone();
+                let control = state.control.stage(state.owner.limits.extract_timeout)?;
+                let paged = state.follows && plan.operation() == QueryOperation::Append;
+                let lease = Self::reserve(state, &control).await?;
                 let read = if paged {
-                    QueryRead::Append(after)
+                    QueryRead::Append(state.after)
                 } else {
                     QueryRead::Snapshot
                 };
@@ -451,72 +564,33 @@ impl QueryFollow {
                         read,
                         Arc::new(control),
                         lease,
-                        self.session.clone(),
+                        state.session.clone(),
                     )
                     .await?;
-                let checkpoint = QueryCheckpoint::from_result(&self.plan, &result)?;
-                let exhausted = result.exhausted;
-                self.meta = result.meta.clone();
-                self.coverage = Some(result.sources.clone());
-                self.reads = result.reads.clone();
-                next_expiry = result.next_expiry_ns;
-                dirty = paged && !result.exhausted;
-                if initial {
-                    if !self
-                        .send(
-                            QueryFrame::metadata_bytes(&result, &self.owner.limits)?,
-                            || {
-                                QueryFrame::metadata(
-                                    &self.plan,
-                                    &result,
-                                    &self.owner.limits,
-                                    revision,
-                                )
-                            },
-                        )
-                        .await?
-                    {
-                        return Ok(self.stop_reason());
-                    }
-                    initial = false;
-                }
-                if !self
-                    .send(
-                        std::mem::size_of::<QueryFrame>()
-                            - std::mem::size_of::<super::QueryResult>(),
-                        || {
-                            let mut frame = QueryFrame::data(&self.plan, result)?;
-                            frame.clock_changed = clock_changed;
-                            Ok(frame)
-                        },
-                    )
-                    .await?
-                {
-                    return Ok(self.stop_reason());
-                }
-                if !self
-                    .send(std::mem::size_of::<QueryFrame>(), || {
-                        QueryFrame::checkpoint(checkpoint.clone(), self.coverage.clone(), exhausted)
-                    })
-                    .await?
-                {
-                    return Ok(self.stop_reason());
-                }
-                after = checkpoint.position();
-                self.checkpoint = Some(checkpoint);
-                seen = Some(revision);
-                last_eval = Some(tokio::time::Instant::now());
-                if !self.follows {
-                    return Ok(QueryTerminalReason::Completed);
-                }
-                evaluated = true;
+                state.candidate = Some(QueryCheckpoint::from_result(&state.plan, &result)?);
+                state.exhausted = result.exhausted;
+                state.meta = result.meta.clone();
+                state.coverage = Some(result.sources.clone());
+                state.reads = result.reads.clone();
+                state.next_expiry = result.next_expiry_ns;
+                state.dirty = paged && !result.exhausted;
+                state.revision = revision;
+                state.clock_changed = clock_changed;
+                state.result = Some(result);
+                state.yielding = if state.initial {
+                    QueryYield::Metadata
+                } else {
+                    QueryYield::Data
+                };
+                continue;
             }
-            if !initial && (tokio::time::Instant::now() >= next_health || clock_changed) {
-                let owner = self.owner.clone();
-                let plan = self.plan.clone();
-                let control = self.control.stage(self.owner.limits.extract_timeout)?;
-                let lease = self.reserve(&control).await?;
-                let session = self.session.clone();
+            if !state.initial && (tokio::time::Instant::now() >= state.next_health || clock_changed)
+            {
+                let owner = state.owner.clone();
+                let plan = state.plan.clone();
+                let control = state.control.stage(state.owner.limits.extract_timeout)?;
+                let lease = Self::reserve(state, &control).await?;
+                let session = state.session.clone();
                 let (meta, coverage, health) = tokio::task::spawn_blocking(move || {
                     control.check()?;
                     if let Some(session) = &session {
@@ -531,54 +605,44 @@ impl QueryFollow {
                     }
                     .build()
                 })??;
-                self.meta = meta.clone();
-                self.coverage = Some(coverage);
-                if !self
-                    .send(std::mem::size_of::<QueryFrame>(), || {
-                        QueryFrame::health(
-                            &self.plan,
-                            &meta,
-                            revision,
-                            self.coverage.clone(),
-                            health,
-                            clock_changed,
-                        )
-                    })
-                    .await?
-                {
-                    return Ok(self.stop_reason());
-                }
-                next_health = tokio::time::Instant::now() + self.owner.limits.heartbeat;
+                state.meta = meta.clone();
+                state.coverage = Some(coverage);
+                state.next_health = tokio::time::Instant::now() + state.owner.limits.heartbeat;
+                return Self::emit(state, std::mem::size_of::<QueryFrame>(), || {
+                    QueryFrame::health(
+                        &state.plan,
+                        &meta,
+                        revision,
+                        state.coverage.clone(),
+                        health,
+                        clock_changed,
+                    )
+                });
             }
-            if evaluated {
-                continue;
-            }
-            let mut wake = next_health;
-            if let Some(expiry) = self
+            let mut wake = state.next_health;
+            if let Some(expiry) = state
                 .session
                 .as_ref()
                 .and_then(|session| session.authority.expires_ns())
             {
                 wake = wake.min(now + Duration::from_nanos(expiry.saturating_sub(now_ns)));
             }
-            if dirty {
-                if let Some(last) = last_eval {
-                    wake = wake.min(last + self.owner.limits.replace_interval);
+            if state.dirty {
+                if let Some(last) = state.last_eval {
+                    wake = wake.min(last + state.owner.limits.replace_interval);
                 }
             }
-            if moving && !dirty {
-                if let Some(expiry) = next_expiry {
+            if moving && !state.dirty {
+                if let Some(expiry) = state.next_expiry {
                     wake = wake.min(now + Duration::from_nanos(expiry.saturating_sub(now_ns)));
                 }
             }
             tokio::select! {
-                _ = self.stop.changed() => {},
-                _ = self.sender.closed() => return Ok(QueryTerminalReason::Closed),
-                changed = self.changes.changed() => {
-                    if changed.is_err() { return Ok(QueryTerminalReason::Closed); }
+                changed = state.changes.changed() => {
+                    if changed.is_err() { return Self::finish(state, Ok(QueryTerminalReason::Closed)); }
                 },
                 changed = async {
-                    match self.auth_changes.as_mut() {
+                    match state.auth_changes.as_mut() {
                         Some(changes) => changes.changed().await,
                         None => std::future::pending().await,
                     }
@@ -586,92 +650,75 @@ impl QueryFollow {
                     if changed.is_err() { return crate::QueryDeniedSnafu.fail(); }
                 },
                 changed = async {
-                    match self.clock_changes.as_mut() {
+                    match state.clock_changes.as_mut() {
                         Some(changes) => changes.changed().await,
                         None => std::future::pending().await,
                     }
                 } => {
-                    if changed.is_ok() { clock_signal = true; } else { self.clock_changes = None; }
+                    if changed.is_ok() { state.clock_signal = true; } else { state.clock_changes = None; }
                 },
                 _ = tokio::time::sleep_until(wake) => {},
             }
         }
     }
 
-    fn stop_reason(&self) -> QueryTerminalReason {
-        if *self.stop.borrow() {
-            QueryTerminalReason::Cancelled
-        } else if self.sender.is_closed() {
-            QueryTerminalReason::Closed
-        } else {
-            QueryTerminalReason::OutputTimeout
-        }
+    fn emit(
+        state: &QueryState,
+        bytes: usize,
+        create: impl FnOnce() -> Result<QueryFrame>,
+    ) -> Result<Option<QueryFrame>> {
+        Self::check_auth(state)?;
+        let lease = state.owner.budget.output(bytes)?;
+        let mut frame = create()?;
+        frame.reads = state.reads.clone();
+        state.owner.check_output(frame.total_bytes()?)?;
+        Ok(Some(frame.attach_lease(lease)?))
     }
 
-    async fn reserve(&mut self, control: &AnalysisReadControl) -> Result<QueryLease> {
-        let owner = self.owner.clone();
-        let plan = self.plan.clone();
-        let wait = owner.reserve_wait(&plan);
+    fn finish(
+        state: &mut QueryState,
+        result: Result<QueryTerminalReason>,
+    ) -> Result<Option<QueryFrame>> {
+        state.finished = true;
+        state.result = None;
+        state.candidate = None;
+        Self::check_auth(state)?;
+        let coverage = state.coverage.take();
+        Self::emit(state, std::mem::size_of::<QueryFrame>(), || match result {
+            Ok(reason) => QueryFrame::terminal(
+                &state.plan,
+                &state.meta,
+                reason,
+                state.checkpoint.clone(),
+                coverage,
+            ),
+            Err(ref error) => QueryFrame::error(
+                &state.plan,
+                &state.meta,
+                error,
+                state.checkpoint.clone(),
+                coverage,
+            ),
+        })
+    }
+
+    async fn reserve(state: &QueryState, control: &AnalysisReadControl) -> Result<QueryLease> {
+        let wait = state.owner.reserve_wait(&state.plan);
         let deadline = tokio::time::sleep(control.remaining()?);
         tokio::pin!(wait, deadline);
-        loop {
-            self.check_auth()?;
-            control.check()?;
-            if *self.stop.borrow() || self.sender.is_closed() {
-                return crate::AnalysisReadCancelledSnafu.fail();
-            }
-            tokio::select! {
-                result = &mut wait => {
-                    let lease = result?;
-                    self.check_auth()?;
-                    control.check()?;
-                    if *self.stop.borrow() || self.sender.is_closed() {
-                        return crate::AnalysisReadCancelledSnafu.fail();
-                    }
-                    return Ok(lease);
-                },
-                _ = &mut deadline => return crate::AnalysisReadDeadlineSnafu.fail(),
-                _ = self.stop.changed() => return crate::AnalysisReadCancelledSnafu.fail(),
-                _ = self.sender.closed() => return crate::AnalysisReadCancelledSnafu.fail(),
-                changed = async {
-                    match self.auth_changes.as_mut() {
-                        Some(changes) => changes.changed().await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    if changed.is_err() { return crate::QueryDeniedSnafu.fail(); }
-                },
-            }
-        }
-    }
-
-    async fn send(&self, bytes: usize, frame: impl FnOnce() -> Result<QueryFrame>) -> Result<bool> {
-        self.check_auth()?;
-        if *self.stop.borrow() {
-            return Ok(false);
-        }
-        let mut stop = self.stop.clone();
         tokio::select! {
-            _ = stop.changed() => Ok(false),
-            result = tokio::time::timeout(self.owner.limits.output_timeout, self.sender.reserve()) => {
-                match result {
-                    Ok(Ok(permit)) => {
-                        self.check_auth()?;
-                        let lease = self.owner.budget.output(bytes)?;
-                        let mut frame = frame()?;
-                        frame.reads = self.reads.clone();
-                        self.owner.check_output(frame.total_bytes()?)?;
-                        permit.send(frame.attach_lease(lease)?);
-                        Ok(true)
-                    },
-                    _ => Ok(false),
-                }
+            result = &mut wait => {
+                let lease = result?;
+                Self::check_auth(state)?;
+                control.check()?;
+                Ok(lease)
             },
+            _ = &mut deadline => crate::AnalysisReadDeadlineSnafu.fail(),
         }
     }
 
-    fn check_auth(&self) -> Result<()> {
-        if let Some(session) = &self.session {
+    fn check_auth(state: &QueryState) -> Result<()> {
+        if let Some(session) = &state.session {
             session.check()?;
         }
         Ok(())

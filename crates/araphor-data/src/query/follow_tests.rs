@@ -12,7 +12,7 @@ use super::{
     QueryCheckpoint, QueryClock, QueryFrame, QueryLimits, QueryOperation, QueryOwner, QueryPayload,
     QueryStream, QueryTemplate, QueryTerminalReason, QUERY_SCHEMA_VERSION,
 };
-use crate::{AnalysisReadControl, Result, StorePositionV1};
+use crate::{Result, StorePositionV1};
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const WAIT: Duration = Duration::from_secs(5);
@@ -60,28 +60,12 @@ impl QueryClock for GateClock {
 struct ExpiryClock {
     now: AtomicU64,
     reads: AtomicUsize,
-    second: Mutex<Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl QueryClock for ExpiryClock {
     fn now_ns(&self) -> Result<u64> {
         let now = self.now.load(Ordering::SeqCst);
-        if self.reads.fetch_add(1, Ordering::SeqCst) == 1 {
-            if let Some((entered, released)) = self
-                .second
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take()
-            {
-                let _entered = entered.send(());
-                released.recv_timeout(WAIT).map_err(|_| {
-                    crate::QueryInvalidSnafu {
-                        field: "test expiry clock gate",
-                    }
-                    .build()
-                })?;
-            }
-        }
+        self.reads.fetch_add(1, Ordering::SeqCst);
         Ok(now)
     }
 }
@@ -148,7 +132,56 @@ async fn cancelled(stream: &mut QueryStream, last: Option<&QueryCheckpoint>) -> 
         .is_none());
     assert!(stream.is_terminated());
     assert!(stream.next().await.is_none());
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
+    Ok(())
+}
+
+#[test]
+fn query_follow_runtime() -> TestResult {
+    use futures_util::FutureExt as _;
+    let fixture = QueryFixture::new()?;
+    fixture.event(1, 1, 7)?;
+    let owner = Arc::new(fixture.owner(QueryLimits::default())?);
+    let plan = fixture.plan(QueryTemplate::Events { operation: None })?;
+    let clock = Arc::new(ExpiryClock {
+        now: AtomicU64::new(1),
+        reads: AtomicUsize::new(0),
+    });
+    let mut stream = owner.follow_clock(plan.clone(), None, clock.clone())?;
+    assert_eq!(clock.reads.load(Ordering::SeqCst), 0);
+    assert!(owner
+        .input_refs
+        .lock()
+        .map_err(|_| "input reference lock failed")?
+        .is_empty());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let metadata = next(&mut stream).await?;
+        assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
+        drop(metadata);
+        let data = next(&mut stream).await?;
+        assert_eq!(cursors(&data)?, vec![1]);
+        drop(data);
+        let complete = checkpoint(&next(&mut stream).await?)?;
+        cancelled(&mut stream, Some(&complete)).await
+    })?;
+    inputs_released(&owner);
+    let clock = Arc::new(ExpiryClock {
+        now: AtomicU64::new(1),
+        reads: AtomicUsize::new(0),
+    });
+    let mut stream = owner.follow_clock(plan, None, clock.clone())?;
+    assert!(matches!(
+        stream.next().now_or_never(),
+        Some(Some(Err(crate::Error::QueryInvalid {
+            field: "query follow runtime",
+            ..
+        })))
+    ));
+    assert!(stream.is_terminated());
+    assert!(matches!(stream.next().now_or_never(), Some(None)));
+    assert_eq!(clock.reads.load(Ordering::SeqCst), 0);
     Ok(())
 }
 
@@ -160,12 +193,17 @@ async fn query_follow_snapshot_race() -> TestResult {
     let plan = fixture.plan(QueryTemplate::Events { operation: None })?;
     let (clock, entered, release) = GateClock::new();
     let mut stream = owner.follow_clock(plan.clone(), None, clock)?;
+    let demand = tokio::spawn(async move {
+        let frame = next(&mut stream).await;
+        (stream, frame)
+    });
     tokio::time::timeout(WAIT, entered).await??;
     fixture.event(2, 2, 7)?;
     let captured = fixture.store.meta()?;
     release.send(())?;
 
-    let metadata = next(&mut stream).await?;
+    let (mut stream, metadata) = tokio::time::timeout(WAIT, demand).await??;
+    let metadata = metadata?;
     assert_eq!(metadata.schema_version, QUERY_SCHEMA_VERSION);
     assert_eq!(metadata.operation, QueryOperation::Append);
     assert_eq!(metadata.read_revision, captured.commit_revision);
@@ -315,40 +353,26 @@ async fn query_follow_autonomous_expiry() -> TestResult {
     assert!(WAIT < limits.heartbeat);
     let owner = Arc::new(fixture.owner(limits)?);
     let plan = fixture.plan(QueryTemplate::MovingCount { seconds: 1 })?;
-    let (entered, entering) = oneshot::channel();
-    let (release, released) = mpsc::channel();
     let clock = Arc::new(ExpiryClock {
         now: AtomicU64::new(3_000_000_000),
         reads: AtomicUsize::new(0),
-        second: Mutex::new(Some((entered, released))),
     });
     assert!(clock.changes().is_none());
-    let deadline = tokio::time::Instant::now() + WAIT;
     let mut stream = owner.follow_clock(plan, None, clock.clone())?;
-    let mut last = None;
-    let proof: TestResult<_> = match tokio::time::timeout_at(deadline, async {
-        let metadata = next(&mut stream).await?;
-        let initial = next(&mut stream).await?;
-        let first = checkpoint(&next(&mut stream).await?)?;
-        last = Some(first.clone());
-        entering.await?;
-        // The idle loop must keep its old sample after this silent advance.
+    let metadata = next(&mut stream).await?;
+    let initial = next(&mut stream).await?;
+    let first = checkpoint(&next(&mut stream).await?)?;
+    let expired = {
+        let demand = stream.next();
+        tokio::pin!(demand);
+        assert!(futures_util::poll!(&mut demand).is_pending());
         clock.now.store(4_000_000_000, Ordering::SeqCst);
-        release.send(())?;
-        let expired = next(&mut stream).await?;
-        let complete = checkpoint(&next(&mut stream).await?)?;
-        last = Some(complete.clone());
-        Ok((metadata, initial, first, expired, complete))
-    })
-    .await
-    {
-        Ok(proof) => proof,
-        Err(error) => Err(error.into()),
+        tokio::time::timeout(WAIT, demand)
+            .await?
+            .ok_or("expiry stream closed")??
     };
-    let _released = release.send(());
-    let cleanup = cancelled(&mut stream, last.as_ref()).await;
-    let (metadata, initial, first, expired, complete) = proof?;
-    cleanup?;
+    let complete = checkpoint(&next(&mut stream).await?)?;
+    cancelled(&mut stream, Some(&complete)).await?;
     assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
     assert_eq!(metadata.operation, QueryOperation::Replace);
     for (frame, count, now, expiry) in [
@@ -375,49 +399,47 @@ async fn query_follow_autonomous_expiry() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn query_follow_output_stall() -> TestResult {
+async fn query_follow_lazy_demand() -> TestResult {
     let fixture = QueryFixture::new()?;
     fixture.event(1, 1, 7)?;
-    let limits = QueryLimits {
+    let owner = Arc::new(fixture.owner(QueryLimits {
         global_streams: 1,
         tenant_streams: 1,
-        output_capacity: QueryLimits::default().output_bytes,
-        output_timeout: Duration::from_millis(50),
         ..Default::default()
-    };
-    let owner = Arc::new(fixture.owner(limits)?);
+    })?);
     let plan = fixture.plan(QueryTemplate::Events { operation: None })?;
-    let (clock, entered, release) = GateClock::new();
-    let mut stream = owner.follow_clock(plan.clone(), None, clock)?;
-    tokio::time::timeout(WAIT, entered).await??;
+    let clock = Arc::new(ExpiryClock {
+        now: AtomicU64::new(3_000_000_000),
+        reads: AtomicUsize::new(0),
+    });
+    let mut stream = owner.follow_clock(plan.clone(), None, clock.clone())?;
+    assert_eq!(clock.reads.load(Ordering::SeqCst), 0);
+    assert!(owner
+        .input_refs
+        .lock()
+        .map_err(|_| "input reference lock failed")?
+        .is_empty());
     assert!(matches!(
         owner.follow(plan.clone(), None),
         Err(crate::Error::AnalysisBusy { .. })
     ));
-    release.send(())?;
-
-    // Leave the one-slot output queue full until its owner reaches the deadline.
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
-    inputs_released(&owner);
+    fixture.event(2, 2, 7)?;
     let metadata = next(&mut stream).await?;
     assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
+    assert_eq!(metadata.coverage()[0].receipt.contiguous_cursor, 2);
     drop(metadata);
-    assert!(tokio::time::timeout(WAIT, stream.next())
-        .await?
-        .transpose()?
-        .is_none());
-    fixture.event(2, 2, 7)?;
-    let result = owner.query_cancel(&plan, 2, &AnalysisReadControl::default())?;
-    assert_eq!(result.rows.len(), 2);
-    drop(result);
-
-    let (clock, entered, release) = GateClock::new();
-    let mut recovered = owner.follow_clock(plan, None, clock)?;
-    tokio::time::timeout(WAIT, entered).await??;
-    recovered.cancel()?;
-    release.send(())?;
-    cancelled(&mut recovered, None).await?;
+    fixture.event(3, 3, 7)?;
+    let data = next(&mut stream).await?;
+    assert_eq!(cursors(&data)?, vec![1, 2]);
+    drop(data);
+    let complete = checkpoint(&next(&mut stream).await?)?;
+    fixture.event(4, 4, 7)?;
+    assert_eq!(clock.reads.load(Ordering::SeqCst), 1);
+    cancelled(&mut stream, Some(&complete)).await?;
     inputs_released(&owner);
+    let mut unpolled = owner.follow_clock(plan, None, clock.clone())?;
+    cancelled(&mut unpolled, None).await?;
+    assert_eq!(clock.reads.load(Ordering::SeqCst), 1);
     assert_eq!(Arc::strong_count(&owner), 1);
     Ok(())
 }

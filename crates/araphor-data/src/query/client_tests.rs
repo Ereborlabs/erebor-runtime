@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use duckdb::types::{TimeUnit, Value};
@@ -21,13 +21,11 @@ use crate::{
 };
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-type ClockGate = (oneshot::Sender<()>, mpsc::Receiver<()>);
 const WAIT: Duration = Duration::from_secs(5);
 
 struct Clock {
     now: Arc<AtomicU64>,
     reads: AtomicUsize,
-    gate: Mutex<Option<ClockGate>>,
 }
 
 impl Clock {
@@ -35,42 +33,14 @@ impl Clock {
         Self {
             now: Arc::new(AtomicU64::new(now)),
             reads: AtomicUsize::new(0),
-            gate: Mutex::new(None),
         }
-    }
-
-    fn arm(&self) -> TestResult<(oneshot::Receiver<()>, mpsc::Sender<()>)> {
-        let (entered, entering) = oneshot::channel();
-        let (release, released) = mpsc::channel();
-        *self.gate.lock().map_err(|_| "clock gate lock failed")? = Some((entered, released));
-        Ok((entering, release))
     }
 }
 
 impl QueryClock for Clock {
     fn now_ns(&self) -> Result<u64> {
         let now = self.now.load(Ordering::SeqCst);
-        if self.reads.fetch_add(1, Ordering::SeqCst) == 1 {
-            let gate = self
-                .gate
-                .lock()
-                .map_err(|_| {
-                    crate::QueryInvalidSnafu {
-                        field: "test clock",
-                    }
-                    .build()
-                })?
-                .take();
-            if let Some((entered, released)) = gate {
-                let _entered = entered.send(());
-                released.recv_timeout(WAIT).map_err(|_| {
-                    crate::QueryInvalidSnafu {
-                        field: "test clock gate",
-                    }
-                    .build()
-                })?;
-            }
-        }
+        self.reads.fetch_add(1, Ordering::SeqCst);
         Ok(now)
     }
 }
@@ -347,6 +317,16 @@ impl ClientFixture {
         .await?
     }
 
+    async fn pending(
+        stream: &mut QueryStream,
+        ready: impl std::future::Future<Output = TestResult>,
+    ) -> TestResult {
+        tokio::select! {
+            result = ready => result,
+            frame = stream.next() => Err(format!("unexpected frame while input is blocked: {frame:?}").into()),
+        }
+    }
+
     fn inputs(&self, alive: bool) -> TestResult {
         let inputs = self
             .owner
@@ -358,6 +338,25 @@ impl ClientFixture {
             .iter()
             .all(|input| input.upgrade().is_some() == alive));
         Ok(())
+    }
+
+    async fn released(&self) -> TestResult {
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let released = self
+                    .owner
+                    .input_refs
+                    .lock()
+                    .map_err(|_| "input reference lock failed")?
+                    .iter()
+                    .all(|input| input.upgrade().is_none());
+                if released {
+                    return Ok(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?
     }
 
     fn input_count(&self) -> TestResult<usize> {
@@ -448,7 +447,6 @@ impl ClientFixture {
                     .await?
                     .transpose()?
                     .is_none());
-                tokio::time::timeout(WAIT, &mut stream.task).await??;
                 return Ok(());
             }
             if !matches!(
@@ -624,7 +622,6 @@ async fn query_target_follow() -> TestResult {
         Some(Err(crate::Error::QueryDenied { .. }))
     ));
     assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
     Ok(())
 }
 
@@ -1093,7 +1090,6 @@ async fn discovery_query_profile_follow() -> TestResult {
         }
     }
     assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
     Ok(())
 }
 
@@ -1313,12 +1309,6 @@ async fn query_trace_revocation() -> TestResult {
     let plan = fixture.plan("SELECT sequence FROM trace_output", vec![], true)?;
     let mut stream = fixture.stream(plan, None)?;
     let metadata = ClientFixture::next(&mut stream).await?;
-    tokio::time::timeout(WAIT, async {
-        while stream.queued() == 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
     let (mut state, _) = fixture
         .data
         .store
@@ -1339,7 +1329,6 @@ async fn query_trace_revocation() -> TestResult {
     ));
     assert!(stream.is_terminated());
     assert!(stream.next().await.is_none());
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
     let mut grant = fixture.grant.clone();
     grant.selection = AnalysisSelectionV1::new(intent.tenant_id, Vec::new());
     grant
@@ -1504,6 +1493,117 @@ async fn query_trace_read_runtime() -> TestResult {
         }))
     ));
     Ok(())
+}
+
+#[test]
+fn query_trace_stream_stop() -> TestResult {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()?;
+    runtime.block_on(async {
+        for cancelled in [true, false] {
+            let mut fixture = ClientFixture::local()?;
+            fixture.tenant();
+            let _intent = fixture.trace(10)?;
+            let plan = fixture.plan("SELECT execution_id FROM traces", Vec::new(), false)?;
+            let _streams = (1..fixture.owner.limits.tenant_streams)
+                .map(|_| {
+                    fixture
+                        .owner
+                        .budget
+                        .stream(fixture.grant.selection.tenant_id)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut stream = fixture.stream(plan, None)?;
+            let metadata = ClientFixture::next(&mut stream).await?;
+            assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
+            let scope = Arc::downgrade(
+                metadata
+                    .reads
+                    .as_ref()
+                    .ok_or("trace read scope is absent")?,
+            );
+            drop(metadata);
+            let _readers = (0..15)
+                .map(|_| fixture.data.store.reserve_reader())
+                .collect::<Result<Vec<_>>>()?;
+            let (entered, entering) = oneshot::channel();
+            let (release, released) = mpsc::channel();
+            let blocking = tokio::task::spawn_blocking(move || {
+                let _entered = entered.send(());
+                released.recv_timeout(WAIT)
+            });
+            tokio::time::timeout(WAIT, entering).await??;
+            ClientFixture::pending(&mut stream, async {
+                tokio::time::timeout(WAIT, async {
+                    loop {
+                        match fixture.data.store.reserve_reader() {
+                            Ok(permit) => drop(permit),
+                            Err(crate::Error::AnalysisBusy {
+                                resource: "reader", ..
+                            }) => return Ok(()),
+                            Err(error) => return Err(error.into()),
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await?
+            })
+            .await?;
+            if cancelled {
+                stream.cancel()?;
+            } else {
+                fixture.authority.revoke();
+            }
+            let error = tokio::time::timeout(WAIT, stream.next())
+                .await?
+                .ok_or("the stopped stream did not return an error")?
+                .err()
+                .ok_or("the stopped stream disclosed a data frame")?;
+            assert!(match error {
+                crate::Error::AnalysisReadCancelled { .. } => cancelled,
+                crate::Error::QueryDenied { .. } => !cancelled,
+                _ => false,
+            });
+            assert!(stream.is_terminated());
+            assert!(stream.next().await.is_none());
+            assert!(scope.upgrade().is_some());
+            assert!(matches!(
+                fixture.data.store.reserve_reader(),
+                Err(crate::Error::AnalysisBusy {
+                    resource: "reader",
+                    ..
+                })
+            ));
+            assert!(matches!(
+                fixture
+                    .owner
+                    .budget
+                    .stream(fixture.grant.selection.tenant_id),
+                Err(crate::Error::AnalysisBusy {
+                    resource: "query stream capacity",
+                    ..
+                })
+            ));
+            release.send(())?;
+            tokio::time::timeout(WAIT, blocking).await???;
+            tokio::time::timeout(WAIT, async {
+                while scope.upgrade().is_some() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+            drop(fixture.data.store.reserve_reader()?);
+            drop(
+                fixture
+                    .owner
+                    .budget
+                    .stream(fixture.grant.selection.tenant_id)?,
+            );
+        }
+        Ok(())
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1746,12 +1846,15 @@ async fn query_follow_wait_capacity() -> TestResult {
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
     let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::entered(&entering).await?;
+    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
     let waiting = fixture.wait_signal()?;
     let mut second = fixture.stream(plan, None)?;
-    tokio::time::timeout(WAIT, waiting).await??;
+    ClientFixture::pending(&mut second, async {
+        tokio::time::timeout(WAIT, waiting).await??;
+        Ok(())
+    })
+    .await?;
     fixture.inputs(true)?;
-    assert_eq!((first.queued(), second.queued()), (0, 0));
     let direct = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
     assert!(matches!(
         fixture.query(&direct).await,
@@ -1797,11 +1900,15 @@ async fn query_follow_wait_cancel() -> TestResult {
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
     let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::entered(&entering).await?;
+    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
     let inputs = fixture.input_count()?;
     let waiting = fixture.wait_signal()?;
     let mut second = fixture.stream(plan, None)?;
-    tokio::time::timeout(WAIT, waiting).await??;
+    ClientFixture::pending(&mut second, async {
+        tokio::time::timeout(WAIT, waiting).await??;
+        Ok(())
+    })
+    .await?;
     ClientFixture::cancel(&mut second).await?;
     fixture.inputs(true)?;
     assert_eq!(fixture.input_count()?, inputs);
@@ -1811,7 +1918,6 @@ async fn query_follow_wait_cancel() -> TestResult {
         .evaluate(fixture.grant.selection.tenant_id)
         .is_err());
     first.cancel()?;
-    assert!(!first.task.is_finished());
     fixture.inputs(true)?;
     assert!(fixture
         .owner
@@ -1821,6 +1927,7 @@ async fn query_follow_wait_cancel() -> TestResult {
     release.send(())?;
     ClientFixture::entered(&entering).await?;
     ClientFixture::cancel(&mut first).await?;
+    fixture.released().await?;
     fixture.inputs(false)?;
     drop(
         fixture
@@ -1838,14 +1945,16 @@ async fn query_follow_wait_close() -> TestResult {
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
     let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::entered(&entering).await?;
+    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
     let inputs = fixture.input_count()?;
     let waiting = fixture.wait_signal()?;
     let mut second = fixture.stream(plan, None)?;
-    tokio::time::timeout(WAIT, waiting).await??;
-    let task = std::mem::replace(&mut second.task, tokio::spawn(async {}));
+    ClientFixture::pending(&mut second, async {
+        tokio::time::timeout(WAIT, waiting).await??;
+        Ok(())
+    })
+    .await?;
     drop(second);
-    tokio::time::timeout(WAIT, task).await??;
     fixture.inputs(true)?;
     assert_eq!(fixture.input_count()?, inputs);
     assert!(fixture
@@ -1857,6 +1966,7 @@ async fn query_follow_wait_close() -> TestResult {
     release.send(())?;
     ClientFixture::entered(&entering).await?;
     ClientFixture::cancel(&mut first).await?;
+    fixture.released().await?;
     fixture.inputs(false)?;
     Ok(())
 }
@@ -1868,14 +1978,16 @@ async fn query_follow_wait_revoke() -> TestResult {
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
     let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::entered(&entering).await?;
+    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
     let inputs = fixture.input_count()?;
     let waiting = fixture.wait_signal()?;
     let mut second = fixture.stream(plan, None)?;
-    tokio::time::timeout(WAIT, waiting).await??;
+    ClientFixture::pending(&mut second, async {
+        tokio::time::timeout(WAIT, waiting).await??;
+        Ok(())
+    })
+    .await?;
     fixture.authority.revoke();
-    tokio::time::timeout(WAIT, &mut second.task).await??;
-    assert_eq!(second.queued(), 0);
     assert!(matches!(
         second.next().await,
         Some(Err(crate::Error::QueryDenied { .. }))
@@ -1889,11 +2001,11 @@ async fn query_follow_wait_revoke() -> TestResult {
         .is_err());
     release.send(())?;
     ClientFixture::entered(&entering).await?;
-    tokio::time::timeout(WAIT, &mut first.task).await??;
     assert!(matches!(
         first.next().await,
         Some(Err(crate::Error::QueryDenied { .. }))
     ));
+    fixture.released().await?;
     fixture.inputs(false)?;
     drop(
         fixture
@@ -1911,11 +2023,15 @@ async fn query_follow_wait_deadline() -> TestResult {
     let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
     let (entering, release) = fixture.gate()?;
     let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::entered(&entering).await?;
+    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
     let inputs = fixture.input_count()?;
     let waiting = fixture.wait_signal()?;
     let mut second = fixture.stream(plan, None)?;
-    tokio::time::timeout(WAIT, waiting).await??;
+    ClientFixture::pending(&mut second, async {
+        tokio::time::timeout(WAIT, waiting).await??;
+        Ok(())
+    })
+    .await?;
     let frame = ClientFixture::next(&mut second).await?;
     assert!(matches!(
         frame.payload,
@@ -1927,7 +2043,6 @@ async fn query_follow_wait_deadline() -> TestResult {
     ));
     drop(frame);
     assert!(second.next().await.is_none());
-    tokio::time::timeout(WAIT, &mut second.task).await??;
     fixture.inputs(true)?;
     assert_eq!(fixture.input_count()?, inputs);
     assert!(fixture
@@ -1939,6 +2054,7 @@ async fn query_follow_wait_deadline() -> TestResult {
     release.send(())?;
     ClientFixture::entered(&entering).await?;
     ClientFixture::cancel(&mut first).await?;
+    fixture.released().await?;
     fixture.inputs(false)?;
     drop(
         fixture
@@ -2560,7 +2676,6 @@ async fn query_stream_snapshot() -> TestResult {
         assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
         assert!(stream.is_terminated());
         assert!(stream.next().await.is_none());
-        tokio::time::timeout(WAIT, &mut stream.task).await??;
     }
     Ok(())
 }
@@ -2592,7 +2707,6 @@ async fn query_stream_empty() -> TestResult {
         }
     ));
     assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
     Ok(())
 }
 
@@ -2822,7 +2936,6 @@ async fn query_tenant_new_contexts() -> TestResult {
     ));
     drop(frame);
     assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
     Ok(())
 }
 
@@ -2874,7 +2987,6 @@ async fn query_stream_cursor_floor() -> TestResult {
     drop(frame);
     assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
     assert!(stream.is_terminated());
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
     Ok(())
 }
 
@@ -2888,32 +3000,24 @@ async fn query_client_timer_replace() -> TestResult {
         vec![],
         true,
     )?;
-    let (entering, release) = fixture.clock.arm()?;
     assert!(fixture.clock.changes().is_none());
     assert!(WAIT < QueryLimits::default().heartbeat);
     let mut stream = fixture.stream(plan, None)?;
-    let proof: TestResult<_> = match tokio::time::timeout(WAIT, async {
-        let metadata = ClientFixture::next(&mut stream).await?;
-        assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
-        let initial = ClientFixture::next(&mut stream).await?;
-        let first = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
-        entering.await?;
-        // Keep the idle loop's old sample. Only its expiry timer can wake it.
+    let metadata = ClientFixture::next(&mut stream).await?;
+    assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
+    let initial = ClientFixture::next(&mut stream).await?;
+    let first = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    let expired = {
+        let demand = stream.next();
+        tokio::pin!(demand);
+        assert!(futures_util::poll!(&mut demand).is_pending());
         fixture.clock.now.store(4_000_000_000, Ordering::SeqCst);
-        release.send(())?;
-        let expired = ClientFixture::next(&mut stream).await?;
-        let complete = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
-        Ok((initial, first, expired, complete))
-    })
-    .await
-    {
-        Ok(proof) => proof,
-        Err(error) => Err(error.into()),
+        tokio::time::timeout(WAIT, demand)
+            .await?
+            .ok_or("timer stream closed")??
     };
-    let _released = release.send(());
-    let cleanup = ClientFixture::cancel(&mut stream).await;
-    let (initial, first, expired, complete) = proof?;
-    cleanup?;
+    let complete = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
+    ClientFixture::cancel(&mut stream).await?;
     for (frame, count, now, expiry) in [
         (&initial, 1, 3_000_000_000, Some(4_000_000_000)),
         (&expired, 0, 4_000_000_000, None),
@@ -2949,7 +3053,6 @@ async fn query_client_quiet_revoke() -> TestResult {
     let _checkpoint = ClientFixture::checkpoint(&ClientFixture::next(&mut stream).await?)?;
     fixture.authority.revoke();
     assert!(WAIT < QueryLimits::default().heartbeat);
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
     assert!(matches!(
         stream.next().await,
         Some(Err(crate::Error::QueryDenied { .. }))
@@ -2976,13 +3079,6 @@ async fn query_client_buffered_revoke() -> TestResult {
         ClientFixture::next(&mut stream).await?.payload,
         QueryPayload::Metadata(_)
     ));
-    tokio::time::timeout(WAIT, async {
-        while stream.queued() == 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-    assert_eq!(stream.queued(), 1);
     fixture.authority.revoke();
     assert!(matches!(
         stream.next().await,
@@ -3051,7 +3147,6 @@ async fn query_client_output_limit() -> TestResult {
         .await?
         .transpose()?
         .is_none());
-    tokio::time::timeout(WAIT, &mut stream.task).await??;
     let result = fixture.query(&plan).await?;
     assert_eq!(result.rows.len(), 2);
     assert!(result.limited);

@@ -151,9 +151,9 @@ impl QueryFollowQualification {
             self.snapshot_and_coalescing(&directory.path().join("snapshot"))
                 .await
                 .map_err(|error| format!("query-follow snapshot and coalescing: {error}"))?,
-            self.blocked_output(&directory.path().join("blocked"))
+            self.paused_stream(&directory.path().join("paused"))
                 .await
-                .map_err(|error| format!("query-follow blocked output: {error}"))?,
+                .map_err(|error| format!("query-follow paused stream: {error}"))?,
         ];
         fs::create_dir(&self.output)?;
         super::write_json(
@@ -487,12 +487,12 @@ impl QueryFollowQualification {
             .await?;
         self.replacement(&owner, &plan, &initial, &[vec![Value::BigInt(1)]])?;
         let before = store.meta()?;
-        advance.await??;
         let expired = tokio::time::timeout(
             Duration::from_secs(5),
             self.cycle(&mut stream, false, QueryOperation::Replace),
         )
         .await??;
+        advance.await??;
         self.replacement(&owner, &plan, &expired, &[vec![Value::BigInt(0)]])?;
         self.check(
             store.meta()? == before
@@ -976,10 +976,10 @@ impl QueryFollowQualification {
             Ok(revision)
         });
         let mut stream = owner.follow_clock(plan.clone(), None, clock)?;
-        let captured = tokio::time::timeout(Duration::from_secs(10), writer).await???;
         let initial = self
             .cycle(&mut stream, true, QueryOperation::Append)
             .await?;
+        let captured = tokio::time::timeout(Duration::from_secs(10), writer).await???;
         self.check(
             cursors(&initial)? == [1, 2, 3]
                 && initial.results.len() == 1
@@ -1045,37 +1045,26 @@ impl QueryFollowQualification {
         )
     }
 
-    async fn blocked_output(&self, root: &Path) -> Result<serde_json::Value> {
+    async fn paused_stream(&self, root: &Path) -> Result<serde_json::Value> {
         let store = Arc::new(AnalysisStore::open(root)?);
         let source = evidence_source(1, 3);
         commit(&store, &source, 1, MINUTE, records(1, 1, 7))?;
         let limits = QueryLimits {
             global_streams: 1,
             tenant_streams: 1,
-            output_timeout: Duration::from_millis(50),
             ..Default::default()
         };
         let owner = Arc::new(QueryOwner::new(store.clone(), limits.clone())?);
         let plan = query_plan(&source, QueryTemplate::Events { operation: None })?;
-        let mut stream = owner.follow_clock(plan.clone(), None, Clock::new(2 * MINUTE))?;
+        let (clock, _, _) = GateClock::on_read(2 * MINUTE, u64::MAX);
+        let mut stream = owner.follow_clock(plan.clone(), None, clock.clone())?;
         self.check(
             matches!(
                 owner.follow_clock(plan.clone(), None, Clock::new(2 * MINUTE)),
                 Err(araphor_data::Error::AnalysisBusy { .. })
             ),
-            "active blocked stream did not consume its admission slot",
+            "active stream did not consume its admission slot",
         )?;
-        let running = Arc::downgrade(&owner);
-        drop(owner);
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if running.upgrade().is_none() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
         let retaining = store.clone();
         let retained_source = source.clone();
         let retained = tokio::time::timeout(
@@ -1088,38 +1077,48 @@ impl QueryFollowQualification {
         .await???;
         self.check(
             retained.removed_records == 1,
-            "blocked output retained a raw segment lease",
-        )?;
-        let metadata = self.next(&mut stream, QueryOperation::Append).await?;
-        self.check(
-            matches!(metadata.payload, QueryPayload::Metadata(_)) && metadata.read_revision == 1,
-            "blocked query did not leave only its initial metadata queued",
-        )?;
-        drop(metadata);
-        self.check(
-            tokio::time::timeout(Duration::from_secs(10), stream.next())
-                .await?
-                .transpose()?
-                .is_none(),
-            "output-timeout stream did not close after its queued metadata",
+            "unpolled stream retained a raw segment lease",
         )?;
         commit(&store, &source, 2, 2 * MINUTE, records(2, 1, 7))?;
+        self.check(
+            clock.reads.load(Ordering::SeqCst) == 0,
+            "unpolled stream started query work",
+        )?;
+        let initial = self
+            .cycle(&mut stream, true, QueryOperation::Append)
+            .await?;
+        self.check(
+            cursors(&initial)? == [2],
+            "first demand did not read current retained input",
+        )?;
+        let reads = clock.reads.load(Ordering::SeqCst);
+        commit(&store, &source, 3, 3 * MINUTE, records(3, 1, 7))?;
+        self.check(
+            clock.reads.load(Ordering::SeqCst) == reads,
+            "paused stream started another evaluation",
+        )?;
+        let running = Arc::downgrade(&owner);
+        drop(owner);
+        drop(stream);
+        self.check(
+            running.upgrade().is_none(),
+            "stream drop retained its query owner",
+        )?;
         let owner = Arc::new(QueryOwner::new(store, limits.clone())?);
         let mut recovered = owner.follow_clock(plan.clone(), None, Clock::new(3 * MINUTE))?;
         let subsequent = self
             .cycle(&mut recovered, true, QueryOperation::Append)
             .await?;
         self.check(
-            cursors(&subsequent)? == [2],
-            "output timeout blocked later intake or follow",
+            cursors(&subsequent)? == [2, 3],
+            "paused stream blocked later intake or follow",
         )?;
         self.cancel(&mut recovered, QueryOperation::Append).await?;
-        Ok(json!({"name": "blocked-output-cleanup", "result": "PASS",
-            "limits": limits_receipt(&limits), "worker_released_before_drain": true,
-            "retention_removed_before_drain": retained.removed_records,
-            "drained_frames": ["Metadata"], "then_closed": true,
-            "last_complete_checkpoint": null,
-            "terminal_frame": "The full output queue cannot accept a terminal frame.",
+        Ok(json!({"name": "lazy-demand-and-drop", "result": "PASS",
+            "limits": limits_receipt(&limits), "owner_released_on_drop": true,
+            "retention_removed_before_first_poll": retained.removed_records,
+            "no_unpolled_evaluation": true,
+            "initial": cycle_receipt(&plan, &initial),
             "subsequent": cycle_receipt(&plan, &subsequent)}))
     }
 
