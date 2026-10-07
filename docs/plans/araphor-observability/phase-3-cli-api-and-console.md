@@ -54,6 +54,8 @@ header and bookmark when a local duration ends. New rows without a checkpoint
 do not change that saved frame. Check retained-read validity and current
 permission before the final response. Decode a trace bookmark once and pass
 its validated QueryCheckpoint to QueryOwner.
+TraceTransport builds each output envelope through its existing frame method.
+Use one conversion for error positions and retention floors.
 
 Frames do not need a separate frame ID or result digest. Append replay uses
 exact row positions within one query and store epoch. Replacement output
@@ -179,6 +181,9 @@ Status: **Done**.
    together. Validate order and equal counts before this removal. Use shared
    Output methods for query and trace coverage, health and error text. Keep
    table layout, escaping and JSONL records unchanged.
+   QueryRequest.duration_ns holds the prepared SQL duration. Derive the local
+   deadline once before retries. Use generated Snafu selectors for CLI errors;
+   keep the existing variants, sources, status mapping and exit codes.
 5. Extend `catalog` with authorized targets, query fields, recipe source,
    parameters, capability status and examples. SQL `--target` narrows tenant
    inputs before evaluation, including joins and aggregates. Use this phase's

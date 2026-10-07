@@ -10,9 +10,10 @@ use std::{
 use clap::{Args, Subcommand, ValueEnum};
 use erebor_runtime_client::AraphorProfile;
 use erebor_runtime_ipc::araphor as wire;
+use snafu::{ensure, OptionExt as _, ResultExt as _};
 use uuid::Uuid;
 
-use super::error::{AraphorCommandError as Error, Result};
+use super::error::{AraphorCommandError as Error, ClientSnafu, InputSnafu, InvalidSnafu, Result};
 
 #[derive(Debug, Args)]
 pub(crate) struct ConnectionArgs {
@@ -128,7 +129,6 @@ impl FromStr for Span {
 pub(super) enum Prepared {
     Sql {
         request: wire::QueryRequest,
-        duration: Option<Duration>,
     },
     Trace {
         request: Option<wire::SubmitTraceRequest>,
@@ -143,9 +143,8 @@ impl AraphorCommand {
             AraphorCommand::Sql(args) => {
                 let bytes =
                     SourceInput::read(args.file.as_deref(), args.sql.as_deref(), 16 * 1024)?;
-                let sql =
-                    String::from_utf8(bytes).map_err(|_| SourceInput::invalid("SQL UTF-8"))?;
-                let duration = args.duration.map(|span| span.0);
+                let sql = String::from_utf8(bytes)
+                    .map_err(|_| InvalidSnafu { field: "SQL UTF-8" }.build())?;
                 Ok(Prepared::Sql {
                     request: wire::QueryRequest {
                         sql,
@@ -153,27 +152,30 @@ impl AraphorCommand {
                         selection: Some((&args.selection).try_into()?),
                         follow: args.follow,
                         bookmark: Vec::new(),
-                        duration_ns: duration.map(|value| value.as_nanos() as u64),
+                        duration_ns: args.duration.map(|span| span.0.as_nanos() as u64),
                     },
-                    duration,
                 })
             }
             AraphorCommand::Trace(args) => {
                 if let Some(id) = args.resume {
-                    if args.selection.selected() || args.duration.is_some() || id.is_nil() {
-                        return Err(SourceInput::invalid(
-                            "resume cannot select new targets, source, or duration",
-                        ));
-                    }
+                    ensure!(
+                        !args.selection.selected() && args.duration.is_none() && !id.is_nil(),
+                        InvalidSnafu {
+                            field: "resume cannot select new targets, source, or duration"
+                        },
+                    );
                     return Ok(Prepared::Trace {
                         request: None,
                         trace_id: id.as_bytes().to_vec(),
                     });
                 }
                 let selection = wire::InputSelection::try_from(&args.selection)?;
-                if selection.target.is_empty() {
-                    return Err(SourceInput::invalid("trace target is required"));
-                }
+                ensure!(
+                    !selection.target.is_empty(),
+                    InvalidSnafu {
+                        field: "trace target is required"
+                    }
+                );
                 let source = match (&args.file, &args.expression, &args.recipe) {
                     (Some(path), None, None) => wire::submit_trace_request::Source::Script(
                         SourceInput::read(Some(path), None, 64 * 1024)?,
@@ -186,14 +188,20 @@ impl AraphorCommand {
                     {
                         wire::submit_trace_request::Source::Recipe(recipe.clone())
                     }
-                    _ => return Err(SourceInput::invalid("trace requires exactly one source")),
+                    _ => {
+                        return InvalidSnafu {
+                            field: "trace requires exactly one source",
+                        }
+                        .fail()
+                    }
                 };
                 let seconds = args.duration.map_or(30, |span| span.0.as_secs());
-                if !(1..=300).contains(&seconds) {
-                    return Err(SourceInput::invalid(
-                        "trace duration must be 1 to 300 seconds",
-                    ));
-                }
+                ensure!(
+                    (1..=300).contains(&seconds),
+                    InvalidSnafu {
+                        field: "trace duration must be 1 to 300 seconds"
+                    }
+                );
                 let trace_id = Uuid::new_v4().as_bytes().to_vec();
                 Ok(Prepared::Trace {
                     request: Some(wire::SubmitTraceRequest {
@@ -238,11 +246,10 @@ impl ConnectionArgs {
                 std::env::var_os("HOME")
                     .map(|path| PathBuf::from(path).join(".config/araphor/client.json"))
             })
-            .ok_or_else(|| SourceInput::invalid("configure --profile or ARAPHOR_PROFILE"))?;
-        let mut profile = AraphorProfile::read(&path).map_err(|source| Error::Client {
-            source,
-            location: snafu::Location::default(),
-        })?;
+            .context(InvalidSnafu {
+                field: "configure --profile or ARAPHOR_PROFILE",
+            })?;
+        let mut profile = AraphorProfile::read(&path).context(ClientSnafu)?;
         if let Some(endpoint) = &self.endpoint {
             profile.endpoint = endpoint.clone();
         }
@@ -254,14 +261,16 @@ impl CatalogArgs {
     fn prepare(&self) -> Result<Prepared> {
         let mut parameters = Vec::new();
         let sql = if let Some(relation) = &self.relation {
-            if relation.is_empty()
-                || relation.len() > 128
-                || !relation
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-            {
-                return Err(SourceInput::invalid("catalog relation name"));
-            }
+            ensure!(
+                !relation.is_empty()
+                    && relation.len() <= 128
+                    && relation
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
+                InvalidSnafu {
+                    field: "catalog relation name"
+                },
+            );
             parameters.push(wire::QueryValue {
                 kind: Some(wire::query_value::Kind::Text(relation.clone())),
             });
@@ -280,7 +289,6 @@ impl CatalogArgs {
                 selection: Some((&self.selection).try_into()?),
                 ..Default::default()
             },
-            duration: None,
         })
     }
 }
@@ -305,15 +313,19 @@ impl TryFrom<&SelectionArgs> for wire::InputSelection {
             .chain(selection.container.iter())
             .chain(selection.nodes.iter())
         {
-            if value.trim().is_empty() || value.len() > 1024 || value.contains('\0') {
-                return Err(SourceInput::invalid(
-                    "selection is empty or exceeds its bound",
-                ));
+            ensure!(
+                !value.trim().is_empty() && value.len() <= 1024 && !value.contains('\0'),
+                InvalidSnafu {
+                    field: "selection is empty or exceeds its bound"
+                },
+            );
+        }
+        ensure!(
+            selection.nodes.len() <= 64,
+            InvalidSnafu {
+                field: "too many node selectors"
             }
-        }
-        if selection.nodes.len() > 64 {
-            return Err(SourceInput::invalid("too many node selectors"));
-        }
+        );
         Ok(Self {
             target: selection.target.clone().unwrap_or_default(),
             cluster: selection.cluster.clone().unwrap_or_default(),
@@ -329,9 +341,12 @@ impl SourceInput {
     fn read(path: Option<&Path>, inline: Option<&str>, limit: usize) -> Result<Vec<u8>> {
         let bytes = match (path, inline) {
             (None, Some(value)) => {
-                if value.len() > limit {
-                    return Err(Self::invalid("source byte limit"));
-                }
+                ensure!(
+                    value.len() <= limit,
+                    InvalidSnafu {
+                        field: "source byte limit"
+                    }
+                );
                 value.as_bytes().to_vec()
             }
             (Some(path), None) => {
@@ -342,35 +357,26 @@ impl SourceInput {
                     File::open(path)
                         .and_then(|file| file.take(limit as u64 + 1).read_to_end(&mut bytes))
                 }
-                .map_err(|source| Error::Input {
-                    source,
-                    location: snafu::Location::default(),
-                })?;
+                .context(InputSnafu)?;
                 bytes
             }
             _ => {
-                return Err(Self::invalid(
-                    "exactly one source argument or file is required",
-                ));
+                return InvalidSnafu {
+                    field: "exactly one source argument or file is required",
+                }
+                .fail();
             }
         };
-        if bytes.len() > limit
-            || bytes.contains(&0)
-            || std::str::from_utf8(&bytes).is_err()
-            || bytes.iter().all(u8::is_ascii_whitespace)
-        {
-            return Err(Self::invalid(
-                "source is empty, invalid UTF-8, contains NUL, or exceeds its bound",
-            ));
-        }
+        ensure!(
+            bytes.len() <= limit
+                && !bytes.contains(&0)
+                && std::str::from_utf8(&bytes).is_ok()
+                && !bytes.iter().all(u8::is_ascii_whitespace),
+            InvalidSnafu {
+                field: "source is empty, invalid UTF-8, contains NUL, or exceeds its bound"
+            },
+        );
         Ok(bytes)
-    }
-
-    fn invalid(field: &'static str) -> Error {
-        Error::Invalid {
-            field,
-            location: snafu::Location::default(),
-        }
     }
 }
 
@@ -382,13 +388,16 @@ mod tests {
 
     fn prepare(cli: Cli) -> Result<Prepared> {
         let Command::Investigate(command) = cli.command else {
-            return Err(SourceInput::invalid("test command"));
+            return InvalidSnafu {
+                field: "test command",
+            }
+            .fail();
         };
         command.prepare()
     }
 
     #[test]
-    fn observability_cli_arguments() {
+    fn observability_cli_arguments() -> Result<()> {
         for args in [
             vec!["araphor", "sql"],
             vec!["araphor", "sql", "SELECT 1", "--file", "query.sql"],
@@ -425,6 +434,23 @@ mod tests {
             "1m"
         ])
         .is_ok());
+        for (span, seconds) in [("10s", 10), ("1m", 60)] {
+            let args =
+                Cli::try_parse_from(["araphor", "sql", "SELECT 1", "--follow", "--duration", span])
+                    .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
+            let Prepared::Sql { request } = prepare(args)? else {
+                return InvalidSnafu {
+                    field: "test query",
+                }
+                .fail();
+            };
+            assert_eq!(request.duration_ns, Some(seconds * 1_000_000_000));
+            assert_eq!(
+                request.duration_ns.map(Duration::from_nanos),
+                Some(Duration::from_secs(seconds)),
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -444,9 +470,12 @@ mod tests {
             "--node",
             "node-b",
         ])
-        .map_err(|_| SourceInput::invalid("test args"))?;
-        let Prepared::Sql { request, .. } = prepare(args)? else {
-            return Err(SourceInput::invalid("test query"));
+        .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
+        let Prepared::Sql { request } = prepare(args)? else {
+            return InvalidSnafu {
+                field: "test query",
+            }
+            .fail();
         };
         assert_eq!(
             request.selection,
@@ -461,7 +490,7 @@ mod tests {
         for flag in ["--target", "--cluster", "--container", "--node"] {
             for invalid in ["", " ", "\0", oversized.as_str()] {
                 let args = Cli::try_parse_from(["araphor", "sql", "SELECT 1", flag, invalid])
-                    .map_err(|_| SourceInput::invalid("test args"))?;
+                    .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
                 assert!(prepare(args).is_err());
             }
         }
@@ -494,13 +523,17 @@ mod tests {
                 "relation = $1",
             ),
         ] {
-            let args = Cli::try_parse_from(args).map_err(|_| SourceInput::invalid("test args"))?;
-            let Prepared::Sql { request, duration } = prepare(args)? else {
-                return Err(SourceInput::invalid("catalog query"));
+            let args = Cli::try_parse_from(args)
+                .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
+            let Prepared::Sql { request } = prepare(args)? else {
+                return InvalidSnafu {
+                    field: "catalog query",
+                }
+                .fail();
             };
             assert!(request.sql.contains(expected));
             assert!(!request.follow);
-            assert!(duration.is_none());
+            assert!(request.duration_ns.is_none());
             if expected == "relation = $1" {
                 assert_eq!(request.parameters.len(), 1);
                 assert_eq!(
@@ -516,7 +549,7 @@ mod tests {
             }
         }
         let args = Cli::try_parse_from(["araphor", "catalog", "--relation", "events'; SELECT 1"])
-            .map_err(|_| SourceInput::invalid("test args"))?;
+            .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
         assert!(prepare(args).is_err());
         Ok(())
     }
@@ -529,7 +562,7 @@ mod tests {
             "--resume",
             "10000000-0000-0000-0000-000000000001",
         ])
-        .map_err(|_| SourceInput::invalid("test args"))?;
+        .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
         assert!(matches!(
             prepare(args)?,
             Prepared::Trace { request: None, .. }
@@ -542,7 +575,7 @@ mod tests {
             "--target",
             "pod/ns/name",
         ])
-        .map_err(|_| SourceInput::invalid("test args"))?;
+        .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
         assert!(prepare(args).is_err());
         Ok(())
     }
@@ -556,17 +589,21 @@ mod tests {
             "--file",
             file.path()
                 .to_str()
-                .ok_or_else(|| SourceInput::invalid("test path"))?,
+                .context(InvalidSnafu { field: "test path" })?,
             "--target",
             "pod/ns/name",
         ])
-        .map_err(|_| SourceInput::invalid("test args"))?;
+        .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
         let Prepared::Trace {
             request: Some(request),
             trace_id,
         } = prepare(args)?
         else {
-            return Err(SourceInput::invalid("test trace").into());
+            return Err(InvalidSnafu {
+                field: "test trace",
+            }
+            .build()
+            .into());
         };
         std::fs::write(file.path(), "BEGIN { printf(\"changed\"); }")?;
         assert_eq!(request.idempotency_key, trace_id);

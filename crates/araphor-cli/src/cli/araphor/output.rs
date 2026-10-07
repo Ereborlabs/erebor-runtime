@@ -5,11 +5,12 @@ use std::{
 
 use erebor_runtime_ipc::araphor as wire;
 use serde::Serialize;
+use snafu::{OptionExt as _, ResultExt as _};
 use tokio::io::AsyncWriteExt as _;
 
 use super::{
     args::OutputMode,
-    error::{AraphorCommandError as Error, Result},
+    error::{EncodeSnafu, InvalidSnafu, OutputDeadlineSnafu, OutputSnafu, Result},
 };
 
 pub(super) struct Output {
@@ -67,13 +68,8 @@ impl Output {
         };
         tokio::time::timeout(std::time::Duration::from_secs(10), write)
             .await
-            .map_err(|_| Error::OutputDeadline {
-                location: snafu::Location::default(),
-            })?
-            .map_err(|source| Error::Output {
-                source,
-                location: snafu::Location::default(),
-            })
+            .map_err(|_| OutputDeadlineSnafu.build())?
+            .context(OutputSnafu)
     }
 
     pub(super) fn receipt(&self, receipt: &wire::TraceReceipt) -> Result<Vec<u8>> {
@@ -93,10 +89,9 @@ impl Output {
 
     pub(super) fn query(&mut self, frame: &wire::QueryFrame) -> Result<Vec<u8>> {
         use wire::query_frame::Payload;
-        let payload = frame
-            .payload
-            .as_ref()
-            .ok_or_else(|| Self::invalid("query payload"))?;
+        let payload = frame.payload.as_ref().context(InvalidSnafu {
+            field: "query payload",
+        })?;
         let kind = match payload {
             Payload::Metadata(_) => "query_metadata",
             Payload::Rows(_) if frame.operation == wire::QueryOperation::Append as i32 => {
@@ -113,18 +108,18 @@ impl Output {
                 if rows.rows.iter().flat_map(|row| &row.values)
                     .any(|value| matches!(value.kind, Some(wire::query_value::Kind::Real(value)) if !value.is_finite()))
                 {
-                    let mut value = serde_json::to_value(frame).map_err(Self::encoding)?;
+                    let mut value = serde_json::to_value(frame).context(EncodeSnafu)?;
                     let values = value.get_mut("payload").and_then(|value| value.get_mut("Rows"))
                         .and_then(|value| value.get_mut("rows")).and_then(serde_json::Value::as_array_mut)
-                        .ok_or_else(|| Self::invalid("query JSON row shape"))?;
+                        .context(InvalidSnafu { field: "query JSON row shape" })?;
                     for (wire, row) in values.iter_mut().zip(&rows.rows) {
                         let values = wire.get_mut("values").and_then(serde_json::Value::as_array_mut)
-                            .ok_or_else(|| Self::invalid("query JSON value shape"))?;
+                            .context(InvalidSnafu { field: "query JSON value shape" })?;
                         for (wire, value) in values.iter_mut().zip(&row.values) {
                             if let Some(wire::query_value::Kind::Real(value)) = value.kind {
                                 if !value.is_finite() {
                                     let real = wire.get_mut("kind").and_then(|value| value.get_mut("Real"))
-                                        .ok_or_else(|| Self::invalid("query JSON real shape"))?;
+                                        .context(InvalidSnafu { field: "query JSON real shape" })?;
                                     *real = serde_json::Value::String(if value.is_nan() { "NaN" }
                                         else if value.is_sign_positive() { "Infinity" } else { "-Infinity" }.into());
                                 }
@@ -200,10 +195,9 @@ impl Output {
 
     pub(super) fn trace(&self, frame: &wire::TraceFrame) -> Result<Vec<u8>> {
         use wire::trace_frame::Payload;
-        let payload = frame
-            .payload
-            .as_ref()
-            .ok_or_else(|| Self::invalid("trace payload"))?;
+        let payload = frame.payload.as_ref().context(InvalidSnafu {
+            field: "trace payload",
+        })?;
         let kind = match payload {
             Payload::Metadata(_) => "trace_metadata",
             Payload::Output(_) => "trace_output",
@@ -334,7 +328,7 @@ impl Output {
             .serialize(&mut serde_json::Serializer::with_formatter(
                 &mut bytes, AsciiJson,
             ))
-            .map_err(Self::encoding)?;
+            .context(EncodeSnafu)?;
         bytes.push(b'\n');
         Ok(bytes)
     }
@@ -361,13 +355,16 @@ impl Output {
     fn value(value: &wire::QueryValue) -> Result<String> {
         use wire::query_value::Kind;
         Ok(
-            match value
-                .kind
-                .as_ref()
-                .ok_or_else(|| Self::invalid("query value"))?
-            {
+            match value.kind.as_ref().context(InvalidSnafu {
+                field: "query value",
+            })? {
                 Kind::Null(true) => "NULL".into(),
-                Kind::Null(false) => return Err(Self::invalid("query null value")),
+                Kind::Null(false) => {
+                    return InvalidSnafu {
+                        field: "query null value",
+                    }
+                    .fail()
+                }
                 Kind::Boolean(value) => value.to_string(),
                 Kind::Signed(value) => value.to_string(),
                 Kind::Unsigned(value) => value.to_string(),
@@ -392,19 +389,6 @@ impl Output {
                 ),
             },
         )
-    }
-
-    fn encoding(source: serde_json::Error) -> Error {
-        Error::Encode {
-            source,
-            location: snafu::Location::default(),
-        }
-    }
-    fn invalid(field: &'static str) -> Error {
-        Error::Invalid {
-            field,
-            location: snafu::Location::default(),
-        }
     }
 }
 
@@ -446,7 +430,12 @@ mod tests {
                 ..Default::default()
             }));
             let bytes = output.query(&frame)?;
-            let text = std::str::from_utf8(&bytes).map_err(|_| Output::invalid("test output"))?;
+            let text = std::str::from_utf8(&bytes).map_err(|_| {
+                InvalidSnafu {
+                    field: "test output",
+                }
+                .build()
+            })?;
             assert!(text.contains("│ count"));
             assert!(text.contains(&count.to_string()));
             assert!(text.contains(if operation == wire::QueryOperation::Append {
@@ -457,7 +446,12 @@ mod tests {
         }
         frame.payload = Some(wire::query_frame::Payload::Rows(wire::QueryRows::default()));
         let bytes = output.query(&frame)?;
-        let text = std::str::from_utf8(&bytes).map_err(|_| Output::invalid("test output"))?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| {
+            InvalidSnafu {
+                field: "test output",
+            }
+            .build()
+        })?;
         assert!(text.contains("│ count"));
         assert!(!text.contains("│ 42"));
         Ok(())
@@ -472,8 +466,7 @@ mod tests {
         assert!(!text.contains('\u{202e}'));
         let bytes = Output::json("text", &value)?;
         assert!(bytes.is_ascii());
-        let decoded: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(Output::encoding)?;
+        let decoded: serde_json::Value = serde_json::from_slice(&bytes).context(EncodeSnafu)?;
         assert_eq!(decoded["frame"], value);
         Ok(())
     }
@@ -540,12 +533,17 @@ mod tests {
             ..Default::default()
         };
         let bytes = Output::new(Some(OutputMode::Table), false).trace(&frame)?;
-        let text = std::str::from_utf8(&bytes).map_err(|_| Output::invalid("test output"))?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| {
+            InvalidSnafu {
+                field: "test output",
+            }
+            .build()
+        })?;
         assert!(text.contains("epoch=3\tread_revision=4"));
         assert!(text.contains("target=pod/ns/name\\n\t"));
         assert!(text.contains("output_bytes=4096"));
         let bytes = Output::new(Some(OutputMode::Jsonl), false).trace(&frame)?;
-        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(Output::encoding)?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).context(EncodeSnafu)?;
         assert_eq!(value["frame"]["recovery_epoch"], 3);
         assert_eq!(
             value["frame"]["payload"]["Metadata"]["requested"]["target"],
@@ -607,11 +605,11 @@ mod tests {
                 ..frame.clone()
             })?;
             for bytes in [query, trace] {
-                let text =
-                    std::str::from_utf8(&bytes).map_err(|_| Output::invalid("test output"))?;
+                let text = std::str::from_utf8(&bytes)
+                    .map_err(|_| InvalidSnafu { field: "test output" }.build())?;
                 let (_, quality) = text
                     .split_once('\n')
-                    .ok_or_else(|| Output::invalid("test envelope"))?;
+                    .context(InvalidSnafu { field: "test envelope" })?;
                 assert_eq!(quality, format!("{line}{suffix}"));
             }
         }

@@ -2,6 +2,7 @@ use std::{future::Future, io, pin::Pin, time::Duration};
 
 use erebor_runtime_client::AraphorClient;
 use erebor_runtime_ipc::araphor as wire;
+use snafu::{ensure, IntoError as _, OptionExt as _, ResultExt as _};
 use tokio::time::Instant;
 
 mod args;
@@ -10,7 +11,10 @@ mod output;
 
 use args::Prepared;
 pub(crate) use args::{AraphorCommand, ConnectionArgs};
-use error::{AraphorCommandError as Error, Result};
+use error::{
+    AraphorCommandError as Error, ClientSnafu, InterruptedSnafu, InvalidSnafu, OutputDeadlineSnafu,
+    PartialSnafu, ProtocolSnafu, Result, RuntimeSnafu, UncertainSnafu,
+};
 use output::Output;
 
 type Interrupt = Pin<Box<dyn Future<Output = io::Result<()>> + Send>>;
@@ -26,10 +30,7 @@ impl<'a> AraphorCommandOwner<'a> {
     }
 
     pub(crate) fn execute(&self) -> std::result::Result<(), crate::error::CliError> {
-        let runtime = tokio::runtime::Runtime::new().map_err(|source| Error::Runtime {
-            source,
-            location: snafu::Location::default(),
-        })?;
+        let runtime = tokio::runtime::Runtime::new().context(RuntimeSnafu)?;
         let result = runtime.block_on(self.run());
         runtime.shutdown_timeout(Duration::from_secs(1));
         result.map_err(Into::into)
@@ -37,13 +38,13 @@ impl<'a> AraphorCommandOwner<'a> {
 
     async fn run(&self) -> Result<()> {
         let prepared = self.command.prepare()?;
-        let follow = matches!(&prepared, Prepared::Sql { request, .. } if request.follow);
+        let follow = matches!(&prepared, Prepared::Sql { request } if request.follow);
         let profile = self.args.connection()?;
         let mut signal: Interrupt = Box::pin(tokio::signal::ctrl_c());
         let client = tokio::select! {
             biased;
-            _ = signal.as_mut() => return Err(CommandRun::interrupted()),
-            result = AraphorClient::connect(profile) => result.map_err(CommandRun::client_error)?,
+            _ = signal.as_mut() => return InterruptedSnafu.fail(),
+            result = AraphorClient::connect(profile) => result.context(ClientSnafu)?,
         };
         let mut run = CommandRun {
             client,
@@ -51,7 +52,7 @@ impl<'a> AraphorCommandOwner<'a> {
             signal,
         };
         match prepared {
-            Prepared::Sql { request, duration } => run.sql(request, duration).await,
+            Prepared::Sql { request } => run.sql(request).await,
             Prepared::Trace { request, trace_id } => run.trace(request, trace_id).await,
         }
     }
@@ -64,12 +65,11 @@ struct CommandRun {
 }
 
 impl CommandRun {
-    async fn sql(
-        &mut self,
-        mut request: wire::QueryRequest,
-        duration: Option<Duration>,
-    ) -> Result<()> {
-        let deadline = duration.and_then(|duration| Instant::now().checked_add(duration));
+    async fn sql(&mut self, mut request: wire::QueryRequest) -> Result<()> {
+        let deadline = request
+            .duration_ns
+            .map(Duration::from_nanos)
+            .and_then(|duration| Instant::now().checked_add(duration));
         let wait = async {
             if let Some(deadline) = deadline {
                 tokio::time::sleep_until(deadline).await;
@@ -84,7 +84,7 @@ impl CommandRun {
         loop {
             let next = if let Some(opened) = stream.as_mut() {
                 tokio::select! {
-                    _ = self.signal.as_mut() => return Err(Self::interrupted()),
+                    _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
                     _ = &mut wait => return replay.duration(),
                     result = opened.message() => result.map_err(AraphorClient::rpc_error),
                 }
@@ -93,7 +93,7 @@ impl CommandRun {
                     replay.resume(&mut request)?;
                 }
                 match tokio::select! {
-                    _ = self.signal.as_mut() => return Err(Self::interrupted()),
+                    _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
                     _ = &mut wait => return replay.duration(),
                     result = self.client.query(request.clone()) => result,
                 } {
@@ -107,9 +107,9 @@ impl CommandRun {
             let mut frame = match next {
                 Ok(Some(frame)) => frame,
                 Err(error) if !error.retryable() || retries >= 3 => {
-                    return Err(Self::client_error(error));
+                    return Err(ClientSnafu.into_error(error));
                 }
-                Ok(None) if retries >= 3 => return Err(Self::uncertain()),
+                Ok(None) if retries >= 3 => return UncertainSnafu.fail(),
                 Ok(None) | Err(_) => {
                     retries += 1;
                     stream = None;
@@ -120,8 +120,8 @@ impl CommandRun {
             if replay.advance(&mut frame)? {
                 let bytes = self.output.query(&frame)?;
                 tokio::select! {
-                    _ = self.signal.as_mut() => return Err(Self::interrupted()),
-                    _ = &mut wait => return Err(Error::OutputDeadline { location: snafu::Location::default() }),
+                    _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
+                    _ = &mut wait => return OutputDeadlineSnafu.fail(),
                     result = self.output.write(&bytes) => result?,
                 }
             }
@@ -132,11 +132,9 @@ impl CommandRun {
                 Some(wire::query_frame::Payload::Terminal(terminal)) => {
                     return match terminal.reason.as_str() {
                         "Completed" => replay.complete(),
-                        "Cancelled" => Err(Self::interrupted()),
-                        "OutputTimeout" => Err(Error::OutputDeadline {
-                            location: snafu::Location::default(),
-                        }),
-                        _ => Err(Self::uncertain()),
+                        "Cancelled" => InterruptedSnafu.fail(),
+                        "OutputTimeout" => OutputDeadlineSnafu.fail(),
+                        _ => UncertainSnafu.fail(),
                     };
                 }
                 _ => {}
@@ -188,27 +186,29 @@ impl CommandRun {
     ) -> Result<()> {
         let receipt = if let Some(request) = request {
             tokio::select! {
-                _ = self.signal.as_mut() => return Err(Self::interrupted()),
-                result = self.client.submit_trace(request) => result.map_err(Self::client_error)?,
+                _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
+                result = self.client.submit_trace(request) => result.context(ClientSnafu)?,
             }
         } else {
             let detail = tokio::select! {
-                _ = self.signal.as_mut() => return Err(Self::interrupted()),
-                result = self.client.get_trace(wire::GetTraceRequest { trace_id: trace_id.to_vec() }) => result.map_err(Self::client_error)?,
+                _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
+                result = self.client.get_trace(wire::GetTraceRequest { trace_id: trace_id.to_vec() }) => result.context(ClientSnafu)?,
             };
-            detail
-                .receipt
-                .ok_or_else(|| Self::protocol("trace receipt"))?
+            detail.receipt.context(ProtocolSnafu {
+                field: "trace receipt",
+            })?
         };
-        if receipt.trace_id != trace_id
-            || receipt.source_sha256.len() != 32
-            || receipt.deadline_unix_ns < receipt.accepted_unix_ns
-        {
-            return Err(Self::protocol("trace receipt identity or bounds"));
-        }
+        ensure!(
+            receipt.trace_id == trace_id
+                && receipt.source_sha256.len() == 32
+                && receipt.deadline_unix_ns >= receipt.accepted_unix_ns,
+            ProtocolSnafu {
+                field: "trace receipt identity or bounds"
+            },
+        );
         let bytes = self.output.receipt(&receipt)?;
         tokio::select! {
-            _ = self.signal.as_mut() => return Err(Self::interrupted()),
+            _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
             result = self.output.write(&bytes) => result?,
         }
         let mut stream: Option<tonic::Streaming<wire::TraceFrame>> = None;
@@ -216,12 +216,12 @@ impl CommandRun {
         loop {
             let next = if let Some(opened) = stream.as_mut() {
                 tokio::select! {
-                    _ = self.signal.as_mut() => return Err(Self::interrupted()),
+                    _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
                     result = opened.message() => result.map_err(AraphorClient::rpc_error),
                 }
             } else {
                 match tokio::select! {
-                    _ = self.signal.as_mut() => return Err(Self::interrupted()),
+                    _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
                     result = self.client.watch_trace(wire::WatchTraceRequest { trace_id: trace_id.to_vec(), bookmark: replay.bookmark.clone() }) => result,
                 } {
                     Ok(opened) => {
@@ -234,9 +234,9 @@ impl CommandRun {
             let frame = match next {
                 Ok(Some(frame)) => frame,
                 Err(error) if !error.retryable() || retries >= 3 => {
-                    return Err(Self::client_error(error));
+                    return Err(ClientSnafu.into_error(error));
                 }
-                Ok(None) if retries >= 3 => return Err(Self::uncertain()),
+                Ok(None) if retries >= 3 => return UncertainSnafu.fail(),
                 Ok(None) | Err(_) => {
                     retries += 1;
                     stream = None;
@@ -247,7 +247,7 @@ impl CommandRun {
             if replay.advance(&frame, trace_id)? {
                 let bytes = self.output.trace(&frame)?;
                 tokio::select! {
-                    _ = self.signal.as_mut() => return Err(Self::interrupted()),
+                    _ = self.signal.as_mut() => return InterruptedSnafu.fail(),
                     result = self.output.write(&bytes) => result?,
                 }
             }
@@ -273,11 +273,12 @@ impl CommandRun {
                 bookmark: replay.bookmark.clone(),
             })
             .await
-            .map_err(Self::client_error)?;
+            .context(ClientSnafu)?;
         while let Some(frame) = stream
             .message()
             .await
-            .map_err(|status| Self::client_error(AraphorClient::rpc_error(status)))?
+            .map_err(AraphorClient::rpc_error)
+            .context(ClientSnafu)?
         {
             if replay.advance(&frame, trace_id)? && print {
                 let bytes = self.output.trace(&frame)?;
@@ -287,77 +288,48 @@ impl CommandRun {
                 return Self::complete(replay.partial);
             }
         }
-        Err(Self::uncertain())
+        UncertainSnafu.fail()
     }
 
     async fn pause(&mut self, retries: u64) -> Result<()> {
         tokio::select! {
-            _ = self.signal.as_mut() => Err(Self::interrupted()),
+            _ = self.signal.as_mut() => InterruptedSnafu.fail(),
             _ = tokio::time::sleep(Duration::from_millis(250 * retries)) => Ok(()),
         }
     }
 
     fn complete(partial: bool) -> Result<()> {
         if partial {
-            Err(Error::Partial {
-                location: snafu::Location::default(),
-            })
+            PartialSnafu.fail()
         } else {
             Ok(())
         }
     }
-    fn interrupted() -> Error {
-        Error::Interrupted {
-            location: snafu::Location::default(),
-        }
-    }
-    fn uncertain() -> Error {
-        Error::Uncertain {
-            location: snafu::Location::default(),
-        }
-    }
-    fn protocol(field: &'static str) -> Error {
-        Error::Protocol {
-            field,
-            location: snafu::Location::default(),
-        }
-    }
-    fn client_error(source: erebor_runtime_client::AraphorError) -> Error {
-        Error::Client {
-            source,
-            location: snafu::Location::default(),
-        }
-    }
-
     fn query_error(code: &str) -> Error {
         match code {
-            "InvalidQuery" | "InvalidCheckpoint" => Error::Invalid {
+            "InvalidQuery" | "InvalidCheckpoint" => InvalidSnafu {
                 field: "query or bookmark",
-                location: snafu::Location::default(),
-            },
-            "InputTooLarge" | "ResultTooLarge" => Error::Partial {
-                location: snafu::Location::default(),
-            },
-            "DeadlineExceeded" | "OutputTimeout" => Error::OutputDeadline {
-                location: snafu::Location::default(),
-            },
-            "Cancelled" => Self::interrupted(),
-            "CursorExpired" => Self::client_error(AraphorClient::rpc_error(
+            }
+            .build(),
+            "InputTooLarge" | "ResultTooLarge" => PartialSnafu.build(),
+            "DeadlineExceeded" | "OutputTimeout" => OutputDeadlineSnafu.build(),
+            "Cancelled" => InterruptedSnafu.build(),
+            "CursorExpired" => ClientSnafu.into_error(AraphorClient::rpc_error(
                 tonic::Status::out_of_range("retained history expired"),
             )),
-            "Denied" => Self::client_error(AraphorClient::rpc_error(
+            "Denied" => ClientSnafu.into_error(AraphorClient::rpc_error(
                 tonic::Status::permission_denied("investigate permission denied"),
             )),
-            "Unsupported" => Self::client_error(AraphorClient::rpc_error(
+            "Unsupported" => ClientSnafu.into_error(AraphorClient::rpc_error(
                 tonic::Status::unimplemented("query operation is unsupported"),
             )),
-            "Busy" => Self::client_error(AraphorClient::rpc_error(
+            "Busy" => ClientSnafu.into_error(AraphorClient::rpc_error(
                 tonic::Status::resource_exhausted("query capacity is unavailable"),
             )),
-            "StorageUnavailable" => Self::client_error(AraphorClient::rpc_error(
+            "StorageUnavailable" => ClientSnafu.into_error(AraphorClient::rpc_error(
                 tonic::Status::unavailable("query storage is unavailable"),
             )),
-            _ => Self::client_error(AraphorClient::rpc_error(tonic::Status::internal(
+            _ => ClientSnafu.into_error(AraphorClient::rpc_error(tonic::Status::internal(
                 "query failed",
             ))),
         }
@@ -377,7 +349,7 @@ struct QueryReplay {
 impl QueryReplay {
     fn resume(&self, request: &mut wire::QueryRequest) -> Result<()> {
         if !request.follow {
-            return Err(CommandRun::uncertain());
+            return UncertainSnafu.fail();
         }
         request.bookmark.clone_from(&self.bookmark);
         Ok(())
@@ -385,9 +357,7 @@ impl QueryReplay {
 
     fn duration(&self) -> Result<()> {
         if self.bookmark.is_empty() {
-            return Err(Error::OutputDeadline {
-                location: snafu::Location::default(),
-            });
+            return OutputDeadlineSnafu.fail();
         }
         self.complete()
     }
@@ -397,50 +367,57 @@ impl QueryReplay {
     }
 
     fn advance(&mut self, frame: &mut wire::QueryFrame) -> Result<bool> {
-        if frame.schema_version != 1
-            || frame.store_uuid.len() != 16
-            || !matches!(frame.operation, 1 | 2)
-        {
-            return Err(CommandRun::protocol("query envelope"));
-        }
+        ensure!(
+            frame.schema_version == 1
+                && frame.store_uuid.len() == 16
+                && matches!(frame.operation, 1 | 2),
+            ProtocolSnafu {
+                field: "query envelope"
+            },
+        );
         let identity = (
             frame.store_uuid.clone(),
             frame.recovery_epoch,
             frame.operation,
         );
-        if self
-            .identity
-            .as_ref()
-            .is_some_and(|current| *current != identity)
-        {
-            return Err(CommandRun::protocol(
-                "query store or operation changed during reconnect",
-            ));
-        }
+        ensure!(
+            self.identity
+                .as_ref()
+                .is_none_or(|current| *current == identity),
+            ProtocolSnafu {
+                field: "query store or operation changed during reconnect"
+            },
+        );
         self.identity = Some(identity);
-        match frame
-            .payload
-            .as_mut()
-            .ok_or_else(|| CommandRun::protocol("query payload"))?
-        {
+        match frame.payload.as_mut().context(ProtocolSnafu {
+            field: "query payload",
+        })? {
             wire::query_frame::Payload::Metadata(_) => self.metadata = true,
             wire::query_frame::Payload::Rows(rows) => {
-                if !self.metadata {
-                    return Err(CommandRun::protocol("query rows before metadata"));
-                }
+                ensure!(
+                    self.metadata,
+                    ProtocolSnafu {
+                        field: "query rows before metadata"
+                    }
+                );
                 self.partial |= rows.limited || !rows.missing_contexts.is_empty();
                 if frame.operation == wire::QueryOperation::Append as i32 {
-                    if rows.rows.len() != rows.positions.len() {
-                        return Err(CommandRun::protocol("append row positions"));
-                    }
+                    ensure!(
+                        rows.rows.len() == rows.positions.len(),
+                        ProtocolSnafu {
+                            field: "append row positions"
+                        }
+                    );
                     let mut previous = None;
                     for position in &rows.positions {
                         let position = (position.commit_revision, position.ordinal);
-                        if position.0 > frame.read_revision
-                            || previous.is_some_and(|previous| previous >= position)
-                        {
-                            return Err(CommandRun::protocol("append position order or revision"));
-                        }
+                        ensure!(
+                            position.0 <= frame.read_revision
+                                && previous.is_none_or(|previous| previous < position),
+                            ProtocolSnafu {
+                                field: "append position order or revision"
+                            },
+                        );
                         previous = Some(position);
                     }
                     let count = rows.rows.len();
@@ -464,9 +441,12 @@ impl QueryReplay {
                 self.pending = true;
             }
             wire::query_frame::Payload::Checkpoint(bookmark) => {
-                if bookmark.is_empty() || bookmark.len() > 1024 {
-                    return Err(CommandRun::protocol("query bookmark bound"));
-                }
+                ensure!(
+                    !bookmark.is_empty() && bookmark.len() <= 1024,
+                    ProtocolSnafu {
+                        field: "query bookmark bound"
+                    }
+                );
                 self.bookmark.clone_from(bookmark);
                 self.pending = false;
             }
@@ -488,26 +468,28 @@ struct TraceReplay {
 
 impl TraceReplay {
     fn advance(&mut self, frame: &wire::TraceFrame, trace_id: &[u8]) -> Result<bool> {
-        if frame.schema_version != 1
-            || frame.trace_id != trace_id
-            || frame.store_uuid.len() != 16
-            || frame.bookmark.len() > 2048
-        {
-            return Err(CommandRun::protocol("trace identity or bookmark bound"));
-        }
+        ensure!(
+            frame.schema_version == 1
+                && frame.trace_id == trace_id
+                && frame.store_uuid.len() == 16
+                && frame.bookmark.len() <= 2048,
+            ProtocolSnafu {
+                field: "trace identity or bookmark bound"
+            },
+        );
         let identity = (frame.store_uuid.clone(), frame.recovery_epoch);
-        if self
-            .identity
-            .as_ref()
-            .is_some_and(|current| *current != identity)
-        {
-            return Err(CommandRun::protocol("trace store changed during reconnect"));
-        }
+        ensure!(
+            self.identity
+                .as_ref()
+                .is_none_or(|current| *current == identity),
+            ProtocolSnafu {
+                field: "trace store changed during reconnect"
+            },
+        );
         self.identity = Some(identity);
-        let payload = frame
-            .payload
-            .as_ref()
-            .ok_or_else(|| CommandRun::protocol("trace payload"))?;
+        let payload = frame.payload.as_ref().context(ProtocolSnafu {
+            field: "trace payload",
+        })?;
         if matches!(payload, wire::trace_frame::Payload::Metadata(_)) {
             self.metadata = true;
         }
@@ -518,12 +500,14 @@ impl TraceReplay {
             payload,
             wire::trace_frame::Payload::Output(_) | wire::trace_frame::Payload::Terminal(_)
         ) {
-            if !self.metadata
-                || frame.execution_id.len() != 16
-                || frame.commit_revision > frame.read_revision
-            {
-                return Err(CommandRun::protocol("trace execution identity or revision"));
-            }
+            ensure!(
+                self.metadata
+                    && frame.execution_id.len() == 16
+                    && frame.commit_revision <= frame.read_revision,
+                ProtocolSnafu {
+                    field: "trace execution identity or revision"
+                },
+            );
             let position = (frame.commit_revision, frame.ordinal);
             if self.position.is_some_and(|before| position <= before) {
                 return Ok(false);
@@ -626,7 +610,10 @@ mod tests {
         frame.payload = Some(wire::query_frame::Payload::Rows(batch.clone()));
         assert!(replay.advance(&mut frame)?);
         let Some(wire::query_frame::Payload::Rows(rows)) = frame.payload.as_ref() else {
-            return Err(CommandRun::protocol("append test rows"));
+            return ProtocolSnafu {
+                field: "append test rows",
+            }
+            .fail();
         };
         assert_eq!(rows.rows, batch.rows[2..]);
         assert_eq!(rows.positions, batch.positions[2..]);
@@ -684,8 +671,8 @@ mod tests {
     fn observability_cli_exit_codes() {
         use erebor_runtime_error::{ErrorExt, StatusCode};
 
-        assert_eq!(CommandRun::interrupted().exit_code(), 130);
-        assert_eq!(CommandRun::uncertain().exit_code(), 4);
+        assert_eq!(InterruptedSnafu.build().exit_code(), 130);
+        assert_eq!(UncertainSnafu.build().exit_code(), 4);
         for (code, exit, status) in [
             ("Denied", 3, StatusCode::PermissionDenied),
             ("CursorExpired", 4, StatusCode::IllegalState),
