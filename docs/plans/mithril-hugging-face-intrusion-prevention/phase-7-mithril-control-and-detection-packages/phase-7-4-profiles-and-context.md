@@ -68,6 +68,9 @@ Derivation fails or is disabled
 3. Apply the exact algorithm in engine-design.md. Deduplicate by accepted
    identity, not similarity. Keep source lifetime, cohort, role/state, operation,
    exact binding, source decision, physical result and proof kind in atom keys.
+   The atom stores only its key, count, first cursor, last cursor and evidence
+   sample. SQL and native preview read exact facts from the key. Do not store
+   duplicate decision, result or policy-key fields beside that key.
    Consume only the declared observation kinds. Derived profile/finding/trace
    revision notices are not new sensor actions. Use checked counts and stable
    record-ID sample selection. Included plus
@@ -169,7 +172,9 @@ DiscoveryContextProvider. Control retains authentication, native preview,
 policy and physical-effect authority. Production Control has no discovery
 SQLite dependency, copied raw archive or archive-head owner.
 
-The shared database schema is 15. A fresh store is required. The result table
+The shared database schema is 16. Discovery bodies use schema 2. A fresh store
+is required. Unsupported formats are rejected without migration or changes
+to stored data. The result table
 holds a typed discovery header; the processor row holds its current result ID.
 No second result directory or JSON extension is required. Working result,
 references and progress commit together. Sealed results are immutable. Late
@@ -268,3 +273,22 @@ Performance, 50,000-atom concurrent-intake measurements, operator review time
 and field noise reduction remain **UNQUALIFIED**. No new performance test or
 benchmark ran. Physical qualification remains in 7.10. No later phase starts
 with this result.
+
+### Canonical atom result
+
+Source: `244ac567`. Status: **Done** for implementation and scoped correctness.
+BehaviorAtom stores only its key, count, first cursor, last cursor and evidence
+sample. SQL and native preview read the five removed fields from that key.
+Exact identities, wildcard arguments, counts, coverage and replay remain.
+AnalysisStore schema 16 and discovery schema 2 require a fresh store. No
+migration or changes to existing data are part of this change.
+
+The focused `discovery_` run passes 38 tests. Control `discovery_` passes eight
+tests. `analysis_store_schema_permissions` passes and checks that rejection
+leaves database bytes unchanged. The projection tests check unchanged SQL
+columns and reject old empty working and sealed profiles. The live restart
+test checks the current profile format. Read `discovery.log`, `preview.log`
+and `store-format.log` in `/tmp/araphor-structure.ZIXAR3/`.
+The current-source workspace procedure and standalone profile, follow and CLI
+checks pass. Read the [shared verification result](phase-7-3-query-and-follow.md#structural-ownership-result)
+for commands, counts and limits. Performance remains **UNQUALIFIED**.

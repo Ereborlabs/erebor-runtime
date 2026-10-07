@@ -115,7 +115,11 @@ input before it returns rows or waits for capacity. Native external
 access, automatic extension loading, and temporary files are disabled.
 These settings are not an operating-system memory or security boundary.
 
-QueryStream owns one pending next-frame future and passive QueryState.
+QueryStream owns one QueryRun value. Ready holds the query state. Pending
+holds the next-frame future and that same state. Closed holds neither value.
+The state uses one Box that moves through each evaluation. The stream has no
+separate done flag. The append position comes from the last disclosed
+checkpoint, not a second position field. Closed cannot start another read.
 QueryYield owns the staged result and checkpoint. Its Metadata and Data
 variants hold both values. Data moves the result into the returned frame.
 The Checkpoint variant then holds only the checked checkpoint. The last
@@ -211,6 +215,62 @@ a partial replacement or checkpoint advance. The final Ponytail review added
 no storage or service layer.
 Use the [phase result](phase-7-3-query-and-follow.md#implementation-result)
 for the final source revision, commands, and verification limits.
+
+### Structural ownership review
+
+Source: `244ac567`, after `782c80ce` and `be08d303`.
+The intended result is one query scope, one follow lifecycle and one copy of
+each exact atom fact. Authorization, retained-read checks and native cleanup
+remain required. No Control authority or capture owner is removed.
+
+[QueryPlan::client](../../../../crates/araphor-data/src/query/plan.rs) A caller supplies admitted SQL and the authenticated tenant input selection.<br>
+-> [QueryScope](../../../../crates/araphor-data/src/query/plan.rs) The client plan owns one immutable QueryGrant through Arc.<br>
+-> [QuerySession](../../../../crates/araphor-data/src/query/authorization.rs) Plan copies and sessions share that grant.<br>
+-> [QueryPlan::dependencies](../../../../crates/araphor-data/src/query/plan.rs) Dependency selection narrows a separate mutable copy.<br>
+-> [QuerySession::check](../../../../crates/araphor-data/src/query/authorization.rs) Each check uses the complete grant and current authority.
+
+[QueryOwner::follow_inner](../../../../crates/araphor-data/src/query/follow.rs) Follow is requested.<br>
+-> [QueryRun](../../../../crates/araphor-data/src/query/follow.rs) The owner returns Ready without starting SQL.<br>
+-> [QueryStream::poll_next](../../../../crates/araphor-data/src/query/follow.rs) Consumer demand moves the state into one Pending future.<br>
+-> [QueryStream::advance](../../../../crates/araphor-data/src/query/follow.rs) That future produces and checks one frame.<br>
+-> [QueryStream::poll_next](../../../../crates/araphor-data/src/query/follow.rs) Authorized checkpoint disclosure sets the next append position.<br>
+-> [QueryStream::close](../../../../crates/araphor-data/src/query/follow.rs) Failure or completed closure removes Ready or Pending state and releases the stream lease.
+
+[DiscoveryOwner::derive_recorded](../../../../crates/araphor-data/src/discovery/derive.rs) The owner derives checked atoms and stable evidence samples.<br>
+-> [BehaviorAtomV1](../../../../crates/araphor-data/src/discovery/model.rs) Each atom stores its key, count, first cursor, last cursor and evidence sample.<br>
+-> [BehaviorSnapshotV1::validate](../../../../crates/araphor-data/src/discovery/derive.rs) Validation checks exact keys, counts, order, coverage and evidence references.<br>
+-> [behavior_row](../../../../crates/araphor-data/src/query/discovery.rs) SQL projects the unchanged columns from the canonical key.<br>
+-> [DiscoveryPreviewOwner::simulate_recorded](../../../../crates/mithril-control/src/discovery/preview.rs) Native preview reads the same static policy key.
+
+[AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) A stored format is unsupported.<br>
+-> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) Startup rejects it without migration or changes to stored data.<br>
+-> [DiscoveryProfileV1::try_from](../../../../crates/araphor-data/src/discovery/live.rs) A current store accepts only checked discovery bodies in the current format.
+
+AnalysisStore uses schema 16. Discovery bodies use schema 2. Development
+requires a fresh store. SQL columns, public query messages and current-format
+restart remain unchanged. Static policy wildcard arguments remain separate
+from observed operation arguments.
+
+Read `query_scope_shared_grant` in
+[client tests](../../../../crates/araphor-data/src/query/client_tests.rs),
+`query_follow_lazy_demand` and `query_follow_staged_cancel` in
+[follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs),
+`discovery_derivation_replay_counts` in
+[derivation tests](../../../../crates/araphor-data/src/discovery/derive.rs),
+and `discovery_query_atom_projection` and `discovery_query_format_rejection` in
+[projection tests](../../../../crates/araphor-data/src/query/discovery.rs).
+`analysis_store_schema_permissions` checks rejected database bytes in
+[store tests](../../../../crates/araphor-data/src/analysis/mod.rs).
+`discovery_live_restart` checks the current profile format in
+[live tests](../../../../crates/araphor-data/src/discovery/live.rs).
+This change adds no BPF or wire layout. Performance remains unqualified.
+
+Verification: **Done, PASS** at `244ac567`. The final workspace procedure
+returns zero. The 76 top-level suites pass 1,632 tests with zero failures and
+544 existing ignored tests. The eight standalone follow cases, profile restart
+and ten native client receipt checks pass. Read the
+[structural ownership result](phase-7-3-query-and-follow.md#structural-ownership-result)
+for exact commands, logs and proof limits.
 
 ### Public query boundary review
 
@@ -2557,7 +2617,8 @@ checks the candidate prefix before it advances progress. It does not publish
 an export artifact or copy the complete raw input.
 
 Control state uses schema 8 and contains no raw evidence metadata. Discovery
-uses the existing AnalysisStore schema 15. Trace intent and lifecycle state
+uses AnalysisStore schema 16 and discovery body schema 2. Unsupported formats
+are rejected without migration or changes to stored data. Trace intent and lifecycle state
 use the same metadata owner; trace output uses diagnostic segments.
 [Control startup](../../../../crates/mithril-control/src/store.rs) rejects old
 schemas and raw directories. It does not import or migrate them.

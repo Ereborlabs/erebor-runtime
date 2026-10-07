@@ -49,6 +49,15 @@ the trusted internal engine from 7.3. Do not enable public SQL before both pass.
    unavailable, not proof that this filter lost a matching row. Keep limits
    in the data crate so the optional remote host uses the same contract.
 
+QueryPlan owns one trusted selection or one immutable client grant. The client
+grant contains the tenant input selection. Plan copies and query sessions
+share that grant; they do not copy the selection into another plan field.
+Dependency selection uses a separate mutable copy to narrow the input.
+Permission changes still wake pending reads and each disclosure checks current
+authority. An immutable grant does not make current permission immutable.
+The [structural ownership result](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-3-query-and-follow.md#structural-ownership-result)
+records current workspace and native client proof at `244ac567`.
+
 The query transport retains one authorized checkpoint frame. Derive its wire
 header and bookmark when a local duration ends. New rows without a checkpoint
 do not change that saved frame. Check retained-read validity and current

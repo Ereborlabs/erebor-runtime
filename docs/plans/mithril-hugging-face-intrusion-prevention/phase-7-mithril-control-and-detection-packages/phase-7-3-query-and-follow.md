@@ -108,8 +108,11 @@ Reader cancels or disconnects
    Register watch before snapshot capture. Use one evaluation and one dirty
    flag per stream; recheck dependency revisions before waiting.
    QueryStream owns the plan, checkpoint, subscriptions and one pending
-   next-frame future. The stream implements Stream directly. Construction
-   starts no SQL. Polling advances that future and returns one frame. Do not
+   next-frame future. One lifecycle value contains the Ready state, the
+   Pending future, or Closed. Move the same state through each evaluation.
+   Derive the append position from the last disclosed checkpoint. Closed
+   cannot start another read. The stream implements Stream directly.
+   Construction starts no SQL. Polling advances that future and returns one frame. Do not
    add a separate producer task, output channel or subscription driver.
    The same future waits for retained-read checks before it returns the frame.
    Cancellation and authority changes also wake this wait. Advance the
@@ -648,3 +651,39 @@ Clippy and all-target/all-feature tests return zero. Across 76 top-level suites,
 nested recovery helpers. The affected libraries pass 290 data tests, 166 Control
 tests and 58 CLI tests. Ignored cases remain unqualified. Read
 `/tmp/araphor-five-cuts.Gor7fD/rust-ci.log`.
+
+### Structural ownership result
+
+Source: `244ac567`. The shared scope is commit `782c80ce`; the follow lifecycle
+is commit `be08d303`. Status: **Done** for implementation and scoped correctness.
+QueryPlan and query sessions share one immutable client grant. Dependency
+selection narrows a separate mutable copy. QueryRun owns Ready, Pending or
+Closed. The append position comes from the last disclosed checkpoint.
+Current authority checks, retained-read checks and native cleanup remain.
+
+The focused `query_` run passes 135 tests. The final procedure,
+`bash .github/scripts/verify-rust-ci.sh`, passes at `244ac567` with exit code 0.
+Formatting, workspace compilation, strict Clippy and all-target/all-feature
+tests pass. The 76 top-level suites pass 1,632 tests, with zero failures and
+544 existing ignored tests. Counts exclude nested recovery helpers.
+The data library passes 292 tests, Control passes 166, CLI passes 58 and
+the end-to-end library passes 167. Ignored cases remain unqualified.
+
+The standalone `query-follow` command passes all eight cases. `profile-restart`
+passes with deterministic profiles qualified and physical profiles unqualified.
+The native CLI `query-trace-client` case passes all ten receipt checks. Its
+`table.stdout` contains the follow table. Cargo checks and builds use the six
+environment settings above. Standalone commands use `TMPDIR=/dev/shm` and
+new temporary stores:
+
+```sh
+target/debug/mithril_discovery_test --case query-follow --output-directory /tmp/araphor-structure.ZIXAR3/query-follow
+target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-structure.ZIXAR3/profile-restart
+target/debug/mithril-observability-test --case query-trace-client --output-directory /tmp/araphor-structure.ZIXAR3/native-client --client-executable /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/araphor
+bash .github/scripts/verify-rust-ci.sh
+```
+
+Read `query-fixed.log`, `clients-build.log`, `rust-ci.log` and the three
+`result.json` receipts in `/tmp/araphor-structure.ZIXAR3/`. Independent source
+review finds no issues. No benchmark or physical-capture run is part of this
+change. Performance and existing physical-proof limits remain unchanged.

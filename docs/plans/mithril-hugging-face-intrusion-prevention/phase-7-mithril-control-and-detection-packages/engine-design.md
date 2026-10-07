@@ -233,6 +233,13 @@ IDs, logs, metrics, and classifier features.
 | `ReviewDecision` | Reviewer and authorization context; proposal/preview/source/target digests; decision; reason; expiry; independence check; publication precondition. |
 | `PublicationReceipt` | Idempotency key; exact submitted source digest; source owner result and revision; candidate and target references when supplied. Never synthesizes an activation acknowledgement. |
 
+BehaviorAtom stores its exact facts in one BehaviorAtomKey. The atom holds
+only that key, count, first cursor, last cursor and evidence sample. SQL and
+native preview read the source reason, decision, kernel result, physical
+result and static policy key from that key. Do not store a second copy of
+these facts beside the key. A stored format change requires a fresh store.
+Reject an unsupported store or discovery body without changing its data.
+
 An entry role comes from the existing owner. A classifier label such as
 `probable_health_check` is not a role and cannot fill an absent role field.
 Replica facts can share a cohort only when all required identities match.
@@ -1024,6 +1031,10 @@ Client disconnects
 
 Use Tokio watch for the latest committed revision, not a queue of raw rows.
 QueryStream owns the plan, checkpoint, notifications and pending evaluation.
+One lifecycle value is Ready with the query state, Pending with the next-frame
+future, or Closed. The same query state moves between Ready and Pending.
+The append read position comes from the last disclosed checkpoint; do not
+store a separate copy of that position. Closed cannot start another read.
 The same stream produces and returns frames. Do not add a separate follow
 task, producer channel or subscription driver. Construction starts no SQL.
 Paused consumption starts no further evaluation. An admitted native task can
