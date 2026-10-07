@@ -14,9 +14,8 @@ use super::{
     MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{
-    AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, Result,
-    TraceFrameKindV1, TraceFrameV1, TraceIdentityV1, TraceIntentV1, TraceMeasurementV1,
-    TraceOutputReceiptV1, TraceRecipeV1, TraceStateV1,
+    AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, EvidenceRecord,
+    Result, TraceIdentityV1, TraceIntentV1, TraceMeasurementV1, TraceOutputReceiptV1, TraceStateV1,
 };
 
 const MAX_EXTRACT_KEYS: usize = 1024;
@@ -83,10 +82,8 @@ pub struct AnalysisSelectionV1 {
     pub(crate) targets: bool,
     pub(crate) targets_only: bool,
     pub(crate) discovery: bool,
-    pub(crate) discovery_context: bool,
     pub(crate) profiles: Vec<String>,
     pub traces: Selection<TraceIdentityV1>,
-    pub(crate) measurements: bool,
     /// Node IDs narrow evidence, coverage, and targets, not context versions.
     pub nodes: Vec<String>,
     pub binding_ids: Vec<[u8; 16]>,
@@ -104,10 +101,8 @@ impl AnalysisSelectionV1 {
             targets: false,
             targets_only: false,
             discovery: false,
-            discovery_context: false,
             profiles: Vec::new(),
             traces: Selection::Exact(Vec::new()),
-            measurements: false,
             nodes: Vec::new(),
             binding_ids: Vec::new(),
             received_from: Bound::Unbounded,
@@ -253,6 +248,7 @@ pub enum AnalysisInputV1<'a> {
         cpu_id: u32,
         received_utc_ns: u64,
         record: &'a AnalysisRecordV1,
+        decoded: Option<&'a EvidenceRecord>,
     },
     Context(&'a AnalysisContextVersionV1),
     DiscoveryContext(&'a AnalysisContextVersionV1),
@@ -265,6 +261,13 @@ pub enum AnalysisInputV1<'a> {
     Target {
         context: &'a AnalysisContextVersionV1,
         fact: &'a crate::WorkloadTargetFactV1,
+    },
+    Profile {
+        result_id: &'a str,
+        body: &'a [u8],
+        commit_revision: u64,
+        sources: &'a [EvidenceIntakeIdentityV1],
+        discovery_enabled: bool,
     },
     Trace {
         state: &'a TraceStateV1,
@@ -280,14 +283,112 @@ pub enum AnalysisInputV1<'a> {
         kind: &'static str,
         bytes: &'a [u8],
     },
-    TraceMeasurement {
-        identity: &'a TraceIdentityV1,
-        measurement: &'a TraceMeasurementV1,
-    },
     Result {
         result_id: &'a str,
         body: &'a [u8],
     },
+    TraceMeasurement {
+        identity: &'a TraceIdentityV1,
+        measurement: &'a TraceMeasurementV1,
+    },
+}
+
+impl AnalysisInputV1<'_> {
+    fn relation(&self) -> AnalysisRelationV1 {
+        match self {
+            Self::Event { .. } => AnalysisRelationV1::Events,
+            Self::Context(_) => AnalysisRelationV1::Context,
+            Self::DiscoveryContext(_) => AnalysisRelationV1::DiscoveryContext,
+            Self::Behavior { .. } => AnalysisRelationV1::Behaviors,
+            Self::Target { .. } => AnalysisRelationV1::Targets,
+            Self::TraceMeasurement { .. } => AnalysisRelationV1::TraceMeasurements,
+            Self::Profile { .. } => AnalysisRelationV1::Behaviors,
+            Self::Trace { .. } => AnalysisRelationV1::Traces,
+            Self::TraceOutput { .. } => AnalysisRelationV1::TraceOutput,
+            Self::Result { .. } => AnalysisRelationV1::Results,
+        }
+    }
+}
+
+pub(crate) trait AnalysisProjection {
+    type Row;
+
+    fn decodes_events(&self) -> bool {
+        false
+    }
+
+    fn project(
+        &mut self,
+        input: AnalysisInputV1<'_>,
+        sink: &mut ProjectionSink<'_, Self::Row>,
+    ) -> Result<bool>;
+}
+
+pub(crate) struct RecordProjection<F>(pub(crate) F);
+
+impl<F, T> AnalysisProjection for RecordProjection<F>
+where
+    F: FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+{
+    type Row = T;
+
+    fn project(
+        &mut self,
+        input: AnalysisInputV1<'_>,
+        sink: &mut ProjectionSink<'_, T>,
+    ) -> Result<bool> {
+        let relation = input.relation();
+        match (self.0)(input)? {
+            Some(row) => sink.emit(relation, row),
+            None => Ok(true),
+        }
+    }
+}
+
+pub(crate) struct ProjectionSink<'a, T> {
+    output: &'a mut AnalysisExtractionV1<T>,
+    control: &'a AnalysisReadControl,
+    row_bytes: Option<&'a mut usize>,
+    emitted: usize,
+}
+
+impl<T> ProjectionSink<'_, T> {
+    pub(crate) fn check(&self) -> Result<()> {
+        self.control.check()
+    }
+
+    pub(crate) fn emit(&mut self, relation: AnalysisRelationV1, row: (T, usize)) -> Result<bool> {
+        self.control.check()?;
+        let bytes = row.1.saturating_add(size_of::<T>());
+        if let Some(used) = &mut self.row_bytes {
+            if used.saturating_add(bytes) > self.output.limits.page_bytes {
+                if **used == 0 || self.emitted != 0 {
+                    return AnalysisInputTooLargeSnafu {
+                        resource: "projected row bytes",
+                    }
+                    .fail();
+                }
+                return Ok(false);
+            }
+            **used += bytes;
+        }
+        self.output.push(relation, row)?;
+        self.emitted += 1;
+        Ok(true)
+    }
+
+    pub(crate) fn grow<U>(&mut self, values: &mut Vec<U>) -> Result<()> {
+        let added = AnalysisExtractionV1::<T>::grow(
+            values,
+            self.output.input_bytes,
+            self.output.limits.input_bytes,
+        )?;
+        self.output.charge(added)
+    }
+
+    pub(crate) fn charge(&mut self, bytes: usize) -> Result<()> {
+        self.output.charge(bytes)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -349,6 +450,12 @@ enum ExtractMode {
     Complete,
     Metadata,
     Page(Option<StorePositionV1>),
+}
+
+struct SelectedTrace<'a> {
+    identity: &'a TraceIdentityV1,
+    target_index: u32,
+    selected: bool,
 }
 
 impl<T> AnalysisExtractionV1<T> {
@@ -460,6 +567,24 @@ impl<T> AnalysisExtractionV1<T> {
         page.input_bytes += bytes;
         page.rows.push(row);
         Ok(())
+    }
+
+    fn project(
+        &mut self,
+        projection: &mut impl AnalysisProjection<Row = T>,
+        input: AnalysisInputV1<'_>,
+        control: &AnalysisReadControl,
+        row_bytes: Option<&mut usize>,
+    ) -> Result<bool> {
+        projection.project(
+            input,
+            &mut ProjectionSink {
+                output: self,
+                control,
+                row_bytes,
+                emitted: 0,
+            },
+        )
     }
 }
 
@@ -767,14 +892,14 @@ impl AnalysisStore {
             ExtractMode::Complete,
             AnalysisExtractLimits::default(),
             control,
-            |input| {
+            RecordProjection(|input: AnalysisInputV1<'_>| {
                 project(input).map(|row| {
                     row.map(|row| {
                         let bytes = row.len();
                         (row.into_boxed_slice(), bytes)
                     })
                 })
-            },
+            }),
         )
         .map(|page| page.extraction)
     }
@@ -792,14 +917,14 @@ impl AnalysisStore {
             ExtractMode::Page(after),
             AnalysisExtractLimits::default(),
             control,
-            |input| {
+            RecordProjection(|input: AnalysisInputV1<'_>| {
                 project(input).map(|row| {
                     row.map(|row| {
                         let bytes = row.len();
                         (row.into_boxed_slice(), bytes)
                     })
                 })
-            },
+            }),
         )
     }
 
@@ -808,7 +933,7 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+        project: impl AnalysisProjection<Row = T>,
     ) -> Result<AnalysisPositionPageV1<T>> {
         self.extract_mode(selection, ExtractMode::Complete, limits, control, project)
     }
@@ -819,7 +944,7 @@ impl AnalysisStore {
         after: Option<StorePositionV1>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+        project: impl AnalysisProjection<Row = T>,
     ) -> Result<AnalysisPositionPageV1<T>> {
         self.extract_mode(
             selection,
@@ -835,7 +960,7 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+        project: impl AnalysisProjection<Row = T>,
     ) -> Result<AnalysisPositionPageV1<T>> {
         self.extract_mode(selection, ExtractMode::Metadata, limits, control, project)
     }
@@ -846,7 +971,7 @@ impl AnalysisStore {
         mode: ExtractMode,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
+        mut project: impl AnalysisProjection<Row = T>,
     ) -> Result<AnalysisPositionPageV1<T>> {
         control.check()?;
         if !selection.valid() {
@@ -968,11 +1093,11 @@ impl AnalysisStore {
                     limits.input_bytes,
                 )?;
                 output.charge(added)?;
-                trace_info.push((
-                    index as u32,
+                trace_info.push(SelectedTrace {
+                    identity,
+                    target_index: index as u32,
                     selected,
-                    TraceRecipeV1::identify(&intent.source)?,
-                ));
+                });
                 if !selected {
                     continue;
                 }
@@ -1005,14 +1130,17 @@ impl AnalysisStore {
                     output.charge(added)?;
                     output.trace_reads.push(identity.request_id);
                 }
-                if let Some(row) = project(AnalysisInputV1::Trace {
-                    state: &state,
-                    intent: &intent,
-                    target_index: index as u32,
-                    receipt: &receipt,
-                })? {
-                    output.push(AnalysisRelationV1::Traces, row)?;
-                }
+                output.project(
+                    &mut project,
+                    AnalysisInputV1::Trace {
+                        state: &state,
+                        intent: &intent,
+                        target_index: index as u32,
+                        receipt: &receipt,
+                    },
+                    control,
+                    None,
+                )?;
             }
             let mut scanned = 0;
             let mut row_bytes = 0_usize;
@@ -1053,45 +1181,49 @@ impl AnalysisStore {
                 output.scan(range.scan_bytes)?;
                 for record in range.read(&self.root)? {
                     control.check()?;
-                    let row = match &identity {
+                    let page_bytes = matches!(mode, ExtractMode::Page(_)).then_some(&mut row_bytes);
+                    let consumed = match &identity {
                         RawIdentity::Evidence(identity) => {
+                            let decoded = (!selection.binding_ids.is_empty()
+                                || project.decodes_events())
+                            .then(|| EvidenceRecord::try_from(record.framed_record.as_slice()))
+                            .transpose()?;
                             let selected = selection.binding_ids.is_empty()
-                                || crate::EvidenceRecord::try_from(
-                                    record.framed_record.as_slice(),
-                                )?
-                                .decision_context
-                                .as_ref()
-                                .is_some_and(|context| {
-                                    selection
-                                        .binding_ids
-                                        .iter()
-                                        .any(|id| id.as_slice() == context.binding_id.as_slice())
-                                });
+                                || decoded
+                                    .as_ref()
+                                    .and_then(|record| record.decision_context.as_ref())
+                                    .is_some_and(|context| {
+                                        selection.binding_ids.iter().any(|id| {
+                                            id.as_slice() == context.binding_id.as_slice()
+                                        })
+                                    });
                             if selected {
-                                project(AnalysisInputV1::Event {
-                                    identity,
-                                    cpu_id: cpu.ok_or_else(|| {
-                                        self.state_error("the selected evidence CPU is absent")
-                                    })?,
-                                    received_utc_ns: range.intake,
-                                    record: &record,
-                                })?
-                                .map(|row| (AnalysisRelationV1::Events, row))
+                                output.project(
+                                    &mut project,
+                                    AnalysisInputV1::Event {
+                                        identity,
+                                        cpu_id: cpu.ok_or_else(|| {
+                                            self.state_error("the selected evidence CPU is absent")
+                                        })?,
+                                        received_utc_ns: range.intake,
+                                        record: &record,
+                                        decoded: decoded.as_ref(),
+                                    },
+                                    control,
+                                    page_bytes,
+                                )?
                             } else {
-                                None
+                                true
                             }
                         }
                         RawIdentity::Diagnostic(identity) => {
-                            let index = selection
-                                .traces
-                                .as_slice()
+                            let trace = trace_info
                                 .iter()
-                                .position(|selected| selected == identity)
+                                .find(|trace| trace.identity == identity)
                                 .ok_or_else(|| {
                                     self.state_error("the selected trace identity is absent")
                                 })?;
-                            let (target_index, selected, recipe) = trace_info[index];
-                            if !selected {
+                            if !trace.selected {
                                 scanned += 1;
                                 after = Some(record.position);
                                 continue;
@@ -1113,58 +1245,23 @@ impl AnalysisStore {
                                     ("terminal", bytes)
                                 }
                             };
-                            if selection.measurements && kind == "data" {
-                                if let Some(recipe) = recipe {
-                                    let frame = TraceFrameV1 {
-                                        execution_id: identity.execution_id,
-                                        sequence: record.cursor,
-                                        kind: TraceFrameKindV1::Data,
-                                        bytes: bytes.clone(),
-                                    };
-                                    if let Some(measurements) = recipe.measurements(&frame) {
-                                        for measurement in measurements {
-                                            control.check()?;
-                                            if let Some(row) =
-                                                project(AnalysisInputV1::TraceMeasurement {
-                                                    identity,
-                                                    measurement: &measurement,
-                                                })?
-                                            {
-                                                output.push(
-                                                    AnalysisRelationV1::TraceMeasurements,
-                                                    row,
-                                                )?;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            project(AnalysisInputV1::TraceOutput {
-                                identity,
-                                target_index,
-                                sequence: record.cursor,
-                                position: record.position,
-                                kind,
-                                bytes,
-                            })?
-                            .map(|row| (AnalysisRelationV1::TraceOutput, row))
+                            output.project(
+                                &mut project,
+                                AnalysisInputV1::TraceOutput {
+                                    identity,
+                                    target_index: trace.target_index,
+                                    sequence: record.cursor,
+                                    position: record.position,
+                                    kind,
+                                    bytes,
+                                },
+                                control,
+                                page_bytes,
+                            )?
                         }
                     };
-                    if let Some((relation, row)) = row {
-                        let bytes = row.1.saturating_add(size_of::<T>());
-                        if matches!(mode, ExtractMode::Page(_))
-                            && row_bytes.saturating_add(bytes) > limits.page_bytes
-                        {
-                            if row_bytes == 0 {
-                                return AnalysisInputTooLargeSnafu {
-                                    resource: "projected row bytes",
-                                }
-                                .fail();
-                            }
-                            break 'scan;
-                        }
-                        output.push(relation, row)?;
-                        row_bytes += bytes;
+                    if !consumed {
+                        break 'scan;
                     }
                     scanned += 1;
                     after = Some(record.position);
@@ -1174,41 +1271,12 @@ impl AnalysisStore {
                 control.check()?;
                 match Self::read_context_from(snapshot, &self.root, key)? {
                     Some((context, _)) => {
-                        if let Some(row) = project(AnalysisInputV1::Context(&context))? {
-                            output.push(AnalysisRelationV1::Context, row)?;
-                        }
-                        if selection.discovery_context {
-                            if let Some(row) = project(AnalysisInputV1::DiscoveryContext(&context))?
-                            {
-                                output.push(AnalysisRelationV1::DiscoveryContext, row)?;
-                            }
-                        }
-                        if selection.targets && context.key.owner_id == "mithril-control/target" {
-                            control.check()?;
-                            let fact = serde_json::from_slice::<crate::WorkloadTargetFactV1>(
-                                &context.body,
-                            )
-                            .map_err(|_| {
-                                self.state_error("the retained target context is invalid")
-                            })?;
-                            if (!selection.nodes.is_empty()
-                                && !selection.nodes.contains(&fact.node_id))
-                                || (!selection.binding_ids.is_empty()
-                                    && !fact.kubernetes.as_ref().is_some_and(|identity| {
-                                        uuid::Uuid::parse_str(&identity.binding_id).is_ok_and(
-                                            |id| selection.binding_ids.contains(id.as_bytes()),
-                                        )
-                                    }))
-                            {
-                                continue;
-                            }
-                            if let Some(row) = project(AnalysisInputV1::Target {
-                                context: &context,
-                                fact: &fact,
-                            })? {
-                                output.push(AnalysisRelationV1::Targets, row)?;
-                            }
-                        }
+                        output.project(
+                            &mut project,
+                            AnalysisInputV1::Context(&context),
+                            control,
+                            None,
+                        )?;
                     }
                     None => {
                         let key = key.clone();
@@ -1233,15 +1301,6 @@ impl AnalysisStore {
                     .read_result_from(snapshot, selection.tenant_id, id)?
                     .ok_or_else(|| self.state_error("the selected discovery profile is absent"))?;
                 output.charge(body.capacity())?;
-                let profile = crate::DiscoveryProfileV1::try_from(body.as_slice())?;
-                if profile.profile_id != *id
-                    || !selection
-                        .sources
-                        .as_slice()
-                        .contains(&profile.scope.identity)
-                {
-                    return self.reject("the discovery profile scope differs from its selection");
-                }
                 let revision: u64 = snapshot
                     .query_row(
                         "SELECT commit_revision FROM analysis_results
@@ -1252,43 +1311,33 @@ impl AnalysisStore {
                     .context(AnalysisDatabaseSnafu {
                         operation: "read discovery profile revision",
                     })?;
-                if selection.binding_ids.is_empty() {
-                    if let Some(row) = project(AnalysisInputV1::Behavior {
-                        profile: &profile,
+                let discovery_enabled = output.discovery_enabled;
+                output.project(
+                    &mut project,
+                    AnalysisInputV1::Profile {
+                        result_id: id,
+                        body: &body,
                         commit_revision: revision,
-                        atom: None,
-                        discovery_enabled: output.discovery_enabled,
-                    })? {
-                        output.push(AnalysisRelationV1::Behaviors, row)?;
-                    }
-                }
-                for atom in &profile.snapshot.atoms {
-                    control.check()?;
-                    if !selection.binding_ids.is_empty()
-                        && !selection.binding_ids.contains(&atom.key.binding_id)
-                    {
-                        continue;
-                    }
-                    if let Some(row) = project(AnalysisInputV1::Behavior {
-                        profile: &profile,
-                        commit_revision: revision,
-                        atom: Some(atom),
-                        discovery_enabled: output.discovery_enabled,
-                    })? {
-                        output.push(AnalysisRelationV1::Behaviors, row)?;
-                    }
-                }
+                        sources: selection.sources.as_slice(),
+                        discovery_enabled,
+                    },
+                    control,
+                    None,
+                )?;
             }
             for id in &selection.results {
                 control.check()?;
                 match self.read_result_from(snapshot, selection.tenant_id, id)? {
                     Some(body) => {
-                        if let Some(row) = project(AnalysisInputV1::Result {
-                            result_id: id,
-                            body: &body,
-                        })? {
-                            output.push(AnalysisRelationV1::Results, row)?;
-                        }
+                        output.project(
+                            &mut project,
+                            AnalysisInputV1::Result {
+                                result_id: id,
+                                body: &body,
+                            },
+                            control,
+                            None,
+                        )?;
                     }
                     None => {
                         let id = id.clone();
@@ -2051,10 +2100,12 @@ mod tests {
                 cpu_id,
                 record,
                 received_utc_ns,
+                decoded,
             } = input
             else {
                 return store.reject("unexpected relation");
             };
+            assert!(decoded.is_none());
             assert_eq!(source, &identity);
             assert_eq!(cpu_id, 0);
             assert_eq!(received_utc_ns, 20);
@@ -2211,7 +2262,7 @@ mod tests {
                     ..Default::default()
                 },
                 &control,
-                |_| Ok(None::<((), usize)>)
+                RecordProjection(|_: AnalysisInputV1<'_>| Ok(None::<((), usize)>))
             ),
             Err(crate::Error::AnalysisInputTooLarge { .. })
         ));
@@ -2300,6 +2351,7 @@ mod tests {
                 | AnalysisInputV1::TraceMeasurement { .. }
                 | AnalysisInputV1::Target { .. }
                 | AnalysisInputV1::DiscoveryContext(_)
+                | AnalysisInputV1::Profile { .. }
                 | AnalysisInputV1::Behavior { .. } => {
                     return store.reject("unselected input entered an evidence-only snapshot")
                 }
@@ -2593,7 +2645,9 @@ mod tests {
                     ..Default::default()
                 },
                 &AnalysisReadControl::default(),
-                |_| Ok(Some((vec![1].into_boxed_slice(), 1))),
+                RecordProjection(|_: AnalysisInputV1<'_>| {
+                    Ok(Some((vec![1].into_boxed_slice(), 1)))
+                }),
             );
             if limit == required {
                 let output = result?.extraction;

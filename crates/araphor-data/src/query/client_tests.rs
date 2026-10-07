@@ -1232,6 +1232,53 @@ async fn query_trace_relations() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_projection_expansion() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    for request in [7, 8] {
+        let intent = fixture.trace(request)?;
+        fixture.trace_frame(
+            &intent,
+            1,
+            br#"{"type":"map","data":{"@errors":{"-13":7,"-2":11}}}"#,
+        )?;
+        fixture.trace_terminal(&intent)?;
+    }
+    fixture.grant.selection.binding_ids = vec![[7; 16]];
+    let plan = fixture.plan(
+        "SELECT m.errno,m.count,o.sequence FROM trace_measurements m JOIN trace_output o ON m.execution_id=o.execution_id AND m.sequence=o.sequence ORDER BY m.errno",
+        vec![], false,
+    )?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![Value::BigInt(-13), Value::UBigInt(7), Value::UBigInt(1)],
+            vec![Value::BigInt(-2), Value::UBigInt(11), Value::UBigInt(1)],
+        ]
+    );
+    assert_eq!(result.input_bytes, None);
+    drop(result);
+    fixture.owner = Arc::new(QueryOwner::new(
+        fixture.data.store.clone(),
+        QueryLimits {
+            input_bytes: 1_024,
+            ..Default::default()
+        },
+    )?);
+    assert!(matches!(
+        fixture.query(&plan).await,
+        Err(crate::Error::AnalysisInputTooLarge { .. } | crate::Error::QueryLimit { .. })
+    ));
+    fixture.owner = Arc::new(QueryOwner::new(
+        fixture.data.store.clone(),
+        QueryLimits::default(),
+    )?);
+    assert_eq!(fixture.query(&plan).await?.rows.len(), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn query_trace_stream() -> TestResult {
     let mut fixture = ClientFixture::local()?;
     fixture.tenant();

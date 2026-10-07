@@ -187,13 +187,11 @@ impl QueryPlan {
         let behavior_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("behaviors"));
         let context_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("context"));
         selection.discovery = behavior_sql;
-        selection.discovery_context = context_sql;
         selection.profiles.clear();
         selection.targets = target_sql;
         selection.targets_only = matches!(&self.template, QueryTemplate::Client(sql) if target_sql && !context_sql && !sql.dependencies().contains("context_versions"));
         if !trace_sql {
             selection.traces = Selection::Exact(Vec::new());
-            selection.measurements = false;
         }
         match &self.template {
             QueryTemplate::Client(sql) => {
@@ -224,7 +222,6 @@ impl QueryPlan {
                 if !sql.dependencies().contains("context_versions") && !context_sql && !target_sql {
                     selection.contexts = Selection::Exact(Vec::new());
                 }
-                selection.measurements = sql.dependencies().contains("trace_measurements");
             }
             QueryTemplate::Catalog => {
                 selection.sources = Selection::Exact(Vec::new());

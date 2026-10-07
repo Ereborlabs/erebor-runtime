@@ -40,7 +40,7 @@ pub use frame::{
     QueryErrorCode, QueryFrame, QueryHealth, QueryMetadata, QueryPayload, QueryTerminalReason,
     QUERY_CHECKPOINT_BYTES,
 };
-use input::{InputRelations, InputRow};
+use input::{InputProjection, InputRelations, InputRow};
 pub use plan::{QueryOperation, QueryPlan, QueryTemplate, QUERY_SCHEMA_VERSION};
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -322,26 +322,7 @@ impl QueryOwner {
         mut lease: QueryLease,
     ) -> Result<QueryResult> {
         let selection = plan.dependencies(now_ns)?;
-        let project = |input: crate::AnalysisInputV1<'_>| {
-            let relation = match &input {
-                crate::AnalysisInputV1::Event { .. } => "events",
-                crate::AnalysisInputV1::Context(_) => "context_versions",
-                crate::AnalysisInputV1::DiscoveryContext(_) => "context",
-                crate::AnalysisInputV1::Behavior { .. } => "behaviors",
-                crate::AnalysisInputV1::Target { .. } => "targets",
-                crate::AnalysisInputV1::Trace { .. } => "traces",
-                crate::AnalysisInputV1::TraceOutput { .. } => "trace_output",
-                crate::AnalysisInputV1::TraceMeasurement { .. } => "trace_measurements",
-                crate::AnalysisInputV1::Result { .. } => "results",
-            };
-            if matches!(&plan.template, QueryTemplate::Client(sql) if !sql.dependencies().contains(relation))
-            {
-                return Ok(None);
-            }
-            let row = InputRow::try_from(input)?;
-            let bytes = row.allocation_bytes()?;
-            Ok(Some((row, bytes)))
-        };
+        let project = InputProjection::new(&plan.template, &selection);
         let bounds = crate::analysis::AnalysisExtractLimits {
             scan_bytes: self.limits.scan_bytes,
             input_bytes: self.limits.input_bytes,
@@ -549,9 +530,12 @@ impl QueryOwner {
             input_bytes: self.limits.input_bytes,
             ..Default::default()
         };
-        let page = self
-            .store
-            .metadata_rows::<InputRow>(&selection, bounds, control, |_| Ok(None))?;
+        let page = self.store.metadata_rows::<InputRow>(
+            &selection,
+            bounds,
+            control,
+            crate::analysis::RecordProjection(|_: crate::AnalysisInputV1<'_>| Ok(None)),
+        )?;
         let extraction = page.extraction;
         let sources = extraction
             .sources

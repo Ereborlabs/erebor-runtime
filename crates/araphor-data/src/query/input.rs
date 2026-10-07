@@ -13,9 +13,11 @@ use super::QueryTemplate;
 use crate::{
     AnalysisContextVersionV1, AnalysisExtractionV1, AnalysisGapV1, AnalysisInputV1,
     AnalysisRelationV1, AnalysisSourceSnapshotV1, CoverageCounters, CoverageInterval,
-    CoverageReport, EvidenceIntakeIdentityV1, EvidenceRecord, Result, TraceRecipeManifestV1,
-    TraceRecipeV1,
+    CoverageReport, EvidenceIntakeIdentityV1, Result, TraceRecipeManifestV1, TraceRecipeV1,
 };
+
+#[cfg(test)]
+use crate::EvidenceRecord;
 
 pub(super) struct InputField(
     pub(super) &'static str,
@@ -805,6 +807,235 @@ pub(super) const SCHEMAS: &[InputSchema] = &[
 #[derive(Debug)]
 pub(super) struct InputRow(pub(super) Vec<Value>);
 
+pub(super) struct InputProjection<'a> {
+    template: &'a QueryTemplate,
+    selection: &'a crate::AnalysisSelectionV1,
+    recipes: Vec<RecipeInput>,
+}
+
+struct RecipeInput {
+    identity: crate::TraceIdentityV1,
+    recipe: Option<TraceRecipeV1>,
+}
+
+impl<'a> InputProjection<'a> {
+    pub(super) fn new(
+        template: &'a QueryTemplate,
+        selection: &'a crate::AnalysisSelectionV1,
+    ) -> Self {
+        Self {
+            template,
+            selection,
+            recipes: Vec::new(),
+        }
+    }
+
+    fn needs(&self, relation: &str) -> bool {
+        !matches!(self.template, QueryTemplate::Client(sql) if !sql.dependencies().contains(relation))
+    }
+
+    fn expands(&self, relation: &str) -> bool {
+        matches!(self.template, QueryTemplate::Client(sql) if sql.dependencies().contains(relation))
+    }
+
+    fn emit(
+        &self,
+        input: AnalysisInputV1<'_>,
+        sink: &mut crate::analysis::ProjectionSink<'_, InputRow>,
+    ) -> Result<bool> {
+        let (name, relation) = match &input {
+            AnalysisInputV1::Event { .. } => ("events", AnalysisRelationV1::Events),
+            AnalysisInputV1::Context(_) => ("context_versions", AnalysisRelationV1::Context),
+            AnalysisInputV1::DiscoveryContext(_) => {
+                ("context", AnalysisRelationV1::DiscoveryContext)
+            }
+            AnalysisInputV1::Behavior { .. } => ("behaviors", AnalysisRelationV1::Behaviors),
+            AnalysisInputV1::Target { .. } => ("targets", AnalysisRelationV1::Targets),
+            AnalysisInputV1::Trace { .. } => ("traces", AnalysisRelationV1::Traces),
+            AnalysisInputV1::TraceOutput { .. } => {
+                ("trace_output", AnalysisRelationV1::TraceOutput)
+            }
+            AnalysisInputV1::TraceMeasurement { .. } => {
+                ("trace_measurements", AnalysisRelationV1::TraceMeasurements)
+            }
+            AnalysisInputV1::Result { .. } => ("results", AnalysisRelationV1::Results),
+            AnalysisInputV1::Profile { .. } => {
+                return crate::QueryInvalidSnafu {
+                    field: "unexpanded profile",
+                }
+                .fail()
+            }
+        };
+        if !self.needs(name) {
+            return Ok(true);
+        }
+        let row = InputRow::try_from(input)?;
+        let bytes = row.allocation_bytes()?;
+        sink.emit(relation, (row, bytes))
+    }
+}
+
+impl crate::analysis::AnalysisProjection for InputProjection<'_> {
+    type Row = InputRow;
+
+    fn decodes_events(&self) -> bool {
+        self.needs("events")
+    }
+
+    fn project(
+        &mut self,
+        input: AnalysisInputV1<'_>,
+        sink: &mut crate::analysis::ProjectionSink<'_, InputRow>,
+    ) -> Result<bool> {
+        sink.check()?;
+        match &input {
+            AnalysisInputV1::Context(context) => {
+                self.emit(AnalysisInputV1::Context(context), sink)?;
+                if self.expands("context") {
+                    self.emit(AnalysisInputV1::DiscoveryContext(context), sink)?;
+                }
+                if self.selection.targets && context.key.owner_id == "mithril-control/target" {
+                    let fact: crate::WorkloadTargetFactV1 = serde_json::from_slice(&context.body)
+                        .map_err(|_| {
+                        crate::QueryInvalidSnafu {
+                            field: "retained target context",
+                        }
+                        .build()
+                    })?;
+                    if (!self.selection.nodes.is_empty()
+                        && !self.selection.nodes.contains(&fact.node_id))
+                        || (!self.selection.binding_ids.is_empty()
+                            && !fact.kubernetes.as_ref().is_some_and(|identity| {
+                                uuid::Uuid::parse_str(&identity.binding_id).is_ok_and(|id| {
+                                    self.selection.binding_ids.contains(id.as_bytes())
+                                })
+                            }))
+                    {
+                        return Ok(true);
+                    }
+                    self.emit(
+                        AnalysisInputV1::Target {
+                            context,
+                            fact: &fact,
+                        },
+                        sink,
+                    )?;
+                }
+                Ok(true)
+            }
+            AnalysisInputV1::Profile {
+                result_id,
+                body,
+                commit_revision,
+                sources,
+                discovery_enabled,
+            } => {
+                let profile = crate::DiscoveryProfileV1::try_from(*body)?;
+                if profile.profile_id != *result_id || !sources.contains(&profile.scope.identity) {
+                    return crate::QueryInvalidSnafu {
+                        field: "discovery profile scope",
+                    }
+                    .fail();
+                }
+                if self.selection.binding_ids.is_empty() {
+                    self.emit(
+                        AnalysisInputV1::Behavior {
+                            profile: &profile,
+                            commit_revision: *commit_revision,
+                            atom: None,
+                            discovery_enabled: *discovery_enabled,
+                        },
+                        sink,
+                    )?;
+                }
+                for atom in &profile.snapshot.atoms {
+                    sink.check()?;
+                    if !self.selection.binding_ids.is_empty()
+                        && !self.selection.binding_ids.contains(&atom.key.binding_id)
+                    {
+                        continue;
+                    }
+                    self.emit(
+                        AnalysisInputV1::Behavior {
+                            profile: &profile,
+                            commit_revision: *commit_revision,
+                            atom: Some(atom),
+                            discovery_enabled: *discovery_enabled,
+                        },
+                        sink,
+                    )?;
+                }
+                Ok(true)
+            }
+            AnalysisInputV1::Trace {
+                intent,
+                target_index,
+                ..
+            } if self.expands("trace_measurements") => {
+                let identity = &intent
+                    .bindings
+                    .get(*target_index as usize)
+                    .ok_or_else(|| {
+                        crate::QueryInvalidSnafu {
+                            field: "trace target index",
+                        }
+                        .build()
+                    })?
+                    .identity;
+                let recipe = TraceRecipeV1::identify(&intent.source)?;
+                sink.grow(&mut self.recipes)?;
+                sink.charge(identity.node_id.capacity())?;
+                self.recipes.push(RecipeInput {
+                    identity: identity.clone(),
+                    recipe,
+                });
+                self.emit(input, sink)
+            }
+            AnalysisInputV1::TraceOutput {
+                identity,
+                sequence,
+                kind,
+                bytes,
+                ..
+            } if self.expands("trace_measurements") && *kind == "data" => {
+                let recipe = self
+                    .recipes
+                    .iter()
+                    .find(|recipe| &recipe.identity == *identity)
+                    .ok_or_else(|| {
+                        crate::QueryInvalidSnafu {
+                            field: "trace recipe input",
+                        }
+                        .build()
+                    })?;
+                if let Some(recipe) = recipe.recipe {
+                    let frame = crate::TraceFrameV1 {
+                        execution_id: identity.execution_id,
+                        sequence: *sequence,
+                        kind: crate::TraceFrameKindV1::Data,
+                        bytes: bytes.to_vec(),
+                    };
+                    if let Some(measurements) = recipe.measurements(&frame) {
+                        for measurement in measurements {
+                            if !self.emit(
+                                AnalysisInputV1::TraceMeasurement {
+                                    identity,
+                                    measurement: &measurement,
+                                },
+                                sink,
+                            )? {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                }
+                self.emit(input, sink)
+            }
+            _ => self.emit(input, sink),
+        }
+    }
+}
+
 impl TryFrom<AnalysisInputV1<'_>> for InputRow {
     type Error = crate::Error;
 
@@ -815,8 +1046,14 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
                 cpu_id,
                 received_utc_ns,
                 record,
+                decoded,
             } => {
-                let decoded = EvidenceRecord::try_from(record.framed_record.as_slice())?;
+                let decoded = decoded.ok_or_else(|| {
+                    crate::QueryInvalidSnafu {
+                        field: "decoded evidence input",
+                    }
+                    .build()
+                })?;
                 let mut row = Self(Vec::with_capacity(EVENTS.columns.len()));
                 row.source(identity, cpu_id);
                 row.0.extend([
@@ -827,15 +1064,15 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
                     Value::Timestamp(TimeUnit::Microsecond, (received_utc_ns / 1_000) as i64),
                     Value::UBigInt(decoded.observed_boottime_ns),
                     Value::BigInt(decoded.ingested_utc_ns),
-                    Value::Blob(decoded.coverage_interval_id.into()),
+                    Value::Blob(decoded.coverage_interval_id.to_vec()),
                     decoded
                         .profile_generation_ref_id
                         .map_or(Value::Null, Value::UBigInt),
                     Value::UBigInt(decoded.task_cookie),
-                    Value::Blob(decoded.process_lineage_id.into()),
-                    Value::Blob(decoded.authority_domain_id.into()),
-                    Value::Blob(decoded.execution_set_id.into()),
-                    Value::Blob(decoded.exact_object_id.into()),
+                    Value::Blob(decoded.process_lineage_id.to_vec()),
+                    Value::Blob(decoded.authority_domain_id.to_vec()),
+                    Value::Blob(decoded.execution_set_id.to_vec()),
+                    Value::Blob(decoded.exact_object_id.to_vec()),
                     Value::UBigInt(decoded.destination_id),
                     Value::UBigInt(decoded.policy_rule_id),
                     Value::UInt(decoded.reason),
@@ -850,23 +1087,23 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
                         .map_or(Value::Null, Value::UBigInt),
                     decoded.operation_argument.map_or(Value::Null, Value::UInt),
                 ]);
-                if let Some(context) = decoded.decision_context {
+                if let Some(context) = &decoded.decision_context {
                     row.0.extend([
                         Value::UInt(context.schema_version),
                         Value::UBigInt(context.original_kernel_sequence),
-                        Value::Blob(context.process_instance_id),
-                        Value::Blob(context.entry_instance_id),
-                        Value::Blob(context.binding_id),
+                        Value::Blob(context.process_instance_id.clone()),
+                        Value::Blob(context.entry_instance_id.clone()),
+                        Value::Blob(context.binding_id.clone()),
                         Value::UBigInt(context.profile_generation_ref_id),
                         Value::UInt(context.role_id),
                         Value::UInt(context.state_id),
                         Value::UInt(context.entry_rule_id),
                         Value::UBigInt(context.exact_object_key_id),
                         Value::UBigInt(context.composite_atom_id),
-                        Value::Blob(context.catalog_json),
-                        Value::Text(context.catalog_state),
+                        Value::Blob(context.catalog_json.clone()),
+                        Value::Text(context.catalog_state.clone()),
                     ]);
-                    if let Some(object) = context.exact_file_object {
+                    if let Some(object) = &context.exact_file_object {
                         row.0.extend([
                             Value::UBigInt(object.profile_generation_ref_id),
                             Value::UBigInt(object.mount_id_unique),
@@ -1061,6 +1298,10 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
                 Value::Boolean(measurement.atomic_snapshot),
                 Value::Text(measurement.unit.clone()),
             ])),
+            AnalysisInputV1::Profile { .. } => crate::QueryUnsupportedSnafu {
+                relation: "unexpanded profile",
+            }
+            .fail(),
             AnalysisInputV1::Result { .. } => crate::QueryUnsupportedSnafu {
                 relation: "results",
             }
@@ -1799,11 +2040,14 @@ mod tests {
     }
 
     fn event(record: &EvidenceRecord) -> Result<InputRow> {
+        let framed = framed(record);
+        let decoded = EvidenceRecord::try_from(framed.framed_record.as_slice())?;
         InputRow::try_from(AnalysisInputV1::Event {
             identity: &identity(),
             cpu_id: 6,
             received_utc_ns: u64::MAX,
-            record: &framed(record),
+            record: &framed,
+            decoded: Some(&decoded),
         })
     }
 
@@ -2045,12 +2289,7 @@ mod tests {
         let mut corrupt = framed(&record);
         corrupt.framed_record[4] ^= 1;
         assert!(matches!(
-            InputRow::try_from(AnalysisInputV1::Event {
-                identity: &identity(),
-                cpu_id: 6,
-                received_utc_ns: 1,
-                record: &corrupt,
-            }),
+            EvidenceRecord::try_from(corrupt.framed_record.as_slice()),
             Err(crate::Error::EvidenceFrame { .. })
         ));
         assert!(matches!(

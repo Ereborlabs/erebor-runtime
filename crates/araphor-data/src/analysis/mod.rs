@@ -41,7 +41,9 @@ mod trace;
 pub use backup::{AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
-pub(crate) use extraction::AnalysisExtractLimits;
+pub(crate) use extraction::{
+    AnalysisExtractLimits, AnalysisProjection, ProjectionSink, RecordProjection,
+};
 pub use extraction::{
     AnalysisExtractionV1, AnalysisInputPageV1, AnalysisInputV1, AnalysisPositionPageV1,
     AnalysisRelationV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1, Selection,
