@@ -157,7 +157,7 @@ struct StagedActivationTarget {
     desired: ExecutionSetBindingStateV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct GenerationSemantics {
     profile_id: Id128V1,
     role_handles: BTreeMap<String, u32>,
@@ -1825,6 +1825,7 @@ fn validate_mount_view(
     Ok(())
 }
 
+#[derive(Default)]
 struct LoweredGeneration {
     descriptor: ProfileGenerationDescriptorV1,
     semantics: GenerationSemantics,
@@ -1854,53 +1855,34 @@ struct LoweredGeneration {
     mount_reconciliation: Vec<MountRootReconciliation>,
 }
 
-impl LoweredGeneration {
-    #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    fn for_binding(
-        artifact: &ProfileCandidateArtifactV1,
-        binding: &WorkloadBindingConfig,
-        measured_objects: &[ExactFileObjectConfig],
-        node_boot_id: Id128V1,
-        node_id: Id128V1,
-        label_epoch: u64,
-        now_utc_ns: i64,
-        now_boottime_ns: u64,
-    ) -> Result<Self> {
-        Self::for_binding_with_mount_routes(
-            artifact,
-            binding,
-            measured_objects,
-            &[],
-            node_boot_id,
-            node_id,
-            label_epoch,
-            now_utc_ns,
-            now_boottime_ns,
-            false,
-        )
-    }
+struct PreparedGeneration<'a> {
+    artifact: &'a ProfileCandidateArtifactV1,
+    lowered: LoweredGeneration,
+    process_state_handles: BTreeMap<String, u32>,
+    role_states: BTreeMap<String, (u32, u32)>,
+    composite_handles: BTreeMap<String, u64>,
+    signed_device_classes: BTreeSet<String>,
+    exception_handles: BTreeMap<String, u32>,
+    exact_object_handles: BTreeMap<String, (u64, u64)>,
+    graph: mithril_control::DeterministicPathGraphV1,
+    network: LoweredNetworkPolicy,
+    node_id: Id128V1,
+    now_utc_ns: i64,
+    now_boottime_ns: u64,
+}
 
+impl<'a> PreparedGeneration<'a> {
     #[allow(clippy::too_many_arguments)]
-    fn for_binding_with_mount_routes(
-        artifact: &ProfileCandidateArtifactV1,
-        binding: &WorkloadBindingConfig,
-        measured_objects: &[ExactFileObjectConfig],
-        measured_mount_routes: &[MeasuredMountRouteV1],
+    fn new(
+        artifact: &'a ProfileCandidateArtifactV1,
+        generation: u64,
         node_boot_id: Id128V1,
         node_id: Id128V1,
         label_epoch: u64,
         now_utc_ns: i64,
         now_boottime_ns: u64,
-        defer_binding_entries: bool,
     ) -> Result<Self> {
-        ensure!(
-            artifact.header.profile_id == binding.profile_id,
-            IdentityStateSnafu {
-                reason: "candidate profile does not match its workload binding",
-            }
-        );
-        let profile_id = parse_id("profile_id", &binding.profile_id)?;
+        let profile_id = parse_id("profile_id", &artifact.header.profile_id)?;
         let role_handles = handles(
             artifact
                 .policy_document
@@ -1941,7 +1923,7 @@ impl LoweredGeneration {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let composite_handles = Self::composite_handles(artifact);
+        let composite_handles = LoweredGeneration::composite_handles(artifact);
         let signed_device_classes = artifact
             .policy_document
             .path_selectors
@@ -1962,14 +1944,6 @@ impl LoweredGeneration {
                         .map(|grant| grant.grant_id.as_str()),
                 ),
         );
-        let generation_objects = measured_objects
-            .iter()
-            .filter(|object| {
-                object.profile_generation_ref_id == binding.active_profile_generation_ref_id
-            })
-            .collect::<Vec<_>>();
-        let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
-        let defer_entry_admissions = defer_binding_entries;
         let mut exact_object_handles = BTreeMap::new();
         for selector in artifact
             .policy_document
@@ -2000,6 +1974,108 @@ impl LoweredGeneration {
                 }
             );
         }
+        let graph = LoweredGeneration::compile_path_graph(artifact)?;
+        let path_tables = PathTables::for_graph(
+            artifact,
+            &graph,
+            generation,
+            &composite_handles,
+            &role_handles,
+        )?;
+        let ipc_relationships = lower_ipc_relationships(
+            &artifact.policy_document,
+            generation,
+            &role_handles,
+            artifact.compiled_profile.mode,
+        )?;
+        let network = LoweredNetworkPolicy::lower(&artifact.policy_document, generation)?;
+        let descriptor = ProfileGenerationDescriptorV1 {
+            node_boot_id,
+            profile_id,
+            label_epoch,
+            profile_generation_ref_id: generation,
+            owner_generation: artifact.header.profile_version,
+            row_count: 0,
+            default_count: 0,
+            state: PolicyGenerationStateV1::Preparing,
+            mode: match artifact.compiled_profile.mode {
+                ProfileModeV1::Observe => PolicyGenerationModeV1::Observe,
+                ProfileModeV1::Protect => PolicyGenerationModeV1::Protect,
+            },
+            reserved: [0; 6],
+            table_digest: [0; 32],
+            transition_version: 1,
+        };
+        Ok(Self {
+            artifact,
+            lowered: LoweredGeneration {
+                descriptor,
+                semantics,
+                ipc_relationships,
+                path_exact: path_tables.exact,
+                path_wildcards: path_tables.wildcards,
+                path_terminals: path_tables.terminals,
+                path_tree_denials: path_tables.path_tree_denials,
+                ..LoweredGeneration::default()
+            },
+            process_state_handles,
+            role_states,
+            composite_handles,
+            signed_device_classes,
+            exception_handles,
+            exact_object_handles,
+            graph,
+            network,
+            node_id,
+            now_utc_ns,
+            now_boottime_ns,
+        })
+    }
+
+    fn check_candidate(&self, artifact: &ProfileCandidateArtifactV1) -> Result<()> {
+        ensure!(
+            self.artifact == artifact,
+            IdentityStateSnafu {
+                reason: "one generation handle cannot name different candidate artifacts",
+            }
+        );
+        Ok(())
+    }
+
+    fn add_binding(
+        &mut self,
+        binding: &WorkloadBindingConfig,
+        measured_objects: &[ExactFileObjectConfig],
+        measured_mount_routes: &[MeasuredMountRouteV1],
+        defer_binding_entries: bool,
+    ) -> Result<()> {
+        let artifact = self.artifact;
+        ensure!(
+            artifact.header.profile_id == binding.profile_id
+                && self.lowered.descriptor.profile_generation_ref_id
+                    == binding.active_profile_generation_ref_id,
+            IdentityStateSnafu {
+                reason: "candidate profile or generation does not match its workload binding",
+            }
+        );
+        let role_handles = &self.lowered.semantics.role_handles;
+        let process_state_handles = &self.process_state_handles;
+        let role_states = &self.role_states;
+        let composite_handles = &self.composite_handles;
+        let signed_device_classes = &self.signed_device_classes;
+        let exception_handles = &self.exception_handles;
+        let exact_object_handles = &self.exact_object_handles;
+        let node_id = self.node_id;
+        let now_utc_ns = self.now_utc_ns;
+        let now_boottime_ns = self.now_boottime_ns;
+        let generation_objects = measured_objects
+            .iter()
+            .filter(|object| {
+                object.profile_generation_ref_id == binding.active_profile_generation_ref_id
+            })
+            .collect::<Vec<_>>();
+        let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
+        let defer_entry_admissions = defer_binding_entries;
         for object in &generation_objects {
             let selector = artifact
                 .policy_document
@@ -2060,7 +2136,7 @@ impl LoweredGeneration {
                 );
             }
         }
-        for (selector_id, (handle, _)) in &exact_object_handles {
+        for (selector_id, (handle, _)) in exact_object_handles {
             ensure!(
                 generation_objects
                     .iter()
@@ -2081,24 +2157,20 @@ impl LoweredGeneration {
             .copied()
             .filter(|object| exact_handles.contains(&object.exact_object_key_id))
             .collect::<Vec<_>>();
-        validate_binding_roles(artifact, binding, &role_handles, &process_state_handles)?;
+        validate_binding_roles(artifact, binding, role_handles, process_state_handles)?;
         let entry_admissions = lower_entry_admissions(
             artifact,
             binding,
-            &role_handles,
-            &process_state_handles,
-            &composite_handles,
+            role_handles,
+            process_state_handles,
+            composite_handles,
             defer_entry_admissions,
         )?;
-        let entry_admission_authority = entry_admission_authority_rows(&entry_admissions)?;
         let mut decisions = BTreeMap::new();
         let mut defaults = BTreeMap::new();
         let mut device_decisions = BTreeMap::new();
         let mut process_control_rules = BTreeMap::new();
-        let mut network = LoweredNetworkPolicy::lower(
-            &artifact.policy_document,
-            binding.active_profile_generation_ref_id,
-        )?;
+        let mut network = LoweredNetworkPolicy::default();
         for cell in &artifact.compiled_profile.compiled_cells {
             if !cell_matches_binding(&cell.key, binding, &artifact.policy_document) {
                 continue;
@@ -2144,7 +2216,7 @@ impl LoweredGeneration {
                 .unwrap_or_default();
             let physical =
                 physical_decision(cell.physical_result, cell.errno, exception_numeric_handle);
-            if let Some(capability) = Self::linux_capability(cell)? {
+            if let Some(capability) = LoweredGeneration::linux_capability(cell)? {
                 ensure!(
                     family == KernelEffectFamilyV1::Privilege as u16
                         && operation == KernelEffectOperationV1::Capability as u16,
@@ -2187,8 +2259,10 @@ impl LoweredGeneration {
                         }
                         .build()
                     })?;
-                let destination_policy_handle =
-                    network.destination_handle(destination_id).ok_or_else(|| {
+                let destination_policy_handle = self
+                    .network
+                    .destination_handle(destination_id)
+                    .ok_or_else(|| {
                         IdentityStateSnafu {
                             reason: format!(
                                 "compiled cell has no handle for destination `{destination_id}`"
@@ -2220,8 +2294,8 @@ impl LoweredGeneration {
                     actor_process_state_vector_id: process_state,
                     binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
                     exact_objects: &policy_exact_objects,
-                    signed_device_classes: &signed_device_classes,
-                    role_states: &role_states,
+                    signed_device_classes: signed_device_classes,
+                    role_states: role_states,
                 },
                 physical,
                 &mut device_decisions,
@@ -2318,15 +2392,6 @@ impl LoweredGeneration {
                 ),
             }
         );
-        let ipc_relationships = lower_ipc_relationships(
-            &artifact.policy_document,
-            binding.active_profile_generation_ref_id,
-            &role_handles,
-            artifact.compiled_profile.mode,
-        )?;
-        let mut exceptions = BTreeMap::new();
-        let mut exception_deadlines_utc = BTreeMap::new();
-        let mut exception_bindings = BTreeMap::new();
         for exception in &artifact.policy_document.exceptions {
             let handle = exception_handles[&exception.exception_id];
             if !artifact.compiled_profile.compiled_cells.iter().any(|cell| {
@@ -2334,6 +2399,18 @@ impl LoweredGeneration {
                     && cell.consuming_exception_id.as_deref()
                         == Some(exception.exception_id.as_str())
             }) {
+                continue;
+            }
+            let binding_key = ExceptionHandleBindingKeyV1 {
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                exception_numeric_handle: handle,
+                reserved: 0,
+            };
+            if self
+                .lowered
+                .exception_bindings
+                .contains_key(binding_key.as_bytes())
+            {
                 continue;
             }
             ensure!(
@@ -2393,7 +2470,7 @@ impl LoweredGeneration {
                 reserved: [0; 7],
             };
             insert_exact(
-                &mut exceptions,
+                &mut self.lowered.exceptions,
                 runtime_state_key.as_bytes(),
                 value.as_bytes(),
             )?;
@@ -2414,7 +2491,9 @@ impl LoweredGeneration {
                     }
                     .build()
                 })?;
-            if let Some(existing) = exception_deadlines_utc
+            if let Some(existing) = self
+                .lowered
+                .exception_deadlines_utc
                 .insert(runtime_state_key.as_bytes().to_vec(), deadline_utc_ns)
             {
                 ensure!(
@@ -2424,18 +2503,13 @@ impl LoweredGeneration {
                     }
                 );
             }
-            let binding_key = ExceptionHandleBindingKeyV1 {
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                exception_numeric_handle: handle,
-                reserved: 0,
-            };
             let binding_value = ExceptionHandleBindingV1 {
                 runtime_state_key,
                 state: ExceptionBindingStateV1::Active,
                 reserved: [0; 7],
             };
             insert_exact(
-                &mut exception_bindings,
+                &mut self.lowered.exception_bindings,
                 binding_key.as_bytes(),
                 binding_value.as_bytes(),
             )?;
@@ -2474,175 +2548,148 @@ impl LoweredGeneration {
             insert_exact(&mut file_objects, key.as_bytes(), value.as_bytes())?;
         }
         let (administrative_required, administrative_plans) =
-            lower_administrative_plans(artifact, binding, &role_handles, &process_state_handles)?;
-        let mut path_tables = Self::lower_path_tables(
-            artifact,
+            lower_administrative_plans(artifact, binding, role_handles, process_state_handles)?;
+        let mut path_tables = PathTables::default();
+        path_tables.add_binding(
+            &self.graph,
             binding,
             &policy_exact_objects,
             measured_mount_routes,
-            &composite_handles,
-            &role_handles,
         )?;
         path_tables.add_mount_namespace_guards(&generation_objects)?;
-        let tables = [
-            ("entry-admission", &entry_admission_authority),
-            ("decision", &decisions),
-            ("default", &defaults),
-            ("process-control-rule", &process_control_rules),
-            ("ipc-relationship", &ipc_relationships),
-            ("network-ipv4-class", &network.ipv4_classes),
-            ("network-ipv6-class", &network.ipv6_classes),
-            ("network-decision", &network.decisions),
-            ("path-exact", &path_tables.exact),
-            ("path-wildcard", &path_tables.wildcards),
-            ("path-terminal", &path_tables.terminals),
-            ("path-tree-denial", &path_tables.path_tree_denials),
-        ];
-        let table_digest = table_digest(&tables);
-        let descriptor = ProfileGenerationDescriptorV1 {
-            node_boot_id,
-            profile_id,
-            label_epoch,
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            owner_generation: artifact.header.profile_version,
-            row_count: decisions
-                .len()
-                .checked_add(entry_admission_authority.len())
-                .and_then(|count| count.checked_add(process_control_rules.len()))
-                .and_then(|count| count.checked_add(ipc_relationships.len()))
-                .and_then(|count| count.checked_add(network.ipv4_classes.len()))
-                .and_then(|count| count.checked_add(network.ipv6_classes.len()))
-                .and_then(|count| count.checked_add(network.decisions.len()))
-                .and_then(|count| count.try_into().ok())
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "decision row count overflow".to_owned(),
-                    }
-                    .build()
-                })?,
-            default_count: defaults.len().try_into().map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("default row count overflow: {error}"),
-                }
-                .build()
-            })?,
-            state: PolicyGenerationStateV1::Preparing,
-            mode: match artifact.compiled_profile.mode {
-                ProfileModeV1::Observe => PolicyGenerationModeV1::Observe,
-                ProfileModeV1::Protect => PolicyGenerationModeV1::Protect,
-            },
-            reserved: [0; 6],
-            table_digest,
-            transition_version: 1,
-        };
-        Ok(Self {
-            descriptor,
-            semantics,
-            entry_admissions,
-            decisions,
-            defaults,
-            device_decisions,
-            process_control_rules,
-            ipc_relationships,
-            network_ipv4_classes: network.ipv4_classes,
-            network_ipv6_classes: network.ipv6_classes,
-            network_decisions: network.decisions,
-            exceptions,
-            exception_deadlines_utc,
-            exception_bindings,
-            file_objects,
-            mount_views: path_tables.mount_views,
-            mount_epochs: path_tables.mount_epochs,
-            mount_locks: path_tables.mount_locks,
-            mount_roots: path_tables.mount_roots,
-            path_exact: path_tables.exact,
-            path_wildcards: path_tables.wildcards,
-            path_terminals: path_tables.terminals,
-            path_tree_denials: path_tables.path_tree_denials,
-            administrative_required,
-            administrative_plans,
-            mount_reconciliation: path_tables.reconciliation,
-        })
+        let lowered = &mut self.lowered;
+        merge_rows(&mut lowered.entry_admissions, entry_admissions)?;
+        merge_rows(&mut lowered.decisions, decisions)?;
+        merge_rows(&mut lowered.defaults, defaults)?;
+        merge_rows(&mut lowered.device_decisions, device_decisions)?;
+        merge_rows(&mut lowered.process_control_rules, process_control_rules)?;
+        merge_rows(&mut self.network.decisions, network.decisions)?;
+        merge_rows(&mut lowered.file_objects, file_objects)?;
+        merge_rows(&mut lowered.mount_views, path_tables.mount_views)?;
+        merge_rows(&mut lowered.mount_epochs, path_tables.mount_epochs)?;
+        merge_rows(&mut lowered.mount_locks, path_tables.mount_locks)?;
+        merge_rows(&mut lowered.mount_roots, path_tables.mount_roots)?;
+        lowered.administrative_required |= administrative_required;
+        lowered.administrative_plans.extend(administrative_plans);
+        lowered
+            .mount_reconciliation
+            .extend(path_tables.reconciliation);
+        Ok(())
     }
 
-    fn merge(&mut self, other: Self) -> Result<()> {
+    fn finish(mut self) -> Result<LoweredGeneration> {
+        let lowered = &mut self.lowered;
+        lowered.network_ipv4_classes = self.network.ipv4_classes;
+        lowered.network_ipv6_classes = self.network.ipv6_classes;
+        lowered.network_decisions = self.network.decisions;
         ensure!(
-            self.descriptor.node_boot_id == other.descriptor.node_boot_id
-                && self.descriptor.profile_id == other.descriptor.profile_id
-                && self.descriptor.label_epoch == other.descriptor.label_epoch
-                && self.descriptor.owner_generation == other.descriptor.owner_generation
-                && self.descriptor.mode == other.descriptor.mode
-                && self.semantics == other.semantics,
+            !lowered.decisions.is_empty()
+                || !lowered.defaults.is_empty()
+                || !lowered.device_decisions.is_empty()
+                || !lowered.process_control_rules.is_empty()
+                || !lowered.network_decisions.is_empty(),
             IdentityStateSnafu {
-                reason: "one generation handle cannot name different candidate artifacts",
+                reason: "generation selected no exact candidate cells",
             }
         );
-        merge_rows(&mut self.entry_admissions, other.entry_admissions)?;
-        merge_rows(&mut self.decisions, other.decisions)?;
-        merge_rows(&mut self.defaults, other.defaults)?;
-        merge_rows(&mut self.device_decisions, other.device_decisions)?;
-        merge_rows(&mut self.process_control_rules, other.process_control_rules)?;
-        merge_rows(&mut self.ipc_relationships, other.ipc_relationships)?;
-        merge_rows(&mut self.network_ipv4_classes, other.network_ipv4_classes)?;
-        merge_rows(&mut self.network_ipv6_classes, other.network_ipv6_classes)?;
-        merge_rows(&mut self.network_decisions, other.network_decisions)?;
-        merge_rows(&mut self.exceptions, other.exceptions)?;
-        for (key, deadline) in other.exception_deadlines_utc {
-            if let Some(existing) = self.exception_deadlines_utc.insert(key, deadline) {
-                ensure!(
-                    existing == deadline,
-                    IdentityStateSnafu {
-                        reason: "one exception instance has unequal activation deadlines",
-                    }
-                );
-            }
-        }
-        merge_rows(&mut self.exception_bindings, other.exception_bindings)?;
-        merge_rows(&mut self.file_objects, other.file_objects)?;
-        merge_rows(&mut self.mount_views, other.mount_views)?;
-        merge_rows(&mut self.mount_epochs, other.mount_epochs)?;
-        merge_rows(&mut self.mount_locks, other.mount_locks)?;
-        merge_rows(&mut self.mount_roots, other.mount_roots)?;
-        merge_rows(&mut self.path_exact, other.path_exact)?;
-        merge_rows(&mut self.path_wildcards, other.path_wildcards)?;
-        merge_rows(&mut self.path_terminals, other.path_terminals)?;
-        merge_rows(&mut self.path_tree_denials, other.path_tree_denials)?;
-        self.administrative_required |= other.administrative_required;
-        self.administrative_plans.extend(other.administrative_plans);
-        self.mount_reconciliation.extend(other.mount_reconciliation);
-        let entry_admission_authority = entry_admission_authority_rows(&self.entry_admissions)?;
-        self.descriptor.row_count = self
+        let entry_authority = entry_admission_authority_rows(&lowered.entry_admissions)?;
+        lowered.descriptor.row_count = lowered
             .decisions
             .len()
-            .checked_add(entry_admission_authority.len())
-            .and_then(|count| count.checked_add(self.process_control_rules.len()))
-            .and_then(|count| count.checked_add(self.ipc_relationships.len()))
-            .and_then(|count| count.checked_add(self.network_ipv4_classes.len()))
-            .and_then(|count| count.checked_add(self.network_ipv6_classes.len()))
-            .and_then(|count| count.checked_add(self.network_decisions.len()))
+            .checked_add(entry_authority.len())
+            .and_then(|count| count.checked_add(lowered.process_control_rules.len()))
+            .and_then(|count| count.checked_add(lowered.ipc_relationships.len()))
+            .and_then(|count| count.checked_add(lowered.network_ipv4_classes.len()))
+            .and_then(|count| count.checked_add(lowered.network_ipv6_classes.len()))
+            .and_then(|count| count.checked_add(lowered.network_decisions.len()))
             .and_then(|count| count.try_into().ok())
             .ok_or_else(|| {
                 IdentityStateSnafu {
-                    reason: "merged decision row count overflow".to_owned(),
+                    reason: "decision row count overflow".to_owned(),
                 }
                 .build()
             })?;
-        self.descriptor.default_count = self.defaults.len() as u32;
-        self.descriptor.table_digest = table_digest(&[
-            ("entry-admission", &entry_admission_authority),
-            ("decision", &self.decisions),
-            ("default", &self.defaults),
-            ("process-control-rule", &self.process_control_rules),
-            ("ipc-relationship", &self.ipc_relationships),
-            ("network-ipv4-class", &self.network_ipv4_classes),
-            ("network-ipv6-class", &self.network_ipv6_classes),
-            ("network-decision", &self.network_decisions),
-            ("path-exact", &self.path_exact),
-            ("path-wildcard", &self.path_wildcards),
-            ("path-terminal", &self.path_terminals),
-            ("path-tree-denial", &self.path_tree_denials),
+        lowered.descriptor.default_count = lowered.defaults.len().try_into().map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("default row count overflow: {error}"),
+            }
+            .build()
+        })?;
+        lowered.descriptor.table_digest = table_digest(&[
+            ("entry-admission", &entry_authority),
+            ("decision", &lowered.decisions),
+            ("default", &lowered.defaults),
+            ("process-control-rule", &lowered.process_control_rules),
+            ("ipc-relationship", &lowered.ipc_relationships),
+            ("network-ipv4-class", &lowered.network_ipv4_classes),
+            ("network-ipv6-class", &lowered.network_ipv6_classes),
+            ("network-decision", &lowered.network_decisions),
+            ("path-exact", &lowered.path_exact),
+            ("path-wildcard", &lowered.path_wildcards),
+            ("path-terminal", &lowered.path_terminals),
+            ("path-tree-denial", &lowered.path_tree_denials),
         ]);
-        Ok(())
+        Ok(self.lowered)
+    }
+}
+
+impl LoweredGeneration {
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn for_binding(
+        artifact: &ProfileCandidateArtifactV1,
+        binding: &WorkloadBindingConfig,
+        measured_objects: &[ExactFileObjectConfig],
+        node_boot_id: Id128V1,
+        node_id: Id128V1,
+        label_epoch: u64,
+        now_utc_ns: i64,
+        now_boottime_ns: u64,
+    ) -> Result<Self> {
+        Self::for_binding_with_mount_routes(
+            artifact,
+            binding,
+            measured_objects,
+            &[],
+            node_boot_id,
+            node_id,
+            label_epoch,
+            now_utc_ns,
+            now_boottime_ns,
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn for_binding_with_mount_routes(
+        artifact: &ProfileCandidateArtifactV1,
+        binding: &WorkloadBindingConfig,
+        measured_objects: &[ExactFileObjectConfig],
+        measured_mount_routes: &[MeasuredMountRouteV1],
+        node_boot_id: Id128V1,
+        node_id: Id128V1,
+        label_epoch: u64,
+        now_utc_ns: i64,
+        now_boottime_ns: u64,
+        defer_binding_entries: bool,
+    ) -> Result<Self> {
+        let mut prepared = PreparedGeneration::new(
+            artifact,
+            binding.active_profile_generation_ref_id,
+            node_boot_id,
+            node_id,
+            label_epoch,
+            now_utc_ns,
+            now_boottime_ns,
+        )?;
+        prepared.add_binding(
+            binding,
+            measured_objects,
+            measured_mount_routes,
+            defer_binding_entries,
+        )?;
+        prepared.finish()
     }
 
     fn planned_rows(&self) -> Vec<PlannedGenerationRow<'_>> {
@@ -5067,6 +5114,7 @@ const fn lifecycle(state: mithril_control::BindingLifecycleV1) -> BindingLifecyc
     }
 }
 
+#[derive(Default)]
 struct PathTables {
     mount_views: BTreeMap<Vec<u8>, Vec<u8>>,
     mount_epochs: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -5290,14 +5338,9 @@ impl LoweredGeneration {
         Ok(Some(capability))
     }
 
-    fn lower_path_tables(
+    fn compile_path_graph(
         artifact: &ProfileCandidateArtifactV1,
-        binding: &WorkloadBindingConfig,
-        objects: &[&ExactFileObjectConfig],
-        measured_mount_routes: &[MeasuredMountRouteV1],
-        composite_handles: &BTreeMap<String, u64>,
-        role_handles: &BTreeMap<String, u32>,
-    ) -> Result<PathTables> {
+    ) -> Result<mithril_control::DeterministicPathGraphV1> {
         let mut patterns = Vec::new();
         for selector in &artifact.policy_document.path_selectors {
             let components = selector
@@ -5346,6 +5389,152 @@ impl LoweredGeneration {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let graph = CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence(
+            artifact.header.profile_id.as_str(),
+            &patterns,
+            &path_tree_denies,
+            artifact.policy_document.path_pattern_precedence,
+        )
+        .context(PolicySnafu)?;
+        let graph = graph
+            .determinize(artifact.header.profile_id.as_str())
+            .context(PolicySnafu)?;
+        Ok(graph)
+    }
+
+    #[cfg(test)]
+    fn lower_path_tables(
+        artifact: &ProfileCandidateArtifactV1,
+        binding: &WorkloadBindingConfig,
+        objects: &[&ExactFileObjectConfig],
+        measured_mount_routes: &[MeasuredMountRouteV1],
+        composite_handles: &BTreeMap<String, u64>,
+        role_handles: &BTreeMap<String, u32>,
+    ) -> Result<PathTables> {
+        let graph = Self::compile_path_graph(artifact)?;
+        let mut tables = PathTables::for_graph(
+            artifact,
+            &graph,
+            binding.active_profile_generation_ref_id,
+            composite_handles,
+            role_handles,
+        )?;
+        tables.add_binding(&graph, binding, objects, measured_mount_routes)?;
+        Ok(tables)
+    }
+}
+
+impl PathTables {
+    fn for_graph(
+        artifact: &ProfileCandidateArtifactV1,
+        graph: &mithril_control::DeterministicPathGraphV1,
+        generation: u64,
+        composite_handles: &BTreeMap<String, u64>,
+        role_handles: &BTreeMap<String, u32>,
+    ) -> Result<Self> {
+        let mut tables = Self::default();
+        for transition in &graph.exact_transitions {
+            let component = path_component(&transition.component)?;
+            let key = PathGraphTransitionKeyV1 {
+                profile_generation_ref_id: generation,
+                current_state_id: transition.current_state_id,
+                component,
+                reserved: 0,
+            };
+            let value = PathGraphTransitionV1 {
+                next_state_id: transition.next_state_id,
+                reserved: 0,
+            };
+            insert_exact(&mut tables.exact, key.as_bytes(), value.as_bytes())?;
+        }
+        for transition in &graph.wildcard_transitions {
+            let key = PathGraphStateKeyV1 {
+                profile_generation_ref_id: generation,
+                state_id: transition.current_state_id,
+                reserved: 0,
+            };
+            let value = PathGraphTransitionV1 {
+                next_state_id: transition.next_state_id,
+                reserved: 0,
+            };
+            insert_exact(&mut tables.wildcards, key.as_bytes(), value.as_bytes())?;
+        }
+        let rule_handles = handles(
+            graph
+                .terminals
+                .iter()
+                .map(|terminal| terminal.rule_id.as_str()),
+        );
+        let mut terminal_values = BTreeMap::<u32, PathGraphTerminalV1>::new();
+        for terminal in &graph.terminals {
+            let selector = artifact
+                .policy_document
+                .path_selectors
+                .iter()
+                .find(|selector| selector.path_selector_id == terminal.rule_id)
+                .context(IdentityStateSnafu {
+                    reason: format!("path terminal has unknown selector `{}`", terminal.rule_id),
+                })?;
+            let composite_atom_id = *composite_handles
+                .get(&format!("PATH:{}", terminal.rule_id))
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "path terminal has no composite atom for `{}`",
+                            terminal.rule_id
+                        ),
+                    }
+                    .build()
+                })?;
+            let value = PathGraphTerminalV1 {
+                composite_atom_id,
+                rule_numeric_id: rule_handles[&terminal.rule_id],
+                exact_object_required: u8::from(selector.requires_exact_object()),
+                reserved: [0; 3],
+            };
+            ensure!(
+                terminal_values.insert(terminal.state_id, value).is_none(),
+                IdentityStateSnafu {
+                    reason: "deterministic path state has multiple exact terminals",
+                }
+            );
+        }
+        for (state_id, value) in terminal_values {
+            let key = PathGraphStateKeyV1 {
+                profile_generation_ref_id: generation,
+                state_id,
+                reserved: 0,
+            };
+            insert_exact(&mut tables.terminals, key.as_bytes(), value.as_bytes())?;
+        }
+        for floor in &graph.path_tree_deny_floors {
+            let active_role_id = *role_handles.get(&floor.role_id).ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: format!("path-tree denial has unknown role `{}`", floor.role_id),
+                }
+                .build()
+            })?;
+            let key = PathTreeDenyKeyV1 {
+                profile_generation_ref_id: generation,
+                state_id: floor.state_id,
+                active_role_id,
+            };
+            insert_exact(
+                &mut tables.path_tree_denials,
+                key.as_bytes(),
+                &floor.operation_mask.to_ne_bytes(),
+            )?;
+        }
+        Ok(tables)
+    }
+
+    fn add_binding(
+        &mut self,
+        graph: &mithril_control::DeterministicPathGraphV1,
+        binding: &WorkloadBindingConfig,
+        objects: &[&ExactFileObjectConfig],
+        measured_mount_routes: &[MeasuredMountRouteV1],
+    ) -> Result<()> {
         let mut route_plans = BTreeMap::<MountRouteIdentity, MountRoutePlan>::new();
         for measured in measured_mount_routes {
             ensure!(
@@ -5435,19 +5624,9 @@ impl LoweredGeneration {
                 }
             }
         }
-        let graph = CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence(
-            artifact.header.profile_id.as_str(),
-            &patterns,
-            &path_tree_denies,
-            artifact.policy_document.path_pattern_precedence,
-        )
-        .context(PolicySnafu)?;
-        let graph = graph
-            .determinize(artifact.header.profile_id.as_str())
-            .context(PolicySnafu)?;
         let mut route_states = BTreeMap::new();
         for (identity, plan) in &route_plans {
-            if let Some(states) = GraphPrefixStates::compile(&graph, &plan.prefixes)? {
+            if let Some(states) = GraphPrefixStates::compile(graph, &plan.prefixes)? {
                 route_states.insert(*identity, states);
             } else if plan.has_known_route {
                 route_states.insert(
@@ -5459,114 +5638,11 @@ impl LoweredGeneration {
                 );
             }
         }
-        let mut tables = PathTables {
-            mount_views: BTreeMap::new(),
-            mount_epochs: BTreeMap::new(),
-            mount_locks: BTreeMap::new(),
-            mount_roots: BTreeMap::new(),
-            exact: BTreeMap::new(),
-            wildcards: BTreeMap::new(),
-            terminals: BTreeMap::new(),
-            path_tree_denials: BTreeMap::new(),
-            reconciliation: Vec::new(),
-        };
-        for transition in &graph.exact_transitions {
-            let component = path_component(&transition.component)?;
-            let key = PathGraphTransitionKeyV1 {
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                current_state_id: transition.current_state_id,
-                component,
-                reserved: 0,
-            };
-            let value = PathGraphTransitionV1 {
-                next_state_id: transition.next_state_id,
-                reserved: 0,
-            };
-            insert_exact(&mut tables.exact, key.as_bytes(), value.as_bytes())?;
-        }
-        for transition in &graph.wildcard_transitions {
-            let key = PathGraphStateKeyV1 {
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                state_id: transition.current_state_id,
-                reserved: 0,
-            };
-            let value = PathGraphTransitionV1 {
-                next_state_id: transition.next_state_id,
-                reserved: 0,
-            };
-            insert_exact(&mut tables.wildcards, key.as_bytes(), value.as_bytes())?;
-        }
-        let rule_handles = handles(
-            graph
-                .terminals
-                .iter()
-                .map(|terminal| terminal.rule_id.as_str()),
-        );
-        let mut terminal_values = BTreeMap::<u32, PathGraphTerminalV1>::new();
-        for terminal in &graph.terminals {
-            let selector = artifact
-                .policy_document
-                .path_selectors
-                .iter()
-                .find(|selector| selector.path_selector_id == terminal.rule_id)
-                .context(IdentityStateSnafu {
-                    reason: format!("path terminal has unknown selector `{}`", terminal.rule_id),
-                })?;
-            let composite_atom_id = *composite_handles
-                .get(&format!("PATH:{}", terminal.rule_id))
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "path terminal has no composite atom for `{}`",
-                            terminal.rule_id
-                        ),
-                    }
-                    .build()
-                })?;
-            let value = PathGraphTerminalV1 {
-                composite_atom_id,
-                rule_numeric_id: rule_handles[&terminal.rule_id],
-                exact_object_required: u8::from(selector.requires_exact_object()),
-                reserved: [0; 3],
-            };
-            ensure!(
-                terminal_values.insert(terminal.state_id, value).is_none(),
-                IdentityStateSnafu {
-                    reason: "deterministic path state has multiple exact terminals",
-                }
-            );
-        }
-        for (state_id, value) in terminal_values {
-            let key = PathGraphStateKeyV1 {
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                state_id,
-                reserved: 0,
-            };
-            insert_exact(&mut tables.terminals, key.as_bytes(), value.as_bytes())?;
-        }
-        for floor in &graph.path_tree_deny_floors {
-            let active_role_id = *role_handles.get(&floor.role_id).ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!("path-tree denial has unknown role `{}`", floor.role_id),
-                }
-                .build()
-            })?;
-            let key = PathTreeDenyKeyV1 {
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                state_id: floor.state_id,
-                active_role_id,
-            };
-            insert_exact(
-                &mut tables.path_tree_denials,
-                key.as_bytes(),
-                &floor.operation_mask.to_ne_bytes(),
-            )?;
-        }
-        tables.add_mount_namespace_guards(objects)?;
+        self.add_mount_namespace_guards(objects)?;
         let binding_id = parse_id("binding_id", &binding.binding_id)?;
         for (identity, graph_prefix_states) in &route_states {
             let plan = &route_plans[identity];
-            tables.add_mount_namespace_guard(
+            self.add_mount_namespace_guard(
                 identity.mount_namespace_inode,
                 identity.topology_generation,
             )?;
@@ -5584,11 +5660,7 @@ impl LoweredGeneration {
             };
             let root = graph_prefix_states
                 .mount_root(plan.selected_mount_id_unique, plan.snapshot_digest_id);
-            insert_exact(
-                &mut tables.mount_roots,
-                root_key.as_bytes(),
-                root.as_bytes(),
-            )?;
+            insert_exact(&mut self.mount_roots, root_key.as_bytes(), root.as_bytes())?;
         }
         for object in objects {
             let components = object
@@ -5617,13 +5689,13 @@ impl LoweredGeneration {
                     reason: "canonical mount prefix is absent from its path graph",
                 }
             );
-            tables.reconciliation.push(MountRootReconciliation {
+            self.reconciliation.push(MountRootReconciliation {
                 mount_namespace_inode: object.mount_namespace_inode,
                 configured: (*object).clone(),
                 canonical_path: canonical_path(&components),
             });
         }
-        Ok(tables)
+        Ok(())
     }
 }
 
@@ -5797,8 +5869,8 @@ mod tests {
         entry_admission_path_selector_ids, exception_counter_is_consistent,
         generation_retirement_needs_tombstone, handles, mount_cache_row_is_unreachable, parse_id,
         pending_exec_retains_generation_authority, read_abi_value, same_exact_file,
-        GenerationSemantics, LoweredGeneration, MeasuredMountRouteV1, ProfileActivation,
-        CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
+        GenerationSemantics, LoweredGeneration, MeasuredMountRouteV1, PreparedGeneration,
+        ProfileActivation, CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
@@ -5999,6 +6071,294 @@ mod tests {
             handles["PATH:projected-token"],
             handles["CLASS:PROJECTED_TOKEN"]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn generation_shares_binding_rows() -> crate::Result<()> {
+        let (artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        let expected = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            std::slice::from_ref(&object),
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        let mut prepared = PreparedGeneration::new(
+            &artifact,
+            1,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        prepared.add_binding(&binding, std::slice::from_ref(&object), &[], false)?;
+        let second = WorkloadBindingConfig {
+            binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            ..binding.clone()
+        };
+        assert!(prepared.add_binding(&second, &[], &[], false).is_err());
+        let empty = WorkloadBindingConfig {
+            execution_set_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+            ..second.clone()
+        };
+        let error = prepared
+            .add_binding(&empty, std::slice::from_ref(&object), &[], false)
+            .err()
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "a binding reused another binding's selected cells",
+                }
+                .build()
+            })?;
+        assert!(error
+            .to_string()
+            .contains("selected no exact candidate cells"));
+        let other = ExactFileObjectConfig {
+            mount_namespace_inode: object.mount_namespace_inode + 1,
+            inode: object.inode + 1,
+            ..object.clone()
+        };
+        prepared.add_binding(&second, std::slice::from_ref(&other), &[], false)?;
+        assert_eq!(prepared.lowered.descriptor.row_count, 0);
+        assert_eq!(prepared.lowered.descriptor.table_digest, [0; 32]);
+        let generation = prepared.finish()?;
+        assert_eq!(generation.descriptor, expected.descriptor);
+        assert_eq!(generation.semantics, expected.semantics);
+        assert_eq!(generation.decisions, expected.decisions);
+        assert_eq!(generation.path_exact, expected.path_exact);
+        assert_eq!(generation.path_wildcards, expected.path_wildcards);
+        assert_eq!(generation.path_terminals, expected.path_terminals);
+        assert_eq!(generation.path_tree_denials, expected.path_tree_denials);
+        assert_eq!(generation.file_objects.len(), 2);
+        assert_eq!(generation.mount_roots.len(), 2);
+        for measured in [&object, &other] {
+            let key = ExactFileObjectKeyV1 {
+                profile_generation_ref_id: 1,
+                mount_namespace_inode: measured.mount_namespace_inode,
+                mount_id_unique: measured.selected_mount_id_unique,
+                filesystem_device: measured.filesystem_device,
+                inode: measured.inode,
+                inode_generation: measured.inode_generation,
+            };
+            assert!(generation.file_objects.contains_key(key.as_bytes()));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn generation_rejects_candidate_changes() -> crate::Result<()> {
+        let (artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        let mut prepared = PreparedGeneration::new(
+            &artifact,
+            1,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        prepared.check_candidate(&artifact.clone())?;
+        let mut other = artifact.clone();
+        other.compiled_profile.compiled_cells[0].errno = Some(-1);
+        assert!(prepared.check_candidate(&other).is_err());
+        let other = WorkloadBindingConfig {
+            active_profile_generation_ref_id: 2,
+            ..binding
+        };
+        assert!(prepared.add_binding(&other, &[object], &[], false).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn generation_rejects_row_conflicts() -> crate::Result<()> {
+        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        let second = WorkloadBindingConfig {
+            binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            execution_set_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+            ..binding.clone()
+        };
+        let mut cell = artifact.compiled_profile.compiled_cells[0].clone();
+        cell.key.execution_set_id = second.execution_set_id.clone();
+        cell.physical_result = mithril_control::CompiledPhysicalResultV1::AllowEffect;
+        cell.errno = None;
+        artifact.compiled_profile.compiled_cells.push(cell);
+        let mut prepared = PreparedGeneration::new(
+            &artifact,
+            1,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        prepared.add_binding(&binding, std::slice::from_ref(&object), &[], false)?;
+        let error = prepared
+            .add_binding(&second, &[object], &[], false)
+            .err()
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "unequal exact rows were accepted in one generation",
+                }
+                .build()
+            })?;
+        assert!(error.to_string().contains("unequal exact-key conflict"));
+        Ok(())
+    }
+
+    #[test]
+    fn generation_keeps_deferred_bindings() -> crate::Result<()> {
+        let (artifact, mut binding) = entry_roles_artifact()?;
+        binding.scheduled_binding_authority_id =
+            Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned());
+        let second = WorkloadBindingConfig {
+            binding_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+            scheduled_binding_authority_id: Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc".to_owned()),
+            ..binding.clone()
+        };
+        let mut prepared = PreparedGeneration::new(
+            &artifact,
+            1,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        prepared.add_binding(&binding, &[], &[], true)?;
+        prepared.add_binding(&second, &[], &[], false)?;
+        let generation = prepared.finish()?;
+        let staged = parse_id("binding_id", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?;
+        let runtime = parse_id("binding_id", &second.binding_id)?;
+        let rows = generation
+            .entry_admissions
+            .keys()
+            .map(|key| read_abi_value::<EntryAdmissionRuleKeyV1>(key, "test entry key"))
+            .collect::<crate::Result<Vec<_>>>()?;
+        assert_eq!(
+            rows.iter().filter(|key| key.binding_id == staged).count(),
+            6
+        );
+        assert_eq!(
+            rows.iter().filter(|key| key.binding_id == runtime).count(),
+            6
+        );
+        assert_eq!(rows.len(), 12);
+        let expected = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert_eq!(generation.descriptor, expected.descriptor);
+        Ok(())
+    }
+
+    #[test]
+    fn generation_keeps_exception_deadlines() -> crate::Result<()> {
+        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        let now = 1_800_000_000_000_000_000;
+        let exception = mithril_control::ExceptionV1 {
+            exception_id: "lease".to_owned(),
+            exception_instance_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            changed_rule_ids: vec!["deny-projected-token-open".to_owned()],
+            exact_subject: mithril_control::ExactExceptionSubjectSelectorV1 {
+                protected_scope_ids: vec![binding.protected_scope_id.clone()],
+                execution_set_ids: vec![binding.execution_set_id.clone()],
+                entry_kind_ids: vec![mithril_control::EntryKindV1::ContainerStart],
+                role_ids: vec!["converter".to_owned()],
+                immutable_definition_digests: Vec::new(),
+                exact_compiled_key_digests: Vec::new(),
+            },
+            authority_delta: mithril_control::PermittedAuthorityDeltaV1 {
+                from_physical_result: "DENY_EFFECT".to_owned(),
+                to_physical_result: "ALLOW_EFFECT".to_owned(),
+                added_or_removed_operation_cells: Vec::new(),
+                added_or_removed_transition_cells: Vec::new(),
+                maximum_blast_radius: mithril_control::BlastRadiusLimitV1::Local {
+                    permitted_target_selector_ids: Vec::new(),
+                    process_count: 1,
+                    execution_set_count: 1,
+                    socket_count: 0,
+                    node_count: 1,
+                },
+            },
+            approver_principal_id: "reviewer".to_owned(),
+            approval_proof_digest: "1".repeat(64),
+            closed_reason_code: "APPROVED".to_owned(),
+            valid_from_utc_ns: now - 1,
+            valid_until_utc_ns: now + 100,
+            consumption_scope: mithril_control::ExceptionConsumptionScopeV1::PerTargetNode,
+            maximum_uses: 2,
+            maximum_lifetime_ns: 40,
+        };
+        let unused = mithril_control::ExceptionV1 {
+            exception_id: "unused".to_owned(),
+            valid_until_utc_ns: now,
+            ..exception.clone()
+        };
+        artifact.policy_document.exceptions = vec![exception, unused];
+        artifact.compiled_profile.compiled_cells[0].consuming_exception_id =
+            Some("lease".to_owned());
+        let mut prepared = PreparedGeneration::new(
+            &artifact,
+            1,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            now,
+            100,
+        )?;
+        prepared.add_binding(&binding, std::slice::from_ref(&object), &[], false)?;
+        let rows = prepared.lowered.exceptions.clone();
+        let deadlines = prepared.lowered.exception_deadlines_utc.clone();
+        let second = WorkloadBindingConfig {
+            binding_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+            ..binding.clone()
+        };
+        prepared.add_binding(&second, std::slice::from_ref(&object), &[], false)?;
+        let generation = prepared.finish()?;
+        assert_eq!(generation.exceptions, rows);
+        assert_eq!(generation.exception_deadlines_utc, deadlines);
+        assert_eq!(generation.exception_bindings.len(), 1);
+        assert_eq!(generation.exceptions.len(), 1);
+        let row = generation.exceptions.values().next().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "test exception has no runtime state",
+            }
+            .build()
+        })?;
+        let state: super::ExceptionRuntimeStateV1 = read_abi_value(row, "test exception state")?;
+        assert_eq!(state.deadline_boottime_ns, 140);
+        assert_eq!(state.maximum_uses, 2);
+        assert_eq!(state.consumed_uses, 0);
+        assert_eq!(state.bound_profile_generation_refs, 1);
+        assert_eq!(
+            generation.exception_deadlines_utc.values().next(),
+            Some(&(now + 40))
+        );
+        let mut expired = artifact.clone();
+        expired.policy_document.exceptions[0].valid_until_utc_ns = now;
+        let mut prepared = PreparedGeneration::new(
+            &expired,
+            1,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            now,
+            100,
+        )?;
+        assert!(prepared
+            .add_binding(&binding, &[object], &[], false)
+            .is_err());
         Ok(())
     }
 

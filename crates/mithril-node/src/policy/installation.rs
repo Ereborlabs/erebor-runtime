@@ -17,7 +17,7 @@ use super::{
     validate_mount_view, ExceptionAuthorityOwner, GenerationHandleAllocator, GenerationRows,
     GenerationSemantics, LoweredGeneration, MeasuredExactObjectV1, MeasuredMountRouteV1,
     MountRootReconciliation, NodeDiscoveryContextCatalog, NodePolicyGenerationOwner,
-    ProfileActivation,
+    PreparedGeneration, ProfileActivation,
 };
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, PolicySnafu};
 use crate::exact_object::ExactFileObjectView;
@@ -112,7 +112,7 @@ impl PreparedPolicy {
             AntiRollbackStore::load(config.state_directory.join("policy-anti-rollback-v1.json"))
                 .context(PolicySnafu)?;
         reconcile_pending_activations(host, &mut rollback, node_boot_id, label_epoch)?;
-        let mut generations = BTreeMap::<u64, LoweredGeneration>::new();
+        let mut generations = BTreeMap::<u64, PreparedGeneration<'_>>::new();
         let mut activations = BTreeMap::<Id128V1, ProfileActivation>::new();
         let mut validated = BTreeMap::<Id128V1, ValidatedProfileCandidateV1>::new();
         let mut declared_entry_requests = BTreeSet::new();
@@ -174,27 +174,32 @@ impl PreparedPolicy {
                 .filter(|measured| measured.binding_id == binding.binding_id)
                 .cloned()
                 .collect::<Vec<_>>();
-            let lowered = LoweredGeneration::for_binding_with_mount_routes(
-                artifact,
+            let generation = match generations.entry(binding.active_profile_generation_ref_id) {
+                Entry::Vacant(entry) => entry.insert(PreparedGeneration::new(
+                    artifact,
+                    binding.active_profile_generation_ref_id,
+                    node_boot_id,
+                    node_id,
+                    label_epoch,
+                    now_utc_ns,
+                    now_boottime_ns,
+                )?),
+                Entry::Occupied(entry) => entry.into_mut(),
+            };
+            generation.check_candidate(artifact)?;
+            generation.add_binding(
                 binding,
                 &measured_for_binding,
                 &binding_routes,
-                node_boot_id,
-                node_id,
-                label_epoch,
-                now_utc_ns,
-                now_boottime_ns,
                 deferred.contains(&binding.binding_id)
                     && !measured.resolved.contains(&binding.binding_id),
             )?;
             context.add_verified_binding(artifact, binding, &measured_for_binding, node_boot_id);
-            match generations.get_mut(&binding.active_profile_generation_ref_id) {
-                Some(existing) => existing.merge(lowered)?,
-                None => {
-                    generations.insert(binding.active_profile_generation_ref_id, lowered);
-                }
-            }
         }
+        let generations = generations
+            .into_iter()
+            .map(|(id, generation)| Ok((id, generation.finish()?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
         let mut generation_allocator = GenerationHandleAllocator::load(
             config.state_directory.join("generation-handles-v1.json"),
             host,
