@@ -108,24 +108,17 @@ impl AnalysisSelectionV1 {
             && self.nodes.len() <= MAX_EXTRACT_KEYS
             && self.nodes.iter().all(|node| crate::node_id_is_valid(node))
             && self.nodes.iter().collect::<BTreeSet<_>>().len() == self.nodes.len()
-            && self.sources.len() <= MAX_EXTRACT_KEYS
-            && self.contexts.len() <= MAX_EXTRACT_KEYS - self.sources.len()
-            && self.results.len() <= MAX_EXTRACT_KEYS - self.sources.len() - self.contexts.len()
-            && self.profiles.len()
-                <= MAX_EXTRACT_KEYS - self.sources.len() - self.contexts.len() - self.results.len()
-            && self.traces.len()
-                <= MAX_EXTRACT_KEYS
-                    - self.sources.len()
-                    - self.contexts.len()
-                    - self.results.len()
-                    - self.profiles.len()
-            && self.binding_ids.len()
-                <= MAX_EXTRACT_KEYS
-                    - self.sources.len()
-                    - self.contexts.len()
-                    - self.results.len()
-                    - self.profiles.len()
-                    - self.traces.len()
+            && [
+                self.sources.len(),
+                self.contexts.len(),
+                self.results.len(),
+                self.profiles.len(),
+                self.traces.len(),
+                self.binding_ids.len(),
+            ]
+            .into_iter()
+            .try_fold(MAX_EXTRACT_KEYS, usize::checked_sub)
+            .is_some()
             && self.binding_ids.iter().all(|id| *id != [0; 16])
             && self.binding_ids.iter().collect::<BTreeSet<_>>().len() == self.binding_ids.len()
             && self
@@ -1388,6 +1381,41 @@ mod tests {
         assert!(!selection.valid());
         selection.binding_ids = vec![[5; 16]];
         selection.traces[0].tenant_id = [2; 16];
+        assert!(!selection.valid());
+    }
+
+    #[test]
+    fn analysis_selection_key_limits() {
+        let mut selection = AnalysisSelectionV1::new([1; 16], vec![identity(1)]);
+        selection.contexts.push(AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "context".into(),
+            entity_key: vec![1],
+            lifetime_key: vec![2],
+            owner_revision: 1,
+        });
+        selection.results.push("result".into());
+        selection.profiles.push("profile".into());
+        selection.binding_ids.push([5; 16]);
+        selection.traces = (1..=MAX_EXTRACT_KEYS as u128 - 5)
+            .map(|execution| TraceIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "trace-node".into(),
+                node_boot_id: [2; 16],
+                request_id: [3; 16],
+                execution_id: execution.to_be_bytes(),
+                source_sha256: [4; 32],
+            })
+            .collect();
+        selection.nodes = (0..MAX_EXTRACT_KEYS)
+            .map(|index| format!("node-{index}"))
+            .collect();
+        assert!(selection.valid());
+        selection.results.push("extra".into());
+        assert!(!selection.valid());
+        selection.results.pop();
+        assert!(selection.valid());
+        selection.nodes.push("extra-node".into());
         assert!(!selection.valid());
     }
 
