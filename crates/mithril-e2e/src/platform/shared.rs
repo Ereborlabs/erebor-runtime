@@ -1736,7 +1736,6 @@ impl Shared {
         };
         Ok(NodeTraceConfigV1 {
             executable,
-            executable_sha256: digest,
             storage_reserve_bytes: 272 * 1024 * 1024,
             qualification,
         })

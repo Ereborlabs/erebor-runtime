@@ -839,7 +839,6 @@ mod tests {
             .maximum_retained_bytes = 256 * MIB;
         node.diagnostics = Some(NodeTraceConfigV1 {
             executable: PathBuf::from("/usr/bin/bpftrace"),
-            executable_sha256: [1; 32],
             storage_reserve_bytes: 256 * MIB,
             qualification: TraceQualificationV1 {
                 evidence_sha256: [2; 32],

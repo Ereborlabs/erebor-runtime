@@ -33,7 +33,6 @@ const MAX_ENCODED_FRAME: u64 = 5 * 1024 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct NodeTraceConfigV1 {
     pub executable: PathBuf,
-    pub executable_sha256: [u8; 32],
     pub storage_reserve_bytes: u64,
     pub qualification: TraceQualificationV1,
 }
@@ -63,9 +62,9 @@ pub struct TraceQualificationPairV1 {
 impl NodeTraceConfigV1 {
     pub fn validate(&self) -> Result<()> {
         let proof = &self.qualification;
-        ensure!(self.executable.is_absolute() && self.executable_sha256 != [0; 32]
+        ensure!(self.executable.is_absolute() && proof.executable_sha256 != [0; 32]
             && self.storage_reserve_bytes >= 256 * 1024 * 1024
-            && proof.evidence_sha256 != [0; 32] && proof.executable_sha256 == self.executable_sha256
+            && proof.evidence_sha256 != [0; 32]
             && !proof.kernel_release.is_empty() && proof.architecture == std::env::consts::ARCH
             && proof.logical_cpus > 0 && proof.maximum_overhead_basis_points > 0
             && (5..=100).contains(&proof.pairs.len())
@@ -159,8 +158,9 @@ impl NodeTraceOwner {
                     "diagnostic qualification does not match the current kernel or CPU allocation"
             }
         );
-        let backend = DiagnosticBackend::new(config.executable, config.executable_sha256)
-            .context(InterceptorSnafu)?;
+        let backend =
+            DiagnosticBackend::new(config.executable, config.qualification.executable_sha256)
+                .context(InterceptorSnafu)?;
         Self::open_state(
             state_directory,
             tenant_id,
@@ -1145,7 +1145,6 @@ mod tests {
     fn config() -> NodeTraceConfigV1 {
         NodeTraceConfigV1 {
             executable: "/not-executed".into(),
-            executable_sha256: [1; 32],
             storage_reserve_bytes: 256 * 1024 * 1024,
             qualification: TraceQualificationV1 {
                 evidence_sha256: [9; 32],
@@ -1169,6 +1168,25 @@ mod tests {
                 ],
             },
         }
+    }
+
+    #[test]
+    fn observability_qualification_digest() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let valid = config();
+        valid.validate()?;
+        let mut encoded = serde_json::to_value(&valid)?;
+        assert!(encoded.get("executable_sha256").is_none());
+        let mut decoded: NodeTraceConfigV1 = serde_json::from_value(encoded.clone())?;
+        decoded.validate()?;
+        assert_eq!(
+            decoded.qualification.executable_sha256,
+            valid.qualification.executable_sha256
+        );
+        decoded.qualification.executable_sha256 = [0; 32];
+        assert!(decoded.validate().is_err());
+        encoded["executable_sha256"] = serde_json::to_value(valid.qualification.executable_sha256)?;
+        assert!(serde_json::from_value::<NodeTraceConfigV1>(encoded).is_err());
+        Ok(())
     }
 
     #[test]

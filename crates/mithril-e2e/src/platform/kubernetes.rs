@@ -2514,7 +2514,7 @@ impl Kubernetes {
         };
         use sha2::Digest as _;
         let digest: [u8; 32] = sha2::Sha256::digest(fs::read(bundle.join("bpftrace"))?).into();
-        if digest != config.executable_sha256 {
+        if digest != config.qualification.executable_sha256 {
             return Err("the bundled backend differs from its pinned configuration".into());
         }
         let mut env = Self::setup("observability-pods")?;
