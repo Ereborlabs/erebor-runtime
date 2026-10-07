@@ -54,7 +54,6 @@ pub struct QueryStream {
     stop: watch::Sender<bool>,
     session: Option<QuerySession>,
     done: bool,
-    checking: Option<Pin<Box<dyn Future<Output = Result<QueryFrame>> + Send>>>,
     lease: Option<Arc<QueryLease>>,
 }
 
@@ -67,7 +66,6 @@ impl QueryStream {
     fn close(&mut self) {
         self.done = true;
         self.next = None;
-        self.checking = None;
         self.state = None;
         self.lease = None;
         let _cancelled = self.cancel();
@@ -96,88 +94,29 @@ impl Stream for QueryStream {
                 .fail(),
             ));
         }
-        let frame = if let Some(pending) = self.checking.as_mut() {
-            match pending.as_mut().poll(context) {
-                Poll::Ready(result) => {
-                    self.checking = None;
-                    Poll::Ready(Some(result))
-                }
-                Poll::Pending => Poll::Pending,
-            }
-        } else {
-            if self.next.is_none() {
-                let Some(state) = self.state.take() else {
-                    self.close();
-                    return Poll::Ready(None);
-                };
-                self.next = Some(Box::pin(Self::advance(state)));
-            }
-            let Some(next) = self.next.as_mut() else {
+        if self.next.is_none() {
+            let Some(state) = self.state.take() else {
                 self.close();
-                return Poll::Ready(Some(
-                    crate::QueryInvalidSnafu {
-                        field: "query next frame",
-                    }
-                    .fail(),
-                ));
+                return Poll::Ready(None);
             };
-            let result = match next.as_mut().poll(context) {
-                Poll::Ready((state, result)) => {
-                    self.next = None;
-                    self.state = Some(state);
-                    result
+            self.next = Some(Box::pin(Self::advance(state, self.lease.clone())));
+        }
+        let Some(next) = self.next.as_mut() else {
+            self.close();
+            return Poll::Ready(Some(
+                crate::QueryInvalidSnafu {
+                    field: "query next frame",
                 }
-                Poll::Pending => return Poll::Pending,
-            };
-            match result {
-                Ok(Some(frame)) if frame.reads.is_some() => {
-                    let lease = self.lease.clone();
-                    let session = self.session.clone();
-                    let mut stop = self.stop.subscribe();
-                    let cancelled = matches!(
-                        frame.payload,
-                        QueryPayload::Terminal {
-                            reason: QueryTerminalReason::Cancelled,
-                            ..
-                        }
-                    );
-                    self.checking = Some(Box::pin(async move {
-                        {
-                            let check = frame.check_stream(lease);
-                            tokio::pin!(check);
-                            let mut changes =
-                                session.as_ref().map(|session| session.authority.changes());
-                            loop {
-                                tokio::select! {
-                                    biased;
-                                    _ = stop.changed(), if !cancelled => {
-                                        return crate::AnalysisReadCancelledSnafu.fail();
-                                    },
-                                    result = &mut check => { result?; break; },
-                                    changed = async {
-                                        match changes.as_mut() {
-                                            Some(changes) => changes.changed().await,
-                                            None => std::future::pending().await,
-                                        }
-                                    } => {
-                                        if changed.is_err() { return crate::QueryDeniedSnafu.fail(); }
-                                        if let Some(session) = &session { session.check()?; }
-                                    },
-                                }
-                            }
-                        }
-                        if let Some(session) = &session {
-                            session.check()?;
-                        }
-                        Ok(frame)
-                    }));
-                    context.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Ok(Some(frame)) => Poll::Ready(Some(Ok(frame))),
-                Ok(None) => Poll::Ready(None),
-                Err(error) => Poll::Ready(Some(Err(error))),
+                .fail(),
+            ));
+        };
+        let frame = match next.as_mut().poll(context) {
+            Poll::Ready((state, result)) => {
+                self.next = None;
+                self.state = Some(state);
+                Poll::Ready(result.transpose())
             }
+            Poll::Pending => Poll::Pending,
         };
         if let Some(session) = &self.session {
             if let Err(error) = session.check() {
@@ -384,14 +323,16 @@ impl QueryOwner {
             stop,
             session,
             done: false,
-            checking: None,
             lease: Some(lease),
         })
     }
 }
 
 impl QueryStream {
-    async fn advance(mut state: QueryState) -> (QueryState, Result<Option<QueryFrame>>) {
+    async fn advance(
+        mut state: QueryState,
+        lease: Option<Arc<QueryLease>>,
+    ) -> (QueryState, Result<Option<QueryFrame>>) {
         if state.finished {
             return (state, Ok(None));
         }
@@ -430,6 +371,47 @@ impl QueryStream {
             }
             Err(error @ crate::Error::QueryDenied { .. }) => Err(error),
             Err(error) => Self::finish(&mut state, Err(error)),
+            result => result,
+        };
+        let result = match result {
+            Ok(Some(frame)) if frame.reads.is_some() => {
+                let cancelled = matches!(
+                    &frame.payload,
+                    QueryPayload::Terminal {
+                        reason: QueryTerminalReason::Cancelled,
+                        ..
+                    }
+                );
+                async {
+                    {
+                        let check = frame.check_stream(lease);
+                        tokio::pin!(check);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = stop.changed(), if !cancelled => {
+                                    return crate::AnalysisReadCancelledSnafu.fail();
+                                },
+                                result = &mut check => { result?; break; },
+                                changed = async {
+                                    match changes.as_mut() {
+                                        Some(changes) => changes.changed().await,
+                                        None => std::future::pending().await,
+                                    }
+                                } => {
+                                    if changed.is_err() { return crate::QueryDeniedSnafu.fail(); }
+                                    if let Some(session) = &session { session.check()?; }
+                                },
+                            }
+                        }
+                    }
+                    if let Some(session) = &session {
+                        session.check()?;
+                    }
+                    Ok(Some(frame))
+                }
+                .await
+            }
             result => result,
         };
         (state, result)

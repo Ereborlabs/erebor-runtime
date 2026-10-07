@@ -1509,7 +1509,7 @@ fn query_trace_stream_stop() -> TestResult {
         .max_blocking_threads(1)
         .build()?;
     runtime.block_on(async {
-        for cancelled in [true, false] {
+        for stop in ["cancel", "revoke", "drop"] {
             let mut fixture = ClientFixture::local()?;
             fixture.tenant();
             let _intent = fixture.trace(10)?;
@@ -1558,23 +1558,27 @@ fn query_trace_stream_stop() -> TestResult {
                 .await?
             })
             .await?;
-            if cancelled {
-                stream.cancel()?;
+            if stop == "drop" {
+                drop(stream);
             } else {
-                fixture.authority.revoke();
+                if stop == "cancel" {
+                    stream.cancel()?;
+                } else {
+                    fixture.authority.revoke();
+                }
+                let error = tokio::time::timeout(WAIT, stream.next())
+                    .await?
+                    .ok_or("the stopped stream did not return an error")?
+                    .err()
+                    .ok_or("the stopped stream disclosed a data frame")?;
+                assert!(match error {
+                    crate::Error::AnalysisReadCancelled { .. } => stop == "cancel",
+                    crate::Error::QueryDenied { .. } => stop == "revoke",
+                    _ => false,
+                });
+                assert!(stream.is_terminated());
+                assert!(stream.next().await.is_none());
             }
-            let error = tokio::time::timeout(WAIT, stream.next())
-                .await?
-                .ok_or("the stopped stream did not return an error")?
-                .err()
-                .ok_or("the stopped stream disclosed a data frame")?;
-            assert!(match error {
-                crate::Error::AnalysisReadCancelled { .. } => cancelled,
-                crate::Error::QueryDenied { .. } => !cancelled,
-                _ => false,
-            });
-            assert!(stream.is_terminated());
-            assert!(stream.next().await.is_none());
             assert!(scope.upgrade().is_some());
             assert!(matches!(
                 fixture.data.store.reserve_reader(),
