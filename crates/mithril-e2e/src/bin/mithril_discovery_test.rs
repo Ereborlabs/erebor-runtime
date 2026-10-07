@@ -8,6 +8,8 @@ enum Case {
     StorageContract,
     EvidenceRestart,
     ContextRoundtrip,
+    ProfileRestart,
+    OwnerIsolation,
     DataStoreRecovery,
     DataStoreStartup,
     DataStoreLoad,
@@ -123,6 +125,16 @@ async fn main() {
                 .context_roundtrip()
                 .await
         }
+        Case::ProfileRestart => {
+            mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
+                .profile_restart()
+                .await
+        }
+        Case::OwnerIsolation => {
+            mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
+                .owner_isolation()
+                .await
+        }
     };
     match result {
         Ok(()) => {
@@ -138,6 +150,40 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_restart_arguments_scoped() -> Result<(), clap::Error> {
+        let base = [
+            "qualification",
+            "--case",
+            "profile-restart",
+            "--output-directory",
+            "/tmp/profile",
+        ];
+        let cli = Cli::try_parse_from(base)?;
+        cli.validate()?;
+        assert!(cli.case == Case::ProfileRestart);
+        let wrong = Cli::try_parse_from(base.into_iter().chain(["--tenants", "2"]))?;
+        assert!(wrong.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn owner_isolation_arguments_scoped() -> Result<(), clap::Error> {
+        let base = [
+            "qualification",
+            "--case",
+            "owner-isolation",
+            "--output-directory",
+            "/tmp/isolation",
+        ];
+        let cli = Cli::try_parse_from(base)?;
+        cli.validate()?;
+        assert!(cli.case == Case::OwnerIsolation);
+        let wrong = Cli::try_parse_from(base.into_iter().chain(["--tenants", "2"]))?;
+        assert!(wrong.validate().is_err());
+        Ok(())
+    }
 
     #[test]
     fn query_follow_arguments_are_scoped() -> Result<(), clap::Error> {

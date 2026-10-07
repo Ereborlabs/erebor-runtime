@@ -279,7 +279,7 @@ impl AnalysisStore {
                         + octet_length(lifetime_key) + octet_length(body) FROM context_versions
                     UNION ALL SELECT tenant_id, 'progress',
                         256 + octet_length(stream_key) + octet_length(encode(processor_id)) + octet_length(encode(retirement_id))
-                        + octet_length(encode(retirement_reason)) FROM processor_progress
+                        + octet_length(encode(retirement_reason)) + octet_length(encode(result_id)) FROM processor_progress
                     UNION ALL SELECT tenant_id, 'witnesses',
                         256 + octet_length(stream_key) + octet_length(encode(ref_id)) FROM evidence_refs
                     UNION ALL SELECT tenant_id, 'context_refs',
@@ -287,7 +287,9 @@ impl AnalysisStore {
                         + octet_length(entity_key) + octet_length(lifetime_key) FROM context_refs
                     UNION ALL SELECT tenant_id, 'results',
                         256 + octet_length(encode(result_id)) + octet_length(encode(processor_id))
-                        + octet_length(body) + octet_length(request_meta) FROM analysis_results
+                        + octet_length(body) + octet_length(request_meta)
+                        + COALESCE(octet_length(stream_key), 0)
+                        + COALESCE(octet_length(encode(interval_id)), 0) FROM analysis_results
                     UNION ALL SELECT tenant_id, 'processor_gaps',
                         256 + octet_length(stream_key) + octet_length(encode(processor_id)) FROM processor_gaps
                     UNION ALL SELECT tenant_id, 'recovery_gaps', 256 + octet_length(stream_key) FROM recovery_gaps

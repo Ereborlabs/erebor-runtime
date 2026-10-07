@@ -66,6 +66,26 @@ impl TryFrom<&[u8]> for EvidenceRecord {
     }
 }
 
+impl TryFrom<&EvidenceRecord> for Vec<u8> {
+    type Error = Error;
+
+    fn try_from(record: &EvidenceRecord) -> Result<Self> {
+        let length = record.encoded_len();
+        if length == 0 || length > MAX_EVIDENCE_RECORD_BYTES {
+            return EvidenceFrameSnafu {
+                reason: "evidence record frame is outside its size bound",
+                input_bytes: length,
+            }
+            .fail();
+        }
+        let mut frame = Vec::with_capacity(length + 8);
+        frame.extend_from_slice(&(length as u32).to_be_bytes());
+        frame.extend(record.encode_to_vec());
+        frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
+        Ok(frame)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,6 +137,7 @@ mod tests {
                 record.decision_context = None;
             }
             let bytes = frame(&record.encode_to_vec());
+            assert_eq!(Vec::<u8>::try_from(&record)?, bytes);
             assert_eq!(EvidenceRecord::try_from(bytes.as_slice())?, record);
             let mut batch = bytes.clone();
             batch.extend_from_slice(&bytes);

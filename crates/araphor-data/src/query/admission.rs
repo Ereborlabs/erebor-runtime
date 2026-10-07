@@ -584,7 +584,10 @@ impl Binder {
                 } else {
                     let columns = SCHEMAS
                         .iter()
-                        .find(|schema| schema.name == name && schema.readiness == "available")
+                        .find(|schema| {
+                            schema.name == name
+                                && (schema.readiness == "available" || schema.name == "behaviors")
+                        })
                         .ok_or_else(|| Self::invalid("SQL relation"))?
                         .columns
                         .iter()

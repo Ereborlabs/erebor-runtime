@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 mod analysis;
 mod canonical;
 mod digest;
+mod discovery;
 mod error;
 mod evidence;
 mod query;
@@ -13,6 +14,7 @@ mod workload;
 
 pub use canonical::encode_value;
 pub use digest::DiscoveryDigestV1;
+pub use discovery::*;
 pub(crate) use error::*;
 pub use error::{Error, Result};
 pub use evidence::{
@@ -38,9 +40,9 @@ pub use workload::{ContainerKindV1, KubernetesWorkloadIdentityV1, WorkloadTarget
 pub use analysis::{
     AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,
     AnalysisContextVersionV1, AnalysisExtractionV1, AnalysisGapV1, AnalysisInputPageV1,
-    AnalysisInputV1, AnalysisPositionPageV1, AnalysisReadControl, AnalysisReadPageV1,
-    AnalysisRecordV1, AnalysisRecoveryStatusV1, AnalysisRelationV1, AnalysisResultCommitV1,
-    AnalysisResultReceiptV1, AnalysisSelectionV1, AnalysisSourceReceiptV1,
+    AnalysisInputV1, AnalysisPositionPageV1, AnalysisProcessorResultV1, AnalysisReadControl,
+    AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1, AnalysisRelationV1,
+    AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSelectionV1, AnalysisSourceReceiptV1,
     AnalysisSourceSnapshotV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
     AnalysisStreamIdentityV1, AnalysisWitnessV1, ContextSensitivityV1, EvidenceRetentionOwner,
     EvidenceStoreOutcomeV1, ProcessorClassV1, ProcessorHealthV1, ProcessorRetirementV1,
@@ -78,5 +80,5 @@ pub struct EvidenceIntakeIdentityV1 {
     pub source_epoch: u64,
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use analysis::AnalysisCommitStage;

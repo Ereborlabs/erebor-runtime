@@ -1545,17 +1545,16 @@ mod tests {
     }
 
     #[test]
-    fn discovery_context_old_and_new_wal_frames_reopen_without_reencoding(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn discovery_context_wal_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         use prost::Message as _;
         let directory = tempfile::tempdir()?;
         let mut wal = EvidenceWal::open(directory.path(), limits())?;
-        let mut old = observation(101)?;
-        old.decision_context = None;
-        let new = observation(202)?;
-        let old_wire = old.to_wire_record()?;
-        let new_wire = new.to_wire_record()?;
-        assert!(old_wire.decision_context.is_none());
+        let mut missing = observation(101)?;
+        missing.decision_context = None;
+        let contextual = observation(202)?;
+        let missing_wire = missing.to_wire_record()?;
+        let context_wire = contextual.to_wire_record()?;
+        assert!(missing_wire.decision_context.is_none());
         assert_eq!(
             mithril_control::EvidenceRecord {
                 observed_boottime_ns: 1,
@@ -1564,13 +1563,16 @@ mod tests {
             .encode_to_vec(),
             vec![8, 1]
         );
-        wal.append(&old)?;
-        wal.append(&new)?;
+        wal.append(&missing)?;
+        wal.append(&contextual)?;
         let path = active_segment(directory.path())?;
         let before = std::fs::read(&path)?;
         let first = wal.next_batch().ok_or("missing batch")?;
         assert_eq!((first.first_cursor, first.last_cursor), (1, 2));
-        assert_eq!(first.decode_records()?, vec![old_wire, new_wire.clone()]);
+        assert_eq!(
+            first.decode_records()?,
+            vec![missing_wire, context_wire.clone()]
+        );
         drop(wal);
         let reopened = EvidenceWal::open(directory.path(), limits())?;
         assert_eq!(std::fs::read(&path)?, before);
@@ -1584,7 +1586,38 @@ mod tests {
                 .original_kernel_sequence,
             202
         );
-        assert_eq!(replay.decode_records()?[1], new_wire);
+        assert_eq!(replay.decode_records()?[1], context_wire);
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_context_unsupported_version() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut wal = EvidenceWal::open(directory.path(), limits())?;
+        let valid = observation(101)?;
+        let mut unsupported = valid.clone();
+        unsupported
+            .decision_context
+            .as_mut()
+            .ok_or("context absent")?
+            .schema_version = 2;
+        assert!(wal.append(&unsupported).is_err());
+        assert_eq!(wal.pending_records(), 0);
+        wal.append(&valid)?;
+        let path = active_segment(directory.path())?;
+        drop(wal);
+        let mut wire = valid.to_wire_record()?;
+        wire.decision_context
+            .as_mut()
+            .ok_or("context absent")?
+            .schema_version = 2;
+        let frame = Vec::<u8>::try_from(&wire)?;
+        let mut bytes = std::fs::read(&path)?;
+        bytes.truncate(SEGMENT_HEADER_BYTES);
+        bytes.extend_from_slice(&frame);
+        std::fs::write(&path, &bytes)?;
+        assert!(EvidenceWal::open(directory.path(), limits()).is_err());
+        assert_eq!(std::fs::read(&path)?, bytes);
         Ok(())
     }
 

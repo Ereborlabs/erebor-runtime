@@ -6,7 +6,7 @@ use mithril_control::{ClientGrpcConfig, ClientListener, ClientListenerConfig, Co
 use std::io::Write as _;
 
 impl ObservabilityQualification {
-    pub(super) fn trace_inputs(
+    pub(crate) fn trace_inputs(
         fact: mithril_control::WorkloadTargetFactV1,
         now: u64,
     ) -> ProofResult<(

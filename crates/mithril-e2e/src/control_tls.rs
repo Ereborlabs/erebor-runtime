@@ -317,13 +317,12 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
 async fn observability_recovery_mtls_reconnect_preserves_dispatch_and_output(
 ) -> Result<(), Box<dyn StdError>> {
     use mithril_control::{
-        DiscoveryDigestV1, DiscoveryOwner, PolicySignerTrustV1, TraceAccessV1, TraceBatchV1,
-        TraceCleanupV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceRecipeV1,
-        TraceRequestV1, TraceTargetV1, TraceTerminalReasonV1, TraceTerminalV1, TraceUploadV1,
+        DiscoveryDigestV1, PolicySignerTrustV1, TraceAccessV1, TraceBatchV1, TraceCleanupV1,
+        TraceExchangeV1, TraceFrameKindV1, TraceFrameV1, TraceRecipeV1, TraceRequestV1,
+        TraceTargetV1, TraceTerminalReasonV1, TraceTerminalV1, TraceUploadV1,
     };
     let tls = MtlsFixture::new(false)?;
     let store = ControlStore::open(tls.path().join("control-store"))?;
-    let _discovery = DiscoveryOwner::open(store.clone())?;
     let fixture = OutagePolicyFixture::new(store.clone());
     let facts = fixture.inventory(&fixture.resource(1)?)?;
     let fact = facts.first().ok_or("missing workload fact")?.clone();

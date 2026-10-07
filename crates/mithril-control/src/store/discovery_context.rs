@@ -1,93 +1,38 @@
 use super::*;
-use crate::{
-    error::DiscoverySnafu, DiscoveryContextBindingV1, DiscoveryRecordV1, EvidenceIdV1,
-    WorkloadTargetFactV1,
+use crate::error::DiscoverySnafu;
+use araphor_data::{
+    DiscoveryContextBindingV1, DiscoveryContextJoinV1, DiscoveryContextProvider,
+    DiscoveryContextUnavailableV1, DiscoveryPinnedContextV1, DiscoveryPolicyKeyV1,
+    DiscoveryPolicyRevisionV1, DiscoveryRecordV1, DISCOVERY_PIN_BYTES,
 };
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoveryPinnedContextV1 {
-    pub binding: DiscoveryContextBindingV1,
-    pub workload: WorkloadTargetFactV1,
-    pub policy_source_revision_id: String,
-    pub target_snapshot_digest: String,
-    pub signed_profile_digest: String,
-    pub control_commit_index: u64,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DiscoveryContextUnavailableV1 {
-    MissingSourceCpu,
-    ContextLimit,
-    MissingDecisionCatalog,
-    MissingProcessLifetime,
-    MissingWorkloadFact,
-    AmbiguousWorkloadFact,
-    PolicyContextMismatch,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "state", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DiscoveryContextJoinV1 {
-    Available(Box<DiscoveryPinnedContextV1>),
-    Unresolved(DiscoveryContextUnavailableV1),
-}
-
-impl DiscoveryContextJoinV1 {
-    pub(crate) fn into_bounded(self) -> Self {
-        if serde_json::to_writer(
-            crate::discovery::InputByteLimit(crate::MAX_DISCOVERY_PIN_BYTES),
-            &self,
-        )
-        .is_ok()
-        {
-            self
-        } else {
-            Self::Unresolved(DiscoveryContextUnavailableV1::ContextLimit)
-        }
-    }
-}
+use super::context::ContextLimit;
 
 impl ControlStore {
     pub fn discovery_context(&self, record: &DiscoveryRecordV1) -> Result<DiscoveryContextJoinV1> {
         use DiscoveryContextUnavailableV1 as Missing;
         let unresolved = DiscoveryContextJoinV1::Unresolved;
-        record.observation.validate().map_err(|error| {
+        let stream = &record.id.stream;
+        let wire = record.decode()?;
+        let observation = crate::ObservationEnvelopeV1::from_wire_record(
+            stream.tenant_id.into(),
+            stream.node_boot_id.into(),
+            stream.source_id.into(),
+            stream.source_epoch,
+            record.id.durable_cursor,
+            record.id.cpu_id,
+            &wire,
+        )
+        .map_err(|error| {
             DiscoverySnafu {
                 code: "CONTEXT_OBSERVATION",
                 reason: error.to_string(),
             }
             .build()
         })?;
-        let stream = &record.id.stream;
-        let observation = &record.observation;
-        if stream.tenant_id != observation.tenant_id.to_be_bytes()
-            || stream.node_boot_id != observation.node_boot_id.to_be_bytes()
-            || stream.source_id != observation.source_id.to_be_bytes()
-            || stream.source_epoch != observation.source_epoch
-            || record.id.cpu_id != observation.cpu_id
-            || stream.node_id.is_empty()
-            || stream.node_id.len() > 256
-            || stream.label_epoch == 0
-            || record.id.durable_cursor == 0
-        {
-            return DiscoverySnafu {
-                code: "CONTEXT_RECORD_IDENTITY",
-                reason: "the discovery record differs from its observation identity",
-            }
-            .fail();
-        }
         let Some(context) = &observation.decision_context else {
             return Ok(unresolved(Missing::MissingDecisionCatalog));
         };
-        if record.original_kernel_sequence != Some(context.original_kernel_sequence) {
-            return DiscoverySnafu {
-                code: "CONTEXT_KERNEL_SEQUENCE",
-                reason: "the original kernel sequence differs from the retained context",
-            }
-            .fail();
-        }
         let Some(catalog) =
             crate::EvidenceDecisionCatalogV1::from_context(context).map_err(|error| {
                 DiscoverySnafu {
@@ -182,12 +127,7 @@ impl ControlStore {
                     {
                         return Ok(unresolved(Missing::PolicyContextMismatch));
                     }
-                    if serde_json::to_writer(
-                        crate::discovery::InputByteLimit(crate::MAX_DISCOVERY_PIN_BYTES),
-                        workload,
-                    )
-                    .is_err()
-                    {
+                    if serde_json::to_writer(ContextLimit(DISCOVERY_PIN_BYTES), workload).is_err() {
                         return Ok(unresolved(Missing::ContextLimit));
                     }
                     let next = DiscoveryPinnedContextV1 {
@@ -196,14 +136,20 @@ impl ControlStore {
                             subject_revision: workload.workload_binding_generation_digest.clone(),
                             image_digest: workload.image_digest.clone(),
                             configuration_digest: catalog.policy_document_digest.clone(),
-                            process_instance_id: EvidenceIdV1::from(process),
-                            entry_instance_id: EvidenceIdV1::from(entry),
-                            binding_id: catalog.binding_id,
+                            process_instance_id: process,
+                            entry_instance_id: entry,
+                            binding_id: catalog.binding_id.to_be_bytes(),
                             role_id: catalog.role_id,
                             state_id: catalog.state_id,
                             entry_rule_id: catalog.entry_rule_id,
                             catalog_revision: catalog.profile_version,
-                            static_key: catalog.static_key.clone(),
+                            static_key: DiscoveryPolicyKeyV1::try_from(&catalog.static_key)?,
+                            policy_revision: DiscoveryPolicyRevisionV1 {
+                                profile_id: catalog.profile_id.clone(),
+                                profile_version: catalog.profile_version,
+                                source_revision_id: snapshot.policy_source_revision_id.clone(),
+                                signed_profile_digest: snapshot.signed_profile_digest.clone(),
+                            },
                         },
                         workload: workload.clone(),
                         policy_source_revision_id: snapshot.policy_source_revision_id.clone(),
@@ -233,5 +179,27 @@ impl ControlStore {
         } else {
             Ok(unresolved(Missing::MissingWorkloadFact))
         }
+    }
+}
+
+impl DiscoveryContextProvider for ControlStore {
+    fn revision(
+        &self,
+        _source: &araphor_data::EvidenceIntakeIdentityV1,
+    ) -> araphor_data::Result<u64> {
+        self.evidence_lock()
+            .map(|inner| inner.state.commit_index)
+            .map_err(|source| araphor_data::Error::DiscoveryContext {
+                source: Box::new(source),
+                location: snafu::Location::default(),
+            })
+    }
+
+    fn context(&self, record: &DiscoveryRecordV1) -> araphor_data::Result<DiscoveryContextJoinV1> {
+        self.discovery_context(record)
+            .map_err(|source| araphor_data::Error::DiscoveryContext {
+                source: Box::new(source),
+                location: snafu::Location::default(),
+            })
     }
 }

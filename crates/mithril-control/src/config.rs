@@ -64,6 +64,8 @@ pub struct ControlConfig {
     #[serde(default)]
     pub data_retirements: Vec<araphor_data::ProcessorRetirementV1>,
     #[serde(default)]
+    pub discovery: Option<araphor_data::DiscoveryConfigV1>,
+    #[serde(default)]
     pub control_store_directory: Option<PathBuf>,
     #[serde(default)]
     pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
@@ -81,6 +83,8 @@ pub struct ControlRuntimeParts {
     pub kubernetes_nodes: Option<KubernetesNodeReadinessOwner>,
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
     pub data_error: Option<crate::Error>,
+    pub discovery: Option<Arc<araphor_data::DiscoveryOwner>>,
+    pub discovery_error: Option<crate::Error>,
 }
 
 impl ControlConfig {
@@ -98,15 +102,33 @@ impl ControlConfig {
             .as_ref()
             .unwrap_or(&self.evidence_directory);
         let store = ControlStore::open(store_directory)?;
-        let (mut control, data_error) = match self.open_analysis() {
-            Ok(data) => (
-                ControlPlane::from_intake(
-                    self.allowed_nodes,
-                    self.trust.clone(),
-                    EvidenceIntakeOwner::new(store.clone(), data, Arc::new(SystemIntakeClock))?,
-                )?,
-                None,
-            ),
+        let (mut control, data_error, discovery, discovery_error) = match self.open_analysis() {
+            Ok(data) => {
+                let (discovery, discovery_error) = match self
+                    .discovery
+                    .map(|config| {
+                        araphor_data::DiscoveryOwner::new(
+                            data.clone(),
+                            Arc::new(store.clone()),
+                            config,
+                        )
+                    })
+                    .transpose()
+                {
+                    Ok(owner) => (owner.map(Arc::new), None),
+                    Err(source) => (None, Some(source.into())),
+                };
+                (
+                    ControlPlane::from_intake(
+                        self.allowed_nodes,
+                        self.trust.clone(),
+                        EvidenceIntakeOwner::new(store.clone(), data, Arc::new(SystemIntakeClock))?,
+                    )?,
+                    None,
+                    discovery,
+                    discovery_error,
+                )
+            }
             Err(error) => (
                 ControlPlane::without_intake(
                     self.allowed_nodes,
@@ -114,6 +136,8 @@ impl ControlConfig {
                     store.clone(),
                 )?,
                 Some(error),
+                None,
+                None,
             ),
         };
         control = control.with_evidence_limits(self.evidence_admission)?;
@@ -146,11 +170,19 @@ impl ControlConfig {
             kubernetes_nodes,
             kubernetes_admission: self.kubernetes_admission,
             data_error,
+            discovery,
+            discovery_error,
         })
     }
 
     fn validate(&self) -> Result<()> {
         self.evidence_admission.validate()?;
+        ensure!(
+            self.discovery.as_ref().is_none_or(|config| config.valid()),
+            InvalidConfigurationSnafu {
+                reason: "discovery limits are invalid",
+            }
+        );
         ensure!(
             !self.allowed_nodes.is_empty(),
             InvalidConfigurationSnafu {
@@ -318,6 +350,8 @@ mod tests {
         assert_eq!(config.evidence_admission.slots_per_node, 2);
         let parts = config.into_parts()?;
         assert!(parts.data_error.is_none());
+        assert!(parts.discovery.is_none());
+        assert!(parts.discovery_error.is_none());
         assert!(parts
             .control
             .clone()
@@ -359,17 +393,48 @@ mod tests {
             }
             source["evidence_admission"][field] = previous;
         }
+        source["discovery"] = serde_json::json!({});
+        fs::write(&path, serde_json::to_vec(&source)?)?;
+        let parts = ControlConfig::load(&path)?.into_parts()?;
+        assert!(parts.data_error.is_none());
+        assert!(parts.discovery_error.is_none());
+        assert_eq!(
+            parts
+                .discovery
+                .as_ref()
+                .ok_or("discovery owner absent")?
+                .process(1)?,
+            0
+        );
+        assert!(parts.control.analysis_store().is_some());
+        assert!(!directory.path().join("discovery").exists());
+        drop(parts);
+        for field in [
+            "interval_records",
+            "input_bytes",
+            "atom_limit",
+            "sources_per_pass",
+            "seal_interval_ns",
+            "witness_age_ns",
+        ] {
+            source["discovery"] = serde_json::json!({});
+            source["discovery"][field] = serde_json::json!(0);
+            fs::write(&path, serde_json::to_vec(&source)?)?;
+            assert!(ControlConfig::load(&path).is_err(), "{field}");
+        }
+        source["discovery"] = serde_json::json!({});
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let database = directory.path().join("analysis/analysis.duckdb");
         fs::write(&database, b"invalid database")?;
         let parts = ControlConfig::load(&path)?.into_parts()?;
         assert!(parts.data_error.is_some());
+        assert!(parts.discovery.is_none());
         assert!(parts.control.analysis_store().is_none());
         assert_eq!(parts.control.allowed_nodes().len(), 1);
         assert_eq!(fs::read(&database)?, b"invalid database");
         drop(parts);
 
-        source["discovery"] = serde_json::json!({});
+        source["discovery"] = serde_json::json!({"unknown": true});
         fs::write(&path, serde_json::to_vec(&source)?)?;
         assert!(ControlConfig::load(&path).is_err());
         Ok(())

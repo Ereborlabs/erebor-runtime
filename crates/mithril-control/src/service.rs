@@ -3150,7 +3150,7 @@ mod tests {
                 .code(),
             tonic::Code::Unauthenticated
         );
-        assert!(store.discovery_heads([1; 16])?.is_empty());
+        assert!(!directory.path().join("discovery").exists());
         assert!(!directory.path().join("discovery-index.sqlite").exists());
         let mut unavailable = control;
         unavailable.evidence = None;

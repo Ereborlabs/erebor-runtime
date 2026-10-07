@@ -11,6 +11,22 @@ use snafu::ResultExt as _;
 use super::{ControlStore, PolicyRolloutKeyV1};
 use crate::{error::JsonSnafu, AllowedNodeIdentity, Result};
 
+pub(super) struct ContextLimit(pub(super) usize);
+
+impl std::io::Write for ContextLimit {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_sub(bytes.len())
+            .ok_or_else(|| std::io::Error::other("the policy context exceeds its byte bound"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Serialize)]
 struct PolicyContext<'a> {
     source: &'a crate::PolicySourceRevisionV1,
@@ -250,8 +266,7 @@ impl ControlStore {
         key: AnalysisContextKeyV1,
         fact: &impl Serialize,
     ) -> Result<AnalysisContextVersionV1> {
-        serde_json::to_writer(crate::discovery::InputByteLimit(32 * 1024), fact)
-            .context(JsonSnafu { path })?;
+        serde_json::to_writer(ContextLimit(32 * 1024), fact).context(JsonSnafu { path })?;
         let body = serde_json::to_vec(fact).context(JsonSnafu { path })?;
         Ok(AnalysisContextVersionV1 {
             key,

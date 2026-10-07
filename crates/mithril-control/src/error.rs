@@ -60,24 +60,6 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Discovery database operation {operation} failed: {source}"))]
-    DiscoveryDatabase {
-        operation: &'static str,
-        #[snafu(source(from(rusqlite::Error, Box::new)))]
-        source: Box<rusqlite::Error>,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display(
-        "Evidence range {first_cursor}..={last_cursor} expired before it was opened"
-    ))]
-    RetainedRangeExpired {
-        identity: Box<crate::EvidenceIntakeIdentityV1>,
-        first_cursor: u64,
-        last_cursor: u64,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Araphor discovery rejected {code}: {reason}"))]
     Discovery {
         code: &'static str,
@@ -206,6 +188,8 @@ impl ErrorExt for Error {
                 if matches!(
                     source.as_ref(),
                     araphor_data::Error::CanonicalEncoding { .. }
+                        | araphor_data::Error::DiscoveryInvalid { .. }
+                        | araphor_data::Error::DiscoveryConflict { .. }
                         | araphor_data::Error::TraceInvalid { .. }
                         | araphor_data::Error::AnalysisConflict { .. }
                         | araphor_data::Error::RetainedRangeExpired { .. }
@@ -217,7 +201,6 @@ impl ErrorExt for Error {
                 source.status_code()
             }
             Self::Observability { source, .. } => source.status_code(),
-            Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
             Self::CoverageDecode { .. } => StatusCode::IllegalState,
             Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
@@ -230,11 +213,9 @@ impl ErrorExt for Error {
             | Self::ControlStore { .. }
             | Self::Decommission { .. }
             | Self::AdministrativeApproval { .. } => StatusCode::InvalidArguments,
-            Self::DataStore { .. }
-            | Self::DiscoveryDatabase { .. }
-            | Self::Io { .. }
-            | Self::Tls { .. }
-            | Self::Serve { .. } => StatusCode::External,
+            Self::DataStore { .. } | Self::Io { .. } | Self::Tls { .. } | Self::Serve { .. } => {
+                StatusCode::External
+            }
         }
     }
 
@@ -263,21 +244,10 @@ impl ErrorExt for Error {
                 source.retry_hint()
             }
             Self::Observability { source, .. } => source.retry_hint(),
-            Self::DiscoveryDatabase { source, .. } => {
-                if matches!(
-                    source.sqlite_error_code(),
-                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
-                ) {
-                    RetryHint::Retryable
-                } else {
-                    RetryHint::NonRetryable
-                }
-            }
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
             Self::CoverageDecode { .. }
             | Self::DataStore { .. }
-            | Self::RetainedRangeExpired { .. }
             | Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }

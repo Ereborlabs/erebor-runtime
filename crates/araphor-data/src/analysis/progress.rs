@@ -8,9 +8,9 @@ use crate::{
     EvidenceIntakeIdentityV1, JsonSnafu, Result,
 };
 
-const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESULT_META_BYTES: usize = 16 * 1024 * 1024;
-const MAX_RESULT_REFS: usize = 8_192;
+pub(crate) const MAX_RESULT_REFS: usize = 8_192;
 const MAX_CONTEXT_REFS: usize = 256;
 const MAX_WITNESS_AGE_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
@@ -49,14 +49,14 @@ pub struct ProcessorScopeV1 {
     pub identity: EvidenceIntakeIdentityV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnalysisWitnessV1 {
     pub identity: AnalysisStreamIdentityV1,
     pub cursor: u64,
     pub expires_utc_ns: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnalysisContextRefV1 {
     pub key: AnalysisContextKeyV1,
     pub commit_revision: u64,
@@ -98,11 +98,56 @@ pub struct AnalysisResultReceiptV1 {
     pub consumed_cursor: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnalysisProcessorResultV1 {
+    pub result_id: String,
+    pub body: Vec<u8>,
+    pub commit_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnalysisGapV1 {
     pub first_cursor: u64,
     pub last_cursor: u64,
     pub commit_revision: u64,
+}
+
+#[derive(Default)]
+struct ProfileHeader {
+    stream_key: Option<Vec<u8>>,
+    method_version: Option<u64>,
+    interval_id: Option<String>,
+    profile_revision: Option<u64>,
+    facts_revision: Option<u64>,
+    coverage_revision: Option<u64>,
+    first_cursor: Option<u64>,
+}
+
+impl From<&crate::DiscoveryProfileV1> for ProfileHeader {
+    fn from(profile: &crate::DiscoveryProfileV1) -> Self {
+        Self {
+            stream_key: Some(profile.scope.identity.key()),
+            method_version: Some(profile.scope.method_version),
+            interval_id: Some(profile.interval_id.clone()),
+            profile_revision: Some(profile.revision),
+            facts_revision: Some(profile.facts_revision),
+            coverage_revision: Some(profile.coverage_revision),
+            first_cursor: Some(
+                profile
+                    .snapshot
+                    .coverage
+                    .first()
+                    .map_or(0, |range| range.first_cursor),
+            ),
+        }
+    }
+}
+
+impl ProfileHeader {
+    fn bytes(&self) -> usize {
+        self.stream_key.as_ref().map_or(0, Vec::len)
+            + self.interval_id.as_ref().map_or(0, String::len)
+    }
 }
 
 impl ProcessorScopeV1 {
@@ -115,6 +160,96 @@ impl ProcessorScopeV1 {
 }
 
 impl AnalysisStore {
+    pub fn processor_gaps(
+        &self,
+        scope: &ProcessorScopeV1,
+        after_cursor: u64,
+    ) -> Result<Vec<AnalysisGapV1>> {
+        if !scope.valid() {
+            return self.reject("the processor gap scope is invalid");
+        }
+        self.read_snapshot(|reader| {
+            let mut statement = reader
+                .prepare(
+                    "SELECT first_cursor, last_cursor, commit_revision FROM processor_gaps
+                 WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?
+                 AND last_cursor > ? ORDER BY first_cursor LIMIT 256",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare processor gaps",
+                })?;
+            let rows = statement
+                .query_map(
+                    params![
+                        scope.processor_id,
+                        scope.method_version,
+                        scope.identity.tenant_id.as_slice(),
+                        scope.identity.key().as_slice(),
+                        after_cursor
+                    ],
+                    |row| {
+                        Ok(AnalysisGapV1 {
+                            first_cursor: row.get(0)?,
+                            last_cursor: row.get(1)?,
+                            commit_revision: row.get(2)?,
+                        })
+                    },
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read processor gaps",
+                })?;
+            rows.map(|row| {
+                row.context(AnalysisDatabaseSnafu {
+                    operation: "decode processor gap",
+                })
+            })
+            .collect()
+        })
+    }
+
+    pub fn processor_result(
+        &self,
+        scope: &ProcessorScopeV1,
+    ) -> Result<Option<AnalysisProcessorResultV1>> {
+        if !scope.valid() {
+            return self.reject("the processor result scope is invalid");
+        }
+        self.read_snapshot(|reader| {
+            let result = reader
+                .query_row(
+                    "SELECT r.result_id, r.body, r.commit_revision
+                     FROM processor_progress p JOIN analysis_results r
+                       ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
+                         AND r.processor_id = p.processor_id
+                     WHERE p.processor_id = ? AND p.method_version = ?
+                       AND p.tenant_id = ? AND p.stream_key = ?",
+                    params![
+                        scope.processor_id,
+                        scope.method_version,
+                        scope.identity.tenant_id.as_slice(),
+                        scope.identity.key().as_slice(),
+                    ],
+                    |row| {
+                        Ok(AnalysisProcessorResultV1 {
+                            result_id: row.get(0)?,
+                            body: row.get(1)?,
+                            commit_revision: row.get(2)?,
+                        })
+                    },
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read processor result",
+                })?;
+            if result.as_ref().is_some_and(|result| {
+                result.body.is_empty() || result.body.len() > MAX_RESULT_BYTES
+            }) {
+                return self.reject("the processor result exceeds its byte bound");
+            }
+            Ok(result)
+        })
+    }
+
     pub fn read_result(&self, tenant: [u8; 16], result_id: &str) -> Result<Option<Vec<u8>>> {
         self.read_snapshot(|reader| self.read_result_from(reader, tenant, result_id))
     }
@@ -187,7 +322,8 @@ impl AnalysisStore {
         }
         let receipt = Self::read_receipt_from(&transaction, &self.root, &scope.identity, &key)?;
         if receipt.as_ref().is_some_and(|receipt| {
-            start_cursor <= receipt.retained_floor
+            (start_cursor <= receipt.retained_floor
+                && !(class == ProcessorClassV1::Optional && start_cursor == 1))
                 || start_cursor > receipt.contiguous_cursor.saturating_add(1)
         }) || (receipt.is_none() && start_cursor != 1)
         {
@@ -199,7 +335,7 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
         transaction
             .execute(
-                "INSERT INTO processor_progress VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, false, '', '', 0, 0)",
+                "INSERT INTO processor_progress VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, false, '', '', 0, 0, '')",
                 params![
                     scope.processor_id,
                     scope.method_version,
@@ -345,6 +481,92 @@ impl AnalysisStore {
     }
 
     pub fn commit_result(&self, input: &AnalysisResultCommitV1) -> Result<AnalysisResultReceiptV1> {
+        self.commit_progress(input, None, true, None)
+    }
+
+    pub(crate) fn commit_working(
+        &self,
+        input: &AnalysisResultCommitV1,
+        previous: Option<u64>,
+    ) -> Result<AnalysisResultReceiptV1> {
+        if input.scope.processor_id != crate::DISCOVERY_PROCESSOR {
+            return self.reject("the working result owner is invalid");
+        }
+        let profile = crate::DiscoveryProfileV1::try_from(input.body.as_slice())?;
+        self.commit_progress(input, previous, true, Some(&profile))
+    }
+
+    pub(crate) fn commit_profile(
+        &self,
+        input: &AnalysisResultCommitV1,
+    ) -> Result<AnalysisResultReceiptV1> {
+        if input.scope.processor_id != crate::DISCOVERY_PROCESSOR
+            || input.expected_cursor != input.consumed_cursor
+        {
+            return self.reject("the historical profile cannot advance progress");
+        }
+        let profile = crate::DiscoveryProfileV1::try_from(input.body.as_slice())?;
+        if !profile.sealed {
+            return self.reject("the historical profile is not sealed");
+        }
+        self.commit_progress(input, None, false, Some(&profile))
+    }
+
+    pub(crate) fn mark_notice(
+        &self,
+        profile: &crate::DiscoveryProfileV1,
+        revision: u64,
+        facts: u64,
+        coverage: u64,
+    ) -> Result<()> {
+        profile.validate()?;
+        let mut writer_guard = self.writer()?;
+        let writer = writer_guard.get_mut()?;
+        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
+            operation: "begin discovery notice",
+        })?;
+        let changed = transaction
+            .execute(
+                "UPDATE analysis_results SET facts_revision = GREATEST(facts_revision, ?),
+                coverage_revision = GREATEST(coverage_revision, ?)
+             WHERE result_id = ? AND tenant_id = ? AND processor_id = ?
+                AND stream_key = ? AND method_version = ? AND commit_revision = ?",
+                params![
+                    facts,
+                    coverage,
+                    profile.profile_id,
+                    profile.scope.identity.tenant_id.as_slice(),
+                    profile.scope.processor_id,
+                    profile.scope.identity.key().as_slice(),
+                    profile.scope.method_version,
+                    revision
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "acknowledge unavailable profile input",
+            })?;
+        if changed != 1 {
+            return AnalysisConflictSnafu.fail();
+        }
+        self.commit_metadata(transaction, "commit discovery notice")
+    }
+
+    fn commit_progress(
+        &self,
+        input: &AnalysisResultCommitV1,
+        previous: Option<u64>,
+        advance: bool,
+        profile: Option<&crate::DiscoveryProfileV1>,
+    ) -> Result<AnalysisResultReceiptV1> {
+        if profile.is_some_and(|profile| {
+            profile.scope != input.scope
+                || profile.profile_id != input.result_id
+                || profile.coverage_revision != input.coverage_revision
+                || profile.context_refs != input.context_refs
+        }) {
+            return self.reject("the profile header or references differ from its commit");
+        }
+        let header = profile.map(ProfileHeader::from).unwrap_or_default();
         if !input.scope.valid()
             || input.result_id.is_empty()
             || input.result_id.len() > 256
@@ -410,18 +632,46 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read immutable result",
             })?;
+        let replacing = existing.is_some() && previous.is_some();
+        let mut removed_bytes = 0;
         if let Some((tenant, stored, body, revision)) = existing {
-            if tenant != input.scope.identity.tenant_id || stored != request || body != input.body {
+            if tenant == input.scope.identity.tenant_id && stored == request && body == input.body {
+                return Ok(AnalysisResultReceiptV1 {
+                    commit_revision: revision,
+                    consumed_cursor: input.consumed_cursor,
+                });
+            }
+            if tenant != input.scope.identity.tenant_id || previous != Some(revision) {
                 return AnalysisConflictSnafu.fail();
             }
-            return Ok(AnalysisResultReceiptV1 {
-                commit_revision: revision,
-                consumed_cursor: input.consumed_cursor,
-            });
+            let profile = crate::DiscoveryProfileV1::try_from(body.as_slice())?;
+            if profile.sealed
+                || profile.scope != input.scope
+                || profile.profile_id != input.result_id
+            {
+                return AnalysisConflictSnafu.fail();
+            }
+            removed_bytes = (256
+                + input.result_id.len()
+                + input.scope.processor_id.len()
+                + body.len()
+                + stored.len()
+                + ProfileHeader::from(&profile).bytes()) as i64;
+            removed_bytes += transaction.query_row(
+                "SELECT COALESCE(SUM(bytes), 0)::BIGINT FROM (
+                    SELECT 256 + octet_length(encode(ref_id)) + octet_length(stream_key) AS bytes
+                    FROM evidence_refs WHERE ref_id = ?
+                    UNION ALL SELECT 256 + octet_length(encode(ref_id)) + octet_length(encode(owner_id))
+                    + octet_length(entity_key) + octet_length(lifetime_key)
+                    FROM context_refs WHERE ref_id = ?)",
+                params![input.result_id, input.result_id], |row| row.get::<_, i64>(0),
+            ).context(AnalysisDatabaseSnafu { operation: "count prior working references" })?;
+        } else if previous.is_some() {
+            return AnalysisConflictSnafu.fail();
         }
-        let progress: Option<(u64, u64, bool)> = transaction
+        let progress: Option<(u64, u64, bool, String)> = transaction
             .query_row(
-                "SELECT consumed_cursor, resume_floor, retired FROM processor_progress
+                "SELECT consumed_cursor, resume_floor, retired, result_id FROM processor_progress
                  WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
                 params![
                     input.scope.processor_id,
@@ -429,15 +679,20 @@ impl AnalysisStore {
                     input.scope.identity.tenant_id.as_slice(),
                     key.as_slice(),
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read expected progress",
             })?;
-        if !progress.is_some_and(|(consumed, resumed, retired)| {
-            !retired && consumed.max(resumed) == input.expected_cursor
-        }) {
+        if !progress
+            .as_ref()
+            .is_some_and(|(consumed, resumed, retired, result)| {
+                !retired
+                    && (*consumed).max(*resumed) == input.expected_cursor
+                    && (!replacing || result == &input.result_id)
+            })
+        {
             return AnalysisConflictSnafu.fail();
         }
         let receipt =
@@ -519,28 +774,82 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        transaction
-            .execute(
-                "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?)",
-                params![
-                    input.result_id,
-                    input.scope.identity.tenant_id.as_slice(),
-                    input.scope.processor_id,
-                    input.body.as_slice(),
-                    request.as_slice(),
-                    revision,
-                ],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "insert analysis result",
-            })?;
+        if replacing {
+            transaction
+                .execute(
+                    "DELETE FROM evidence_refs WHERE ref_id = ?",
+                    params![input.result_id],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "replace working witnesses",
+                })?;
+            transaction
+                .execute(
+                    "DELETE FROM context_refs WHERE ref_id = ?",
+                    params![input.result_id],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "replace working contexts",
+                })?;
+            transaction
+                .execute(
+                    "UPDATE analysis_results SET body = ?, request_meta = ?, commit_revision = ?,
+                 stream_key = ?, method_version = ?, interval_id = ?, profile_revision = ?,
+                 facts_revision = ?, coverage_revision = ?, first_cursor = ? WHERE result_id = ?",
+                    params![
+                        input.body.as_slice(),
+                        request.as_slice(),
+                        revision,
+                        header.stream_key.as_deref(),
+                        header.method_version,
+                        header.interval_id,
+                        header.profile_revision,
+                        header.facts_revision,
+                        header.coverage_revision,
+                        header.first_cursor,
+                        input.result_id
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "update working result",
+                })?;
+        } else {
+            transaction
+                .execute(
+                    "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        input.result_id,
+                        input.scope.identity.tenant_id.as_slice(),
+                        input.scope.processor_id,
+                        input.body.as_slice(),
+                        request.as_slice(),
+                        revision,
+                        header.stream_key.as_deref(),
+                        header.method_version,
+                        header.interval_id,
+                        header.profile_revision,
+                        header.facts_revision,
+                        header.coverage_revision,
+                        header.first_cursor,
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert analysis result",
+                })?;
+        }
         let mut usage = super::quota::UsageChange {
-            bytes: (256
+            bytes: if advance {
+                input.result_id.len() as i64 - progress.as_ref().map_or(0, |row| row.3.len()) as i64
+            } else {
+                0
+            } + (256
                 + input.result_id.len()
                 + input.scope.processor_id.len()
                 + input.body.len()
-                + request.len()) as i64,
-            results: 1,
+                + request.len()
+                + header.bytes()) as i64
+                - removed_bytes,
+            results: i64::from(!replacing),
             ..Default::default()
         };
         for (witness, segment) in input.witnesses.iter().zip(&witness_segments) {
@@ -584,16 +893,18 @@ impl AnalysisStore {
                 + reference.key.entity_key.len()
                 + reference.key.lifetime_key.len()) as i64;
         }
-        transaction
+        if advance {
+            transaction
             .execute(
                 "UPDATE processor_progress SET consumed_cursor = ?, coverage_revision = ?,
-                 context_revision = ?, required_floor = ?
+                 context_revision = ?, required_floor = ?, result_id = ?
                  WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
                 params![
                     input.consumed_cursor,
                     input.coverage_revision,
                     input.context_revision,
                     input.consumed_cursor,
+                    input.result_id,
                     input.scope.processor_id,
                     input.scope.method_version,
                     input.scope.identity.tenant_id.as_slice(),
@@ -603,7 +914,11 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "advance processor progress",
             })?;
-        let mut relations = vec!["analysis_results", "processor_progress"];
+        }
+        let mut relations = vec!["analysis_results"];
+        if advance {
+            relations.push("processor_progress");
+        }
         if !input.witnesses.is_empty() {
             relations.push("evidence_refs");
         }
@@ -611,7 +926,11 @@ impl AnalysisStore {
             relations.push("context_refs");
         }
         usage.apply(&transaction, &input.scope.identity.tenant_id)?;
-        self.check_logical(&transaction, input.scope.identity.tenant_id, true)?;
+        self.check_logical(
+            &transaction,
+            input.scope.identity.tenant_id,
+            profile.is_none(),
+        )?;
         self.check_witnesses(
             &transaction,
             input.scope.identity.tenant_id,
@@ -722,6 +1041,7 @@ mod tests {
             }],
         };
         let mut invalid = input.clone();
+        assert!(store.processor_result(&input.scope)?.is_none());
         invalid.body.clear();
         assert!(store.commit_result(&invalid).is_err());
         invalid = input.clone();
@@ -730,6 +1050,15 @@ mod tests {
         let receipt = store.commit_result(&input)?;
         assert_eq!(receipt.commit_revision, 4);
         assert_eq!(receipt.consumed_cursor, 1);
+        let head = AnalysisProcessorResultV1 {
+            result_id: input.result_id.clone(),
+            body: input.body.clone(),
+            commit_revision: receipt.commit_revision,
+        };
+        assert_eq!(store.processor_result(&input.scope)?, Some(head.clone()));
+        let mut foreign = input.scope.clone();
+        foreign.identity.tenant_id = [4; 16];
+        assert!(store.processor_result(&foreign)?.is_none());
         assert_eq!(
             store.read_result([1; 16], "finding-1")?,
             Some(b"result".to_vec())
@@ -798,6 +1127,7 @@ mod tests {
         let path = directory.path().join("analysis");
         drop(store);
         let store = AnalysisStore::open(path)?;
+        assert_eq!(store.processor_result(&input.scope)?, Some(head));
         assert_eq!(store.commit_result(&input)?, receipt);
         input.result_id = "finding-2".into();
         assert!(matches!(

@@ -462,9 +462,9 @@ fn discovery_native_query_worker() -> TestResult<()> {
 fn discovery_native_storage_qualification() -> TestResult<()> {
     let root = PathBuf::from(std::env::var("MITHRIL_DISCOVERY_STORAGE_OUTPUT")?);
     fs::create_dir(&root)?;
-    let input = mithril_control::DiscoveryInputManifestV1::from_json(include_bytes!(
-        "../../fixtures/discovery/manifest.json"
-    ))?;
+    let input = araphor_data::DiscoveryInputManifestV1::try_from(
+        include_bytes!("../../fixtures/discovery/manifest.json").as_slice(),
+    )?;
     let payload = serde_json::to_vec(&(&input.records[0], &input.contexts[0]))?;
     let count = 256 * 1024 * 1024 / (40 + u64::try_from(payload.len())?);
     assert!(count >= 50_000);

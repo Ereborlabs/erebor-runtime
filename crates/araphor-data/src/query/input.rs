@@ -8,6 +8,7 @@ use prost::Message as _;
 use snafu::{IntoError as _, ResultExt as _};
 
 use super::adapter::{InputColumn, InputTable};
+use super::discovery::{BEHAVIORS, CONTEXT};
 use super::QueryTemplate;
 use crate::{
     AnalysisContextVersionV1, AnalysisExtractionV1, AnalysisGapV1, AnalysisInputV1,
@@ -797,6 +798,8 @@ pub(super) const SCHEMAS: &[InputSchema] = &[
     TRACE_MEASUREMENTS,
     TARGETS,
     TRACE_RECIPES,
+    BEHAVIORS,
+    CONTEXT,
 ];
 
 #[derive(Debug)]
@@ -878,6 +881,13 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
                 Ok(row)
             }
             AnalysisInputV1::Context(context) => Ok(Self::from(context)),
+            AnalysisInputV1::DiscoveryContext(context) => super::discovery::context_row(context),
+            AnalysisInputV1::Behavior {
+                profile,
+                commit_revision,
+                atom,
+                discovery_enabled,
+            } => super::discovery::behavior_row(profile, commit_revision, atom, discovery_enabled),
             AnalysisInputV1::Target { context, fact } => {
                 let entity = fact
                     .kubernetes
@@ -1231,7 +1241,7 @@ impl InputRelations {
     ) -> Result<Self> {
         let mut bytes = extraction.input_bytes;
         Self::charge(&mut bytes, 0, limit)?;
-        let mut counts = [0_usize; 9];
+        let mut counts = [0_usize; 11];
         if !extraction.missing_results.is_empty() {
             return crate::QueryUnsupportedSnafu {
                 relation: "results",
@@ -1242,6 +1252,8 @@ impl InputRelations {
             let index = match page.relation {
                 AnalysisRelationV1::Events => 0,
                 AnalysisRelationV1::Context => 2,
+                AnalysisRelationV1::Behaviors => 9,
+                AnalysisRelationV1::DiscoveryContext => 10,
                 AnalysisRelationV1::Traces => 4,
                 AnalysisRelationV1::TraceOutput => 5,
                 AnalysisRelationV1::TraceMeasurements => 6,
@@ -1271,12 +1283,16 @@ impl InputRelations {
             Self::table(&TRACE_MEASUREMENTS, counts[6], &mut bytes, limit)?,
             Self::table(&TARGETS, counts[7], &mut bytes, limit)?,
             Self::table(&TRACE_RECIPES, 0, &mut bytes, limit)?,
+            Self::table(&BEHAVIORS, counts[9], &mut bytes, limit)?,
+            Self::table(&CONTEXT, counts[10], &mut bytes, limit)?,
         ];
         Self::charge(&mut bytes, size_of::<Self>(), limit)?;
         for page in &mut extraction.pages {
             let index = match page.relation {
                 AnalysisRelationV1::Events => 0,
                 AnalysisRelationV1::Context => 2,
+                AnalysisRelationV1::Behaviors => 9,
+                AnalysisRelationV1::DiscoveryContext => 10,
                 AnalysisRelationV1::Traces => 4,
                 AnalysisRelationV1::TraceOutput => 5,
                 AnalysisRelationV1::TraceMeasurements => 6,
@@ -1358,7 +1374,18 @@ impl InputRelations {
                             Value::Text(field.3.into()),
                             Value::Text(schema.join_keys.into()),
                             Value::Text(schema.owner.into()),
-                            Value::Text(schema.readiness.into()),
+                            Value::Text(
+                                if schema.name == "behaviors" {
+                                    if extraction.discovery_enabled {
+                                        "enabled"
+                                    } else {
+                                        "disabled"
+                                    }
+                                } else {
+                                    schema.readiness
+                                }
+                                .into(),
+                            ),
                             Value::Text(schema.description.into()),
                         ]),
                         &mut bytes,
@@ -1486,6 +1513,8 @@ impl InputRelations {
                 "trace_measurements" => "_query_trace_measurements",
                 "targets" => "_query_targets",
                 "trace_recipes" => "_query_trace_recipes",
+                "behaviors" => "_query_behaviors",
+                "context" => "_query_discovery_context",
                 _ => {
                     return crate::QueryInvalidSnafu {
                         field: "query relation",
@@ -1789,6 +1818,7 @@ mod tests {
 
     fn empty_input() -> AnalysisExtractionV1<InputRow> {
         AnalysisExtractionV1 {
+            discovery_enabled: false,
             meta: AnalysisStoreMetaV1 {
                 store_uuid: uuid::Uuid::from_u128(1),
                 schema_version: 1,

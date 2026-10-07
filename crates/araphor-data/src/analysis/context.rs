@@ -21,7 +21,7 @@ pub struct AnalysisContextKeyV1 {
 }
 
 impl AnalysisContextKeyV1 {
-    pub(super) fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         self.tenant_id != [0; 16]
             && !self.owner_id.is_empty()
             && self.owner_id.len() <= 128
@@ -86,27 +86,130 @@ impl AnalysisContextVersionV1 {
 
 impl AnalysisStore {
     pub fn commit_context(&self, input: &AnalysisContextVersionV1) -> Result<u64> {
+        self.commit_context_value(input, false)
+            .map(|reference| reference.commit_revision)
+    }
+
+    pub(crate) fn intern_context(
+        &self,
+        input: &AnalysisContextVersionV1,
+    ) -> Result<super::AnalysisContextRefV1> {
+        if !matches!(
+            input.key.owner_id.as_str(),
+            "discovery-facts-v1" | "discovery-source-v1"
+        ) {
+            return self.reject("the qualified context owner is invalid");
+        }
+        self.commit_context_value(input, true)
+    }
+
+    fn commit_context_value(
+        &self,
+        input: &AnalysisContextVersionV1,
+        intern: bool,
+    ) -> Result<super::AnalysisContextRefV1> {
         if !input.valid() {
             return self.reject("the context version identity or bounds are invalid");
         }
         let path = self.root.join("analysis.duckdb");
         let key = &input.key;
+        let imported = (key.owner_id == "discovery-context-v1")
+            .then(|| crate::DiscoveryContextRevisionV1::try_from(input))
+            .transpose()?;
         let mut writer_guard = self.writer()?;
         let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin context version",
         })?;
+        let sensitivity: &'static str = input.sensitivity.into();
+        if intern {
+            let stored: Option<(Vec<u8>, u64, u64)> = transaction
+                .query_row(
+                    "SELECT entity_key, owner_revision, commit_revision FROM context_versions
+                 WHERE tenant_id = ? AND owner_id = ? AND lifetime_key = ? AND body = ?
+                 AND sensitivity = ? AND valid_from_utc_ns IS NOT DISTINCT FROM ?
+                 AND valid_until_utc_ns IS NOT DISTINCT FROM ? ORDER BY entity_key LIMIT 1",
+                    params![
+                        key.tenant_id.as_slice(),
+                        key.owner_id,
+                        key.lifetime_key.as_slice(),
+                        input.body.as_slice(),
+                        sensitivity,
+                        input.valid_from_utc_ns,
+                        input.valid_until_utc_ns
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "find exact qualified context",
+                })?;
+            if let Some((entity, owner, revision)) = stored {
+                let mut key = key.clone();
+                key.entity_key = entity;
+                key.owner_revision = owner;
+                return Ok(super::AnalysisContextRefV1 {
+                    key,
+                    commit_revision: revision,
+                });
+            }
+        }
         if let Some((stored, revision)) = Self::read_context_from(&transaction, &self.root, key)? {
             if &stored != input {
                 return AnalysisConflictSnafu.fail();
             }
-            return Ok(revision);
+            return Ok(super::AnalysisContextRefV1 {
+                key: key.clone(),
+                commit_revision: revision,
+            });
+        }
+        if let Some(imported) = imported {
+            let previous: Option<(Vec<u8>, u64)> = transaction
+                .query_row(
+                    "SELECT lifetime_key, owner_revision FROM context_versions
+                 WHERE tenant_id = ? AND owner_id = ? AND entity_key = ?
+                 ORDER BY owner_revision DESC LIMIT 1",
+                    params![
+                        key.tenant_id.as_slice(),
+                        key.owner_id,
+                        key.entity_key.as_slice()
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read discovery document history",
+                })?;
+            let previous = previous
+                .map(|(lifetime_key, owner_revision)| {
+                    let previous = AnalysisContextKeyV1 {
+                        lifetime_key,
+                        owner_revision,
+                        ..key.clone()
+                    };
+                    let (stored, _) = Self::read_context_from(&transaction, &self.root, &previous)?
+                        .ok_or_else(|| {
+                            self.state_error("the prior discovery document is absent")
+                        })?;
+                    crate::DiscoveryContextRevisionV1::try_from(&stored)
+                })
+                .transpose()?;
+            let (documents, revisions): (u64, u64) = transaction
+                .query_row(
+                    "SELECT COUNT(DISTINCT entity_key), COUNT(*) FROM context_versions
+                 WHERE tenant_id = ? AND owner_id = ?",
+                    params![key.tenant_id.as_slice(), key.owner_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read discovery document bounds",
+                })?;
+            imported.validate_history(previous.as_ref(), documents, revisions)?;
         }
         let revision = Self::read_meta_from(&transaction, &path)?
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        let sensitivity: &'static str = input.sensitivity.into();
         transaction
             .execute(
                 "INSERT INTO context_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -144,7 +247,10 @@ impl AnalysisStore {
         #[cfg(test)]
         self.crash_at("context.after");
         self.revision.send_replace(revision);
-        Ok(revision)
+        Ok(super::AnalysisContextRefV1 {
+            key: key.clone(),
+            commit_revision: revision,
+        })
     }
 
     pub fn context_version(

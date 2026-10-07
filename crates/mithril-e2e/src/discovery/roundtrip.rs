@@ -3,7 +3,10 @@ use std::{
     error::Error as StdError,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use mithril_control::{ControlStore, EvidenceIdV1, EvidenceIntakeIdentityV1, NodeRegistration};
@@ -11,7 +14,6 @@ use mithril_node::{
     EffectObservationStore, EvidenceWalLimits, NodeControlMessage, ObservationCanonicalizer,
     TrustCache,
 };
-use prost::Message as _;
 use snafu::ensure;
 use zerocopy::IntoBytes as _;
 
@@ -26,20 +28,65 @@ pub struct DiscoveryQualificationRunner {
     output: PathBuf,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RoundtripCase {
+    EvidenceRestart,
+    ContextRoundtrip,
+    ProfileRestart,
+}
+
+struct DelayedContext {
+    store: ControlStore,
+    available: AtomicBool,
+    calls: AtomicUsize,
+}
+
+impl araphor_data::DiscoveryContextProvider for DelayedContext {
+    fn revision(&self, _source: &EvidenceIntakeIdentityV1) -> araphor_data::Result<u64> {
+        Ok(if self.available.load(Ordering::Acquire) {
+            2
+        } else {
+            1
+        })
+    }
+
+    fn context(
+        &self,
+        record: &araphor_data::DiscoveryRecordV1,
+    ) -> araphor_data::Result<araphor_data::DiscoveryContextJoinV1> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.available.load(Ordering::Acquire) {
+            araphor_data::DiscoveryContextProvider::context(&self.store, record)
+        } else {
+            Ok(araphor_data::DiscoveryContextJoinV1::Unresolved(
+                araphor_data::DiscoveryContextUnavailableV1::MissingWorkloadFact,
+            ))
+        }
+    }
+}
+
 impl DiscoveryQualificationRunner {
     pub fn new(output: PathBuf) -> Self {
         Self { output }
     }
 
     pub async fn evidence_restart(&self) -> Result<(), Box<dyn StdError>> {
-        self.roundtrip(false).await
+        self.roundtrip(RoundtripCase::EvidenceRestart).await
     }
 
     pub async fn context_roundtrip(&self) -> Result<(), Box<dyn StdError>> {
-        self.roundtrip(true).await
+        self.roundtrip(RoundtripCase::ContextRoundtrip).await
     }
 
-    async fn roundtrip(&self, signed_context: bool) -> Result<(), Box<dyn StdError>> {
+    pub async fn profile_restart(&self) -> Result<(), Box<dyn StdError>> {
+        self.roundtrip(RoundtripCase::ProfileRestart).await
+    }
+
+    pub async fn owner_isolation(&self) -> Result<(), Box<dyn StdError>> {
+        super::isolation::run(&self.output).await
+    }
+
+    async fn roundtrip(&self, case: RoundtripCase) -> Result<(), Box<dyn StdError>> {
         ensure!(
             !self.output.exists(),
             InvalidInputSnafu {
@@ -47,6 +94,7 @@ impl DiscoveryQualificationRunner {
                 reason: "the qualification output already exists",
             }
         );
+        let signed_context = case != RoundtripCase::EvidenceRestart;
         let tls = MtlsFixture::new(false)?;
         let root = tls.path().join("control-store");
         let store = ControlStore::open(&root)?;
@@ -169,8 +217,7 @@ impl DiscoveryQualificationRunner {
             page.records
                 .iter()
                 .map(|record| {
-                    let frame = &record.framed_record;
-                    mithril_control::EvidenceRecord::decode(&frame[4..frame.len() - 4])
+                    araphor_data::EvidenceRecord::try_from(record.framed_record.as_slice())
                 })
                 .collect::<Result<Vec<_>, _>>()?
         };
@@ -194,40 +241,67 @@ impl DiscoveryQualificationRunner {
         );
         ensure!(
             context.original_kernel_sequence == 101
+                && context.original_kernel_sequence != wire.first_cursor
                 && context.process_instance_id.as_slice() == process.to_be_bytes()
-                && context.entry_instance_id.as_slice() == entry.to_be_bytes(),
+                && context.entry_instance_id.as_slice() == entry.to_be_bytes()
+                && context.profile_generation_ref_id == raw.profile_generation_ref_id
+                && context.role_id == raw.active_role_id
+                && context.state_id == raw.process_state_vector_id
+                && context.entry_rule_id == raw.admitted_entry_rule_id
+                && context.exact_object_key_id == raw.exact_object_key_id
+                && context.composite_atom_id == raw.composite_atom_id,
             InvalidInputSnafu {
                 path: &self.output,
                 reason: "raw context differs after the transport roundtrip",
             }
         );
-        let joined = mithril_control::DiscoveryRecordV1 {
-            id: mithril_control::DiscoveryRecordIdV1 {
+        let joined = araphor_data::DiscoveryRecordV1 {
+            id: araphor_data::DiscoveryRecordIdV1 {
                 stream: stream.clone(),
                 cpu_id: wire.cpu_id,
                 durable_cursor: 1,
             },
             original_kernel_sequence: Some(context.original_kernel_sequence),
-            observation: mithril_control::ObservationEnvelopeV1::from_wire_record(
-                stream.tenant_id.into(),
-                stream.node_boot_id.into(),
-                stream.source_id.into(),
-                stream.source_epoch,
-                1,
-                wire.cpu_id,
-                &retained[0],
-            )?,
+            wire_record: wire.framed_records.to_vec(),
         };
         let pin = store.discovery_context(&joined)?;
         if let Some(workload) = expected_workload {
-            let mithril_control::DiscoveryContextJoinV1::Available(context) = &pin else {
+            let araphor_data::DiscoveryContextJoinV1::Available(context) = &pin else {
                 return Err("the signed context was not resolved".into());
             };
             ensure!(
-                context.workload == workload,
+                context.workload == workload
+                    && context.binding.process_instance_id == process.to_be_bytes()
+                    && context.binding.entry_instance_id == entry.to_be_bytes()
+                    && context.binding.binding_id == raw.binding_id.to_be_bytes()
+                    && context.binding.role_id == raw.active_role_id
+                    && context.binding.state_id == raw.process_state_vector_id
+                    && context.binding.entry_rule_id == raw.admitted_entry_rule_id,
                 InvalidInputSnafu {
                     path: &self.output,
                     reason: "the signed workload pin differs",
+                }
+            );
+            let catalog = mithril_control::EvidenceDecisionCatalogV1::from_context(
+                retained[0]
+                    .decision_context
+                    .as_ref()
+                    .ok_or("context absent")?,
+            )?
+            .ok_or("signed catalog absent")?;
+            ensure!(
+                context.binding.static_key
+                    == araphor_data::DiscoveryPolicyKeyV1::try_from(&catalog.static_key)?
+                    && catalog.node_boot_id == boot
+                    && context.binding.policy_revision.profile_id == catalog.profile_id
+                    && context.binding.policy_revision.profile_version == catalog.profile_version
+                    && context.binding.policy_revision.source_revision_id
+                        == context.policy_source_revision_id
+                    && context.binding.policy_revision.signed_profile_digest
+                        == context.signed_profile_digest,
+                InvalidInputSnafu {
+                    path: &self.output,
+                    reason: "the signed policy key or provenance differs",
                 }
             );
         }
@@ -241,13 +315,105 @@ impl DiscoveryQualificationRunner {
                 reason: "Node retained acknowledged input",
             }
         );
+        let profile_config = araphor_data::DiscoveryConfigV1 {
+            interval_records: 1,
+            ..Default::default()
+        };
+        let now = 1_800_000_000_000_000_000;
+        let (profile, unresolved) = if case == RoundtripCase::ProfileRestart {
+            let provider = Arc::new(DelayedContext {
+                store: store.clone(),
+                available: AtomicBool::new(false),
+                calls: AtomicUsize::new(0),
+            });
+            let owner =
+                araphor_data::DiscoveryOwner::new(data.clone(), provider.clone(), profile_config)?;
+            ensure!(
+                owner.process(now)? == 1,
+                InvalidInputSnafu {
+                    path: &self.output,
+                    reason: "the live owner did not consume one accepted record",
+                }
+            );
+            let unresolved = owner.profile(&stream)?.ok_or("live profile absent")?;
+            ensure!(
+                unresolved.sealed
+                    && unresolved.snapshot.accepted_records == 1
+                    && unresolved.snapshot.included_records == 0
+                    && unresolved.snapshot.unresolved_records == 1
+                    && unresolved.context_refs.len() == 1
+                    && unresolved.facts_revision == 1
+                    && owner.process(now + 1)? == 0
+                    && owner.profile(&stream)? == Some(unresolved.clone()),
+                InvalidInputSnafu {
+                    path: &self.output,
+                    reason: "the unavailable context did not remain unresolved",
+                }
+            );
+            provider.available.store(true, Ordering::Release);
+            ensure!(
+                owner.process(now + 2)? == 0,
+                InvalidInputSnafu {
+                    path: &self.output,
+                    reason: "the late context repeated raw input consumption",
+                }
+            );
+            let profile = owner.profile(&stream)?.ok_or("refreshed profile absent")?;
+            let frozen = data
+                .read_result(stream.tenant_id, &unresolved.profile_id)?
+                .ok_or("the frozen unresolved result is absent")?;
+            ensure!(
+                profile.sealed
+                    && profile.profile_id != unresolved.profile_id
+                    && profile.interval_id == unresolved.interval_id
+                    && profile.revision == unresolved.revision + 1
+                    && profile.facts_revision == 2
+                    && profile.snapshot.accepted_records == 1
+                    && profile.snapshot.included_records == 1
+                    && profile.snapshot.unresolved_records == 0
+                    && profile.snapshot.atoms.len() == 1
+                    && profile.snapshot.atoms[0].count == 1
+                    && profile.context_refs.len() == 2
+                    && araphor_data::DiscoveryProfileV1::try_from(frozen.as_slice())? == unresolved
+                    && data
+                        .processor_health(&profile.scope)?
+                        .is_some_and(|health| health.consumed_cursor == 1)
+                    && !owner.refresh(&stream, now + 3)?
+                    && owner.process(now + 4)? == 0
+                    && owner.profile(&stream)? == Some(profile.clone()),
+                InvalidInputSnafu {
+                    path: &self.output,
+                    reason: "the live profile, context, progress, or replay count differs",
+                }
+            );
+            let calls = provider.calls.load(Ordering::SeqCst);
+            ensure!(
+                owner.replay(&profile)?
+                    == araphor_data::DiscoveryReplayV1::Available(Box::new(
+                        profile.snapshot.clone()
+                    ))
+                    && owner.replay(&unresolved)?
+                        == araphor_data::DiscoveryReplayV1::Available(Box::new(
+                            unresolved.snapshot.clone()
+                        ))
+                    && provider.calls.load(Ordering::SeqCst) == calls,
+                InvalidInputSnafu {
+                    path: &self.output,
+                    reason: "frozen replay changed its snapshot or queried current context",
+                }
+            );
+            (Some(profile), Some(unresolved))
+        } else {
+            (None, None)
+        };
         drop(data);
         drop(connection);
         server.shutdown().await?;
         drop(store);
         let store = reopen_control_store(&root).await?;
-        let recovered =
-            super::data_store::DataStoreQualification::reopen_data(&root.join("analysis")).await?;
+        let recovered = Arc::new(
+            super::data_store::DataStoreQualification::reopen_data(&root.join("analysis")).await?,
+        );
         let page = recovered.read_page(&stream, 1)?;
         ensure!(
             page.records.len() == 1
@@ -255,26 +421,101 @@ impl DiscoveryQualificationRunner {
                 && recovered.source_receipt(&stream)? == Some(receipt)
                 && store.discovery_context(&joined)? == pin
                 && !root.join("evidence/segments-v2").exists()
-                && !root.join("discovery").exists(),
+                && !root.join("discovery").exists()
+                && !root.join("discovery-index.sqlite").exists(),
             InvalidInputSnafu {
                 path: &self.output,
                 reason: "retained evidence or context changed after restart",
             }
         );
+        if let Some(profile) = &profile {
+            let provider = Arc::new(DelayedContext {
+                store,
+                available: AtomicBool::new(true),
+                calls: AtomicUsize::new(0),
+            });
+            let owner = araphor_data::DiscoveryOwner::new(
+                recovered.clone(),
+                provider.clone(),
+                profile_config,
+            )?;
+            ensure!(
+                owner.profile(&stream)? == Some(profile.clone())
+                    && owner.process(now + 5)? == 0
+                    && owner.profile(&stream)? == Some(profile.clone())
+                    && owner.replay(profile)?
+                        == araphor_data::DiscoveryReplayV1::Available(Box::new(
+                            profile.snapshot.clone()
+                        ))
+                    && provider.calls.load(Ordering::SeqCst) == 0,
+                InvalidInputSnafu {
+                    path: &self.output,
+                    reason: "restart changed the live profile or replay count",
+                }
+            );
+            let unresolved = unresolved
+                .as_ref()
+                .ok_or("the unresolved profile is absent")?;
+            let frozen = recovered
+                .read_result(stream.tenant_id, &unresolved.profile_id)?
+                .ok_or("the frozen unresolved result is absent after restart")?;
+            ensure!(
+                araphor_data::DiscoveryProfileV1::try_from(frozen.as_slice())? == *unresolved
+                    && owner.replay(unresolved)?
+                        == araphor_data::DiscoveryReplayV1::Available(Box::new(
+                            unresolved.snapshot.clone()
+                        ))
+                    && provider.calls.load(Ordering::SeqCst) == 0,
+                InvalidInputSnafu {
+                    path: &self.output,
+                    reason: "restart changed the frozen unresolved revision",
+                }
+            );
+        }
         fs::create_dir(&self.output)?;
+        if let Some(profile) = &profile {
+            super::write_json(&self.output.join("profile.json"), profile)?;
+        }
+        if let Some(unresolved) = &unresolved {
+            super::write_json(&self.output.join("profile-unresolved.json"), unresolved)?;
+        }
+        let mut checks = vec![
+            "node-wal",
+            "mtls-intake",
+            "exact-retained-frame",
+            "raw-context",
+            "data-restart",
+            "no-control-raw-writer",
+            "no-discovery-copy",
+        ];
+        if profile.is_some() {
+            checks.extend([
+                "live-owner-profile",
+                "atomic-profile-progress",
+                "profile-restart-replay",
+                "late-context-auto-refresh",
+                "immutable-sealed-revision",
+                "frozen-replay-no-provider",
+            ]);
+        }
         super::write_json(
             &self.output.join("result.json"),
             &serde_json::json!({
                 "schema_version": 1,
-                "case": if signed_context { "context-roundtrip" } else { "evidence-restart" },
+                "case": match case {
+                    RoundtripCase::EvidenceRestart => "evidence-restart",
+                    RoundtripCase::ContextRoundtrip => "context-roundtrip",
+                    RoundtripCase::ProfileRestart => "profile-restart",
+                },
                 "result": "PASS", "qualification": "LIGHTWEIGHT",
                 "input": "synthetic kernel record", "production_authority": false,
                 "physical_action_attempted": false, "profiles_qualified": false,
                 "signed_context_resolved": signed_context, "durable_cursor": 1,
+                "live_profile_persisted": profile.is_some(),
+                "late_context_resolved": profile.is_some(),
                 "original_kernel_sequence": context.original_kernel_sequence,
-                "context_digest": crate::DigestV1::of(serde_json::to_vec(context)?),
-                "asserted_contracts": ["node-wal", "mtls-intake", "exact-retained-frame",
-                    "raw-context", "data-restart", "no-control-raw-writer", "no-discovery-copy"]
+                "decision_context": context,
+                "asserted_contracts": checks,
             }),
         )?;
         Ok(())
@@ -466,8 +707,19 @@ pub(super) fn signed_catalog(
 #[cfg(test)]
 mod tests {
     #[tokio::test]
-    async fn discovery_context_roundtrip_uses_verified_catalog_wal_and_mtls(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn discovery_live_profile_restart() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let output = directory.path().join("proof");
+        let runner = super::DiscoveryQualificationRunner::new(output.clone());
+        runner.profile_restart().await?;
+        let before = std::fs::read(output.join("profile.json"))?;
+        assert!(runner.profile_restart().await.is_err());
+        assert_eq!(std::fs::read(output.join("profile.json"))?, before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_context_mtls_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         super::DiscoveryQualificationRunner::new(directory.path().join("proof"))
             .context_roundtrip()

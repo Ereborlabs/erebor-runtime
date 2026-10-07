@@ -17,6 +17,7 @@ mod trust;
 
 pub use administrative_exec::*;
 pub use administrative_http::*;
+pub use araphor_data::DiscoveryDigestV1;
 pub use araphor_observability::{
     TraceAcceptedV1, TraceAccessV1, TraceAcknowledgementV1, TraceBatchV1, TraceCleanupV1,
     TraceDispatchV1, TraceErrorCodeV1, TraceExchangeReplyV1, TraceExchangeV1, TraceFrameKindV1,
@@ -46,7 +47,5 @@ pub use service::{
 };
 pub use store::{
     startup_absence_proof_digest, ControlContextOwner, ControlStore, ControlStoreHealthV1,
-    DiscoveryArtifactRefV1, DiscoveryArtifactV1, DiscoveryContextJoinV1,
-    DiscoveryContextUnavailableV1, DiscoveryHeadKeyV1, DiscoveryHeadV1, DiscoveryPinnedContextV1,
 };
 pub use trust::*;

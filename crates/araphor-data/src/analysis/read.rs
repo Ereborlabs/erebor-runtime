@@ -230,6 +230,40 @@ impl Drop for ReadInterrupt<'_> {
 }
 
 impl AnalysisStore {
+    pub fn tenant_page(&self, after: Option<[u8; 16]>) -> Result<Vec<[u8; 16]>> {
+        self.read_snapshot(|reader| {
+            let mut statement = reader
+                .prepare(
+                    "SELECT DISTINCT tenant_id FROM source_receipts
+                 WHERE CAST(? AS BLOB) IS NULL OR tenant_id > ?
+                 ORDER BY tenant_id LIMIT 256",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare source tenants",
+                })?;
+            let rows = statement
+                .query_map(
+                    params![
+                        after.as_ref().map(|key| key.as_slice()),
+                        after.as_ref().map(|key| key.as_slice())
+                    ],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read source tenants",
+                })?;
+            rows.map(|row| {
+                let tenant = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode source tenant",
+                })?;
+                tenant
+                    .try_into()
+                    .map_err(|_| self.state_error("the source tenant identity is invalid"))
+            })
+            .collect()
+        })
+    }
+
     pub(super) fn read_snapshot<T>(
         &self,
         read: impl FnOnce(&duckdb::Connection) -> Result<T>,

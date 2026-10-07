@@ -1,17 +1,17 @@
 use std::{error::Error as StdError, fs, path::Path};
 
 use araphor_data::{
-    AnalysisStore, EvidenceStoreOutcomeV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
+    AnalysisStore, DiscoveryInputManifestV1, DiscoveryOwner, EvidenceStoreOutcomeV1,
+    ValidatedCoverageV1, ValidatedEvidenceBatchV1,
 };
-use mithril_control::{ControlStore, DiscoveryInputManifestV1, DiscoveryOwner};
-use prost::Message as _;
+use mithril_control::ControlStore;
 use snafu::ensure;
 
 use crate::error::InvalidInputSnafu;
 
 pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
     let fixture = include_bytes!("../../fixtures/discovery/manifest.json");
-    let input = DiscoveryInputManifestV1::from_json(fixture)?;
+    let input = DiscoveryInputManifestV1::try_from(fixture.as_slice())?;
     let derived = DiscoveryOwner::derive_recorded(&input)?;
     let coverage = input.coverage.first().ok_or("coverage fixture is absent")?;
     let identity = coverage.stream.clone();
@@ -44,12 +44,7 @@ pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 reason: "the storage fixture source identity changed",
             }
         );
-        let wire = record.observation.to_wire_record()?.encode_to_vec();
-        let frame_start = framed_records.len();
-        framed_records.extend_from_slice(&u32::try_from(wire.len())?.to_be_bytes());
-        framed_records.extend_from_slice(&wire);
-        let checksum = crc32c::crc32c(&framed_records[frame_start..]);
-        framed_records.extend_from_slice(&checksum.to_be_bytes());
+        framed_records.extend_from_slice(&record.wire_record);
         frame_ends.push(framed_records.len());
     }
     let first_frame_len = frame_ends[0];
@@ -167,16 +162,14 @@ pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
             "production_intake": false,
             "asserted_contracts": checks,
             "assertion_count": checks.len(),
-            "fixture_digest": crate::DigestV1::of(fixture),
             "source_identity": identity,
             "store_uuid": store_meta.store_uuid.to_string(),
             "recovery_epoch": store_meta.recovery_epoch,
             "commit_revision": store_meta.commit_revision,
             "contiguous_cursor": before.receipt.contiguous_cursor,
             "coverage_revision": before.receipt.coverage_revision,
-            "coverage_digest": crate::DigestV1::of(&coverage_bytes),
             "retained_event_count": before.retained_event_count,
-            "snapshot_digest": hex::encode(derived.snapshot.content_digest.0),
+            "snapshot": derived.snapshot,
         }),
     )?;
     Ok(())

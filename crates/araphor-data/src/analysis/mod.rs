@@ -48,9 +48,10 @@ pub use extraction::{
 };
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use progress::{
-    AnalysisContextRefV1, AnalysisGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
-    AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
+    AnalysisContextRefV1, AnalysisGapV1, AnalysisProcessorResultV1, AnalysisResultCommitV1,
+    AnalysisResultReceiptV1, AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
+pub(crate) use progress::{MAX_RESULT_BYTES, MAX_RESULT_REFS};
 pub use quota::WitnessUsageV1;
 pub use raw::{AnalysisStreamIdentityV1, TraceOutputPageV1, TraceOutputReceiptV1};
 pub use read::AnalysisReadControl;
@@ -63,7 +64,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 13;
+const ANALYSIS_SCHEMA_VERSION: i64 = 15;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -95,6 +96,7 @@ pub struct AnalysisStore {
     raw_pending: AtomicBool,
     read_slots: Arc<tokio::sync::Semaphore>,
     read_next: AtomicUsize,
+    pub(crate) discovery_owners: AtomicUsize,
     maintenance: RwLock<()>,
     revision: watch::Sender<u64>,
     retention_healthy: AtomicBool,
@@ -382,6 +384,7 @@ impl AnalysisStore {
                     retirement_reason VARCHAR NOT NULL,
                     retirement_cursor UBIGINT NOT NULL,
                     retirement_revision UBIGINT NOT NULL,
+                    result_id VARCHAR NOT NULL,
                     PRIMARY KEY (processor_id, method_version, tenant_id, stream_key)
                 );
                 CREATE TABLE IF NOT EXISTS evidence_refs (
@@ -409,7 +412,14 @@ impl AnalysisStore {
                     processor_id VARCHAR NOT NULL,
                     body BLOB NOT NULL,
                     request_meta BLOB NOT NULL,
-                    commit_revision UBIGINT NOT NULL
+                    commit_revision UBIGINT NOT NULL,
+                    stream_key BLOB,
+                    method_version UBIGINT,
+                    interval_id VARCHAR,
+                    profile_revision UBIGINT,
+                    facts_revision UBIGINT,
+                    coverage_revision UBIGINT,
+                    first_cursor UBIGINT
                 );
                 CREATE TABLE IF NOT EXISTS processor_gaps (
                     processor_id VARCHAR NOT NULL,
@@ -488,6 +498,7 @@ impl AnalysisStore {
             readers,
             read_slots: Arc::new(tokio::sync::Semaphore::new(16)),
             read_next: AtomicUsize::new(0),
+            discovery_owners: AtomicUsize::new(0),
             maintenance: RwLock::new(()),
             revision,
             retention_healthy: AtomicBool::new(true),
@@ -501,6 +512,10 @@ impl AnalysisStore {
 
     pub fn retention_healthy(&self) -> bool {
         self.retention_healthy.load(Ordering::Acquire)
+    }
+
+    pub fn discovery_enabled(&self) -> bool {
+        self.discovery_owners.load(Ordering::Acquire) > 0
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]

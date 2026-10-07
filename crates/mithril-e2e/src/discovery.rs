@@ -1,18 +1,21 @@
 use std::{fs, path::Path};
 
-use mithril_control::{
+use araphor_data::{
     DiscoveryInputManifestV1, DiscoveryOwner, DiscoveryPhysicalResultV1, DiscoveryProofKindV1,
-    PolicyDocumentV1, SimulatedDispositionV1, SimulatedPhysicalResultV1,
+};
+use mithril_control::{
+    DiscoveryPreviewOwner, PolicyDocumentV1, SimulatedDispositionV1, SimulatedPhysicalResultV1,
 };
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
 
 use crate::{
-    error::{InvalidInputSnafu, IoSnafu, JsonSnafu, PolicySnafu},
+    error::{DataSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, PolicySnafu},
     Result,
 };
 
 mod data_store;
+mod isolation;
 mod query_follow;
 mod roundtrip;
 #[cfg(test)]
@@ -25,8 +28,8 @@ pub use storage_contract::run as run_discovery_storage_contract;
 
 pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let input_bytes = include_bytes!("../fixtures/discovery/manifest.json");
-    let input = DiscoveryInputManifestV1::from_json(input_bytes).context(PolicySnafu)?;
-    let result = DiscoveryOwner::derive_recorded(&input).context(PolicySnafu)?;
+    let input = DiscoveryInputManifestV1::try_from(input_bytes.as_slice()).context(DataSnafu)?;
+    let result = DiscoveryOwner::derive_recorded(&input).context(DataSnafu)?;
     let snapshot = &result.snapshot;
     ensure!(
         snapshot.proof_kind == DiscoveryProofKindV1::Synthetic
@@ -49,7 +52,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     replay.records.extend(input.records.clone());
     ensure!(
         DiscoveryOwner::derive_recorded(&replay)
-            .context(PolicySnafu)?
+            .context(DataSnafu)?
             .snapshot
             == *snapshot,
         InvalidInputSnafu {
@@ -60,12 +63,12 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let policy_bytes = include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml");
     let policy =
         PolicyDocumentV1::parse(Path::new("policy-v1.yaml"), policy_bytes).context(PolicySnafu)?;
-    let preview = DiscoveryOwner::simulate_recorded(&input, &policy).context(PolicySnafu)?;
+    let preview = DiscoveryPreviewOwner::simulate_recorded(&input, &policy).context(PolicySnafu)?;
     ensure!(
         preview.simulations.len() == 1
             && preview.simulations[0].disposition == SimulatedDispositionV1::WouldDeny
             && preview.simulations[0].physical_result == SimulatedPhysicalResultV1::NotAttempted
-            && preview.snapshot_digest == snapshot.content_digest,
+            && preview.snapshot == *snapshot,
         InvalidInputSnafu {
             path: output,
             reason: "native preview differs or claims a physical result"
@@ -76,11 +79,6 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
             .context(JsonSnafu { path: output })?;
     let observed_oracle = serde_json::json!({
         "source_revision": input.source_revision,
-        "manifest_sha256": crate::DigestV1::of(input_bytes).to_hex(),
-        "candidate_sha256": crate::DigestV1::of(policy_bytes).to_hex(),
-        "input_digest": hex::encode(snapshot.input_digest.0),
-        "snapshot_digest": hex::encode(snapshot.content_digest.0),
-        "atom_digests": snapshot.atoms.iter().map(|atom| hex::encode(atom.id.0)).collect::<Vec<_>>(),
         "accepted": snapshot.accepted_records,
         "included": snapshot.included_records,
         "unresolved": snapshot.unresolved_records,
@@ -109,8 +107,6 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
             "case": "offline-exact",
             "result": "PASS",
             "asserted_contracts": ["exact-counts", "duplicate-delivery", "missing-context", "replay", "native-static-preview"],
-            "fixture_digest": crate::DigestV1::of(input_bytes),
-            "candidate_bytes_digest": crate::DigestV1::of(policy_bytes),
             "preview": preview,
             "recorded_oracle": observed_oracle,
             "production_authority": false,
@@ -132,8 +128,7 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn discovery_offline_uses_production_owners_and_preserves_existing_output(
-    ) -> crate::platform::TestResult<()> {
+    fn discovery_offline_output_unchanged() -> crate::platform::TestResult<()> {
         let directory = tempfile::tempdir()?;
         let output = directory.path().join("proof");
         super::run_discovery_offline(&output)?;

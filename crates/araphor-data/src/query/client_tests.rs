@@ -628,6 +628,475 @@ async fn query_target_follow() -> TestResult {
     Ok(())
 }
 
+#[derive(Default)]
+struct DiscoveryUnavailable {
+    revision: AtomicU64,
+    pinned: Option<crate::DiscoveryPinnedContextV1>,
+}
+
+impl crate::DiscoveryContextProvider for DiscoveryUnavailable {
+    fn context(&self, record: &crate::DiscoveryRecordV1) -> Result<crate::DiscoveryContextJoinV1> {
+        if self.revision.load(Ordering::SeqCst) > 0 {
+            if let Some(pinned) = &self.pinned {
+                let mut pinned = pinned.clone();
+                pinned.binding.record_id = record.id.clone();
+                return Ok(crate::DiscoveryContextJoinV1::Available(Box::new(pinned)));
+            }
+        }
+        Ok(crate::DiscoveryContextJoinV1::Unresolved(
+            crate::DiscoveryContextUnavailableV1::MissingDecisionCatalog,
+        ))
+    }
+
+    fn revision(&self, _: &crate::EvidenceIntakeIdentityV1) -> Result<u64> {
+        Ok(self.revision.load(Ordering::SeqCst))
+    }
+}
+
+fn discovery_owner(fixture: &ClientFixture, records: usize) -> Result<crate::DiscoveryOwner> {
+    crate::DiscoveryOwner::new(
+        fixture.data.store.clone(),
+        Arc::new(DiscoveryUnavailable::default()),
+        crate::DiscoveryConfigV1 {
+            interval_records: records,
+            ..Default::default()
+        },
+    )
+}
+
+fn discovery_record() -> Result<EvidenceRecord> {
+    let input = crate::DiscoveryInputManifestV1::try_from(
+        include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
+    )?;
+    input.records[0].decode()
+}
+
+#[tokio::test]
+async fn discovery_query_current_profiles() -> TestResult {
+    let fixture = ClientFixture::local()?;
+    let discovery = discovery_owner(&fixture, 3)?;
+    let plan = fixture.plan(
+        "SELECT profile_id,profile_revision,accepted_records,unresolved_records,profile_state FROM behaviors WHERE kind='profile' ORDER BY profile_id",
+        vec![], false,
+    )?;
+    assert!(!plan.reads_raw());
+    fixture.data.commit(1, 2000, discovery_record()?)?;
+    discovery.process(3000)?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(
+        result.rows[0][1..],
+        [
+            Value::UBigInt(1),
+            Value::UBigInt(1),
+            Value::UBigInt(1),
+            Value::Text("working".into())
+        ]
+    );
+    let first_id = result.rows[0][0].clone();
+    drop(result);
+    fixture.data.commit(2, 2001, discovery_record()?)?;
+    discovery.process(3001)?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][0], first_id);
+    assert_eq!(
+        result.rows[0][1..],
+        [
+            Value::UBigInt(2),
+            Value::UBigInt(2),
+            Value::UBigInt(2),
+            Value::Text("working".into())
+        ]
+    );
+    drop(result);
+    let mut foreign = fixture.data.source.clone();
+    foreign.tenant_id = [9; 16];
+    fixture
+        .data
+        .commit_as(&foreign, 0, 1, 2002, discovery_record()?)?;
+    let mut other = fixture.data.source.clone();
+    other.source_id = [4; 16];
+    other.node_id = "another-query-node".into();
+    fixture
+        .data
+        .commit_as(&other, 0, 1, 2002, discovery_record()?)?;
+    fixture.data.commit(3, 2002, discovery_record()?)?;
+    discovery.process(3002)?;
+    fixture.data.commit(4, 2003, discovery_record()?)?;
+    discovery.process(3003)?;
+    discovery.process(3004)?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(result.rows.len(), 2);
+    assert!(result.rows.iter().any(|row| row[0] == first_id
+        && row[2] == Value::UBigInt(3)
+        && row[4] == Value::Text("sealed".into())));
+    assert!(result
+        .rows
+        .iter()
+        .any(|row| row[2] == Value::UBigInt(1) && row[4] == Value::Text("working".into())));
+    drop(result);
+    let sum = fixture.plan(
+        "SELECT CAST(SUM(accepted_records) AS BIGINT) FROM behaviors WHERE kind='profile'",
+        vec![],
+        false,
+    )?;
+    assert_eq!(
+        fixture.query(&sum).await?.rows,
+        vec![vec![Value::BigInt(4)]]
+    );
+    let before = discovery
+        .profile(&fixture.data.source)?
+        .ok_or("profile absent")?;
+    discovery.process(3005)?;
+    assert_eq!(
+        discovery
+            .profile(&fixture.data.source)?
+            .ok_or("profile absent")?,
+        before
+    );
+    let selection = plan.dependencies(3004)?;
+    let (_, revision) = fixture
+        .data
+        .store
+        .dependency_revision(&selection, &AnalysisReadControl::default())?;
+    assert!(revision > 0);
+    let catalog = fixture.plan(
+        "SELECT DISTINCT readiness FROM catalog WHERE relation='behaviors'",
+        vec![],
+        false,
+    )?;
+    assert_eq!(
+        fixture.query(&catalog).await?.rows,
+        vec![vec![Value::Text("enabled".into())]]
+    );
+    drop(discovery);
+    assert_eq!(
+        fixture.query(&catalog).await?.rows,
+        vec![vec![Value::Text("disabled".into())]]
+    );
+    let disabled = fixture.plan(
+        "SELECT DISTINCT discovery_enabled FROM behaviors",
+        vec![],
+        false,
+    )?;
+    assert_eq!(
+        fixture.query(&disabled).await?.rows,
+        vec![vec![Value::Boolean(false)]]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn discovery_query_document_context() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    fixture.tenant();
+    let owner = discovery_owner(&fixture, 3)?;
+    let fact = fixture.target(1)?;
+    fixture.data.store.commit_context(&fact)?;
+    let access = crate::DiscoveryContextAccessV1 {
+        tenant_id: fixture.grant.selection.tenant_id,
+        subject: fact.key.clone(),
+        principal: fixture.grant.principal.clone(),
+        grant_revision: fixture.grant.revision,
+        purpose: "inspect exact retained context".into(),
+        sensitivities: vec![ContextSensitivityV1::Tenant],
+        can_import: true,
+        can_review: true,
+    };
+    let mut revision = crate::DiscoveryContextRevisionV1 {
+        imported_utc_ns: 2500,
+        document: crate::DiscoveryContextDocumentV1 {
+            schema_version: 1,
+            tenant_id: access.tenant_id,
+            id: "supplied-runbook".into(),
+            revision: 1,
+            kind: crate::DiscoveryContextKindV1::Runbook,
+            subject: fact.key.clone(),
+            method: crate::DiscoveryMethodV1 {
+                id: "credential-read".into(),
+                revision: 1,
+            },
+            origin: "operator supplied".into(),
+            valid_from_utc_ns: 1000,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            trust: crate::DiscoveryContextTrustV1::Unreviewed,
+            approver: None,
+            text: "Supplied instructions remain untrusted data.".into(),
+        },
+    };
+    owner.import_context(&access, &revision)?;
+    let plan = fixture.plan(
+        "SELECT owner_id,owner_revision,trust,text FROM context ORDER BY owner_id,owner_revision",
+        vec![],
+        false,
+    )?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![
+                Value::Text("discovery-context-v1".into()),
+                Value::UBigInt(1),
+                Value::Text("unreviewed".into()),
+                Value::Text(revision.document.text.clone())
+            ],
+            vec![
+                Value::Text("mithril-control/target".into()),
+                Value::UBigInt(1),
+                Value::Null,
+                Value::Null
+            ],
+        ]
+    );
+    drop(result);
+    revision.document.revision = 2;
+    revision.imported_utc_ns += 1;
+    revision.document.trust = crate::DiscoveryContextTrustV1::Reviewed;
+    revision.document.approver = Some(access.principal.clone());
+    owner.import_context(&access, &revision)?;
+    let mut foreign = fact.clone();
+    foreign.key.tenant_id = [9; 16];
+    fixture.data.store.commit_context(&foreign)?;
+    let plan = fixture.plan("SELECT owner_revision,trust,subject_revision,method_revision FROM context WHERE owner_id='discovery-context-v1' ORDER BY owner_revision", vec![], false)?;
+    assert_eq!(
+        fixture.query(&plan).await?.rows,
+        vec![
+            vec![
+                Value::UBigInt(1),
+                Value::Text("unreviewed".into()),
+                Value::UBigInt(1),
+                Value::UBigInt(1)
+            ],
+            vec![
+                Value::UBigInt(2),
+                Value::Text("reviewed".into()),
+                Value::UBigInt(1),
+                Value::UBigInt(1)
+            ],
+        ]
+    );
+    let plan = fixture.plan(
+        "SELECT body FROM context WHERE owner_id='mithril-control/target'",
+        vec![],
+        false,
+    )?;
+    assert_eq!(
+        fixture.query(&plan).await?.rows,
+        vec![vec![Value::Blob(fact.body)]]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn discovery_query_sealed_revision() -> TestResult {
+    let fixture = ClientFixture::local()?;
+    let input = crate::DiscoveryInputManifestV1::try_from(
+        include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
+    )?;
+    let mut binding = input.contexts[0].clone();
+    binding.record_id.stream = fixture.data.source.clone();
+    let mut workload: crate::WorkloadTargetFactV1 =
+        serde_json::from_slice(&fixture.target(1)?.body)?;
+    workload.workload_binding_generation_digest = binding.subject_revision.clone();
+    workload.image_digest = binding.image_digest.clone();
+    workload.execution_set_id = binding.static_key.execution_set_id.clone();
+    workload.kubernetes = None;
+    let provider = Arc::new(DiscoveryUnavailable {
+        revision: AtomicU64::new(0),
+        pinned: Some(crate::DiscoveryPinnedContextV1 {
+            policy_source_revision_id: binding.policy_revision.source_revision_id.clone(),
+            signed_profile_digest: binding.policy_revision.signed_profile_digest.clone(),
+            binding: binding.clone(),
+            workload,
+            target_snapshot_digest: "retained-target-fixture".into(),
+            control_commit_index: 1,
+        }),
+    });
+    let owner = crate::DiscoveryOwner::new(
+        fixture.data.store.clone(),
+        provider.clone(),
+        crate::DiscoveryConfigV1 {
+            interval_records: 1,
+            ..Default::default()
+        },
+    )?;
+    let mut record = discovery_record()?;
+    record.decision_context = Some(crate::EvidenceDecisionContext {
+        schema_version: 1,
+        original_kernel_sequence: 1,
+        profile_generation_ref_id: record.profile_generation_ref_id.unwrap_or_default(),
+        process_instance_id: binding.process_instance_id.to_vec(),
+        entry_instance_id: binding.entry_instance_id.to_vec(),
+        binding_id: binding.binding_id.to_vec(),
+        role_id: binding.role_id,
+        state_id: binding.state_id,
+        entry_rule_id: binding.entry_rule_id,
+        ..Default::default()
+    });
+    fixture.data.commit(1, 2000, record.clone())?;
+    owner.process(3000)?;
+    let original = owner
+        .profile(&fixture.data.source)?
+        .ok_or("profile absent")?;
+    assert!(original.sealed);
+    let stored = fixture
+        .data
+        .store
+        .read_result(fixture.data.source.tenant_id, &original.profile_id)?
+        .ok_or("retained sealed result absent")?;
+    record
+        .decision_context
+        .as_mut()
+        .ok_or("context absent")?
+        .original_kernel_sequence = 2;
+    fixture.data.commit(2, 2001, record)?;
+    owner.process(3001)?;
+    let head = owner
+        .profile(&fixture.data.source)?
+        .ok_or("profile absent")?;
+    assert!(head.sealed);
+    assert_ne!(head.interval_id, original.interval_id);
+    assert!(fixture
+        .data
+        .store
+        .profile_notices(&original.scope, 0, 0)?
+        .is_empty());
+    provider.revision.store(2, Ordering::SeqCst);
+    let notices = fixture.data.store.profile_notices(&original.scope, 2, 0)?;
+    assert_eq!(notices.len(), 2);
+    assert!(notices.iter().any(|notice| notice.0 == original.profile_id));
+    assert!(notices.iter().any(|notice| notice.0 == head.profile_id));
+    let mut foreign = original.scope.clone();
+    foreign.identity.tenant_id = [9; 16];
+    assert!(fixture
+        .data
+        .store
+        .profile_notices(&foreign, 2, 0)?
+        .is_empty());
+    foreign = original.scope.clone();
+    foreign.method_version += 1;
+    assert!(fixture.data.store.profile_notices(&foreign, 2, 0).is_err());
+    assert_eq!(owner.process(3002)?, 0);
+    let latest = owner
+        .profile(&fixture.data.source)?
+        .ok_or("profile absent")?;
+    assert_eq!(latest.interval_id, head.interval_id);
+    assert_ne!(latest.profile_id, head.profile_id);
+    assert_eq!(latest.revision, head.revision + 1);
+    assert_eq!(latest.snapshot.included_records, 1);
+    assert_eq!(
+        fixture
+            .data
+            .store
+            .processor_health(&original.scope)?
+            .ok_or("processor absent")?
+            .consumed_cursor,
+        2
+    );
+    assert_eq!(
+        fixture
+            .data
+            .store
+            .read_result(fixture.data.source.tenant_id, &original.profile_id)?,
+        Some(stored)
+    );
+    assert!(fixture
+        .data
+        .store
+        .profile_notices(&original.scope, 2, 0)?
+        .is_empty());
+    let plan = fixture.plan("SELECT profile_id,interval_id,profile_revision,accepted_records,included_records,unresolved_records FROM behaviors WHERE kind='profile' ORDER BY interval_id", vec![], false)?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(result.rows.len(), 2);
+    for (prior, current) in [(&original, None), (&head, Some(&latest))] {
+        let row = result
+            .rows
+            .iter()
+            .find(|row| row[1] == Value::Text(prior.interval_id.clone()))
+            .ok_or("latest interval row absent")?;
+        assert_ne!(row[0], Value::Text(prior.profile_id.clone()));
+        if let Some(current) = current {
+            assert_eq!(row[0], Value::Text(current.profile_id.clone()));
+        }
+        assert_eq!(
+            row[2..],
+            [
+                Value::UBigInt(prior.revision + 1),
+                Value::UBigInt(1),
+                Value::UBigInt(1),
+                Value::UBigInt(0)
+            ]
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn discovery_query_profile_follow() -> TestResult {
+    let fixture = ClientFixture::local()?;
+    let discovery = discovery_owner(&fixture, 3)?;
+    fixture.data.commit(1, 2000, discovery_record()?)?;
+    let plan = fixture.plan("SELECT CAST(COALESCE(SUM(accepted_records),0) AS BIGINT) FROM behaviors WHERE kind='profile'", vec![], true)?;
+    assert_eq!(plan.operation(), QueryOperation::Replace);
+    assert_eq!(
+        fixture.query(&plan).await?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    let mut stream = fixture.stream(plan, None)?;
+    let frame = ClientFixture::next(&mut stream)
+        .await
+        .map_err(|error| format!("discovery metadata: {error}"))?;
+    if !matches!(frame.payload, QueryPayload::Metadata(_)) {
+        return Err(format!("discovery metadata frame: {:?}", frame.payload).into());
+    }
+    drop(frame);
+    let frame = ClientFixture::next(&mut stream)
+        .await
+        .map_err(|error| format!("discovery initial replacement: {error}"))?;
+    assert_eq!(
+        ClientFixture::result(&frame, QueryOperation::Replace)?.rows,
+        vec![vec![Value::BigInt(0)]]
+    );
+    drop(frame);
+    let frame = ClientFixture::next(&mut stream)
+        .await
+        .map_err(|error| format!("discovery initial checkpoint: {error}"))?;
+    ClientFixture::checkpoint(&frame)?;
+    drop(frame);
+    discovery.process(3000)?;
+    let mut changed = false;
+    for _ in 0..6 {
+        let frame = ClientFixture::next(&mut stream)
+            .await
+            .map_err(|error| format!("discovery changed replacement: {error}"))?;
+        match &frame.payload {
+            QueryPayload::Replace { result, .. } if result.rows == vec![vec![Value::BigInt(1)]] => {
+                changed = true;
+                break;
+            }
+            QueryPayload::Replace { result, .. } => {
+                assert_eq!(result.rows, vec![vec![Value::BigInt(0)]])
+            }
+            QueryPayload::Checkpoint { .. } => {}
+            _ => return Err("unexpected discovery follow frame".into()),
+        }
+    }
+    assert!(changed);
+    fixture.authority.revoke();
+    loop {
+        match tokio::time::timeout(WAIT, stream.next()).await? {
+            Some(Err(crate::Error::QueryDenied { .. })) => break,
+            Some(Ok(frame)) if matches!(frame.payload, QueryPayload::Checkpoint { .. }) => {}
+            _ => return Err("discovery follow did not enforce current authorization".into()),
+        }
+    }
+    assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+    tokio::time::timeout(WAIT, &mut stream.task).await??;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn query_trace_relations() -> TestResult {
     let mut fixture = ClientFixture::local()?;

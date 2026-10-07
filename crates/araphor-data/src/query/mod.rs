@@ -17,6 +17,7 @@ mod authorization_tests;
 mod budget;
 #[cfg(test)]
 mod client_tests;
+mod discovery;
 mod evaluation;
 mod follow;
 #[cfg(test)]
@@ -320,6 +321,8 @@ impl QueryOwner {
             let relation = match &input {
                 crate::AnalysisInputV1::Event { .. } => "events",
                 crate::AnalysisInputV1::Context(_) => "context_versions",
+                crate::AnalysisInputV1::DiscoveryContext(_) => "context",
+                crate::AnalysisInputV1::Behavior { .. } => "behaviors",
                 crate::AnalysisInputV1::Target { .. } => "targets",
                 crate::AnalysisInputV1::Trace { .. } => "traces",
                 crate::AnalysisInputV1::TraceOutput { .. } => "trace_output",

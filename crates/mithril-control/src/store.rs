@@ -26,11 +26,8 @@ use crate::{
 
 const STORE_SCHEMA_VERSION: u32 = 8;
 
-mod discovery;
-pub use discovery::*;
-mod discovery_context;
-pub use discovery_context::*;
 mod context;
+mod discovery_context;
 pub use context::ControlContextOwner;
 #[cfg(test)]
 mod raw_bench;
@@ -41,7 +38,6 @@ const MAX_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 /// Owns durable policy, trust, rollout, and node-session state.
 pub struct ControlStore {
     inner: Arc<ControlStoreLock>,
-    discovery_files: Arc<Mutex<discovery::DiscoveryFiles>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -331,8 +327,6 @@ impl Drop for ControlStorePriorityGuard<'_> {
 #[serde(deny_unknown_fields)]
 struct ControlStoreState {
     commit_index: u64,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    discovery_heads: BTreeMap<DiscoveryHeadKeyV1, DiscoveryHeadV1>,
     source_revisions: BTreeMap<String, PolicySourceRevisionV1>,
     policy_documents: BTreeMap<String, PolicyDocumentV1>,
     latest_sources: BTreeMap<PolicyObjectKeyV1, String>,
@@ -383,10 +377,6 @@ struct PolicyRolloutKeyV1 {
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 // Each variant contains all state that must become durable in one transaction.
 enum ControlTransactionV1 {
-    DiscoveryHeadCommitted {
-        head: DiscoveryHeadV1,
-        expected: Option<Box<DiscoveryHeadV1>>,
-    },
     NodeSessionAdvanced {
         advance: Box<NodeSessionAdvanceTransactionV1>,
     },
@@ -572,24 +562,33 @@ pub fn startup_absence_proof_digest(
 impl ControlStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
-        let old_root = root.join("evidence/segments-v2");
-        match fs::symlink_metadata(&old_root) {
-            Ok(_) => {
-                return ControlStoreSnafu {
-                    path: old_root,
-                    reason:
-                        "Control-owned raw evidence is unsupported; use fresh development state"
+        for name in [
+            "evidence/segments-v2",
+            "discovery",
+            "discovery-index.sqlite",
+            "discovery-index.rebuild.sqlite",
+            "discovery-index.previous.sqlite",
+            "discovery-index.install",
+            "discovery-index.lock",
+        ] {
+            let old_path = root.join(name);
+            match fs::symlink_metadata(&old_path) {
+                Ok(_) => {
+                    return ControlStoreSnafu {
+                        path: old_path,
+                        reason: "Control-owned evidence or discovery state is unsupported; use fresh development state"
                             .to_owned(),
+                    }
+                    .fail()
                 }
-                .fail()
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(crate::Error::Io {
-                    path: old_root,
-                    source,
-                    location: snafu::Location::default(),
-                })
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(crate::Error::Io {
+                        path: old_path,
+                        source,
+                        location: snafu::Location::default(),
+                    })
+                }
             }
         }
         let (state_file, state) = ControlStateOwner::open(&root)?;
@@ -598,7 +597,6 @@ impl ControlStore {
             commit_index = %state.commit_index
         );
         Ok(Self {
-            discovery_files: Arc::new(Mutex::new(discovery::DiscoveryFiles::new(&root))),
             inner: Arc::new(ControlStoreLock::new(ControlStoreInner {
                 root,
                 state,
@@ -2653,9 +2651,6 @@ fn apply_transaction(
     path: &Path,
 ) -> Result<()> {
     match transaction {
-        ControlTransactionV1::DiscoveryHeadCommitted { head, expected } => {
-            discovery::DiscoveryFiles::apply_head(state, head, expected.as_deref())?;
-        }
         ControlTransactionV1::NodeSessionAdvanced { advance } => {
             validate_node_session_advance(state, advance, path)?;
             for rollout in &advance.policy_rollout_states {
@@ -4277,9 +4272,41 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn discovery_context_pins_exact_policy_and_workload_facts(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use crate::{DiscoveryContextJoinV1 as Join, DiscoveryContextUnavailableV1 as Missing};
+    fn discovery_archive_startup_rejection() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        for name in [
+            "evidence/segments-v2",
+            "discovery",
+            "discovery-index.sqlite",
+            "discovery-index.rebuild.sqlite",
+            "discovery-index.previous.sqlite",
+            "discovery-index.install",
+            "discovery-index.lock",
+        ] {
+            let directory = TempDir::new()?;
+            let path = directory.path().join(name);
+            let retained = if matches!(name, "evidence/segments-v2" | "discovery") {
+                std::fs::create_dir_all(&path)?;
+                path.join("retained")
+            } else {
+                path.clone()
+            };
+            std::fs::write(&retained, b"retained old state")?;
+            assert!(matches!(
+                super::ControlStore::open(directory.path()),
+                Err(crate::Error::ControlStore { path: rejected, .. }) if rejected == path
+            ));
+            assert_eq!(std::fs::read(&retained)?, b"retained old state");
+            assert!(!directory.path().join("owner.lock").exists());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_context_retained_facts() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use araphor_data::{
+            DiscoveryContextJoinV1 as Join, DiscoveryContextUnavailableV1 as Missing,
+        };
         let directory = TempDir::new()?;
         let store = super::ControlStore::open(directory.path())?;
         let document = PolicyDocumentV1::parse(
@@ -4330,18 +4357,24 @@ mod tests {
             rollout.bundles,
             rollout.rollout_states,
         )?;
-        let input = crate::DiscoveryInputManifestV1::from_json(include_bytes!(
-            "../../mithril-e2e/fixtures/discovery/manifest.json"
-        ))?;
+        let input = araphor_data::DiscoveryInputManifestV1::try_from(
+            include_bytes!("../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
+        )?;
         let mut record = input.records[0].clone();
         record.id.stream.tenant_id = uuid::Uuid::parse_str(&source.tenant_id)?.into_bytes();
         record.id.stream.node_id = "node-a".into();
         record.id.stream.node_boot_id = [1; 16];
         record.id.stream.label_epoch = 1;
         record.original_kernel_sequence = Some(101);
-        let observation = &mut record.observation;
-        observation.tenant_id = record.id.stream.tenant_id.into();
-        observation.node_boot_id = record.id.stream.node_boot_id.into();
+        let mut observation = crate::ObservationEnvelopeV1::from_wire_record(
+            record.id.stream.tenant_id.into(),
+            record.id.stream.node_boot_id.into(),
+            record.id.stream.source_id.into(),
+            record.id.stream.source_epoch,
+            record.id.durable_cursor,
+            record.id.cpu_id,
+            &record.decode()?,
+        )?;
         observation.profile_generation_ref_id = Some(8);
         observation.effect.execution_set_id = Some(
             uuid::Uuid::parse_str(&expected_workload.execution_set_id)?
@@ -4402,6 +4435,8 @@ mod tests {
             catalog_json: catalog.clone().seal()?,
             catalog_state: "AVAILABLE".into(),
         });
+        let wire = observation.to_wire_record()?;
+        record.wire_record = Vec::<u8>::try_from(&wire)?;
         let resolved = store.discovery_context(&record)?;
         let Join::Available(pin) = &resolved else {
             return Err("context was not resolved".into());
@@ -4417,6 +4452,22 @@ mod tests {
             expected_workload.workload_binding_generation_digest
         );
         assert_eq!(pin.control_commit_index, store.commit_index());
+        assert_eq!(
+            araphor_data::DiscoveryContextProvider::revision(&store, &record.id.stream)?,
+            store.commit_index()
+        );
+        assert_eq!(
+            pin.binding.policy_revision.source_revision_id,
+            source.policy_source_revision_id
+        );
+        assert_eq!(
+            pin.binding.policy_revision.signed_profile_digest,
+            pin.signed_profile_digest
+        );
+        assert_eq!(
+            pin.binding.policy_revision.profile_version,
+            artifact.header.profile_version
+        );
         drop(store);
         let store = super::ControlStore::open(directory.path())?;
         assert_eq!(store.discovery_context(&record)?, resolved);
@@ -4432,23 +4483,23 @@ mod tests {
             "catalog",
             "operation",
             "kernel_sequence",
+            "context_version",
             "execution_set",
         ] {
             let mut changed = record.clone();
+            let mut changed_wire = wire.clone();
             let mut changed_catalog = catalog.clone();
-            let context = changed
-                .observation
+            let context = changed_wire
                 .decision_context
                 .as_mut()
                 .ok_or("context absent")?;
             let expected = match scenario {
                 "execution_set" => {
-                    changed.observation.effect.execution_set_id = Some([9; 16].into());
+                    changed_wire.execution_set_id = vec![9; 16].into();
                     Missing::PolicyContextMismatch
                 }
                 "tenant" => {
                     changed.id.stream.tenant_id = [9; 16];
-                    changed.observation.tenant_id = [9; 16].into();
                     Missing::MissingWorkloadFact
                 }
                 "node" => {
@@ -4457,7 +4508,6 @@ mod tests {
                 }
                 "boot" => {
                     changed.id.stream.node_boot_id = [9; 16];
-                    changed.observation.node_boot_id = [9; 16].into();
                     changed_catalog.node_boot_id = [9; 16].into();
                     Missing::MissingWorkloadFact
                 }
@@ -4487,7 +4537,11 @@ mod tests {
                     Missing::MissingDecisionCatalog
                 }
                 "operation" => {
-                    changed.observation.effect.operation += 1;
+                    changed_wire.operation += 1;
+                    Missing::PolicyContextMismatch
+                }
+                "context_version" => {
+                    context.schema_version += 1;
                     Missing::PolicyContextMismatch
                 }
                 _ => {
@@ -4500,8 +4554,18 @@ mod tests {
             } else {
                 changed_catalog.seal()?
             };
-            if matches!(scenario, "operation" | "kernel_sequence") {
+            changed.wire_record = Vec::<u8>::try_from(&changed_wire)?;
+            if matches!(
+                scenario,
+                "operation" | "kernel_sequence" | "context_version"
+            ) {
                 assert!(store.discovery_context(&changed).is_err(), "{scenario}");
+                let Err(araphor_data::Error::DiscoveryContext { source, .. }) =
+                    araphor_data::DiscoveryContextProvider::context(&store, &changed)
+                else {
+                    return Err("the context provider lost the Control error source".into());
+                };
+                assert!(source.downcast_ref::<crate::Error>().is_some());
             } else {
                 assert_eq!(
                     store.discovery_context(&changed)?,
@@ -4536,7 +4600,7 @@ mod tests {
                 .pod_labels
                 .insert(
                     "oversized".into(),
-                    "x".repeat(crate::MAX_DISCOVERY_PIN_BYTES),
+                    "x".repeat(araphor_data::DISCOVERY_PIN_BYTES),
                 );
         }
         assert_eq!(

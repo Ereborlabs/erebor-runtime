@@ -166,8 +166,13 @@ impl QueryPlan {
         let mut selection = self.selection(now_ns);
         let trace_sql = matches!(&self.template, QueryTemplate::Client(sql) if ["traces", "trace_output", "trace_measurements"].iter().any(|relation| sql.dependencies().contains(*relation)));
         let target_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("targets"));
+        let behavior_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("behaviors"));
+        let context_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("context"));
+        selection.discovery = behavior_sql;
+        selection.discovery_context = context_sql;
+        selection.profiles.clear();
         selection.targets = target_sql;
-        selection.targets_only = matches!(&self.template, QueryTemplate::Client(sql) if target_sql && !sql.dependencies().contains("context_versions"));
+        selection.targets_only = matches!(&self.template, QueryTemplate::Client(sql) if target_sql && !context_sql && !sql.dependencies().contains("context_versions"));
         if !trace_sql {
             selection.traces.clear();
             selection.all_traces = false;
@@ -191,6 +196,7 @@ impl QueryPlan {
                 selection.received_until = Bound::Included(until);
                 if !sql.dependencies().contains("events")
                     && !sql.dependencies().contains("coverage")
+                    && !behavior_sql
                 {
                     selection.sources.clear();
                     selection.all_sources = false;
@@ -199,7 +205,7 @@ impl QueryPlan {
                         selection.binding_ids.clear();
                     }
                 }
-                if !sql.dependencies().contains("context_versions") && !target_sql {
+                if !sql.dependencies().contains("context_versions") && !context_sql && !target_sql {
                     selection.contexts.clear();
                     selection.all_contexts = false;
                 }

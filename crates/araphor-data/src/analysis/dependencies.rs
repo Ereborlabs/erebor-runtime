@@ -1,10 +1,85 @@
 use duckdb::params;
 use snafu::ResultExt as _;
 
-use super::{AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1};
-use crate::{AnalysisDatabaseSnafu, Result};
+use super::{
+    AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, AnalysisStoreMetaV1, ProcessorScopeV1,
+};
+use crate::{AnalysisDatabaseSnafu, Result, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION};
 
 impl AnalysisStore {
+    pub(crate) fn profile_notices(
+        &self,
+        scope: &ProcessorScopeV1,
+        facts_revision: u64,
+        coverage_revision: u64,
+    ) -> Result<Vec<(String, u64)>> {
+        if !scope.valid()
+            || scope.processor_id != DISCOVERY_PROCESSOR
+            || scope.method_version != DISCOVERY_SCHEMA_VERSION as u64
+        {
+            return self.reject("the discovery notice scope is invalid");
+        }
+        self.read_snapshot(|reader| {
+            let Some(receipt) = Self::read_receipt_from(
+                reader,
+                &self.root,
+                &scope.identity,
+                &scope.identity.key(),
+            )?
+            else {
+                return Ok(Vec::new());
+            };
+            let mut statement = reader
+                .prepare(
+                    "WITH profiles AS (
+                        SELECT result_id, commit_revision, interval_id,
+                            facts_revision, coverage_revision, first_cursor,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY interval_id
+                                ORDER BY profile_revision DESC, commit_revision DESC, result_id DESC
+                            ) AS rank
+                        FROM analysis_results
+                        WHERE tenant_id = ? AND processor_id = ?
+                          AND method_version = ? AND stream_key = ?
+                    )
+                    SELECT result_id, commit_revision FROM profiles
+                    WHERE rank = 1 AND (facts_revision < ? OR coverage_revision < ?)
+                      AND (first_cursor = 0 OR first_cursor > ?)
+                    ORDER BY interval_id LIMIT 16",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare discovery notices",
+                })?;
+            let rows = statement
+                .query_map(
+                    params![
+                        scope.identity.tenant_id.as_slice(),
+                        scope.processor_id,
+                        scope.method_version,
+                        scope.identity.key().as_slice(),
+                        facts_revision,
+                        coverage_revision,
+                        receipt.retained_floor,
+                    ],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read discovery notices",
+                })?;
+            let mut notices = Vec::with_capacity(16);
+            for row in rows {
+                let notice = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode discovery notice",
+                })?;
+                if notice.0.is_empty() || notice.0.len() > 256 || notice.1 == 0 {
+                    return self.reject("the discovery notice result is invalid");
+                }
+                notices.push(notice);
+            }
+            Ok(notices)
+        })
+    }
+
     /// Read the last relevant commit and current metadata without decoding event payloads.
     pub fn dependency_revision(
         &self,
@@ -93,6 +168,27 @@ impl AnalysisStore {
                     })?;
                 revision = revision.max(changed.unwrap_or(0));
             }
+            let mut profiles = snapshot
+                .prepare(
+                    "SELECT MAX(commit_revision) FROM analysis_results
+                 WHERE tenant_id = ? AND processor_id = 'discovery' AND result_id = ?
+                   AND commit_revision <= ?",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare discovery dependencies",
+                })?;
+            for id in &selection.profiles {
+                control.check()?;
+                let changed: Option<u64> = profiles
+                    .query_row(
+                        params![selection.tenant_id.as_slice(), id, meta.commit_revision],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read discovery dependencies",
+                    })?;
+                revision = revision.max(changed.unwrap_or(0));
+            }
             let mut traces = snapshot
                 .prepare(
                     "SELECT MAX(revision) FROM traces WHERE tenant_id = ?
@@ -153,6 +249,7 @@ impl AnalysisStore {
 #[cfg(test)]
 mod tests {
     use std::ops::Bound;
+    use std::sync::Arc;
 
     use prost::Message as _;
 
@@ -199,6 +296,84 @@ mod tests {
         store
             .dependency_revision(selection, &AnalysisReadControl::default())
             .map(|(meta, revision)| (meta.commit_revision, revision))
+    }
+
+    fn result_row(store: &AnalysisStore, id: &str) -> Result<(Vec<u8>, Vec<u8>, u64)> {
+        store.read_snapshot(|reader| {
+            reader.query_row(
+                "SELECT body, request_meta, commit_revision FROM analysis_results WHERE result_id = ?",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).context(AnalysisDatabaseSnafu { operation: "read frozen result test" })
+        })
+    }
+
+    struct NoContext;
+
+    impl crate::DiscoveryContextProvider for NoContext {
+        fn context(&self, _: &crate::DiscoveryRecordV1) -> Result<crate::DiscoveryContextJoinV1> {
+            Ok(crate::DiscoveryContextJoinV1::Unresolved(
+                crate::DiscoveryContextUnavailableV1::MissingDecisionCatalog,
+            ))
+        }
+    }
+
+    #[test]
+    fn discovery_notice_cache() -> TestResult {
+        let input = crate::DiscoveryInputManifestV1::try_from(
+            include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
+        )?;
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = Arc::new(AnalysisStore::open(&root)?);
+        let record = &input.records[0];
+        store.accept_validated_batch(
+            record.id.stream.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: record.id.cpu_id,
+                first_cursor: record.id.durable_cursor,
+                last_cursor: record.id.durable_cursor,
+                intake_utc_ns: 1,
+                framed_records: record.wire_record.clone().into(),
+                frame_ends: vec![record.wire_record.len()],
+            },
+        )?;
+        let owner = crate::DiscoveryOwner::new(
+            store.clone(),
+            Arc::new(NoContext),
+            crate::DiscoveryConfigV1 {
+                interval_records: 1,
+                ..Default::default()
+            },
+        )?;
+        owner.process(10)?;
+        let profile = owner.profile(&record.id.stream)?.ok_or("profile absent")?;
+        assert!(profile.sealed);
+        let head = store.processor_result(&profile.scope)?;
+        let health = store.processor_health(&profile.scope)?;
+        let meta = store.meta()?;
+        let frozen = result_row(&store, &profile.profile_id)?;
+        let notices = vec![(profile.profile_id.clone(), frozen.2)];
+        assert_eq!(store.profile_notices(&profile.scope, 2, 2)?, notices);
+        store.mark_notice(&profile, frozen.2, 2, 2)?;
+        assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
+        store.mark_notice(&profile, frozen.2, 1, 1)?;
+        assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
+        assert!(store.mark_notice(&profile, frozen.2 + 1, 3, 3).is_err());
+        assert_eq!(result_row(&store, &profile.profile_id)?, frozen);
+        assert_eq!(store.processor_result(&profile.scope)?, head);
+        assert_eq!(store.processor_health(&profile.scope)?, health);
+        assert_eq!(store.meta()?, meta);
+        drop(owner);
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(result_row(&store, &profile.profile_id)?, frozen);
+        assert_eq!(store.processor_result(&profile.scope)?, head);
+        assert_eq!(store.processor_health(&profile.scope)?, health);
+        assert_eq!(store.meta()?, meta);
+        assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
+        assert_eq!(store.profile_notices(&profile.scope, 3, 2)?, notices);
+        Ok(())
     }
 
     #[test]

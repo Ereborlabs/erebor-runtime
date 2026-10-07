@@ -53,6 +53,13 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Araphor data test failed: {source}"))]
+    Data {
+        #[snafu(source(from(araphor_data::Error, Box::new)))]
+        source: Box<araphor_data::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril node identity test failed: {source}"))]
     Node {
         #[snafu(source(from(mithril_node::Error, Box::new)))]
@@ -77,6 +84,7 @@ impl ErrorExt for Error {
             Self::Io { .. } | Self::Command { .. } => StatusCode::External,
             Self::Timeout { .. } => StatusCode::DeadlineExceeded,
             Self::Interceptor { source, .. } => source.status_code(),
+            Self::Data { source, .. } => source.status_code(),
             Self::Node { source, .. } => source.status_code(),
             Self::Policy { source, .. } => source.status_code(),
         }
@@ -90,6 +98,7 @@ impl ErrorExt for Error {
             | Self::Command { .. }
             | Self::Timeout { .. } => RetryHint::NonRetryable,
             Self::Interceptor { source, .. } => source.retry_hint(),
+            Self::Data { source, .. } => source.retry_hint(),
             Self::Node { source, .. } => source.retry_hint(),
             Self::Policy { source, .. } => source.retry_hint(),
         }

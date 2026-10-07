@@ -51,6 +51,9 @@ pub struct AnalysisSelectionV1 {
     pub all_contexts: bool,
     pub(crate) targets: bool,
     pub(crate) targets_only: bool,
+    pub(crate) discovery: bool,
+    pub(crate) discovery_context: bool,
+    pub(crate) profiles: Vec<String>,
     pub traces: Vec<TraceIdentityV1>,
     pub all_traces: bool,
     pub(crate) measurements: bool,
@@ -72,6 +75,9 @@ impl AnalysisSelectionV1 {
             all_contexts: false,
             targets: false,
             targets_only: false,
+            discovery: false,
+            discovery_context: false,
+            profiles: Vec::new(),
             traces: Vec::new(),
             all_traces: false,
             measurements: false,
@@ -105,13 +111,20 @@ impl AnalysisSelectionV1 {
             && self.sources.len() <= MAX_EXTRACT_KEYS
             && self.contexts.len() <= MAX_EXTRACT_KEYS - self.sources.len()
             && self.results.len() <= MAX_EXTRACT_KEYS - self.sources.len() - self.contexts.len()
-            && self.traces.len()
+            && self.profiles.len()
                 <= MAX_EXTRACT_KEYS - self.sources.len() - self.contexts.len() - self.results.len()
+            && self.traces.len()
+                <= MAX_EXTRACT_KEYS
+                    - self.sources.len()
+                    - self.contexts.len()
+                    - self.results.len()
+                    - self.profiles.len()
             && self.binding_ids.len()
                 <= MAX_EXTRACT_KEYS
                     - self.sources.len()
                     - self.contexts.len()
                     - self.results.len()
+                    - self.profiles.len()
                     - self.traces.len()
             && self.binding_ids.iter().all(|id| *id != [0; 16])
             && self.binding_ids.iter().collect::<BTreeSet<_>>().len() == self.binding_ids.len()
@@ -127,9 +140,14 @@ impl AnalysisSelectionV1 {
                 .results
                 .iter()
                 .all(|id| !id.is_empty() && id.len() <= 256)
+            && self
+                .profiles
+                .iter()
+                .all(|id| !id.is_empty() && id.len() <= 256)
             && self.sources.iter().collect::<BTreeSet<_>>().len() == self.sources.len()
             && self.contexts.iter().collect::<BTreeSet<_>>().len() == self.contexts.len()
             && self.results.iter().collect::<BTreeSet<_>>().len() == self.results.len()
+            && self.profiles.iter().collect::<BTreeSet<_>>().len() == self.profiles.len()
             && self
                 .traces
                 .iter()
@@ -151,6 +169,7 @@ impl AnalysisSelectionV1 {
             )
             .saturating_add(self.nodes.capacity().saturating_mul(size_of::<String>()))
             .saturating_add(self.results.capacity().saturating_mul(size_of::<String>()));
+        bytes = bytes.saturating_add(self.profiles.capacity().saturating_mul(size_of::<String>()));
         bytes = bytes.saturating_add(
             self.traces
                 .capacity()
@@ -170,7 +189,7 @@ impl AnalysisSelectionV1 {
                 .saturating_add(key.entity_key.capacity())
                 .saturating_add(key.lifetime_key.capacity());
         }
-        for key in self.nodes.iter().chain(&self.results) {
+        for key in self.nodes.iter().chain(&self.results).chain(&self.profiles) {
             bytes = bytes.saturating_add(key.capacity());
         }
         for identity in &self.traces {
@@ -203,6 +222,13 @@ pub enum AnalysisInputV1<'a> {
         record: &'a AnalysisRecordV1,
     },
     Context(&'a AnalysisContextVersionV1),
+    DiscoveryContext(&'a AnalysisContextVersionV1),
+    Behavior {
+        profile: &'a crate::DiscoveryProfileV1,
+        commit_revision: u64,
+        atom: Option<&'a crate::BehaviorAtomV1>,
+        discovery_enabled: bool,
+    },
     Target {
         context: &'a AnalysisContextVersionV1,
         fact: &'a crate::WorkloadTargetFactV1,
@@ -235,6 +261,8 @@ pub enum AnalysisInputV1<'a> {
 pub enum AnalysisRelationV1 {
     Events,
     Context,
+    DiscoveryContext,
+    Behaviors,
     Targets,
     Results,
     Traces,
@@ -261,6 +289,7 @@ pub struct AnalysisSourceSnapshotV1 {
 
 #[derive(Debug)]
 pub struct AnalysisExtractionV1<T = Box<[u8]>> {
+    pub discovery_enabled: bool,
     pub meta: AnalysisStoreMetaV1,
     pub sources: Vec<AnalysisSourceSnapshotV1>,
     pub missing_contexts: Vec<AnalysisContextKeyV1>,
@@ -417,6 +446,7 @@ impl AnalysisStore {
             && !selection.all_contexts
             && !selection.all_traces
             && !selection.targets_only
+            && !selection.discovery
             && selection.nodes.is_empty()
         {
             return Ok((Cow::Borrowed(selection), 0));
@@ -434,6 +464,7 @@ impl AnalysisStore {
         resolved.all_sources = false;
         resolved.all_contexts = false;
         resolved.all_traces = false;
+        resolved.discovery = false;
         if selection.targets_only {
             resolved
                 .contexts
@@ -467,6 +498,7 @@ impl AnalysisStore {
                     if resolved.sources.len()
                         + resolved.contexts.len()
                         + resolved.results.len()
+                        + resolved.profiles.len()
                         + resolved.traces.len()
                         + resolved.binding_ids.len()
                         == MAX_EXTRACT_KEYS
@@ -488,6 +520,7 @@ impl AnalysisStore {
             let remaining = MAX_EXTRACT_KEYS
                 - resolved.sources.len()
                 - resolved.results.len()
+                - resolved.profiles.len()
                 - resolved.traces.len()
                 - resolved.binding_ids.len();
             let mut statement = snapshot.prepare(
@@ -575,6 +608,7 @@ impl AnalysisStore {
                     if resolved.sources.len()
                         + resolved.contexts.len()
                         + resolved.results.len()
+                        + resolved.profiles.len()
                         + resolved.traces.len()
                         + resolved.binding_ids.len()
                         == MAX_EXTRACT_KEYS
@@ -591,6 +625,74 @@ impl AnalysisStore {
                     resolved.traces.push(identity);
                 }
             }
+        }
+        if selection.discovery {
+            let mut statement = snapshot
+                .prepare(
+                    "SELECT result_id FROM analysis_results
+                 WHERE tenant_id = ? AND processor_id = 'discovery'
+                   AND method_version = ? AND stream_key = ?
+                 QUALIFY ROW_NUMBER() OVER (
+                     PARTITION BY interval_id
+                     ORDER BY profile_revision DESC, commit_revision DESC, result_id DESC
+                 ) = 1
+                 ORDER BY result_id LIMIT ?",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare discovery profile keys",
+                })?;
+            for source in &resolved.sources {
+                control.check()?;
+                let remaining = MAX_EXTRACT_KEYS
+                    - resolved.sources.len()
+                    - resolved.contexts.len()
+                    - resolved.results.len()
+                    - resolved.profiles.len()
+                    - resolved.traces.len()
+                    - resolved.binding_ids.len();
+                let rows = statement
+                    .query_map(
+                        params![
+                            selection.tenant_id.as_slice(),
+                            crate::DISCOVERY_SCHEMA_VERSION as u64,
+                            source.key().as_slice(),
+                            (remaining + 1) as u32
+                        ],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read discovery profile keys",
+                    })?;
+                for row in rows {
+                    control.check()?;
+                    let id = row.context(AnalysisDatabaseSnafu {
+                        operation: "decode discovery profile key",
+                    })?;
+                    if id.is_empty() || id.len() > 256 {
+                        return self.reject("the discovery profile key is invalid");
+                    }
+                    if resolved.sources.len()
+                        + resolved.contexts.len()
+                        + resolved.results.len()
+                        + resolved.profiles.len()
+                        + resolved.traces.len()
+                        + resolved.binding_ids.len()
+                        == MAX_EXTRACT_KEYS
+                    {
+                        return Err(error());
+                    }
+                    let added =
+                        AnalysisExtractionV1::<()>::grow(&mut resolved.profiles, bytes, limit)?;
+                    bytes = bytes
+                        .checked_add(added)
+                        .and_then(|bytes| bytes.checked_add(id.capacity()))
+                        .filter(|bytes| *bytes <= limit)
+                        .ok_or_else(error)?;
+                    resolved.profiles.push(id);
+                }
+            }
+            resolved.profiles.sort();
+            resolved.profiles.dedup();
         }
         control.check()?;
         Ok((Cow::Owned(resolved), bytes))
@@ -722,6 +824,7 @@ impl AnalysisStore {
             // The revision fixes raw selection. The lease prevents segment deletion.
             drop(coordinator);
             let mut output = AnalysisExtractionV1 {
+                discovery_enabled: self.discovery_enabled(),
                 meta,
                 sources: Vec::new(),
                 missing_contexts: Vec::new(),
@@ -1016,6 +1119,12 @@ impl AnalysisStore {
                         if let Some(row) = project(AnalysisInputV1::Context(&context))? {
                             output.push(AnalysisRelationV1::Context, row)?;
                         }
+                        if selection.discovery_context {
+                            if let Some(row) = project(AnalysisInputV1::DiscoveryContext(&context))?
+                            {
+                                output.push(AnalysisRelationV1::DiscoveryContext, row)?;
+                            }
+                        }
                         if selection.targets && context.key.owner_id == "mithril-control/target" {
                             control.check()?;
                             let fact = serde_json::from_slice::<crate::WorkloadTargetFactV1>(
@@ -1057,6 +1166,54 @@ impl AnalysisStore {
                         )?;
                         output.charge(added)?;
                         output.missing_contexts.push(key);
+                    }
+                }
+            }
+            for id in &selection.profiles {
+                control.check()?;
+                let body = self
+                    .read_result_from(snapshot, selection.tenant_id, id)?
+                    .ok_or_else(|| self.state_error("the selected discovery profile is absent"))?;
+                output.charge(body.capacity())?;
+                let profile = crate::DiscoveryProfileV1::try_from(body.as_slice())?;
+                if profile.profile_id != *id || !selection.sources.contains(&profile.scope.identity)
+                {
+                    return self.reject("the discovery profile scope differs from its selection");
+                }
+                let revision: u64 = snapshot
+                    .query_row(
+                        "SELECT commit_revision FROM analysis_results
+                     WHERE tenant_id = ? AND processor_id = 'discovery' AND result_id = ?",
+                        params![selection.tenant_id.as_slice(), id],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read discovery profile revision",
+                    })?;
+                if selection.binding_ids.is_empty() {
+                    if let Some(row) = project(AnalysisInputV1::Behavior {
+                        profile: &profile,
+                        commit_revision: revision,
+                        atom: None,
+                        discovery_enabled: output.discovery_enabled,
+                    })? {
+                        output.push(AnalysisRelationV1::Behaviors, row)?;
+                    }
+                }
+                for atom in &profile.snapshot.atoms {
+                    control.check()?;
+                    if !selection.binding_ids.is_empty()
+                        && !selection.binding_ids.contains(&atom.key.binding_id)
+                    {
+                        continue;
+                    }
+                    if let Some(row) = project(AnalysisInputV1::Behavior {
+                        profile: &profile,
+                        commit_revision: revision,
+                        atom: Some(atom),
+                        discovery_enabled: output.discovery_enabled,
+                    })? {
+                        output.push(AnalysisRelationV1::Behaviors, row)?;
                     }
                 }
             }
@@ -2010,7 +2167,9 @@ mod tests {
                 AnalysisInputV1::Trace { .. }
                 | AnalysisInputV1::TraceOutput { .. }
                 | AnalysisInputV1::TraceMeasurement { .. }
-                | AnalysisInputV1::Target { .. } => {
+                | AnalysisInputV1::Target { .. }
+                | AnalysisInputV1::DiscoveryContext(_)
+                | AnalysisInputV1::Behavior { .. } => {
                     return store.reject("unselected input entered an evidence-only snapshot")
                 }
             }))

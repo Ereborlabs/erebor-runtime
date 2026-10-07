@@ -36,6 +36,8 @@ async fn run() -> mithril_control::Result<()> {
         kubernetes_nodes,
         kubernetes_admission,
         data_error,
+        discovery,
+        discovery_error,
     } = config.into_parts()?;
     info!(
         "starting Mithril Control",
@@ -45,6 +47,17 @@ async fn run() -> mithril_control::Result<()> {
     if let Some(error) = data_error {
         warn!("data intake is unavailable; policy service remains active", error = %error);
     }
+    if let Some(error) = discovery_error {
+        warn!("discovery startup failed", error = %error);
+    }
+    let (discovery_cancel, discovery_stop) = tokio::sync::watch::channel(false);
+    let discovery_task = discovery.map(|owner| {
+        tokio::spawn(async move {
+            if let Err(error) = owner.run(discovery_stop).await {
+                warn!("discovery stopped with an error", error = %error);
+            }
+        })
+    });
     // All optional Kubernetes tasks share the owners created from one validated configuration.
     let policy_owner = control.policy_desired_state();
     let admission_policy_owner = policy_owner.clone();
@@ -84,7 +97,7 @@ async fn run() -> mithril_control::Result<()> {
     };
     tokio::pin!(admission_server);
     // Required policy owner exits stop Control.
-    if let Some(client) = client {
+    let result = if let Some(client) = client {
         let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let control_shutdown = shutdown.clone();
         let client_shutdown = shutdown.clone();
@@ -134,5 +147,12 @@ async fn run() -> mithril_control::Result<()> {
             _ = &mut node_reconciler => Ok(()),
             result = &mut admission_server => result,
         }
+    };
+    let _ = discovery_cancel.send(true);
+    if let Some(task) = discovery_task {
+        if let Err(error) = task.await {
+            warn!("discovery task failed", error = %error);
+        }
     }
+    result
 }

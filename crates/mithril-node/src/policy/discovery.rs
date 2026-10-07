@@ -32,8 +32,8 @@ mod tests {
     use mithril_control::TemporalCoverageV1;
 
     #[test]
-    fn discovery_catalog_pins_verified_coordinates_and_bounds_lookup(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn discovery_catalog_exact_coordinates() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
         let (artifact, binding) = super::super::tests::entry_roles_artifact()?;
         let objects = super::super::tests::entry_role_objects(&artifact, &binding)?;
         let boot = Id128V1::new(1, 2);
@@ -64,6 +64,8 @@ mod tests {
                     source_sequence: 101,
                     observed_boottime_ns: 102,
                     task_cookie: 103,
+                    process_instance_id: Id128V1::new(104, 105),
+                    entry_instance_id: Id128V1::new(106, 107),
                     binding_id: key.binding,
                     profile_generation_ref_id: key.generation,
                     active_role_id: key.role,
@@ -146,6 +148,37 @@ mod tests {
             crate::EvidenceWal::open(directory.path(), crate::EvidenceWalLimits::default())?;
         assert_eq!(reopened.next_batch().ok_or("missing replay")?, batch);
         assert_eq!(batch.decode_records()?, vec![record]);
+        let mut next_binding = binding.clone();
+        next_binding.active_profile_generation_ref_id += 1;
+        let mut next_objects = objects.clone();
+        for object in &mut next_objects {
+            object.profile_generation_ref_id = next_binding.active_profile_generation_ref_id;
+        }
+        let mut next_catalog = NodeDiscoveryContextCatalog::default();
+        next_catalog.add_verified_binding(&artifact, &next_binding, &next_objects, boot);
+        let mut historical = observation.clone();
+        next_catalog.attach(&mut historical);
+        assert_eq!(
+            historical
+                .decision_context
+                .as_ref()
+                .ok_or("context")?
+                .catalog_state,
+            "NO_EXACT_MATCH"
+        );
+        let context = observation.decision_context.as_ref().ok_or("context")?;
+        assert_eq!(
+            context.process_instance_id,
+            Id128V1::new(104, 105).to_be_bytes()
+        );
+        assert_eq!(
+            context.entry_instance_id,
+            Id128V1::new(106, 107).to_be_bytes()
+        );
+        assert_eq!(
+            EvidenceDecisionCatalogV1::from_context(context)?,
+            Some(sealed.clone())
+        );
         let mut other_boot = NodeDiscoveryContextCatalog::default();
         other_boot.add_verified_binding(&artifact, &binding, &objects, Id128V1::new(7, 8));
         other_boot.attach(&mut changed);

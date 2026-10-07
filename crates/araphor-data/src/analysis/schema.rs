@@ -9,7 +9,7 @@ use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
 const MAX_SOURCES: u64 = 4096;
 
 impl EvidenceIntakeIdentityV1 {
-    pub(super) fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         crate::node_id_is_valid(&self.node_id)
             && self.tenant_id != [0; 16]
             && self.node_boot_id != [0; 16]
@@ -18,7 +18,7 @@ impl EvidenceIntakeIdentityV1 {
             && self.source_epoch != 0
     }
 
-    pub(super) fn key(&self) -> Vec<u8> {
+    pub(crate) fn key(&self) -> Vec<u8> {
         let mut key = Vec::with_capacity(67 + self.node_id.len());
         key.push(0);
         key.extend_from_slice(&self.tenant_id);
@@ -87,6 +87,16 @@ impl AnalysisStore {
                 OR result_id = '' OR length(result_id) > 256 OR processor_id = ''
                 OR octet_length(body) = 0 OR octet_length(body) > 16777216
                 OR octet_length(request_meta) = 0 OR octet_length(request_meta) > 16777216"),
+            ("invalid profile header", "SELECT 1 FROM analysis_results
+                WHERE (stream_key IS NULL AND (method_version IS NOT NULL OR interval_id IS NOT NULL
+                    OR profile_revision IS NOT NULL OR facts_revision IS NOT NULL
+                    OR coverage_revision IS NOT NULL OR first_cursor IS NOT NULL))
+                OR (stream_key IS NOT NULL AND (processor_id <> 'discovery'
+                    OR octet_length(stream_key) NOT BETWEEN 68 AND 195
+                    OR method_version IS NULL OR method_version = 0
+                    OR interval_id IS NULL OR interval_id = '' OR length(interval_id) > 256
+                    OR profile_revision IS NULL OR profile_revision = 0
+                    OR facts_revision IS NULL OR coverage_revision IS NULL OR first_cursor IS NULL))"),
             ("invalid witness reference", "SELECT 1 FROM evidence_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
                 LEFT JOIN segments e ON e.segment_id = r.segment_id AND e.state = 'Live'
@@ -99,6 +109,10 @@ impl AnalysisStore {
                     AND c.entity_key = r.entity_key AND c.lifetime_key = r.lifetime_key
                     AND c.owner_revision = r.owner_revision AND c.commit_revision = r.commit_revision
                 WHERE a.result_id IS NULL OR c.owner_id IS NULL OR r.commit_revision = 0"),
+            ("invalid processor result", "SELECT 1 FROM processor_progress p
+                LEFT JOIN analysis_results r ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
+                WHERE length(p.result_id) > 256
+                    OR (p.result_id <> '' AND (r.result_id IS NULL OR r.processor_id <> p.processor_id))"),
             ("invalid processor progress", "SELECT 1 FROM processor_progress p
                 LEFT JOIN source_receipts s ON s.stream_key = p.stream_key AND s.tenant_id = p.tenant_id
                 WHERE p.class NOT IN ('required', 'optional') OR p.processor_id = '' OR p.method_version = 0
@@ -472,10 +486,12 @@ impl AnalysisStore {
             "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end FROM segments",
             "stream_key, tenant_id, revision, report, commit_revision, ordinal FROM coverage",
             "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, commit_revision FROM context_versions",
-            "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision FROM processor_progress",
+            "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision, result_id FROM processor_progress",
             "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns, segment_id FROM evidence_refs",
             "ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision, commit_revision FROM context_refs",
-            "result_id, tenant_id, processor_id, body, request_meta, commit_revision FROM analysis_results",
+            "result_id, tenant_id, processor_id, body, request_meta, commit_revision,
+             stream_key, method_version, interval_id, profile_revision, facts_revision,
+             coverage_revision, first_cursor FROM analysis_results",
             "processor_id, method_version, tenant_id, stream_key, first_cursor, last_cursor, commit_revision FROM processor_gaps",
             "stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM recovery_gaps",
             "segment_id, stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM expired_ranges",

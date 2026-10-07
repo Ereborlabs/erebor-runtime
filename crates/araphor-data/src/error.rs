@@ -6,6 +6,36 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Discovery {field} is invalid"))]
+    DiscoveryInvalid {
+        field: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Discovery {kind} conflicts with retained state"))]
+    DiscoveryConflict {
+        kind: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Discovery encoding failed: {source}"))]
+    DiscoveryEncoding {
+        source: serde_json::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Discovery policy context failed: {source}"))]
+    DiscoveryContext {
+        source: Box<dyn std::error::Error + Send + Sync>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Discovery execution failed: {source}"))]
+    DiscoveryExecution {
+        source: tokio::task::JoinError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Canonical encoding failed: {reason}"))]
     CanonicalEncoding {
         reason: String,
@@ -162,6 +192,7 @@ impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::CanonicalEncoding { .. }
+            | Self::DiscoveryInvalid { .. }
             | Self::TraceInvalid { .. }
             | Self::QueryInvalid { .. }
             | Self::QueryLimit { .. }
@@ -177,15 +208,19 @@ impl ErrorExt for Error {
             | Self::AnalysisBusy { .. }
             | Self::ProtectedInputCapacity { .. }
             | Self::RetentionUnavailable { .. } => StatusCode::Unavailable,
-            Self::AnalysisConflict { .. } => StatusCode::AlreadyExists,
+            Self::AnalysisConflict { .. } | Self::DiscoveryConflict { .. } => {
+                StatusCode::AlreadyExists
+            }
             Self::EvidenceFrame { .. }
             | Self::EvidenceDecode { .. }
             | Self::AnalysisState { .. }
             | Self::Json { .. } => StatusCode::IllegalState,
-            Self::AnalysisDatabase { .. } | Self::Io { .. } | Self::QueryExecution { .. } => {
-                StatusCode::External
-            }
-            Self::QueryEncoding { .. } => StatusCode::Internal,
+            Self::AnalysisDatabase { .. }
+            | Self::Io { .. }
+            | Self::QueryExecution { .. }
+            | Self::DiscoveryContext { .. }
+            | Self::DiscoveryExecution { .. } => StatusCode::External,
+            Self::QueryEncoding { .. } | Self::DiscoveryEncoding { .. } => StatusCode::Internal,
         }
     }
 
