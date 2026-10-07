@@ -1864,7 +1864,6 @@ struct PreparedSelector<'a> {
 struct PreparedGeneration<'a> {
     artifact: &'a ProfileCandidateArtifactV1,
     lowered: LoweredGeneration,
-    process_state_handles: BTreeMap<String, u32>,
     role_states: BTreeMap<String, (u32, u32)>,
     composite_handles: BTreeMap<String, u64>,
     signed_device_classes: BTreeSet<String>,
@@ -1888,23 +1887,7 @@ impl<'a> PreparedGeneration<'a> {
         now_utc_ns: i64,
         now_boottime_ns: u64,
     ) -> Result<Self> {
-        let profile_id = parse_id("profile_id", &artifact.header.profile_id)?;
-        let role_handles = handles(
-            artifact
-                .policy_document
-                .roles
-                .iter()
-                .map(|role| role.role_id.as_str()),
-        );
-        let process_state_handles = handles(
-            artifact
-                .policy_document
-                .process_state_definitions
-                .iter()
-                .map(|state| state.process_state_id.as_str()),
-        );
-        let semantics =
-            generation_semantics(artifact, profile_id, &role_handles, &process_state_handles)?;
+        let semantics = GenerationSemantics::try_from(artifact)?;
         let role_states = artifact
             .policy_document
             .roles
@@ -1913,9 +1896,11 @@ impl<'a> PreparedGeneration<'a> {
                 Ok((
                     role.role_id.clone(),
                     (
-                        role_handles[&role.role_id],
-                        *process_state_handles
+                        semantics.role_handles[&role.role_id],
+                        semantics
+                            .process_state_handles
                             .get(&role.default_process_state_id)
+                            .map(|(handle, _)| *handle)
                             .ok_or_else(|| {
                                 IdentityStateSnafu {
                                     reason: format!(
@@ -1972,18 +1957,18 @@ impl<'a> PreparedGeneration<'a> {
             &graph,
             generation,
             &composite_handles,
-            &role_handles,
+            &semantics.role_handles,
         )?;
         let ipc_relationships = lower_ipc_relationships(
             &artifact.policy_document,
             generation,
-            &role_handles,
+            &semantics.role_handles,
             artifact.compiled_profile.mode,
         )?;
         let network = LoweredNetworkPolicy::lower(&artifact.policy_document, generation)?;
         let descriptor = ProfileGenerationDescriptorV1 {
             node_boot_id,
-            profile_id,
+            profile_id: semantics.profile_id,
             label_epoch,
             profile_generation_ref_id: generation,
             owner_generation: artifact.header.profile_version,
@@ -2010,7 +1995,6 @@ impl<'a> PreparedGeneration<'a> {
                 path_tree_denials: path_tables.path_tree_denials,
                 ..LoweredGeneration::default()
             },
-            process_state_handles,
             role_states,
             composite_handles,
             signed_device_classes,
@@ -2050,8 +2034,7 @@ impl<'a> PreparedGeneration<'a> {
                 reason: "candidate profile or generation does not match its workload binding",
             }
         );
-        let role_handles = &self.lowered.semantics.role_handles;
-        let process_state_handles = &self.process_state_handles;
+        let semantics = &self.lowered.semantics;
         let generation_objects = measured_objects
             .iter()
             .filter(|object| object.profile_generation_ref_id == generation);
@@ -2130,15 +2113,8 @@ impl<'a> PreparedGeneration<'a> {
             .fail();
         }
         let policy_exact_objects = proven.iter().map(|(object, _)| *object).collect::<Vec<_>>();
-        validate_binding_roles(artifact, binding, role_handles, process_state_handles)?;
-        let entry_admissions = lower_entry_admissions(
-            artifact,
-            binding,
-            role_handles,
-            process_state_handles,
-            &self.composite_handles,
-            defer_binding_entries,
-        )?;
+        self.validate_binding_roles(binding)?;
+        let entry_admissions = self.lower_entry_admissions(binding, defer_binding_entries)?;
         let mut decisions = BTreeMap::new();
         let mut defaults = BTreeMap::new();
         let mut device_decisions = BTreeMap::new();
@@ -2151,13 +2127,15 @@ impl<'a> PreparedGeneration<'a> {
             }
             let mut key = EffectDefaultKeyV1 {
                 profile_generation_ref_id: generation,
-                active_role_id: *role_handles.get(&cell.key.role_id).context(
+                active_role_id: *semantics.role_handles.get(&cell.key.role_id).context(
                     IdentityStateSnafu {
                         reason: format!("compiled cell has unknown role `{}`", cell.key.role_id),
                     },
                 )?,
-                process_state_vector_id: *process_state_handles
+                process_state_vector_id: semantics
+                    .process_state_handles
                     .get(&cell.key.process_state_id)
+                    .map(|(handle, _)| *handle)
                     .context(IdentityStateSnafu {
                         reason: format!(
                             "compiled cell has unknown process state `{}`",
@@ -2414,7 +2392,7 @@ impl<'a> PreparedGeneration<'a> {
             insert_exact(&mut file_objects, key.as_bytes(), value.as_bytes())?;
         }
         let (administrative_required, administrative_plans) =
-            lower_administrative_plans(artifact, binding, role_handles, process_state_handles)?;
+            self.lower_administrative_plans(binding)?;
         let mut path_tables = PathTables::default();
         path_tables.add_binding(
             &self.graph,
@@ -2441,6 +2419,360 @@ impl<'a> PreparedGeneration<'a> {
             .mount_reconciliation
             .extend(path_tables.reconciliation);
         Ok(())
+    }
+
+    fn lower_entry_admissions(
+        &self,
+        binding: &WorkloadBindingConfig,
+        defer_entries: bool,
+    ) -> Result<GenerationRows> {
+        let artifact = self.artifact;
+        let semantics = &self.lowered.semantics;
+        let assignment_handles = handles(
+            artifact
+                .policy_document
+                .entry_role_assignments
+                .iter()
+                .map(|assignment| assignment.assignment_id.as_str()),
+        );
+        let binding_id = if defer_entries {
+            binding
+                .scheduled_binding_authority_id
+                .as_deref()
+                .map(|binding_id| parse_id("scheduled_binding_authority_id", binding_id))
+                .transpose()?
+                .unwrap_or(parse_id("binding_id", &binding.binding_id)?)
+        } else {
+            parse_id("binding_id", &binding.binding_id)?
+        };
+        let external_role_id = semantics
+            .role_handles
+            .iter()
+            .find_map(|(role, handle)| {
+                (*handle == binding.external_role_id).then_some(role.as_str())
+            })
+            .context(IdentityStateSnafu {
+                reason: "configured external role has no signed role ID",
+            })?;
+        let mut rows = GenerationRows::new();
+        for assignment in artifact
+            .policy_document
+            .entry_role_assignments
+            .iter()
+            .filter(|assignment| {
+                assignment
+                    .workload_selector_ids
+                    .contains(&binding.workload_selector_id)
+                    && assignment
+                        .container_kinds
+                        .contains(&policy_container_kind(binding.container_kind))
+                    && assignment.admission_execution_rule_id.is_some()
+            })
+        {
+            let [policy_entry_kind] = assignment.entry_kinds.as_slice() else {
+                return IdentityStateSnafu {
+                    reason: format!(
+                        "entry admission `{}` does not have one entry kind",
+                        assignment.assignment_id
+                    ),
+                }
+                .fail();
+            };
+            let source_role_id = match policy_entry_kind {
+                EntryKindV1::ContainerStart => assignment.resulting_role_id.as_str(),
+                EntryKindV1::DeclaredPostStart
+                | EntryKindV1::DeclaredPreStop
+                | EntryKindV1::DeclaredStartupProbe
+                | EntryKindV1::DeclaredReadinessProbe
+                | EntryKindV1::DeclaredLivenessProbe => external_role_id,
+                _ => {
+                    return IdentityStateSnafu {
+                        reason: format!(
+                            "entry admission `{}` uses an unsupported transition kind",
+                            assignment.assignment_id
+                        ),
+                    }
+                    .fail()
+                }
+            };
+            let rule_id =
+                assignment
+                    .admission_execution_rule_id
+                    .as_deref()
+                    .context(IdentityStateSnafu {
+                        reason: "entry admission lost its execution rule",
+                    })?;
+            let rule = artifact
+                .policy_document
+                .rules
+                .iter()
+                .find(|rule| rule.rule_id == rule_id)
+                .context(IdentityStateSnafu {
+                    reason: format!("entry admission rule `{rule_id}` is not signed"),
+                })?;
+            let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match else {
+                return IdentityStateSnafu {
+                    reason: format!("entry admission rule `{rule_id}` is not a local effect"),
+                }
+                .fail();
+            };
+            let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object else {
+                return IdentityStateSnafu {
+                    reason: format!("entry admission rule `{rule_id}` has no path selector"),
+                }
+                .fail();
+            };
+            let [path_selector_id] = path_selector_ids.as_slice() else {
+                return IdentityStateSnafu {
+                    reason: format!("entry admission rule `{rule_id}` is not one exact path match"),
+                }
+                .fail();
+            };
+            let selector = artifact
+                .policy_document
+                .path_selectors
+                .iter()
+                .find(|selector| selector.path_selector_id == *path_selector_id)
+                .context(IdentityStateSnafu {
+                    reason: format!(
+                        "entry admission rule `{rule_id}` has an unknown path selector"
+                    ),
+                })?;
+            ensure!(
+                rule.enabled
+                    && rule.requested_disposition == PolicyDispositionV1::Allow
+                    && effect.effect_families == [mithril_control::EffectFamilyV1::Exec]
+                    && effect.operation_ids.iter().any(|operation| operation == "EXECUTE")
+                    && effect.subject.role_ids == [assignment.resulting_role_id.as_str()]
+                    && effect
+                        .subject
+                        .entry_kind_ids
+                        .contains(policy_entry_kind)
+                    && !selector.requires_exact_object(),
+                IdentityStateSnafu {
+                    reason: format!(
+                        "entry admission rule `{rule_id}` is not one literal-path Allow Execute rule for its role and entry kind"
+                    ),
+                }
+            );
+            let target_role_id = semantics.role_handles[&assignment.resulting_role_id];
+            let target_role = artifact
+                .policy_document
+                .roles
+                .iter()
+                .find(|role| role.role_id == assignment.resulting_role_id)
+                .context(IdentityStateSnafu {
+                    reason: format!(
+                        "entry admission `{}` has no signed target role",
+                        assignment.assignment_id
+                    ),
+                })?;
+            let key = EntryAdmissionRuleKeyV1 {
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                binding_id,
+                composite_atom_id: self.composite_handles[&format!("PATH:{path_selector_id}")],
+                source_role_id: semantics.role_handles[source_role_id],
+                reserved: 0,
+            };
+            let value = EntryAdmissionRuleV1 {
+                target_role_id,
+                target_process_state_vector_id: semantics.process_state_handles
+                    [&target_role.default_process_state_id]
+                    .0,
+                admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
+                reserved: 0,
+                exact_object_key_id: 0,
+                executable_object: ExactFileObjectKeyV1::default(),
+            };
+            insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
+        }
+        Ok(rows)
+    }
+
+    fn validate_binding_roles(&self, binding: &WorkloadBindingConfig) -> Result<()> {
+        let artifact = self.artifact;
+        let semantics = &self.lowered.semantics;
+        for (entry_kind, configured_handle) in [
+            (EntryKindV1::ContainerStart, binding.initial_role_id),
+            (
+                EntryKindV1::ExternalRuntimeUnknown,
+                binding.external_role_id,
+            ),
+        ] {
+            let role_ids = artifact
+                .policy_document
+                .entry_role_assignments
+                .iter()
+                .filter(|assignment| {
+                    assignment
+                        .workload_selector_ids
+                        .contains(&binding.workload_selector_id)
+                        && assignment.entry_kinds.contains(&entry_kind)
+                        && assignment
+                            .container_kinds
+                            .contains(&policy_container_kind(binding.container_kind))
+                })
+                .map(|assignment| assignment.resulting_role_id.as_str())
+                .collect::<BTreeSet<_>>();
+            ensure!(
+                role_ids.len() == 1,
+                IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` needs one exact signed {entry_kind:?} role assignment",
+                        binding.binding_id
+                    ),
+                }
+            );
+            let role_id = role_ids.iter().next().copied().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` lost its signed {entry_kind:?} role assignment",
+                        binding.binding_id
+                    ),
+                }
+                .build()
+            })?;
+            ensure!(
+                semantics.role_handles.get(role_id) == Some(&configured_handle),
+                IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` configured role handle does not match signed {entry_kind:?} role `{role_id}`",
+                        binding.binding_id
+                    ),
+                }
+            );
+            let role = artifact
+                .policy_document
+                .roles
+                .iter()
+                .find(|role| role.role_id == role_id)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!("signed role `{role_id}` is not defined"),
+                    }
+                    .build()
+                })?;
+            let state = artifact
+                .policy_document
+                .process_state_definitions
+                .iter()
+                .find(|state| state.process_state_id == role.default_process_state_id)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "signed role `{role_id}` references undefined process state `{}`",
+                            role.default_process_state_id
+                        ),
+                    }
+                    .build()
+                })?;
+            ensure!(
+                semantics
+                    .process_state_handles
+                    .get(&state.process_state_id)
+                    .is_some_and(|(handle, _)| *handle == 1)
+                    && state.state_bits.is_empty(),
+                IdentityStateSnafu {
+                    reason: format!(
+                        "signed role `{role_id}` needs the conservative empty process-state vector supported by the BPF root path"
+                    ),
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn lower_administrative_plans(
+        &self,
+        binding: &WorkloadBindingConfig,
+    ) -> Result<(bool, Vec<AdministrativePolicyPlanV1>)> {
+        let artifact = self.artifact;
+        let semantics = &self.lowered.semantics;
+        let assignments = artifact
+            .policy_document
+            .entry_role_assignments
+            .iter()
+            .filter(|assignment| {
+                assignment
+                    .workload_selector_ids
+                    .contains(&binding.workload_selector_id)
+                    && assignment.entry_kinds.as_slice()
+                        == [EntryKindV1::ApprovedAdministrativeExec]
+                    && assignment
+                        .container_kinds
+                        .contains(&policy_container_kind(binding.container_kind))
+                    && assignment.required_administrative_exec_approval
+            })
+            .collect::<Vec<_>>();
+        if assignments.is_empty() {
+            return Ok((false, Vec::new()));
+        }
+        ensure!(
+            assignments.len() == 1,
+            IdentityStateSnafu {
+                reason: "one container binding must have one administrative entry",
+            }
+        );
+        let assignment_handles = handles(
+            artifact
+                .policy_document
+                .entry_role_assignments
+                .iter()
+                .map(|assignment| assignment.assignment_id.as_str()),
+        );
+        let artifact_sha256 = decode_sha256(&artifact.header.policy_document_digest)?;
+        let profile = PortableProfileGenerationIdentityV1 {
+            profile_id: parse_id("profile_id", &artifact.header.profile_id)?,
+            owner_generation: artifact.header.profile_version,
+            artifact_sha256,
+        };
+        let mut plans = Vec::new();
+        for assignment in assignments {
+            let role = artifact
+                .policy_document
+                .roles
+                .iter()
+                .find(|role| role.role_id == assignment.resulting_role_id)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "administrative assignment has no signed role".to_owned(),
+                    }
+                    .build()
+                })?;
+            let process_state = artifact
+                .policy_document
+                .process_state_definitions
+                .iter()
+                .find(|state| state.process_state_id == role.default_process_state_id)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "administrative role has no signed process state".to_owned(),
+                    }
+                    .build()
+                })?;
+            ensure!(
+                role.permitted_entry_kinds
+                    .contains(&EntryKindV1::ApprovedAdministrativeExec)
+                    && process_state.state_bits.is_empty()
+                    && semantics
+                        .process_state_handles
+                        .get(&process_state.process_state_id)
+                        .is_some_and(|(handle, _)| *handle == 1),
+                IdentityStateSnafu {
+                    reason: "administrative role needs the supported approved entry and conservative process state",
+                }
+            );
+            let approved_role_numeric_id = semantics.role_handles[&role.role_id];
+            plans.push(AdministrativePolicyPlanV1 {
+                binding_id: parse_id("binding_id", &binding.binding_id)?,
+                approved_role_id: role.role_id.clone(),
+                approved_role_numeric_id,
+                admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
+                profile: profile.clone(),
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+            });
+        }
+        Ok((true, plans))
     }
 
     fn finish(mut self) -> Result<LoweredGeneration> {
@@ -4464,169 +4796,6 @@ fn entry_admission_path_selector_ids(
     Ok(selector_ids)
 }
 
-fn lower_entry_admissions(
-    artifact: &ProfileCandidateArtifactV1,
-    binding: &WorkloadBindingConfig,
-    role_handles: &BTreeMap<String, u32>,
-    process_state_handles: &BTreeMap<String, u32>,
-    composite_handles: &BTreeMap<String, u64>,
-    defer_non_initial_entries: bool,
-) -> Result<GenerationRows> {
-    let assignment_handles = handles(
-        artifact
-            .policy_document
-            .entry_role_assignments
-            .iter()
-            .map(|assignment| assignment.assignment_id.as_str()),
-    );
-    let binding_id = if defer_non_initial_entries {
-        binding
-            .scheduled_binding_authority_id
-            .as_deref()
-            .map(|binding_id| parse_id("scheduled_binding_authority_id", binding_id))
-            .transpose()?
-            .unwrap_or(parse_id("binding_id", &binding.binding_id)?)
-    } else {
-        parse_id("binding_id", &binding.binding_id)?
-    };
-    let external_role_id = role_handles
-        .iter()
-        .find_map(|(role, handle)| (*handle == binding.external_role_id).then_some(role.as_str()))
-        .context(IdentityStateSnafu {
-            reason: "configured external role has no signed role ID",
-        })?;
-    let mut rows = GenerationRows::new();
-    for assignment in artifact
-        .policy_document
-        .entry_role_assignments
-        .iter()
-        .filter(|assignment| {
-            assignment
-                .workload_selector_ids
-                .contains(&binding.workload_selector_id)
-                && assignment
-                    .container_kinds
-                    .contains(&policy_container_kind(binding.container_kind))
-                && assignment.admission_execution_rule_id.is_some()
-        })
-    {
-        let [policy_entry_kind] = assignment.entry_kinds.as_slice() else {
-            return IdentityStateSnafu {
-                reason: format!(
-                    "entry admission `{}` does not have one entry kind",
-                    assignment.assignment_id
-                ),
-            }
-            .fail();
-        };
-        let source_role_id = match policy_entry_kind {
-            EntryKindV1::ContainerStart => assignment.resulting_role_id.as_str(),
-            EntryKindV1::DeclaredPostStart
-            | EntryKindV1::DeclaredPreStop
-            | EntryKindV1::DeclaredStartupProbe
-            | EntryKindV1::DeclaredReadinessProbe
-            | EntryKindV1::DeclaredLivenessProbe => external_role_id,
-            _ => {
-                return IdentityStateSnafu {
-                    reason: format!(
-                        "entry admission `{}` uses an unsupported transition kind",
-                        assignment.assignment_id
-                    ),
-                }
-                .fail()
-            }
-        };
-        let rule_id =
-            assignment
-                .admission_execution_rule_id
-                .as_deref()
-                .context(IdentityStateSnafu {
-                    reason: "entry admission lost its execution rule",
-                })?;
-        let rule = artifact
-            .policy_document
-            .rules
-            .iter()
-            .find(|rule| rule.rule_id == rule_id)
-            .context(IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` is not signed"),
-            })?;
-        let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match else {
-            return IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` is not a local effect"),
-            }
-            .fail();
-        };
-        let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object else {
-            return IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` has no path selector"),
-            }
-            .fail();
-        };
-        let [path_selector_id] = path_selector_ids.as_slice() else {
-            return IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` is not one exact path match"),
-            }
-            .fail();
-        };
-        let selector = artifact
-            .policy_document
-            .path_selectors
-            .iter()
-            .find(|selector| selector.path_selector_id == *path_selector_id)
-            .context(IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` has an unknown path selector"),
-            })?;
-        ensure!(
-            rule.enabled
-                && rule.requested_disposition == PolicyDispositionV1::Allow
-                && effect.effect_families == [mithril_control::EffectFamilyV1::Exec]
-                && effect.operation_ids.iter().any(|operation| operation == "EXECUTE")
-                && effect.subject.role_ids == [assignment.resulting_role_id.as_str()]
-                && effect
-                    .subject
-                    .entry_kind_ids
-                    .contains(policy_entry_kind)
-                && !selector.requires_exact_object(),
-            IdentityStateSnafu {
-                reason: format!(
-                    "entry admission rule `{rule_id}` is not one literal-path Allow Execute rule for its role and entry kind"
-                ),
-            }
-        );
-        let target_role_id = role_handles[&assignment.resulting_role_id];
-        let target_role = artifact
-            .policy_document
-            .roles
-            .iter()
-            .find(|role| role.role_id == assignment.resulting_role_id)
-            .context(IdentityStateSnafu {
-                reason: format!(
-                    "entry admission `{}` has no signed target role",
-                    assignment.assignment_id
-                ),
-            })?;
-        let key = EntryAdmissionRuleKeyV1 {
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            binding_id,
-            composite_atom_id: composite_handles[&format!("PATH:{path_selector_id}")],
-            source_role_id: role_handles[source_role_id],
-            reserved: 0,
-        };
-        let value = EntryAdmissionRuleV1 {
-            target_role_id,
-            target_process_state_vector_id: process_state_handles
-                [&target_role.default_process_state_id],
-            admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
-            reserved: 0,
-            exact_object_key_id: 0,
-            executable_object: ExactFileObjectKeyV1::default(),
-        };
-        insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
-    }
-    Ok(rows)
-}
-
 fn entry_admission_authority_rows(rows: &GenerationRows) -> Result<GenerationRows> {
     let mut authority = GenerationRows::new();
     for (key, value) in rows {
@@ -4638,188 +4807,6 @@ fn entry_admission_authority_rows(rows: &GenerationRows) -> Result<GenerationRow
         insert_exact(&mut authority, key.as_bytes(), rule.as_bytes())?;
     }
     Ok(authority)
-}
-
-fn validate_binding_roles(
-    artifact: &ProfileCandidateArtifactV1,
-    binding: &WorkloadBindingConfig,
-    role_handles: &BTreeMap<String, u32>,
-    process_state_handles: &BTreeMap<String, u32>,
-) -> Result<()> {
-    for (entry_kind, configured_handle) in [
-        (EntryKindV1::ContainerStart, binding.initial_role_id),
-        (
-            EntryKindV1::ExternalRuntimeUnknown,
-            binding.external_role_id,
-        ),
-    ] {
-        let role_ids = artifact
-            .policy_document
-            .entry_role_assignments
-            .iter()
-            .filter(|assignment| {
-                assignment
-                    .workload_selector_ids
-                    .contains(&binding.workload_selector_id)
-                    && assignment.entry_kinds.contains(&entry_kind)
-                    && assignment
-                        .container_kinds
-                        .contains(&policy_container_kind(binding.container_kind))
-            })
-            .map(|assignment| assignment.resulting_role_id.as_str())
-            .collect::<BTreeSet<_>>();
-        ensure!(
-            role_ids.len() == 1,
-            IdentityStateSnafu {
-                reason: format!(
-                    "binding `{}` needs one exact signed {entry_kind:?} role assignment",
-                    binding.binding_id
-                ),
-            }
-        );
-        let role_id = role_ids.iter().next().copied().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!(
-                    "binding `{}` lost its signed {entry_kind:?} role assignment",
-                    binding.binding_id
-                ),
-            }
-            .build()
-        })?;
-        ensure!(
-            role_handles.get(role_id) == Some(&configured_handle),
-            IdentityStateSnafu {
-                reason: format!(
-                    "binding `{}` configured role handle does not match signed {entry_kind:?} role `{role_id}`",
-                    binding.binding_id
-                ),
-            }
-        );
-        let role = artifact
-            .policy_document
-            .roles
-            .iter()
-            .find(|role| role.role_id == role_id)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!("signed role `{role_id}` is not defined"),
-                }
-                .build()
-            })?;
-        let state = artifact
-            .policy_document
-            .process_state_definitions
-            .iter()
-            .find(|state| state.process_state_id == role.default_process_state_id)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!(
-                        "signed role `{role_id}` references undefined process state `{}`",
-                        role.default_process_state_id
-                    ),
-                }
-                .build()
-            })?;
-        ensure!(
-            process_state_handles.get(&state.process_state_id) == Some(&1)
-                && state.state_bits.is_empty(),
-            IdentityStateSnafu {
-                reason: format!(
-                    "signed role `{role_id}` needs the conservative empty process-state vector supported by the BPF root path"
-                ),
-            }
-        );
-    }
-    Ok(())
-}
-
-fn lower_administrative_plans(
-    artifact: &ProfileCandidateArtifactV1,
-    binding: &WorkloadBindingConfig,
-    role_handles: &BTreeMap<String, u32>,
-    process_state_handles: &BTreeMap<String, u32>,
-) -> Result<(bool, Vec<AdministrativePolicyPlanV1>)> {
-    let assignments = artifact
-        .policy_document
-        .entry_role_assignments
-        .iter()
-        .filter(|assignment| {
-            assignment
-                .workload_selector_ids
-                .contains(&binding.workload_selector_id)
-                && assignment.entry_kinds.as_slice() == [EntryKindV1::ApprovedAdministrativeExec]
-                && assignment
-                    .container_kinds
-                    .contains(&policy_container_kind(binding.container_kind))
-                && assignment.required_administrative_exec_approval
-        })
-        .collect::<Vec<_>>();
-    if assignments.is_empty() {
-        return Ok((false, Vec::new()));
-    }
-    ensure!(
-        assignments.len() == 1,
-        IdentityStateSnafu {
-            reason: "one container binding must have one administrative entry",
-        }
-    );
-    let assignment_handles = handles(
-        artifact
-            .policy_document
-            .entry_role_assignments
-            .iter()
-            .map(|assignment| assignment.assignment_id.as_str()),
-    );
-    let artifact_sha256 = decode_sha256(&artifact.header.policy_document_digest)?;
-    let profile = PortableProfileGenerationIdentityV1 {
-        profile_id: parse_id("profile_id", &artifact.header.profile_id)?,
-        owner_generation: artifact.header.profile_version,
-        artifact_sha256,
-    };
-    let mut plans = Vec::new();
-    for assignment in assignments {
-        let role = artifact
-            .policy_document
-            .roles
-            .iter()
-            .find(|role| role.role_id == assignment.resulting_role_id)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "administrative assignment has no signed role".to_owned(),
-                }
-                .build()
-            })?;
-        let process_state = artifact
-            .policy_document
-            .process_state_definitions
-            .iter()
-            .find(|state| state.process_state_id == role.default_process_state_id)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "administrative role has no signed process state".to_owned(),
-                }
-                .build()
-            })?;
-        ensure!(
-            role.permitted_entry_kinds
-                .contains(&EntryKindV1::ApprovedAdministrativeExec)
-                && process_state.state_bits.is_empty()
-                && process_state_handles.get(&process_state.process_state_id) == Some(&1),
-            IdentityStateSnafu {
-                reason: "administrative role needs the supported approved entry and conservative process state",
-            }
-        );
-        let approved_role_numeric_id = role_handles[&role.role_id];
-        plans.push(AdministrativePolicyPlanV1 {
-            binding_id: parse_id("binding_id", &binding.binding_id)?,
-            approved_role_id: role.role_id.clone(),
-            approved_role_numeric_id,
-            admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
-            profile: profile.clone(),
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-        });
-    }
-    Ok((true, plans))
 }
 
 fn decode_sha256(value: &str) -> Result<[u8; 32]> {
@@ -4891,63 +4878,70 @@ fn handles<'a>(ids: impl Iterator<Item = &'a str>) -> BTreeMap<String, u32> {
         .collect()
 }
 
-fn generation_semantics(
-    artifact: &ProfileCandidateArtifactV1,
-    profile_id: Id128V1,
-    role_handles: &BTreeMap<String, u32>,
-    process_state_handles: &BTreeMap<String, u32>,
-) -> Result<GenerationSemantics> {
-    let process_states = artifact
-        .policy_document
-        .process_state_definitions
-        .iter()
-        .map(|state| {
-            let mut bits = 0_u64;
-            for bit in &state.state_bits {
-                bits |= 1_u64.checked_shl(u32::from(*bit)).ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "process state `{}` has an out-of-range state bit",
-                            state.process_state_id
-                        ),
-                    }
-                    .build()
-                })?;
-            }
-            Ok((
-                state.process_state_id.clone(),
-                (process_state_handles[&state.process_state_id], bits),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    let mut live_role_states = artifact
-        .policy_document
-        .roles
-        .iter()
-        .map(|role| (role.role_id.clone(), role.default_process_state_id.clone()))
-        .collect::<BTreeSet<_>>();
-    live_role_states.extend(artifact.policy_document.native_transition_rules.iter().map(
-        |transition| {
-            (
-                transition.resulting_role_id.clone(),
-                transition.resulting_process_state_id.clone(),
-            )
-        },
-    ));
-    ensure!(
-        live_role_states.iter().all(|(role, state)| {
-            role_handles.contains_key(role) && process_states.contains_key(state)
-        }),
-        IdentityStateSnafu {
-            reason: "generation semantics contain an unknown live role or process state",
+impl TryFrom<&ProfileCandidateArtifactV1> for GenerationSemantics {
+    type Error = crate::Error;
+
+    fn try_from(artifact: &ProfileCandidateArtifactV1) -> Result<Self> {
+        let profile_id = parse_id("profile_id", &artifact.header.profile_id)?;
+        let role_handles = handles(
+            artifact
+                .policy_document
+                .roles
+                .iter()
+                .map(|role| role.role_id.as_str()),
+        );
+        let mut process_states = artifact
+            .policy_document
+            .process_state_definitions
+            .iter()
+            .map(|state| {
+                let mut bits = 0_u64;
+                for bit in &state.state_bits {
+                    bits |= 1_u64.checked_shl(u32::from(*bit)).ok_or_else(|| {
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "process state `{}` has an out-of-range state bit",
+                                state.process_state_id
+                            ),
+                        }
+                        .build()
+                    })?;
+                }
+                Ok((state.process_state_id.clone(), (0, bits)))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        for (index, (handle, _)) in process_states.values_mut().enumerate() {
+            *handle = index as u32 + 1;
         }
-    );
-    Ok(GenerationSemantics {
-        profile_id,
-        role_handles: role_handles.clone(),
-        process_state_handles: process_states,
-        live_role_states,
-    })
+        let mut live_role_states = artifact
+            .policy_document
+            .roles
+            .iter()
+            .map(|role| (role.role_id.clone(), role.default_process_state_id.clone()))
+            .collect::<BTreeSet<_>>();
+        live_role_states.extend(artifact.policy_document.native_transition_rules.iter().map(
+            |transition| {
+                (
+                    transition.resulting_role_id.clone(),
+                    transition.resulting_process_state_id.clone(),
+                )
+            },
+        ));
+        ensure!(
+            live_role_states.iter().all(|(role, state)| {
+                role_handles.contains_key(role) && process_states.contains_key(state)
+            }),
+            IdentityStateSnafu {
+                reason: "generation semantics contain an unknown live role or process state",
+            }
+        );
+        Ok(Self {
+            profile_id,
+            role_handles,
+            process_state_handles: process_states,
+            live_role_states,
+        })
+    }
 }
 
 fn physical_decision(
