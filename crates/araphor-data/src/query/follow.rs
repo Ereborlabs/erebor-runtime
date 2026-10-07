@@ -45,9 +45,11 @@ impl QueryClock for SystemQueryClock {
     }
 }
 
+type QueryNext = Pin<Box<dyn Future<Output = (QueryState, Result<Option<QueryFrame>>)> + Send>>;
+
 pub struct QueryStream {
     state: Option<QueryState>,
-    next: Option<Pin<Box<dyn Future<Output = (QueryState, Result<Option<QueryFrame>>)> + Send>>>,
+    next: Option<QueryNext>,
     control: Arc<AnalysisReadControl>,
     stop: watch::Sender<bool>,
     session: Option<QuerySession>,

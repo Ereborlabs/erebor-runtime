@@ -752,7 +752,7 @@ mod tests {
             }
         }
         request.owner_facts[0].recorded_utc_ns = 4000;
-        let view = DiscoveryOwner::select_context(&request, &[first.clone()])?;
+        let view = DiscoveryOwner::select_context(&request, std::slice::from_ref(&first))?;
         assert!(view
             .missing_facts
             .iter()
@@ -762,7 +762,7 @@ mod tests {
             Some(&1)
         );
         request.access.sensitivities.clear();
-        let view = DiscoveryOwner::select_context(&request, &[first.clone()])?;
+        let view = DiscoveryOwner::select_context(&request, std::slice::from_ref(&first))?;
         assert!(view.documents.is_empty());
         assert_eq!(view.omissions.get("DOCUMENT_ACCESS_DENIED"), Some(&1));
         conflict.document.tenant_id = [9; 16];
@@ -856,11 +856,11 @@ mod tests {
         for (index, fact) in request.owner_facts.iter_mut().enumerate() {
             fact.context.key.lifetime_key = vec![20 + index as u8];
         }
-        let view = DiscoveryOwner::select_context(&request, &[first.clone()])?;
+        let view = DiscoveryOwner::select_context(&request, std::slice::from_ref(&first))?;
         assert_eq!(view.owner_facts.len(), 2);
         assert!(view.omissions.is_empty());
         request.owner_facts[0].subject.owner_revision += 1;
-        let view = DiscoveryOwner::select_context(&request, &[first.clone()])?;
+        let view = DiscoveryOwner::select_context(&request, std::slice::from_ref(&first))?;
         assert_eq!(view.owner_facts.len(), 1);
         assert_eq!(view.omissions.get("FACT_SUBJECT_MISMATCH"), Some(&1));
         assert!(view
@@ -887,8 +887,8 @@ mod tests {
         request.owner_facts = facts;
         let view = DiscoveryOwner::select_context(&request, &[first])?;
         assert!(serde_json::to_vec(&view)?.len() <= CONTEXT_PACKET_BYTES);
-        assert!(view.omissions.get("PACKET_OWNER_FACT_BYTES").is_some());
-        assert!(view.omissions.get("PACKET_EVIDENCE_BYTES").is_some());
+        assert!(view.omissions.contains_key("PACKET_OWNER_FACT_BYTES"));
+        assert!(view.omissions.contains_key("PACKET_EVIDENCE_BYTES"));
         assert!(view
             .missing_facts
             .iter()

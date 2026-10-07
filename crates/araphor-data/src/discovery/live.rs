@@ -1093,6 +1093,48 @@ impl DiscoveryOwner {
     }
 }
 
+impl TryFrom<&DiscoveryPinnedContextV1> for AnalysisContextVersionV1 {
+    type Error = crate::Error;
+
+    fn try_from(pinned: &DiscoveryPinnedContextV1) -> Result<Self> {
+        pinned.validate()?;
+        let binding = &pinned.binding;
+        let key = AnalysisContextKeyV1 {
+            tenant_id: binding.record_id.stream.tenant_id,
+            owner_id: "discovery-facts-v1".into(),
+            entity_key: uuid::Uuid::new_v4().as_bytes().to_vec(),
+            lifetime_key: binding.record_id.stream.key(),
+            owner_revision: pinned.control_commit_index,
+        };
+        require(key.valid(), "qualified context key")?;
+        let body = serde_json::to_vec(&serde_json::json!({
+            "subject_revision": binding.subject_revision,
+            "image_digest": binding.image_digest,
+            "configuration_digest": binding.configuration_digest,
+            "process_instance_id": binding.process_instance_id,
+            "entry_instance_id": binding.entry_instance_id,
+            "binding_id": binding.binding_id,
+            "role_id": binding.role_id, "state_id": binding.state_id,
+            "entry_rule_id": binding.entry_rule_id, "catalog_revision": binding.catalog_revision,
+            "static_key": binding.static_key, "policy_revision": binding.policy_revision,
+            "workload": pinned.workload,
+            "policy_source_revision_id": pinned.policy_source_revision_id,
+            "target_snapshot_digest": pinned.target_snapshot_digest,
+            "signed_profile_digest": pinned.signed_profile_digest,
+            "control_commit_index": pinned.control_commit_index,
+        }))
+        .context(DiscoveryEncodingSnafu)?;
+        require(body.len() <= DISCOVERY_PIN_BYTES, "qualified context bytes")?;
+        Ok(Self {
+            key,
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1416,7 +1458,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_coverage_counter_proof() {
+    fn discovery_coverage_counter_proof() -> TestResult {
         let interval = crate::CoverageInterval {
             state: "HEALTHY".into(),
             first_sequence: 1,
@@ -1437,7 +1479,10 @@ mod tests {
         assert!(closed.is_complete());
         for field in 0..4 {
             let mut gap = interval.clone();
-            let counters = gap.closing_counters.as_mut().expect("closing counters");
+            let counters = gap
+                .closing_counters
+                .as_mut()
+                .ok_or("closing counters absent")?;
             match field {
                 0 => {
                     counters.lost = 1;
@@ -1462,9 +1507,10 @@ mod tests {
         invalid
             .closing_counters
             .as_mut()
-            .expect("closing counters")
+            .ok_or("closing counters absent")?
             .requested = 2;
         assert!(!invalid.is_complete());
+        Ok(())
     }
 
     #[test]
@@ -1491,7 +1537,7 @@ mod tests {
             ..Default::default()
         });
         let report = CoverageReport {
-            source_id: record.id.stream.source_id.to_vec().into(),
+            source_id: record.id.stream.source_id.to_vec(),
             cpu_id: record.id.cpu_id,
             source_epoch: record.id.stream.source_epoch,
             revision: 1,
@@ -1554,7 +1600,7 @@ mod tests {
                 "temporal unknown" => {
                     wire.temporal_coverage = crate::EvidenceTemporalCoverage::Unknown as i32
                 }
-                "wrong source" => report.source_id = vec![255; 16].into(),
+                "wrong source" => report.source_id = vec![255; 16],
                 _ => return Err("coverage case absent".into()),
             }
             let mut sample = record.clone();
@@ -1681,47 +1727,5 @@ mod tests {
             1
         );
         Ok(())
-    }
-}
-
-impl TryFrom<&DiscoveryPinnedContextV1> for AnalysisContextVersionV1 {
-    type Error = crate::Error;
-
-    fn try_from(pinned: &DiscoveryPinnedContextV1) -> Result<Self> {
-        pinned.validate()?;
-        let binding = &pinned.binding;
-        let key = AnalysisContextKeyV1 {
-            tenant_id: binding.record_id.stream.tenant_id,
-            owner_id: "discovery-facts-v1".into(),
-            entity_key: uuid::Uuid::new_v4().as_bytes().to_vec(),
-            lifetime_key: binding.record_id.stream.key(),
-            owner_revision: pinned.control_commit_index,
-        };
-        require(key.valid(), "qualified context key")?;
-        let body = serde_json::to_vec(&serde_json::json!({
-            "subject_revision": binding.subject_revision,
-            "image_digest": binding.image_digest,
-            "configuration_digest": binding.configuration_digest,
-            "process_instance_id": binding.process_instance_id,
-            "entry_instance_id": binding.entry_instance_id,
-            "binding_id": binding.binding_id,
-            "role_id": binding.role_id, "state_id": binding.state_id,
-            "entry_rule_id": binding.entry_rule_id, "catalog_revision": binding.catalog_revision,
-            "static_key": binding.static_key, "policy_revision": binding.policy_revision,
-            "workload": pinned.workload,
-            "policy_source_revision_id": pinned.policy_source_revision_id,
-            "target_snapshot_digest": pinned.target_snapshot_digest,
-            "signed_profile_digest": pinned.signed_profile_digest,
-            "control_commit_index": pinned.control_commit_index,
-        }))
-        .context(DiscoveryEncodingSnafu)?;
-        require(body.len() <= DISCOVERY_PIN_BYTES, "qualified context bytes")?;
-        Ok(Self {
-            key,
-            valid_from_utc_ns: None,
-            valid_until_utc_ns: None,
-            sensitivity: ContextSensitivityV1::Tenant,
-            body,
-        })
     }
 }

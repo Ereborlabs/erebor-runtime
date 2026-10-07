@@ -796,7 +796,7 @@ mod tests {
         ));
         assert_eq!(store.meta()?, before);
         let request_bytes = input.request_meta()?.len() as u64;
-        let result_bytes = 776 + request_bytes + key_bytes;
+        let result_bytes = 776 + request_bytes + key_bytes + input.result_id.len() as u64;
         store.storage.tenant_max_bytes = current_bytes + result_bytes - 1;
         assert!(matches!(
             store.commit_result(&input),
