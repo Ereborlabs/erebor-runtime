@@ -797,3 +797,26 @@ Read `policy-tests.log`, `build-final.log`, `rust-ci-check.log` and the three
 final `result.json` receipts. The first two workspace attempts stopped on
 Clippy warnings. The final procedure runs after both corrections and returns
 zero at the stated source. Independent source review finds no required change.
+
+### Production reduction acceptance
+
+Status: **Not done**. Complete the four approved changes above and the
+remaining production reduction. `PreparedGeneration::add_binding`,
+`lower_kubernetes_policy` and `PolicyDocumentV1::validate_relationships` must
+each contain fewer than 400 physical lines. Count from the function signature
+through its closing brace. Include comments and blank lines.
+
+Remove redundant state, repeated translation and duplicate decisions. Reduce
+the total production code, including new types, methods and macros. Moving a
+body to helpers or changing formatting does not meet this requirement.
+Keep validation, diagnostic order, signed authority, binding isolation,
+exception bounds, deterministic output, recovery, leases and query limits.
+Do not refactor test or qualification code. Add a focused regression only
+when an existing test does not prove a changed contract.
+
+Before completion, inspect the production diff and measure all production
+functions. Run the final Rust procedure after the last Rust edit. Run the
+existing policy integration, follow, profile-restart and built CLI checks.
+Record source, removed state, production-code reduction, function lengths and
+verification limits in this result and the existing review guide. Commit each
+deliverable. Do not mark this reduction complete before all requirements pass.
