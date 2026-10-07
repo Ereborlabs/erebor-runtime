@@ -16,7 +16,7 @@ use crate::Result;
 
 use super::persistence::atomic_write;
 
-const COVERAGE_SCHEMA_VERSION: u32 = 1;
+const COVERAGE_SCHEMA_VERSION: u32 = 2;
 const MAX_COVERAGE_HISTORY: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -74,8 +74,6 @@ impl CoverageIntervalV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SourceCoverageV1 {
-    source_id: EvidenceIdV1,
-    cpu_id: u32,
     last_observed_sequence: Option<u64>,
     last_health: Option<CoverageCountersV1>,
     current: CoverageIntervalV1,
@@ -525,7 +523,7 @@ impl CoverageHealthOwner {
                 if source.current.state != CoverageStateV1::Gapped {
                     continue;
                 }
-                let counters = samples[&source.cpu_id];
+                let counters = samples[&source.current.cpu_id];
                 let first_sequence = counters.next_sequence.checked_add(1).ok_or_else(|| {
                     EvidenceStateSnafu {
                         reason: "coverage recovery sequence is exhausted".to_owned(),
@@ -626,7 +624,7 @@ impl CoverageHealthOwner {
         inner.commit(|inner| {
             let mut completed = Vec::with_capacity(recovering);
             for source in inner.snapshot.sources.values_mut() {
-                let counters = samples[&source.cpu_id];
+                let counters = samples[&source.current.cpu_id];
                 source.last_health = Some(counters);
                 source.current.closing_counters = Some(counters);
                 if source.current.state != CoverageStateV1::Gapped {
@@ -750,8 +748,6 @@ fn ensure_source(
         inner.snapshot.sources.insert(
             sample.cpu_id,
             SourceCoverageV1 {
-                source_id,
-                cpu_id: sample.cpu_id,
                 last_observed_sequence: None,
                 last_health: None,
                 current: interval,
@@ -833,9 +829,9 @@ fn rotate_interval(
 ) -> CoverageIntervalV1 {
     let revision = source.current.revision.saturating_add(1);
     let next = interval(
-        source.source_id,
+        source.current.source_id,
         source.current.source_epoch,
-        source.cpu_id,
+        source.current.cpu_id,
         revision,
         IntervalStart {
             state,
@@ -929,11 +925,9 @@ fn validate_snapshot(snapshot: &CoverageSnapshotV1) -> Result<()> {
                 || !interval_is_valid(interval, false)
         })
         || snapshot.sources.iter().any(|(cpu, source)| {
-            *cpu != source.cpu_id
-                || source.source_id.is_zero()
+            *cpu != source.current.cpu_id
                 || !interval_ids.insert(source.current.interval_id)
                 || source.current.source_epoch != snapshot.source_epoch
-                || source.current.source_id != source.source_id
                 || !interval_is_valid(&source.current, true)
                 || source.last_observed_sequence == Some(0)
                 || source.last_health.is_some_and(|counters| {
@@ -1294,8 +1288,10 @@ mod tests {
     fn exact_probe_opens_a_new_healthy_interval_without_rewriting_a_gap(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        let path = directory.path().join("coverage.json");
+        let owner = open_owner(&path, 1)?;
         owner.sample_health(&[health(0, 0)])?;
+        let source_id = owner.snapshot().current_intervals()[0].source_id;
         owner.observe(2, 1)?;
         owner.sample_health(&[health(2, 1)])?;
         assert!(owner.recover_after_probe(&[health(2, 1)]).is_err());
@@ -1319,6 +1315,57 @@ mod tests {
         assert_eq!(current.state, crate::CoverageStateV1::Healthy);
         assert_eq!(current.first_sequence, 4);
         assert!(current.gap_reasons.is_empty());
+        assert!(snapshot
+            .all_intervals()
+            .iter()
+            .all(|interval| interval.source_id == source_id && interval.cpu_id == 2));
+        let encoded = serde_json::to_value(&snapshot)?;
+        assert!(encoded["sources"]["2"].get("source_id").is_none());
+        assert!(encoded["sources"]["2"].get("cpu_id").is_none());
+        drop(owner);
+
+        let reopened = open_owner(&path, 1)?;
+        let restored = reopened.snapshot();
+        assert!(restored
+            .all_intervals()
+            .iter()
+            .all(|interval| interval.source_id == source_id && interval.cpu_id == 2));
+        assert_eq!(restored.sources[&2].last_observed_sequence, Some(3));
+        assert_eq!(
+            restored.sources[&2].last_health,
+            Some(health(3, 1).counters)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reopen_rejects_unsupported_versions() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        for populated in [false, true] {
+            let path = directory.path().join(if populated {
+                "populated.json"
+            } else {
+                "empty.json"
+            });
+            let owner = open_owner(&path, 1)?;
+            if populated {
+                owner.sample_health(&[health(0, 0)])?;
+                owner.observe(2, 1)?;
+            }
+            drop(owner);
+            let mut snapshot: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+            for version in [1, super::COVERAGE_SCHEMA_VERSION + 1] {
+                snapshot["schema_version"] = serde_json::json!(version);
+                let bytes = serde_json::to_vec(&snapshot)?;
+                std::fs::write(&path, &bytes)?;
+                assert!(matches!(
+                    open_owner(&path, 1),
+                    Err(crate::Error::EvidenceState { reason, .. })
+                        if reason == "coverage state version, identity, or bounds are invalid"
+                ));
+                assert_eq!(std::fs::read(&path)?, bytes);
+            }
+        }
         Ok(())
     }
 
@@ -1335,6 +1382,13 @@ mod tests {
         snapshot["sources"]["2"]["current"]["gap_reasons"] = serde_json::json!(["RING_LOSS"]);
         std::fs::write(&path, serde_json::to_vec(&snapshot)?)?;
         assert!(open_owner(&path, 1).is_err());
+
+        snapshot["sources"]["2"]["current"]["gap_reasons"] = serde_json::json!([]);
+        snapshot["sources"]["2"]["current"]["cpu_id"] = serde_json::json!(3);
+        let bytes = serde_json::to_vec(&snapshot)?;
+        std::fs::write(&path, &bytes)?;
+        assert!(open_owner(&path, 1).is_err());
+        assert_eq!(std::fs::read(&path)?, bytes);
         Ok(())
     }
 
