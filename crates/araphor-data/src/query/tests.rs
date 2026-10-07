@@ -5,7 +5,7 @@ use prost::Message as _;
 
 use super::*;
 use crate::{
-    evidence::EvidenceRecord, AnalysisSelectionV1, EvidenceIntakeIdentityV1,
+    evidence::EvidenceRecord, AnalysisSelectionV1, EvidenceIntakeIdentityV1, Selection,
     ValidatedEvidenceBatchV1,
 };
 
@@ -176,7 +176,7 @@ fn query_input_exact_time() -> TestResult {
         result
             .columns
             .iter()
-            .position(|column| column == name)
+            .position(|column| column.name == name)
             .ok_or("column absent")
     };
     assert_eq!(result.rows[0][index("operation")?], Value::UInt(u32::MAX));
@@ -281,7 +281,7 @@ fn query_scope_plan_validation() -> TestResult {
     let operation = result
         .columns
         .iter()
-        .position(|name| name == "operation")
+        .position(|column| column.name == "operation")
         .ok_or("operation column absent")?;
     assert_eq!(result.rows.len(), 2);
     assert!(result
@@ -300,11 +300,19 @@ fn query_scope_plan_validation() -> TestResult {
     assert_eq!(result.rows[0][operation], Value::UInt(7));
     assert_eq!(bounded.dependencies(40)?.received_from, Bound::Included(20));
     let mut selection = plan.base_selection().clone();
-    selection.sources[0].source_epoch += 1;
+    selection
+        .sources
+        .exact_mut()
+        .ok_or("exact sources absent")?[0]
+        .source_epoch += 1;
     let changed = QueryPlan::new(selection.clone(), plan.template.clone())?;
     assert_eq!(changed.dependencies(40)?.sources, selection.sources);
     let mut selection = plan.base_selection().clone();
-    selection.sources[0].tenant_id = [9; 16];
+    selection
+        .sources
+        .exact_mut()
+        .ok_or("exact sources absent")?[0]
+        .tenant_id = [9; 16];
     assert!(QueryPlan::new(selection, plan.template.clone()).is_err());
     assert!(fixture
         .plan(QueryTemplate::MovingCount { seconds: 0 })
@@ -400,7 +408,7 @@ fn query_follow_append_pages() -> TestResult {
         let column = result
             .columns
             .iter()
-            .position(|name| name == "source_cursor")
+            .position(|column| column.name == "source_cursor")
             .ok_or("cursor absent")?;
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][column], Value::UBigInt(expected));
@@ -514,7 +522,7 @@ fn query_input_exact_match() -> TestResult {
     let cursor = result
         .columns
         .iter()
-        .position(|name| name == "source_cursor")
+        .position(|column| column.name == "source_cursor")
         .ok_or("cursor absent")?;
     assert_eq!(
         result
@@ -663,24 +671,28 @@ fn query_input_subject_sequence() -> TestResult {
             cursor * 10,
             record(20, task, Some(101), 1),
         )?;
-        selection.sources.push(source);
+        selection
+            .sources
+            .exact_mut()
+            .ok_or("exact sources absent")?
+            .push(source);
     }
     let plan = QueryPlan::new(selection, plan.template.clone())?;
     let result = owner.query_at(&plan, 1_000)?;
     let cursor = result
         .columns
         .iter()
-        .position(|name| name == "source_cursor")
+        .position(|column| column.name == "source_cursor")
         .ok_or("cursor absent")?;
     let revision = result
         .columns
         .iter()
-        .position(|name| name == "commit_revision")
+        .position(|column| column.name == "commit_revision")
         .ok_or("revision absent")?;
     let task = result
         .columns
         .iter()
-        .position(|name| name == "task_cookie")
+        .position(|column| column.name == "task_cookie")
         .ok_or("task absent")?;
     assert_eq!(result.rows.len(), 2);
     assert_eq!(result.rows[0][cursor], Value::UBigInt(2));
@@ -743,7 +755,7 @@ fn query_scope_revision_difference() -> TestResult {
     selection.received_from = Bound::Included(100);
     selection.received_until = Bound::Excluded(200);
     for (left, right, changed) in [(10, 20, true), (20, 30, false), (30, 10, true)] {
-        selection.contexts = vec![
+        selection.contexts = Selection::Exact(vec![
             crate::AnalysisContextKeyV1 {
                 owner_revision: left,
                 ..key.clone()
@@ -752,7 +764,7 @@ fn query_scope_revision_difference() -> TestResult {
                 owner_revision: right,
                 ..key.clone()
             },
-        ];
+        ]);
         let plan = QueryPlan::new(selection.clone(), QueryTemplate::RevisionDifference)?;
         let result = owner.query_at(&plan, 1_000)?;
         assert_eq!(
@@ -768,8 +780,12 @@ fn query_scope_revision_difference() -> TestResult {
         assert_eq!(result.input_rows, 2);
         assert_eq!(result.rows, fixture.baseline(&plan, 1_000)?);
     }
-    selection.contexts[1].owner_revision = 99;
-    let missing = selection.contexts[1].clone();
+    selection
+        .contexts
+        .exact_mut()
+        .ok_or("exact contexts absent")?[1]
+        .owner_revision = 99;
+    let missing = selection.contexts.as_slice()[1].clone();
     let plan = QueryPlan::new(selection.clone(), QueryTemplate::RevisionDifference)?;
     let result = owner.query_at(&plan, 1_000)?;
     assert!(result.rows.is_empty());
@@ -777,13 +793,15 @@ fn query_scope_revision_difference() -> TestResult {
     assert_eq!(result.rows, fixture.baseline(&plan, 1_000)?);
     drop(result);
     let mut versions = selection.clone();
-    versions.contexts = [30, 10, 20, 99]
-        .into_iter()
-        .map(|owner_revision| crate::AnalysisContextKeyV1 {
-            owner_revision,
-            ..key.clone()
-        })
-        .collect();
+    versions.contexts = Selection::Exact(
+        [30, 10, 20, 99]
+            .into_iter()
+            .map(|owner_revision| crate::AnalysisContextKeyV1 {
+                owner_revision,
+                ..key.clone()
+            })
+            .collect(),
+    );
     let versions = QueryPlan::new(versions, QueryTemplate::ContextVersions)?;
     let result = owner.query_at(&versions, 1_000)?;
     assert_eq!(result.rows, fixture.baseline(&versions, 1_000)?);
@@ -795,7 +813,7 @@ fn query_scope_revision_difference() -> TestResult {
         result
             .columns
             .iter()
-            .position(|column| column == name)
+            .position(|column| column.name == name)
             .ok_or("context column absent")
     };
     let revision = index("owner_revision")?;
@@ -824,14 +842,22 @@ fn query_scope_revision_difference() -> TestResult {
     }
     for change in 0..3 {
         let mut invalid = selection.clone();
+        let contexts = invalid
+            .contexts
+            .exact_mut()
+            .ok_or("exact contexts absent")?;
         match change {
-            0 => invalid.contexts[1].owner_id.push('x'),
-            1 => invalid.contexts[1].entity_key.push(9),
-            _ => invalid.contexts[1].lifetime_key.push(9),
+            0 => contexts[1].owner_id.push('x'),
+            1 => contexts[1].entity_key.push(9),
+            _ => contexts[1].lifetime_key.push(9),
         }
         assert!(QueryPlan::new(invalid, QueryTemplate::RevisionDifference).is_err());
     }
-    selection.contexts.pop();
+    selection
+        .contexts
+        .exact_mut()
+        .ok_or("exact contexts absent")?
+        .pop();
     assert!(QueryPlan::new(selection, QueryTemplate::RevisionDifference).is_err());
     Ok(())
 }
@@ -864,7 +890,7 @@ fn query_input_catalog() -> TestResult {
         result
             .columns
             .iter()
-            .position(|column| column == name)
+            .position(|column| column.name == name)
             .ok_or("catalog column absent")
     };
     let relation = index("relation")?;
@@ -973,7 +999,7 @@ fn query_scope_coverage() -> TestResult {
         complete
             .columns
             .iter()
-            .position(|column| column == name)
+            .position(|column| column.name == name)
             .ok_or("coverage column absent")
     };
     let kind = index("kind")?;

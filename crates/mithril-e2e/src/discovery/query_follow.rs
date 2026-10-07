@@ -1355,7 +1355,7 @@ fn column(result: &QueryResult, name: &str) -> Result<usize> {
     result
         .columns
         .iter()
-        .position(|column| column == name)
+        .position(|column| column.name == name)
         .ok_or_else(|| format!("query column {name} is absent").into())
 }
 
@@ -1385,7 +1385,9 @@ fn result_receipt(plan: &QueryPlan, result: &QueryResult) -> serde_json::Value {
         "store_uuid": result.meta.store_uuid.to_string(), "recovery_epoch": result.meta.recovery_epoch,
         "evaluated_utc_ns": result.evaluated_utc_ns, "scanned_bytes": result.scanned_bytes,
         "input_rows": result.input_rows, "input_bytes": result.input_bytes, "output_bytes": result.output_bytes,
-        "returned_rows": result.rows.len(), "columns": result.columns, "types": result.types,
+        "returned_rows": result.rows.len(),
+        "columns": result.columns.iter().map(|column| &column.name).collect::<Vec<_>>(),
+        "types": result.columns.iter().map(|column| &column.data_type).collect::<Vec<_>>(),
         "rows": result.rows.iter().map(|row| row.iter().map(|value| format!("{value:?}")).collect::<Vec<_>>()).collect::<Vec<_>>(),
         "limited": result.limited, "exhausted": result.exhausted,
         "coverage": result.sources.iter().map(|source| json!({"source": source.receipt.identity,

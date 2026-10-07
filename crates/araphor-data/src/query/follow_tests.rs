@@ -91,7 +91,7 @@ fn cursors(frame: &QueryFrame) -> TestResult<Vec<u64>> {
     let cursor = result
         .columns
         .iter()
-        .position(|column| column == "source_cursor")
+        .position(|column| column.name == "source_cursor")
         .ok_or("source cursor column absent")?;
     result
         .rows

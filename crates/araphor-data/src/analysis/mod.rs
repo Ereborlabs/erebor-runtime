@@ -44,7 +44,7 @@ pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensiti
 pub(crate) use extraction::AnalysisExtractLimits;
 pub use extraction::{
     AnalysisExtractionV1, AnalysisInputPageV1, AnalysisInputV1, AnalysisPositionPageV1,
-    AnalysisRelationV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1,
+    AnalysisRelationV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1, Selection,
 };
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use progress::{
@@ -64,7 +64,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 16;
+const ANALYSIS_SCHEMA_VERSION: i64 = 17;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 

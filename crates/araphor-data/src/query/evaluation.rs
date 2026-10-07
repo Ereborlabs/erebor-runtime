@@ -3,7 +3,7 @@ use duckdb::{params_from_iter, Config, Connection};
 use snafu::ResultExt as _;
 
 use super::input::InputRelations;
-use super::{QueryOperation, QueryOwner};
+use super::{Column, QueryOperation, QueryOwner};
 use crate::{AnalysisReadControl, Result, StorePositionV1};
 
 pub(super) struct EvaluationLimits {
@@ -15,8 +15,7 @@ pub(super) struct EvaluationLimits {
 }
 
 pub(super) struct EvaluationResult {
-    pub columns: Vec<String>,
-    pub types: Vec<String>,
+    pub columns: Vec<Column>,
     pub rows: Vec<Vec<Value>>,
     pub output_bytes: usize,
     pub limited: bool,
@@ -84,25 +83,28 @@ impl QueryEvaluation {
                 }
                 .build()
             })?;
-            let columns = schema.column_names();
-            let types: Vec<_> = (0..schema.column_count())
-                .map(|index| format!("{:?}", schema.column_logical_type(index).id()))
+            let columns: Vec<_> = schema
+                .column_names()
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| Column {
+                    name,
+                    data_type: format!("{:?}", schema.column_logical_type(index).id()),
+                })
                 .collect();
-            let mut output_bytes = limits.summary_bytes;
-            for fields in [&columns, &types] {
-                output_bytes = output_bytes.saturating_add(
-                    fields
-                        .capacity()
-                        .saturating_mul(std::mem::size_of::<String>()),
-                );
-                for field in fields {
-                    output_bytes = output_bytes.saturating_add(field.capacity());
-                }
+            let mut output_bytes = limits.summary_bytes.saturating_add(
+                columns
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Column>()),
+            );
+            for column in &columns {
+                output_bytes = output_bytes
+                    .saturating_add(column.name.capacity())
+                    .saturating_add(column.data_type.capacity());
             }
             limits.check_output(output_bytes)?;
             let mut output = EvaluationResult {
                 columns,
-                types,
                 rows: Vec::new(),
                 output_bytes,
                 limited: false,

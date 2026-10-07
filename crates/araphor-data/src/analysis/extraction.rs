@@ -42,27 +42,57 @@ impl Default for AnalysisExtractLimits {
     }
 }
 
-/// Input selection after tenant authorization. An empty explicit list selects no events.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Selection<T> {
+    All,
+    Exact(Vec<T>),
+}
+
+impl<T> Selection<T> {
+    pub fn is_all(&self) -> bool {
+        matches!(self, Self::All)
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        match self {
+            Self::All => &[],
+            Self::Exact(keys) => keys,
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        match self {
+            Self::All => 0,
+            Self::Exact(keys) => keys.capacity(),
+        }
+    }
+
+    pub fn exact_mut(&mut self) -> Option<&mut Vec<T>> {
+        match self {
+            Self::All => None,
+            Self::Exact(keys) => Some(keys),
+        }
+    }
+}
+
+/// Input selection after tenant authorization. An empty exact list selects no events.
 #[derive(Clone, Debug)]
 pub struct AnalysisSelectionV1 {
     pub tenant_id: [u8; 16],
-    pub sources: Vec<EvidenceIntakeIdentityV1>,
-    pub all_sources: bool,
-    pub all_contexts: bool,
+    pub sources: Selection<EvidenceIntakeIdentityV1>,
     pub(crate) targets: bool,
     pub(crate) targets_only: bool,
     pub(crate) discovery: bool,
     pub(crate) discovery_context: bool,
     pub(crate) profiles: Vec<String>,
-    pub traces: Vec<TraceIdentityV1>,
-    pub all_traces: bool,
+    pub traces: Selection<TraceIdentityV1>,
     pub(crate) measurements: bool,
     /// Node IDs narrow evidence, coverage, and targets, not context versions.
     pub nodes: Vec<String>,
     pub binding_ids: Vec<[u8; 16]>,
     pub received_from: Bound<u64>,
     pub received_until: Bound<u64>,
-    pub contexts: Vec<AnalysisContextKeyV1>,
+    pub contexts: Selection<AnalysisContextKeyV1>,
     pub results: Vec<String>,
 }
 
@@ -70,31 +100,28 @@ impl AnalysisSelectionV1 {
     pub fn new(tenant_id: [u8; 16], sources: Vec<EvidenceIntakeIdentityV1>) -> Self {
         Self {
             tenant_id,
-            sources,
-            all_sources: false,
-            all_contexts: false,
+            sources: Selection::Exact(sources),
             targets: false,
             targets_only: false,
             discovery: false,
             discovery_context: false,
             profiles: Vec::new(),
-            traces: Vec::new(),
-            all_traces: false,
+            traces: Selection::Exact(Vec::new()),
             measurements: false,
             nodes: Vec::new(),
             binding_ids: Vec::new(),
             received_from: Bound::Unbounded,
             received_until: Bound::Unbounded,
-            contexts: Vec::new(),
+            contexts: Selection::Exact(Vec::new()),
             results: Vec::new(),
         }
     }
 
     pub fn tenant(tenant_id: [u8; 16]) -> Self {
         Self {
-            all_sources: true,
-            all_contexts: true,
-            all_traces: true,
+            sources: Selection::All,
+            contexts: Selection::All,
+            traces: Selection::All,
             ..Self::new(tenant_id, Vec::new())
         }
     }
@@ -102,18 +129,15 @@ impl AnalysisSelectionV1 {
     pub(crate) fn valid(&self) -> bool {
         self.tenant_id != [0; 16]
             && (!self.targets_only || self.targets)
-            && (!self.all_sources || self.sources.is_empty())
-            && (!self.all_contexts || self.contexts.is_empty())
-            && (!self.all_traces || self.traces.is_empty())
             && self.nodes.len() <= MAX_EXTRACT_KEYS
             && self.nodes.iter().all(|node| crate::node_id_is_valid(node))
             && self.nodes.iter().collect::<BTreeSet<_>>().len() == self.nodes.len()
             && [
-                self.sources.len(),
-                self.contexts.len(),
+                self.sources.as_slice().len(),
+                self.contexts.as_slice().len(),
                 self.results.len(),
                 self.profiles.len(),
-                self.traces.len(),
+                self.traces.as_slice().len(),
                 self.binding_ids.len(),
             ]
             .into_iter()
@@ -123,10 +147,12 @@ impl AnalysisSelectionV1 {
             && self.binding_ids.iter().collect::<BTreeSet<_>>().len() == self.binding_ids.len()
             && self
                 .sources
+                .as_slice()
                 .iter()
                 .all(|source| source.tenant_id == self.tenant_id && source.valid())
             && self
                 .contexts
+                .as_slice()
                 .iter()
                 .all(|key| key.tenant_id == self.tenant_id && key.valid())
             && self
@@ -137,15 +163,29 @@ impl AnalysisSelectionV1 {
                 .profiles
                 .iter()
                 .all(|id| !id.is_empty() && id.len() <= 256)
-            && self.sources.iter().collect::<BTreeSet<_>>().len() == self.sources.len()
-            && self.contexts.iter().collect::<BTreeSet<_>>().len() == self.contexts.len()
+            && self
+                .sources
+                .as_slice()
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == self.sources.as_slice().len()
+            && self
+                .contexts
+                .as_slice()
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == self.contexts.as_slice().len()
             && self.results.iter().collect::<BTreeSet<_>>().len() == self.results.len()
             && self.profiles.iter().collect::<BTreeSet<_>>().len() == self.profiles.len()
             && self
                 .traces
+                .as_slice()
                 .iter()
                 .all(|identity| identity.tenant_id == self.tenant_id && identity.validate().is_ok())
-            && self.traces.iter().collect::<BTreeSet<_>>().len() == self.traces.len()
+            && self.traces.as_slice().iter().collect::<BTreeSet<_>>().len()
+                == self.traces.as_slice().len()
     }
 
     fn allocation_bytes(&self) -> usize {
@@ -173,10 +213,10 @@ impl AnalysisSelectionV1 {
                 .capacity()
                 .saturating_mul(size_of::<[u8; 16]>()),
         );
-        for source in &self.sources {
+        for source in self.sources.as_slice() {
             bytes = bytes.saturating_add(source.node_id.capacity());
         }
-        for key in &self.contexts {
+        for key in self.contexts.as_slice() {
             bytes = bytes
                 .saturating_add(key.owner_id.capacity())
                 .saturating_add(key.entity_key.capacity())
@@ -185,7 +225,7 @@ impl AnalysisSelectionV1 {
         for key in self.nodes.iter().chain(&self.results).chain(&self.profiles) {
             bytes = bytes.saturating_add(key.capacity());
         }
-        for identity in &self.traces {
+        for identity in self.traces.as_slice() {
             bytes = bytes.saturating_add(identity.node_id.capacity());
         }
         bytes
@@ -435,9 +475,9 @@ impl AnalysisStore {
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
-        if !selection.all_sources
-            && !selection.all_contexts
-            && !selection.all_traces
+        if !selection.sources.is_all()
+            && !selection.contexts.is_all()
+            && !selection.traces.is_all()
             && !selection.targets_only
             && !selection.discovery
             && selection.nodes.is_empty()
@@ -454,26 +494,43 @@ impl AnalysisStore {
             return Err(error());
         }
         let mut resolved = selection.clone();
-        resolved.all_sources = false;
-        resolved.all_contexts = false;
-        resolved.all_traces = false;
+        resolved.sources = Selection::Exact(match resolved.sources {
+            Selection::All => Vec::new(),
+            Selection::Exact(keys) => keys,
+        });
+        resolved.contexts = Selection::Exact(match resolved.contexts {
+            Selection::All => Vec::new(),
+            Selection::Exact(keys) => keys,
+        });
+        resolved.traces = Selection::Exact(match resolved.traces {
+            Selection::All => Vec::new(),
+            Selection::Exact(keys) => keys,
+        });
         resolved.discovery = false;
         if selection.targets_only {
             resolved
                 .contexts
+                .exact_mut()
+                .ok_or_else(|| self.state_error("the resolved context selection is not exact"))?
                 .retain(|key| key.owner_id == "mithril-control/target");
         }
         resolved
             .sources
+            .exact_mut()
+            .ok_or_else(|| self.state_error("the resolved source selection is not exact"))?
             .retain(|source| resolved.nodes.is_empty() || resolved.nodes.contains(&source.node_id));
-        resolved.traces.retain(|identity| {
-            resolved.nodes.is_empty() || resolved.nodes.contains(&identity.node_id)
-        });
+        resolved
+            .traces
+            .exact_mut()
+            .ok_or_else(|| self.state_error("the resolved trace selection is not exact"))?
+            .retain(|identity| {
+                resolved.nodes.is_empty() || resolved.nodes.contains(&identity.node_id)
+            });
         let mut bytes = resolved.allocation_bytes();
         if bytes > limit {
             return Err(error());
         }
-        if selection.all_sources {
+        if selection.sources.is_all() {
             let mut after = None;
             loop {
                 control.check()?;
@@ -488,33 +545,35 @@ impl AnalysisStore {
                     if !resolved.nodes.is_empty() && !resolved.nodes.contains(&source.node_id) {
                         continue;
                     }
-                    if resolved.sources.len()
-                        + resolved.contexts.len()
+                    if resolved.sources.as_slice().len()
+                        + resolved.contexts.as_slice().len()
                         + resolved.results.len()
                         + resolved.profiles.len()
-                        + resolved.traces.len()
+                        + resolved.traces.as_slice().len()
                         + resolved.binding_ids.len()
                         == MAX_EXTRACT_KEYS
                     {
                         return Err(error());
                     }
-                    let added =
-                        AnalysisExtractionV1::<()>::grow(&mut resolved.sources, bytes, limit)?;
+                    let sources = resolved.sources.exact_mut().ok_or_else(|| {
+                        self.state_error("the resolved source selection is not exact")
+                    })?;
+                    let added = AnalysisExtractionV1::<()>::grow(sources, bytes, limit)?;
                     bytes = bytes
                         .checked_add(added)
                         .and_then(|bytes| bytes.checked_add(source.node_id.capacity()))
                         .filter(|bytes| *bytes <= limit)
                         .ok_or_else(error)?;
-                    resolved.sources.push(source);
+                    sources.push(source);
                 }
             }
         }
-        if selection.all_contexts {
+        if selection.contexts.is_all() {
             let remaining = MAX_EXTRACT_KEYS
-                - resolved.sources.len()
+                - resolved.sources.as_slice().len()
                 - resolved.results.len()
                 - resolved.profiles.len()
-                - resolved.traces.len()
+                - resolved.traces.as_slice().len()
                 - resolved.binding_ids.len();
             let mut statement = snapshot.prepare(
                 "SELECT owner_id, entity_key, lifetime_key, owner_revision FROM context_versions
@@ -549,10 +608,13 @@ impl AnalysisStore {
                 if !key.valid() {
                     return self.reject("the tenant context key is invalid");
                 }
-                if resolved.contexts.len() == remaining {
+                if resolved.contexts.as_slice().len() == remaining {
                     return Err(error());
                 }
-                let added = AnalysisExtractionV1::<()>::grow(&mut resolved.contexts, bytes, limit)?;
+                let contexts = resolved.contexts.exact_mut().ok_or_else(|| {
+                    self.state_error("the resolved context selection is not exact")
+                })?;
+                let added = AnalysisExtractionV1::<()>::grow(contexts, bytes, limit)?;
                 bytes = bytes
                     .checked_add(added)
                     .and_then(|bytes| bytes.checked_add(key.owner_id.capacity()))
@@ -560,10 +622,10 @@ impl AnalysisStore {
                     .and_then(|bytes| bytes.checked_add(key.lifetime_key.capacity()))
                     .filter(|bytes| *bytes <= limit)
                     .ok_or_else(error)?;
-                resolved.contexts.push(key);
+                contexts.push(key);
             }
         }
-        if selection.all_traces {
+        if selection.traces.is_all() {
             let mut statement = snapshot.prepare(
                 "SELECT request_id FROM traces WHERE tenant_id = ? AND NOT read_revoked ORDER BY request_id LIMIT 257",
             ).context(AnalysisDatabaseSnafu { operation: "prepare tenant trace keys" })?;
@@ -598,24 +660,26 @@ impl AnalysisStore {
                     {
                         continue;
                     }
-                    if resolved.sources.len()
-                        + resolved.contexts.len()
+                    if resolved.sources.as_slice().len()
+                        + resolved.contexts.as_slice().len()
                         + resolved.results.len()
                         + resolved.profiles.len()
-                        + resolved.traces.len()
+                        + resolved.traces.as_slice().len()
                         + resolved.binding_ids.len()
                         == MAX_EXTRACT_KEYS
                     {
                         return Err(error());
                     }
-                    let added =
-                        AnalysisExtractionV1::<()>::grow(&mut resolved.traces, bytes, limit)?;
+                    let traces = resolved.traces.exact_mut().ok_or_else(|| {
+                        self.state_error("the resolved trace selection is not exact")
+                    })?;
+                    let added = AnalysisExtractionV1::<()>::grow(traces, bytes, limit)?;
                     bytes = bytes
                         .checked_add(added)
                         .and_then(|bytes| bytes.checked_add(identity.node_id.capacity()))
                         .filter(|bytes| *bytes <= limit)
                         .ok_or_else(error)?;
-                    resolved.traces.push(identity);
+                    traces.push(identity);
                 }
             }
         }
@@ -634,14 +698,14 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare discovery profile keys",
                 })?;
-            for source in &resolved.sources {
+            for source in resolved.sources.as_slice() {
                 control.check()?;
                 let remaining = MAX_EXTRACT_KEYS
-                    - resolved.sources.len()
-                    - resolved.contexts.len()
+                    - resolved.sources.as_slice().len()
+                    - resolved.contexts.as_slice().len()
                     - resolved.results.len()
                     - resolved.profiles.len()
-                    - resolved.traces.len()
+                    - resolved.traces.as_slice().len()
                     - resolved.binding_ids.len();
                 let rows = statement
                     .query_map(
@@ -664,11 +728,11 @@ impl AnalysisStore {
                     if id.is_empty() || id.len() > 256 {
                         return self.reject("the discovery profile key is invalid");
                     }
-                    if resolved.sources.len()
-                        + resolved.contexts.len()
+                    if resolved.sources.as_slice().len()
+                        + resolved.contexts.as_slice().len()
                         + resolved.results.len()
                         + resolved.profiles.len()
-                        + resolved.traces.len()
+                        + resolved.traces.as_slice().len()
                         + resolved.binding_ids.len()
                         == MAX_EXTRACT_KEYS
                     {
@@ -796,7 +860,7 @@ impl AnalysisStore {
             return self.reject("the extraction limits must be positive");
         }
         let coordinator = self.read_coordinator(control)?;
-        let explicit_traces = !selection.all_traces && !selection.traces.is_empty();
+        let explicit_traces = !selection.traces.is_all() && !selection.traces.as_slice().is_empty();
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
@@ -841,7 +905,7 @@ impl AnalysisStore {
                     .fail();
                 }
             }
-            for identity in &selection.sources {
+            for identity in selection.sources.as_slice() {
                 control.check()?;
                 let key = identity.key();
                 let receipt = Self::read_receipt_from(snapshot, &self.root, identity, &key)?
@@ -873,7 +937,7 @@ impl AnalysisStore {
                 });
             }
             let mut trace_info = Vec::new();
-            for identity in &selection.traces {
+            for identity in selection.traces.as_slice() {
                 control.check()?;
                 let (state, intent) = Self::read_trace_intent(
                     snapshot,
@@ -1020,6 +1084,7 @@ impl AnalysisStore {
                         RawIdentity::Diagnostic(identity) => {
                             let index = selection
                                 .traces
+                                .as_slice()
                                 .iter()
                                 .position(|selected| selected == identity)
                                 .ok_or_else(|| {
@@ -1105,7 +1170,7 @@ impl AnalysisStore {
                     after = Some(record.position);
                 }
             }
-            for key in &selection.contexts {
+            for key in selection.contexts.as_slice() {
                 control.check()?;
                 match Self::read_context_from(snapshot, &self.root, key)? {
                     Some((context, _)) => {
@@ -1169,7 +1234,11 @@ impl AnalysisStore {
                     .ok_or_else(|| self.state_error("the selected discovery profile is absent"))?;
                 output.charge(body.capacity())?;
                 let profile = crate::DiscoveryProfileV1::try_from(body.as_slice())?;
-                if profile.profile_id != *id || !selection.sources.contains(&profile.scope.identity)
+                if profile.profile_id != *id
+                    || !selection
+                        .sources
+                        .as_slice()
+                        .contains(&profile.scope.identity)
                 {
                     return self.reject("the discovery profile scope differs from its selection");
                 }
@@ -1358,55 +1427,64 @@ mod tests {
     }
 
     #[test]
-    fn analysis_trace_key_limits() {
+    fn analysis_trace_key_limits() -> TestResult {
         let mut selection = AnalysisSelectionV1::new([1; 16], Vec::new());
-        selection.traces = (1_u128..=1024)
-            .map(|execution| TraceIdentityV1 {
-                tenant_id: [1; 16],
-                node_id: "trace-node".into(),
-                node_boot_id: [2; 16],
-                request_id: [3; 16],
-                execution_id: execution.to_be_bytes(),
-                source_sha256: [4; 32],
-            })
-            .collect();
+        selection.traces = Selection::Exact(
+            (1_u128..=1024)
+                .map(|execution| TraceIdentityV1 {
+                    tenant_id: [1; 16],
+                    node_id: "trace-node".into(),
+                    node_boot_id: [2; 16],
+                    request_id: [3; 16],
+                    execution_id: execution.to_be_bytes(),
+                    source_sha256: [4; 32],
+                })
+                .collect(),
+        );
         assert!(selection.valid());
         selection.binding_ids.push([5; 16]);
         assert!(!selection.valid());
-        selection.traces.pop();
+        selection
+            .traces
+            .exact_mut()
+            .ok_or("exact traces absent")?
+            .pop();
         assert!(selection.valid());
         selection.binding_ids.push([5; 16]);
         assert!(!selection.valid());
         selection.binding_ids = vec![[0; 16]];
         assert!(!selection.valid());
         selection.binding_ids = vec![[5; 16]];
-        selection.traces[0].tenant_id = [2; 16];
+        selection.traces.exact_mut().ok_or("exact traces absent")?[0].tenant_id = [2; 16];
         assert!(!selection.valid());
+        Ok(())
     }
 
     #[test]
     fn analysis_selection_key_limits() {
         let mut selection = AnalysisSelectionV1::new([1; 16], vec![identity(1)]);
-        selection.contexts.push(AnalysisContextKeyV1 {
+        selection.contexts = Selection::Exact(vec![AnalysisContextKeyV1 {
             tenant_id: [1; 16],
             owner_id: "context".into(),
             entity_key: vec![1],
             lifetime_key: vec![2],
             owner_revision: 1,
-        });
+        }]);
         selection.results.push("result".into());
         selection.profiles.push("profile".into());
         selection.binding_ids.push([5; 16]);
-        selection.traces = (1..=MAX_EXTRACT_KEYS as u128 - 5)
-            .map(|execution| TraceIdentityV1 {
-                tenant_id: [1; 16],
-                node_id: "trace-node".into(),
-                node_boot_id: [2; 16],
-                request_id: [3; 16],
-                execution_id: execution.to_be_bytes(),
-                source_sha256: [4; 32],
-            })
-            .collect();
+        selection.traces = Selection::Exact(
+            (1..=MAX_EXTRACT_KEYS as u128 - 5)
+                .map(|execution| TraceIdentityV1 {
+                    tenant_id: [1; 16],
+                    node_id: "trace-node".into(),
+                    node_boot_id: [2; 16],
+                    request_id: [3; 16],
+                    execution_id: execution.to_be_bytes(),
+                    source_sha256: [4; 32],
+                })
+                .collect(),
+        );
         selection.nodes = (0..MAX_EXTRACT_KEYS)
             .map(|index| format!("node-{index}"))
             .collect();
@@ -1417,6 +1495,30 @@ mod tests {
         assert!(selection.valid());
         selection.nodes.push("extra-node".into());
         assert!(!selection.valid());
+    }
+
+    #[test]
+    fn analysis_selection_states() {
+        let mut tenant = AnalysisSelectionV1::tenant([1; 16]);
+        assert!(tenant.sources.is_all());
+        assert!(tenant.contexts.is_all());
+        assert!(tenant.traces.is_all());
+        assert!(tenant.sources.exact_mut().is_none());
+        assert!(tenant.contexts.exact_mut().is_none());
+        assert!(tenant.traces.exact_mut().is_none());
+        assert!(tenant.valid());
+        assert_eq!(tenant.allocation_bytes(), size_of::<AnalysisSelectionV1>());
+
+        let exact = AnalysisSelectionV1::new([1; 16], Vec::with_capacity(8));
+        assert!(!exact.sources.is_all());
+        assert!(!exact.contexts.is_all());
+        assert!(!exact.traces.is_all());
+        assert!(exact.sources.as_slice().is_empty());
+        assert!(exact.valid());
+        assert_eq!(
+            exact.allocation_bytes(),
+            size_of::<AnalysisSelectionV1>() + 8 * size_of::<EvidenceIntakeIdentityV1>()
+        );
     }
 
     fn batch(first: u64, count: usize, received: u64) -> ValidatedEvidenceBatchV1 {
@@ -1988,17 +2090,17 @@ mod tests {
             assert!(empty.pages.is_empty());
             assert_eq!(empty.scanned_bytes, 0);
         }
-        selection.sources.clear();
+        selection.sources = Selection::Exact(Vec::new());
         assert!(store
             .extract(&selection, &AnalysisReadControl::default(), |_| store
                 .reject("empty source scope is not a wildcard"))?
             .pages
             .is_empty());
-        selection.sources.push(foreign);
+        selection.sources = Selection::Exact(vec![foreign]);
         assert!(store
             .extract(&selection, &AnalysisReadControl::default(), |_| Ok(None))
             .is_err());
-        selection.sources = vec![identity.clone(), identity];
+        selection.sources = Selection::Exact(vec![identity.clone(), identity]);
         assert!(store
             .extract(&selection, &AnalysisReadControl::default(), |_| Ok(None))
             .is_err());
@@ -2075,16 +2177,17 @@ mod tests {
         let first = identity(1);
         store.accept_validated_batch(first.clone(), batch(1, 1, 10))?;
         let mut selection = AnalysisSelectionV1::tenant(first.tenant_id);
-        selection.all_contexts = false;
-        selection.contexts = (0..MAX_EXTRACT_KEYS - 1)
-            .map(|revision| AnalysisContextKeyV1 {
-                tenant_id: first.tenant_id,
-                owner_id: "policy".into(),
-                entity_key: vec![1],
-                lifetime_key: vec![2],
-                owner_revision: revision as u64,
-            })
-            .collect();
+        selection.contexts = Selection::Exact(
+            (0..MAX_EXTRACT_KEYS - 1)
+                .map(|revision| AnalysisContextKeyV1 {
+                    tenant_id: first.tenant_id,
+                    owner_id: "policy".into(),
+                    entity_key: vec![1],
+                    lifetime_key: vec![2],
+                    owner_revision: revision as u64,
+                })
+                .collect(),
+        );
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
         let output = store.extract(&selection, &control, |_| Ok(None))?;
         assert_eq!(output.sources.len(), 1);
@@ -2119,7 +2222,7 @@ mod tests {
             Err(crate::Error::AnalysisReadCancelled { .. })
         ));
         let mut invalid = selection.clone();
-        invalid.sources.push(first.clone());
+        invalid.sources = Selection::Exact(vec![first.clone(), first.clone()]);
         assert!(!invalid.valid());
         let mut invalid = selection.clone();
         invalid.nodes = vec![first.node_id.clone(), first.node_id];
@@ -2156,7 +2259,7 @@ mod tests {
             body: vec![42],
         };
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
-        selection.contexts.push(context.key.clone());
+        selection.contexts = Selection::Exact(vec![context.key.clone()]);
         selection.results.push("late".into());
         let before = store.meta()?;
         let mut calls = 0;
@@ -2277,10 +2380,14 @@ mod tests {
                 .collect(),
         );
         assert!(selection.valid());
-        selection.sources.push(EvidenceIntakeIdentityV1 {
-            source_epoch: MAX_EXTRACT_KEYS as u64 + 1,
-            ..identity
-        });
+        selection
+            .sources
+            .exact_mut()
+            .ok_or("exact sources absent")?
+            .push(EvidenceIntakeIdentityV1 {
+                source_epoch: MAX_EXTRACT_KEYS as u64 + 1,
+                ..identity
+            });
         assert!(!selection.valid());
         Ok(())
     }
@@ -2454,13 +2561,17 @@ mod tests {
         store.record_recovery_floor(&identity, 5)?;
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         for revision in 0..4 {
-            selection.contexts.push(AnalysisContextKeyV1 {
-                tenant_id: identity.tenant_id,
-                owner_id: "missing".into(),
-                entity_key: vec![1],
-                lifetime_key: vec![2],
-                owner_revision: revision,
-            });
+            selection
+                .contexts
+                .exact_mut()
+                .ok_or("exact contexts absent")?
+                .push(AnalysisContextKeyV1 {
+                    tenant_id: identity.tenant_id,
+                    owner_id: "missing".into(),
+                    entity_key: vec![1],
+                    lifetime_key: vec![2],
+                    owner_revision: revision,
+                });
             selection.results.push(format!("missing-{revision}"));
         }
         let output = store.extract(&selection, &AnalysisReadControl::default(), |_| {

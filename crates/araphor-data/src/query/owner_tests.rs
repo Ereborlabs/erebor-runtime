@@ -15,7 +15,6 @@ fn while_held<T: Send>(
     work: impl FnOnce() -> TestResult<T> + Send,
 ) -> TestResult<T> {
     let columns = held.columns.clone();
-    let types = held.types.clone();
     let rows = held.rows.clone();
     let positions = held.positions.clone();
     let meta = held.meta.clone();
@@ -29,7 +28,6 @@ fn while_held<T: Send>(
         });
         let completed = completed.recv_timeout(Duration::from_secs(5));
         let unchanged = held.columns == columns
-            && held.types == types
             && held.rows == rows
             && held.positions == positions
             && held.meta == meta
@@ -79,12 +77,12 @@ fn query_scope_reader_release() -> TestResult {
     let cursor = later
         .columns
         .iter()
-        .position(|name| name == "source_cursor")
+        .position(|column| column.name == "source_cursor")
         .ok_or("source cursor column absent")?;
     let operation = later
         .columns
         .iter()
-        .position(|name| name == "operation")
+        .position(|column| column.name == "operation")
         .ok_or("operation column absent")?;
     assert_eq!(later.rows.len(), 2);
     assert_eq!(later.rows[0][cursor], Value::UBigInt(1));
@@ -148,7 +146,7 @@ fn query_scope_pin_deletion() -> TestResult {
     let cursor = retained
         .columns
         .iter()
-        .position(|name| name == "source_cursor")
+        .position(|column| column.name == "source_cursor")
         .ok_or("source cursor column absent")?;
     assert_eq!(retained.rows[0][cursor], Value::UBigInt(1));
     assert_eq!(retained.sources[0].receipt.contiguous_cursor, 2);
@@ -306,7 +304,7 @@ fn query_scope_pin_race() -> TestResult {
             let cursor = later
                 .columns
                 .iter()
-                .position(|name| name == "source_cursor")
+                .position(|column| column.name == "source_cursor")
                 .ok_or("source cursor column absent")?;
             assert_eq!(later.rows[0][cursor], Value::UBigInt(1));
         } else {

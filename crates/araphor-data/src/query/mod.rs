@@ -127,10 +127,15 @@ impl QueryLimits {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Column {
+    pub name: String,
+    pub data_type: String,
+}
+
 #[derive(Debug)]
 pub struct QueryResult {
-    pub columns: Vec<String>,
-    pub types: Vec<String>,
+    pub columns: Vec<Column>,
     pub rows: Vec<Vec<Value>>,
     pub meta: AnalysisStoreMetaV1,
     pub sources: Arc<QueryCoverageRows>,
@@ -468,20 +473,18 @@ impl QueryOwner {
         drop(input);
         let evaluation::EvaluationResult {
             mut columns,
-            mut types,
             mut rows,
             output_bytes,
             limited,
             scanned_through,
         } = output;
         let positions = if plan.grant().is_some() && plan.operation() == QueryOperation::Append {
-            QueryResult::take_positions(&mut columns, &mut types, &mut rows)?
+            QueryResult::take_positions(&mut columns, &mut rows)?
         } else {
             Vec::new()
         };
         let mut result = QueryResult {
             columns,
-            types,
             rows,
             meta: page.extraction.meta,
             sources,
@@ -538,7 +541,9 @@ impl QueryOwner {
         crate::StorageHealthV1,
     )> {
         let mut selection = plan.dependencies(now_ns)?;
-        selection.contexts.clear();
+        if let Some(contexts) = selection.contexts.exact_mut() {
+            contexts.clear();
+        }
         let bounds = crate::analysis::AnalysisExtractLimits {
             scan_bytes: self.limits.scan_bytes,
             input_bytes: self.limits.input_bytes,
@@ -594,14 +599,12 @@ impl QueryOwner {
 
 impl QueryResult {
     fn take_positions(
-        columns: &mut Vec<String>,
-        types: &mut Vec<String>,
+        columns: &mut Vec<Column>,
         rows: &mut [Vec<Value>],
     ) -> Result<Vec<StorePositionV1>> {
         if columns.len() < 2
-            || columns.len() != types.len()
-            || columns[columns.len() - 2] != "__araphor_commit_revision"
-            || columns[columns.len() - 1] != "__araphor_ordinal"
+            || columns[columns.len() - 2].name != "__araphor_commit_revision"
+            || columns[columns.len() - 1].name != "__araphor_ordinal"
         {
             return crate::QueryInvalidSnafu {
                 field: "query cursor output",
@@ -633,7 +636,6 @@ impl QueryResult {
             });
         }
         columns.truncate(width - 2);
-        types.truncate(width - 2);
         Ok(positions)
     }
 
@@ -661,15 +663,15 @@ impl QueryResult {
                 .saturating_add(key.entity_key.capacity())
                 .saturating_add(key.lifetime_key.capacity());
         }
-        for fields in [&self.columns, &self.types] {
-            bytes = bytes.saturating_add(
-                fields
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<String>()),
-            );
-            for field in fields {
-                bytes = bytes.saturating_add(field.capacity());
-            }
+        bytes = bytes.saturating_add(
+            self.columns
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Column>()),
+        );
+        for column in &self.columns {
+            bytes = bytes
+                .saturating_add(column.name.capacity())
+                .saturating_add(column.data_type.capacity());
         }
         bytes = bytes.saturating_add(
             self.rows

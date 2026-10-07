@@ -1259,7 +1259,7 @@ mod tests {
         assert!(owner.process(10).is_err());
         assert!(owner.profile(&fixture.source)?.is_none());
         let mut selection = crate::AnalysisSelectionV1::new(fixture.source.tenant_id, Vec::new());
-        selection.all_contexts = true;
+        selection.contexts = crate::Selection::All;
         let contexts = fixture.store.extract(
             &selection,
             &crate::AnalysisReadControl::default(),

@@ -562,20 +562,18 @@ impl QueryFrame {
     }
 
     pub(super) fn metadata_bytes(result: &QueryResult, limits: &QueryLimits) -> Result<usize> {
-        if result.columns.len() != result.types.len() {
-            return crate::QueryInvalidSnafu {
-                field: "result schema",
-            }
-            .fail();
-        }
-        let bytes = result.columns.iter().chain(&result.types).fold(
+        let bytes = result.columns.iter().fold(
             size_of::<Self>().saturating_add(
                 result
                     .columns
                     .len()
                     .saturating_mul(size_of::<QueryColumn>()),
             ),
-            |bytes, field| bytes.saturating_add(field.len()),
+            |bytes, column| {
+                bytes
+                    .saturating_add(column.name.len())
+                    .saturating_add(column.data_type.len())
+            },
         );
         if bytes
             .saturating_add(result.sources.allocation_bytes()?)
@@ -605,8 +603,8 @@ impl QueryFrame {
         let bytes = Self::metadata_bytes(result, limits)?;
         result.check_rows()?;
         let mut columns = Vec::with_capacity(result.columns.len());
-        for (name, data_type) in result.columns.iter().zip(&result.types) {
-            columns.push(QueryColumn::new(plan, name, data_type)?);
+        for column in &result.columns {
+            columns.push(QueryColumn::new(plan, &column.name, &column.data_type)?);
         }
         let mut frame = Self::new(
             plan,
@@ -859,12 +857,6 @@ impl QueryColumn {
 
 impl QueryResult {
     fn check_rows(&self) -> Result<()> {
-        if self.columns.len() != self.types.len() {
-            return crate::QueryInvalidSnafu {
-                field: "result schema",
-            }
-            .fail();
-        }
         for row in &self.rows {
             if row.len() != self.columns.len() {
                 return crate::QueryInvalidSnafu {
@@ -936,8 +928,11 @@ impl QueryResult {
         let revision = self
             .columns
             .iter()
-            .position(|name| name == "commit_revision");
-        let ordinal = self.columns.iter().position(|name| name == "ordinal");
+            .position(|column| column.name == "commit_revision");
+        let ordinal = self
+            .columns
+            .iter()
+            .position(|column| column.name == "ordinal");
         let (Some(revision), Some(ordinal)) = (revision, ordinal) else {
             return crate::QueryInvalidSnafu {
                 field: "append schema",
@@ -982,7 +977,7 @@ mod tests {
 
     use super::*;
     use crate::query::budget::QueryBudget;
-    use crate::{AnalysisSelectionV1, EvidenceIntakeIdentityV1};
+    use crate::{AnalysisSelectionV1, Column, EvidenceIntakeIdentityV1};
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
@@ -1043,11 +1038,19 @@ mod tests {
             let sources = Arc::new(QueryCoverageRows::new(sources, lease.split(bytes)?)?);
             let mut result = QueryResult {
                 columns: vec![
-                    "operation".into(),
-                    "commit_revision".into(),
-                    "ordinal".into(),
+                    Column {
+                        name: "operation".into(),
+                        data_type: "UInteger".into(),
+                    },
+                    Column {
+                        name: "commit_revision".into(),
+                        data_type: "UBigint".into(),
+                    },
+                    Column {
+                        name: "ordinal".into(),
+                        data_type: "UInteger".into(),
+                    },
                 ],
-                types: vec!["UInteger".into(), "UBigint".into(), "UInteger".into()],
                 rows: vec![vec![Value::UInt(7), Value::UBigInt(3), Value::UInt(4)]],
                 meta: self.meta.clone(),
                 sources,
@@ -1108,7 +1111,13 @@ mod tests {
             let mut template = fixture.plan.template.clone();
             match change {
                 0 => template = QueryTemplate::Events { operation: Some(7) },
-                1 => selection.sources[0].source_epoch += 1,
+                1 => {
+                    selection
+                        .sources
+                        .exact_mut()
+                        .ok_or("exact sources absent")?[0]
+                        .source_epoch += 1
+                }
                 _ => selection.received_from = Bound::Excluded(10),
             }
             let plan = QueryPlan::new(selection, template)?;
@@ -1288,8 +1297,8 @@ mod tests {
             let mut result = fixture.result()?;
             let expected = match change {
                 0 => {
-                    result.types.pop();
-                    "result schema"
+                    result.columns.pop();
+                    "result row"
                 }
                 1 => {
                     result.rows[0].pop();
@@ -1350,8 +1359,16 @@ mod tests {
     fn query_frame_borrowed_rows() -> TestResult {
         let fixture = FrameFixture::new()?;
         let mut result = fixture.result()?;
-        result.columns = vec!["a".into(), "b".into()];
-        result.types = vec!["Varchar".into(), "Blob".into()];
+        result.columns = vec![
+            Column {
+                name: "a".into(),
+                data_type: "Varchar".into(),
+            },
+            Column {
+                name: "b".into(),
+                data_type: "Blob".into(),
+            },
+        ];
         result.rows = vec![vec![Value::Text("a\0b".into()), Value::Blob(vec![0, 255])]];
         let rows = result.rows.as_ptr();
         let [Value::Text(text), Value::Blob(blob)] = result.rows[0].as_slice() else {
@@ -1381,14 +1398,8 @@ mod tests {
                 ..
             })
         ));
-        result.types.pop();
-        assert!(matches!(
-            result.check_rows(),
-            Err(crate::Error::QueryInvalid {
-                field: "result schema",
-                ..
-            })
-        ));
+        result.columns.pop();
+        result.check_rows()?;
         Ok(())
     }
 
@@ -1635,8 +1646,10 @@ mod tests {
         let mut moving = fixture.plan.clone();
         moving.template = QueryTemplate::MovingCount { seconds: 60 };
         let mut count = fixture.result()?;
-        count.columns = vec!["event_count".into()];
-        count.types = vec!["Bigint".into()];
+        count.columns = vec![Column {
+            name: "event_count".into(),
+            data_type: "Bigint".into(),
+        }];
         count.rows = vec![vec![Value::BigInt(2)]];
         let metadata = QueryFrame::metadata(&moving, &count, &QueryLimits::default(), 7)?;
         let QueryPayload::Metadata(metadata) = metadata.payload else {

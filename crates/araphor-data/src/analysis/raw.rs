@@ -1374,7 +1374,7 @@ impl RawJournal {
         control: &super::AnalysisReadControl,
     ) -> Result<u64> {
         let mut latest = 0;
-        for identity in &selection.sources {
+        for identity in selection.sources.as_slice() {
             control.check()?;
             let key = identity.key();
             for (_, &(id, _)) in self.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
@@ -1392,7 +1392,7 @@ impl RawJournal {
                 }
             }
         }
-        for identity in &selection.traces {
+        for identity in selection.traces.as_slice() {
             control.check()?;
             let key = RawIdentity::Diagnostic(identity.clone()).key();
             for (_, &(id, _)) in self.ranges.range((key.clone(), 0)..=(key, u64::MAX)) {
@@ -1416,7 +1416,9 @@ impl RawJournal {
         limit: usize,
         control: &super::AnalysisReadControl,
     ) -> Result<Option<(RawIdentity, Option<u32>, super::segments::SegmentRange)>> {
-        if (selection.sources.is_empty() && selection.traces.is_empty()) || limit == 0 {
+        if (selection.sources.as_slice().is_empty() && selection.traces.as_slice().is_empty())
+            || limit == 0
+        {
             return Ok(None);
         }
         let first = after.map_or(0, |position| position.commit_revision);
@@ -1424,12 +1426,12 @@ impl RawJournal {
             control.check()?;
             let selected = match &entry.identity {
                 RawIdentity::Evidence(identity) => {
-                    selection.sources.contains(identity)
+                    selection.sources.as_slice().contains(identity)
                         && selection.time_range().is_some_and(|(from, until)| {
                             entry.commit.intake >= from && entry.commit.intake <= until
                         })
                 }
-                RawIdentity::Diagnostic(identity) => selection.traces.contains(identity),
+                RawIdentity::Diagnostic(identity) => selection.traces.as_slice().contains(identity),
             };
             if !selected {
                 continue;

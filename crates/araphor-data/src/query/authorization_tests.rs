@@ -177,14 +177,21 @@ fn query_grant_rejects_scope() -> TestResult {
     }
     for change in 0..5 {
         let mut invalid = base.clone();
+        let sources = invalid
+            .selection
+            .sources
+            .exact_mut()
+            .ok_or("exact sources absent")?;
         match change {
             0 => invalid.selection.tenant_id = [0; 16],
-            1 => invalid.selection.sources[0].tenant_id = [9; 16],
-            2 => invalid.selection.sources[0].node_id.clear(),
-            3 => invalid.selection.sources.push(fixture.source.clone()),
+            1 => sources[0].tenant_id = [9; 16],
+            2 => sources[0].node_id.clear(),
+            3 => sources.push(fixture.source.clone()),
             _ => invalid
                 .selection
                 .contexts
+                .exact_mut()
+                .ok_or("exact contexts absent")?
                 .push(crate::AnalysisContextKeyV1 {
                     tenant_id: [9; 16],
                     owner_id: "query-context".into(),
@@ -447,16 +454,20 @@ fn query_bookmark_keeps_scope() -> TestResult {
     for change in 0..7 {
         let mut selection = plan.base_selection().clone();
         let mut template = plan.template.clone();
+        let sources = selection
+            .sources
+            .exact_mut()
+            .ok_or("exact sources absent")?;
         match change {
             0 => template = QueryTemplate::Events { operation: Some(7) },
-            1 => selection.sources[0].source_id = [8; 16],
-            2 => selection.sources[0].source_epoch += 1,
-            3 => selection.sources[0].node_boot_id = [8; 16],
-            4 => selection.sources[0].node_id = "foreign-node".into(),
+            1 => sources[0].source_id = [8; 16],
+            2 => sources[0].source_epoch += 1,
+            3 => sources[0].node_boot_id = [8; 16],
+            4 => sources[0].node_id = "foreign-node".into(),
             5 => selection.received_from = Bound::Excluded(10),
             _ => {
                 selection.tenant_id = [8; 16];
-                selection.sources[0].tenant_id = [8; 16];
+                sources[0].tenant_id = [8; 16];
             }
         }
         let changed = QueryPlan::new(selection.clone(), template)?;
@@ -520,7 +531,14 @@ fn client_plan_rejects_scope() -> TestResult {
         let mut changed = base.clone();
         match change {
             0 => changed.principal.clear(),
-            1 => changed.selection.sources[0].tenant_id = [9; 16],
+            1 => {
+                changed
+                    .selection
+                    .sources
+                    .exact_mut()
+                    .ok_or("exact sources absent")?[0]
+                    .tenant_id = [9; 16]
+            }
             _ => changed.selection.results.push("retained-result".into()),
         }
         assert!(matches!(

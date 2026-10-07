@@ -15,9 +15,10 @@ use super::{
 };
 use crate::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisReadControl, AnalysisSelectionV1,
-    ContextSensitivityV1, EvidenceRecord, EvidenceRetentionOwner, Result, StorePositionV1,
-    TraceBatchV1, TraceBindingV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
-    TraceIntentV1, TraceOutputReceiptV1, TraceRecipeV1, TraceTerminalReasonV1, TraceTerminalV1,
+    ContextSensitivityV1, EvidenceRecord, EvidenceRetentionOwner, Result, Selection,
+    StorePositionV1, TraceBatchV1, TraceBindingV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1,
+    TraceIdentityV1, TraceIntentV1, TraceOutputReceiptV1, TraceRecipeV1, TraceTerminalReasonV1,
+    TraceTerminalV1,
 };
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -506,8 +507,8 @@ async fn query_catalog_relations() -> TestResult {
         false,
     )?;
     let selection = plan.dependencies(100)?;
-    assert!(selection.targets && selection.targets_only && selection.all_contexts);
-    assert!(!selection.all_sources && !selection.all_traces);
+    assert!(selection.targets && selection.targets_only && selection.contexts.is_all());
+    assert!(!selection.sources.is_all() && !selection.traces.is_all());
     let result = fixture.query(&plan).await?;
     assert_eq!(plan.operation(), QueryOperation::Replace);
     assert_eq!(
@@ -536,7 +537,9 @@ async fn query_catalog_relations() -> TestResult {
         false,
     )?;
     let selection = plan.dependencies(100)?;
-    assert!(!selection.all_contexts && !selection.all_sources && !selection.all_traces);
+    assert!(
+        !selection.contexts.is_all() && !selection.sources.is_all() && !selection.traces.is_all()
+    );
     let result = fixture.query(&plan).await?;
     assert_eq!(result.rows.len(), 2);
     for (row, recipe, name) in [
@@ -825,7 +828,6 @@ async fn discovery_query_document_context() -> TestResult {
             valid_from_utc_ns: 1000,
             valid_until_utc_ns: None,
             sensitivity: ContextSensitivityV1::Tenant,
-            trust: crate::DiscoveryContextTrustV1::Unreviewed,
             approver: None,
             text: "Supplied instructions remain untrusted data.".into(),
         },
@@ -857,7 +859,6 @@ async fn discovery_query_document_context() -> TestResult {
     drop(result);
     revision.document.revision = 2;
     revision.imported_utc_ns += 1;
-    revision.document.trust = crate::DiscoveryContextTrustV1::Reviewed;
     revision.document.approver = Some(access.principal.clone());
     owner.import_context(&access, &revision)?;
     let mut foreign = fact.clone();
@@ -1341,6 +1342,8 @@ async fn query_trace_revocation() -> TestResult {
     grant
         .selection
         .traces
+        .exact_mut()
+        .ok_or("exact traces absent")?
         .push(intent.bindings[0].identity.clone());
     let plan = QueryPlan::client(
         grant,
@@ -2521,24 +2524,31 @@ async fn query_client_tenant_scope() -> TestResult {
         .find(|schema| schema.name == "events")
         .ok_or("event schema is absent")?;
     assert_eq!(
-        rows.columns,
+        rows.columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect::<Vec<_>>(),
         schema
             .columns
             .iter()
             .map(|field| field.0)
             .collect::<Vec<_>>()
     );
-    assert_eq!(rows.types.len(), schema.columns.len());
+    assert_eq!(rows.columns.len(), schema.columns.len());
+    assert!(rows
+        .columns
+        .iter()
+        .all(|column| !column.data_type.is_empty()));
     assert_eq!(rows.rows.len(), 5);
     assert_eq!(rows.positions.len(), 5);
     assert!(!rows
         .columns
         .iter()
-        .any(|name| name.starts_with("__araphor_")));
+        .any(|column| column.name.starts_with("__araphor_")));
     let target = rows
         .columns
         .iter()
-        .position(|name| name == "execution_set_id")
+        .position(|column| column.name == "execution_set_id")
         .ok_or("target column is absent")?;
     assert_eq!(
         rows.rows
@@ -2574,7 +2584,12 @@ async fn query_client_tenant_scope() -> TestResult {
         )
         .is_err());
     let mut grant = fixture.grant.clone();
-    grant.selection.sources.push(other);
+    grant
+        .selection
+        .sources
+        .exact_mut()
+        .ok_or("exact sources absent")?
+        .push(other);
     let plan = QueryPlan::client(
         grant.clone(),
         QuerySql::admit("SELECT COUNT(*) FROM events", vec![], false)?,
@@ -2587,7 +2602,7 @@ async fn query_client_tenant_scope() -> TestResult {
         .iter()
         .all(|source| source.receipt.identity.tenant_id == fixture.grant.selection.tenant_id));
     drop(result);
-    grant.selection.sources.clear();
+    grant.selection.sources = Selection::Exact(Vec::new());
     let plan = QueryPlan::client(
         grant.clone(),
         QuerySql::admit("SELECT COUNT(*) FROM events", vec![], false)?,
@@ -2596,7 +2611,7 @@ async fn query_client_tenant_scope() -> TestResult {
         fixture.query(&plan).await?.rows,
         vec![vec![Value::BigInt(0)]]
     );
-    grant.selection.sources.push(foreign.clone());
+    grant.selection.sources = Selection::Exact(vec![foreign.clone()]);
     assert!(matches!(
         QueryPlan::client(
             grant.clone(),
@@ -2640,7 +2655,13 @@ async fn query_client_append_resume() -> TestResult {
     assert_eq!(metadata.columns[0].name, "operation");
     let frame = ClientFixture::next(&mut stream).await?;
     let result = ClientFixture::result(&frame, QueryOperation::Append)?;
-    assert_eq!(result.columns, ["operation"]);
+    assert_eq!(
+        result.columns,
+        [super::Column {
+            name: "operation".into(),
+            data_type: "UInteger".into()
+        }]
+    );
     assert_eq!(
         result.rows,
         vec![vec![Value::UInt(7)], vec![Value::UInt(7)]]
@@ -2672,7 +2693,13 @@ async fn query_client_append_resume() -> TestResult {
     ));
     let frame = ClientFixture::next(&mut resumed).await?;
     let result = ClientFixture::result(&frame, QueryOperation::Append)?;
-    assert_eq!(result.columns, ["operation"]);
+    assert_eq!(
+        result.columns,
+        [super::Column {
+            name: "operation".into(),
+            data_type: "UInteger".into()
+        }]
+    );
     assert_eq!(result.rows, vec![vec![Value::UInt(7)]]);
     assert_eq!(
         result.positions,
@@ -2910,8 +2937,8 @@ fn query_tenant_relation_scope() -> TestResult {
     ] {
         let plan = fixture.plan(sql, vec![], false)?;
         let selection = plan.dependencies(100)?;
-        assert_eq!(selection.all_sources, sources, "{sql}");
-        assert_eq!(selection.all_contexts, contexts, "{sql}");
+        assert_eq!(selection.sources.is_all(), sources, "{sql}");
+        assert_eq!(selection.contexts.is_all(), contexts, "{sql}");
         assert_eq!(!selection.nodes.is_empty(), nodes, "{sql}");
     }
     Ok(())

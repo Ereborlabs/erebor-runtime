@@ -8,7 +8,7 @@ use crate::{
     EvidenceIntakeIdentityV1, EvidenceRecord, Result, WorkloadTargetFactV1,
 };
 
-pub const DISCOVERY_SCHEMA_VERSION: u32 = 2;
+pub const DISCOVERY_SCHEMA_VERSION: u32 = 3;
 pub const DISCOVERY_INPUT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_DISCOVERY_RECORDS: usize = 1_000_000;
 pub const MAX_DISCOVERY_ATOMS: usize = 50_000;

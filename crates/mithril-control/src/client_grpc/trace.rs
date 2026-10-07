@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use araphor_data::{
     QueryCheckpoint, QueryFrame, QueryGrant, QueryPayload, QueryPlan, QuerySql, QueryStream,
+    Selection,
 };
 use duckdb::types::Value;
 use futures_util::Stream;
@@ -281,19 +282,20 @@ impl ClientGrpcOwner {
             true,
         ).map_err(QueryTransport::failure)?;
         let mut selection = araphor_data::AnalysisSelectionV1::tenant(access.tenant_id());
-        selection.all_traces = false;
-        selection.traces = accepted
-            .request
-            .targets
-            .iter()
-            .enumerate()
-            .map(|(index, _)| {
-                accepted
-                    .binding(index as u16)
-                    .map(|binding| binding.identity)
-                    .map_err(Self::failure)
-            })
-            .collect::<Result<_, _>>()?;
+        selection.traces = Selection::Exact(
+            accepted
+                .request
+                .targets
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    accepted
+                        .binding(index as u16)
+                        .map(|binding| binding.identity)
+                        .map_err(Self::failure)
+                })
+                .collect::<Result<_, _>>()?,
+        );
         let plan = QueryPlan::client(
             QueryGrant {
                 principal: access.principal().to_owned(),

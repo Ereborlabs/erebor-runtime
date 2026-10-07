@@ -1031,7 +1031,7 @@ mod tests {
             DiscoveryLifecycleStateV1::Missing
         );
         assert_eq!(snapshot.lifecycle[7].state, input.lifecycle[1].state);
-        input.schema_version = 1;
+        input.schema_version = DISCOVERY_SCHEMA_VERSION - 1;
         assert!(input.validate().is_err());
         input.schema_version = DISCOVERY_SCHEMA_VERSION;
         let mut json = serde_json::to_value(input)?;

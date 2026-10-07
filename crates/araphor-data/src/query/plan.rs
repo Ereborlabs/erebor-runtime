@@ -4,7 +4,7 @@ use std::sync::Arc;
 use duckdb::types::Value;
 
 use super::{QueryGrant, QuerySql};
-use crate::{AnalysisSelectionV1, Result};
+use crate::{AnalysisSelectionV1, Result, Selection};
 
 pub const QUERY_SCHEMA_VERSION: u32 = 1;
 
@@ -75,14 +75,14 @@ impl QueryPlan {
                 .fail();
             }
             QueryTemplate::RevisionDifference => {
-                if selection.contexts.len() != 2 {
+                if selection.contexts.as_slice().len() != 2 {
                     return crate::QueryInvalidSnafu {
                         field: "context pair",
                     }
                     .fail();
                 }
-                let left = &selection.contexts[0];
-                let right = &selection.contexts[1];
+                let left = &selection.contexts.as_slice()[0];
+                let right = &selection.contexts.as_slice()[1];
                 if left.owner_id != right.owner_id
                     || left.entity_key != right.entity_key
                     || left.lifetime_key != right.lifetime_key
@@ -192,8 +192,7 @@ impl QueryPlan {
         selection.targets = target_sql;
         selection.targets_only = matches!(&self.template, QueryTemplate::Client(sql) if target_sql && !context_sql && !sql.dependencies().contains("context_versions"));
         if !trace_sql {
-            selection.traces.clear();
-            selection.all_traces = false;
+            selection.traces = Selection::Exact(Vec::new());
             selection.measurements = false;
         }
         match &self.template {
@@ -216,34 +215,28 @@ impl QueryPlan {
                     && !sql.dependencies().contains("coverage")
                     && !behavior_sql
                 {
-                    selection.sources.clear();
-                    selection.all_sources = false;
+                    selection.sources = Selection::Exact(Vec::new());
                     if !trace_sql && !target_sql {
                         selection.nodes.clear();
                         selection.binding_ids.clear();
                     }
                 }
                 if !sql.dependencies().contains("context_versions") && !context_sql && !target_sql {
-                    selection.contexts.clear();
-                    selection.all_contexts = false;
+                    selection.contexts = Selection::Exact(Vec::new());
                 }
                 selection.measurements = sql.dependencies().contains("trace_measurements");
             }
             QueryTemplate::Catalog => {
-                selection.sources.clear();
-                selection.contexts.clear();
-                selection.all_sources = false;
-                selection.all_contexts = false;
+                selection.sources = Selection::Exact(Vec::new());
+                selection.contexts = Selection::Exact(Vec::new());
                 selection.nodes.clear();
             }
             QueryTemplate::ContextVersions | QueryTemplate::RevisionDifference => {
-                selection.sources.clear();
-                selection.all_sources = false;
+                selection.sources = Selection::Exact(Vec::new());
                 selection.nodes.clear();
             }
             QueryTemplate::Coverage => {
-                selection.contexts.clear();
-                selection.all_contexts = false;
+                selection.contexts = Selection::Exact(Vec::new());
                 selection.received_from = Bound::Unbounded;
                 selection.received_until = Bound::Unbounded;
             }
@@ -308,6 +301,7 @@ impl QueryPlan {
             QueryTemplate::RevisionDifference => self
                 .base_selection()
                 .contexts
+                .as_slice()
                 .iter()
                 .map(|key| Value::UBigInt(key.owner_revision))
                 .collect(),

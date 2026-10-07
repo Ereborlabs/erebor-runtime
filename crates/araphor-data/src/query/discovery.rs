@@ -270,7 +270,7 @@ pub(super) fn context_row(context: &AnalysisContextVersionV1) -> Result<InputRow
             Value::UBigInt(document.method.revision),
             Value::Text(document.origin.clone()),
             Value::Text(
-                match document.trust {
+                match document.trust() {
                     crate::DiscoveryContextTrustV1::Reviewed => "reviewed",
                     crate::DiscoveryContextTrustV1::Unreviewed => "unreviewed",
                 }
@@ -297,8 +297,8 @@ mod tests {
     use super::*;
     use crate::{
         AnalysisContextKeyV1, AnalysisInputV1, ContextSensitivityV1, DiscoveryContextDocumentV1,
-        DiscoveryContextKindV1, DiscoveryContextTrustV1, DiscoveryInputManifestV1,
-        DiscoveryMethodV1, DiscoveryOwner, ProcessorScopeV1, DISCOVERY_SCHEMA_VERSION,
+        DiscoveryContextKindV1, DiscoveryInputManifestV1, DiscoveryMethodV1, DiscoveryOwner,
+        ProcessorScopeV1, DISCOVERY_SCHEMA_VERSION,
     };
 
     type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -448,9 +448,15 @@ mod tests {
             for change in 0..3 {
                 let mut old = serde_json::to_value(&profile)?;
                 match change {
-                    0 => old["schema_version"] = serde_json::json!(1),
-                    1 => old["scope"]["method_version"] = serde_json::json!(1),
-                    _ => old["snapshot"]["schema_version"] = serde_json::json!(1),
+                    0 => old["schema_version"] = serde_json::json!(DISCOVERY_SCHEMA_VERSION - 1),
+                    1 => {
+                        old["scope"]["method_version"] =
+                            serde_json::json!(DISCOVERY_SCHEMA_VERSION - 1)
+                    }
+                    _ => {
+                        old["snapshot"]["schema_version"] =
+                            serde_json::json!(DISCOVERY_SCHEMA_VERSION - 1)
+                    }
                 }
                 assert!(matches!(
                     DiscoveryProfileV1::try_from(serde_json::to_vec(&old)?.as_slice()),
@@ -461,7 +467,7 @@ mod tests {
                 ));
             }
         }
-        input.schema_version = 1;
+        input.schema_version = DISCOVERY_SCHEMA_VERSION - 1;
         assert!(matches!(
             DiscoveryInputManifestV1::try_from(serde_json::to_vec(&input)?.as_slice()),
             Err(crate::Error::DiscoveryInvalid {
@@ -517,7 +523,6 @@ mod tests {
                 valid_from_utc_ns: 1000,
                 valid_until_utc_ns: None,
                 sensitivity: ContextSensitivityV1::Tenant,
-                trust: DiscoveryContextTrustV1::Unreviewed,
                 approver: None,
                 text: "Supplied instructions remain text.".into(),
             },

@@ -92,7 +92,7 @@ impl AnalysisStore {
                 .reject("the dependency selection is invalid or includes unsupported results");
         }
         let coordinator = self.read_coordinator(control)?;
-        let all_traces = selection.all_traces;
+        let all_traces = selection.traces.is_all();
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
@@ -117,7 +117,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare source dependencies",
                 })?;
-            for identity in &selection.sources {
+            for identity in selection.sources.as_slice() {
                 control.check()?;
                 let key = identity.key();
                 let changed: Option<u64> = sources
@@ -149,7 +149,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare context dependencies",
                 })?;
-            for key in &selection.contexts {
+            for key in selection.contexts.as_slice() {
                 control.check()?;
                 let changed: Option<u64> = contexts
                     .query_row(
@@ -212,7 +212,7 @@ impl AnalysisStore {
                     })?;
                 revision = revision.max(changed.unwrap_or(0));
             } else {
-                for identity in &selection.traces {
+                for identity in selection.traces.as_slice() {
                     control.check()?;
                     let changed: Option<u64> = traces
                         .query_row(
@@ -409,7 +409,7 @@ mod tests {
         };
         store.commit_context(&context)?;
         assert_eq!(read(&store, &selection)?, (4, 4));
-        selection.all_contexts = false;
+        selection.contexts = crate::Selection::Exact(Vec::new());
         assert_eq!(read(&store, &selection)?, (4, 1));
         selection.received_from = Bound::Included(11);
         assert_eq!(read(&store, &selection)?, (4, 0));
@@ -442,7 +442,7 @@ mod tests {
         let mut selection = AnalysisSelectionV1::new(selected.tenant_id, vec![selected.clone()]);
         selection.received_from = Bound::Included(10);
         selection.received_until = Bound::Excluded(20);
-        selection.contexts.push(context.key.clone());
+        selection.contexts = crate::Selection::Exact(vec![context.key.clone()]);
         assert_eq!(read(&store, &selection)?, (0, 0));
         store.accept_validated_batch(foreign, batch(1, 10))?;
         assert_eq!(read(&store, &selection)?, (1, 0));
@@ -499,7 +499,11 @@ mod tests {
             Err(crate::Error::AnalysisReadCancelled { .. })
         ));
         let mut invalid = selection.clone();
-        invalid.sources.push(identity(2, 2));
+        invalid
+            .sources
+            .exact_mut()
+            .ok_or("exact sources absent")?
+            .push(identity(2, 2));
         assert!(store
             .dependency_revision(&invalid, &AnalysisReadControl::default())
             .is_err());
