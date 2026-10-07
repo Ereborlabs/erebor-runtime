@@ -82,51 +82,39 @@ impl CommandRun {
         let mut stream: Option<tonic::Streaming<wire::QueryFrame>> = None;
         let mut retries = 0;
         loop {
-            if stream.is_none() {
+            let next = if let Some(opened) = stream.as_mut() {
+                tokio::select! {
+                    _ = self.signal.as_mut() => return Err(Self::interrupted()),
+                    _ = &mut wait => return replay.duration(),
+                    result = opened.message() => result.map_err(AraphorClient::rpc_error),
+                }
+            } else {
                 if retries != 0 {
                     replay.resume(&mut request)?;
                 }
-                let result = tokio::select! {
+                match tokio::select! {
                     _ = self.signal.as_mut() => return Err(Self::interrupted()),
                     _ = &mut wait => return replay.duration(),
                     result = self.client.query(request.clone()) => result,
-                };
-                match result {
-                    Ok(opened) => stream = Some(opened),
-                    Err(error) if error.retryable() && retries < 3 => {
-                        retries += 1;
-                        self.pause(retries).await?;
+                } {
+                    Ok(opened) => {
+                        stream = Some(opened);
                         continue;
                     }
-                    Err(error) => return Err(Self::client_error(error)),
+                    Err(error) => Err(error),
                 }
-            }
-            let opened = stream
-                .as_mut()
-                .ok_or_else(|| Self::protocol("query stream"))?;
-            let next = tokio::select! {
-                _ = self.signal.as_mut() => return Err(Self::interrupted()),
-                _ = &mut wait => return replay.duration(),
-                result = opened.message() => result,
             };
             let mut frame = match next {
                 Ok(Some(frame)) => frame,
-                Ok(None) if retries < 3 => {
+                Err(error) if !error.retryable() || retries >= 3 => {
+                    return Err(Self::client_error(error));
+                }
+                Ok(None) if retries >= 3 => return Err(Self::uncertain()),
+                Ok(None) | Err(_) => {
                     retries += 1;
                     stream = None;
                     self.pause(retries).await?;
                     continue;
-                }
-                Ok(None) => return Err(Self::uncertain()),
-                Err(status) => {
-                    let error = AraphorClient::rpc_error(status);
-                    if error.retryable() && retries < 3 {
-                        retries += 1;
-                        stream = None;
-                        self.pause(retries).await?;
-                        continue;
-                    }
-                    return Err(Self::client_error(error));
                 }
             };
             if replay.advance(&mut frame)? {
@@ -226,46 +214,34 @@ impl CommandRun {
         let mut stream: Option<tonic::Streaming<wire::TraceFrame>> = None;
         let mut retries = 0;
         loop {
-            if stream.is_none() {
-                let result = tokio::select! {
+            let next = if let Some(opened) = stream.as_mut() {
+                tokio::select! {
+                    _ = self.signal.as_mut() => return Err(Self::interrupted()),
+                    result = opened.message() => result.map_err(AraphorClient::rpc_error),
+                }
+            } else {
+                match tokio::select! {
                     _ = self.signal.as_mut() => return Err(Self::interrupted()),
                     result = self.client.watch_trace(wire::WatchTraceRequest { trace_id: trace_id.to_vec(), bookmark: replay.bookmark.clone() }) => result,
-                };
-                match result {
-                    Ok(opened) => stream = Some(opened),
-                    Err(error) if error.retryable() && retries < 3 => {
-                        retries += 1;
-                        self.pause(retries).await?;
+                } {
+                    Ok(opened) => {
+                        stream = Some(opened);
                         continue;
                     }
-                    Err(error) => return Err(Self::client_error(error)),
+                    Err(error) => Err(error),
                 }
-            }
-            let opened = stream
-                .as_mut()
-                .ok_or_else(|| Self::protocol("trace stream"))?;
-            let next = tokio::select! {
-                _ = self.signal.as_mut() => return Err(Self::interrupted()),
-                result = opened.message() => result,
             };
             let frame = match next {
                 Ok(Some(frame)) => frame,
-                Ok(None) if retries < 3 => {
+                Err(error) if !error.retryable() || retries >= 3 => {
+                    return Err(Self::client_error(error));
+                }
+                Ok(None) if retries >= 3 => return Err(Self::uncertain()),
+                Ok(None) | Err(_) => {
                     retries += 1;
                     stream = None;
                     self.pause(retries).await?;
                     continue;
-                }
-                Ok(None) => return Err(Self::uncertain()),
-                Err(status) => {
-                    let error = AraphorClient::rpc_error(status);
-                    if error.retryable() && retries < 3 {
-                        retries += 1;
-                        stream = None;
-                        self.pause(retries).await?;
-                        continue;
-                    }
-                    return Err(Self::client_error(error));
                 }
             };
             if replay.advance(&frame, trace_id)? {
@@ -467,22 +443,14 @@ impl QueryReplay {
                         }
                         previous = Some(position);
                     }
-                    let before = self.position;
                     let count = rows.rows.len();
-                    let positions = &rows.positions;
-                    let mut index = 0;
-                    rows.rows.retain(|_| {
-                        let position = &positions[index];
-                        index += 1;
-                        before.is_none_or(|before| {
-                            (position.commit_revision, position.ordinal) > before
+                    let skip = rows.positions.partition_point(|position| {
+                        self.position.is_some_and(|before| {
+                            (position.commit_revision, position.ordinal) <= before
                         })
                     });
-                    rows.positions.retain(|position| {
-                        before.is_none_or(|before| {
-                            (position.commit_revision, position.ordinal) > before
-                        })
-                    });
+                    drop(rows.rows.drain(..skip));
+                    drop(rows.positions.drain(..skip));
                     if let Some(position) = previous {
                         self.position = Some(
                             self.position
@@ -638,6 +606,34 @@ mod tests {
         }));
         assert!(replay.advance(&mut frame)?);
         assert!(!replay.advance(&mut frame)?);
+        let mut batch = wire::QueryRows {
+            rows: (0..3)
+                .map(|value| wire::QueryRow {
+                    values: vec![wire::QueryValue {
+                        kind: Some(wire::query_value::Kind::Unsigned(value)),
+                    }],
+                })
+                .collect(),
+            positions: [(8, 0), (9, 0), (9, 1)]
+                .into_iter()
+                .map(|(commit_revision, ordinal)| wire::StorePosition {
+                    commit_revision,
+                    ordinal,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        frame.payload = Some(wire::query_frame::Payload::Rows(batch.clone()));
+        assert!(replay.advance(&mut frame)?);
+        let Some(wire::query_frame::Payload::Rows(rows)) = frame.payload.as_ref() else {
+            return Err(CommandRun::protocol("append test rows"));
+        };
+        assert_eq!(rows.rows, batch.rows[2..]);
+        assert_eq!(rows.positions, batch.positions[2..]);
+        assert_eq!(replay.position, Some((9, 1)));
+        batch.positions.swap(0, 2);
+        frame.payload = Some(wire::query_frame::Payload::Rows(batch));
+        assert!(replay.advance(&mut frame).is_err());
         frame.recovery_epoch += 1;
         assert!(replay.advance(&mut frame).is_err());
         Ok(())

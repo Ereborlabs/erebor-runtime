@@ -188,33 +188,13 @@ impl Output {
                 );
             }
             Payload::Checkpoint(_) => {}
-            Payload::Health(health) => {
-                let _ = writeln!(text, "health\twrite_ready={}\tretention_healthy={}\tintake_capacity={}\tmaintenance_capacity={}", health.write_ready,
-                    health.retention_healthy, health.intake_capacity, health.maintenance_capacity);
-            }
-            Payload::Error(error) => {
-                let _ = writeln!(
-                    text,
-                    "error\t{}\t{}\tposition={:?}\tfloor={:?}",
-                    Self::text(&error.code),
-                    Self::text(&error.reason),
-                    error.position,
-                    error.floor
-                );
-            }
+            Payload::Health(health) => Self::health(&mut text, health),
+            Payload::Error(error) => Self::error(&mut text, error),
             Payload::Terminal(terminal) => {
                 let _ = writeln!(text, "terminal\t{}", Self::text(&terminal.reason));
             }
         }
-        for coverage in &frame.coverage {
-            let source = coverage.source.as_ref();
-            let _ = writeln!(text, "coverage\tstate={}\tcpu={}\tnode={}\tsource={}\tcontiguous={}\tfloor={}\texpired={:?}\trecovery={:?}\tpending={:?}",
-                Self::text(&coverage.state), coverage.cpu_id,
-                source.map_or_else(String::new, |source| Self::text(&source.node_id)),
-                source.map_or_else(String::new, |source| Self::id(&source.source_id)),
-                coverage.contiguous_cursor, coverage.retained_floor,
-                coverage.expired, coverage.recovery, coverage.pending);
-        }
+        Self::coverage(&mut text, &frame.coverage);
         Ok(text.into_bytes())
     }
 
@@ -313,22 +293,31 @@ impl Output {
                     result.output_incomplete, result.cleanup_complete, result.missing_targets);
             }
             Payload::Checkpoint(_) => {}
-            Payload::Error(error) => {
-                let _ = writeln!(
-                    text,
-                    "error\t{}\t{}\tposition={:?}\tfloor={:?}",
-                    Self::text(&error.code),
-                    Self::text(&error.reason),
-                    error.position,
-                    error.floor
-                );
-            }
-            Payload::Health(health) => {
-                let _ = writeln!(text, "health\twrite_ready={}\tretention_healthy={}\tintake_capacity={}\tmaintenance_capacity={}",
-                    health.write_ready, health.retention_healthy, health.intake_capacity, health.maintenance_capacity);
-            }
+            Payload::Error(error) => Self::error(&mut text, error),
+            Payload::Health(health) => Self::health(&mut text, health),
         }
-        for coverage in &frame.coverage {
+        Self::coverage(&mut text, &frame.coverage);
+        Ok(text.into_bytes())
+    }
+
+    fn error(text: &mut String, error: &wire::QueryError) {
+        let _ = writeln!(
+            text,
+            "error\t{}\t{}\tposition={:?}\tfloor={:?}",
+            Self::text(&error.code),
+            Self::text(&error.reason),
+            error.position,
+            error.floor
+        );
+    }
+
+    fn health(text: &mut String, health: &wire::QueryHealth) {
+        let _ = writeln!(text, "health\twrite_ready={}\tretention_healthy={}\tintake_capacity={}\tmaintenance_capacity={}",
+            health.write_ready, health.retention_healthy, health.intake_capacity, health.maintenance_capacity);
+    }
+
+    fn coverage(text: &mut String, items: &[wire::QueryCoverage]) {
+        for coverage in items {
             let source = coverage.source.as_ref();
             let _ = writeln!(text, "coverage\tstate={}\tcpu={}\tnode={}\tsource={}\tcontiguous={}\tfloor={}\texpired={:?}\trecovery={:?}\tpending={:?}",
                 Self::text(&coverage.state), coverage.cpu_id,
@@ -337,7 +326,6 @@ impl Output {
                 coverage.contiguous_cursor, coverage.retained_floor,
                 coverage.expired, coverage.recovery, coverage.pending);
         }
-        Ok(text.into_bytes())
     }
 
     fn json<T: Serialize>(kind: &'static str, frame: &T) -> Result<Vec<u8>> {
@@ -563,6 +551,70 @@ mod tests {
             value["frame"]["payload"]["Metadata"]["requested"]["target"],
             "pod/ns/name\n"
         );
+        let coverage = wire::QueryCoverage {
+            source: Some(wire::SourceIdentity {
+                node_id: "node\n".into(),
+                source_id: vec![1; 16],
+                ..Default::default()
+            }),
+            cpu_id: 7,
+            contiguous_cursor: 11,
+            retained_floor: 5,
+            state: "Gap\n".into(),
+            pending: vec![wire::SourceGap {
+                first_cursor: 1,
+                last_cursor: 3,
+                commit_revision: 2,
+            }],
+            ..Default::default()
+        };
+        let suffix = "coverage\tstate=Gap\\n\tcpu=7\tnode=node\\n\tsource=01010101-0101-0101-0101-010101010101\tcontiguous=11\tfloor=5\texpired=[]\trecovery=[]\tpending=[SourceGap { first_cursor: 1, last_cursor: 3, commit_revision: 2 }]\n";
+        let health = wire::QueryHealth {
+            write_ready: true,
+            intake_capacity: true,
+            ..Default::default()
+        };
+        let error = wire::QueryError {
+            code: "Busy\n".into(),
+            reason: "wait\t".into(),
+            position: Some(wire::StorePosition {
+                commit_revision: 9,
+                ordinal: 1,
+            }),
+            ..Default::default()
+        };
+        let mut output = Output::new(Some(OutputMode::Table), false);
+        for (query, trace, line) in [
+            (
+                wire::query_frame::Payload::Health(health.clone()),
+                wire::trace_frame::Payload::Health(health),
+                "health\twrite_ready=true\tretention_healthy=false\tintake_capacity=true\tmaintenance_capacity=false\n",
+            ),
+            (
+                wire::query_frame::Payload::Error(error.clone()),
+                wire::trace_frame::Payload::Error(error),
+                "error\tBusy\\n\twait\\t\tposition=Some(StorePosition { commit_revision: 9, ordinal: 1 })\tfloor=None\n",
+            ),
+        ] {
+            let query = output.query(&wire::QueryFrame {
+                payload: Some(query),
+                coverage: vec![coverage.clone()],
+                ..Default::default()
+            })?;
+            let trace = output.trace(&wire::TraceFrame {
+                payload: Some(trace),
+                coverage: vec![coverage.clone()],
+                ..frame.clone()
+            })?;
+            for bytes in [query, trace] {
+                let text =
+                    std::str::from_utf8(&bytes).map_err(|_| Output::invalid("test output"))?;
+                let (_, quality) = text
+                    .split_once('\n')
+                    .ok_or_else(|| Output::invalid("test envelope"))?;
+                assert_eq!(quality, format!("{line}{suffix}"));
+            }
+        }
         Ok(())
     }
 }
