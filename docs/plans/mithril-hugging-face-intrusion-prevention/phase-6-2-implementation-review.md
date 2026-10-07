@@ -22,6 +22,74 @@ Mount-cache design: [Independent runtime mount-cache generation](./phase-6-2-sec
 
 Held-OCI design: [Held OCI route publication](./phase-6-2-held-oci-route-publication-design.md)
 
+## Policy Refactor Review On 2026-10-07
+
+Source: `b197ac6e` and the following policy simplification changes.
+Result: **Not done**. The 300-line increment is complete. The repository
+gate has one failing E2E case. The direct-runc check also fails.
+The following changes remove 319 production code lines from `b197ac6e`.
+This count excludes tests, comments, and blank lines. It includes all changed
+crate files. Module moves receive no reduction credit. See
+[Node simplification](./node-simplification.md) for the complete result.
+
+### Intended end state
+
+Keep the same signed authority, native readback, publication, and recovery
+checks with less state and fewer operation passes. Retained preparation caching
+is a separate step. The complete 5,000-line target is not met.
+
+### Implemented review route
+
+[NodePolicyGenerationOwner::install_bindings](../../../crates/mithril-node/src/policy/owner.rs) Node starts or refreshes configured policy
+  -> [Candidates::load](../../../crates/mithril-node/src/policy/installation.rs) policy verifies one candidate snapshot for the operation
+  -> [resolve_cri_exact_objects](../../../crates/mithril-node/src/policy/owner.rs) policy measures the authenticated binding views
+  -> [NodePolicyGenerationOwner::install](../../../crates/mithril-node/src/policy/installation.rs) policy rechecks current validity and anti-rollback state
+  -> [LoweredGeneration::compile](../../../crates/mithril-node/src/policy/generation.rs) policy checks signed roles and emits conflict-checked native rows
+  -> [GenerationPlan](../../../crates/mithril-node/src/policy/generation.rs) one row plan supplies capacity, installation, readback, and probes
+  -> [LoweredGeneration::install](../../../crates/mithril-node/src/policy/generation.rs) policy stages native dependencies and checks exact readback
+  -> [LoweredGeneration::probe_staged_rows](../../../crates/mithril-node/src/policy/generation.rs) policy runs the required activation probes
+  -> [ProfileActivation::publish](../../../crates/mithril-node/src/policy/publication.rs) policy checks the predecessor and commits active authority
+  -> [LoweredGeneration::install_entry_admissions](../../../crates/mithril-node/src/policy/generation.rs) policy publishes entry authority last
+
+[NodePolicyGenerationOwner::install](../../../crates/mithril-node/src/policy/installation.rs) Entry publication fails
+  -> [LoweredGeneration::revoke_entry_admissions](../../../crates/mithril-node/src/policy/generation.rs) policy removes and checks the affected entry rows
+
+[reconcile_generation_retirement](../../../crates/mithril-node/src/policy/publication.rs) Node reconciles retained generations
+  -> [generation_has_retained_authority](../../../crates/mithril-node/src/policy/publication.rs) policy checks native references before retirement
+  -> [retire_generation_rows](../../../crates/mithril-node/src/policy/publication.rs) policy records a tombstone before row deletion
+
+`Candidates` owns verified signed material only for one operation.
+`LoweredGeneration::compile` borrows this material and makes one row plan for
+all profile bindings. `ProfileOperation` keeps the validated candidate,
+activation, and generation together until publication ends.
+The installed owner retains binding measurements, held namespace views,
+generation semantics, and dynamic-row keys. A measurement record can contain
+zero objects and still prove that resolution completed.
+
+`GenerationPlan::add_paths` collects graph state IDs in one mount-route plan.
+It does not retain path prefixes or build a second route-state directory.
+The plan retains view, snapshot, route-count, and exact-prefix checks.
+It rejects duplicate terminal keys before it inserts native rows.
+`ExceptionAuthorityOwner` retains one normalized native runtime record with
+its qualified key, boot identity, and UTC deadline. Stored lock and reserved
+bytes are zero. The durable JSON fields and recovery rules do not change.
+The native ID conversion traits preserve byte order and digest identities.
+One fixed reference list supplies task, async, and socket counter operations.
+Each retained-holder scan still reads the current typed native state.
+
+The native Application Binary Interface (ABI), BPF programs, and durable
+formats do not change. Exception rows retain typed use state and UTC deadlines.
+All 62 focused policy tests and all 276 Node unit tests pass. Formatting,
+workspace checking, and strict Clippy pass. The workspace tests stop in
+`discovery_owner_service_isolation` with `RetainedRangeExpired` when the case
+reads trace output after raw retention. Storage and trace code do not change
+in this increment. The fresh direct-runc VM installs the policy generation,
+then fails because `canonical_mount_cache_states` has no BPF-ready snapshot
+at cache generation 23. The same physical error occurred before this increment.
+The harness removes its disposable VM. Its log is
+`/tmp/node-policy-proof.WmuhRa/vm-retry.log`. No Kubernetes result covers
+this source state. No performance test was run.
+
 ## Recovery Reconciliation Update On 2026-09-08
 
 This section covers the uncommitted recovery changes. Earlier passes below

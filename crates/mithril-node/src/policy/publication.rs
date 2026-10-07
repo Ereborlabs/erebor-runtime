@@ -27,6 +27,12 @@ use super::{
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, PolicySnafu};
 use crate::{Result, WorkloadBindingConfig, WorkloadBindingOwner};
 
+pub(super) const GENERATION_REFERENCES: [(&str, &str); 3] = [
+    ("profile_generation_task_refs", "task"),
+    ("profile_generation_async_refs", "async"),
+    ("profile_generation_socket_refs", "socket"),
+];
+
 #[derive(Clone, Copy)]
 pub(super) struct BindingActivationTarget {
     pub(super) initial_role_id: u32,
@@ -316,24 +322,9 @@ impl ProfileActivation {
                 reason: "staged generation descriptor does not match its activation",
             }
         );
-        ensure_generation_reference_row(
-            host,
-            "profile_generation_task_refs",
-            self.generation,
-            "task",
-        )?;
-        ensure_generation_reference_row(
-            host,
-            "profile_generation_async_refs",
-            self.generation,
-            "async",
-        )?;
-        ensure_generation_reference_row(
-            host,
-            "profile_generation_socket_refs",
-            self.generation,
-            "socket",
-        )?;
+        for (map, kind) in GENERATION_REFERENCES {
+            ensure_generation_reference_row(host, map, self.generation, kind)?;
+        }
 
         let pointer_key = profile_id.as_bytes();
         let expected_pointer = host
@@ -791,50 +782,22 @@ pub(super) fn reconcile_generation_retirement(
 
 fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Result<bool> {
     let reference_key = generation.to_ne_bytes();
-    let references = host
-        .lookup_map("profile_generation_task_refs", &reference_key)
-        .context(InterceptorSnafu)?
-        .context(IdentityStateSnafu {
-            reason: "RETIRING generation lost its task-reference row",
-        })?;
-    if u64::read_from_bytes(&references).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("generation task references are invalid: {error}"),
+    for (map, kind) in GENERATION_REFERENCES {
+        let references = host
+            .lookup_map(map, &reference_key)
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: format!("RETIRING generation lost its {kind}-reference row"),
+            })?;
+        if u64::read_from_bytes(&references).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("generation {kind} references are invalid: {error}"),
+            }
+            .build()
+        })? != 0
+        {
+            return Ok(true);
         }
-        .build()
-    })? != 0
-    {
-        return Ok(true);
-    }
-    let async_references = host
-        .lookup_map("profile_generation_async_refs", &reference_key)
-        .context(InterceptorSnafu)?
-        .context(IdentityStateSnafu {
-            reason: "RETIRING generation lost its async-reference row",
-        })?;
-    if u64::read_from_bytes(&async_references).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("generation async references are invalid: {error}"),
-        }
-        .build()
-    })? != 0
-    {
-        return Ok(true);
-    }
-    let socket_references = host
-        .lookup_map("profile_generation_socket_refs", &reference_key)
-        .context(InterceptorSnafu)?
-        .context(IdentityStateSnafu {
-            reason: "RETIRING generation lost its socket-reference row",
-        })?;
-    if u64::read_from_bytes(&socket_references).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("generation socket references are invalid: {error}"),
-        }
-        .build()
-    })? != 0
-    {
-        return Ok(true);
     }
 
     for key in host
@@ -1088,12 +1051,10 @@ fn retire_generation_rows(
         }
     }
     delete_generation_prefixed_rows(host, "binding_activation_targets", generation, 16)?;
-    host.delete_map_entry("profile_generation_task_refs", &generation.to_ne_bytes())
-        .context(InterceptorSnafu)?;
-    host.delete_map_entry("profile_generation_async_refs", &generation.to_ne_bytes())
-        .context(InterceptorSnafu)?;
-    host.delete_map_entry("profile_generation_socket_refs", &generation.to_ne_bytes())
-        .context(InterceptorSnafu)?;
+    for (map, _) in GENERATION_REFERENCES {
+        host.delete_map_entry(map, &generation.to_ne_bytes())
+            .context(InterceptorSnafu)?;
+    }
     host.delete_map_entry("profile_generation_descriptors", descriptor_key)
         .context(InterceptorSnafu)?;
     ensure!(

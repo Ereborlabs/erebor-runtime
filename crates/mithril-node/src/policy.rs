@@ -64,7 +64,6 @@ use self::generation_allocator::GenerationHandleAllocator;
 #[cfg(test)]
 use self::installation::same_exact_file;
 use self::installation::{Candidates, MountRootReconciliation, PolicyInput, PolicyMeasurements};
-use self::network::LoweredNetworkPolicy;
 pub(crate) use self::publication::generation_publication_is_absent;
 use self::publication::{
     build_process_generation_migrations, install_missing_rows, install_rows, mount_epoch_from,
@@ -175,10 +174,6 @@ fn decode_sha256(value: &str) -> Result<[u8; 32]> {
     })
 }
 
-fn portable_id_bytes(id: Id128V1) -> Vec<u8> {
-    [id.high.to_be_bytes(), id.low.to_be_bytes()].concat()
-}
-
 fn derived_id(domain: &[u8], fields: &[Vec<u8>]) -> Result<Id128V1> {
     let mut digest = Sha256::new();
     digest.update(domain);
@@ -186,20 +181,8 @@ fn derived_id(domain: &[u8], fields: &[Vec<u8>]) -> Result<Id128V1> {
         digest.update((field.len() as u64).to_be_bytes());
         digest.update(field);
     }
-    let digest = digest.finalize();
-    let high = u64::from_be_bytes(digest[0..8].try_into().map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("derived identity high word is invalid: {error}"),
-        }
-        .build()
-    })?);
-    let low = u64::from_be_bytes(digest[8..16].try_into().map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("derived identity low word is invalid: {error}"),
-        }
-        .build()
-    })?);
-    let id = Id128V1::new(high, low);
+    let digest: [u8; 32] = digest.finalize().into();
+    let id = Id128V1::from(digest);
     ensure!(
         !id.is_zero(),
         IdentityStateSnafu {
@@ -341,42 +324,16 @@ pub(crate) fn parse_id(name: &str, value: &str) -> Result<Id128V1> {
         }
         .build()
     })?;
-    let bytes = uuid.into_bytes();
-    Ok(Id128V1::new(
-        u64::from_be_bytes(bytes[..8].try_into().map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("{name} high half is invalid: {error}"),
-            }
-            .build()
-        })?),
-        u64::from_be_bytes(bytes[8..].try_into().map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("{name} low half is invalid: {error}"),
-            }
-            .build()
-        })?),
-    ))
+    Ok(uuid.into_bytes().into())
 }
 
 pub(crate) fn stable_node_id(value: &str) -> Result<Id128V1> {
     if let Ok(id) = parse_id("node_id", value) {
         return Ok(id);
     }
-    let digest = Sha256::digest([b"MITHRIL-NODE-ID-V1\0".as_slice(), value.as_bytes()].concat());
-    Ok(Id128V1::new(
-        u64::from_be_bytes(digest[..8].try_into().map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("node_id digest high half is invalid: {error}"),
-            }
-            .build()
-        })?),
-        u64::from_be_bytes(digest[8..16].try_into().map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("node_id digest low half is invalid: {error}"),
-            }
-            .build()
-        })?),
-    ))
+    let digest: [u8; 32] =
+        Sha256::digest([b"MITHRIL-NODE-ID-V1\0".as_slice(), value.as_bytes()].concat()).into();
+    Ok(digest.into())
 }
 
 pub(crate) fn current_utc_ns() -> Result<i64> {
@@ -450,6 +407,24 @@ mod tests {
         ContainerKindV1, ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig,
         WorkloadBindingConfig,
     };
+
+    #[test]
+    fn policy_ids_keep_bytes() -> crate::Result<()> {
+        let uuid = "01234567-89ab-cdef-fedc-ba9876543210";
+        let expected = Id128V1::new(0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210);
+        assert_eq!(parse_id("profile_id", uuid)?, expected);
+        assert!(parse_id("profile_id", "invalid").is_err());
+        assert_eq!(super::stable_node_id(uuid)?, expected);
+        assert_eq!(
+            super::stable_node_id("node-a")?,
+            Id128V1::new(0x8854_28bd_b7d4_4ec2, 0x3084_f251_0dd4_7503)
+        );
+        assert_eq!(
+            super::derived_id(b"test\0", &[b"abc".to_vec()])?,
+            Id128V1::new(0x6791_daa3_300a_9cee, 0xe337_d1e8_a6fe_2b7e)
+        );
+        Ok(())
+    }
 
     #[test]
     fn mount_cache_retirement_only_selects_older_rows() -> crate::Result<()> {

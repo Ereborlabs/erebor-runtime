@@ -136,22 +136,14 @@ impl NodeBindingReconciliation<'_> {
         prepared: crate::policy_delivery::PreparedPolicyActivationV1,
     ) -> Result<()> {
         self.delivery.begin_activation(bundle, &prepared)?;
-        let owner = match self.policy.as_ref() {
-            Some(policy) => policy.reload_and_install_for_bindings(
-                &prepared.config,
-                host,
-                self.bindings,
-                self.node_boot_id,
-                self.label_epoch,
-            )?,
-            None => crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
-                &prepared.config,
-                host,
-                self.bindings,
-                self.node_boot_id,
-                self.label_epoch,
-            )?,
-        };
+        let owner = crate::NodePolicyGenerationOwner::install_bindings(
+            &prepared.config,
+            host,
+            self.bindings,
+            self.node_boot_id,
+            self.label_epoch,
+            self.policy.as_ref(),
+        )?;
         self.identity.set_effect_policy(host, true)?;
         self.bindings
             .adopt_activated_profiles(host, &prepared.config.workload_bindings)?;
@@ -792,22 +784,14 @@ impl NodeChassis {
         let next_policy = if self.config.policy_candidates.is_empty() {
             None
         } else {
-            Some(match self.policy.as_ref() {
-                Some(policy) => policy.reload_and_install_for_bindings(
-                    &self.config,
-                    host,
-                    &self.bindings,
-                    self.node_boot_id,
-                    self.label_epoch,
-                )?,
-                None => crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
-                    &self.config,
-                    host,
-                    &self.bindings,
-                    self.node_boot_id,
-                    self.label_epoch,
-                )?,
-            })
+            Some(crate::NodePolicyGenerationOwner::install_bindings(
+                &self.config,
+                host,
+                &self.bindings,
+                self.node_boot_id,
+                self.label_epoch,
+                self.policy.as_ref(),
+            )?)
         };
         if next_policy.is_some() || generation_retired {
             self.policy = next_policy;

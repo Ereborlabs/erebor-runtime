@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use erebor_interceptor_abi::{
@@ -16,32 +15,19 @@ use super::{GenerationPlan, NativeTable};
 
 const LPM_FIXED_PREFIX_BITS: u32 = 160;
 
-#[derive(Default)]
-pub(super) struct LoweredNetworkPolicy {
-    handles: BTreeMap<String, u64>,
-}
-
-impl LoweredNetworkPolicy {
-    pub(super) fn lower(
+impl GenerationPlan {
+    pub(super) fn add_network_classes(
+        &mut self,
         document: &PolicyDocumentV1,
         profile_generation_ref_id: u64,
-        rows: &mut GenerationPlan,
-    ) -> Result<Self> {
-        let tables = Self {
-            handles: document
-                .network_policy
-                .iter()
-                .flat_map(|policy| &policy.destination_policies)
-                .zip(1_u64..)
-                .map(|(policy, handle)| (policy.destination_policy_id.clone(), handle))
-                .collect(),
-        };
-        for policy in document
+    ) -> Result<()> {
+        for (policy, handle) in document
             .network_policy
             .iter()
             .flat_map(|network| &network.destination_policies)
+            .zip(1_u64..)
         {
-            let value = destination_class(policy, tables.handles[&policy.destination_policy_id])?;
+            let value = destination_class(policy, handle)?;
             for protocol in &policy.protocols {
                 let protocol = (*protocol).into();
                 for prefix in &policy.ipv4_prefixes {
@@ -55,7 +41,7 @@ impl LoweredNetworkPolicy {
                         address: address.octets(),
                         reserved_tail: [0; 4],
                     };
-                    rows.insert(
+                    self.insert(
                         NativeTable::NetworkIpv4Class,
                         key.as_bytes(),
                         value.as_bytes(),
@@ -71,7 +57,7 @@ impl LoweredNetworkPolicy {
                         reserved: [0; 7],
                         address: address.octets(),
                     };
-                    rows.insert(
+                    self.insert(
                         NativeTable::NetworkIpv6Class,
                         key.as_bytes(),
                         value.as_bytes(),
@@ -79,15 +65,8 @@ impl LoweredNetworkPolicy {
                 }
             }
         }
-        Ok(tables)
+        Ok(())
     }
-
-    pub(super) fn destination_handle(&self, destination_id: &str) -> Option<u64> {
-        self.handles.get(destination_id).copied()
-    }
-}
-
-impl GenerationPlan {
     pub(super) fn add_network_decisions(
         &mut self,
         mut key: NetworkDestinationDecisionKeyV1,
@@ -191,7 +170,7 @@ mod tests {
     };
     use zerocopy::{FromBytes as _, TryFromBytes as _};
 
-    use super::{GenerationPlan, LoweredNetworkPolicy, NativeTable};
+    use super::{GenerationPlan, NativeTable};
 
     fn network_document() -> crate::Result<PolicyDocumentV1> {
         let mut document = PolicyDocumentV1::parse(
@@ -225,7 +204,7 @@ mod tests {
     fn destination_classes_are_generation_scoped_lpm_rows() -> crate::Result<()> {
         let document = network_document()?;
         let mut rows = GenerationPlan::default();
-        let _lowered = LoweredNetworkPolicy::lower(&document, 17, &mut rows)?;
+        rows.add_network_classes(&document, 17)?;
         let (key, value) = rows[NativeTable::NetworkIpv4Class]
             .iter()
             .next()
@@ -260,7 +239,7 @@ mod tests {
     fn destination_decisions_keep_protocol_and_actor_dimensions() -> crate::Result<()> {
         let document = network_document()?;
         let mut rows = GenerationPlan::default();
-        let lowered = LoweredNetworkPolicy::lower(&document, 17, &mut rows)?;
+        rows.add_network_classes(&document, 17)?;
         let decision = PhysicalDecisionV1 {
             decision: PhysicalDecisionKindV1::Deny,
             reserved: 0,
@@ -272,14 +251,7 @@ mod tests {
         rows.add_network_decisions(
             NetworkDestinationDecisionKeyV1 {
                 profile_generation_ref_id: 17,
-                destination_policy_handle: lowered
-                    .destination_handle("result-service")
-                    .ok_or_else(|| {
-                        crate::error::IdentityStateSnafu {
-                            reason: "network test has no destination handle".to_owned(),
-                        }
-                        .build()
-                    })?,
+                destination_policy_handle: 1,
                 active_role_id: 19,
                 process_state_vector_id: 23,
                 operation: 26,

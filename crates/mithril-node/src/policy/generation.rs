@@ -33,12 +33,12 @@ use crate::error::{InterceptorSnafu, PolicySnafu};
 use crate::identity::PortableProfileGenerationIdentityV1;
 use crate::{ExactFileObjectConfig, WorkloadBindingConfig};
 
+use super::publication::GENERATION_REFERENCES;
 use super::{
     decode_sha256, handles, insert_exact, install_missing_rows, install_rows, lifecycle, parse_id,
     physical_decision, policy_container_kind, read_abi_value, verify_rows,
     AdministrativePolicyPlanV1, ExceptionAuthorityOwner, GenerationRows, GenerationSemantics,
-    LoweredNetworkPolicy, MeasuredMountRouteV1, MountRootReconciliation, ProfileActivation,
-    TypedEffectContext,
+    MeasuredMountRouteV1, MountRootReconciliation, ProfileActivation, TypedEffectContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -446,8 +446,7 @@ impl LoweredGeneration {
             &semantics.role_handles,
             artifact.compiled_profile.mode,
         )?;
-        let network =
-            LoweredNetworkPolicy::lower(&artifact.policy_document, generation, &mut rows)?;
+        rows.add_network_classes(&artifact.policy_document, generation)?;
 
         let mut lowered = Self {
             semantics,
@@ -571,6 +570,10 @@ impl LoweredGeneration {
             });
         }
         let semantics = &lowered.semantics;
+        let context = TypedEffectContext {
+            signed_device_classes: &signed_device_classes,
+            role_states: &role_states,
+        };
         let mut used_exceptions = BTreeSet::new();
         for cell in &artifact.compiled_profile.compiled_cells {
             let mut matching = proofs
@@ -625,14 +628,8 @@ impl LoweredGeneration {
                         .rows
                         .lower_typed_effect(
                             cell,
-                            &TypedEffectContext {
-                                profile_generation_ref_id: generation,
-                                actor_role_id: key.active_role_id,
-                                actor_process_state_vector_id: key.process_state_vector_id,
-                                binding_lifecycle_state: key.binding_lifecycle_state,
-                                signed_device_classes: &signed_device_classes,
-                                role_states: &role_states,
-                            },
+                            &key,
+                            &context,
                             binding.proven.iter().map(|(object, _)| *object),
                             physical,
                         )?
@@ -640,122 +637,106 @@ impl LoweredGeneration {
                 }
                 continue;
             }
-            if let Some(capability) = LoweredGeneration::linux_capability(cell)? {
-                ensure!(
-                    key.effect_family == KernelEffectFamilyV1::Privilege as u16
-                        && key.operation == KernelEffectOperationV1::Capability as u16,
-                    IdentityStateSnafu {
-                        reason:
-                            "a Linux capability selector is valid only for PRIVILEGE/CAPABILITY",
-                    }
-                );
-                key.composite_atom_id = u64::from(capability) + 1;
-            } else if let Some(destination_id) =
-                cell.key.object_selector.strip_prefix("DESTINATION:")
-            {
-                ensure!(
-                    cell.key.effect_family == mithril_control::EffectFamilyV1::Network,
-                    IdentityStateSnafu {
-                        reason: "a destination selector lowered outside NETWORK".to_owned(),
-                    }
-                );
-                let destination = artifact
-                    .policy_document
-                    .network_policy
-                    .iter()
-                    .flat_map(|policy| &policy.destination_policies)
-                    .find(|policy| policy.destination_policy_id == destination_id)
-                    .context(IdentityStateSnafu {
-                        reason: format!("compiled cell has unknown destination `{destination_id}`"),
-                    })?;
-                let destination_policy_handle = network
-                    .destination_handle(destination_id)
-                    .context(IdentityStateSnafu {
-                        reason: format!(
-                            "compiled cell has no handle for destination `{destination_id}`"
-                        ),
-                    })?;
-                lowered.rows.add_network_decisions(
-                    NetworkDestinationDecisionKeyV1 {
-                        profile_generation_ref_id: generation,
-                        destination_policy_handle,
-                        active_role_id: key.active_role_id,
-                        process_state_vector_id: key.process_state_vector_id,
-                        operation: key.operation,
-                        binding_lifecycle_state: key.binding_lifecycle_state,
-                        ..NetworkDestinationDecisionKeyV1::default()
-                    },
-                    &destination.protocols,
-                    physical,
-                )?;
-                for binding in matching {
-                    binding.decision |= !destination.protocols.is_empty();
-                }
-                continue;
-            } else if let Some(emitted) = lowered.rows.lower_typed_effect(
-                cell,
-                &TypedEffectContext {
-                    profile_generation_ref_id: generation,
-                    actor_role_id: key.active_role_id,
-                    actor_process_state_vector_id: key.process_state_vector_id,
-                    binding_lifecycle_state: key.binding_lifecycle_state,
-                    signed_device_classes: &signed_device_classes,
-                    role_states: &role_states,
-                },
-                std::iter::empty(),
-                physical,
-            )? {
-                for binding in matching {
-                    binding.decision |= emitted;
-                }
-                continue;
-            } else if let Some(id) = cell.key.object_selector.strip_prefix("PATH:") {
-                let selector = selectors
-                    .iter()
-                    .find(|selector| selector.source.path_selector_id == id)
-                    .context(IdentityStateSnafu {
-                        reason: format!("compiled cell has unknown path selector `{id}`"),
-                    })?;
-                key.composite_atom_id = selector.composite;
-                if selector.source.requires_exact_object() {
-                    let exact_key = EffectDecisionKeyV1 {
-                        profile_generation_ref_id: generation,
-                        active_role_id: key.active_role_id,
-                        effect_family: key.effect_family,
-                        operation: key.operation,
-                        composite_atom_id: key.composite_atom_id,
-                        exact_object_key_id: selector.handle,
-                        process_state_vector_id: key.process_state_vector_id,
-                        binding_lifecycle_state: key.binding_lifecycle_state,
-                        reserved_tail: [0; 3],
-                    };
-                    lowered.rows.insert(
-                        NativeTable::EffectDecision,
-                        exact_key.as_bytes(),
-                        physical.as_bytes(),
+            let emitted = 'effect: {
+                if let Some(capability) = LoweredGeneration::linux_capability(cell)? {
+                    ensure!(
+                        key.effect_family == KernelEffectFamilyV1::Privilege as u16
+                            && key.operation == KernelEffectOperationV1::Capability as u16,
+                        IdentityStateSnafu {
+                            reason:
+                                "a Linux capability selector is valid only for PRIVILEGE/CAPABILITY",
+                        }
+                    );
+                    key.composite_atom_id = u64::from(capability) + 1;
+                } else if let Some(destination_id) =
+                    cell.key.object_selector.strip_prefix("DESTINATION:")
+                {
+                    ensure!(
+                        cell.key.effect_family == mithril_control::EffectFamilyV1::Network,
+                        IdentityStateSnafu {
+                            reason: "a destination selector lowered outside NETWORK".to_owned(),
+                        }
+                    );
+                    let (destination, destination_policy_handle) = artifact
+                        .policy_document
+                        .network_policy
+                        .iter()
+                        .flat_map(|policy| &policy.destination_policies)
+                        .zip(1_u64..)
+                        .find(|(policy, _)| policy.destination_policy_id == destination_id)
+                        .context(IdentityStateSnafu {
+                            reason: format!(
+                                "compiled cell has unknown destination `{destination_id}`"
+                            ),
+                        })?;
+                    lowered.rows.add_network_decisions(
+                        NetworkDestinationDecisionKeyV1 {
+                            profile_generation_ref_id: generation,
+                            destination_policy_handle,
+                            active_role_id: key.active_role_id,
+                            process_state_vector_id: key.process_state_vector_id,
+                            operation: key.operation,
+                            binding_lifecycle_state: key.binding_lifecycle_state,
+                            ..NetworkDestinationDecisionKeyV1::default()
+                        },
+                        &destination.protocols,
+                        physical,
                     )?;
-                    for binding in matching {
-                        binding.decision = true;
+                    break 'effect !destination.protocols.is_empty();
+                } else if let Some(emitted) = lowered.rows.lower_typed_effect(
+                    cell,
+                    &key,
+                    &context,
+                    std::iter::empty(),
+                    physical,
+                )? {
+                    break 'effect emitted;
+                } else if let Some(id) = cell.key.object_selector.strip_prefix("PATH:") {
+                    let selector = selectors
+                        .iter()
+                        .find(|selector| selector.source.path_selector_id == id)
+                        .context(IdentityStateSnafu {
+                            reason: format!("compiled cell has unknown path selector `{id}`"),
+                        })?;
+                    key.composite_atom_id = selector.composite;
+                    if selector.source.requires_exact_object() {
+                        let exact_key = EffectDecisionKeyV1 {
+                            profile_generation_ref_id: generation,
+                            active_role_id: key.active_role_id,
+                            effect_family: key.effect_family,
+                            operation: key.operation,
+                            composite_atom_id: key.composite_atom_id,
+                            exact_object_key_id: selector.handle,
+                            process_state_vector_id: key.process_state_vector_id,
+                            binding_lifecycle_state: key.binding_lifecycle_state,
+                            reserved_tail: [0; 3],
+                        };
+                        lowered.rows.insert(
+                            NativeTable::EffectDecision,
+                            exact_key.as_bytes(),
+                            physical.as_bytes(),
+                        )?;
+                        break 'effect true;
                     }
-                    continue;
+                } else if cell.key.object_selector != "DEFAULT" {
+                    key.composite_atom_id = *composite_handles
+                        .get(&cell.key.object_selector)
+                        .context(IdentityStateSnafu {
+                            reason: format!(
+                                "compiled cell has unknown object selector `{}`",
+                                cell.key.object_selector
+                            ),
+                        })?;
                 }
-            } else if cell.key.object_selector != "DEFAULT" {
-                key.composite_atom_id = *composite_handles.get(&cell.key.object_selector).context(
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "compiled cell has unknown object selector `{}`",
-                            cell.key.object_selector
-                        ),
-                    },
+                lowered.rows.insert(
+                    NativeTable::EffectDefault,
+                    key.as_bytes(),
+                    physical.as_bytes(),
                 )?;
-            }
-            lowered.rows.insert(
-                NativeTable::EffectDefault,
-                key.as_bytes(),
-                physical.as_bytes(),
-            )?;
+                true
+            };
             for binding in matching {
-                binding.decision = true;
+                binding.decision |= emitted;
             }
         }
 
@@ -1477,14 +1458,12 @@ pub(super) fn preflight_policy_map_capacity<'a>(
             .entry("profile_generation_descriptors")
             .or_default()
             .insert(handle.to_ne_bytes().to_vec());
-        planned
-            .entry("profile_generation_task_refs")
-            .or_default()
-            .insert(handle.to_ne_bytes().to_vec());
-        planned
-            .entry("profile_generation_socket_refs")
-            .or_default()
-            .insert(handle.to_ne_bytes().to_vec());
+        for (map, _) in GENERATION_REFERENCES {
+            planned
+                .entry(map)
+                .or_default()
+                .insert(handle.to_ne_bytes().to_vec());
+        }
         for table in NativeTable::ALL {
             let keys = planned.entry(table.map_name()).or_default();
             if table == NativeTable::ExceptionState {
@@ -1585,22 +1564,22 @@ impl GenerationPlan {
                     "existing exception runtime state",
                 )?;
                 ensure!(
-                existing.maximum_uses == desired.maximum_uses
-                    && existing.bound_profile_generation_refs
-                        == desired.bound_profile_generation_refs
-                    && existing.exception_definition_sha256
-                        == desired.exception_definition_sha256
-                    && exception_counter_is_consistent(
-                        existing.maximum_uses,
-                        existing.consumed_uses,
-                        existing.state,
-                    )
-                    && existing.deadline_boottime_ns <= desired.deadline_boottime_ns
-                    && existing.transition_version > 0,
-                IdentityStateSnafu {
-                    reason: "existing exception runtime state is inconsistent with the signed generation",
-                }
-            );
+                    existing.maximum_uses == desired.maximum_uses
+                        && existing.bound_profile_generation_refs
+                            == desired.bound_profile_generation_refs
+                        && existing.exception_definition_sha256
+                            == desired.exception_definition_sha256
+                        && exception_counter_is_consistent(
+                            existing.maximum_uses,
+                            existing.consumed_uses,
+                            existing.state,
+                        )
+                        && existing.deadline_boottime_ns <= desired.deadline_boottime_ns
+                        && existing.transition_version > 0,
+                    IdentityStateSnafu {
+                        reason: "existing exception runtime state is inconsistent with the signed generation",
+                    }
+                );
                 continue;
             }
             host.update_map("exception_runtime_states", key, installed.as_bytes())

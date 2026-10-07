@@ -32,99 +32,35 @@ struct MountRouteIdentity {
     topology_generation: u64,
 }
 
+#[derive(Default)]
 struct MountRoutePlan {
-    prefixes: Vec<Vec<Vec<u8>>>,
+    states: BTreeSet<u32>,
     mount_view_root_pid: u32,
     selected_mount_id_unique: u64,
     snapshot_digest_id: u64,
     has_known_route: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct GraphPrefixStates {
-    ids: [u32; MAX_CANONICAL_ROUTE_STATES_V1],
-    count: u32,
-}
-
-impl GraphPrefixStates {
-    pub(super) fn compile(
-        graph: &mithril_control::DeterministicPathGraphV1,
-        prefixes: &[Vec<Vec<u8>>],
-    ) -> Result<Option<Self>> {
-        let ids = prefixes
-            .iter()
-            .filter_map(|prefix| graph.state_after(prefix))
-            .collect::<BTreeSet<_>>();
-        if ids.is_empty() {
-            return Ok(None);
-        }
-        ensure!(
-            ids.len() <= MAX_CANONICAL_ROUTE_STATES_V1,
-            IdentityStateSnafu {
-                reason: format!(
-                    "one mount source exceeds {MAX_CANONICAL_ROUTE_STATES_V1} policy path routes"
-                ),
-            }
-        );
-        let count = ids.len() as u32;
-        let mut state_ids = [0; MAX_CANONICAL_ROUTE_STATES_V1];
-        for (slot, state_id) in state_ids.iter_mut().zip(ids) {
-            *slot = state_id;
-        }
-        Ok(Some(Self {
-            ids: state_ids,
-            count,
-        }))
-    }
-
-    pub(super) fn mount_root(
-        &self,
-        selected_mount_id_unique: u64,
-        snapshot_digest_id: u64,
-    ) -> CanonicalMountRootV1 {
-        CanonicalMountRootV1 {
-            selected_mount_id_unique,
-            snapshot_digest_id,
-            graph_prefix_state_ids: self.ids,
-            graph_prefix_state_count: self.count,
-            reserved: 0,
-        }
-    }
-}
-
 impl MountRoutePlan {
-    pub(super) fn new(
-        prefix: Vec<Vec<u8>>,
-        mount_view_root_pid: u32,
-        selected_mount_id_unique: u64,
-        snapshot_digest_id: u64,
-        has_known_route: bool,
-    ) -> Result<Self> {
-        ensure!(
-            mount_view_root_pid > 0 && selected_mount_id_unique > 0,
-            IdentityStateSnafu {
-                reason: "known mount route has no live view or unique mount",
-            }
-        );
-        Ok(Self {
-            prefixes: vec![prefix],
-            mount_view_root_pid,
-            selected_mount_id_unique,
-            snapshot_digest_id,
-            has_known_route,
-        })
-    }
-
     pub(super) fn merge(
         &mut self,
-        prefix: Vec<Vec<u8>>,
+        state: Option<u32>,
         mount_view_root_pid: u32,
         selected_mount_id_unique: u64,
         snapshot_digest_id: u64,
         has_known_route: bool,
     ) -> Result<()> {
         ensure!(
-            self.mount_view_root_pid == mount_view_root_pid && selected_mount_id_unique > 0,
+            self.mount_view_root_pid != 0
+                || (mount_view_root_pid > 0 && selected_mount_id_unique > 0),
+            IdentityStateSnafu {
+                reason: "known mount route has no live view or unique mount",
+            }
+        );
+        ensure!(
+            self.mount_view_root_pid == 0
+                || (self.mount_view_root_pid == mount_view_root_pid
+                    && selected_mount_id_unique > 0),
             IdentityStateSnafu {
                 reason: "one mount source has unequal live security views",
             }
@@ -137,8 +73,13 @@ impl MountRoutePlan {
                 reason: "one mount source has unequal topology snapshots",
             }
         );
-        self.prefixes.push(prefix);
-        self.selected_mount_id_unique = self.selected_mount_id_unique.min(selected_mount_id_unique);
+        self.states.extend(state);
+        self.selected_mount_id_unique = if self.mount_view_root_pid == 0 {
+            selected_mount_id_unique
+        } else {
+            self.selected_mount_id_unique.min(selected_mount_id_unique)
+        };
+        self.mount_view_root_pid = mount_view_root_pid;
         self.snapshot_digest_id = self.snapshot_digest_id.max(snapshot_digest_id);
         self.has_known_route |= has_known_route;
         Ok(())
@@ -369,7 +310,6 @@ impl GenerationPlan {
                 .iter()
                 .map(|terminal| terminal.rule_id.as_str()),
         );
-        let mut terminal_values = BTreeMap::<u32, PathGraphTerminalV1>::new();
         for terminal in &graph.terminals {
             let selector = artifact
                 .policy_document
@@ -396,19 +336,17 @@ impl GenerationPlan {
                 exact_object_required: u8::from(selector.requires_exact_object()),
                 reserved: [0; 3],
             };
+            let key = PathGraphStateKeyV1 {
+                profile_generation_ref_id: generation,
+                state_id: terminal.state_id,
+                reserved: 0,
+            };
             ensure!(
-                terminal_values.insert(terminal.state_id, value).is_none(),
+                !tables[NativeTable::PathTerminal].contains_key(key.as_bytes()),
                 IdentityStateSnafu {
                     reason: "deterministic path state has multiple exact terminals",
                 }
             );
-        }
-        for (state_id, value) in terminal_values {
-            let key = PathGraphStateKeyV1 {
-                profile_generation_ref_id: generation,
-                state_id,
-                reserved: 0,
-            };
             tables.insert(NativeTable::PathTerminal, key.as_bytes(), value.as_bytes())?;
         }
         for floor in &graph.path_tree_deny_floors {
@@ -457,26 +395,13 @@ impl GenerationPlan {
                 root_inode: measured.route.root_inode,
                 topology_generation: measured.mount_topology_generation,
             };
-            match route_plans.entry(identity) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(MountRoutePlan::new(
-                        measured.route.mountpoint_components.clone(),
-                        measured.mount_view_root_pid,
-                        measured.route.selected_mount_id_unique,
-                        measured.route.mount_snapshot_digest_id,
-                        true,
-                    )?);
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().merge(
-                        measured.route.mountpoint_components.clone(),
-                        measured.mount_view_root_pid,
-                        measured.route.selected_mount_id_unique,
-                        measured.route.mount_snapshot_digest_id,
-                        true,
-                    )?;
-                }
-            }
+            route_plans.entry(identity).or_default().merge(
+                graph.state_after(&measured.route.mountpoint_components),
+                measured.mount_view_root_pid,
+                measured.route.selected_mount_id_unique,
+                measured.route.mount_snapshot_digest_id,
+                true,
+            )?;
         }
         for object in objects {
             let components = object
@@ -494,7 +419,6 @@ impl GenerationPlan {
                 })
                 .collect::<Result<Vec<_>>>()?;
             reconciliation.push(MountRootReconciliation {
-                mount_namespace_inode: object.mount_namespace_inode,
                 configured: (*object).clone(),
                 canonical_path: canonical_path(&components),
             });
@@ -513,45 +437,31 @@ impl GenerationPlan {
                 root_inode: object.mount_root_inode,
                 topology_generation: object.mount_topology_generation,
             };
-            match route_plans.entry(identity) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(MountRoutePlan::new(
-                        components[..prefix_len].to_vec(),
-                        object.mount_view_root_pid,
-                        object.selected_mount_id_unique,
-                        object.mount_snapshot_digest_id,
-                        false,
-                    )?);
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().merge(
-                        components[..prefix_len].to_vec(),
-                        object.mount_view_root_pid,
-                        object.selected_mount_id_unique,
-                        object.mount_snapshot_digest_id,
-                        false,
-                    )?;
-                }
-            }
-        }
-        let mut route_states = BTreeMap::new();
-        for (identity, plan) in &route_plans {
-            if let Some(states) = GraphPrefixStates::compile(graph, &plan.prefixes)? {
-                route_states.insert(*identity, states);
-            } else if plan.has_known_route {
-                route_states.insert(
-                    *identity,
-                    GraphPrefixStates {
-                        ids: [0; MAX_CANONICAL_ROUTE_STATES_V1],
-                        count: 0,
-                    },
-                );
-            }
+            route_plans.entry(identity).or_default().merge(
+                graph.state_after(&components[..prefix_len]),
+                object.mount_view_root_pid,
+                object.selected_mount_id_unique,
+                object.mount_snapshot_digest_id,
+                false,
+            )?;
         }
         self.add_mount_namespace_guards(objects.iter().copied())?;
         let binding_id = parse_id("binding_id", &binding.binding_id)?;
-        for (identity, graph_prefix_states) in &route_states {
-            let plan = &route_plans[identity];
+        for (identity, plan) in route_plans {
+            ensure!(
+                plan.states.len() <= MAX_CANONICAL_ROUTE_STATES_V1,
+                IdentityStateSnafu {
+                    reason: format!(
+                        "one mount source exceeds {MAX_CANONICAL_ROUTE_STATES_V1} policy path routes"
+                    ),
+                }
+            );
+            ensure!(
+                plan.has_known_route || !plan.states.is_empty(),
+                IdentityStateSnafu {
+                    reason: "canonical mount prefix is absent from its path graph",
+                }
+            );
             self.add_mount_namespace_guard(
                 identity.mount_namespace_inode,
                 identity.topology_generation,
@@ -568,24 +478,16 @@ impl GenerationPlan {
                 filesystem_device: identity.filesystem_device,
                 root_inode: identity.root_inode,
             };
-            let root = graph_prefix_states
-                .mount_root(plan.selected_mount_id_unique, plan.snapshot_digest_id);
-            self.insert(NativeTable::MountRoot, root_key.as_bytes(), root.as_bytes())?;
-        }
-        for root in &reconciliation {
-            let object = &root.configured;
-            let identity = MountRouteIdentity {
-                mount_namespace_inode: object.mount_namespace_inode,
-                topology_generation: object.mount_topology_generation,
-                filesystem_device: object.mount_root_filesystem_device,
-                root_inode: object.mount_root_inode,
+            let mut root = CanonicalMountRootV1 {
+                selected_mount_id_unique: plan.selected_mount_id_unique,
+                snapshot_digest_id: plan.snapshot_digest_id,
+                graph_prefix_state_count: plan.states.len() as u32,
+                ..CanonicalMountRootV1::default()
             };
-            ensure!(
-                route_states.contains_key(&identity),
-                IdentityStateSnafu {
-                    reason: "canonical mount prefix is absent from its path graph",
-                }
-            );
+            for (slot, state) in root.graph_prefix_state_ids.iter_mut().zip(plan.states) {
+                *slot = state;
+            }
+            self.insert(NativeTable::MountRoot, root_key.as_bytes(), root.as_bytes())?;
         }
         Ok(reconciliation)
     }

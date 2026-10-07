@@ -2331,12 +2331,13 @@ impl EffectTestRunner {
             vec![scheduled_binding],
         );
         let policy_start = Instant::now();
-        let mut policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
+        let mut policy_owner = NodePolicyGenerationOwner::install_bindings(
             &node_config,
             &mut host,
             &bindings,
             node_boot_id,
             1,
+            None,
         )
         .context(NodeSnafu)?;
         eprintln!(
@@ -3371,15 +3372,15 @@ impl EffectTestRunner {
             policy.replacement_artifact_path.clone(),
             vec![replacement_binding.clone()],
         );
-        policy_owner = policy_owner
-            .reload_and_install_for_bindings(
-                &replacement_config,
-                &mut host,
-                &bindings,
-                node_boot_id,
-                1,
-            )
-            .context(NodeSnafu)?;
+        policy_owner = NodePolicyGenerationOwner::install_bindings(
+            &replacement_config,
+            &mut host,
+            &bindings,
+            node_boot_id,
+            1,
+            Some(&policy_owner),
+        )
+        .context(NodeSnafu)?;
         bindings
             .adopt_activated_profiles(&host, &replacement_config.workload_bindings)
             .context(NodeSnafu)?;
@@ -3489,12 +3490,13 @@ impl EffectTestRunner {
         restarted_bindings
             .adopt_activated_profiles(&host, &replacement_config.workload_bindings)
             .context(NodeSnafu)?;
-        let mut restarted_policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
+        let mut restarted_policy_owner = NodePolicyGenerationOwner::install_bindings(
             &replacement_config,
             &mut host,
             &restarted_bindings,
             node_boot_id,
             1,
+            None,
         )
         .context(NodeSnafu)?;
         restarted_policy_owner

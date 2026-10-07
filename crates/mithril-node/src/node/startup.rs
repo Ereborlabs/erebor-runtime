@@ -307,15 +307,14 @@ impl Enforcement {
         let policy = if config.policy_candidates.is_empty() {
             None
         } else {
-            Some(
-                crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
-                    config,
-                    host,
-                    &bindings,
-                    node_boot_id,
-                    label_epoch,
-                )?,
-            )
+            Some(crate::NodePolicyGenerationOwner::install_bindings(
+                config,
+                host,
+                &bindings,
+                node_boot_id,
+                label_epoch,
+                None,
+            )?)
         };
         if policy.is_some() {
             bindings.adopt_activated_profiles(host, &config.workload_bindings)?;

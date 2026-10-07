@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use erebor_interceptor_abi::{
-    BindingLifecycleStateV1, DeviceEffectKeyV1, ExactDeviceTypeV1, KernelEffectFamilyV1,
+    DeviceEffectKeyV1, EffectDefaultKeyV1, ExactDeviceTypeV1, KernelEffectFamilyV1,
     KernelEffectOperationV1, PhysicalDecisionKindV1, PhysicalDecisionV1, ProcessControlRuleKeyV1,
 };
 use mithril_control::{CompiledDecisionCellV1, CompiledOperationV1};
@@ -14,10 +14,6 @@ use crate::{ExactDeviceType, ExactFileObjectConfig, Result};
 use super::{GenerationPlan, NativeTable};
 
 pub(super) struct TypedEffectContext<'a> {
-    pub profile_generation_ref_id: u64,
-    pub actor_role_id: u32,
-    pub actor_process_state_vector_id: u32,
-    pub binding_lifecycle_state: BindingLifecycleStateV1,
     pub signed_device_classes: &'a BTreeSet<String>,
     pub role_states: &'a BTreeMap<String, (u32, u32)>,
 }
@@ -26,17 +22,18 @@ impl GenerationPlan {
     pub(super) fn lower_typed_effect<'a>(
         &mut self,
         cell: &CompiledDecisionCellV1,
+        key: &EffectDefaultKeyV1,
         context: &TypedEffectContext<'_>,
         objects: impl IntoIterator<Item = &'a ExactFileObjectConfig>,
         decision: PhysicalDecisionV1,
     ) -> Result<Option<bool>> {
         if let Some(selector) = cell.key.object_selector.strip_prefix("DEVICE:") {
             return self
-                .lower_device(cell, selector, context, objects, decision)
+                .lower_device(cell, selector, key, context, objects, decision)
                 .map(Some);
         }
         if let Some(target_role) = cell.key.object_selector.strip_prefix("SECURITY:PROCESS:") {
-            self.lower_process(cell, target_role, context, decision)?;
+            self.lower_process(cell, target_role, key, context, decision)?;
             return Ok(Some(true));
         }
         Ok(None)
@@ -46,6 +43,7 @@ impl GenerationPlan {
         &mut self,
         cell: &CompiledDecisionCellV1,
         selector: &str,
+        key: &EffectDefaultKeyV1,
         context: &TypedEffectContext<'_>,
         objects: impl IntoIterator<Item = &'a ExactFileObjectConfig>,
         decision: PhysicalDecisionV1,
@@ -99,12 +97,12 @@ impl GenerationPlan {
                 continue;
             };
             let key = DeviceEffectKeyV1 {
-                profile_generation_ref_id: context.profile_generation_ref_id,
+                profile_generation_ref_id: key.profile_generation_ref_id,
                 mount_id_unique: object.mount_id_unique,
                 inode: object.inode,
                 exact_object_key_id: object.exact_object_key_id,
-                active_role_id: context.actor_role_id,
-                process_state_vector_id: context.actor_process_state_vector_id,
+                active_role_id: key.active_role_id,
+                process_state_vector_id: key.process_state_vector_id,
                 mount_namespace_inode: object.mount_namespace_inode,
                 filesystem_device: object.filesystem_device,
                 inode_generation: object.inode_generation,
@@ -112,7 +110,7 @@ impl GenerationPlan {
                 device_minor: device.minor,
                 ioctl_command,
                 operation: KernelEffectOperationV1::Ioctl as u16,
-                binding_lifecycle_state: context.binding_lifecycle_state,
+                binding_lifecycle_state: key.binding_lifecycle_state,
                 device_type: match device.device_type {
                     ExactDeviceType::Character => ExactDeviceTypeV1::Character,
                     ExactDeviceType::Block => ExactDeviceTypeV1::Block,
@@ -134,6 +132,7 @@ impl GenerationPlan {
         &mut self,
         cell: &CompiledDecisionCellV1,
         target_role: &str,
+        key: &EffectDefaultKeyV1,
         context: &TypedEffectContext<'_>,
         decision: PhysicalDecisionV1,
     ) -> Result<()> {
@@ -181,14 +180,14 @@ impl GenerationPlan {
                 .build()
             })?;
         let key = ProcessControlRuleKeyV1 {
-            profile_generation_ref_id: context.profile_generation_ref_id,
-            controller_role_id: context.actor_role_id,
-            controller_process_state_vector_id: context.actor_process_state_vector_id,
+            profile_generation_ref_id: key.profile_generation_ref_id,
+            controller_role_id: key.active_role_id,
+            controller_process_state_vector_id: key.process_state_vector_id,
             target_role_id,
             target_process_state_vector_id,
             operation_argument: operation.argument,
             operation: operation.kernel_id as u16,
-            binding_lifecycle_state: context.binding_lifecycle_state,
+            binding_lifecycle_state: key.binding_lifecycle_state,
             argument_wildcard: u8::from(operation.argument_wildcard),
         };
         self.insert(
@@ -205,8 +204,8 @@ mod tests {
     use std::sync::LazyLock;
 
     use erebor_interceptor_abi::{
-        BindingLifecycleStateV1, DeviceEffectKeyV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-        ProcessControlRuleKeyV1,
+        BindingLifecycleStateV1, DeviceEffectKeyV1, EffectDefaultKeyV1, PhysicalDecisionKindV1,
+        PhysicalDecisionV1, ProcessControlRuleKeyV1,
     };
     use mithril_control::{
         BindingLifecycleV1, CompiledDecisionCellV1, CompiledPhysicalResultV1, EffectFamilyV1,
@@ -226,13 +225,14 @@ mod tests {
         let object = device_object();
         let exact_objects = [&object];
         let roles = role_states();
-        let context = context(&roles, 1, 11);
+        let context = context(&roles);
         let allow = decision(PhysicalDecisionKindV1::Allow, 0);
         let mut rows = GenerationPlan::default();
 
         assert!(rows
             .lower_typed_effect(
                 &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:gpu:21531"),
+                &key(1, 11),
                 &context,
                 exact_objects.iter().copied(),
                 allow,
@@ -248,6 +248,7 @@ mod tests {
         assert!(rows
             .lower_typed_effect(
                 &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:gpu:*"),
+                &key(1, 11),
                 &context,
                 exact_objects.iter().copied(),
                 allow,
@@ -274,7 +275,8 @@ mod tests {
                     "SIGNAL_15",
                     "SECURITY:PROCESS:target",
                 ),
-                &context(&roles, 1, 11),
+                &key(1, 11),
+                &context(&roles),
                 exact_objects.iter().copied(),
                 allow,
             )?
@@ -293,7 +295,8 @@ mod tests {
                     "SIGNAL",
                     "SECURITY:PROCESS:controller",
                 ),
-                &context(&roles, 2, 22),
+                &key(2, 22),
+                &context(&roles),
                 exact_objects.iter().copied(),
                 deny,
             )?
@@ -317,13 +320,14 @@ mod tests {
         let object = device_object();
         let exact_objects = [&object];
         let roles = role_states();
-        let context = context(&roles, 1, 11);
+        let context = context(&roles);
         let decision = decision(PhysicalDecisionKindV1::Allow, 0);
         let mut rows = GenerationPlan::default();
 
         assert!(rows
             .lower_typed_effect(
                 &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:unknown:1"),
+                &key(1, 11),
                 &context,
                 exact_objects.iter().copied(),
                 decision,
@@ -332,6 +336,7 @@ mod tests {
         assert!(rows
             .lower_typed_effect(
                 &cell(EffectFamilyV1::Privilege, "PTRACE", "SECURITY:PROCESS:*",),
+                &key(1, 11),
                 &context,
                 exact_objects.iter().copied(),
                 decision,
@@ -341,18 +346,23 @@ mod tests {
         assert_eq!(rows[NativeTable::ProcessControl].len(), 0);
     }
 
-    fn context<'a>(
-        role_states: &'a BTreeMap<String, (u32, u32)>,
-        actor_role_id: u32,
-        actor_process_state_vector_id: u32,
-    ) -> TypedEffectContext<'a> {
+    fn context(role_states: &BTreeMap<String, (u32, u32)>) -> TypedEffectContext<'_> {
         TypedEffectContext {
-            profile_generation_ref_id: 7,
-            actor_role_id,
-            actor_process_state_vector_id,
-            binding_lifecycle_state: BindingLifecycleStateV1::Active,
             signed_device_classes: &SIGNED_DEVICE_CLASSES,
             role_states,
+        }
+    }
+
+    fn key(actor_role_id: u32, process_state: u32) -> EffectDefaultKeyV1 {
+        EffectDefaultKeyV1 {
+            profile_generation_ref_id: 7,
+            active_role_id: actor_role_id,
+            effect_family: 0,
+            operation: 0,
+            composite_atom_id: 0,
+            process_state_vector_id: process_state,
+            binding_lifecycle_state: BindingLifecycleStateV1::Active,
+            reserved_tail: [0; 3],
         }
     }
 

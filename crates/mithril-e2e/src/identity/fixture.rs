@@ -77,12 +77,13 @@ impl IdentityFixture {
         fs::write(group.join("cgroup.procs"), actor_pid.to_string())
             .context(IoSnafu { path: group })?;
         let mut bindings = WorkloadBindingOwner::system(node, 1).context(NodeSnafu)?;
-        let policy = NodePolicyGenerationOwner::load_and_install_for_bindings(
+        let policy = NodePolicyGenerationOwner::install_bindings(
             &config,
             fixture.host()?,
             &bindings,
             node,
             1,
+            None,
         )
         .context(NodeSnafu)?;
         fixture.policy = Some(policy);

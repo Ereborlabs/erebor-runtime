@@ -16,33 +16,11 @@ use zerocopy::{IntoBytes as _, TryFromBytes as _};
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu};
 use crate::Result;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct StoredIdV1 {
-    high: u64,
-    low: u64,
-}
-
-impl From<Id128V1> for StoredIdV1 {
-    fn from(value: Id128V1) -> Self {
-        Self {
-            high: value.high,
-            low: value.low,
-        }
-    }
-}
-
-impl From<StoredIdV1> for Id128V1 {
-    fn from(value: StoredIdV1) -> Self {
-        Self::new(value.high, value.low)
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct StoredStateV1 {
     runtime_state_key_hex: String,
-    node_boot_id: StoredIdV1,
+    node_boot_id: Id128V1,
     maximum_uses: u32,
     consumed_uses: u32,
     bound_profile_generation_refs: u32,
@@ -64,7 +42,7 @@ struct StoredReceiptV1 {
 #[serde(deny_unknown_fields)]
 struct ExceptionAuthorityRecordV1 {
     schema_version: u32,
-    node_id: StoredIdV1,
+    node_id: Id128V1,
     state: StoredStateV1,
     receipts: Vec<StoredReceiptV1>,
 }
@@ -73,14 +51,8 @@ struct ExceptionAuthorityRecordV1 {
 struct DurableStateV1 {
     runtime_state_key: ExceptionRuntimeStateKeyV1,
     node_boot_id: Id128V1,
-    maximum_uses: u32,
-    consumed_uses: u32,
-    bound_profile_generation_refs: u32,
     deadline_utc_ns: i64,
-    deadline_boottime_ns: u64,
-    transition_version: u64,
-    exception_definition_sha256: [u8; 32],
-    state: ExceptionRuntimeStateKindV1,
+    runtime: ExceptionRuntimeStateV1,
 }
 
 pub(super) struct ExceptionAuthorityOwner {
@@ -200,7 +172,7 @@ impl ExceptionAuthorityOwner {
             .fail();
         }
         let reserved_uses = self.states.values().try_fold(0_u64, |total, state| {
-            total.checked_add(u64::from(state.maximum_uses))
+            total.checked_add(u64::from(state.runtime.maximum_uses))
         });
         if reserved_uses
             .and_then(|uses| uses.checked_add(u64::from(desired.maximum_uses)))
@@ -214,14 +186,12 @@ impl ExceptionAuthorityOwner {
         let state = DurableStateV1 {
             runtime_state_key,
             node_boot_id: self.node_boot_id,
-            maximum_uses: desired.maximum_uses,
-            consumed_uses: desired.consumed_uses,
-            bound_profile_generation_refs: desired.bound_profile_generation_refs,
             deadline_utc_ns,
-            deadline_boottime_ns: desired.deadline_boottime_ns,
-            transition_version: desired.transition_version,
-            exception_definition_sha256: desired.exception_definition_sha256,
-            state: desired.state,
+            runtime: ExceptionRuntimeStateV1 {
+                lock: 0,
+                reserved: [0; 7],
+                ..desired
+            },
         };
         self.states.insert(key.to_vec(), state);
         self.append(key)?;
@@ -373,14 +343,12 @@ impl ExceptionAuthorityOwner {
         let next = DurableStateV1 {
             runtime_state_key,
             node_boot_id: self.node_boot_id,
-            maximum_uses: state.maximum_uses,
-            consumed_uses: state.consumed_uses,
-            bound_profile_generation_refs: state.bound_profile_generation_refs,
             deadline_utc_ns,
-            deadline_boottime_ns: state.deadline_boottime_ns,
-            transition_version: state.transition_version,
-            exception_definition_sha256: state.exception_definition_sha256,
-            state: state.state,
+            runtime: ExceptionRuntimeStateV1 {
+                lock: 0,
+                reserved: [0; 7],
+                ..state
+            },
         };
         if let Some(previous) = self.states.get(key).copied() {
             validate_state_transition(previous, next)?;
@@ -393,7 +361,7 @@ impl ExceptionAuthorityOwner {
     }
 
     fn apply(&mut self, record: ExceptionAuthorityRecordV1) -> Result<()> {
-        if record.schema_version != 1 || Id128V1::from(record.node_id) != self.node_id {
+        if record.schema_version != 1 || record.node_id != self.node_id {
             return IdentityStateSnafu {
                 reason: "exception authority WAL has invalid node ownership".to_owned(),
             }
@@ -446,7 +414,7 @@ impl ExceptionAuthorityOwner {
         })?;
         let record = ExceptionAuthorityRecordV1 {
             schema_version: 1,
-            node_id: self.node_id.into(),
+            node_id: self.node_id,
             state: encode_state(state),
             receipts: self
                 .receipts
@@ -560,6 +528,84 @@ mod tests {
             state,
             reserved: [0; 7],
         }
+    }
+
+    #[test]
+    fn runtime_padding_preserves_authority() -> crate::Result<()> {
+        let directory = state_directory()?;
+        let key = runtime_key();
+        let expected = runtime(0, ExceptionRuntimeStateKindV1::Active);
+        let desired = ExceptionRuntimeStateV1 {
+            lock: 17,
+            reserved: [19; 7],
+            ..expected
+        };
+        let mut owner = ExceptionAuthorityOwner::load(directory.path(), NODE, BOOT_ONE)?;
+        assert_eq!(
+            owner.prepare_runtime(
+                key.as_bytes(),
+                desired,
+                DEADLINE_UTC_NS,
+                None,
+                NOW_UTC_NS,
+                NOW_BOOTTIME_NS,
+            )?,
+            desired
+        );
+        let stored = owner.states[key.as_bytes()];
+        assert_eq!(stored.runtime, expected);
+        assert!(!owner.observe_runtime_in_memory(
+            key.as_bytes(),
+            ExceptionRuntimeStateV1 {
+                lock: 23,
+                reserved: [29; 7],
+                ..expected
+            },
+            DEADLINE_UTC_NS,
+        )?);
+        assert_eq!(owner.states[key.as_bytes()], stored);
+        drop(owner);
+
+        let owner = ExceptionAuthorityOwner::load(directory.path(), NODE, BOOT_ONE)?;
+        assert_eq!(owner.states[key.as_bytes()], stored);
+        assert_eq!(
+            super::runtime_from_durable(stored, BOOT_ONE, NOW_UTC_NS, NOW_BOOTTIME_NS),
+            expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stored_state_keeps_diagnostics() -> crate::Result<()> {
+        let directory = state_directory()?;
+        let key = runtime_key();
+        let mut owner = ExceptionAuthorityOwner::load(directory.path(), NODE, BOOT_ONE)?;
+        owner.prepare_runtime(
+            key.as_bytes(),
+            runtime(0, ExceptionRuntimeStateKindV1::Active),
+            DEADLINE_UTC_NS,
+            None,
+            NOW_UTC_NS,
+            NOW_BOOTTIME_NS,
+        )?;
+        let stored = owner.states[key.as_bytes()];
+        assert_eq!(super::decode_state(super::encode_state(stored))?, stored);
+        for tag in [0, 5, u8::MAX] {
+            let mut invalid = super::encode_state(stored);
+            invalid.state = tag;
+            assert!(matches!(
+                super::decode_state(invalid.clone()),
+                Err(crate::Error::IdentityState { reason, .. })
+                    if reason == "exception authority WAL state is invalid"
+            ));
+            invalid.exception_definition_sha256_hex = "00".to_owned();
+            assert!(matches!(
+                super::decode_state(invalid),
+                Err(crate::Error::IdentityState { reason, .. })
+                    if reason == "exception authority WAL digest has the wrong size"
+            ));
+        }
+        Ok(())
     }
 
     #[test]
@@ -960,9 +1006,9 @@ fn ensure_same_definition(
     state: ExceptionRuntimeStateV1,
 ) -> Result<()> {
     if stored.runtime_state_key != key
-        || stored.maximum_uses != state.maximum_uses
-        || stored.bound_profile_generation_refs != state.bound_profile_generation_refs
-        || stored.exception_definition_sha256 != state.exception_definition_sha256
+        || stored.runtime.maximum_uses != state.maximum_uses
+        || stored.runtime.bound_profile_generation_refs != state.bound_profile_generation_refs
+        || stored.runtime.exception_definition_sha256 != state.exception_definition_sha256
     {
         return IdentityStateSnafu {
             reason: "exception instance differs from durable authority".to_owned(),
@@ -974,23 +1020,24 @@ fn ensure_same_definition(
 
 fn validate_state_transition(previous: DurableStateV1, next: DurableStateV1) -> Result<()> {
     let definition_matches = previous.runtime_state_key == next.runtime_state_key
-        && previous.maximum_uses == next.maximum_uses
-        && previous.bound_profile_generation_refs == next.bound_profile_generation_refs
+        && previous.runtime.maximum_uses == next.runtime.maximum_uses
+        && previous.runtime.bound_profile_generation_refs
+            == next.runtime.bound_profile_generation_refs
         && previous.deadline_utc_ns == next.deadline_utc_ns
-        && previous.exception_definition_sha256 == next.exception_definition_sha256;
-    let state_advances = previous.state == next.state
-        || (previous.state == ExceptionRuntimeStateKindV1::Active
+        && previous.runtime.exception_definition_sha256 == next.runtime.exception_definition_sha256;
+    let state_advances = previous.runtime.state == next.runtime.state
+        || (previous.runtime.state == ExceptionRuntimeStateKindV1::Active
             && matches!(
-                next.state,
+                next.runtime.state,
                 ExceptionRuntimeStateKindV1::Exhausted
                     | ExceptionRuntimeStateKindV1::Expired
                     | ExceptionRuntimeStateKindV1::ReconciliationRequired
             ))
-        || (previous.state == ExceptionRuntimeStateKindV1::ReconciliationRequired
-            && next.state == ExceptionRuntimeStateKindV1::Exhausted);
+        || (previous.runtime.state == ExceptionRuntimeStateKindV1::ReconciliationRequired
+            && next.runtime.state == ExceptionRuntimeStateKindV1::Exhausted);
     if !definition_matches
-        || next.consumed_uses < previous.consumed_uses
-        || next.transition_version < previous.transition_version
+        || next.runtime.consumed_uses < previous.runtime.consumed_uses
+        || next.runtime.transition_version < previous.runtime.transition_version
         || !state_advances
     {
         return IdentityStateSnafu {
@@ -1027,39 +1074,33 @@ fn runtime_from_durable(
 ) -> ExceptionRuntimeStateV1 {
     let rebooted = state.node_boot_id != node_boot_id;
     let remaining = state.deadline_utc_ns.saturating_sub(now_utc_ns);
-    let mut kind = state.state;
+    let mut kind = state.runtime.state;
     if remaining <= 0 {
         kind = ExceptionRuntimeStateKindV1::Expired;
     }
     ExceptionRuntimeStateV1 {
-        lock: 0,
-        maximum_uses: state.maximum_uses,
-        consumed_uses: state.consumed_uses,
-        bound_profile_generation_refs: state.bound_profile_generation_refs,
         deadline_boottime_ns: if rebooted {
             now_boottime_ns.saturating_add(remaining.max(0) as u64)
         } else {
-            state.deadline_boottime_ns
+            state.runtime.deadline_boottime_ns
         },
-        transition_version: state.transition_version,
-        exception_definition_sha256: state.exception_definition_sha256,
         state: kind,
-        reserved: [0; 7],
+        ..state.runtime
     }
 }
 
 fn encode_state(state: DurableStateV1) -> StoredStateV1 {
     StoredStateV1 {
         runtime_state_key_hex: hex::encode(state.runtime_state_key.as_bytes()),
-        node_boot_id: state.node_boot_id.into(),
-        maximum_uses: state.maximum_uses,
-        consumed_uses: state.consumed_uses,
-        bound_profile_generation_refs: state.bound_profile_generation_refs,
+        node_boot_id: state.node_boot_id,
+        maximum_uses: state.runtime.maximum_uses,
+        consumed_uses: state.runtime.consumed_uses,
+        bound_profile_generation_refs: state.runtime.bound_profile_generation_refs,
         deadline_utc_ns: state.deadline_utc_ns,
-        deadline_boottime_ns: state.deadline_boottime_ns,
-        transition_version: state.transition_version,
-        exception_definition_sha256_hex: hex::encode(state.exception_definition_sha256),
-        state: state.state as u8,
+        deadline_boottime_ns: state.runtime.deadline_boottime_ns,
+        transition_version: state.runtime.transition_version,
+        exception_definition_sha256_hex: hex::encode(state.runtime.exception_definition_sha256),
+        state: state.runtime.state as u8,
     }
 }
 
@@ -1078,50 +1119,33 @@ fn decode_state(state: StoredStateV1) -> Result<DurableStateV1> {
     })?;
     let durable = DurableStateV1 {
         runtime_state_key: read_runtime_key(&key)?,
-        node_boot_id: state.node_boot_id.into(),
-        maximum_uses: state.maximum_uses,
-        consumed_uses: state.consumed_uses,
-        bound_profile_generation_refs: state.bound_profile_generation_refs,
+        node_boot_id: state.node_boot_id,
         deadline_utc_ns: state.deadline_utc_ns,
-        deadline_boottime_ns: state.deadline_boottime_ns,
-        transition_version: state.transition_version,
-        exception_definition_sha256: digest.try_into().map_err(|_| {
-            IdentityStateSnafu {
-                reason: "exception authority WAL digest has the wrong size".to_owned(),
-            }
-            .build()
-        })?,
-        state: match state.state {
-            value if value == ExceptionRuntimeStateKindV1::Active as u8 => {
-                ExceptionRuntimeStateKindV1::Active
-            }
-            value if value == ExceptionRuntimeStateKindV1::Exhausted as u8 => {
-                ExceptionRuntimeStateKindV1::Exhausted
-            }
-            value if value == ExceptionRuntimeStateKindV1::Expired as u8 => {
-                ExceptionRuntimeStateKindV1::Expired
-            }
-            value if value == ExceptionRuntimeStateKindV1::ReconciliationRequired as u8 => {
-                ExceptionRuntimeStateKindV1::ReconciliationRequired
-            }
-            _ => {
-                return IdentityStateSnafu {
-                    reason: "exception authority WAL state is invalid".to_owned(),
+        runtime: ExceptionRuntimeStateV1 {
+            lock: 0,
+            maximum_uses: state.maximum_uses,
+            consumed_uses: state.consumed_uses,
+            bound_profile_generation_refs: state.bound_profile_generation_refs,
+            deadline_boottime_ns: state.deadline_boottime_ns,
+            transition_version: state.transition_version,
+            exception_definition_sha256: digest.try_into().map_err(|_| {
+                IdentityStateSnafu {
+                    reason: "exception authority WAL digest has the wrong size".to_owned(),
                 }
-                .fail()
-            }
+                .build()
+            })?,
+            state: ExceptionRuntimeStateKindV1::try_read_from_bytes(&[state.state])
+                .ok()
+                .filter(|kind| *kind != ExceptionRuntimeStateKindV1::Unknown)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "exception authority WAL state is invalid".to_owned(),
+                    }
+                    .build()
+                })?,
+            reserved: [0; 7],
         },
     };
-    validate_runtime(&ExceptionRuntimeStateV1 {
-        lock: 0,
-        maximum_uses: durable.maximum_uses,
-        consumed_uses: durable.consumed_uses,
-        bound_profile_generation_refs: durable.bound_profile_generation_refs,
-        deadline_boottime_ns: durable.deadline_boottime_ns,
-        transition_version: durable.transition_version,
-        exception_definition_sha256: durable.exception_definition_sha256,
-        state: durable.state,
-        reserved: [0; 7],
-    })?;
+    validate_runtime(&durable.runtime)?;
     Ok(durable)
 }

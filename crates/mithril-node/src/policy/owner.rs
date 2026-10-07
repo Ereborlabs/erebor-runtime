@@ -547,12 +547,13 @@ impl NodePolicyGenerationOwner {
         )
     }
 
-    pub fn load_and_install_for_bindings(
+    pub fn install_bindings(
         config: &NodeConfig,
         host: &mut KernelHost,
         bindings: &WorkloadBindingOwner,
         node_boot_id: Id128V1,
         label_epoch: u64,
+        prior: Option<&Self>,
     ) -> Result<Self> {
         let candidates = Candidates::load(config)?;
         let measured = Self::resolve_cri_exact_objects(
@@ -570,37 +571,8 @@ impl NodePolicyGenerationOwner {
             PolicyInput {
                 candidates,
                 measured,
-                semantics: BTreeMap::new(),
-                deferred: bindings.held_binding_ids().map(str::to_owned).collect(),
-            },
-        )
-    }
-
-    pub fn reload_and_install_for_bindings(
-        &self,
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        bindings: &WorkloadBindingOwner,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-    ) -> Result<Self> {
-        let candidates = Candidates::load(config)?;
-        let measured = Self::resolve_cri_exact_objects(
-            config,
-            host,
-            &candidates,
-            bindings.exact_object_binding_targets(),
-            None,
-        )?;
-        Self::install(
-            config,
-            host,
-            node_boot_id,
-            label_epoch,
-            PolicyInput {
-                candidates,
-                measured,
-                semantics: self.generation_semantics.clone(),
+                semantics: prior
+                    .map_or_else(BTreeMap::new, |owner| owner.generation_semantics.clone()),
                 deferred: bindings.held_binding_ids().map(str::to_owned).collect(),
             },
         )
@@ -994,12 +966,10 @@ impl NodePolicyGenerationOwner {
                         topology_generation,
                         route_view.mount_root_routes()?,
                     ));
-            }
-            for selector in selectors {
-                let canonical_path = selector.path_expression();
-                let path = PathBuf::from(canonical_path);
-                let object = match target_oci_entry_view {
-                    Some((_, _, oci_view)) => oci_view.try_resolve_signed_selector(
+                for selector in selectors {
+                    let canonical_path = selector.path_expression();
+                    let path = PathBuf::from(canonical_path);
+                    let object = route_view.try_resolve_signed_selector(
                         host,
                         &path,
                         binding.active_profile_generation_ref_id,
@@ -1007,43 +977,35 @@ impl NodePolicyGenerationOwner {
                         selector.object_class_id.clone(),
                         selector.device_class_id.clone(),
                         topology_generation,
-                    )?,
-                    None if process_root_is_container => view.try_resolve_signed_selector(
-                        host,
-                        &path,
-                        binding.active_profile_generation_ref_id,
-                        selector.kernel_handle(),
-                        selector.object_class_id.clone(),
-                        selector.device_class_id.clone(),
-                        topology_generation,
-                    )?,
-                    None => None,
-                };
-                let Some(object) = object else {
-                    continue;
-                };
-                let expected_components =
-                    canonical_path_components(artifact.header.profile_id.as_str(), canonical_path)
-                        .context(PolicySnafu)?;
-                ensure!(
-                    object.canonical_component_hex
-                        == expected_components
-                            .iter()
-                            .map(hex::encode)
-                            .collect::<Vec<_>>(),
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "signed path selector `{}` resolved to a different canonical path",
-                            selector.path_selector_id
-                        ),
-                    }
-                );
-                measured
-                    .bindings
-                    .entry(binding.binding_id.clone())
-                    .or_default()
-                    .objects
-                    .push(object);
+                    )?;
+                    let Some(object) = object else {
+                        continue;
+                    };
+                    let expected_components = canonical_path_components(
+                        artifact.header.profile_id.as_str(),
+                        canonical_path,
+                    )
+                    .context(PolicySnafu)?;
+                    ensure!(
+                        object.canonical_component_hex
+                            == expected_components
+                                .iter()
+                                .map(hex::encode)
+                                .collect::<Vec<_>>(),
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "signed path selector `{}` resolved to a different canonical path",
+                                selector.path_selector_id
+                            ),
+                        }
+                    );
+                    measured
+                        .bindings
+                        .entry(binding.binding_id.clone())
+                        .or_default()
+                        .objects
+                        .push(object);
+                }
             }
             if process_root_is_container && target_oci_entry_view.is_none() {
                 measured.views.insert(view.mount_namespace_inode()?, view);
@@ -1336,7 +1298,7 @@ impl NodePolicyGenerationOwner {
         let mount_namespace_id = derived_id(
             b"MITHRIL-MOUNT-NAMESPACE-V1\0",
             &[
-                portable_id_bytes(self.node_boot_id),
+                self.node_boot_id.to_be_bytes().to_vec(),
                 self.label_epoch.to_be_bytes().to_vec(),
                 mount_namespace_inode.to_be_bytes().to_vec(),
             ],
@@ -1344,14 +1306,14 @@ impl NodePolicyGenerationOwner {
         let filesystem_instance_id = derived_id(
             b"MITHRIL-FILESYSTEM-INSTANCE-V1\0",
             &[
-                portable_id_bytes(mount_namespace_id),
+                mount_namespace_id.to_be_bytes().to_vec(),
                 live.filesystem_device.to_be_bytes().to_vec(),
             ],
         )?;
         let exact_live_object_id = derived_id(
             b"MITHRIL-EXACT-LIVE-FILE-V1\0",
             &[
-                portable_id_bytes(filesystem_instance_id),
+                filesystem_instance_id.to_be_bytes().to_vec(),
                 live.mount_id.to_be_bytes().to_vec(),
                 live.inode.to_be_bytes().to_vec(),
                 live.inode_generation.to_be_bytes().to_vec(),
@@ -1361,7 +1323,7 @@ impl NodePolicyGenerationOwner {
         let backing_identity = derived_id(
             b"MITHRIL-ADMINISTRATIVE-EXECUTABLE-BACKING-V1\0",
             &[
-                portable_id_bytes(plan.profile.profile_id),
+                plan.profile.profile_id.to_be_bytes().to_vec(),
                 plan.profile_generation_ref_id.to_be_bytes().to_vec(),
                 plan.admitted_entry_rule_id.to_be_bytes().to_vec(),
             ],
@@ -1369,8 +1331,8 @@ impl NodePolicyGenerationOwner {
         let live_interval_id = derived_id(
             b"MITHRIL-ADMINISTRATIVE-FILE-INTERVAL-V1\0",
             &[
-                portable_id_bytes(target.binding_nonce),
-                portable_id_bytes(exact_live_object_id),
+                target.binding_nonce.to_be_bytes().to_vec(),
+                exact_live_object_id.to_be_bytes().to_vec(),
                 target.container_generation.to_be_bytes().to_vec(),
             ],
         )?;

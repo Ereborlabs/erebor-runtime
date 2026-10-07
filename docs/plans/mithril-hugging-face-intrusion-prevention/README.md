@@ -14,6 +14,9 @@ Design authority:
 - [Shared manual-test environment setup](./manual-testing/environment-setup.md)
 - [Implemented outcome review guide](./implemented-phase-review.md)
 
+Node work: [component redesign and simplification](./node-simplification.md).
+A is approved. Retained preparation caching and B-E require separate approval.
+
 Phase 6.2 preserves the frozen BPF ABI and qualifies Control RPC/schema
 compatibility with Node. Phase 6.1 supplies typed operation-specific gRPC
 services while retaining domain generations, cursors, digests, and replay rules.

@@ -111,7 +111,6 @@ pub(super) struct PolicyMeasurements {
 
 #[derive(Clone)]
 pub(super) struct MountRootReconciliation {
-    pub(super) mount_namespace_inode: u32,
     pub(super) configured: ExactFileObjectConfig,
     pub(super) canonical_path: PathBuf,
 }
@@ -485,7 +484,7 @@ impl PolicyMeasurements {
     fn prepare_views(&mut self, roots: &[MountRootReconciliation]) -> Result<()> {
         let roots = roots.iter().map(|root| {
             (
-                root.mount_namespace_inode,
+                root.configured.mount_namespace_inode,
                 root.configured.mount_view_root_pid,
                 Some(root),
             )
