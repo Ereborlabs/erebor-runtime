@@ -1667,6 +1667,46 @@ async fn query_binding_selection() -> TestResult {
 }
 
 #[test]
+fn query_scope_shared_grant() -> TestResult {
+    let grant = QueryGrant {
+        principal: "query-operator".into(),
+        revision: 1,
+        selection: AnalysisSelectionV1::tenant([1; 16]),
+    };
+    let authority = Arc::new(Authority::new(grant.clone(), Arc::new(AtomicU64::new(0))));
+    let sql = QuerySql::admit("SELECT operation FROM events", Vec::new(), false)?;
+    let plan = QueryPlan::client(grant, sql)?;
+    let cloned = plan.clone();
+    let grant = plan.grant().ok_or("client grant absent")?;
+    let session = super::authorization::QuerySession {
+        authority: authority.clone(),
+        grant: grant.clone(),
+    };
+    let copied = session.clone();
+    assert!(Arc::ptr_eq(
+        grant,
+        cloned.grant().ok_or("cloned grant absent")?
+    ));
+    assert!(Arc::ptr_eq(grant, &session.grant));
+    assert!(Arc::ptr_eq(grant, &copied.grant));
+    assert!(std::ptr::eq(plan.base_selection(), &grant.selection));
+    let mut narrowed = plan.dependencies(20)?;
+    narrowed.nodes.push("selected-node".into());
+    assert!(plan.base_selection().nodes.is_empty());
+    session.check()?;
+    authority.revoke();
+    assert!(matches!(
+        session.check(),
+        Err(crate::Error::QueryDenied { .. })
+    ));
+    assert!(matches!(
+        copied.check(),
+        Err(crate::Error::QueryDenied { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn query_client_trusted_entry() -> TestResult {
     let fixture = ClientFixture::local()?;
     let plan = fixture.plan("SELECT operation FROM events", vec![], true)?;
@@ -2237,8 +2277,11 @@ async fn query_client_drop() -> TestResult {
 #[test]
 fn query_client_stream_admission() -> TestResult {
     let fixture = ClientFixture::local()?;
-    let mut plan = fixture.plan("SELECT operation FROM events", vec![], false)?;
-    plan.grant = None;
+    let client = fixture.plan("SELECT operation FROM events", vec![], false)?;
+    let mut plan = fixture
+        .data
+        .plan(super::QueryTemplate::Events { operation: None })?;
+    plan.template = client.template().clone();
     assert!(matches!(
         fixture
             .owner

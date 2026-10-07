@@ -699,7 +699,7 @@ impl QueryFrame {
         clock_changed: bool,
     ) -> Result<Self> {
         let mut storage_health = QueryHealth::from(storage_health);
-        if plan.grant.is_some() {
+        if plan.grant().is_some() {
             storage_health.usage = None;
         }
         let mut frame = Self::new(
@@ -1104,12 +1104,14 @@ mod tests {
         ));
 
         for change in 0..3 {
-            let mut plan = fixture.plan.clone();
+            let mut selection = fixture.plan.base_selection().clone();
+            let mut template = fixture.plan.template.clone();
             match change {
-                0 => plan.template = QueryTemplate::Events { operation: Some(7) },
-                1 => plan.selection.sources[0].source_epoch += 1,
-                _ => plan.selection.received_from = Bound::Excluded(10),
+                0 => template = QueryTemplate::Events { operation: Some(7) },
+                1 => selection.sources[0].source_epoch += 1,
+                _ => selection.received_from = Bound::Excluded(10),
             }
+            let plan = QueryPlan::new(selection, template)?;
             assert_eq!(
                 checkpoint.validate(&plan, &fixture.meta, None)?,
                 Some(position),

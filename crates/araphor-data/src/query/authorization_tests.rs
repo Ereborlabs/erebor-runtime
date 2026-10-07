@@ -445,7 +445,7 @@ fn query_bookmark_keeps_scope() -> TestResult {
     let bytes = QueryCheckpoint::from_result(&plan, &result)?.encode()?;
     let checkpoint = QueryCheckpoint::try_from(bytes.as_slice())?;
     for change in 0..7 {
-        let mut selection = plan.selection.clone();
+        let mut selection = plan.base_selection().clone();
         let mut template = plan.template.clone();
         match change {
             0 => template = QueryTemplate::Events { operation: Some(7) },
@@ -464,9 +464,12 @@ fn query_bookmark_keeps_scope() -> TestResult {
             checkpoint.validate(&changed, &result.meta, None)?,
             checkpoint.position()
         );
-        assert_eq!(changed.selection.tenant_id, selection.tenant_id);
-        assert_eq!(changed.selection.sources, selection.sources);
-        assert_eq!(changed.selection.received_from, selection.received_from);
+        assert_eq!(changed.base_selection().tenant_id, selection.tenant_id);
+        assert_eq!(changed.base_selection().sources, selection.sources);
+        assert_eq!(
+            changed.base_selection().received_from,
+            selection.received_from
+        );
     }
     Ok(())
 }
@@ -559,7 +562,7 @@ fn client_bookmark_keeps_grant() -> TestResult {
             checkpoint.validate(&changed, &result.meta, None)?,
             checkpoint.position()
         );
-        let retained = changed.grant.as_ref().ok_or("current grant absent")?;
+        let retained = changed.grant().ok_or("current grant absent")?;
         assert_eq!(retained.principal, current.principal);
         assert_eq!(retained.revision, current.revision);
         assert_eq!(retained.selection.tenant_id, current.selection.tenant_id);

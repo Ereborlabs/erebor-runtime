@@ -21,7 +21,7 @@ pub trait QueryAuthorization: Send + Sync + 'static {
 #[derive(Clone)]
 pub(super) struct QuerySession {
     pub authority: Arc<dyn QueryAuthorization>,
-    pub grant: QueryGrant,
+    pub grant: Arc<QueryGrant>,
 }
 
 impl QuerySession {

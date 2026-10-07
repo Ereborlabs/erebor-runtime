@@ -1,4 +1,5 @@
 use std::ops::Bound;
+use std::sync::Arc;
 
 use duckdb::types::Value;
 
@@ -31,9 +32,14 @@ pub enum QueryOperation {
 
 #[derive(Clone, Debug)]
 pub struct QueryPlan {
-    pub(super) selection: AnalysisSelectionV1,
+    scope: QueryScope,
     pub(super) template: QueryTemplate,
-    pub(super) grant: Option<QueryGrant>,
+}
+
+#[derive(Clone, Debug)]
+enum QueryScope {
+    Trusted(Arc<AnalysisSelectionV1>),
+    Client(Arc<QueryGrant>),
 }
 
 impl QueryPlan {
@@ -90,9 +96,8 @@ impl QueryPlan {
             _ => {}
         }
         Ok(Self {
-            selection,
+            scope: QueryScope::Trusted(Arc::new(selection)),
             template,
-            grant: None,
         })
     }
 
@@ -102,10 +107,23 @@ impl QueryPlan {
             return crate::QueryDeniedSnafu.fail();
         }
         Ok(Self {
-            selection: grant.selection.clone(),
+            scope: QueryScope::Client(Arc::new(grant)),
             template: QueryTemplate::Client(sql),
-            grant: Some(grant),
         })
+    }
+
+    pub(super) fn base_selection(&self) -> &AnalysisSelectionV1 {
+        match &self.scope {
+            QueryScope::Trusted(selection) => selection,
+            QueryScope::Client(grant) => &grant.selection,
+        }
+    }
+
+    pub(super) fn grant(&self) -> Option<&Arc<QueryGrant>> {
+        match &self.scope {
+            QueryScope::Client(grant) => Some(grant),
+            QueryScope::Trusted(_) => None,
+        }
     }
 
     pub fn operation(&self) -> QueryOperation {
@@ -235,7 +253,7 @@ impl QueryPlan {
     }
 
     pub(super) fn selection(&self, now_ns: u64) -> AnalysisSelectionV1 {
-        let mut selection = self.selection.clone();
+        let mut selection = self.base_selection().clone();
         if let QueryTemplate::MovingCount { seconds } = self.template {
             selection.received_from =
                 Bound::Included(now_ns.saturating_sub(u64::from(seconds) * 1_000_000_000));
@@ -288,7 +306,7 @@ impl QueryPlan {
                 vec![Value::UInt(first), Value::UInt(second)]
             }
             QueryTemplate::RevisionDifference => self
-                .selection
+                .base_selection()
                 .contexts
                 .iter()
                 .map(|key| Value::UBigInt(key.owner_revision))

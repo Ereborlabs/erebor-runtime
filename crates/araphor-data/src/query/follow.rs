@@ -216,7 +216,7 @@ impl QueryOwner {
         checkpoint: Option<QueryCheckpoint>,
         clock: Arc<dyn QueryClock>,
     ) -> Result<QueryStream> {
-        if plan.grant.is_some() {
+        if plan.grant().is_some() {
             return crate::QueryDeniedSnafu.fail();
         }
         self.follow_inner(plan, checkpoint, clock, None)
@@ -248,8 +248,8 @@ impl QueryOwner {
             .fail();
         }
         let grant = plan
-            .grant
-            .clone()
+            .grant()
+            .cloned()
             .ok_or_else(|| crate::QueryDeniedSnafu.build())?;
         authority.check(&grant)?;
         self.limits.client_capacity()?;
@@ -268,7 +268,7 @@ impl QueryOwner {
         clock: Arc<dyn QueryClock>,
         session: Option<QuerySession>,
     ) -> Result<QueryStream> {
-        let lease = Arc::new(self.budget.stream(plan.selection.tenant_id)?);
+        let lease = Arc::new(self.budget.stream(plan.base_selection().tenant_id)?);
         // Register before the first poll can capture storage state.
         let changes = self.store.subscribe_revision();
         let clock_changes = clock.changes();

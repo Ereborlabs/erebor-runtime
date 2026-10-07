@@ -212,7 +212,7 @@ impl QueryOwner {
         now_ns: u64,
         control: &AnalysisReadControl,
     ) -> Result<QueryResult> {
-        if plan.grant.is_some() {
+        if plan.grant().is_some() {
             return crate::QueryDeniedSnafu.fail();
         }
         let control = control.within(self.limits.extract_timeout)?;
@@ -233,8 +233,8 @@ impl QueryOwner {
         control: Arc<AnalysisReadControl>,
     ) -> Result<QueryResult> {
         let grant = plan
-            .grant
-            .clone()
+            .grant()
+            .cloned()
             .ok_or_else(|| crate::QueryDeniedSnafu.build())?;
         authority.check(&grant)?;
         let stage = Arc::new(control.within(self.limits.extract_timeout)?);
@@ -295,17 +295,17 @@ impl QueryOwner {
     }
 
     fn reserve(&self, plan: &QueryPlan) -> Result<QueryLease> {
-        if plan.grant.is_some() {
+        if plan.grant().is_some() {
             self.limits.client_capacity()?;
         }
-        self.budget.evaluate(plan.selection.tenant_id)
+        self.budget.evaluate(plan.base_selection().tenant_id)
     }
 
     async fn reserve_wait(&self, plan: &QueryPlan) -> Result<QueryLease> {
-        if plan.grant.is_some() {
+        if plan.grant().is_some() {
             self.limits.client_capacity()?;
         }
-        self.budget.wait(plan.selection.tenant_id).await
+        self.budget.wait(plan.base_selection().tenant_id).await
     }
 
     fn evaluate(
@@ -380,7 +380,7 @@ impl QueryOwner {
             self.limits.input_bytes,
             &plan.template,
         )?;
-        let input = if plan.grant.is_some() && plan.operation() == QueryOperation::Append {
+        let input = if plan.grant().is_some() && plan.operation() == QueryOperation::Append {
             input.append_positions(self.limits.input_bytes)?
         } else {
             input
@@ -474,7 +474,7 @@ impl QueryOwner {
             limited,
             scanned_through,
         } = output;
-        let positions = if plan.grant.is_some() && plan.operation() == QueryOperation::Append {
+        let positions = if plan.grant().is_some() && plan.operation() == QueryOperation::Append {
             QueryResult::take_positions(&mut columns, &mut types, &mut rows)?
         } else {
             Vec::new()
@@ -487,10 +487,13 @@ impl QueryOwner {
             sources,
             missing_contexts: page.extraction.missing_contexts,
             scanned_bytes: plan
-                .grant
+                .grant()
                 .is_none()
                 .then_some(page.extraction.scanned_bytes),
-            input_bytes: plan.grant.is_none().then_some(page.extraction.input_bytes),
+            input_bytes: plan
+                .grant()
+                .is_none()
+                .then_some(page.extraction.input_bytes),
             input_rows,
             output_bytes,
             evaluated_utc_ns: now_ns,

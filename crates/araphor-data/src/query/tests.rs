@@ -98,7 +98,7 @@ impl QueryFixture {
     fn baseline(&self, plan: &QueryPlan, now_ns: u64) -> TestResult<Vec<Vec<Value>>> {
         use super::adapter::{InputColumn, InputTable};
 
-        let mut selection = plan.selection.clone();
+        let mut selection = plan.base_selection().clone();
         selection.received_from = Bound::Unbounded;
         selection.received_until = Bound::Unbounded;
         let (template, relation) = match &plan.template {
@@ -214,7 +214,7 @@ fn query_input_windows() -> TestResult {
         assert_eq!(result.rows, vec![vec![Value::BigInt(count)]]);
         assert_eq!(result.rows, fixture.baseline(&moving, time * minute)?);
     }
-    let mut selection = moving.selection.clone();
+    let mut selection = moving.base_selection().clone();
     selection.received_from = Bound::Included(600 * minute);
     selection.received_until = Bound::Excluded(610 * minute);
     let buckets = QueryPlan::new(selection, QueryTemplate::FixedBuckets { seconds: 300 })?;
@@ -292,18 +292,18 @@ fn query_scope_plan_validation() -> TestResult {
     let result = owner.query_at(&changed, 40)?;
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0][operation], Value::UInt(8));
-    let mut selection = plan.selection.clone();
+    let mut selection = plan.base_selection().clone();
     selection.received_from = Bound::Included(20);
     let bounded = QueryPlan::new(selection, plan.template.clone())?;
     let result = owner.query_at(&bounded, 40)?;
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0][operation], Value::UInt(7));
     assert_eq!(bounded.dependencies(40)?.received_from, Bound::Included(20));
-    let mut selection = plan.selection.clone();
+    let mut selection = plan.base_selection().clone();
     selection.sources[0].source_epoch += 1;
     let changed = QueryPlan::new(selection.clone(), plan.template.clone())?;
     assert_eq!(changed.dependencies(40)?.sources, selection.sources);
-    let mut selection = plan.selection.clone();
+    let mut selection = plan.base_selection().clone();
     selection.sources[0].tenant_id = [9; 16];
     assert!(QueryPlan::new(selection, plan.template.clone()).is_err());
     assert!(fixture
@@ -427,8 +427,12 @@ fn query_scope_bounded_history() -> TestResult {
     for cursor in 1..=20 {
         fixture.event(cursor, cursor * 1_000, 7)?;
     }
-    let mut plan = fixture.plan(QueryTemplate::OperationCounts)?;
-    plan.selection.received_from = Bound::Included(19_000);
+    let mut selection = fixture
+        .plan(QueryTemplate::OperationCounts)?
+        .base_selection()
+        .clone();
+    selection.received_from = Bound::Included(19_000);
+    let plan = QueryPlan::new(selection.clone(), QueryTemplate::OperationCounts)?;
     let result = fixture
         .owner(QueryLimits::default())?
         .query_at(&plan, 20_000)?;
@@ -447,7 +451,8 @@ fn query_scope_bounded_history() -> TestResult {
     assert!(owner
         .query_at(&fixture.plan(QueryTemplate::OperationCounts)?, 20_000)
         .is_err());
-    plan.selection.received_from = Bound::Included(20_000);
+    selection.received_from = Bound::Included(20_000);
+    let plan = QueryPlan::new(selection, QueryTemplate::OperationCounts)?;
     fixture.event(21, 21_000, 7)?;
     let result = owner.query_at(&plan, 21_000)?;
     assert_eq!(result.rows, vec![vec![Value::UInt(7), Value::BigInt(2)]]);
@@ -497,12 +502,14 @@ fn query_input_exact_match() -> TestResult {
         )?;
     }
     let owner = fixture.owner(QueryLimits::default())?;
-    let mut plan = fixture.plan(QueryTemplate::ExactMatch {
+    let plan = fixture.plan(QueryTemplate::ExactMatch {
         operation: 7,
         object_id: object,
     })?;
-    plan.selection.received_from = Bound::Excluded(1_001);
-    plan.selection.received_until = Bound::Included(1_006);
+    let mut selection = plan.base_selection().clone();
+    selection.received_from = Bound::Excluded(1_001);
+    selection.received_until = Bound::Included(1_006);
+    let plan = QueryPlan::new(selection, plan.template.clone())?;
     let result = owner.query_at(&plan, 2_000)?;
     let cursor = result
         .columns
@@ -557,7 +564,7 @@ fn query_input_subject_sequence() -> TestResult {
             ..Default::default()
         };
     let owner = fixture.owner(QueryLimits::default())?;
-    let mut plan = fixture.plan(QueryTemplate::SubjectSequence {
+    let plan = fixture.plan(QueryTemplate::SubjectSequence {
         first: 10,
         second: 20,
     })?;
@@ -615,6 +622,7 @@ fn query_input_subject_sequence() -> TestResult {
             record(20, 99, Some(101), 1)
         )
         .is_err());
+    let mut selection = plan.base_selection().clone();
     for change in 0..6 {
         let mut source = fixture.source.clone();
         let cpu_id = match change {
@@ -655,8 +663,9 @@ fn query_input_subject_sequence() -> TestResult {
             cursor * 10,
             record(20, task, Some(101), 1),
         )?;
-        plan.selection.sources.push(source);
+        selection.sources.push(source);
     }
+    let plan = QueryPlan::new(selection, plan.template.clone())?;
     let result = owner.query_at(&plan, 1_000)?;
     let cursor = result
         .columns
@@ -990,8 +999,10 @@ fn query_scope_coverage() -> TestResult {
         (Bound::Included(100), Bound::Unbounded),
         (Bound::Included(100), Bound::Excluded(100)),
     ] {
-        plan.selection.received_from = from;
-        plan.selection.received_until = until;
+        let mut selection = plan.base_selection().clone();
+        selection.received_from = from;
+        selection.received_until = until;
+        plan = QueryPlan::new(selection, QueryTemplate::Coverage)?;
         let result = owner.query_at(&plan, 100)?;
         assert_eq!(result.rows, complete.rows);
         assert_eq!(result.rows, fixture.baseline(&plan, 100)?);
