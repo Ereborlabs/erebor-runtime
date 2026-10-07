@@ -893,8 +893,6 @@ pub fn lower_kubernetes_policy(
         .map(|container| container.additional_entries.len() + 3)
         .sum();
     let mut entry_role_assignments = Vec::with_capacity(entry_capacity);
-    let mut role_selectors = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut role_entry_kinds = BTreeMap::<String, BTreeSet<EntryKindV1>>::new();
     for (index, container) in resource.spec.containers.iter().enumerate() {
         let selector_id = format!("container-{index}");
         workload_selectors.push(WorkloadSelectorV1 {
@@ -976,14 +974,6 @@ pub fn lower_kubernetes_policy(
             required_administrative_exec_approval,
         ) in assignments
         {
-            role_selectors
-                .entry(role.clone())
-                .or_default()
-                .insert(selector_id.clone());
-            role_entry_kinds
-                .entry(role.clone())
-                .or_default()
-                .insert(entry_kind);
             entry_role_assignments.push(EntryRoleAssignmentV1 {
                 assignment_id: format!("container-{index}-{suffix}"),
                 workload_selector_ids: vec![selector_id.clone()],
@@ -1015,24 +1005,38 @@ pub fn lower_kubernetes_policy(
     let mut ipc_relationship_rules = Vec::new();
     let mut file_rule_actions = BTreeMap::new();
 
-    let mut roles = resource.spec.roles.clone();
+    let mut roles = resource.spec.roles.iter().collect::<Vec<_>>();
     roles.sort_by(|left, right| left.name.cmp(&right.name));
-    for role in &roles {
-        let selectors = role_selectors
-            .get(&role.name)
-            .map(|values| values.iter().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        let entry_kinds = role_entry_kinds
-            .get(&role.name)
-            .map(|values| values.iter().copied().collect::<Vec<_>>())
-            .unwrap_or_default();
+    let mut role_definitions = Vec::with_capacity(roles.len());
+    for role in roles {
+        // ponytail: Scan at most 256 roles and 8960 assignments. Use an index if these bounds increase.
+        let assignments = entry_role_assignments
+            .iter()
+            .filter(|assignment| assignment.resulting_role_id == role.name);
+        let definition = RoleDefinitionV1 {
+            role_id: role.name.clone(),
+            maximum_native_depth: 1,
+            default_process_state_id: "base".to_owned(),
+            permitted_entry_kinds: sorted_unique(
+                assignments
+                    .clone()
+                    .flat_map(|assignment| assignment.entry_kinds.iter().copied())
+                    .collect(),
+            ),
+            description_artifact_digest: None,
+        };
         let subject = rule_subject(
-            selectors,
+            sorted_unique(
+                assignments
+                    .flat_map(|assignment| assignment.workload_selector_ids.iter().cloned())
+                    .collect(),
+            ),
             protected_scope_id.clone(),
             execution_set_id.clone(),
-            entry_kinds,
-            role.name.clone(),
+            definition.permitted_entry_kinds.clone(),
+            definition.role_id.clone(),
         );
+        role_definitions.push(definition);
         for default in &role.default_actions {
             match default {
                 KubernetesDefaultActionV1::Network { operations, action } => {
@@ -1324,30 +1328,16 @@ pub fn lower_kubernetes_policy(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let role_definitions = roles
-        .iter()
-        .map(|role| RoleDefinitionV1 {
-            role_id: role.name.clone(),
-            maximum_native_depth: 1,
-            default_process_state_id: "base".to_owned(),
-            permitted_entry_kinds: role_entry_kinds
-                .get(&role.name)
-                .map(|values| values.iter().copied().collect())
-                .unwrap_or_default(),
-            description_artifact_digest: None,
-        })
-        .collect::<Vec<_>>();
     let role_ids = role_definitions
         .iter()
         .map(|role| role.role_id.clone())
         .collect::<Vec<_>>();
-    let entry_kind_ids = role_entry_kinds
-        .values()
-        .flatten()
-        .copied()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+    let entry_kind_ids = sorted_unique(
+        entry_role_assignments
+            .iter()
+            .flat_map(|assignment| assignment.entry_kinds.iter().copied())
+            .collect(),
+    );
     let finding = fixed_default_finding();
     let network_policy = (!destination_policies.is_empty()).then_some(NetworkPolicyV1 {
         dns_mode: DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses,
@@ -2759,7 +2749,116 @@ fn bound_openapi_schema(value: &mut serde_json::Value, resource_root: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::next_continuation_token;
+    use super::{
+        canonical_policy_document_bytes, lower_kubernetes_policy, next_continuation_token,
+        policy_custom_resource, EntryKindV1, KubernetesAdditionalEntryKindV1, RuleMatchV1,
+        WorkloadProtectionPolicySpec,
+    };
+
+    #[test]
+    fn assignments_define_role_subjects() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let spec = WorkloadProtectionPolicySpec::parse(
+            std::path::Path::new("kubernetes-entry-roles-v1.yaml"),
+            include_bytes!("../../tests/fixtures/kubernetes-entry-roles-v1.yaml"),
+        )?;
+        let mut resource = policy_custom_resource("worker", "tenant-a", spec)?;
+        resource.metadata.uid = Some("30000000-0000-4000-8000-000000000001".to_owned());
+        resource.metadata.generation = Some(7);
+        for index in 1..=10 {
+            let mut container = resource.spec.containers[0].clone();
+            container.names = vec![format!("worker-{index}")];
+            if index == 1 {
+                container.additional_entries[0].kind =
+                    KubernetesAdditionalEntryKindV1::StartupProbe;
+            }
+            if index == 10 {
+                container.additional_entries.remove(0);
+            }
+            resource.spec.containers.push(container);
+        }
+        let identity = "10000000-0000-4000-8000-000000000001";
+        let document = lower_kubernetes_policy(&resource, identity, identity, identity)?;
+        let selectors = [
+            "container-0",
+            "container-1",
+            "container-10",
+            "container-2",
+            "container-3",
+            "container-4",
+            "container-5",
+            "container-6",
+            "container-7",
+            "container-8",
+            "container-9",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(document.entry_role_assignments.len(), 87);
+        assert!(document
+            .entry_role_assignments
+            .windows(2)
+            .all(|pair| pair[0].assignment_id < pair[1].assignment_id));
+        assert!(document
+            .roles
+            .windows(2)
+            .all(|pair| pair[0].role_id < pair[1].role_id));
+        for role in &document.roles {
+            let kinds = document
+                .entry_role_assignments
+                .iter()
+                .filter(|assignment| assignment.resulting_role_id == role.role_id)
+                .flat_map(|assignment| assignment.entry_kinds.iter().copied())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            assert_eq!(role.permitted_entry_kinds, kinds);
+            if role.role_id == "cache-initializer" {
+                assert_eq!(
+                    kinds,
+                    [
+                        EntryKindV1::DeclaredPostStart,
+                        EntryKindV1::DeclaredStartupProbe
+                    ]
+                );
+            }
+        }
+        for rule in &document.rules {
+            let RuleMatchV1::LocalPreEffect(local) = &rule.rule_match else {
+                return Err("Kubernetes lowering returned a non-local rule".into());
+            };
+            let role = document
+                .roles
+                .iter()
+                .find(|role| local.subject.role_ids == [role.role_id.clone()])
+                .ok_or("the rule subject has no single declared role")?;
+            let mut expected = selectors.clone();
+            if role.role_id == "cache-initializer" {
+                expected.retain(|selector| selector != "container-10");
+            }
+            assert_eq!(local.subject.workload_selector_ids, expected);
+            assert_eq!(local.subject.entry_kind_ids, role.permitted_entry_kinds);
+        }
+        assert_eq!(
+            document.protected_universe.entry_kind_ids,
+            document
+                .entry_role_assignments
+                .iter()
+                .flat_map(|assignment| assignment.entry_kinds.iter().copied())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        resource.spec.roles.reverse();
+        for container in &mut resource.spec.containers {
+            container.additional_entries.reverse();
+        }
+        let reordered = lower_kubernetes_policy(&resource, identity, identity, identity)?;
+        assert_eq!(
+            canonical_policy_document_bytes(&document)?,
+            canonical_policy_document_bytes(&reordered)?
+        );
+        Ok(())
+    }
 
     #[test]
     fn continuation_token_must_advance() -> crate::Result<()> {
