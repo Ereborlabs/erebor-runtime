@@ -22,8 +22,6 @@ pub(super) struct QueryTransport {
     guard: Option<Arc<QueryFrame>>,
     checking: Option<Pin<Box<dyn Future<Output = araphor_data::Result<()>> + Send>>>,
     deadline: Option<Pin<Box<Sleep>>>,
-    last: proto::QueryFrame,
-    bookmark: Vec<u8>,
     pending_rows: bool,
     pending: Option<Status>,
     done: bool,
@@ -78,8 +76,6 @@ impl QueryTransport {
             checking: None,
             deadline: duration
                 .map(|duration| Box::pin(tokio::time::sleep(Duration::from_nanos(duration)))),
-            last: proto::QueryFrame::default(),
-            bookmark: Vec::new(),
             pending_rows: false,
             pending: None,
             done: false,
@@ -151,23 +147,17 @@ impl Stream for QueryTransport {
             .as_mut()
             .is_some_and(|deadline| Future::poll(deadline.as_mut(), context).is_ready())
         {
-            if self.bookmark.is_empty() {
+            let Some(frame) = self.guard.clone() else {
                 let _cancelled = self.inner.cancel();
                 self.done = true;
                 return Poll::Ready(Some(Err(Status::deadline_exceeded(
                     "Follow ended before its first complete checkpoint.",
                 ))));
-            }
-            let Some(frame) = self.guard.clone() else {
-                self.done = true;
-                let _cancelled = self.inner.cancel();
-                return Poll::Ready(Some(Err(Status::internal(
-                    "The query checkpoint frame is absent.",
-                ))));
             };
-            let checking = self
-                .checking
-                .get_or_insert_with(|| Box::pin(async move { frame.check_read().await }));
+            let checking = self.checking.get_or_insert_with(|| {
+                let frame = frame.clone();
+                Box::pin(async move { frame.check_read().await })
+            });
             match checking.as_mut().poll(context) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(error)) => {
@@ -187,13 +177,27 @@ impl Stream for QueryTransport {
             }
             self.guard = None;
             let _cancelled = self.inner.cancel();
-            self.last.payload = Some(if self.pending_rows {
+            let QueryPayload::Checkpoint { checkpoint, .. } = &frame.payload else {
+                self.done = true;
+                return Poll::Ready(Some(Err(Status::internal(
+                    "The query checkpoint frame is absent.",
+                ))));
+            };
+            let bookmark = match WireFrame::bookmark(Some(checkpoint)) {
+                Ok(bookmark) => bookmark,
+                Err(error) => {
+                    self.done = true;
+                    return Poll::Ready(Some(Err(error)));
+                }
+            };
+            let mut output = WireFrame::header(&frame);
+            output.payload = Some(if self.pending_rows {
                 let code = QueryErrorCode::DeadlineExceeded;
                 self.pending = Some(Self::code(code));
                 proto::query_frame::Payload::Error(proto::QueryError {
                     code: format!("{code:?}"),
                     reason: code.reason().into(),
-                    last_checkpoint: self.bookmark.clone(),
+                    last_checkpoint: bookmark,
                     position: None,
                     floor: None,
                 })
@@ -201,10 +205,10 @@ impl Stream for QueryTransport {
                 self.done = true;
                 proto::query_frame::Payload::Terminal(proto::QueryTerminal {
                     reason: "Completed".into(),
-                    last_checkpoint: self.bookmark.clone(),
+                    last_checkpoint: bookmark,
                 })
             });
-            return Poll::Ready(Some(Ok(std::mem::take(&mut self.last))));
+            return Poll::Ready(Some(Ok(output)));
         }
         match Pin::new(&mut self.inner).poll_next(context) {
             Poll::Ready(Some(Ok(frame))) => {
@@ -223,21 +227,11 @@ impl Stream for QueryTransport {
                     let _cancelled = self.inner.cancel();
                     return Poll::Ready(Some(Err(ClientGrpcOwner::auth_failure(error))));
                 }
-                if let Some(proto::query_frame::Payload::Checkpoint(bookmark)) =
-                    &wire.message.payload
-                {
-                    self.bookmark = bookmark.clone();
+                if matches!(
+                    &wire.message.payload,
+                    Some(proto::query_frame::Payload::Checkpoint(_))
+                ) {
                     self.pending_rows = false;
-                    self.last = proto::QueryFrame {
-                        schema_version: wire.message.schema_version,
-                        operation: wire.message.operation,
-                        store_uuid: wire.message.store_uuid.clone(),
-                        recovery_epoch: wire.message.recovery_epoch,
-                        read_revision: wire.message.read_revision,
-                        clock_changed: wire.message.clock_changed,
-                        coverage: wire.message.coverage.clone(),
-                        payload: None,
-                    };
                     self.guard = Some(Arc::new(wire.owner));
                 } else {
                     if matches!(

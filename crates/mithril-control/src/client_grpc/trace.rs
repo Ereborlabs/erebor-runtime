@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use araphor_data::{QueryFrame, QueryGrant, QueryPayload, QueryPlan, QuerySql, QueryStream};
+use araphor_data::{
+    QueryCheckpoint, QueryFrame, QueryGrant, QueryPayload, QueryPlan, QuerySql, QueryStream,
+};
 use duckdb::types::Value;
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
@@ -23,9 +25,9 @@ struct TraceBookmark {
 }
 
 impl TraceBookmark {
-    fn decode(bytes: &[u8], trace: [u8; 16]) -> Result<Vec<u8>, Status> {
+    fn decode(bytes: &[u8], trace: [u8; 16]) -> Result<Option<QueryCheckpoint>, Status> {
         if bytes.is_empty() {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         if bytes.len() > 2048 {
             return Err(Status::invalid_argument(
@@ -39,14 +41,10 @@ impl TraceBookmark {
                 "The bookmark names another trace.",
             ));
         }
-        QueryTransport::checkpoint(&value.checkpoint)?;
-        Ok(value.checkpoint)
+        QueryTransport::checkpoint(&value.checkpoint)
     }
 
-    fn encode(
-        trace: [u8; 16],
-        checkpoint: &araphor_data::QueryCheckpoint,
-    ) -> Result<Vec<u8>, Status> {
+    fn encode(trace: [u8; 16], checkpoint: &QueryCheckpoint) -> Result<Vec<u8>, Status> {
         let value = Self {
             trace_id: trace,
             checkpoint: checkpoint.encode().map_err(QueryTransport::failure)?,
@@ -329,7 +327,7 @@ impl ClientGrpcOwner {
         let stream = self
             .data()?
             .query
-            .stream_client(plan, QueryTransport::checkpoint(&bookmark)?, access.clone())
+            .stream_client(plan, bookmark, access.clone())
             .map_err(QueryTransport::failure)?;
         let remaining = accepted.deadline_unix_ns.saturating_sub(Self::now()?);
         Ok(TraceTransport {

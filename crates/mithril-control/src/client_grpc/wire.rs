@@ -164,7 +164,7 @@ impl TryFrom<QueryFrame> for WireFrame {
     fn try_from(owner: QueryFrame) -> Result<Self, Self::Error> {
         use proto::query_frame::Payload;
 
-        let coverage = owner.coverage().iter().map(Self::coverage).collect();
+        let mut message = Self::header(&owner);
         let payload = match &owner.payload {
             QueryPayload::Metadata(metadata) => Payload::Metadata(proto::QueryMetadata {
                 columns: metadata.columns.iter().map(Self::column).collect(),
@@ -215,7 +215,14 @@ impl TryFrom<QueryFrame> for WireFrame {
                 last_checkpoint: Self::bookmark(last_checkpoint.as_ref())?,
             }),
         };
-        let message = proto::QueryFrame {
+        message.payload = Some(payload);
+        Ok(Self { message, owner })
+    }
+}
+
+impl WireFrame {
+    pub(super) fn header(owner: &QueryFrame) -> proto::QueryFrame {
+        proto::QueryFrame {
             schema_version: owner.schema_version,
             operation: match owner.operation {
                 QueryOperation::Append => proto::QueryOperation::Append as i32,
@@ -225,14 +232,11 @@ impl TryFrom<QueryFrame> for WireFrame {
             recovery_epoch: owner.recovery_epoch,
             read_revision: owner.read_revision,
             clock_changed: owner.clock_changed,
-            coverage,
-            payload: Some(payload),
-        };
-        Ok(Self { message, owner })
+            coverage: owner.coverage().iter().map(Self::coverage).collect(),
+            payload: None,
+        }
     }
-}
 
-impl WireFrame {
     fn rows(result: &QueryResult) -> Result<proto::QueryRows, Status> {
         Ok(proto::QueryRows {
             rows: result
@@ -289,7 +293,7 @@ impl WireFrame {
         }
     }
 
-    fn bookmark(checkpoint: Option<&QueryCheckpoint>) -> Result<Vec<u8>, Status> {
+    pub(super) fn bookmark(checkpoint: Option<&QueryCheckpoint>) -> Result<Vec<u8>, Status> {
         checkpoint.map_or_else(
             || Ok(Vec::new()),
             |checkpoint| {

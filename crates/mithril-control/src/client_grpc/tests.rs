@@ -641,8 +641,8 @@ async fn observability_grpc_duration_pending() -> TestResult {
         Fixture::next(&mut stream).await?.payload,
         Some(proto::query_frame::Payload::Rows(_))
     ));
-    let checkpoint = Fixture::next(&mut stream).await?;
-    let Some(proto::query_frame::Payload::Checkpoint(bookmark)) = checkpoint.payload else {
+    let mut checkpoint = Fixture::next(&mut stream).await?;
+    let Some(proto::query_frame::Payload::Checkpoint(bookmark)) = checkpoint.payload.take() else {
         return Err("the complete checkpoint is absent".into());
     };
     assert!(!bookmark.is_empty());
@@ -655,12 +655,15 @@ async fn observability_grpc_duration_pending() -> TestResult {
     ));
     stream.expire().await;
     let frame = Fixture::next(&mut stream).await?;
-    assert_eq!(frame.read_revision, checkpoint.read_revision);
-    assert!(matches!(
-        frame.payload,
-        Some(proto::query_frame::Payload::Error(error))
-        if error.code == "DeadlineExceeded" && error.last_checkpoint == bookmark
-    ));
+    let code = araphor_data::QueryErrorCode::DeadlineExceeded;
+    checkpoint.payload = Some(proto::query_frame::Payload::Error(proto::QueryError {
+        code: format!("{code:?}"),
+        reason: code.reason().into(),
+        last_checkpoint: bookmark,
+        position: None,
+        floor: None,
+    }));
+    assert_eq!(frame, checkpoint);
     let status = tokio::time::timeout(WAIT, stream.next())
         .await?
         .ok_or("the duration failure status is absent")?;
@@ -668,6 +671,62 @@ async fn observability_grpc_duration_pending() -> TestResult {
         status.err().map(|error| error.code()),
         Some(tonic::Code::DeadlineExceeded)
     );
+    assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn observability_grpc_duration_complete() -> TestResult {
+    let fixture = Fixture::new()?;
+    let accepted = fixture.seed([1; 16], 6)?;
+    fixture.record(&accepted)?;
+    let request = fixture.request(
+        proto::QueryRequest {
+            sql: "SELECT * FROM trace_output".into(),
+            follow: true,
+            duration_ns: Some(60_000_000_000),
+            ..Default::default()
+        },
+        false,
+    )?;
+    let access = fixture.service.authenticate(&request, false).await?;
+    let mut early = fixture
+        .service
+        .query_request(request.get_ref().clone(), access.clone())?;
+    early.expire().await;
+    let status = tokio::time::timeout(WAIT, early.next())
+        .await?
+        .ok_or("the initial duration failure is absent")?;
+    assert_eq!(
+        status.err().map(|error| error.code()),
+        Some(tonic::Code::DeadlineExceeded)
+    );
+    assert!(tokio::time::timeout(WAIT, early.next()).await?.is_none());
+    drop(early);
+    let mut stream = fixture
+        .service
+        .query_request(request.into_inner(), access)?;
+    assert!(matches!(
+        Fixture::next(&mut stream).await?.payload,
+        Some(proto::query_frame::Payload::Metadata(_))
+    ));
+    assert!(matches!(
+        Fixture::next(&mut stream).await?.payload,
+        Some(proto::query_frame::Payload::Rows(_))
+    ));
+    let mut checkpoint = Fixture::next(&mut stream).await?;
+    let Some(proto::query_frame::Payload::Checkpoint(bookmark)) = checkpoint.payload.take() else {
+        return Err("the complete checkpoint is absent".into());
+    };
+    assert!(!bookmark.is_empty());
+    stream.expire().await;
+    checkpoint.payload = Some(proto::query_frame::Payload::Terminal(
+        proto::QueryTerminal {
+            reason: "Completed".into(),
+            last_checkpoint: bookmark,
+        },
+    ));
+    assert_eq!(Fixture::next(&mut stream).await?, checkpoint);
     assert!(tokio::time::timeout(WAIT, stream.next()).await?.is_none());
     Ok(())
 }
@@ -909,6 +968,67 @@ async fn observability_grpc_trace_retry() -> TestResult {
         .await?
         .into_inner();
     assert!(detail.receipt.ok_or("receipt is absent")?.cancel_requested);
+    Ok(())
+}
+
+#[tokio::test]
+async fn observability_grpc_trace_bookmark() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.seed([1; 16], 6)?;
+    let wrong = rmp_serde::to_vec_named(&serde_json::json!({
+        "trace_id": vec![7; 16],
+        "checkpoint": [0],
+    }))?;
+    let malformed = rmp_serde::to_vec_named(&serde_json::json!({
+        "trace_id": vec![6; 16],
+        "checkpoint": [0],
+    }))?;
+    for (bookmark, reason) in [
+        (vec![0; 2049], "The trace bookmark exceeds its bound."),
+        (vec![0; 2048], "The trace bookmark is invalid."),
+        (vec![0], "The trace bookmark is invalid."),
+        (wrong, "The bookmark names another trace."),
+        (
+            malformed,
+            araphor_data::QueryErrorCode::InvalidCheckpoint.reason(),
+        ),
+    ] {
+        let error = fixture
+            .service
+            .watch_trace(fixture.request(
+                proto::WatchTraceRequest {
+                    trace_id: vec![6; 16],
+                    bookmark,
+                },
+                false,
+            )?)
+            .await
+            .err()
+            .ok_or("the invalid bookmark was accepted")?;
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), reason);
+    }
+    let empty = rmp_serde::to_vec_named(&serde_json::json!({
+        "trace_id": vec![6; 16],
+        "checkpoint": [],
+    }))?;
+    for bookmark in [Vec::new(), empty] {
+        let mut stream = fixture
+            .service
+            .watch_trace(fixture.request(
+                proto::WatchTraceRequest {
+                    trace_id: vec![6; 16],
+                    bookmark,
+                },
+                false,
+            )?)
+            .await?
+            .into_inner();
+        assert!(matches!(
+            Fixture::next(&mut stream).await?.payload,
+            Some(proto::trace_frame::Payload::Metadata(_))
+        ));
+    }
     Ok(())
 }
 
