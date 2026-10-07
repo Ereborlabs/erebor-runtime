@@ -186,6 +186,35 @@ fn query_follow_runtime() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_follow_staged_cancel() -> TestResult {
+    for count in 1..=2 {
+        let fixture = QueryFixture::new()?;
+        fixture.event(1, 1, 7)?;
+        let owner = Arc::new(fixture.owner(QueryLimits {
+            global_streams: 1,
+            tenant_streams: 1,
+            ..Default::default()
+        })?);
+        let plan = fixture.plan(QueryTemplate::Events { operation: None })?;
+        let mut stream = owner.follow(plan.clone(), None)?;
+        let metadata = next(&mut stream).await?;
+        assert!(matches!(metadata.payload, QueryPayload::Metadata(_)));
+        drop(metadata);
+        if count == 2 {
+            let data = next(&mut stream).await?;
+            assert_eq!(cursors(&data)?, vec![1]);
+            drop(data);
+        }
+        cancelled(&mut stream, None).await?;
+        inputs_released(&owner);
+        drop(owner.budget.output(owner.limits.output_capacity)?);
+        drop(owner.reserve(&plan)?);
+        drop(owner.follow(plan, None)?);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn query_follow_snapshot_race() -> TestResult {
     let fixture = QueryFixture::new()?;
     fixture.event(1, 1, 7)?;

@@ -117,7 +117,9 @@ Reader cancels or disconnects
    Construction needs no runtime. Poll with the Tokio timer enabled. Polling
    outside Tokio returns a typed QueryInvalid error.
    Drain the current metadata/data/checkpoint sequence before another
-   evaluation. A paused consumer starts no further evaluation. An admitted
+   evaluation. QueryYield holds each staged result and its checked checkpoint.
+   Keep the last disclosed checkpoint separate until authorized yield.
+   A paused consumer starts no further evaluation. An admitted
    native task can finish; retain its capacity until cleanup returns.
 7. Check the checkpoint schema, store UUID/epoch, operation, read revision and
    position. The caller retains the exact plan, parameters and input selection.

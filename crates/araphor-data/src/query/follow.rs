@@ -162,12 +162,11 @@ impl Drop for QueryStream {
     }
 }
 
-#[derive(Clone, Copy)]
 enum QueryYield {
     Idle,
-    Metadata,
-    Data,
-    Checkpoint,
+    Metadata(QueryResult, QueryCheckpoint),
+    Data(QueryResult, QueryCheckpoint),
+    Checkpoint(QueryCheckpoint),
 }
 
 struct QueryState {
@@ -198,8 +197,6 @@ struct QueryState {
     clock_signal: bool,
     clock_changed: bool,
     revision: u64,
-    result: Option<QueryResult>,
-    candidate: Option<QueryCheckpoint>,
     exhausted: bool,
     yielding: QueryYield,
 }
@@ -311,8 +308,6 @@ impl QueryOwner {
             clock_signal: false,
             clock_changed: false,
             revision: 0,
-            result: None,
-            candidate: None,
             exhausted: false,
             yielding: QueryYield::Idle,
         };
@@ -440,34 +435,23 @@ impl QueryStream {
         }
         loop {
             Self::check_auth(state)?;
-            match state.yielding {
-                QueryYield::Metadata => {
-                    let result = state.result.as_ref().ok_or_else(|| {
-                        crate::QueryInvalidSnafu {
-                            field: "staged query result",
-                        }
-                        .build()
-                    })?;
-                    let bytes = QueryFrame::metadata_bytes(result, &state.owner.limits)?;
-                    state.yielding = QueryYield::Data;
+            match std::mem::replace(&mut state.yielding, QueryYield::Idle) {
+                QueryYield::Metadata(result, checkpoint) => {
+                    let bytes = QueryFrame::metadata_bytes(&result, &state.owner.limits)?;
                     state.initial = false;
-                    return Self::emit(state, bytes, || {
+                    let frame = Self::emit(state, bytes, || {
                         QueryFrame::metadata(
                             &state.plan,
-                            result,
+                            &result,
                             &state.owner.limits,
                             state.revision,
                         )
-                    });
-                }
-                QueryYield::Data => {
-                    let result = state.result.take().ok_or_else(|| {
-                        crate::QueryInvalidSnafu {
-                            field: "staged query result",
-                        }
-                        .build()
                     })?;
-                    state.yielding = QueryYield::Checkpoint;
+                    state.yielding = QueryYield::Data(result, checkpoint);
+                    return Ok(frame);
+                }
+                QueryYield::Data(result, checkpoint) => {
+                    state.yielding = QueryYield::Checkpoint(checkpoint);
                     return Self::emit(
                         state,
                         std::mem::size_of::<QueryFrame>() - std::mem::size_of::<QueryResult>(),
@@ -478,14 +462,7 @@ impl QueryStream {
                         },
                     );
                 }
-                QueryYield::Checkpoint => {
-                    let checkpoint = state.candidate.take().ok_or_else(|| {
-                        crate::QueryInvalidSnafu {
-                            field: "staged query checkpoint",
-                        }
-                        .build()
-                    })?;
-                    state.yielding = QueryYield::Idle;
+                QueryYield::Checkpoint(checkpoint) => {
                     return Self::emit(state, std::mem::size_of::<QueryFrame>(), || {
                         QueryFrame::checkpoint(checkpoint, state.coverage.clone(), state.exhausted)
                     });
@@ -551,7 +528,7 @@ impl QueryStream {
                         state.session.clone(),
                     )
                     .await?;
-                state.candidate = Some(QueryCheckpoint::from_result(&state.plan, &result)?);
+                let checkpoint = QueryCheckpoint::from_result(&state.plan, &result)?;
                 state.exhausted = result.exhausted;
                 state.meta = result.meta.clone();
                 state.coverage = Some(result.sources.clone());
@@ -560,11 +537,10 @@ impl QueryStream {
                 state.dirty = paged && !result.exhausted;
                 state.revision = revision;
                 state.clock_changed = clock_changed;
-                state.result = Some(result);
                 state.yielding = if state.initial {
-                    QueryYield::Metadata
+                    QueryYield::Metadata(result, checkpoint)
                 } else {
-                    QueryYield::Data
+                    QueryYield::Data(result, checkpoint)
                 };
                 continue;
             }
@@ -664,8 +640,7 @@ impl QueryStream {
         result: Result<QueryTerminalReason>,
     ) -> Result<Option<QueryFrame>> {
         state.finished = true;
-        state.result = None;
-        state.candidate = None;
+        state.yielding = QueryYield::Idle;
         Self::check_auth(state)?;
         let coverage = state.coverage.take();
         Self::emit(state, std::mem::size_of::<QueryFrame>(), || match result {
