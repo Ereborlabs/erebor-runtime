@@ -586,7 +586,7 @@ mod tests {
         let mut output = Output::new(Some(OutputMode::Table), false);
         for (query, trace, line) in [
             (
-                wire::query_frame::Payload::Health(health.clone()),
+                wire::query_frame::Payload::Health(health),
                 wire::trace_frame::Payload::Health(health),
                 "health\twrite_ready=true\tretention_healthy=false\tintake_capacity=true\tmaintenance_capacity=false\n",
             ),
