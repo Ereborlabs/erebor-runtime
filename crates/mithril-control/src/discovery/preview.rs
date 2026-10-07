@@ -29,7 +29,7 @@ impl DiscoveryPreviewOwner {
             .snapshot
             .atoms
             .iter()
-            .map(|atom| &atom.static_key)
+            .map(|atom| &atom.key.static_key)
             .collect();
         let simulator = PolicySimulator::new(&compiled);
         let simulations = keys

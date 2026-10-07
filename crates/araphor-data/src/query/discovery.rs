@@ -179,11 +179,11 @@ pub(super) fn behavior_row(
             json_blob(&key.static_key)?,
             json_blob(&key.policy_revision)?,
             json_blob(&key.effect)?,
-            Value::UInt(atom.source_reason),
-            Value::UInt(atom.source_decision),
-            Value::Int(atom.kernel_result),
+            Value::UInt(key.effect.reason),
+            Value::UInt(key.effect.decision),
+            Value::Int(key.effect.kernel_result),
             Value::Text(
-                match atom.physical_result {
+                match key.physical_result {
                     DiscoveryPhysicalResultV1::Prevented => "prevented",
                     DiscoveryPhysicalResultV1::Unknown => "unknown",
                 }
@@ -298,7 +298,7 @@ mod tests {
     use crate::{
         AnalysisContextKeyV1, AnalysisInputV1, ContextSensitivityV1, DiscoveryContextDocumentV1,
         DiscoveryContextKindV1, DiscoveryContextTrustV1, DiscoveryInputManifestV1,
-        DiscoveryMethodV1, DiscoveryOwner, ProcessorScopeV1,
+        DiscoveryMethodV1, DiscoveryOwner, ProcessorScopeV1, DISCOVERY_SCHEMA_VERSION,
     };
 
     type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -308,10 +308,10 @@ mod tests {
             include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
         )?;
         let profile = DiscoveryProfileV1 {
-            schema_version: 1,
+            schema_version: DISCOVERY_SCHEMA_VERSION,
             scope: ProcessorScopeV1 {
                 processor_id: "discovery".into(),
-                method_version: 1,
+                method_version: u64::from(DISCOVERY_SCHEMA_VERSION),
                 identity: input.coverage[0].stream.clone(),
             },
             profile_id: "retained-profile".into(),
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn discovery_query_atom_projection() -> TestResult {
-        let profile = profile()?;
+        let mut profile = profile()?;
         let summary = InputRow::try_from(AnalysisInputV1::Behavior {
             profile: &profile,
             commit_revision: 9,
@@ -389,6 +389,14 @@ mod tests {
         );
         assert_eq!(field(&BEHAVIORS, &atom, "kernel_result")?, &Value::Int(-13));
         assert_eq!(
+            field(&BEHAVIORS, &atom, "source_reason")?,
+            &Value::UInt(profile.snapshot.atoms[0].key.effect.reason)
+        );
+        assert_eq!(
+            field(&BEHAVIORS, &atom, "source_decision")?,
+            &Value::UInt(profile.snapshot.atoms[0].key.effect.decision)
+        );
+        assert_eq!(
             field(&BEHAVIORS, &atom, "physical_result")?,
             &Value::Text("prevented".into())
         );
@@ -401,6 +409,66 @@ mod tests {
         );
         assert_eq!(field(&BEHAVIORS, &atom, "lifecycle")?, &Value::Null);
         assert!(atom.allocation_bytes()? > 0);
+        profile.snapshot.atoms[0].key.static_key.argument_wildcard = true;
+        profile.snapshot.atoms[0].key.static_key.operation_argument = 7;
+        profile.snapshot.atoms[0].key.effect.operation_argument = Some(42);
+        profile.validate()?;
+        let atom = behavior_row(&profile, 9, Some(&profile.snapshot.atoms[0]), true)?;
+        assert_eq!(
+            field(&BEHAVIORS, &atom, "operation_argument")?,
+            &Value::UInt(42)
+        );
+        let Value::Blob(key) = field(&BEHAVIORS, &atom, "static_key")? else {
+            return Err("full static key absent".into());
+        };
+        let key: crate::DiscoveryPolicyKeyV1 = serde_json::from_slice(key)?;
+        assert!(key.argument_wildcard);
+        assert_eq!(key.operation_argument, 7);
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_query_format_rejection() -> TestResult {
+        let mut profile = profile()?;
+        let mut input = DiscoveryInputManifestV1::try_from(
+            include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
+        )?;
+        input.records.clear();
+        input.contexts.clear();
+        input.coverage.clear();
+        input.exclusions.clear();
+        input.lifecycle.clear();
+        profile.snapshot = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+        profile.input_bytes = 0;
+        assert!(profile.snapshot.atoms.is_empty());
+        for sealed in [false, true] {
+            profile.sealed = sealed;
+            let bytes = serde_json::to_vec(&profile)?;
+            assert_eq!(DiscoveryProfileV1::try_from(bytes.as_slice())?, profile);
+            for change in 0..3 {
+                let mut old = serde_json::to_value(&profile)?;
+                match change {
+                    0 => old["schema_version"] = serde_json::json!(1),
+                    1 => old["scope"]["method_version"] = serde_json::json!(1),
+                    _ => old["snapshot"]["schema_version"] = serde_json::json!(1),
+                }
+                assert!(matches!(
+                    DiscoveryProfileV1::try_from(serde_json::to_vec(&old)?.as_slice()),
+                    Err(crate::Error::DiscoveryInvalid {
+                        field: "profile bounds" | "snapshot schema",
+                        ..
+                    })
+                ));
+            }
+        }
+        input.schema_version = 1;
+        assert!(matches!(
+            DiscoveryInputManifestV1::try_from(serde_json::to_vec(&input)?.as_slice()),
+            Err(crate::Error::DiscoveryInvalid {
+                field: "schema version",
+                ..
+            })
+        ));
         Ok(())
     }
 
@@ -435,7 +503,7 @@ mod tests {
         let document = DiscoveryContextRevisionV1 {
             imported_utc_ns: 2500,
             document: DiscoveryContextDocumentV1 {
-                schema_version: 1,
+                schema_version: DISCOVERY_SCHEMA_VERSION,
                 tenant_id: subject.tenant_id,
                 id: "runbook".into(),
                 revision: 1,

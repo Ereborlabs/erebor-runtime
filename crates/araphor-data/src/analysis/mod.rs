@@ -64,7 +64,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 15;
+const ANALYSIS_SCHEMA_VERSION: i64 = 16;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -1104,7 +1104,13 @@ mod tests {
                 writer.execute("UPDATE store_meta SET schema_version = ?", params![version])?;
             }
             drop(store);
-            assert!(AnalysisStore::open(&root).is_err());
+            let bytes = fs::read(root.join("analysis.duckdb"))?;
+            assert!(matches!(
+                AnalysisStore::open(&root),
+                Err(crate::Error::AnalysisState { reason, .. })
+                    if reason == "the analysis schema version is unsupported"
+            ));
+            assert_eq!(fs::read(root.join("analysis.duckdb"))?, bytes);
         }
         let root = directory.path().join("nonprivate");
         let store = AnalysisStore::open(&root)?;

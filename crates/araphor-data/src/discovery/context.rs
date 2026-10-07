@@ -638,7 +638,7 @@ mod tests {
         let revision = DiscoveryContextRevisionV1 {
             imported_utc_ns: 2500,
             document: DiscoveryContextDocumentV1 {
-                schema_version: 1,
+                schema_version: DISCOVERY_SCHEMA_VERSION,
                 tenant_id: input.tenant_id,
                 id: "worker-runbook".into(),
                 revision: 1,

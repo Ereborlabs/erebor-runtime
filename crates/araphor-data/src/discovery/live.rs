@@ -1218,6 +1218,11 @@ mod tests {
         assert_eq!(second.revision, 2);
         assert_eq!(second.snapshot.accepted_records, 2);
         assert_eq!(second.snapshot.unresolved_records, 2);
+        assert_eq!(second.schema_version, DISCOVERY_SCHEMA_VERSION);
+        assert_eq!(
+            DiscoveryProfileV1::try_from(serde_json::to_vec(&second)?.as_slice())?,
+            second
+        );
         assert_eq!(owner.process(12)?, 0);
         assert_eq!(owner.profile(&fixture.source)?, Some(second.clone()));
         drop(owner);

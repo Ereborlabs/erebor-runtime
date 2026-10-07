@@ -8,7 +8,7 @@ use crate::{
     EvidenceIntakeIdentityV1, EvidenceRecord, Result, WorkloadTargetFactV1,
 };
 
-pub const DISCOVERY_SCHEMA_VERSION: u32 = 1;
+pub const DISCOVERY_SCHEMA_VERSION: u32 = 2;
 pub const DISCOVERY_INPUT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_DISCOVERY_RECORDS: usize = 1_000_000;
 pub const MAX_DISCOVERY_ATOMS: usize = 50_000;
@@ -732,11 +732,6 @@ pub struct BehaviorAtomV1 {
     pub count: u64,
     pub first_cursor: u64,
     pub last_cursor: u64,
-    pub source_reason: u32,
-    pub source_decision: u32,
-    pub kernel_result: i32,
-    pub physical_result: DiscoveryPhysicalResultV1,
-    pub static_key: DiscoveryPolicyKeyV1,
     pub evidence_sample: Vec<DiscoveryRecordIdV1>,
 }
 

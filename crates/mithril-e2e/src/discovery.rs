@@ -40,7 +40,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
             && result.duplicate_deliveries == 1
             && snapshot.atoms.len() == 1
             && snapshot.atoms[0].count == 2
-            && snapshot.atoms[0].physical_result == DiscoveryPhysicalResultV1::Prevented,
+            && snapshot.atoms[0].key.physical_result == DiscoveryPhysicalResultV1::Prevented,
         InvalidInputSnafu {
             path: output,
             reason: "offline exact counts or proof kind differ"

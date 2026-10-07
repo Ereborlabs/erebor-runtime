@@ -811,7 +811,7 @@ async fn discovery_query_document_context() -> TestResult {
     let mut revision = crate::DiscoveryContextRevisionV1 {
         imported_utc_ns: 2500,
         document: crate::DiscoveryContextDocumentV1 {
-            schema_version: 1,
+            schema_version: crate::DISCOVERY_SCHEMA_VERSION,
             tenant_id: access.tenant_id,
             id: "supplied-runbook".into(),
             revision: 1,

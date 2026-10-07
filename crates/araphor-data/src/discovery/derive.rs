@@ -103,11 +103,6 @@ impl DiscoveryOwner {
                 proof_kind: input.proof_kind,
             };
             let atom = atoms.entry(key.clone()).or_insert_with(|| BehaviorAtomV1 {
-                source_reason: wire.reason,
-                source_decision: wire.decision,
-                kernel_result: wire.kernel_result,
-                physical_result,
-                static_key: context.static_key.clone(),
                 key,
                 count: 0,
                 first_cursor: id.durable_cursor,
@@ -275,11 +270,6 @@ impl BehaviorSnapshotV1 {
                     && atom.evidence_sample.len() <= MAX_DISCOVERY_SAMPLES
                     && !atom.evidence_sample.is_empty()
                     && atom.evidence_sample.len() as u64 <= atom.count
-                    && atom.source_reason == atom.key.effect.reason
-                    && atom.source_decision == atom.key.effect.decision
-                    && atom.kernel_result == atom.key.effect.kernel_result
-                    && atom.physical_result == atom.key.physical_result
-                    && atom.static_key == atom.key.static_key
                     && atom.key.proof_kind == self.proof_kind
                     && atom.key.stream.tenant_id == self.tenant_id
                     && atom
@@ -773,9 +763,40 @@ mod tests {
         assert_eq!(result.snapshot.atoms.len(), 1);
         assert_eq!(result.snapshot.atoms[0].count, 2);
         assert_eq!(
-            result.snapshot.atoms[0].physical_result,
+            result.snapshot.atoms[0].key.physical_result,
             DiscoveryPhysicalResultV1::Prevented
         );
+        let encoded = serde_json::to_value(&result.snapshot.atoms[0])?;
+        assert_eq!(
+            encoded
+                .as_object()
+                .ok_or("atom object absent")?
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "key",
+                "count",
+                "first_cursor",
+                "last_cursor",
+                "evidence_sample"
+            ])
+        );
+        for field in [
+            "source_reason",
+            "source_decision",
+            "kernel_result",
+            "physical_result",
+            "static_key",
+        ] {
+            let mut changed = encoded.clone();
+            changed[field] = serde_json::Value::Null;
+            assert!(serde_json::from_value::<BehaviorAtomV1>(changed).is_err());
+        }
+        let retained: BehaviorSnapshotV1 =
+            serde_json::from_slice(&serde_json::to_vec(&result.snapshot)?)?;
+        retained.validate()?;
+        assert_eq!(retained, result.snapshot);
         let mut permuted = original.clone();
         permuted.records.reverse();
         permuted.contexts.reverse();
@@ -866,8 +887,8 @@ mod tests {
             .snapshot
             .atoms
             .iter()
-            .any(|atom| atom.kernel_result == -5
-                && atom.physical_result == DiscoveryPhysicalResultV1::Unknown));
+            .any(|atom| atom.key.effect.kernel_result == -5
+                && atom.key.physical_result == DiscoveryPhysicalResultV1::Unknown));
         changed = input()?;
         changed.proof_kind = DiscoveryProofKindV1::RecordedInput;
         assert_ne!(
@@ -1010,9 +1031,9 @@ mod tests {
             DiscoveryLifecycleStateV1::Missing
         );
         assert_eq!(snapshot.lifecycle[7].state, input.lifecycle[1].state);
-        input.schema_version = 2;
-        assert!(input.validate().is_err());
         input.schema_version = 1;
+        assert!(input.validate().is_err());
+        input.schema_version = DISCOVERY_SCHEMA_VERSION;
         let mut json = serde_json::to_value(input)?;
         json["contexts"][0]["static_key"]["authority"] = serde_json::json!("allow");
         assert!(DiscoveryInputManifestV1::try_from(serde_json::to_vec(&json)?.as_slice()).is_err());
@@ -1026,7 +1047,7 @@ mod tests {
         let baseline = DiscoveryReviewedBaselineV1 {
             reviewer: "operator".into(),
             reviewed_utc_ns: 3000,
-            forbidden: vec![snapshot.atoms[0].static_key.clone()],
+            forbidden: vec![snapshot.atoms[0].key.static_key.clone()],
             snapshot: snapshot.clone(),
         };
         let mut changed = original.clone();
@@ -1269,7 +1290,7 @@ mod tests {
                 result
                     .atoms
                     .iter()
-                    .filter(|atom| atom.physical_result == DiscoveryPhysicalResultV1::Prevented)
+                    .filter(|atom| atom.key.physical_result == DiscoveryPhysicalResultV1::Prevented)
                     .map(|atom| atom.count)
                     .sum::<u64>(),
                 case.expected.prevented,
