@@ -15,12 +15,18 @@ use tonic::Status;
 use super::wire::{Parameters, WireFrame};
 use super::{proto, ClientAccess, ClientGrpcOwner};
 
+type GuardCheck = Pin<Box<dyn Future<Output = araphor_data::Result<Box<QueryFrame>>> + Send>>;
+
+enum QueryGuard {
+    Stored(Box<QueryFrame>),
+    Checking(GuardCheck),
+}
+
 pub(super) struct QueryTransport {
     inner: QueryStream,
     access: Arc<ClientAccess>,
     held: Option<QueryFrame>,
-    guard: Option<Arc<QueryFrame>>,
-    checking: Option<Pin<Box<dyn Future<Output = araphor_data::Result<()>> + Send>>>,
+    guard: Option<QueryGuard>,
     deadline: Option<Pin<Box<Sleep>>>,
     pending_rows: bool,
     pending: Option<Status>,
@@ -73,7 +79,6 @@ impl QueryTransport {
             access,
             held: None,
             guard: None,
-            checking: None,
             deadline: duration
                 .map(|duration| Box::pin(tokio::time::sleep(Duration::from_nanos(duration)))),
             pending_rows: false,
@@ -147,35 +152,37 @@ impl Stream for QueryTransport {
             .as_mut()
             .is_some_and(|deadline| Future::poll(deadline.as_mut(), context).is_ready())
         {
-            let Some(frame) = self.guard.clone() else {
-                let _cancelled = self.inner.cancel();
-                self.done = true;
-                return Poll::Ready(Some(Err(Status::deadline_exceeded(
-                    "Follow ended before its first complete checkpoint.",
-                ))));
+            let mut checking: GuardCheck = match self.guard.take() {
+                Some(QueryGuard::Stored(frame)) => Box::pin(async move {
+                    frame.check_read().await?;
+                    Ok(frame)
+                }),
+                Some(QueryGuard::Checking(checking)) => checking,
+                None => {
+                    let _cancelled = self.inner.cancel();
+                    self.done = true;
+                    return Poll::Ready(Some(Err(Status::deadline_exceeded(
+                        "Follow ended before its first complete checkpoint.",
+                    ))));
+                }
             };
-            let checking = self.checking.get_or_insert_with(|| {
-                let frame = frame.clone();
-                Box::pin(async move { frame.check_read().await })
-            });
-            match checking.as_mut().poll(context) {
-                Poll::Pending => return Poll::Pending,
+            let frame = match checking.as_mut().poll(context) {
+                Poll::Pending => {
+                    self.guard = Some(QueryGuard::Checking(checking));
+                    return Poll::Pending;
+                }
                 Poll::Ready(Err(error)) => {
                     self.done = true;
-                    self.checking = None;
-                    self.guard = None;
                     let _cancelled = self.inner.cancel();
                     return Poll::Ready(Some(Err(Self::failure(error))));
                 }
-                Poll::Ready(Ok(())) => self.checking = None,
-            }
+                Poll::Ready(Ok(frame)) => frame,
+            };
             if let Err(error) = self.access.check() {
                 self.done = true;
-                self.guard = None;
                 let _cancelled = self.inner.cancel();
                 return Poll::Ready(Some(Err(ClientGrpcOwner::auth_failure(error))));
             }
-            self.guard = None;
             let _cancelled = self.inner.cancel();
             let QueryPayload::Checkpoint { checkpoint, .. } = &frame.payload else {
                 self.done = true;
@@ -232,7 +239,7 @@ impl Stream for QueryTransport {
                     Some(proto::query_frame::Payload::Checkpoint(_))
                 ) {
                     self.pending_rows = false;
-                    self.guard = Some(Arc::new(wire.owner));
+                    self.guard = Some(QueryGuard::Stored(Box::new(wire.owner)));
                 } else {
                     if matches!(
                         &wire.message.payload,

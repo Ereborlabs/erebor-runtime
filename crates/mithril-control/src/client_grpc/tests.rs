@@ -675,6 +675,107 @@ async fn observability_grpc_duration_pending() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn observability_grpc_duration_wait() -> TestResult {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()?;
+    runtime.block_on(async {
+        for revoke in [false, true] {
+            let fixture = Fixture::with_limits(QueryLimits {
+                global_streams: 1,
+                tenant_streams: 1,
+                ..QueryLimits::default()
+            })?;
+            let accepted = fixture.seed([1; 16], 6)?;
+            fixture.record(&accepted)?;
+            let request = fixture.request(
+                proto::QueryRequest {
+                    sql: "SELECT * FROM trace_output".into(),
+                    follow: true,
+                    duration_ns: Some(60_000_000_000),
+                    ..Default::default()
+                },
+                false,
+            )?;
+            let access = fixture.service.authenticate(&request, false).await?;
+            let mut stream = fixture
+                .service
+                .query_request(request.get_ref().clone(), access.clone())?;
+            assert!(matches!(
+                Fixture::next(&mut stream).await?.payload,
+                Some(proto::query_frame::Payload::Metadata(_))
+            ));
+            assert!(matches!(
+                Fixture::next(&mut stream).await?.payload,
+                Some(proto::query_frame::Payload::Rows(_))
+            ));
+            assert!(matches!(
+                Fixture::next(&mut stream).await?.payload,
+                Some(proto::query_frame::Payload::Checkpoint(_))
+            ));
+            let (entered, entering) = tokio::sync::oneshot::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            let blocking = tokio::task::spawn_blocking(move || {
+                let _entered = entered.send(());
+                released.recv_timeout(WAIT)
+            });
+            tokio::time::timeout(WAIT, entering).await??;
+            stream.expire().await;
+            assert!(futures_util::poll!(stream.next()).is_pending());
+            assert_eq!(
+                fixture
+                    .service
+                    .query_request(request.get_ref().clone(), access)
+                    .err()
+                    .map(|error| error.code()),
+                Some(tonic::Code::ResourceExhausted)
+            );
+            if revoke {
+                fixture.service.auth.replace_grants(Vec::new())?;
+                let error = tokio::time::timeout(WAIT, stream.next())
+                    .await?
+                    .ok_or("the final-check revocation status is absent")?;
+                assert_eq!(
+                    error.err().map(|error| error.code()),
+                    Some(tonic::Code::PermissionDenied)
+                );
+                assert!(stream.next().await.is_none());
+            }
+            drop(stream);
+            release.send(())?;
+            tokio::time::timeout(WAIT, blocking).await???;
+            if revoke {
+                fixture
+                    .service
+                    .auth
+                    .replace_grants(vec![crate::InvestigateGrant {
+                        subject: "alice".into(),
+                        tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+                    }])?;
+            }
+            let access = fixture.service.authenticate(&request, false).await?;
+            let mut stream = fixture
+                .service
+                .query_request(request.into_inner(), access)?;
+            assert!(matches!(
+                Fixture::next(&mut stream).await?.payload,
+                Some(proto::query_frame::Payload::Metadata(_))
+            ));
+            assert!(matches!(
+                Fixture::next(&mut stream).await?.payload,
+                Some(proto::query_frame::Payload::Rows(_))
+            ));
+            assert!(matches!(
+                Fixture::next(&mut stream).await?.payload,
+                Some(proto::query_frame::Payload::Checkpoint(_))
+            ));
+        }
+        Ok(())
+    })
+}
+
 #[tokio::test]
 async fn observability_grpc_duration_complete() -> TestResult {
     let fixture = Fixture::new()?;
