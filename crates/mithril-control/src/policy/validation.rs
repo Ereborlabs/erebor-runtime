@@ -69,6 +69,11 @@ macro_rules! ordered {
 }
 
 macro_rules! all_in {
+    ($values:expr, keys $map:expr) => {
+        $values
+            .iter()
+            .all(|value| $map.contains_key(value.as_str()))
+    };
     ($values:expr, $set:expr) => {
         $values.iter().all(|value| $set.contains(value.as_str()))
     };

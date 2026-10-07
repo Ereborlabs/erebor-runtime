@@ -86,6 +86,25 @@ impl Validate for ExceptionV1 {
     }
 }
 
+impl AuthorityBehaviorRuleV1 {
+    pub(super) fn references(&self) -> (&str, &[String], Option<&FindingSpecV1>) {
+        match self {
+            Self::RemoteAdmission {
+                rule_id,
+                response_binding_ids,
+                finding,
+                ..
+            }
+            | Self::PostEffectResult {
+                rule_id,
+                response_binding_ids,
+                finding,
+                ..
+            } => (rule_id, response_binding_ids, finding.as_ref()),
+        }
+    }
+}
+
 impl Validate for AuthorityBehaviorRuleV1 {
     fn validate(&self) -> ValidationResult {
         match self {

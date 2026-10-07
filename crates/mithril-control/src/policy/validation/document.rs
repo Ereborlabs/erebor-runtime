@@ -100,80 +100,23 @@ impl PolicyDocumentV1 {
             .iter()
             .map(|value| value.exception_id.as_str())
             .collect::<BTreeSet<_>>();
-        let exception_grants = self
-            .file_exception_grants
-            .iter()
-            .map(|value| value.grant_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let ipc_ids = self
-            .ipc_relationship_rules
-            .iter()
-            .map(|value| value.relationship_rule_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let authority_ids = self
-            .authority_behavior_rules
-            .iter()
-            .map(|value| match value {
-                AuthorityBehaviorRuleV1::RemoteAdmission { rule_id, .. }
-                | AuthorityBehaviorRuleV1::PostEffectResult { rule_id, .. } => rule_id.as_str(),
-            })
-            .collect::<BTreeSet<_>>();
-        let destination_ids = self
+        let destinations = self
             .network_policy
             .iter()
             .flat_map(|policy| &policy.destination_policies)
-            .map(|policy| policy.destination_policy_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let dns_ids = self
-            .network_policy
-            .iter()
-            .filter(|policy| {
-                policy.dns_mode == DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses
-            })
-            .flat_map(|policy| &policy.destination_policies)
-            .filter(|policy| {
-                policy
-                    .port_ranges
-                    .iter()
-                    .any(|range| (range.first..=range.last).contains(&53))
-            })
-            .map(|policy| policy.destination_policy_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let coverage_ids = self
-            .source_coverage_health_rules
-            .iter()
-            .map(|value| value.health_rule_id.as_str())
-            .collect::<BTreeSet<_>>();
+            .map(|policy| (policy.destination_policy_id.as_str(), policy))
+            .collect::<BTreeMap<_, _>>();
+        let dns = self.network_policy.as_ref().is_some_and(|policy| {
+            policy.dns_mode == DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses
+        });
         let scopes = string_set!(&self.protected_universe.protected_scope_ids);
         let execution_sets = string_set!(&self.protected_universe.execution_set_ids);
         let object_classes = string_set!(&self.protected_universe.object_class_ids);
-        let mut path_selectors = BTreeMap::new();
-        let mut path_selector_handles = BTreeSet::new();
-        let mut path_selector_targets = BTreeSet::new();
-        let mut valid_path_selector_references = true;
-        let mut exact_path_selector_count = 0;
-        for selector in &self.path_selectors {
-            valid_path_selector_references &= object_classes
-                .contains(selector.object_class_id.as_str())
-                && self.classifier_bindings.iter().any(|binding| {
-                    binding.object_class_id == selector.object_class_id
-                        && match (&selector.device_class_id, &binding.selector) {
-                            (
-                                Some(device_class_id),
-                                ObjectClassifierSelectorV1::Device { device_class_ids },
-                            ) => device_class_ids.contains(device_class_id),
-                            (None, ObjectClassifierSelectorV1::Device { .. }) => false,
-                            (None, _) => true,
-                            (Some(_), _) => false,
-                        }
-                });
-            path_selectors.insert(selector.path_selector_id.as_str(), selector);
-            path_selector_targets.insert(&selector.target);
-            if selector.requires_exact_object() {
-                exact_path_selector_count += 1;
-                path_selector_handles.insert(selector.kernel_handle());
-            }
-        }
+        let path_selectors = self
+            .path_selectors
+            .iter()
+            .map(|selector| (selector.path_selector_id.as_str(), selector))
+            .collect::<BTreeMap<_, _>>();
         let rules = self
             .rules
             .iter()
@@ -212,18 +155,39 @@ impl PolicyDocumentV1 {
             && routes.len() == self.notification_routes.len()
             && responses.len() == self.response_bindings.len()
             && exceptions.len() == self.exceptions.len()
-            && exception_grants.len() == self.file_exception_grants.len()
-            && ipc_ids.len() == self.ipc_relationship_rules.len()
-            && destination_ids.len()
+            && Self::unique_values(
+                self.file_exception_grants
+                    .iter()
+                    .map(|grant| &grant.grant_id),
+            )
+            && Self::unique_values(
+                self.ipc_relationship_rules
+                    .iter()
+                    .map(|rule| &rule.relationship_rule_id),
+            )
+            && destinations.len()
                 == self
                     .network_policy
                     .as_ref()
                     .map_or(0, |policy| policy.destination_policies.len())
-            && authority_ids.len() == self.authority_behavior_rules.len()
-            && coverage_ids.len() == self.source_coverage_health_rules.len()
+            && Self::unique_values(
+                self.authority_behavior_rules
+                    .iter()
+                    .map(|rule| rule.references().0),
+            )
+            && Self::unique_values(
+                self.source_coverage_health_rules
+                    .iter()
+                    .map(|rule| &rule.health_rule_id),
+            )
             && path_selectors.len() == self.path_selectors.len()
-            && path_selector_handles.len() == exact_path_selector_count
-            && path_selector_targets.len() == self.path_selectors.len()
+            && Self::unique_values(
+                self.path_selectors
+                    .iter()
+                    .filter(|selector| selector.requires_exact_object())
+                    .map(PathSelectorV1::kernel_handle),
+            )
+            && Self::unique_values(self.path_selectors.iter().map(|selector| &selector.target))
             && rule_ids.len() == self.rules.len() + self.path_tree_deny_floors.len();
         require!(
             unique_ids,
@@ -231,7 +195,21 @@ impl PolicyDocumentV1 {
             "policy IDs must be unique by kind"
         );
         require!(
-            valid_path_selector_references,
+            self.path_selectors.iter().all(|selector| {
+                object_classes.contains(selector.object_class_id.as_str())
+                    && self.classifier_bindings.iter().any(|binding| {
+                        binding.object_class_id == selector.object_class_id
+                            && match (&selector.device_class_id, &binding.selector) {
+                                (
+                                    Some(id),
+                                    ObjectClassifierSelectorV1::Device { device_class_ids },
+                                ) => device_class_ids.contains(id),
+                                (None, ObjectClassifierSelectorV1::Device { .. })
+                                | (Some(_), _) => false,
+                                (None, _) => true,
+                            }
+                    })
+            }),
             "CFG_PATH_SELECTOR_REFERENCE",
             "path selectors need unique path kinds and signed object classes"
         );
@@ -297,28 +275,27 @@ impl PolicyDocumentV1 {
                 )
             );
         }
-        let process_bits = self
+        let bits = self
             .state_bit_definitions
             .iter()
-            .filter(|bit| bit.scope == StateBitScopeV1::Process)
-            .map(|bit| bit.bit_index)
+            .map(|bit| (bit.scope, bit.bit_index))
             .collect::<BTreeSet<_>>();
-        let mut bit_keys = BTreeSet::new();
-        let mut semantics = BTreeSet::new();
-        for bit in &self.state_bit_definitions {
-            require!(
-                bit_keys.insert((bit.scope, bit.bit_index))
-                    && semantics.insert((bit.scope, bit.semantic_id.as_str())),
-                "CFG_DUPLICATE_STATE_BIT",
-                "state bit indices and semantics must be unique per scope"
-            );
-        }
+        require!(
+            bits.len() == self.state_bit_definitions.len()
+                && Self::unique_values(
+                    self.state_bit_definitions
+                        .iter()
+                        .map(|bit| (bit.scope, &bit.semantic_id))
+                ),
+            "CFG_DUPLICATE_STATE_BIT",
+            "state bit indices and semantics must be unique per scope"
+        );
         for state in &self.process_state_definitions {
             require!(
                 state
                     .state_bits
                     .iter()
-                    .all(|bit| process_bits.contains(bit)),
+                    .all(|bit| bits.contains(&(StateBitScopeV1::Process, *bit))),
                 "CFG_STATE_REFERENCE",
                 format!(
                     "state `{}` references an undefined process bit",
@@ -342,11 +319,8 @@ impl PolicyDocumentV1 {
             );
             for source in &relation.source_role_ids {
                 for peer in &relation.peer_role_ids {
-                    let pair = if source <= peer {
-                        (source.as_str(), peer.as_str())
-                    } else {
-                        (peer.as_str(), source.as_str())
-                    };
+                    let mut pair = [source.as_str(), peer.as_str()];
+                    pair.sort();
                     let decision = (relation.requested_disposition, relation.errno);
                     require!(
                         ipc.insert(pair, decision).is_none_or(|old| old == decision),
@@ -366,10 +340,7 @@ impl PolicyDocumentV1 {
         );
         for default in &self.effect_family_defaults {
             require!(
-                default
-                    .role_ids
-                    .iter()
-                    .all(|id| roles.contains_key(id.as_str())),
+                all_in!(&default.role_ids, keys roles),
                 "CFG_ROLE_REFERENCE",
                 "effect default references an unknown role"
             );
@@ -404,21 +375,19 @@ impl PolicyDocumentV1 {
                 "CFG_OVERRIDE_REFERENCE",
                 format!("rule `{}` has an invalid override", rule.rule_id)
             );
-            let known_actions = all_in!(&rule.response_binding_ids, responses)
-                && all_in!(&rule.exception_ids, exceptions);
-            let known_finding = rule
-                .finding
-                .as_ref()
-                .is_none_or(|finding| all_in!(&finding.route_ids, routes));
-            let known_fallbacks = rule.fallback_by_condition.iter().all(|fallback| {
-                all_in!(&fallback.finding.route_ids, routes)
-                    && fallback
-                        .unknown_restricted_role_id
-                        .as_ref()
-                        .is_none_or(|id| roles.contains_key(id.as_str()))
-            });
             require!(
-                known_actions && known_finding && known_fallbacks,
+                all_in!(&rule.response_binding_ids, responses)
+                    && all_in!(&rule.exception_ids, exceptions)
+                    && rule
+                        .finding
+                        .iter()
+                        .map(|finding| (finding, None))
+                        .chain(rule.fallback_by_condition.iter().map(|fallback| (
+                            &fallback.finding,
+                            fallback.unknown_restricted_role_id.as_ref()
+                        )))
+                        .all(|(finding, role)| all_in!(&finding.route_ids, routes)
+                            && role.is_none_or(|id| roles.contains_key(id.as_str()))),
                 "CFG_RULE_ACTION",
                 format!("rule `{}` references an unknown action", rule.rule_id)
             );
@@ -440,10 +409,7 @@ impl PolicyDocumentV1 {
                         .entry_kind_ids
                         .iter()
                         .all(|id| self.protected_universe.entry_kind_ids.contains(id))
-                    && subject
-                        .role_ids
-                        .iter()
-                        .all(|id| roles.contains_key(id.as_str()));
+                    && all_in!(&subject.role_ids, keys roles);
                 let known_states = subject
                     .required_process_state_ids
                     .iter()
@@ -459,45 +425,44 @@ impl PolicyDocumentV1 {
                 );
             }
             if let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match {
-                if let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object {
-                    require!(
-                        ordered_unique(path_selector_ids)
-                            && path_selector_ids
-                                .iter()
-                                .all(|id| path_selectors.contains_key(id.as_str())),
+                let (valid, code, reason) = match &effect.object {
+                    LocalObjectSelectorV1::PathSelectors { path_selector_ids } => (
+                        all_in!(path_selector_ids, keys path_selectors),
                         "CFG_PATH_SELECTOR_REFERENCE",
-                        format!("rule `{}` has an invalid path selector", rule.rule_id)
-                    );
-                }
+                        "an invalid path selector",
+                    ),
+                    LocalObjectSelectorV1::Destinations {
+                        destination_policy_ids,
+                    } => (
+                        ordered_unique(destination_policy_ids)
+                            && all_in!(destination_policy_ids, keys destinations),
+                        "CFG_NETWORK_DESTINATION_REFERENCE",
+                        "unknown network destinations",
+                    ),
+                    LocalObjectSelectorV1::ObjectClasses { object_class_ids } => (
+                        ordered_unique(object_class_ids)
+                            && all_in!(object_class_ids, object_classes),
+                        "CFG_OBJECT_CLASS_REFERENCE",
+                        "unknown object classes",
+                    ),
+                    _ => (true, "", ""),
+                };
+                require!(valid, code, format!("rule `{}` has {reason}", rule.rule_id));
                 if let LocalObjectSelectorV1::Destinations {
                     destination_policy_ids,
                 } = &effect.object
                 {
                     require!(
-                        ordered_unique(destination_policy_ids)
-                            && destination_policy_ids
-                                .iter()
-                                .all(|id| destination_ids.contains(id.as_str())),
-                        "CFG_NETWORK_DESTINATION_REFERENCE",
-                        format!("rule `{}` has unknown network destinations", rule.rule_id)
-                    );
-                    require!(
                         rule.requested_disposition == PolicyDispositionV1::Deny
-                            || destination_policy_ids
-                                .iter()
-                                .all(|id| !dns_ids.contains(id.as_str())),
+                            || !dns
+                            || destination_policy_ids.iter().all(|id| {
+                                destinations[id.as_str()]
+                                    .port_ranges
+                                    .iter()
+                                    .all(|range| !(range.first..=range.last).contains(&53))
+                            }),
                         "CFG_NETWORK_DNS_MODE",
                         "policy-resolved address mode cannot authorize DNS port 53"
-                    );
-                }
-                if let LocalObjectSelectorV1::ObjectClasses { object_class_ids } = &effect.object {
-                    require!(
-                        ordered_unique(object_class_ids)
-                            && object_class_ids
-                                .iter()
-                                .all(|id| object_classes.contains(id.as_str())),
-                        "CFG_OBJECT_CLASS_REFERENCE",
-                        format!("rule `{}` has unknown object classes", rule.rule_id)
                     );
                 }
                 if let LocalObjectSelectorV1::SecurityObjects {
@@ -512,27 +477,13 @@ impl PolicyDocumentV1 {
                             format!("rule `{}` has an unknown target role", rule.rule_id)
                         );
                     }
-                    if security_object_ids
-                        .iter()
-                        .any(|id| id == "LINUX_CAPABILITY")
-                    {
-                        require!(
-                            target_selector_ids.iter().all(|target| target
-                                .parse::<u32>()
-                                .is_ok_and(|capability| capability <= 40)),
-                            "CFG_LINUX_CAPABILITY_KEY",
-                            format!("rule `{}` has an unknown Linux capability", rule.rule_id)
-                        );
-                    }
                 }
             }
             if let RuleMatchV1::NativeTransition(value) = &rule.rule_match {
                 require!(
-                    value
-                        .source_role_ids
-                        .iter()
-                        .chain(&value.target_role_ids)
-                        .all(|id| roles.contains_key(id.as_str()))
+                    [&value.source_role_ids, &value.target_role_ids]
+                        .into_iter()
+                        .all(|ids| all_in!(ids, keys roles))
                         && value.executable_path_selector_ids.iter().all(|id| {
                             path_selectors
                                 .get(id.as_str())
@@ -566,28 +517,21 @@ impl PolicyDocumentV1 {
                 )
             );
         }
-        let granted_rules = self
-            .file_exception_grants
-            .iter()
-            .flat_map(|grant| grant.denied_file_rule_ids.iter())
-            .collect::<Vec<_>>();
         require!(
-            granted_rules.iter().collect::<BTreeSet<_>>().len() == granted_rules.len(),
+            Self::unique_values(
+                self.file_exception_grants
+                    .iter()
+                    .flat_map(|grant| &grant.denied_file_rule_ids)
+            ),
             "CFG_EXCEPTION_GRANT_OVERLAP",
             "one denied file rule cannot belong to multiple exception grants"
         );
         for exception in &self.exceptions {
             let subject = &exception.exact_subject;
-            let known_rules = exception
-                .changed_rule_ids
-                .iter()
-                .all(|id| rules.contains_key(id.as_str()));
+            let known_rules = all_in!(&exception.changed_rule_ids, keys rules);
             let known_subject = all_in!(&subject.protected_scope_ids, scopes)
                 && all_in!(&subject.execution_set_ids, execution_sets)
-                && subject
-                    .role_ids
-                    .iter()
-                    .all(|id| roles.contains_key(id.as_str()));
+                && all_in!(&subject.role_ids, keys roles);
             require!(
                 known_rules && known_subject,
                 "CFG_EXCEPTION",
@@ -598,23 +542,10 @@ impl PolicyDocumentV1 {
             );
         }
         for rule in &self.authority_behavior_rules {
-            let (responses_used, finding) = match rule {
-                AuthorityBehaviorRuleV1::RemoteAdmission {
-                    response_binding_ids,
-                    finding,
-                    ..
-                }
-                | AuthorityBehaviorRuleV1::PostEffectResult {
-                    response_binding_ids,
-                    finding,
-                    ..
-                } => (response_binding_ids, finding),
-            };
+            let (_, bindings, finding) = rule.references();
             require!(
-                all_in!(responses_used, responses)
-                    && finding
-                        .as_ref()
-                        .is_none_or(|value| all_in!(&value.route_ids, routes)),
+                all_in!(bindings, responses)
+                    && finding.is_none_or(|value| all_in!(&value.route_ids, routes)),
                 "CFG_AUTHORITY_RULE",
                 "authority rule references an unknown route or response"
             );
@@ -632,6 +563,10 @@ impl PolicyDocumentV1 {
             );
         }
         Ok(())
+    }
+    fn unique_values<T: Ord>(values: impl IntoIterator<Item = T>) -> bool {
+        let mut seen = BTreeSet::new();
+        values.into_iter().all(|value| seen.insert(value))
     }
     fn validate_role_reachability(&self) -> ValidationResult {
         let mut reachable = self
