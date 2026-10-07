@@ -6,12 +6,12 @@ use mithril_control::{
     AntiRollbackStore, BlastRadiusLimitV1, CompiledOperationV1, CompiledPhysicalResultV1,
     DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1,
     ErrnoV1, ExactExceptionSubjectSelectorV1, ExceptionConsumptionScopeV1, ExceptionV1,
-    HardSafetyConditionV1, IpcRelationshipRuleV1, NetworkPolicyV1, NetworkPortRangeV1,
-    NetworkProtocolV1, PathPatternPrecedenceV1, PathSelectorV1, PathTreeDenyFloorV1,
-    PermittedAuthorityDeltaV1, PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1,
-    PolicySimulator, ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
-    RegistryDigestsV1, RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1,
-    RootClassificationV1, SimulatedDispositionV1,
+    FileExceptionGrantTemplateV1, HardSafetyConditionV1, IpcRelationshipRuleV1, NetworkPolicyV1,
+    NetworkPortRangeV1, NetworkProtocolV1, PathPatternPrecedenceV1, PathSelectorV1,
+    PathTreeDenyFloorV1, PermittedAuthorityDeltaV1, PolicyCompiler, PolicyDispositionV1,
+    PolicyDocumentV1, PolicySimulator, ProfileActivationMetadataV1, ProfileCandidateArtifactV1,
+    ProfileSealRequestV1, RegistryDigestsV1, RollbackAuthorizationArtifactV1,
+    RollbackAuthorizationPayloadV1, RootClassificationV1, SimulatedDispositionV1,
 };
 
 const VALID_POLICY: &str = include_str!("fixtures/policy-v1.yaml");
@@ -116,6 +116,155 @@ fn child_owned_policy_values_validate_before_document_relationships() -> mithril
     assert!(PolicyCompiler
         .compile(&document)
         .is_err_and(|error| error.to_string().contains("CFG_LOCAL_ID")));
+    Ok(())
+}
+
+#[test]
+fn relationship_duplicate_order() -> mithril_control::Result<()> {
+    for first in [false, true] {
+        let mut document = parse(VALID_POLICY)?;
+        let mut duplicate = document.roles[0].clone();
+        duplicate.default_process_state_id = "missing-state".to_owned();
+        duplicate.permitted_entry_kinds = vec![EntryKindV1::ExternalRuntimeUnknown];
+        let index = if first { 0 } else { document.roles.len() };
+        document.roles.insert(index, duplicate);
+        assert!(matches!(
+            PolicyCompiler.compile(&document),
+            Err(mithril_control::Error::PolicyValidation {
+                code: "CFG_DUPLICATE_ID",
+                ..
+            })
+        ));
+        document.protected_universe.role_ids.pop();
+        assert!(matches!(
+            PolicyCompiler.compile(&document),
+            Err(mithril_control::Error::PolicyValidation {
+                code: "CFG_ROLE_REGISTRY",
+                ..
+            })
+        ));
+
+        let mut document = parse(VALID_POLICY)?;
+        document.entry_role_assignments[0].admission_execution_rule_id =
+            Some(document.rules[0].rule_id.clone());
+        let mut duplicate = document.rules[0].clone();
+        duplicate.requested_disposition = PolicyDispositionV1::Allow;
+        duplicate.errno = None;
+        let index = if first { 0 } else { document.rules.len() };
+        document.rules.insert(index, duplicate);
+        assert!(matches!(
+            PolicyCompiler.compile(&document),
+            Err(mithril_control::Error::PolicyValidation {
+                code: "CFG_DUPLICATE_ID",
+                ..
+            })
+        ));
+        document.protected_universe.workload_selector_ids = vec!["missing-selector".to_owned()];
+        assert!(matches!(
+            PolicyCompiler.compile(&document),
+            Err(mithril_control::Error::PolicyValidation {
+                code: "CFG_SELECTOR_REGISTRY",
+                ..
+            })
+        ));
+    }
+
+    let mut document = parse(VALID_POLICY)?;
+    document.rollout.desired_profile_mode = mithril_control::ProfileModeV1::Protect;
+    document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
+        rule_id: document.rules[0].rule_id.clone(),
+        role_id: "converter".to_owned(),
+        path: "/work/secrets".to_owned(),
+        operation_ids: vec!["OPEN_READ".to_owned()],
+    });
+    assert!(matches!(
+        PolicyCompiler.compile(&document),
+        Err(mithril_control::Error::PolicyValidation {
+            code: "CFG_DUPLICATE_ID",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn relationship_record_checks() -> mithril_control::Result<()> {
+    let mut document = parse(VALID_POLICY)?;
+    document.rollout.desired_profile_mode = mithril_control::ProfileModeV1::Protect;
+    document.path_selectors.push(PathSelectorV1::path(
+        "entry-image",
+        "/usr/bin/worker",
+        "PROJECTED_TOKEN",
+    ));
+    let mut admission = document.rules[0].clone();
+    admission.rule_id = "entry-execution".to_owned();
+    admission.requested_disposition = PolicyDispositionV1::Allow;
+    admission.errno = None;
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut admission.rule_match else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.effect_families = vec![EffectFamilyV1::Exec];
+    effect.operation_ids = vec!["EXECUTE".to_owned()];
+    effect.object = mithril_control::LocalObjectSelectorV1::PathSelectors {
+        path_selector_ids: vec!["entry-image".to_owned()],
+    };
+    document.entry_role_assignments[0].admission_execution_rule_id =
+        Some(admission.rule_id.clone());
+    document.rules.push(admission);
+    document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
+        rule_id: "deny-tree".to_owned(),
+        role_id: "converter".to_owned(),
+        path: "/work/secrets".to_owned(),
+        operation_ids: vec!["OPEN_READ".to_owned()],
+    });
+    document
+        .file_exception_grants
+        .push(FileExceptionGrantTemplateV1 {
+            grant_id: "token-open".to_owned(),
+            denied_file_rule_ids: vec![document.rules[0].rule_id.clone()],
+            maximum_duration_ns: 1,
+            maximum_uses: 1,
+        });
+    assert_eq!(PolicyCompiler.compile(&document)?.compiled_cells.len(), 2);
+
+    let cases: [(&str, fn(&mut PolicyDocumentV1)); 7] = [
+        ("CFG_ROLE_REFERENCE", |document| {
+            document.entry_role_assignments[0].resulting_role_id = "missing-role".to_owned();
+        }),
+        ("CFG_ENTRY_ASSIGNMENT", |document| {
+            document.roles[0].permitted_entry_kinds = vec![EntryKindV1::ExternalRuntimeUnknown];
+        }),
+        ("CFG_ENTRY_EXECUTION_RULE", |document| {
+            document.entry_role_assignments[0].admission_execution_rule_id =
+                Some("missing-rule".to_owned());
+        }),
+        ("CFG_ENTRY_EXECUTION_RULE", |document| {
+            document.rules[1].enabled = false;
+        }),
+        ("CFG_EXCEPTION_GRANT", |document| {
+            document.file_exception_grants[0].denied_file_rule_ids =
+                vec!["entry-execution".to_owned()];
+        }),
+        ("CFG_EXCEPTION_GRANT", |document| {
+            document.file_exception_grants[0].denied_file_rule_ids = vec!["deny-tree".to_owned()];
+        }),
+        ("CFG_EXCEPTION_GRANT_OVERLAP", |document| {
+            let mut grant = document.file_exception_grants[0].clone();
+            grant.grant_id = "second-grant".to_owned();
+            document.file_exception_grants.push(grant);
+        }),
+    ];
+    for (expected, mutate) in cases {
+        let mut invalid = document.clone();
+        mutate(&mut invalid);
+        assert!(
+            matches!(
+                PolicyCompiler.compile(&invalid),
+                Err(mithril_control::Error::PolicyValidation { code, .. }) if code == expected
+            ),
+            "expected {expected}"
+        );
+    }
     Ok(())
 }
 

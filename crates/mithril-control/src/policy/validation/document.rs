@@ -73,8 +73,8 @@ impl PolicyDocumentV1 {
         let roles = self
             .roles
             .iter()
-            .map(|value| value.role_id.as_str())
-            .collect::<BTreeSet<_>>();
+            .map(|value| (value.role_id.as_str(), value))
+            .collect::<BTreeMap<_, _>>();
         let selectors = self
             .workload_selectors
             .iter()
@@ -174,10 +174,14 @@ impl PolicyDocumentV1 {
                 path_selector_handles.insert(selector.kernel_handle());
             }
         }
-        let rule_ids = self
+        let rules = self
             .rules
             .iter()
-            .map(|value| value.rule_id.as_str())
+            .map(|value| (value.rule_id.as_str(), value))
+            .collect::<BTreeMap<_, _>>();
+        let rule_ids = rules
+            .keys()
+            .copied()
             .chain(
                 self.path_tree_deny_floors
                     .iter()
@@ -185,14 +189,17 @@ impl PolicyDocumentV1 {
             )
             .collect::<BTreeSet<_>>();
         require!(
-            roles == string_set!(&self.protected_universe.role_ids),
+            roles
+                .keys()
+                .copied()
+                .eq(string_set!(&self.protected_universe.role_ids)),
             "CFG_ROLE_REGISTRY",
             "role registry must equal defined roles"
         );
         require!(
             self.path_tree_deny_floors
                 .iter()
-                .all(|floor| roles.contains(floor.role_id.as_str())),
+                .all(|floor| roles.contains_key(floor.role_id.as_str())),
             "CFG_ROLE_REFERENCE",
             "path-tree denial references an unknown role"
         );
@@ -236,25 +243,21 @@ impl PolicyDocumentV1 {
             );
         }
         for entry in &self.entry_role_assignments {
+            let role = roles.get(entry.resulting_role_id.as_str());
             require!(
-                roles.contains(entry.resulting_role_id.as_str())
-                    && all_in!(&entry.workload_selector_ids, selectors),
+                role.is_some() && all_in!(&entry.workload_selector_ids, selectors),
                 "CFG_ROLE_REFERENCE",
                 format!(
                     "entry `{}` has an unknown role or selector",
                     entry.assignment_id
                 )
             );
-            let permitted = self
-                .roles
-                .iter()
-                .find(|role| role.role_id == entry.resulting_role_id)
-                .is_some_and(|role| {
-                    entry
-                        .entry_kinds
-                        .iter()
-                        .all(|kind| role.permitted_entry_kinds.contains(kind))
-                });
+            let permitted = role.is_some_and(|role| {
+                entry
+                    .entry_kinds
+                    .iter()
+                    .all(|kind| role.permitted_entry_kinds.contains(kind))
+            });
             require!(
                 permitted,
                 "CFG_ENTRY_ASSIGNMENT",
@@ -265,9 +268,8 @@ impl PolicyDocumentV1 {
             );
             let valid_admission_rule = entry.admission_execution_rule_id.as_ref().is_none_or(
                 |rule_id| {
-                    self.rules.iter().any(|rule| {
-                        rule.rule_id == *rule_id
-                            && rule.enabled
+                    rules.get(rule_id.as_str()).is_some_and(|rule| {
+                        rule.enabled
                             && rule.requested_disposition == PolicyDispositionV1::Allow
                             && matches!(
                                 &rule.rule_match,
@@ -331,7 +333,7 @@ impl PolicyDocumentV1 {
                     .source_role_ids
                     .iter()
                     .chain(&relation.peer_role_ids)
-                    .all(|id| roles.contains(id.as_str())),
+                    .all(|id| roles.contains_key(id.as_str())),
                 "CFG_IPC_RELATIONSHIP",
                 format!(
                     "IPC relationship `{}` references an unknown role",
@@ -364,7 +366,10 @@ impl PolicyDocumentV1 {
         );
         for default in &self.effect_family_defaults {
             require!(
-                all_in!(&default.role_ids, roles),
+                default
+                    .role_ids
+                    .iter()
+                    .all(|id| roles.contains_key(id.as_str())),
                 "CFG_ROLE_REFERENCE",
                 "effect default references an unknown role"
             );
@@ -385,7 +390,7 @@ impl PolicyDocumentV1 {
                 posture
                     .unknown_restricted_role_id
                     .as_ref()
-                    .is_none_or(|id| roles.contains(id.as_str()))
+                    .is_none_or(|id| roles.contains_key(id.as_str()))
                     && all_in!(&posture.finding.route_ids, routes),
                 "CFG_DEFAULT_POSTURE",
                 "default posture references an unknown role or route"
@@ -410,7 +415,7 @@ impl PolicyDocumentV1 {
                     && fallback
                         .unknown_restricted_role_id
                         .as_ref()
-                        .is_none_or(|id| roles.contains(id.as_str()))
+                        .is_none_or(|id| roles.contains_key(id.as_str()))
             });
             require!(
                 known_actions && known_finding && known_fallbacks,
@@ -435,7 +440,10 @@ impl PolicyDocumentV1 {
                         .entry_kind_ids
                         .iter()
                         .all(|id| self.protected_universe.entry_kind_ids.contains(id))
-                    && all_in!(&subject.role_ids, roles);
+                    && subject
+                        .role_ids
+                        .iter()
+                        .all(|id| roles.contains_key(id.as_str()));
                 let known_states = subject
                     .required_process_state_ids
                     .iter()
@@ -499,7 +507,7 @@ impl PolicyDocumentV1 {
                 {
                     if security_object_ids.iter().any(|id| id == "PROCESS") {
                         require!(
-                            roles.contains(target_selector_ids[0].as_str()),
+                            roles.contains_key(target_selector_ids[0].as_str()),
                             "CFG_PROCESS_CONTROL_KEY",
                             format!("rule `{}` has an unknown target role", rule.rule_id)
                         );
@@ -524,7 +532,7 @@ impl PolicyDocumentV1 {
                         .source_role_ids
                         .iter()
                         .chain(&value.target_role_ids)
-                        .all(|id| roles.contains(id.as_str()))
+                        .all(|id| roles.contains_key(id.as_str()))
                         && value.executable_path_selector_ids.iter().all(|id| {
                             path_selectors
                                 .get(id.as_str())
@@ -538,26 +546,19 @@ impl PolicyDocumentV1 {
                 );
             }
         }
-        let base_rule_ids = self
-            .rules
-            .iter()
-            .map(|rule| rule.rule_id.as_str())
-            .collect::<BTreeSet<_>>();
         for grant in &self.file_exception_grants {
             require!(
                 grant
                     .denied_file_rule_ids
                     .iter()
-                    .all(|id| base_rule_ids.contains(id.as_str())
-                        && self.rules.iter().any(|rule| {
-                            rule.rule_id == *id
-                                && rule.requested_disposition == PolicyDispositionV1::Deny
-                                && matches!(
-                                    &rule.rule_match,
-                                    RuleMatchV1::LocalPreEffect(effect)
-                                        if effect.effect_families == [EffectFamilyV1::File]
-                                )
-                        })),
+                    .all(|id| rules.get(id.as_str()).is_some_and(|rule| {
+                        rule.requested_disposition == PolicyDispositionV1::Deny
+                            && matches!(
+                                &rule.rule_match,
+                                RuleMatchV1::LocalPreEffect(effect)
+                                    if effect.effect_families == [EffectFamilyV1::File]
+                            )
+                    })),
                 "CFG_EXCEPTION_GRANT",
                 format!(
                     "exception grant `{}` must reference denied file rules",
@@ -577,10 +578,16 @@ impl PolicyDocumentV1 {
         );
         for exception in &self.exceptions {
             let subject = &exception.exact_subject;
-            let known_rules = all_in!(&exception.changed_rule_ids, base_rule_ids);
+            let known_rules = exception
+                .changed_rule_ids
+                .iter()
+                .all(|id| rules.contains_key(id.as_str()));
             let known_subject = all_in!(&subject.protected_scope_ids, scopes)
                 && all_in!(&subject.execution_set_ids, execution_sets)
-                && all_in!(&subject.role_ids, roles);
+                && subject
+                    .role_ids
+                    .iter()
+                    .all(|id| roles.contains_key(id.as_str()));
             require!(
                 known_rules && known_subject,
                 "CFG_EXCEPTION",
