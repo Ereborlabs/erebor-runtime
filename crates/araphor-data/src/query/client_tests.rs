@@ -351,10 +351,17 @@ impl ClientFixture {
                     .iter()
                     .all(|input| input.upgrade().is_none());
                 if released {
-                    return Ok(());
+                    break;
                 }
                 tokio::task::yield_now().await;
             }
+            drop(
+                self.owner
+                    .budget
+                    .wait(self.grant.selection.tenant_id)
+                    .await?,
+            );
+            Ok(())
         })
         .await?
     }
@@ -1712,6 +1719,42 @@ async fn query_client_in_process() -> TestResult {
     let trusted = fixture.data.plan(super::QueryTemplate::OperationCounts)?;
     let result = fixture.owner.query_at(&trusted, 100)?;
     assert_eq!(result.rows, vec![vec![Value::UInt(7), Value::BigInt(1)]]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_client_cleanup_wait() -> TestResult {
+    use futures_util::FutureExt as _;
+
+    let fixture = ClientFixture::bounded()?;
+    fixture.commit(1, 1, 7, 4)?;
+    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(result.rows, vec![vec![Value::BigInt(1)]]);
+    drop(result);
+    fixture.inputs(false)?;
+    let held = fixture
+        .owner
+        .budget
+        .evaluate(fixture.grant.selection.tenant_id)?;
+    let cleanup = fixture.released();
+    tokio::pin!(cleanup);
+    assert!(cleanup.as_mut().now_or_never().is_none());
+    drop(held);
+    cleanup.await?;
+    fixture.inputs(false)?;
+    drop(
+        fixture
+            .owner
+            .budget
+            .evaluate(fixture.grant.selection.tenant_id)?,
+    );
+    drop(
+        fixture
+            .owner
+            .budget
+            .output(fixture.owner.limits.output_bytes)?,
+    );
     Ok(())
 }
 
