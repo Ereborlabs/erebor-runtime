@@ -49,6 +49,12 @@ the trusted internal engine from 7.3. Do not enable public SQL before both pass.
    unavailable, not proof that this filter lost a matching row. Keep limits
    in the data crate so the optional remote host uses the same contract.
 
+The query transport retains one authorized checkpoint frame. Derive its wire
+header and bookmark when a local duration ends. New rows without a checkpoint
+do not change that saved frame. Check retained-read validity and current
+permission before the final response. Decode a trace bookmark once and pass
+its validated QueryCheckpoint to QueryOwner.
+
 Frames do not need a separate frame ID or result digest. Append replay uses
 exact row positions within one query and store epoch. Replacement output
 is one complete bounded result. An edited bookmark can replay or skip rows
@@ -167,6 +173,12 @@ Status: **Done**.
    Normal commands do not create a background job or require a second command.
    Automatic submit retries reuse a key; a newly invoked command is a new
    request. Return the accepted trace ID before lengthy output.
+   Keep one retry transition in each SQL and trace read loop. Preserve retry
+   limits, delays, credential refresh, interruption and resume rules. For
+   ordered append replay, remove the duplicate prefix from rows and positions
+   together. Validate order and equal counts before this removal. Use shared
+   Output methods for query and trace coverage, health and error text. Keep
+   table layout, escaping and JSONL records unchanged.
 5. Extend `catalog` with authorized targets, query fields, recipe source,
    parameters, capability status and examples. SQL `--target` narrows tenant
    inputs before evaluation, including joins and aggregates. Use this phase's
@@ -730,6 +742,40 @@ zero: 1,626 tests passed, zero failed and 544 were ignored. The counts exclude
 nested recovery helpers. Ignored tests remain unqualified.
 No browser, physical case or performance test ran for this correction.
 Earlier browser and physical proofs retain their recorded source limits.
+
+### Owner composition result
+
+Source: `be7f411c`. Commit `504fe5d8` retains one native query checkpoint and
+decodes trace bookmarks once. Commit `36c30113` uses one retry transition in
+each CLI read loop, removes replay prefixes with paired drains, and shares
+coverage, health and error text. No command feature or wire field changes.
+Commit `be7f411c` copies QueryHealth directly in one test; production code is
+unchanged.
+Status: **Done** for scoped correctness.
+
+On 2026-10-07, all 58 CLI tests passed. The affected-library command also
+passed the full-header duration and trace-bookmark validation tests. Use the
+[query result](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-3-query-and-follow.md#owner-composition-result)
+for the build command, environment and library counts.
+
+```sh
+target/debug/mithril-observability-test --case query-trace-client --output-directory /tmp/araphor-owner-simplify.ht265y/native-client --client-executable /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/araphor
+```
+
+The built-client command passed. It checked default table follow through a
+pipe, reconnect, exact retry, selected output, normal completion, initiator
+cancellation and viewer interruption. The printed table was also inspected.
+Read `/tmp/araphor-owner-simplify.ht265y/native-client/result.json` and
+`table.stdout` in that directory. The command uses production TLS clients,
+query and trace owners, and a runtime/backend fixture. It does not prove
+physical BPF cleanup or performance. Earlier browser and physical results
+retain their named source limits.
+
+The final Rust procedure passed at `be7f411c` after the last Rust edit.
+Formatting, workspace compilation, strict Clippy and all-target/all-feature
+tests passed: 1,629 passed, zero failed and 544 existing tests were ignored.
+Counts exclude nested subprocess helpers. Ignored cases remain unqualified.
+Read `/tmp/araphor-owner-simplify.ht265y/rust-ci-final.log`.
 
 ## Stop point
 

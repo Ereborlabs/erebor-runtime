@@ -63,6 +63,7 @@ is part of this change.
 -> [QueryOwner::follow_clock](../../../../crates/araphor-data/src/query/follow.rs) QueryOwner registers dependency notifications before the initial snapshot.<br>
 -> [QueryOwner::follow_inner](../../../../crates/araphor-data/src/query/follow.rs) The owner returns one lazy QueryStream without starting SQL.<br>
 -> [QueryStream::poll_next](../../../../crates/araphor-data/src/query/follow.rs) Consumer polling produces metadata, initial result and a checkpoint.<br>
+-> [QueryStream::advance](../../../../crates/araphor-data/src/query/follow.rs) The same future checks retained-read validity before it returns the frame.<br>
 -> [AnalysisStore::dependency_revision](../../../../crates/araphor-data/src/analysis/dependencies.rs) Relevant commits mark one evaluation dirty.<br>
 -> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) Append reads new committed positions; replace evaluates a complete snapshot.<br>
 -> [QueryStream::next_frame](../../../../crates/araphor-data/src/query/follow.rs) Supported time-window expiry also triggers replacement without new input.<br>
@@ -117,7 +118,10 @@ These settings are not an operating-system memory or security boundary.
 QueryStream owns one pending next-frame future and passive QueryState.
 QueryState has no runtime or driver. A store watch is registered before the
 first poll. Construction starts no SQL. Polling advances one evaluation and
-returns metadata, data and checkpoint frames in order. The checkpoint advances
+returns metadata, data and checkpoint frames in order. The same future waits
+for the retained-read check. Cancellation and authority changes wake that
+wait. There is no separate frame-check future or manual wake between these
+steps. The checkpoint advances
 only when the authorized frame is returned. Paused consumption starts no
 further evaluation. The stream checks exact dependency revisions before it
 waits. It closes the storage snapshot before native SQL execution. A paused
@@ -179,11 +183,13 @@ Use these source tests to check each owner boundary:
 | --- | --- |
 | Shared wire decoding | [evidence tests](../../../../crates/araphor-data/src/evidence.rs): `query_input_values`, `query_input_size_bounds`, `query_input_invalid_frames`, `query_input_shared_bytes`. |
 | Snapshot and rotation | [extraction tests](../../../../crates/araphor-data/src/analysis/extraction.rs): `analysis_extract_rotation`, `analysis_extract_lock_waits`, and position-page cases. |
+| Selection bounds | [extraction tests](../../../../crates/araphor-data/src/analysis/extraction.rs): `analysis_selection_key_limits` fills the combined six-list budget and the separate Node budget. One extra key rejects each input. |
 | Native reader recovery | [read tests](../../../../crates/araphor-data/src/analysis/read.rs): `query_scope_reader_recovery`, `query_input_native_cancel`, `analysis_read_cancel_cleanup`. |
 | Temporary input ownership | [adapter tests](../../../../crates/araphor-data/src/query/adapter.rs): value, repeated-scan, error, and Weak-reference lifetime checks. [input tests](../../../../crates/araphor-data/src/query/input.rs) check generated relations and exact allocation bounds. |
 | Fixed templates | [query tests](../../../../crates/araphor-data/src/query/tests.rs): `QueryFixture::baseline` evaluates complete scoped input through the pinned DuckDB adapter. Each trusted template compares against that result. |
 | Stream lifecycle | [follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs): snapshot race, empty progress, coalesced output, lazy construction, paused demand, drop, and `query_follow_autonomous_expiry` without a clock notification or heartbeat wake. `query_follow_runtime` checks construction outside Tokio and a typed error for polling without a runtime. [frame tests](../../../../crates/araphor-data/src/query/frame.rs) check envelopes, binding, identity, and shared byte reservations. |
 | Active evaluation cancellation | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): `query_scope_native_cancel` pauses inside a real native input scan, requires native failure after cancellation, and checks input/capacity release and later intake/query. Its barrier and native-error flag are test-only. |
+| Pending frame checks | [client tests](../../../../crates/araphor-data/src/query/client_tests.rs): `query_trace_stream_stop` checks cancel, revoke and drop during a blocked native retained-read check. Reader and stream capacity remain charged until native cleanup. |
 | Maintenance and evidence | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): reader release, held-output deletion, and both pin/delete commit orders. [retention tests](../../../../crates/araphor-data/src/analysis/retention.rs) check floor persistence, recovery, restore, and exact witnesses. |
 | Production-owner qualification | [query-follow](../../../../crates/mithril-e2e/src/discovery/query_follow.rs): eight small cases for data, time, stream barriers, retention, restart/restore, and policy continuity. `timer_expiry` checks a timer-only replacement. `bounded_window` checks input/output overflow after a complete replacement, the retained checkpoint, no partial result, closure, and recovery. The simultaneous pin/delete and rotation proofs are component tests. |
 
@@ -265,6 +271,7 @@ for its current verification result.
 -> [command dispatch](../../../../crates/araphor-cli/src/cli.rs) Existing command owners retain their behavior.
 
 [CommandRun::sql](../../../../crates/araphor-cli/src/cli/araphor.rs) The CLI receives an ordered query frame.<br>
+-> [QueryReplay::advance](../../../../crates/araphor-cli/src/cli/araphor.rs) The replay owner validates row counts and position order, then removes the duplicate prefix from both lists.<br>
 -> [Output::query](../../../../crates/araphor-cli/src/cli/araphor/output.rs) The output owner formats row values and escapes terminal control bytes.<br>
 -> [shared table layout](../../../../crates/araphor-cli/src/cli/output.rs) Runtime and query output use the same table layout. Each query batch has its own table.
 
@@ -272,6 +279,15 @@ SQL follow defaults to table, including when stdout is a pipe. Other commands
 retain their stdout-based default. Explicit `--output jsonl` retains all stream
 records for agents. Append, replacement, coverage, limits and errors remain
 visible. The output owner does not retain an ever-growing row list.
+Query and trace output use the same private methods for coverage, health and
+error text. Their JSONL records and table layout do not change.
+
+CommandRun keeps one retry transition in each SQL and trace read loop. Each
+loop retains its three-retry limit, delays and interruption checks. SQL also
+retains its duration check. Each new RPC reads the current credential. Only
+follow SQL can resume; an interrupted one-shot query does not run again.
+The trace initiator retains cancellation and final-result draining. Closing
+a viewer read does not cancel trace execution.
 
 [AraphorCommand::prepare](../../../../crates/araphor-cli/src/cli/araphor/args.rs) An operator selects query or trace input.<br>
 -> [TryFrom selector conversion](../../../../crates/araphor-cli/src/cli/araphor/args.rs) TryFrom validates the existing selector bounds.<br>
@@ -355,6 +371,11 @@ and cannot release a running native task's lease.
 QueryTransport and TraceTransport retain the latest native checkpoint as a
 read guard. A local deadline or final result checks that guard and current
 tenant access after the wait. The guard contains no drained output page.
+QueryTransport derives its final header and bookmark from that guard. It
+does not keep separate header and bookmark copies. Rows after that checkpoint
+cannot change the saved header. TraceBookmark validates the outer bound and
+trace identity, then decodes the nested checkpoint once. The watch owner passes
+that checked value to QueryOwner.
 QueryReadScope reserves one existing AnalysisStore reader slot before its
 blocking task. The native connection retains that same slot through cleanup.
 This fixed read checks current trace revocation; it does not reserve client
@@ -366,6 +387,14 @@ checkpoint. The CLI and browser cannot treat these rows as completed output.
 `observability_grpc_deadline_revocation` and
 `observability_grpc_duration_revocation` check read revocation before these
 transport-generated results.
+`observability_grpc_duration_pending` and
+`observability_grpc_duration_complete` check the full final checkpoint header,
+bookmark and end-of-stream result. `observability_grpc_trace_bookmark` checks
+outer bounds, invalid encodings, another trace identity and empty checkpoints.
+The [CLI tests](../../../../crates/araphor-cli/src/cli/araphor.rs) check mixed
+duplicate/new row alignment and invalid position order. The
+[output tests](../../../../crates/araphor-cli/src/cli/araphor/output.rs) compare
+exact query and trace coverage, health and error text.
 
 The listener registers exactly five query/trace methods and six administrative
 methods. Unknown paths do not select a business handler. Administrative OIDC
@@ -2957,6 +2986,18 @@ WAL limit plus metadata. Qualification input is an operator-supplied record,
 not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
+
+The owner-composition links describe source `be7f411c`. This update checks
+the lazy stream, checkpoint transport, CLI retry/replay/output and selection
+bounds. The affected library command passed 513 tests. Both standalone
+qualification commands passed. Read the
+[query result](phase-7-3-query-and-follow.md#owner-composition-result) and
+[client result](../../araphor-observability/phase-3-cli-api-and-console.md#owner-composition-result)
+for source commits, commands and proof limits. The final Rust procedure passed
+at `be7f411c` after the last Rust edit: 1,629 tests passed, zero failed and 544
+existing tests were ignored. Counts exclude nested subprocess helpers.
+Formatting, workspace compilation and strict Clippy also passed. Ignored cases
+remain unqualified. These checks add no performance or physical qualification.
 
 The shared-capture links describe extraction source `9d570500` and the Node
 error conversion fix at `3248d2a0`. This guide update checks source paths and

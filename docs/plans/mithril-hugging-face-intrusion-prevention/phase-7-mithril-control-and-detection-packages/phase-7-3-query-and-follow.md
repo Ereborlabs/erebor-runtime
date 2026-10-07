@@ -77,6 +77,9 @@ Reader cancels or disconnects
    contiguous source reads for ordered processors. Capture source membership,
    coverage and metadata in the same snapshot. A coverage correction changes
    coverage, not an immutable event row or its store position.
+   Validate source, context, result, profile, trace and binding keys against
+   one combined limit with checked subtraction. Keep Node keys under their
+   separate limit. Preserve identity, tenant and uniqueness checks.
 4. Add `QueryOwner` under `crates/araphor-data/src/query/`. Accept only
    code-owned read plans with fixed SQL templates and checked parameters.
    Templates specify relations, columns, source selection, time bounds and
@@ -108,6 +111,9 @@ Reader cancels or disconnects
    next-frame future. The stream implements Stream directly. Construction
    starts no SQL. Polling advances that future and returns one frame. Do not
    add a separate producer task, output channel or subscription driver.
+   The same future waits for retained-read checks before it returns the frame.
+   Cancellation and authority changes also wake this wait. Advance the
+   checkpoint only when the authorized frame is returned.
    Construction needs no runtime. Poll with the Tokio timer enabled. Polling
    outside Tokio returns a typed QueryInvalid error.
    Drain the current metadata/data/checkpoint sequence before another
@@ -561,3 +567,45 @@ it. The five `query_follow_wait_` cases also pass. They preserve the original
 timeouts and all cancellation and capacity assertions. Logs are
 `/tmp/araphor-profile-follow.tPl3zk/query-cleanup-before.log`,
 `query-cleanup-after.log` and `query-follow-wait-final.log` in that directory.
+
+### Owner composition result
+
+Source: `be7f411c`. Commit `a4f2cf56` uses one checked selection-key budget.
+Commit `c62c5fd9` puts frame production and retained-read checks in one future.
+The transport and CLI changes are recorded in the
+[client result](../../araphor-observability/phase-3-cli-api-and-console.md#owner-composition-result).
+Status: **Done** for scoped correctness.
+
+On 2026-10-07, the affected library command passed with 513 tests, zero
+failures and four existing ignored tests. It checked mixed selection bounds,
+cancel/revoke/drop during a blocked native read, and capacity release after
+native cleanup. The standalone follow command passed all eight cases.
+Both standalone commands ran at `36c30113`. The later `be7f411c` correction
+copies QueryHealth directly in one test. Its focused check passed. Production
+code is unchanged.
+
+Run from the primary checkout with these six settings. The commands use its
+default target directory. TMPDIR keeps temporary Unix socket paths short.
+
+```sh
+export TMPDIR=/dev/shm CXXFLAGS='-O2 -g0' CARGO_BUILD_JOBS=2
+export CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1
+
+cargo test -p araphor-data -p mithril-control -p araphor-cli --all-features --lib
+cargo build -p araphor-cli -p mithril-e2e --all-features --bin araphor --bin mithril-observability-test --bin mithril_discovery_test
+target/debug/mithril_discovery_test --case query-follow --output-directory /tmp/araphor-owner-simplify.ht265y/query-follow
+bash .github/scripts/verify-rust-ci.sh
+```
+
+Read `/tmp/araphor-owner-simplify.ht265y/focused.log`, `clients-build.log`,
+`query-follow.log` and `query-follow/result.json`. These checks use production
+owners, synthetic evidence and temporary stores. They do not qualify
+performance or physical capture. Existing ignored cases remain unqualified.
+
+The final procedure, `bash .github/scripts/verify-rust-ci.sh`, passed at
+`be7f411c` after the last Rust edit. Formatting, workspace compilation, strict
+Clippy and all-target/all-feature tests passed with exit code 0. The suite
+passed 1,629 tests, with zero failures and 544 existing ignored tests. Counts
+exclude nested subprocess helpers. Read
+`/tmp/araphor-owner-simplify.ht265y/rust-ci-final.log`. The focused test-only
+correction is recorded in `output-test.log` in that directory.
