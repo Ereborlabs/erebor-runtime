@@ -23,7 +23,8 @@ public SQL access. This phase must not expose arbitrary SQL through a service.
 Trusted code supplies a reviewed read plan, typed parameters and exact tenant/source scope
   -> QueryOwner validates the plan and its configured limits
   -> AnalysisStore captures source membership, metadata revision and committed segment ends
-  -> shared decoder reads bounded segment records into temporary typed pages
+  -> shared decoder decodes each selected event once when binding checks or projection require it
+  -> query-owned projection expands SQL views through the store-owned byte limit
   -> built-in DuckDB table function exposes those pages as logical relations
   -> QueryOwner evaluates its fixed SQL template against these pages in memory
   -> owner returns rows, coverage, read revision and checked internal checkpoint
@@ -95,6 +96,12 @@ Reader cancels or disconnects
    with the existing DuckDB `VTab` trait. Register query-owned input and expose
    SQL views over it; do not insert raw records into DuckDB tables. Reuse the
    same adapter for client execution. No loadable plugin is required.
+   Keep target, context, profile and trace-measurement expansion in the query
+   projection. AnalysisStore supplies retained inputs from one snapshot. It
+   owns selection, segment leases, byte limits, cancellation and page progress.
+   Binding checks and event rows use the same decoded event. Raw-only reads
+   do not require decoding. Charge projection state and every emitted row.
+   A page must not disclose part of one expanded raw record.
 5. Implement typed rows and internal frames for `catalog`, `events`, `coverage`
    and `context_versions`. Document units, nulls, exact join keys and proof
    limits. `received_at` is Control intake time; source boot-relative time is
@@ -737,3 +744,56 @@ and 544 existing ignored tests. Counts exclude nested recovery helpers.
 The end-to-end library passes 167 tests. Ignored cases remain unqualified.
 Read `rust-ci.log`. Independent source review finds no required correction.
 The existing review guide contains the updated owner flow and test links.
+
+### Production simplification result
+
+Source: `d3c2f276`. Status: **Done** for the four approved production changes
+and their correctness checks. Data commit `bff24af9` puts SQL expansion in
+InputProjection. AnalysisStore retains snapshot selection, segment reads,
+leases, byte limits, cancellation and cursor progress. Binding checks and SQL
+event rows use one decoded event. Raw-only reads do not require decoding.
+Projection state and rows remain charged to the input limit.
+
+Node commit `a1f76dbf` prepares shared tables once per generation. Each binding
+checks its measurements and selected cells. Node finalizes counts and the table
+digest once. Control commit `f5f7f5bc` derives role selectors and entry kinds
+from completed assignments. Control commit `7a7a6cea` uses borrowed role and
+base-rule maps. Validation checks and diagnostic order remain. Commit
+`d3c2f276` corrects field shorthand and a local regression-test type. These
+changes do not refactor qualification scenarios. Read the
+[production review flow](implementation-review.md#production-simplification-review)
+for owner lifetimes, invariants and regression links.
+
+The final procedure passes formatting, workspace compilation, strict Clippy
+and all-target, all-feature tests. The 76 top-level suites pass 1,646 tests
+with zero failures and 544 existing ignored tests. Counts exclude nested
+recovery helpers. The data library passes 295 tests. Control passes 168
+library tests and 84 policy integration tests. Node passes 272 library tests.
+The end-to-end library passes 167 tests. All nine new regressions pass.
+
+The eight standalone `query-follow` cases pass. `profile-restart` passes and
+qualifies deterministic profiles only. The built CLI case passes retry,
+expiry, cancellation and default table output. Actual output is in
+`native-client-final/table.stdout`. The checks use fresh temporary stores.
+No store format, BPF or wire change is part of these simplifications. No
+benchmark or physical-capture run is part of this change. Ignored cases remain
+unqualified.
+
+The build and Cargo checks use the six environment settings above. The
+standalone commands use `TMPDIR=/dev/shm`. Logs and receipts are in
+`/tmp/araphor-production.9oCkuTHM/`:
+
+```sh
+cargo test --offline -p araphor-data -p mithril-control -p mithril-node --all-features --lib
+cargo test --offline -p mithril-control --all-features --test policy_compilation --test kubernetes_policy_api --test control_policy_reconciliation
+cargo build --offline -p araphor-cli -p mithril-e2e --all-features --bin araphor --bin mithril_discovery_test --bin mithril-observability-test
+target/debug/mithril_discovery_test --case query-follow --output-directory /tmp/araphor-production.9oCkuTHM/query-follow-final
+target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-production.9oCkuTHM/profile-restart-final
+target/debug/mithril-observability-test --case query-trace-client --output-directory /tmp/araphor-production.9oCkuTHM/native-client-final --client-executable /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/araphor
+bash .github/scripts/verify-rust-ci.sh
+```
+
+Read `policy-tests.log`, `build-final.log`, `rust-ci-check.log` and the three
+final `result.json` receipts. The first two workspace attempts stopped on
+Clippy warnings. The final procedure runs after both corrections and returns
+zero at the stated source. Independent source review finds no required change.

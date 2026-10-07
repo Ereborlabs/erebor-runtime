@@ -49,6 +49,7 @@ is part of this change.
 -> [QueryOwner::new](../../../../crates/araphor-data/src/query/mod.rs) QueryOwner validates its configured limits and reads the store identity.<br>
 -> [AnalysisStore::extract_rows](../../../../crates/araphor-data/src/analysis/extraction.rs) AnalysisStore captures source membership, metadata revision and committed segment ends.<br>
 -> [EvidenceRecord::try_from](../../../../crates/araphor-data/src/evidence.rs) The shared decoder reads bounded segment records into temporary typed pages.<br>
+-> [InputProjection](../../../../crates/araphor-data/src/query/input.rs) Query-owned projection expands SQL views through the store-owned byte limit.<br>
 -> [InputScan](../../../../crates/araphor-data/src/query/adapter.rs) The built-in DuckDB table function exposes those pages as logical relations.<br>
 -> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) QueryOwner evaluates its fixed SQL template against these pages in memory.<br>
 -> [QueryCheckpoint::from_result](../../../../crates/araphor-data/src/query/frame.rs) The owner returns rows, coverage, read revision and a checked internal checkpoint.
@@ -317,6 +318,67 @@ returns zero. The 76 top-level suites pass 1,637 tests with zero failures and
 and native client receipt checks pass. Read the
 [field ownership result](phase-7-3-query-and-follow.md#field-ownership-result)
 for exact commands, logs and proof limits.
+
+### Production simplification review
+
+Source: `d3c2f276`. Verification: **Done, PASS**.
+This section covers the four approved production simplifications. It does not
+refactor qualification scenarios. The intended result removes repeated table
+preparation, parallel role state, duplicate validation indexes and store-owned
+SQL expansion. Policy authority, validation, storage and query limits remain.
+
+[PreparedPolicy::prepare](../../../../crates/mithril-node/src/policy/installation.rs) Node prepares verified candidates for workload bindings.<br>
+-> [PreparedGeneration::new](../../../../crates/mithril-node/src/policy.rs) One preparation owner creates shared handles, semantics, path tables, IPC rows and network classes per generation.<br>
+-> [PreparedGeneration::check_candidate](../../../../crates/mithril-node/src/policy.rs) Reuse requires the same complete candidate.<br>
+-> [PreparedGeneration::add_binding](../../../../crates/mithril-node/src/policy.rs) Each binding checks its measurements and selected cells before exact-key row insertion.<br>
+-> [PreparedGeneration::finish](../../../../crates/mithril-node/src/policy.rs) Node calculates counts and the table digest once.<br>
+-> [PreparedPolicy::prepare](../../../../crates/mithril-node/src/policy/installation.rs) The existing allocator and capacity checks accept the complete generation.<br>
+-> [PreparedPolicy::publish](../../../../crates/mithril-node/src/policy/installation.rs) Node keeps dependency publication, readback, probes and activation in their existing order.
+
+[lower_kubernetes_policy](../../../../crates/mithril-control/src/policy/kubernetes.rs) Control lowers a validated Kubernetes policy.<br>
+-> [EntryRoleAssignmentV1](../../../../crates/mithril-control/src/policy/kubernetes.rs) Completed assignments supply role selectors and entry kinds.<br>
+-> [lower_kubernetes_policy](../../../../crates/mithril-control/src/policy/kubernetes.rs) The same role pass constructs each role definition and rule subject.<br>
+-> [PolicyDocumentV1::validate_relationships](../../../../crates/mithril-control/src/policy/validation/document.rs) Borrowed role and base-rule maps replace membership checks followed by searches.<br>
+-> [PolicyDocumentV1::validate_relationships](../../../../crates/mithril-control/src/policy/validation/document.rs) Duplicate rejection precedes record retrieval. Existing checks and diagnostics remain.
+
+[QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) QueryOwner supplies its projection with the selected input.<br>
+-> [AnalysisStore::extract_mode](../../../../crates/araphor-data/src/analysis/extraction.rs) The store captures one snapshot, resolves membership and retains segment leases.<br>
+-> [EvidenceRecord::try_from](../../../../crates/araphor-data/src/evidence.rs) Binding checks and SQL event rows share one decoded record.<br>
+-> [InputProjection::project](../../../../crates/araphor-data/src/query/input.rs) Query projection checks target and profile scope and expands context, behavior and measurement rows.<br>
+-> [ProjectionSink](../../../../crates/araphor-data/src/analysis/extraction.rs) The store charges projection state and rows. It checks cancellation and page limits.<br>
+-> [AnalysisStore::extract_mode](../../../../crates/araphor-data/src/analysis/extraction.rs) The cursor advances only after the complete selected record is consumed.
+
+PreparedGeneration borrows the verified candidate during preparation. It owns
+shared tables and accumulated rows. Finish moves those rows to LoweredGeneration.
+Per-binding decision maps remain local. Earlier bindings cannot satisfy a later
+binding's required measurement or nonempty-cell check. Exceptions are prepared
+only after a binding selects them. No kernel staging occurs during preparation.
+
+InputProjection exists for one extraction. Its recipe cache has no global
+registry. ProjectionSink charges that cache to the captured input budget.
+Raw inspection uses RecordProjection and does not require protobuf decoding.
+The query adapter creates no durable raw copy, service, task or output queue.
+No BPF, wire or stored format changes are part of these simplifications.
+
+Read the five `generation_` regressions in
+[Node policy tests](../../../../crates/mithril-node/src/policy.rs). They check
+binding isolation, candidate changes, row conflicts, deferred bindings and
+exception deadlines. Read `assignments_define_role_subjects` in
+[Kubernetes lowering tests](../../../../crates/mithril-control/src/policy/kubernetes.rs)
+for canonical order and assignment-derived role facts. Read
+`relationship_duplicate_order` and `relationship_record_checks` in
+[policy compilation tests](../../../../crates/mithril-control/tests/policy_compilation.rs)
+for diagnostics and exact record checks. Read `query_projection_expansion` in
+[client query tests](../../../../crates/araphor-data/src/query/client_tests.rs)
+for scoped multi-row expansion, input overflow and later query recovery.
+Existing target, behavior, trace, paging, cancellation and follow cases pass.
+The final workspace procedure passes 1,646 tests with zero failures and 544
+existing ignored tests. All eight standalone follow cases pass. Profile restart
+and the built CLI case pass. The CLI case checks retry, expiry, cancellation and
+default table output. Read the
+[production simplification result](phase-7-3-query-and-follow.md#production-simplification-result)
+for commands and receipts. No benchmark or physical-capture qualification is
+part of this change. Ignored cases remain unqualified.
 
 ### Public query boundary review
 
