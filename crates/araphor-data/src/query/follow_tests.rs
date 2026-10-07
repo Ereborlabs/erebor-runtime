@@ -466,6 +466,9 @@ async fn query_follow_lazy_demand() -> TestResult {
     assert_eq!(clock.reads.load(Ordering::SeqCst), 1);
     cancelled(&mut stream, Some(&complete)).await?;
     inputs_released(&owner);
+    fixture.event(5, 5, 7)?;
+    assert!(stream.next().await.is_none());
+    assert_eq!(clock.reads.load(Ordering::SeqCst), 1);
     let mut unpolled = owner.follow_clock(plan, None, clock.clone())?;
     cancelled(&mut unpolled, None).await?;
     assert_eq!(clock.reads.load(Ordering::SeqCst), 1);

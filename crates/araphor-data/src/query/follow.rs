@@ -45,15 +45,20 @@ impl QueryClock for SystemQueryClock {
     }
 }
 
-type QueryNext = Pin<Box<dyn Future<Output = (QueryState, Result<Option<QueryFrame>>)> + Send>>;
+type QueryNext =
+    Pin<Box<dyn Future<Output = (Box<QueryState>, Result<Option<QueryFrame>>)> + Send>>;
+
+enum QueryRun {
+    Ready(Box<QueryState>),
+    Pending(QueryNext),
+    Closed,
+}
 
 pub struct QueryStream {
-    state: Option<QueryState>,
-    next: Option<QueryNext>,
+    run: QueryRun,
     control: Arc<AnalysisReadControl>,
     stop: watch::Sender<bool>,
     session: Option<QuerySession>,
-    done: bool,
     lease: Option<Arc<QueryLease>>,
 }
 
@@ -64,9 +69,7 @@ impl QueryStream {
     }
 
     fn close(&mut self) {
-        self.done = true;
-        self.next = None;
-        self.state = None;
+        self.run = QueryRun::Closed;
         self.lease = None;
         let _cancelled = self.cancel();
     }
@@ -76,7 +79,7 @@ impl Stream for QueryStream {
     type Item = Result<QueryFrame>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.done {
+        if self.is_terminated() {
             return Poll::Ready(None);
         }
         if let Some(session) = &self.session {
@@ -94,29 +97,20 @@ impl Stream for QueryStream {
                 .fail(),
             ));
         }
-        if self.next.is_none() {
-            let Some(state) = self.state.take() else {
-                self.close();
-                return Poll::Ready(None);
-            };
-            self.next = Some(Box::pin(Self::advance(state, self.lease.clone())));
-        }
-        let Some(next) = self.next.as_mut() else {
-            self.close();
-            return Poll::Ready(Some(
-                crate::QueryInvalidSnafu {
-                    field: "query next frame",
-                }
-                .fail(),
-            ));
+        let mut next: QueryNext = match std::mem::replace(&mut self.run, QueryRun::Closed) {
+            QueryRun::Ready(state) => Box::pin(Self::advance(state, self.lease.clone())),
+            QueryRun::Pending(next) => next,
+            QueryRun::Closed => return Poll::Ready(None),
         };
         let frame = match next.as_mut().poll(context) {
             Poll::Ready((state, result)) => {
-                self.next = None;
-                self.state = Some(state);
+                self.run = QueryRun::Ready(state);
                 Poll::Ready(result.transpose())
             }
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                self.run = QueryRun::Pending(next);
+                Poll::Pending
+            }
         };
         if let Some(session) = &self.session {
             if let Err(error) = session.check() {
@@ -127,8 +121,7 @@ impl Stream for QueryStream {
         match frame {
             Poll::Ready(Some(Ok(frame))) => {
                 if let QueryPayload::Checkpoint { checkpoint, .. } = &frame.payload {
-                    if let Some(state) = self.state.as_mut() {
-                        state.after = checkpoint.position();
+                    if let QueryRun::Ready(state) = &mut self.run {
                         state.checkpoint = Some(checkpoint.clone());
                         state.seen = Some(state.revision);
                         state.last_eval = Some(tokio::time::Instant::now());
@@ -151,7 +144,7 @@ impl Stream for QueryStream {
 
 impl FusedStream for QueryStream {
     fn is_terminated(&self) -> bool {
-        self.done
+        matches!(self.run, QueryRun::Closed)
     }
 }
 
@@ -186,7 +179,6 @@ struct QueryState {
     follows: bool,
     started: bool,
     finished: bool,
-    after: Option<crate::StorePositionV1>,
     dirty: bool,
     seen: Option<u64>,
     initial: bool,
@@ -279,8 +271,7 @@ impl QueryOwner {
             QueryTemplate::Client(sql) => sql.follow(),
             _ => true,
         };
-        let after = checkpoint.as_ref().and_then(QueryCheckpoint::position);
-        let state = QueryState {
+        let state = Box::new(QueryState {
             owner: self.clone(),
             plan,
             clock,
@@ -295,7 +286,6 @@ impl QueryOwner {
             session: session.clone(),
             auth_changes,
             follows,
-            after,
             started: false,
             finished: false,
             dirty: true,
@@ -310,14 +300,12 @@ impl QueryOwner {
             revision: 0,
             exhausted: false,
             yielding: QueryYield::Idle,
-        };
+        });
         Ok(QueryStream {
-            state: Some(state),
-            next: None,
+            run: QueryRun::Ready(state),
             control,
             stop,
             session,
-            done: false,
             lease: Some(lease),
         })
     }
@@ -325,9 +313,9 @@ impl QueryOwner {
 
 impl QueryStream {
     async fn advance(
-        mut state: QueryState,
+        mut state: Box<QueryState>,
         lease: Option<Arc<QueryLease>>,
-    ) -> (QueryState, Result<Option<QueryFrame>>) {
+    ) -> (Box<QueryState>, Result<Option<QueryFrame>>) {
         if state.finished {
             return (state, Ok(None));
         }
@@ -514,7 +502,12 @@ impl QueryStream {
                 let paged = state.follows && plan.operation() == QueryOperation::Append;
                 let lease = Self::reserve(state, &control).await?;
                 let read = if paged {
-                    QueryRead::Append(state.after)
+                    QueryRead::Append(
+                        state
+                            .checkpoint
+                            .as_ref()
+                            .and_then(QueryCheckpoint::position),
+                    )
                 } else {
                     QueryRead::Snapshot
                 };
