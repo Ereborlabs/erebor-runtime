@@ -800,8 +800,8 @@ zero at the stated source. Independent source review finds no required change.
 
 ### Production reduction acceptance
 
-Status: **Not done**. Complete the four approved changes above and the
-remaining production reduction. `PreparedGeneration::add_binding`,
+Status: **Done** at `972365cc`. The four approved changes above and the
+remaining production reduction are complete. `PreparedGeneration::add_binding`,
 `lower_kubernetes_policy` and `PolicyDocumentV1::validate_relationships` can
 contain more than 400 lines. Keep normal spacing and useful comments. Do not
 split a cohesive owner to meet a line count.
@@ -823,3 +823,76 @@ existing policy integration, follow, profile-restart and built CLI checks.
 Record source, removed complexity, production-code changes, function lengths and
 verification limits in this result and the existing review guide. Commit each
 deliverable. Do not mark this reduction complete before all requirements pass.
+
+#### Production reduction result
+
+Source: `972365cc`. Implementation and scoped qualification: **Done, PASS**.
+The current acceptance rule permits cohesive functions above 400 lines.
+Normal spacing and useful comments remain. A moved body does not count as
+removed complexity. Independent review finds no further known material state,
+pass or wrapper to remove from the four approved flows without a behavior
+change. This is a scoped source-review result, not a proof of the smallest
+possible implementation.
+
+Commit `82fc8ba5` uses typed entry assignments and one path-selector map in
+Kubernetes lowering. Exception grants read completed file rules. One pass
+partitions network inputs. Commit `80ff0a9a` removes validation-only ID sets,
+a DNS mirror and unread bit-map values. Borrowed record maps and transient
+uniqueness checks retain the cross-record rules and diagnostic order.
+
+Commit `1271332d` retains measured selector proof for file-row construction.
+One native decision key serves the existing effect cases. Selected exceptions
+are collected during the cell pass. Checked deadlines and lexical missing-ID
+diagnostics remain. Commit `972365cc` removes the second state-handle cache
+and role-map clone. The existing GenerationSemantics owner supplies all
+generation readers. Its complete conversion uses TryFrom. The three existing
+binding operations are methods of the preparation owner; they add no wrapper
+or new lifecycle. Query projection and segment ownership remain as recorded
+in the production simplification result above.
+
+Against `afbd76a9`, complete production source decreases from 9,620 to 9,377
+lines across the five changed source files. The count includes types, methods,
+helpers, macros, comments and spacing. Test modules are excluded. The three
+remaining cohesive functions contain 402, 524 and 495 physical lines.
+Store extraction contains 398 lines. Read the
+[necessary production flows](implementation-review.md#necessary-production-flows)
+for the source paths, owner lifetimes, invariants and per-owner counts.
+
+The final Rust procedure runs after the last Rust edit at the stated source
+and returns zero. Formatting, workspace compilation and strict Clippy pass.
+The 76 top-level suites pass 1,646 tests with zero failures and 544 existing
+ignored tests. Counts exclude nested recovery subprocesses. Control passes
+168 library tests and 84 policy integration tests. Node passes 272 library
+tests. Data passes 295 library tests. The end-to-end library passes 167 tests.
+Two existing Node regressions also check UTC subtraction overflow and lexical
+missing-selector diagnostics. No test or qualification refactor is part of
+this reduction.
+
+All eight standalone query-follow cases pass. Profile restart passes and
+qualifies deterministic profiles only. The built native CLI case passes
+retry, expiry, cancellation and default table-follow output. Read the actual
+table in `native-client/table.stdout`. The client case uses production TLS
+RPCs and a runtime fixture. It does not prove physical BPF cleanup or
+performance. Ignored cases remain unqualified. No BPF, wire or stored format
+changes are part of this reduction.
+
+Logs and receipts are in `/tmp/araphor-reduction.UFecrlZp/`. Cargo uses the
+six environment settings above. Standalone commands use `TMPDIR=/dev/shm`
+and fresh temporary stores:
+
+```sh
+cargo test --offline -p mithril-control -p mithril-node --all-features --lib
+cargo test --offline -p mithril-control --all-features --test policy_compilation --test kubernetes_policy_api --test control_policy_reconciliation
+cargo test --offline -p mithril-node --all-features --lib
+bash .github/scripts/verify-rust-ci.sh
+cargo build --offline -p araphor-cli -p mithril-e2e --all-features --bin araphor --bin mithril_discovery_test --bin mithril-observability-test
+target/debug/mithril_discovery_test --case query-follow --output-directory /tmp/araphor-reduction.UFecrlZp/query-follow
+target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-reduction.UFecrlZp/profile-restart
+target/debug/mithril-observability-test --case query-trace-client --output-directory /tmp/araphor-reduction.UFecrlZp/native-client --client-executable /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/araphor
+```
+
+Read `owner-tests.log`, `policy-tests.log`, `node-final.log`,
+`rust-ci-final.log`, `clients-build.log` and the three `result.json` receipts.
+The earlier `rust-ci.log` run stopped before the final semantic-owner edit.
+It is not the completion proof. No benchmark or physical-capture run is part
+of this change.

@@ -380,6 +380,91 @@ default table output. Read the
 for commands and receipts. No benchmark or physical-capture qualification is
 part of this change. Ignored cases remain unqualified.
 
+#### Necessary production flows
+
+Source: `972365cc`. Implementation and verification: **Done, PASS**.
+The acceptance rule permits a cohesive function with more than 400 lines.
+Normal spacing and useful comments remain. A moved body does not count as
+removed complexity.
+
+[GenerationSemantics::try_from](../../../../crates/mithril-node/src/policy.rs) The existing semantics owner creates sorted role handles and one state-handle and bit map from the verified candidate.<br>
+-> [PreparedGeneration::new](../../../../crates/mithril-node/src/policy.rs) Preparation uses those maps without a second state cache or a role-map clone.<br>
+-> [PreparedGeneration::add_binding](../../../../crates/mithril-node/src/policy.rs) Each measured object keeps its proved signed selector for native file rows. Required exact measurements remain binding-local.<br>
+-> [PreparedGeneration::lower_entry_admissions](../../../../crates/mithril-node/src/policy.rs) Entry rows use the same semantic handles.<br>
+-> [PreparedGeneration::validate_binding_roles](../../../../crates/mithril-node/src/policy.rs) The binding checks its signed role and conservative state against that owner.<br>
+-> [PreparedGeneration::lower_administrative_plans](../../../../crates/mithril-node/src/policy.rs) Administrative plans use the same handles and retain signed approval checks.<br>
+-> [PreparedGeneration::finish](../../../../crates/mithril-node/src/policy.rs) Finish moves the complete generation and its semantics to the existing installation owner.
+
+Preparation still needs its role-default view for native process-control
+targets. Migration needs the live role-state set and state bits after
+installation. These records have different uses and lifetimes. They are not
+interchangeable. State bits are checked in source order. Duplicate state IDs
+keep the last bit mask. Numeric handles keep sorted, distinct-ID order.
+
+Binding lowering uses one native decision key and changes its effect fields
+for each existing case. It collects selected exceptions during the cell pass.
+It does not scan all cells again for each exception. Deadline calculations
+retain checked UTC subtraction and monotonic addition. Required exact-selector
+failures still name the first missing ID in lexical order. The candidate
+verifier owns static selector checks. Node still checks measured object class,
+device identity, path components and native row conflicts.
+
+[lower_kubernetes_policy](../../../../crates/mithril-control/src/policy/kubernetes.rs) Control constructs typed entry assignments, not a parallel tuple list.<br>
+-> [EntryRoleAssignmentV1](../../../../crates/mithril-control/src/policy/kubernetes.rs) The completed records supply role selectors and entry kinds.<br>
+-> [lower_kubernetes_policy](../../../../crates/mithril-control/src/policy/kubernetes.rs) One keyed selector map supplies lookup and final output. Completed file rules supply exception-grant checks.<br>
+-> [lower_kubernetes_policy](../../../../crates/mithril-control/src/policy/kubernetes.rs) One partition separates IPv4 and IPv6 inputs. Existing sorts retain canonical output.
+
+[PolicyDocumentV1::validate_closed](../../../../crates/mithril-control/src/policy/source.rs) Record validation checks local authority and capability limits first.<br>
+-> [PolicyDocumentV1::validate_relationships](../../../../crates/mithril-control/src/policy/validation/document.rs) Borrowed record maps supply membership and record facts without parallel ID and DNS sets.<br>
+-> [AuthorityBehaviorRuleV1::references](../../../../crates/mithril-control/src/policy/validation/authority.rs) One borrowed field view supports uniqueness and cross-record checks.<br>
+-> [PolicyDocumentV1::validate_relationships](../../../../crates/mithril-control/src/policy/validation/document.rs) Transient uniqueness predicates replace sets that had no later reader. Cross-record checks and diagnostic order remain.
+
+The validation change removes only the two repeated child-owned checks for
+local path-selector order and Linux capability range. It does not remove the
+broader signed-document file-grant contract. That contract differs from the
+Kubernetes file-open grant check. Process-state bit keys need one set, not a set
+and a map with unread values.
+
+The query and segment-owner flow above is unchanged. AnalysisStore owns raw
+selection, leases, budgets and progress. InputProjection owns SQL expansion.
+Binding selection and SQL rows still use one decoded event. This reduction
+adds no service, task, queue, BPF layout, wire layout or stored format.
+
+Production counts compare `afbd76a9` with `972365cc`. Counts include types,
+helpers, macros, comments and spacing. Test modules are excluded. Moving the
+three existing generation operations to methods receives no reduction credit.
+
+| Production scope | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Node policy owner | 5,764 | 5,627 | -137 |
+| Kubernetes lowering | 2,749 | 2,684 | -65 |
+| Document, authority and shared validation | 1,107 | 1,066 | -41 |
+| Total | 9,620 | 9,377 | -243 |
+
+The remaining cohesive functions contain 402 lines for generation binding
+lowering, 524 for Kubernetes lowering and 495 for document relationships.
+Store extraction contains 398 lines. Physical counts include spacing and
+comments. The inventory covers 934 Rust files and 10,697 function bodies.
+Other functions above 400 lines belong to excluded tests or qualification.
+Independent review finds no further known material state, pass or wrapper to
+remove from the four approved flows without a behavior change.
+
+The existing `generation_keeps_exception_deadlines` case now checks UTC
+subtraction overflow. `generation_shares_binding_rows` now checks the missing
+exact-selector diagnostic with reversed source-ID order. These are extensions
+of existing tests, not qualification refactors.
+
+The final Rust procedure runs after the last Rust edit and passes formatting,
+workspace compilation, strict Clippy and all-target, all-feature tests. The
+76 top-level suites pass 1,646 tests with zero failures and 544 existing
+ignored tests. All eight standalone follow cases pass. Deterministic profile
+restart and the built native CLI case pass. The CLI case checks retry, expiry,
+cancellation and default table-follow output. It uses production TLS RPCs and
+a runtime fixture. It does not prove physical BPF cleanup or performance.
+Ignored cases remain unqualified. Read the
+[reduction result](phase-7-3-query-and-follow.md#production-reduction-result)
+for commands, logs and receipts.
+
 ### Public query boundary review
 
 This section covers the client implementation on primary `main`.
