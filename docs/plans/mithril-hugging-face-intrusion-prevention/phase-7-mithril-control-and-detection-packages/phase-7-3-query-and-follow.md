@@ -80,6 +80,9 @@ Reader cancels or disconnects
    Validate source, context, result, profile, trace and binding keys against
    one combined limit with checked subtraction. Keep Node keys under their
    separate limit. Preserve identity, tenant and uniqueness checks.
+   Represent sources, contexts and traces with one Selection value each:
+   All or Exact with a list. An empty Exact list selects nothing. Resolve All
+   membership in the same bounded snapshot. Do not store separate all flags.
 4. Add `QueryOwner` under `crates/araphor-data/src/query/`. Accept only
    code-owned read plans with fixed SQL templates and checked parameters.
    Templates specify relations, columns, source selection, time bounds and
@@ -98,6 +101,9 @@ Reader cancels or disconnects
    separate. Metadata/results use their existing owner reads. Add later views
    only when their owners exist; unavailable capability is not an empty table.
    Register shared evidence and trace schemas without a second query owner.
+   Column stores one name and data type. EvaluationResult and QueryResult
+   share that type and one column vector. Client metadata adds units, owner
+   and readiness at its existing boundary. Preserve row and cursor checks.
 6. For append, select positions after the last scanned position and through
    one captured end. Page the initial retained range and later commits without
    repeatedly extracting full history. Advance checkpoints across nonmatching
@@ -687,3 +693,47 @@ Read `query-fixed.log`, `clients-build.log`, `rust-ci.log` and the three
 `result.json` receipts in `/tmp/araphor-structure.ZIXAR3/`. Independent source
 review finds no issues. No benchmark or physical-capture run is part of this
 change. Performance and existing physical-proof limits remain unchanged.
+
+### Field ownership result
+
+Source: `5f885e2d`. The data contract is commit `4fd7b8fe`. Status: **Done**
+for implementation and scoped correctness. Sources, contexts and traces each
+use `Selection::All` or `Selection::Exact`. Empty Exact lists select no records.
+Tenant snapshot resolution, combined key limits and byte limits remain.
+Native evaluation and QueryResult use one `Vec<Column>`. Each Column contains
+the name and data type. Client metadata keeps its existing annotations.
+Private cursor removal, row checks and allocation checks remain.
+
+The data library passes 294 tests with zero failures and three existing ignored
+tests. The eight standalone `query-follow` cases pass. `profile-restart` passes
+and qualifies deterministic profiles only. The built native CLI case passes
+retry, expiry, cancellation and default table-follow checks. Actual table output
+is in `native-client/table.stdout`. No benchmark or physical capture runs are
+part of this change.
+
+Logs and receipts are in `/tmp/araphor-fields.9ncVKeNY/`. The build and Cargo
+checks use the six environment settings above. The standalone commands use
+`TMPDIR=/dev/shm` and fresh temporary stores:
+
+```sh
+cargo test --offline -p araphor-data --all-features --lib
+cargo test --offline -p araphor-observability -p mithril-node -p mithril-control --all-features --lib
+cargo build --offline -p araphor-cli -p mithril-e2e --all-features --bin araphor --bin mithril_discovery_test --bin mithril-observability-test
+target/debug/mithril_discovery_test --case query-follow --output-directory /tmp/araphor-fields.9ncVKeNY/query-follow
+target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-fields.9ncVKeNY/profile-restart
+target/debug/mithril-observability-test --case query-trace-client --output-directory /tmp/araphor-fields.9ncVKeNY/native-client --client-executable /home/navid/go/src/github.com/Ereborlabs/erebor-runtime/target/debug/araphor
+bash .github/scripts/verify-rust-ci.sh
+```
+
+Read `data-tests.log`, `owners-tests.log`, `clients-build.log` and the three
+`result.json` receipts. AnalysisStore schema 17 and discovery schema 3 require
+a fresh store. Startup rejects unsupported formats without changes to stored
+bytes. No migration is part of this change.
+
+The final Rust procedure is **Done, PASS** at `5f885e2d` after the last Rust
+edit. Formatting, workspace compilation, strict Clippy and all-target/all-feature
+tests return zero. The 76 top-level suites pass 1,637 tests with zero failures
+and 544 existing ignored tests. Counts exclude nested recovery helpers.
+The end-to-end library passes 167 tests. Ignored cases remain unqualified.
+Read `rust-ci.log`. Independent source review finds no required correction.
+The existing review guide contains the updated owner flow and test links.

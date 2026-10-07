@@ -53,15 +53,19 @@ QueryPlan owns one trusted selection or one immutable client grant. The client
 grant contains the tenant input selection. Plan copies and query sessions
 share that grant; they do not copy the selection into another plan field.
 Dependency selection uses a separate mutable copy to narrow the input.
+
 Permission changes still wake pending reads and each disclosure checks current
 authority. An immutable grant does not make current permission immutable.
 The [structural ownership result](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-3-query-and-follow.md#structural-ownership-result)
 records current workspace and native client proof at `244ac567`.
 
-The query transport retains one authorized checkpoint frame. Derive its wire
-header and bookmark when a local duration ends. New rows without a checkpoint
-do not change that saved frame. Check retained-read validity and current
-permission before the final response. Decode a trace bookmark once and pass
+QueryTransport retains one checkpoint guard. The guard stores the authorized
+frame or owns the pending final-check future. That future returns the same
+frame. Derive its wire header and bookmark when a local duration ends.
+New rows without a checkpoint do not change that saved frame.
+Check retained-read validity and current
+permission before the final response. Keep row delivery, Error-before-status
+order and trace lifecycle separate. Decode a trace bookmark once and pass
 its validated QueryCheckpoint to QueryOwner.
 TraceTransport builds each output envelope through its existing frame method.
 Use one conversion for error positions and retention floors.
@@ -815,6 +819,20 @@ Formatting, workspace compilation, strict Clippy and all-target/all-feature test
 return zero: 1,630 tests pass, zero fail and 544 existing tests are ignored.
 Counts exclude nested recovery helpers. Ignored cases remain unqualified.
 Read `/tmp/araphor-five-cuts.Gor7fD/rust-ci.log`.
+
+### Checkpoint guard result
+
+Source: `5f885e2d`. Status: **Done** for implementation and scoped correctness.
+QueryTransport uses one QueryGuard slot. Stored owns the last disclosed complete
+checkpoint. Checking owns a future that returns the same frame after its
+retained-read check. Current access checks, pending rows and trace state remain.
+
+The Control library passes 167 tests, with one existing ignored test. Zero tests
+fail. `observability_grpc_duration_wait` checks revocation and drop while the
+final read check waits. Existing duration, incomplete-row and trace tests pass.
+The built CLI still prints default follow tables through a pipe. Read the
+[field ownership result](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-3-query-and-follow.md#field-ownership-result)
+for the native client receipt, commands and limits.
 
 ## Stop point
 

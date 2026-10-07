@@ -108,6 +108,10 @@ Derivation fails or is disabled
    policy provenance, rule guide and reviewed history available at the cutoff.
    Preserve conflicts, omissions, sensitivity and source trust. Imported
    documents are bounded operator data, not executable instructions.
+   An imported document stores an optional approver, not a separate trust
+   field. Derive Reviewed when an approver is present. Retain import and
+   review permission, authenticated-principal and cutoff checks. Owner facts
+   retain their separate trust field.
 8. Retain exact context/witness dependencies with sealed outputs under the
    shared quota. Charge the full distinct witness segments under 7.2 rules.
    No private witness archive or discovery-specific compactor is permitted.
@@ -292,3 +296,18 @@ and `store-format.log` in `/tmp/araphor-structure.ZIXAR3/`.
 The current-source workspace procedure and standalone profile, follow and CLI
 checks pass. Read the [shared verification result](phase-7-3-query-and-follow.md#structural-ownership-result)
 for commands, counts and limits. Performance remains **UNQUALIFIED**.
+
+### Context review-state result
+
+Source: `5f885e2d`; implementation: `4fd7b8fe`. Status: **Done** for
+implementation and scoped correctness. DiscoveryContextDocumentV1 stores one
+optional approver. Its `trust()` method derives Reviewed or Unreviewed.
+Reviewed import still requires review permission and the current principal
+as approver. Packet access, time limits and SQL trust columns remain.
+Owner facts retain their separate trust field.
+
+`discovery_context_approval_state`, `discovery_context_import_history` and
+format-rejection tests pass in the complete data library. The standalone
+profile restart passes. AnalysisStore schema 17 and discovery schema 3 require
+a fresh store. Read the [field ownership result](phase-7-3-query-and-follow.md#field-ownership-result)
+for commands, receipts and qualification limits.

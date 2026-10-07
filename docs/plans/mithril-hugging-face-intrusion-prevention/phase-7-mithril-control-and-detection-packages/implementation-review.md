@@ -218,16 +218,28 @@ for the final source revision, commands, and verification limits.
 
 ### Structural ownership review
 
-Source: `244ac567`, after `782c80ce` and `be08d303`.
+Source: `5f885e2d`, after `4fd7b8fe`, `dd9a0e9d` and `9d4ff114`.
 The intended result is one query scope, one follow lifecycle and one copy of
-each exact atom fact. Authorization, retained-read checks and native cleanup
-remain required. No Control authority or capture owner is removed.
+each exact atom fact. Each selection, column, coverage identity, document
+review state, executable digest and checkpoint check has one owner.
+Authorization, retained-read checks and native cleanup remain required.
+No Control authority or capture owner is removed.
 
 [QueryPlan::client](../../../../crates/araphor-data/src/query/plan.rs) A caller supplies admitted SQL and the authenticated tenant input selection.<br>
 -> [QueryScope](../../../../crates/araphor-data/src/query/plan.rs) The client plan owns one immutable QueryGrant through Arc.<br>
 -> [QuerySession](../../../../crates/araphor-data/src/query/authorization.rs) Plan copies and sessions share that grant.<br>
 -> [QueryPlan::dependencies](../../../../crates/araphor-data/src/query/plan.rs) Dependency selection narrows a separate mutable copy.<br>
 -> [QuerySession::check](../../../../crates/araphor-data/src/query/authorization.rs) Each check uses the complete grant and current authority.
+
+[QueryPlan::dependencies](../../../../crates/araphor-data/src/query/plan.rs) The plan selects required input.<br>
+-> [Selection](../../../../crates/araphor-data/src/analysis/extraction.rs) Each source, context and trace selector contains All or Exact keys.<br>
+-> [AnalysisStore::resolve_selection](../../../../crates/araphor-data/src/analysis/extraction.rs) The store resolves All from one tenant snapshot within the existing key and byte limits.<br>
+-> [RawJournal::select_position](../../../../crates/araphor-data/src/analysis/raw.rs) The segment reader uses resolved exact keys. An empty Exact list selects no records.
+
+[QueryEvaluation::run](../../../../crates/araphor-data/src/query/evaluation.rs) Native SQL produces columns and rows.<br>
+-> [Column](../../../../crates/araphor-data/src/query/mod.rs) One descriptor stores each name and data type together.<br>
+-> [QueryResult::take_positions](../../../../crates/araphor-data/src/query/mod.rs) Append output checks and removes both private cursor columns.<br>
+-> [QueryFrame::metadata](../../../../crates/araphor-data/src/query/frame.rs) Client metadata adds existing annotations to the checked descriptors. Row, value and position checks remain.
 
 [QueryOwner::follow_inner](../../../../crates/araphor-data/src/query/follow.rs) Follow is requested.<br>
 -> [QueryRun](../../../../crates/araphor-data/src/query/follow.rs) The owner returns Ready without starting SQL.<br>
@@ -242,14 +254,36 @@ remain required. No Control authority or capture owner is removed.
 -> [behavior_row](../../../../crates/araphor-data/src/query/discovery.rs) SQL projects the unchanged columns from the canonical key.<br>
 -> [DiscoveryPreviewOwner::simulate_recorded](../../../../crates/mithril-control/src/discovery/preview.rs) Native preview reads the same static policy key.
 
+[DiscoveryOwner::import_context](../../../../crates/araphor-data/src/discovery/context.rs) A caller imports a context revision.<br>
+-> [DiscoveryContextDocumentV1::trust](../../../../crates/araphor-data/src/discovery/context.rs) The document derives review state from its optional approver.<br>
+-> [DiscoveryOwner::import_context](../../../../crates/araphor-data/src/discovery/context.rs) A reviewed import requires review permission and the current principal as approver.<br>
+-> [DiscoveryOwner::select_context](../../../../crates/araphor-data/src/discovery/context.rs) Packet selection applies access and time limits. SQL projects the same derived trust value.
+
+[CoverageHealthOwner](../../../../crates/mithril-node/src/observation/coverage.rs) Node receives a coverage sample.<br>
+-> [SourceCoverageV1](../../../../crates/mithril-node/src/observation/coverage.rs) The current interval owns source and CPU identity. Progress and health remain separate.<br>
+-> [CoverageHealthOwner::open](../../../../crates/mithril-node/src/observation/coverage.rs) Restart validates the current format and restores interval identity and progress.
+
+[NodeTraceConfigV1::validate](../../../../crates/araphor-observability/src/capture.rs) Node validates capture configuration.<br>
+-> [TraceQualificationV1](../../../../crates/araphor-observability/src/capture.rs) The qualification record owns the pinned executable digest.<br>
+-> [NodeTraceOwner::open](../../../../crates/araphor-observability/src/capture.rs) The backend receives that digest.<br>
+-> [NodeTraceOwner::admit](../../../../crates/araphor-observability/src/capture.rs) Node starts an approved capture.<br>
+-> [DiagnosticBackend::start](../../../../crates/erebor-interceptor/src/diagnostic.rs) The backend checks the opened executable against the pinned digest.
+
+[QueryTransport::poll_next](../../../../crates/mithril-control/src/client_grpc/query.rs) Control discloses a complete checkpoint.<br>
+-> [QueryGuard](../../../../crates/mithril-control/src/client_grpc/query.rs) One slot stores that frame or a pending check that owns the frame.<br>
+-> [QueryFrame::check_read](../../../../crates/araphor-data/src/query/frame.rs) The pending future checks retained evidence while it owns the frame.<br>
+-> [QueryTransport::poll_next](../../../../crates/mithril-control/src/client_grpc/query.rs) Control checks current access before final status. Failed access rejects disclosure. Drop cancels a pending retained-read check. Neither advances the bookmark.
+
 [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) A stored format is unsupported.<br>
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) Startup rejects it without migration or changes to stored data.<br>
 -> [DiscoveryProfileV1::try_from](../../../../crates/araphor-data/src/discovery/live.rs) A current store accepts only checked discovery bodies in the current format.
 
-AnalysisStore uses schema 16. Discovery bodies use schema 2. Development
-requires a fresh store. SQL columns, public query messages and current-format
-restart remain unchanged. Static policy wildcard arguments remain separate
-from observed operation arguments.
+AnalysisStore uses schema 17. Discovery bodies use schema 3. Node coverage
+snapshots use schema 2. Development requires fresh data and coverage state.
+Unsupported formats fail without changes to stored bytes. Capture configuration
+rejects the removed top-level digest field. SQL columns and public query messages
+remain unchanged. Static policy wildcard arguments remain separate from
+observed operation arguments.
 
 Read `query_scope_shared_grant` in
 [client tests](../../../../crates/araphor-data/src/query/client_tests.rs),
@@ -263,13 +297,25 @@ and `discovery_query_atom_projection` and `discovery_query_format_rejection` in
 [store tests](../../../../crates/araphor-data/src/analysis/mod.rs).
 `discovery_live_restart` checks the current profile format in
 [live tests](../../../../crates/araphor-data/src/discovery/live.rs).
+`analysis_selection_states` checks exact-empty selection and retained capacity.
+`query_frame_borrowed_rows` checks paired columns, row width and supported values.
+`discovery_context_approval_state` and `discovery_context_import_history` check
+derived trust, reviewer permission and current-principal binding.
+`reopen_rejects_unsupported_versions` and the exact-probe case check coverage
+format rejection, interval rotation and restart in
+[coverage tests](../../../../crates/mithril-node/src/observation/coverage.rs).
+`observability_qualification_digest` checks the single pinned value in
+[capture tests](../../../../crates/araphor-observability/src/capture.rs).
+`observability_grpc_duration_wait` checks revocation and drop during a pending
+retained-read check in
+[transport tests](../../../../crates/mithril-control/src/client_grpc/tests.rs).
 This change adds no BPF or wire layout. Performance remains unqualified.
 
-Verification: **Done, PASS** at `244ac567`. The final workspace procedure
-returns zero. The 76 top-level suites pass 1,632 tests with zero failures and
+Verification: **Done, PASS** at `5f885e2d`. The final workspace procedure
+returns zero. The 76 top-level suites pass 1,637 tests with zero failures and
 544 existing ignored tests. The eight standalone follow cases, profile restart
-and ten native client receipt checks pass. Read the
-[structural ownership result](phase-7-3-query-and-follow.md#structural-ownership-result)
+and native client receipt checks pass. Read the
+[field ownership result](phase-7-3-query-and-follow.md#field-ownership-result)
 for exact commands, logs and proof limits.
 
 ### Public query boundary review

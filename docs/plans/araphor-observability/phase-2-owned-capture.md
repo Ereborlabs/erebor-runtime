@@ -29,6 +29,10 @@ database, protocol or execution owner. Keep shared workload facts and digest
 encoding in one lower-level definition. Keep the current executable and
 protobuf names; a repository-wide rename is outside this change.
 
+NodeTraceConfig uses the qualification record's executable digest as the
+single pinned value. Interceptor checks the opened executable against that
+value. Keep qualification, kernel, CPU and storage-reserve checks.
+
 ## Implementation flow
 
 ```text
@@ -2547,6 +2551,22 @@ and a partial backup bundle. Keep diagnostic quotas separate from enforcement.
 Record accepted spec, target lifetime, source/commit positions, quota and
 cleanup state in result.json. Use `harness/observability/{owned,pods,disk-full}.sh`
 for the paired physical cases; extend them instead of creating another runner.
+
+### Capture and coverage field result
+
+Source: `5f885e2d`. Coverage is commit `dd9a0e9d`; capture configuration is
+commit `9d4ff114`. Status: **Done** for implementation and scoped correctness.
+Each coverage source reads its identity from the current interval. Progress
+and health remain separate. Coverage snapshots use schema 2. Restart rejects
+unsupported formats without changes to stored bytes. No migration is present.
+The qualification record owns the pinned executable digest. The backend checks
+the opened executable before capture. Kernel, CPU and resource checks remain.
+
+The Node library passes 267 tests. The capture library passes 24 tests, with
+two existing ignored tests. Zero tests fail. Rotation, restart, obsolete format,
+canonical configuration and invalid digest cases pass. Read the
+[field ownership result](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-3-query-and-follow.md#field-ownership-result)
+for commands and logs. Performance and physical qualification do not change.
 
 ## Stop point
 
