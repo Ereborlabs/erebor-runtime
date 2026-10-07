@@ -11,177 +11,192 @@ use zerocopy::IntoBytes as _;
 use crate::error::IdentityStateSnafu;
 use crate::{ExactDeviceType, ExactFileObjectConfig, Result};
 
-use super::insert_exact;
+use super::{GenerationPlan, NativeTable};
 
 pub(super) struct TypedEffectContext<'a> {
     pub profile_generation_ref_id: u64,
     pub actor_role_id: u32,
     pub actor_process_state_vector_id: u32,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
-    pub exact_objects: &'a [&'a ExactFileObjectConfig],
     pub signed_device_classes: &'a BTreeSet<String>,
     pub role_states: &'a BTreeMap<String, (u32, u32)>,
 }
 
-pub(super) fn lower_typed_effect(
-    cell: &CompiledDecisionCellV1,
-    context: &TypedEffectContext<'_>,
-    decision: PhysicalDecisionV1,
-    device_rows: &mut BTreeMap<Vec<u8>, Vec<u8>>,
-    process_rows: &mut BTreeMap<Vec<u8>, Vec<u8>>,
-) -> Result<bool> {
-    if let Some(selector) = cell.key.object_selector.strip_prefix("DEVICE:") {
-        lower_device(cell, selector, context, decision, device_rows)?;
-        return Ok(true);
+impl GenerationPlan {
+    pub(super) fn lower_typed_effect<'a>(
+        &mut self,
+        cell: &CompiledDecisionCellV1,
+        context: &TypedEffectContext<'_>,
+        objects: impl IntoIterator<Item = &'a ExactFileObjectConfig>,
+        decision: PhysicalDecisionV1,
+    ) -> Result<Option<bool>> {
+        if let Some(selector) = cell.key.object_selector.strip_prefix("DEVICE:") {
+            return self
+                .lower_device(cell, selector, context, objects, decision)
+                .map(Some);
+        }
+        if let Some(target_role) = cell.key.object_selector.strip_prefix("SECURITY:PROCESS:") {
+            self.lower_process(cell, target_role, context, decision)?;
+            return Ok(Some(true));
+        }
+        Ok(None)
     }
-    if let Some(target_role) = cell.key.object_selector.strip_prefix("SECURITY:PROCESS:") {
-        lower_process(cell, target_role, context, decision, process_rows)?;
-        return Ok(true);
-    }
-    Ok(false)
-}
 
-fn lower_device(
-    cell: &CompiledDecisionCellV1,
-    selector: &str,
-    context: &TypedEffectContext<'_>,
-    decision: PhysicalDecisionV1,
-    rows: &mut BTreeMap<Vec<u8>, Vec<u8>>,
-) -> Result<()> {
-    ensure!(
-        KernelEffectFamilyV1::from(cell.key.effect_family) == KernelEffectFamilyV1::Device
-            && CompiledOperationV1::try_from(cell.key.operation_id.as_str())
-                .is_ok_and(|operation| operation.kernel_id == KernelEffectOperationV1::Ioctl),
-        IdentityStateSnafu {
-            reason: "a DEVICE selector is valid only for the DEVICE/IOCTL effect",
+    fn lower_device<'a>(
+        &mut self,
+        cell: &CompiledDecisionCellV1,
+        selector: &str,
+        context: &TypedEffectContext<'_>,
+        objects: impl IntoIterator<Item = &'a ExactFileObjectConfig>,
+        decision: PhysicalDecisionV1,
+    ) -> Result<bool> {
+        ensure!(
+            KernelEffectFamilyV1::from(cell.key.effect_family) == KernelEffectFamilyV1::Device
+                && CompiledOperationV1::try_from(cell.key.operation_id.as_str())
+                    .is_ok_and(|operation| operation.kernel_id == KernelEffectOperationV1::Ioctl),
+            IdentityStateSnafu {
+                reason: "a DEVICE selector is valid only for the DEVICE/IOCTL effect",
+            }
+        );
+        let (device_class, command) = selector.rsplit_once(':').ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: format!("invalid compiled device selector `DEVICE:{selector}`"),
+            }
+            .build()
+        })?;
+        ensure!(
+            !device_class.is_empty(),
+            IdentityStateSnafu {
+                reason: "a compiled device selector has an empty device class",
+            }
+        );
+        ensure!(
+            context.signed_device_classes.contains(device_class),
+            IdentityStateSnafu {
+                reason: format!("device class `{device_class}` has no signed path selector"),
+            }
+        );
+        let (ioctl_command, command_wildcard) = if command == "*" {
+            (0, 1)
+        } else {
+            (
+                command.parse::<u32>().map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("invalid ioctl command `{command}`: {error}"),
+                    }
+                    .build()
+                })?,
+                0,
+            )
+        };
+        let mut emitted = false;
+        for object in objects {
+            let Some(device) = object
+                .device
+                .as_ref()
+                .filter(|device| device.device_class_id == device_class)
+            else {
+                continue;
+            };
+            let key = DeviceEffectKeyV1 {
+                profile_generation_ref_id: context.profile_generation_ref_id,
+                mount_id_unique: object.mount_id_unique,
+                inode: object.inode,
+                exact_object_key_id: object.exact_object_key_id,
+                active_role_id: context.actor_role_id,
+                process_state_vector_id: context.actor_process_state_vector_id,
+                mount_namespace_inode: object.mount_namespace_inode,
+                filesystem_device: object.filesystem_device,
+                inode_generation: object.inode_generation,
+                device_major: device.major,
+                device_minor: device.minor,
+                ioctl_command,
+                operation: KernelEffectOperationV1::Ioctl as u16,
+                binding_lifecycle_state: context.binding_lifecycle_state,
+                device_type: match device.device_type {
+                    ExactDeviceType::Character => ExactDeviceTypeV1::Character,
+                    ExactDeviceType::Block => ExactDeviceTypeV1::Block,
+                },
+                command_wildcard,
+                reserved: [0; 7],
+            };
+            self.insert(
+                NativeTable::DeviceEffect,
+                key.as_bytes(),
+                decision.as_bytes(),
+            )?;
+            emitted = true;
         }
-    );
-    let (device_class, command) = selector.rsplit_once(':').ok_or_else(|| {
-        IdentityStateSnafu {
-            reason: format!("invalid compiled device selector `DEVICE:{selector}`"),
-        }
-        .build()
-    })?;
-    ensure!(
-        !device_class.is_empty(),
-        IdentityStateSnafu {
-            reason: "a compiled device selector has an empty device class",
-        }
-    );
-    ensure!(
-        context.signed_device_classes.contains(device_class),
-        IdentityStateSnafu {
-            reason: format!("device class `{device_class}` has no signed path selector"),
-        }
-    );
-    let (ioctl_command, command_wildcard) = if command == "*" {
-        (0, 1)
-    } else {
-        (
-            command.parse::<u32>().map_err(|error| {
+        Ok(emitted)
+    }
+
+    fn lower_process(
+        &mut self,
+        cell: &CompiledDecisionCellV1,
+        target_role: &str,
+        context: &TypedEffectContext<'_>,
+        decision: PhysicalDecisionV1,
+    ) -> Result<()> {
+        let operation = CompiledOperationV1::try_from(cell.key.operation_id.as_str())
+            .ok()
+            .and_then(CompiledOperationV1::process_control)
+            .ok_or_else(|| {
                 IdentityStateSnafu {
-                    reason: format!("invalid ioctl command `{command}`: {error}"),
+                    reason: format!(
+                        "process-control selector has unknown operation `{}`",
+                        cell.key.operation_id
+                    ),
                 }
                 .build()
-            })?,
-            0,
-        )
-    };
-    for object in context.exact_objects {
-        let Some(device) = object
-            .device
-            .as_ref()
-            .filter(|device| device.device_class_id == device_class)
-        else {
-            continue;
-        };
-        let key = DeviceEffectKeyV1 {
-            profile_generation_ref_id: context.profile_generation_ref_id,
-            mount_id_unique: object.mount_id_unique,
-            inode: object.inode,
-            exact_object_key_id: object.exact_object_key_id,
-            active_role_id: context.actor_role_id,
-            process_state_vector_id: context.actor_process_state_vector_id,
-            mount_namespace_inode: object.mount_namespace_inode,
-            filesystem_device: object.filesystem_device,
-            inode_generation: object.inode_generation,
-            device_major: device.major,
-            device_minor: device.minor,
-            ioctl_command,
-            operation: KernelEffectOperationV1::Ioctl as u16,
-            binding_lifecycle_state: context.binding_lifecycle_state,
-            device_type: match device.device_type {
-                ExactDeviceType::Character => ExactDeviceTypeV1::Character,
-                ExactDeviceType::Block => ExactDeviceTypeV1::Block,
-            },
-            command_wildcard,
-            reserved: [0; 7],
-        };
-        insert_exact(rows, key.as_bytes(), decision.as_bytes())?;
-    }
-    Ok(())
-}
-
-fn lower_process(
-    cell: &CompiledDecisionCellV1,
-    target_role: &str,
-    context: &TypedEffectContext<'_>,
-    decision: PhysicalDecisionV1,
-    rows: &mut BTreeMap<Vec<u8>, Vec<u8>>,
-) -> Result<()> {
-    let operation = CompiledOperationV1::try_from(cell.key.operation_id.as_str())
-        .ok()
-        .and_then(CompiledOperationV1::process_control)
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!(
-                    "process-control selector has unknown operation `{}`",
-                    cell.key.operation_id
+            })?;
+        ensure!(
+            KernelEffectFamilyV1::from(cell.key.effect_family) == KernelEffectFamilyV1::Privilege
+                && matches!(
+                    operation.kernel_id,
+                    KernelEffectOperationV1::Ptrace | KernelEffectOperationV1::Signal
                 ),
-            }
-            .build()
-        })?;
-    ensure!(
-        KernelEffectFamilyV1::from(cell.key.effect_family) == KernelEffectFamilyV1::Privilege
-            && matches!(
-                operation.kernel_id,
-                KernelEffectOperationV1::Ptrace | KernelEffectOperationV1::Signal
-            ),
-        IdentityStateSnafu {
-            reason: "a SECURITY:PROCESS selector is valid only for PTRACE or SIGNAL",
-        }
-    );
-    ensure!(
-        !operation.argument_wildcard || decision.decision == PhysicalDecisionKindV1::Deny,
-        IdentityStateSnafu {
-            reason: "a process-control argument wildcard is denial-only",
-        }
-    );
-    ensure!(
-        target_role != "*",
-        IdentityStateSnafu {
-            reason: "process control requires one exact signed target role",
-        }
-    );
-    let &(target_role_id, target_process_state_vector_id) =
-        context.role_states.get(target_role).ok_or_else(|| {
             IdentityStateSnafu {
-                reason: format!("process-control selector has unknown target role `{target_role}`"),
+                reason: "a SECURITY:PROCESS selector is valid only for PTRACE or SIGNAL",
             }
-            .build()
-        })?;
-    let key = ProcessControlRuleKeyV1 {
-        profile_generation_ref_id: context.profile_generation_ref_id,
-        controller_role_id: context.actor_role_id,
-        controller_process_state_vector_id: context.actor_process_state_vector_id,
-        target_role_id,
-        target_process_state_vector_id,
-        operation_argument: operation.argument,
-        operation: operation.kernel_id as u16,
-        binding_lifecycle_state: context.binding_lifecycle_state,
-        argument_wildcard: u8::from(operation.argument_wildcard),
-    };
-    insert_exact(rows, key.as_bytes(), decision.as_bytes())
+        );
+        ensure!(
+            !operation.argument_wildcard || decision.decision == PhysicalDecisionKindV1::Deny,
+            IdentityStateSnafu {
+                reason: "a process-control argument wildcard is denial-only",
+            }
+        );
+        ensure!(
+            target_role != "*",
+            IdentityStateSnafu {
+                reason: "process control requires one exact signed target role",
+            }
+        );
+        let &(target_role_id, target_process_state_vector_id) =
+            context.role_states.get(target_role).ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: format!(
+                        "process-control selector has unknown target role `{target_role}`"
+                    ),
+                }
+                .build()
+            })?;
+        let key = ProcessControlRuleKeyV1 {
+            profile_generation_ref_id: context.profile_generation_ref_id,
+            controller_role_id: context.actor_role_id,
+            controller_process_state_vector_id: context.actor_process_state_vector_id,
+            target_role_id,
+            target_process_state_vector_id,
+            operation_argument: operation.argument,
+            operation: operation.kernel_id as u16,
+            binding_lifecycle_state: context.binding_lifecycle_state,
+            argument_wildcard: u8::from(operation.argument_wildcard),
+        };
+        self.insert(
+            NativeTable::ProcessControl,
+            key.as_bytes(),
+            decision.as_bytes(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -201,7 +216,7 @@ mod tests {
 
     use crate::{ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig};
 
-    use super::{lower_typed_effect, TypedEffectContext};
+    use super::{GenerationPlan, NativeTable, TypedEffectContext};
 
     static SIGNED_DEVICE_CLASSES: LazyLock<BTreeSet<String>> =
         LazyLock::new(|| BTreeSet::from(["gpu".to_owned()]));
@@ -211,33 +226,34 @@ mod tests {
         let object = device_object();
         let exact_objects = [&object];
         let roles = role_states();
-        let context = context(&exact_objects, &roles, 1, 11);
+        let context = context(&roles, 1, 11);
         let allow = decision(PhysicalDecisionKindV1::Allow, 0);
-        let mut devices = BTreeMap::new();
-        let mut processes = BTreeMap::new();
+        let mut rows = GenerationPlan::default();
 
-        assert!(lower_typed_effect(
-            &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:gpu:21531"),
-            &context,
-            allow,
-            &mut devices,
-            &mut processes,
-        )?);
-        let exact = first_device_key(&devices)?;
+        assert!(rows
+            .lower_typed_effect(
+                &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:gpu:21531"),
+                &context,
+                exact_objects.iter().copied(),
+                allow,
+            )?
+            .is_some());
+        let exact = first_device_key(&rows)?;
         assert_eq!(exact.ioctl_command, 21_531);
         assert_eq!(exact.command_wildcard, 0);
         assert_eq!(exact.device_major, 226);
         assert_eq!(exact.device_minor, 128);
 
-        devices.clear();
-        assert!(lower_typed_effect(
-            &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:gpu:*"),
-            &context,
-            allow,
-            &mut devices,
-            &mut processes,
-        )?);
-        let wildcard = first_device_key(&devices)?;
+        rows = GenerationPlan::default();
+        assert!(rows
+            .lower_typed_effect(
+                &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:gpu:*"),
+                &context,
+                exact_objects.iter().copied(),
+                allow,
+            )?
+            .is_some());
+        let wildcard = first_device_key(&rows)?;
         assert_eq!(wildcard.ioctl_command, 0);
         assert_eq!(wildcard.command_wildcard, 1);
         Ok(())
@@ -247,42 +263,43 @@ mod tests {
     fn process_control_keeps_direction_and_exact_hook_arguments() -> crate::Result<()> {
         let roles = role_states();
         let exact_objects = [];
-        let mut devices = BTreeMap::new();
-        let mut processes = BTreeMap::new();
+        let mut rows = GenerationPlan::default();
         let allow = decision(PhysicalDecisionKindV1::Allow, 0);
         let deny = decision(PhysicalDecisionKindV1::Deny, ErrnoV1::Eacces.negative());
 
-        assert!(lower_typed_effect(
-            &cell(
-                EffectFamilyV1::Privilege,
-                "SIGNAL_15",
-                "SECURITY:PROCESS:target",
-            ),
-            &context(&exact_objects, &roles, 1, 11),
-            allow,
-            &mut devices,
-            &mut processes,
-        )?);
-        let allow_key = first_process_key(&processes)?;
+        assert!(rows
+            .lower_typed_effect(
+                &cell(
+                    EffectFamilyV1::Privilege,
+                    "SIGNAL_15",
+                    "SECURITY:PROCESS:target",
+                ),
+                &context(&roles, 1, 11),
+                exact_objects.iter().copied(),
+                allow,
+            )?
+            .is_some());
+        let allow_key = first_process_key(&rows)?;
         assert_eq!(allow_key.controller_role_id, 1);
         assert_eq!(allow_key.target_role_id, 2);
         assert_eq!(allow_key.operation_argument, 15);
         assert_eq!(allow_key.argument_wildcard, 0);
 
-        processes.clear();
-        assert!(lower_typed_effect(
-            &cell(
-                EffectFamilyV1::Privilege,
-                "SIGNAL",
-                "SECURITY:PROCESS:controller",
-            ),
-            &context(&exact_objects, &roles, 2, 22),
-            deny,
-            &mut devices,
-            &mut processes,
-        )?);
-        assert_eq!(processes.len(), 1);
-        for (bytes, value) in &processes {
+        rows = GenerationPlan::default();
+        assert!(rows
+            .lower_typed_effect(
+                &cell(
+                    EffectFamilyV1::Privilege,
+                    "SIGNAL",
+                    "SECURITY:PROCESS:controller",
+                ),
+                &context(&roles, 2, 22),
+                exact_objects.iter().copied(),
+                deny,
+            )?
+            .is_some());
+        assert_eq!(rows[NativeTable::ProcessControl].len(), 1);
+        for (bytes, value) in rows[NativeTable::ProcessControl].iter() {
             let key = ProcessControlRuleKeyV1::try_read_from_bytes(bytes).map_err(|error| {
                 test_error(format!("invalid process-control test key: {error}"))
             })?;
@@ -300,33 +317,31 @@ mod tests {
         let object = device_object();
         let exact_objects = [&object];
         let roles = role_states();
-        let context = context(&exact_objects, &roles, 1, 11);
+        let context = context(&roles, 1, 11);
         let decision = decision(PhysicalDecisionKindV1::Allow, 0);
-        let mut devices = BTreeMap::new();
-        let mut processes = BTreeMap::new();
+        let mut rows = GenerationPlan::default();
 
-        assert!(lower_typed_effect(
-            &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:unknown:1"),
-            &context,
-            decision,
-            &mut devices,
-            &mut processes,
-        )
-        .is_err());
-        assert!(lower_typed_effect(
-            &cell(EffectFamilyV1::Privilege, "PTRACE", "SECURITY:PROCESS:*",),
-            &context,
-            decision,
-            &mut devices,
-            &mut processes,
-        )
-        .is_err());
-        assert!(devices.is_empty());
-        assert!(processes.is_empty());
+        assert!(rows
+            .lower_typed_effect(
+                &cell(EffectFamilyV1::Device, "IOCTL", "DEVICE:unknown:1"),
+                &context,
+                exact_objects.iter().copied(),
+                decision,
+            )
+            .is_err());
+        assert!(rows
+            .lower_typed_effect(
+                &cell(EffectFamilyV1::Privilege, "PTRACE", "SECURITY:PROCESS:*",),
+                &context,
+                exact_objects.iter().copied(),
+                decision,
+            )
+            .is_err());
+        assert_eq!(rows[NativeTable::DeviceEffect].len(), 0);
+        assert_eq!(rows[NativeTable::ProcessControl].len(), 0);
     }
 
     fn context<'a>(
-        exact_objects: &'a [&'a ExactFileObjectConfig],
         role_states: &'a BTreeMap<String, (u32, u32)>,
         actor_role_id: u32,
         actor_process_state_vector_id: u32,
@@ -336,7 +351,6 @@ mod tests {
             actor_role_id,
             actor_process_state_vector_id,
             binding_lifecycle_state: BindingLifecycleStateV1::Active,
-            exact_objects,
             signed_device_classes: &SIGNED_DEVICE_CLASSES,
             role_states,
         }
@@ -349,8 +363,8 @@ mod tests {
         ])
     }
 
-    fn first_device_key(rows: &BTreeMap<Vec<u8>, Vec<u8>>) -> crate::Result<DeviceEffectKeyV1> {
-        let bytes = rows
+    fn first_device_key(rows: &GenerationPlan) -> crate::Result<DeviceEffectKeyV1> {
+        let bytes = rows[NativeTable::DeviceEffect]
             .keys()
             .next()
             .ok_or_else(|| test_error("expected one device decision row"))?;
@@ -358,10 +372,8 @@ mod tests {
             .map_err(|error| test_error(format!("invalid device test key: {error}")))
     }
 
-    fn first_process_key(
-        rows: &BTreeMap<Vec<u8>, Vec<u8>>,
-    ) -> crate::Result<ProcessControlRuleKeyV1> {
-        let bytes = rows
+    fn first_process_key(rows: &GenerationPlan) -> crate::Result<ProcessControlRuleKeyV1> {
+        let bytes = rows[NativeTable::ProcessControl]
             .keys()
             .next()
             .ok_or_else(|| test_error("expected one process-control decision row"))?;

@@ -187,6 +187,10 @@ impl ProfileCandidateArtifactV1 {
 
     pub fn verify_at(&self, key: &VerifyingKey, now_utc_ns: i64) -> Result<()> {
         self.verify(key)?;
+        self.validate_time(now_utc_ns)
+    }
+
+    pub fn validate_time(&self, now_utc_ns: i64) -> Result<()> {
         let valid_from = timestamp_ns(&self.header.valid_from_utc).ok_or_else(|| {
             PolicySignatureSnafu {
                 key_id: &self.signed_profile.signing_key_id,

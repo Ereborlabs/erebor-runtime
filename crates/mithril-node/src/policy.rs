@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::mem::size_of;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
@@ -10,37 +10,22 @@ use std::sync::{
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
-    AuthorityDomainStateV1, BindingActivationTargetKeyV1, BindingLifecycleStateV1,
-    CanonicalMountRootKeyV1, CanonicalMountRootV1, CanonicalPathComponentV1, EffectDecisionKeyV1,
-    EffectDefaultKeyV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactExecutableCandidateV1,
-    ExactFileObjectKeyV1, ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
+    BindingLifecycleStateV1, ExactExecutableCandidateV1, ExceptionBindingStateV1,
     ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1,
-    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionApprovalSlotStateV1,
-    ExecutionApprovalSlotV1, ExecutionSetBindingStateV1, Id128V1, IoUringRequestStateV1,
-    IoUringRingStateV1, KernelEffectFamilyV1, KernelEffectOperationV1, MountSecurityViewStateV1,
-    MountTopologyStateV1, NetworkDestinationDecisionKeyV1, NetworkResponseFloorKeyV1,
-    NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1, PathGraphTerminalV1,
-    PathGraphTransitionKeyV1, PathGraphTransitionV1, PathTreeDenyKeyV1, PendingExecStateV1,
-    PendingExecV1, PendingExecutionApprovalV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-    PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
-    PolicyGenerationStateV1, ProcessGenerationMigrationKeyV1, ProcessGenerationMigrationV1,
-    ProcessSecurityStateKindV1, ProcessSecurityStateV1, ProfileGenerationDescriptorV1,
-    ReferenceTombstoneStateV1, TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
-    MAX_CANONICAL_ROUTE_STATES_V1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, Id128V1, KernelEffectFamilyV1,
+    NetworkResponseFloorKeyV1, NetworkResponseFloorV1, NetworkResponseScopeV1,
+    PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyGenerationStateV1,
+    ProfileGenerationDescriptorV1,
 };
 use mithril_control::{
-    canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
-    CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
-    ExceptionActivationStateV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1,
-    LocalObjectSelectorV1, PathPatternComponentV1, PathPatternV1, PathSelectorTargetV1,
-    PathSelectorV1, PathTreeDenyPatternV1, PendingProfileActivationV1, PolicyArtifactOwner,
-    PolicyDispositionV1, PolicyDocumentV1, ProfileActivationMetadataV1, ProfileCandidateArtifactV1,
-    ProfileModeV1, RuleMatchV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
+    canonical_path_components, CompiledOperationV1, CompiledPhysicalResultV1,
+    ContainerKindV1 as PolicyContainerKindV1, ExceptionActivationStateV1,
+    ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ProfileCandidateArtifactV1,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
 use uuid::Uuid;
-use zerocopy::{FromBytes as _, IntoBytes as _, KnownLayout, TryFromBytes};
+use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, PolicySnafu};
 use crate::identity::{
@@ -55,18 +40,45 @@ use crate::{
 mod device_process;
 mod discovery;
 mod exception_authority;
+mod generation;
 mod generation_allocator;
 mod installation;
 mod ipc;
 mod network;
+mod owner;
+mod path;
+mod publication;
 
-use self::device_process::{lower_typed_effect, TypedEffectContext};
+use self::device_process::TypedEffectContext;
 pub use self::discovery::NodeDiscoveryContextCatalog;
 use self::exception_authority::ExceptionAuthorityOwner;
+#[cfg(any(test, feature = "test-support"))]
+use self::generation::entry_admission_path_selector_ids;
+#[cfg(test)]
+use self::generation::exception_counter_is_consistent;
+use self::generation::{
+    cell_matches_binding, ensure_map_capacity, preflight_policy_map_capacity, GenerationBinding,
+    GenerationPlan, LoweredGeneration, NativeTable,
+};
 use self::generation_allocator::GenerationHandleAllocator;
-use self::installation::{PolicyMeasurements, PreparedPolicy};
-use self::ipc::lower_ipc_relationships;
+#[cfg(test)]
+use self::installation::same_exact_file;
+use self::installation::{Candidates, MountRootReconciliation, PolicyInput, PolicyMeasurements};
 use self::network::LoweredNetworkPolicy;
+pub(crate) use self::publication::generation_publication_is_absent;
+use self::publication::{
+    build_process_generation_migrations, install_missing_rows, install_rows, mount_epoch_from,
+    prepare_declared_entry_requests, read_abi_value, read_active_generation,
+    reconcile_generation_retirement, reconcile_pending_activations,
+    retire_undeclared_entry_requests, retire_unreachable_mount_cache_rows, verify_rows,
+    ProfileActivation,
+};
+#[cfg(test)]
+use self::publication::{
+    ensure_active_generation_unchanged, ensure_committed_generation,
+    generation_retirement_needs_tombstone, mount_cache_row_is_unreachable,
+    pending_exec_retains_generation_authority,
+};
 
 const LINUX_CAPABILITY_SELECTOR_PREFIX: &str = "SECURITY:LINUX_CAPABILITY:";
 const CANONICAL_MOUNT_CACHE_KEY_SIZE_V1: usize = 56;
@@ -77,13 +89,9 @@ const CANONICAL_MOUNT_CACHE_GENERATION_OFFSET_V1: usize = 24;
 pub struct NodePolicyGenerationOwner {
     node_boot_id: Id128V1,
     label_epoch: u64,
-    mount_view_handles: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
     prevention_enabled: bool,
-    administrative_required: bool,
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
-    measured_exact_objects: Vec<MeasuredExactObjectV1>,
-    measured_mount_routes: Vec<MeasuredMountRouteV1>,
-    resolved_path_binding_ids: BTreeSet<String>,
+    measured: PolicyMeasurements,
     generation_semantics: BTreeMap<u64, GenerationSemantics>,
     discovery_context: Arc<NodeDiscoveryContextCatalog>,
     dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
@@ -103,6 +111,7 @@ pub(crate) struct ExceptionRuntimeObservationV1 {
     pub consumed_uses: u32,
 }
 
+#[cfg(feature = "test-support")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MeasuredExactObjectV1 {
     binding_id: String,
@@ -138,25 +147,6 @@ pub(crate) struct ResolvedAdministrativePolicyV1 {
     pub kernel_executable: ExactExecutableCandidateV1,
 }
 
-#[derive(Clone, Copy)]
-struct BindingActivationTarget {
-    generation: u64,
-    initial_role_id: u32,
-    external_role_id: u32,
-    requires_live_cgroup: bool,
-}
-
-struct ProfileActivation {
-    generation: u64,
-    bindings: BTreeMap<Id128V1, BindingActivationTarget>,
-}
-
-struct StagedActivationTarget {
-    key: Vec<u8>,
-    previous: Option<Vec<u8>>,
-    desired: ExecutionSetBindingStateV1,
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct GenerationSemantics {
     profile_id: Id128V1,
@@ -166,4648 +156,6 @@ struct GenerationSemantics {
 }
 
 type GenerationRows = BTreeMap<Vec<u8>, Vec<u8>>;
-type PlannedGenerationRow<'a> = (&'static str, &'a GenerationRows);
-type ActivationDecisionRow<'a> = (PolicyActivationProbeMapKindV1, &'a GenerationRows);
-
-impl NodePolicyGenerationOwner {
-    pub fn discovery_context(&self) -> Arc<NodeDiscoveryContextCatalog> {
-        Arc::clone(&self.discovery_context)
-    }
-
-    pub(crate) fn next_generation_ref_id(
-        config: &NodeConfig,
-        host: &KernelHost,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-    ) -> Result<u64> {
-        // The allocator reconciles durable handles with live maps before it returns a new handle.
-        GenerationHandleAllocator::load(
-            config.state_directory.join("generation-handles-v1.json"),
-            host,
-            node_boot_id,
-            label_epoch,
-        )?
-        .next_handle()
-    }
-
-    pub(crate) fn retire_profile_generation(
-        host: &KernelHost,
-        profile_id: &str,
-        profile_generation_ref_id: u64,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-    ) -> Result<bool> {
-        let profile_id = parse_id("profile_id", profile_id)?;
-        let observed = read_active_generation(host, &profile_id)?;
-        ensure!(
-            observed.is_none_or(|generation| generation == profile_generation_ref_id),
-            IdentityStateSnafu {
-                reason: "stale policy retirement found a different active profile generation",
-            }
-        );
-        if observed.is_some() {
-            host.delete_map_entry("active_profile_generations", profile_id.as_bytes())
-                .context(InterceptorSnafu)?;
-        }
-        ensure!(
-            read_active_generation(host, &profile_id)?.is_none(),
-            IdentityStateSnafu {
-                reason: "stale policy retirement active profile pointer survived deletion",
-            }
-        );
-        reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
-        Ok(host
-            .lookup_map(
-                "profile_generation_descriptors",
-                &profile_generation_ref_id.to_ne_bytes(),
-            )
-            .context(InterceptorSnafu)?
-            .is_none())
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn retire_profile_generation_for_test(
-        host: &KernelHost,
-        profile_id: &str,
-        profile_generation_ref_id: u64,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-    ) -> Result<bool> {
-        Self::retire_profile_generation(
-            host,
-            profile_id,
-            profile_generation_ref_id,
-            node_boot_id,
-            label_epoch,
-        )
-    }
-
-    pub(crate) fn profile_generation_is_absent(
-        host: &KernelHost,
-        profile_id: &str,
-        profile_generation_ref_id: u64,
-    ) -> Result<bool> {
-        let profile_id = parse_id("profile_id", profile_id)?;
-        Ok(read_active_generation(host, &profile_id)?.is_none()
-            && generation_publication_is_absent(host, profile_generation_ref_id)?)
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn profile_generation_is_absent_for_test(
-        host: &KernelHost,
-        profile_id: &str,
-        profile_generation_ref_id: u64,
-    ) -> Result<bool> {
-        Self::profile_generation_is_absent(host, profile_id, profile_generation_ref_id)
-    }
-
-    pub(crate) fn activation_receipt(
-        host: &KernelHost,
-        profile_id: &str,
-        profile_generation_ref_id: u64,
-    ) -> Result<PolicyActivationReceiptV1> {
-        let profile_id = parse_id("profile_id", profile_id)?;
-        // Read the published pointer and descriptor; staged bytes do not prove activation.
-        let active = host
-            .lookup_map("active_profile_generations", profile_id.as_bytes())
-            .context(InterceptorSnafu)?
-            .context(IdentityStateSnafu {
-                reason: "the activated profile has no active pointer",
-            })?;
-        ensure!(
-            u64::read_from_bytes(&active)
-                .is_ok_and(|active| { active == profile_generation_ref_id }),
-            IdentityStateSnafu {
-                reason: "the activated profile pointer failed exact readback",
-            }
-        );
-        let descriptor = host
-            .lookup_map(
-                "profile_generation_descriptors",
-                &profile_generation_ref_id.to_ne_bytes(),
-            )
-            .context(InterceptorSnafu)?
-            .context(IdentityStateSnafu {
-                reason: "the activated profile has no generation descriptor",
-            })?;
-        let parsed =
-            ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor).map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("the activated generation descriptor is invalid: {error}"),
-                }
-                .build()
-            })?;
-        ensure!(
-            parsed.profile_id == profile_id
-                && parsed.profile_generation_ref_id == profile_generation_ref_id
-                && parsed.state == PolicyGenerationStateV1::Active,
-            IdentityStateSnafu {
-                reason: "the activated generation descriptor is not current",
-            }
-        );
-        // Bind the acknowledgement to exact descriptor bytes and the controlled probe domain.
-        let readback_digest = format!("{:x}", Sha256::digest(&descriptor));
-        let mut probe = Sha256::new();
-        probe.update(b"MITHRIL-POLICY-CONTROLLED-PROBE-V1\0");
-        probe.update(parsed.table_digest);
-        probe.update(profile_generation_ref_id.to_be_bytes());
-        Ok(PolicyActivationReceiptV1 {
-            node_bound_generation_digest: hex::encode(parsed.table_digest),
-            profile_generation_ref_id,
-            readback_digest,
-            probe_result_digest: format!("{:x}", probe.finalize()),
-        })
-    }
-
-    pub(crate) fn apply_exception_candidate(
-        &self,
-        host: &KernelHost,
-        candidate: &ExceptionDeliveryCandidateV1,
-        grant_handle: u32,
-    ) -> Result<ExceptionRuntimeObservationV1> {
-        let profile_id = parse_id("profile_id", &candidate.profile_id)?;
-        let exception_instance_id =
-            parse_id("exception_instance_id", &candidate.exception_instance_id)?;
-        let descriptor_key = candidate.profile_generation_ref_id.to_ne_bytes();
-        let descriptor = host
-            .lookup_map("profile_generation_descriptors", &descriptor_key)
-            .context(InterceptorSnafu)?
-            .map(|descriptor| {
-                ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor).map_err(|error| {
-                    IdentityStateSnafu {
-                        reason: format!("the exception base-policy descriptor is invalid: {error}"),
-                    }
-                    .build()
-                })
-            })
-            .transpose()?;
-        ensure!(
-            descriptor.as_ref().is_none_or(|descriptor| {
-                descriptor.profile_id == profile_id
-                    && descriptor.profile_generation_ref_id == candidate.profile_generation_ref_id
-                    && descriptor.node_boot_id == self.node_boot_id
-                    && descriptor.label_epoch == self.label_epoch
-                    && matches!(
-                        descriptor.state,
-                        PolicyGenerationStateV1::Active | PolicyGenerationStateV1::Retiring
-                    )
-            }),
-            IdentityStateSnafu {
-                reason: "the exception target differs from its local policy generation",
-            }
-        );
-        ensure!(
-            candidate.operation == ExceptionDeliveryOperationV1::Revoke || descriptor.is_some(),
-            IdentityStateSnafu {
-                reason: "the exception base-policy generation is not installed",
-            }
-        );
-        let mut authority = self.exception_authority.lock().map_err(|_| {
-            IdentityStateSnafu {
-                reason: "exception authority owner lock is poisoned".to_owned(),
-            }
-            .build()
-        })?;
-        let runtime_key = ExceptionRuntimeStateKeyV1 {
-            node_id: authority.node_id(),
-            exception_instance_id,
-        };
-        let binding_key = ExceptionHandleBindingKeyV1 {
-            profile_generation_ref_id: candidate.profile_generation_ref_id,
-            exception_numeric_handle: grant_handle,
-            reserved: 0,
-        };
-        match candidate.operation {
-            ExceptionDeliveryOperationV1::Activate => {
-                let now_utc_ns = current_utc_ns()?;
-                let remaining_ns = u64::try_from(candidate.valid_until_utc_ns - now_utc_ns)
-                    .map_err(|error| {
-                        IdentityStateSnafu {
-                            reason: format!(
-                                "the exception activation deadline is invalid: {error}"
-                            ),
-                        }
-                        .build()
-                    })?;
-                let now_boottime_ns = current_boottime_ns()?;
-                let deadline_boottime_ns =
-                    now_boottime_ns.checked_add(remaining_ns).ok_or_else(|| {
-                        IdentityStateSnafu {
-                            reason: "the exception boottime deadline overflows".to_owned(),
-                        }
-                        .build()
-                    })?;
-                let definition_bytes =
-                    hex::decode(&candidate.candidate_content_id).map_err(|error| {
-                        IdentityStateSnafu {
-                            reason: format!(
-                                "the exception candidate content identity is invalid: {error}"
-                            ),
-                        }
-                        .build()
-                    })?;
-                let definition: [u8; 32] = definition_bytes.try_into().map_err(|_| {
-                    IdentityStateSnafu {
-                        reason: "the exception candidate content identity has an invalid size"
-                            .to_owned(),
-                    }
-                    .build()
-                })?;
-                let desired = ExceptionRuntimeStateV1 {
-                    lock: 0,
-                    maximum_uses: candidate.maximum_uses,
-                    consumed_uses: 0,
-                    bound_profile_generation_refs: 1,
-                    deadline_boottime_ns,
-                    transition_version: 1,
-                    exception_definition_sha256: definition,
-                    state: ExceptionRuntimeStateKindV1::Active,
-                    reserved: [0; 7],
-                };
-                let existing = host
-                    .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
-                    .context(InterceptorSnafu)?;
-                let installed = authority.prepare_runtime(
-                    runtime_key.as_bytes(),
-                    desired,
-                    candidate.valid_until_utc_ns,
-                    existing.as_deref(),
-                    now_utc_ns,
-                    now_boottime_ns,
-                )?;
-                // Durable runtime authority must exist before a grant handle can reach it.
-                if existing.is_none() {
-                    host.update_map(
-                        "exception_runtime_states",
-                        runtime_key.as_bytes(),
-                        installed.as_bytes(),
-                    )
-                    .context(InterceptorSnafu)?;
-                }
-                ensure!(
-                    host.lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
-                        .context(InterceptorSnafu)?
-                        .is_some_and(|live| live == installed.as_bytes()),
-                    IdentityStateSnafu {
-                        reason: "the exception runtime state failed exact readback",
-                    }
-                );
-                let mut binding = ExceptionHandleBindingV1 {
-                    runtime_state_key: runtime_key,
-                    state: ExceptionBindingStateV1::Preparing,
-                    reserved: [0; 7],
-                };
-                // Preparing readback makes a partial binding fail closed during recovery.
-                host.update_map(
-                    "exception_handle_bindings",
-                    binding_key.as_bytes(),
-                    binding.as_bytes(),
-                )
-                .context(InterceptorSnafu)?;
-                ensure!(
-                    host.lookup_map("exception_handle_bindings", binding_key.as_bytes())
-                        .context(InterceptorSnafu)?
-                        .as_deref()
-                        == Some(binding.as_bytes()),
-                    IdentityStateSnafu {
-                        reason: "the preparing exception binding failed exact readback",
-                    }
-                );
-                binding.state = ExceptionBindingStateV1::Active;
-                host.update_map(
-                    "exception_handle_bindings",
-                    binding_key.as_bytes(),
-                    binding.as_bytes(),
-                )
-                .context(InterceptorSnafu)?;
-                ensure!(
-                    host.lookup_map("exception_handle_bindings", binding_key.as_bytes())
-                        .context(InterceptorSnafu)?
-                        .as_deref()
-                        == Some(binding.as_bytes()),
-                    IdentityStateSnafu {
-                        reason: "the active exception binding failed exact readback",
-                    }
-                );
-                Ok(ExceptionRuntimeObservationV1 {
-                    state: ExceptionActivationStateV1::Active,
-                    consumed_uses: installed.consumed_uses,
-                })
-            }
-            ExceptionDeliveryOperationV1::Revoke => {
-                let binding = host
-                    .lookup_map("exception_handle_bindings", binding_key.as_bytes())
-                    .context(InterceptorSnafu)?;
-                // A retired base generation may remove its binding before Control sends revoke.
-                ensure!(
-                    descriptor.is_some() || binding.is_none(),
-                    IdentityStateSnafu {
-                        reason: "an exception binding outlived its base-policy generation",
-                    }
-                );
-                if let Some(binding) = binding {
-                    let mut binding = ExceptionHandleBindingV1::try_read_from_bytes(&binding)
-                        .map_err(|error| {
-                            IdentityStateSnafu {
-                                reason: format!("the exception binding is invalid: {error}"),
-                            }
-                            .build()
-                        })?;
-                    ensure!(
-                        binding.runtime_state_key == runtime_key,
-                        IdentityStateSnafu {
-                            reason: "the exception grant is bound to another runtime instance",
-                        }
-                    );
-                    // Retiring blocks new BPF claims before authority reconciliation runs.
-                    binding.state = ExceptionBindingStateV1::Retiring;
-                    host.update_map(
-                        "exception_handle_bindings",
-                        binding_key.as_bytes(),
-                        binding.as_bytes(),
-                    )
-                    .context(InterceptorSnafu)?;
-                    ensure!(
-                        host.lookup_map("exception_handle_bindings", binding_key.as_bytes())
-                            .context(InterceptorSnafu)?
-                            .as_deref()
-                            == Some(binding.as_bytes()),
-                        IdentityStateSnafu {
-                            reason: "the retiring exception binding failed exact readback",
-                        }
-                    );
-                }
-                authority.reconcile(host, current_utc_ns()?)?;
-                // Keep the final use count after revocation for the durable Control receipt.
-                let consumed_uses = host
-                    .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
-                    .context(InterceptorSnafu)?
-                    .map_or(Ok(0), |state| {
-                        ExceptionRuntimeStateV1::try_read_from_bytes(&state)
-                            .map(|state| state.consumed_uses)
-                            .map_err(|error| {
-                                IdentityStateSnafu {
-                                    reason: format!(
-                                        "the revoked exception runtime state is invalid: {error}"
-                                    ),
-                                }
-                                .build()
-                            })
-                    })?;
-                Ok(ExceptionRuntimeObservationV1 {
-                    state: ExceptionActivationStateV1::Revoked,
-                    consumed_uses,
-                })
-            }
-        }
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn apply_exception_candidate_for_test(
-        &self,
-        host: &KernelHost,
-        candidate: &ExceptionDeliveryCandidateV1,
-        grant_handle: u32,
-    ) -> Result<()> {
-        self.apply_exception_candidate(host, candidate, grant_handle)
-            .map(|_| ())
-    }
-
-    pub(crate) fn observe_exception_candidate(
-        &self,
-        host: &KernelHost,
-        candidate: &ExceptionDeliveryCandidateV1,
-    ) -> Result<ExceptionRuntimeObservationV1> {
-        let exception_instance_id =
-            parse_id("exception_instance_id", &candidate.exception_instance_id)?;
-        let mut authority = self.exception_authority.lock().map_err(|_| {
-            IdentityStateSnafu {
-                reason: "exception authority owner lock is poisoned".to_owned(),
-            }
-            .build()
-        })?;
-        authority.reconcile(host, current_utc_ns()?)?;
-        let runtime_key = ExceptionRuntimeStateKeyV1 {
-            node_id: authority.node_id(),
-            exception_instance_id,
-        };
-        let state = host
-            .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
-            .context(InterceptorSnafu)?
-            .context(IdentityStateSnafu {
-                reason: "the active exception has no runtime state",
-            })?;
-        let state = ExceptionRuntimeStateV1::try_read_from_bytes(&state).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("the active exception runtime state is invalid: {error}"),
-            }
-            .build()
-        })?;
-        let observed = match state.state {
-            // The deadline is authoritative even if no later BPF operation updates the map state.
-            ExceptionRuntimeStateKindV1::Active
-                if current_boottime_ns()? >= state.deadline_boottime_ns =>
-            {
-                ExceptionActivationStateV1::Expired
-            }
-            ExceptionRuntimeStateKindV1::Active => ExceptionActivationStateV1::Active,
-            ExceptionRuntimeStateKindV1::Exhausted => ExceptionActivationStateV1::Consumed,
-            ExceptionRuntimeStateKindV1::Expired => ExceptionActivationStateV1::Expired,
-            ExceptionRuntimeStateKindV1::ReconciliationRequired
-            | ExceptionRuntimeStateKindV1::Unknown => ExceptionActivationStateV1::Stale,
-        };
-        Ok(ExceptionRuntimeObservationV1 {
-            state: observed,
-            consumed_uses: state.consumed_uses,
-        })
-    }
-
-    pub fn fence_network_socket(
-        &self,
-        host: &KernelHost,
-        key: NetworkResponseFloorKeyV1,
-    ) -> Result<bool> {
-        ensure!(
-            key.profile_generation_ref_id > 0 && key.socket_key_id > 0 && key.socket_generation > 0,
-            IdentityStateSnafu {
-                reason: "a network response fence needs exact nonzero socket identity",
-            }
-        );
-        let generation_key = key.profile_generation_ref_id.to_ne_bytes();
-        let descriptor = host
-            .lookup_map("profile_generation_descriptors", &generation_key)
-            .context(InterceptorSnafu)?
-            .context(IdentityStateSnafu {
-                reason: "the network response generation does not exist",
-            })?;
-        let descriptor =
-            ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor).map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("the network response generation is invalid: {error}"),
-                }
-                .build()
-            })?;
-        ensure!(
-            descriptor.profile_generation_ref_id == key.profile_generation_ref_id
-                && descriptor.node_boot_id == self.node_boot_id
-                && descriptor.label_epoch == self.label_epoch
-                && matches!(
-                    descriptor.state,
-                    PolicyGenerationStateV1::Active | PolicyGenerationStateV1::Retiring
-                ),
-            IdentityStateSnafu {
-                reason: "the network response generation is not a live local generation",
-            }
-        );
-        let references = host
-            .lookup_map("profile_generation_socket_refs", &generation_key)
-            .context(InterceptorSnafu)?
-            .context(IdentityStateSnafu {
-                reason: "the network response generation has no socket references",
-            })?;
-        ensure!(
-            u64::read_from_bytes(&references).map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("the network socket reference count is invalid: {error}"),
-                }
-                .build()
-            })? > 0,
-            IdentityStateSnafu {
-                reason: "the network response generation has no live socket",
-            }
-        );
-        let floor = NetworkResponseFloorV1 {
-            scope: NetworkResponseScopeV1::WholeSocket,
-            reserved: [0; 7],
-        };
-        let inserted = host
-            .insert_map("network_response_floors", key.as_bytes(), floor.as_bytes())
-            .context(InterceptorSnafu)?
-            == MapInsertResult::Inserted;
-        ensure!(
-            host.lookup_map("network_response_floors", key.as_bytes())
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(floor.as_bytes()),
-            IdentityStateSnafu {
-                reason: "the whole-socket response fence failed exact readback",
-            }
-        );
-        Ok(inserted)
-    }
-
-    pub fn load_and_install(
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-    ) -> Result<Self> {
-        Self::install(
-            config,
-            host,
-            node_boot_id,
-            label_epoch,
-            PolicyMeasurements::default(),
-            BTreeMap::new(),
-            BTreeSet::new(),
-        )
-    }
-
-    pub fn load_and_install_for_bindings(
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        bindings: &WorkloadBindingOwner,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-    ) -> Result<Self> {
-        let measured = Self::resolve_cri_exact_objects(
-            config,
-            host,
-            bindings.exact_object_binding_targets(),
-            None,
-        )?;
-        Self::install(
-            config,
-            host,
-            node_boot_id,
-            label_epoch,
-            measured,
-            BTreeMap::new(),
-            bindings.held_binding_ids().map(str::to_owned).collect(),
-        )
-    }
-
-    pub fn reload_and_install_for_bindings(
-        &self,
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        bindings: &WorkloadBindingOwner,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-    ) -> Result<Self> {
-        let measured = Self::resolve_cri_exact_objects(
-            config,
-            host,
-            bindings.exact_object_binding_targets(),
-            None,
-        )?;
-        Self::install(
-            config,
-            host,
-            node_boot_id,
-            label_epoch,
-            measured,
-            self.generation_semantics.clone(),
-            bindings.held_binding_ids().map(str::to_owned).collect(),
-        )
-    }
-
-    pub fn reload_and_install(
-        self,
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-    ) -> Result<Self> {
-        let measured_exact_objects = self.measured_exact_objects;
-        let measured_mount_routes = self.measured_mount_routes;
-        let resolved_path_binding_ids = self.resolved_path_binding_ids;
-        let generation_semantics = self.generation_semantics;
-        Self::install(
-            config,
-            host,
-            node_boot_id,
-            label_epoch,
-            PolicyMeasurements {
-                objects: measured_exact_objects,
-                routes: measured_mount_routes,
-                views: self.mount_view_handles,
-                resolved: resolved_path_binding_ids,
-            },
-            generation_semantics,
-            BTreeSet::new(),
-        )
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn load_and_install_for_test_objects<I, S>(
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-        objects: I,
-    ) -> Result<Self>
-    where
-        I: IntoIterator<Item = (S, ExactFileObjectConfig)>,
-        S: Into<String>,
-    {
-        let measured_exact_objects = Self::resolve_test_exact_objects(config, objects)?;
-        let measured_mount_routes = Self::resolve_test_mount_routes(host, &measured_exact_objects)?;
-        let resolved_path_binding_ids = measured_exact_objects
-            .iter()
-            .map(|measured| measured.binding_id.clone())
-            .collect();
-        Self::install(
-            config,
-            host,
-            node_boot_id,
-            label_epoch,
-            PolicyMeasurements {
-                objects: measured_exact_objects,
-                routes: measured_mount_routes,
-                views: BTreeMap::new(),
-                resolved: resolved_path_binding_ids,
-            },
-            BTreeMap::new(),
-            BTreeSet::new(),
-        )
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn reload_and_install_for_test_objects<I, S>(
-        self,
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-        objects: I,
-    ) -> Result<Self>
-    where
-        I: IntoIterator<Item = (S, ExactFileObjectConfig)>,
-        S: Into<String>,
-    {
-        let measured_exact_objects = Self::resolve_test_exact_objects(config, objects)?;
-        let measured_mount_routes = self.measured_mount_routes;
-        let resolved_path_binding_ids = measured_exact_objects
-            .iter()
-            .map(|measured| measured.binding_id.clone())
-            .chain(self.resolved_path_binding_ids)
-            .collect();
-        let generation_semantics = self.generation_semantics;
-        Self::install(
-            config,
-            host,
-            node_boot_id,
-            label_epoch,
-            PolicyMeasurements {
-                objects: measured_exact_objects,
-                routes: measured_mount_routes,
-                views: self.mount_view_handles,
-                resolved: resolved_path_binding_ids,
-            },
-            generation_semantics,
-            BTreeSet::new(),
-        )
-    }
-
-    fn install(
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        node_boot_id: Id128V1,
-        label_epoch: u64,
-        measured: PolicyMeasurements,
-        semantics: BTreeMap<u64, GenerationSemantics>,
-        deferred: BTreeSet<String>,
-    ) -> Result<Self> {
-        PreparedPolicy::prepare(
-            config,
-            host,
-            node_boot_id,
-            label_epoch,
-            measured,
-            semantics,
-            deferred,
-        )?
-        .publish(host)
-    }
-
-    #[must_use]
-    pub const fn prevention_enabled(&self) -> bool {
-        self.prevention_enabled
-    }
-
-    #[must_use]
-    pub(crate) fn administrative_enabled(&self) -> bool {
-        self.administrative_required
-    }
-
-    pub fn reconcile_cri_exact_bindings(
-        &mut self,
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        bindings: &WorkloadBindingOwner,
-    ) -> Result<()> {
-        self.reconcile_cri_exact_bindings_inner(config, host, bindings, None)?;
-        retire_unreachable_mount_cache_rows(host)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn reconcile_cri_exact_bindings_for_oci_entries(
-        &mut self,
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        bindings: &WorkloadBindingOwner,
-        binding_id: &str,
-        held_initial_pid: u32,
-        root_source_pid: u32,
-        root_source_fd: u32,
-        bundle: &Path,
-    ) -> Result<()> {
-        let view = crate::exact_object::ExactFileObjectView::acquire_oci(
-            held_initial_pid,
-            root_source_pid,
-            root_source_fd,
-            bundle,
-        )?;
-        self.reconcile_cri_exact_bindings_inner(
-            config,
-            host,
-            bindings,
-            Some((binding_id, held_initial_pid, view)),
-        )?;
-        self.log_staged_path_policy(binding_id);
-        Ok(())
-    }
-
-    #[cfg(feature = "test-support")]
-    #[allow(clippy::too_many_arguments)]
-    pub fn reconcile_cri_exact_bindings_for_oci_entries_for_test(
-        &mut self,
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        bindings: &WorkloadBindingOwner,
-        binding_id: &str,
-        held_initial_pid: u32,
-        root_source_pid: u32,
-        root_source_fd: u32,
-        bundle: &Path,
-    ) -> Result<()> {
-        self.reconcile_cri_exact_bindings_for_oci_entries(
-            config,
-            host,
-            bindings,
-            binding_id,
-            held_initial_pid,
-            root_source_pid,
-            root_source_fd,
-            bundle,
-        )
-    }
-
-    fn reconcile_cri_exact_bindings_inner(
-        &mut self,
-        config: &NodeConfig,
-        host: &mut KernelHost,
-        bindings: &WorkloadBindingOwner,
-        oci_entry_view: Option<(&str, u32, crate::exact_object::ExactFileObjectView)>,
-    ) -> Result<()> {
-        let active_binding_ids = bindings
-            .active_binding_ids()
-            .map(str::to_owned)
-            .collect::<BTreeSet<_>>();
-        let targets = bindings.exact_object_binding_targets().collect::<Vec<_>>();
-        let borrowed_oci_entry_view = oci_entry_view
-            .as_ref()
-            .map(|(binding_id, root_pid, view)| (*binding_id, *root_pid, view));
-        let refreshed_binding_id = borrowed_oci_entry_view.map(|(binding_id, _, _)| binding_id);
-        let PolicyMeasurements {
-            objects: mut measured_exact_objects,
-            routes: mut measured_mount_routes,
-            views: measured_mount_views,
-            resolved: mut resolved_path_binding_ids,
-        } = Self::resolve_cri_exact_objects(
-            config,
-            host,
-            targets.iter().copied(),
-            borrowed_oci_entry_view,
-        )?;
-        let retained_binding_ids = self
-            .resolved_path_binding_ids
-            .intersection(&active_binding_ids)
-            .filter(|binding_id| Some(binding_id.as_str()) != refreshed_binding_id)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        measured_exact_objects
-            .retain(|measured| !retained_binding_ids.contains(&measured.binding_id));
-        measured_exact_objects.extend(
-            self.measured_exact_objects
-                .iter()
-                .filter(|measured| retained_binding_ids.contains(&measured.binding_id))
-                .cloned(),
-        );
-        measured_mount_routes
-            .retain(|measured| !retained_binding_ids.contains(&measured.binding_id));
-        measured_mount_routes.extend(
-            self.measured_mount_routes
-                .iter()
-                .filter(|measured| retained_binding_ids.contains(&measured.binding_id))
-                .cloned(),
-        );
-        resolved_path_binding_ids.retain(|binding_id| active_binding_ids.contains(binding_id));
-        resolved_path_binding_ids.extend(retained_binding_ids);
-        let deferred_entry_binding_ids = bindings.held_binding_ids().map(str::to_owned).collect();
-        let mut candidate_mount_views = measured_mount_views;
-        if let Some((_, _, view)) = oci_entry_view {
-            candidate_mount_views.insert(view.mount_namespace_inode()?, view);
-        }
-        let previous_dynamic_rows = self.dynamic_rows.clone();
-        let mut next = Self::install(
-            config,
-            host,
-            self.node_boot_id,
-            self.label_epoch,
-            PolicyMeasurements {
-                objects: measured_exact_objects,
-                routes: measured_mount_routes,
-                views: candidate_mount_views,
-                resolved: resolved_path_binding_ids,
-            },
-            self.generation_semantics.clone(),
-            deferred_entry_binding_ids,
-        )?;
-        let mut retained_mount_views = std::mem::take(&mut self.mount_view_handles);
-        retained_mount_views.append(&mut next.mount_view_handles);
-        next.mount_view_handles = retained_mount_views;
-        *self = next;
-        Self::retire_replaced_dynamic_dependencies(
-            host,
-            &previous_dynamic_rows,
-            &self.dynamic_rows,
-        )?;
-        Ok(())
-    }
-
-    fn log_staged_path_policy(&self, binding_id: &str) {
-        for measured in self
-            .measured_exact_objects
-            .iter()
-            .filter(|measured| measured.binding_id == binding_id)
-        {
-            let object = &measured.object;
-            erebor_telemetry::debug!(
-                "staged stable exact entry policy",
-                binding_id = %binding_id,
-                exact_object_key_id = %object.exact_object_key_id,
-                mount_namespace_inode = %object.mount_namespace_inode,
-                mount_id_unique = %object.mount_id_unique,
-                filesystem_device = %object.filesystem_device,
-                inode = %object.inode,
-                inode_generation = %object.inode_generation,
-                selected_mount_id_unique = %object.selected_mount_id_unique,
-                mount_topology_generation = %object.mount_topology_generation
-            );
-        }
-        erebor_telemetry::debug!(
-            "staged stable canonical mount policy",
-            binding_id = %binding_id,
-            route_count = %self
-                .measured_mount_routes
-                .iter()
-                .filter(|measured| measured.binding_id == binding_id)
-                .count()
-        );
-    }
-
-    fn retire_replaced_dynamic_dependencies(
-        host: &KernelHost,
-        previous: &BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
-        replacement: &BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
-    ) -> Result<()> {
-        for map in [
-            "entry_admission_rules",
-            "device_effect_decisions",
-            "exact_file_objects",
-            "canonical_mount_roots",
-            "mount_security_views",
-            "mount_mutation_epochs",
-            "mount_security_view_locks",
-        ] {
-            let replacement_keys = replacement.get(map).cloned().unwrap_or_default();
-            let stale_keys = previous
-                .get(map)
-                .cloned()
-                .unwrap_or_default()
-                .difference(&replacement_keys)
-                .cloned()
-                .collect::<BTreeSet<_>>();
-            Self::revoke_rows(host, map, &stale_keys, "replacement retirement")?;
-        }
-        Ok(())
-    }
-
-    fn revoke_rows(
-        host: &KernelHost,
-        map: &str,
-        keys: &BTreeSet<Vec<u8>>,
-        operation: &str,
-    ) -> Result<()> {
-        for key in keys {
-            if host
-                .lookup_map(map, key)
-                .context(InterceptorSnafu)?
-                .is_some()
-            {
-                host.delete_map_entry(map, key).context(InterceptorSnafu)?;
-            }
-            ensure!(
-                host.lookup_map(map, key)
-                    .context(InterceptorSnafu)?
-                    .is_none(),
-                IdentityStateSnafu {
-                    reason: format!("dynamic path authority remained in `{map}` after {operation}"),
-                }
-            );
-        }
-        Ok(())
-    }
-
-    fn resolve_cri_exact_objects<'a>(
-        config: &NodeConfig,
-        host: &KernelHost,
-        bindings: impl IntoIterator<Item = ExactObjectBindingTargetV1<'a>>,
-        oci_entry_view: Option<(&str, u32, &crate::exact_object::ExactFileObjectView)>,
-    ) -> Result<PolicyMeasurements> {
-        let now_utc_ns = current_utc_ns()?;
-        let artifact_owner = PolicyArtifactOwner::default();
-        let mut artifacts = BTreeMap::new();
-        for candidate in &config.policy_candidates {
-            let artifact = artifact_owner
-                .load_verified_at(
-                    &candidate.artifact_path,
-                    &candidate.public_key_path,
-                    now_utc_ns,
-                )
-                .context(PolicySnafu)?;
-            ensure!(
-                artifacts
-                    .insert(artifact.header.profile_id.clone(), artifact)
-                    .is_none(),
-                IdentityStateSnafu {
-                    reason: "one node candidate is allowed per profile ID",
-                }
-            );
-        }
-        let topology_generation = Self::current_mount_topology_generation(host)?;
-        let mut measured = Vec::new();
-        let mut measured_mount_routes = Vec::new();
-        let mut measured_mount_views = BTreeMap::new();
-        let mut resolved_path_binding_ids = BTreeSet::new();
-        let mut target_bindings = BTreeSet::new();
-        let mut oci_entry_view_used = false;
-        for target in bindings {
-            ensure!(
-                target_bindings.insert(target.binding_id),
-                IdentityStateSnafu {
-                    reason: format!(
-                        "binding `{}` has more than one authenticated CRI exact-object target",
-                        target.binding_id
-                    ),
-                }
-            );
-            let binding = config
-                .workload_bindings
-                .iter()
-                .find(|binding| binding.binding_id == target.binding_id)
-                .context(IdentityStateSnafu {
-                    reason: format!(
-                        "authenticated CRI exact-object target `{}` is not configured",
-                        target.binding_id
-                    ),
-                })?;
-            let artifact = artifacts
-                .get(&binding.profile_id)
-                .context(IdentityStateSnafu {
-                    reason: format!(
-                        "binding `{}` has no verified candidate for exact-object resolution",
-                        binding.binding_id
-                    ),
-                })?;
-            let selectors = artifact
-                .policy_document
-                .path_selectors
-                .iter()
-                .filter(|selector| selector.requires_exact_object());
-            let target_oci_entry_view =
-                oci_entry_view.filter(|(binding_id, _, _)| *binding_id == target.binding_id);
-            if !target.process_path_view_allowed && target_oci_entry_view.is_none() {
-                continue;
-            }
-            let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
-            let process_root_is_container = !view.has_host_root()?;
-            if let Some((_, held_initial_pid, _)) = target_oci_entry_view {
-                ensure!(
-                    held_initial_pid == target.init_pid,
-                    IdentityStateSnafu {
-                        reason: "OCI entry view differs from the held initial task",
-                    }
-                );
-                oci_entry_view_used = true;
-            }
-            let route_view = target_oci_entry_view
-                .map(|(_, _, oci_view)| oci_view)
-                .or_else(|| process_root_is_container.then_some(&view));
-            if route_view.is_some() {
-                resolved_path_binding_ids.insert(binding.binding_id.clone());
-            }
-            if let Some(route_view) = route_view {
-                measured_mount_routes.extend(Self::authoritative_mount_routes(
-                    binding,
-                    target.init_pid,
-                    topology_generation,
-                    route_view.mount_root_routes()?,
-                ));
-            }
-            for selector in selectors {
-                let canonical_path = selector.path_expression();
-                let path = PathBuf::from(canonical_path);
-                let object = match target_oci_entry_view {
-                    Some((_, _, oci_view)) => oci_view.try_resolve_signed_selector(
-                        host,
-                        &path,
-                        binding.active_profile_generation_ref_id,
-                        selector.kernel_handle(),
-                        selector.object_class_id.clone(),
-                        selector.device_class_id.clone(),
-                        topology_generation,
-                    )?,
-                    None if process_root_is_container => view.try_resolve_signed_selector(
-                        host,
-                        &path,
-                        binding.active_profile_generation_ref_id,
-                        selector.kernel_handle(),
-                        selector.object_class_id.clone(),
-                        selector.device_class_id.clone(),
-                        topology_generation,
-                    )?,
-                    None => None,
-                };
-                let Some(object) = object else {
-                    continue;
-                };
-                let expected_components =
-                    canonical_path_components(artifact.header.profile_id.as_str(), canonical_path)
-                        .context(PolicySnafu)?;
-                ensure!(
-                    object.canonical_component_hex
-                        == expected_components
-                            .iter()
-                            .map(hex::encode)
-                            .collect::<Vec<_>>(),
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "signed path selector `{}` resolved to a different canonical path",
-                            selector.path_selector_id
-                        ),
-                    }
-                );
-                measured.push(MeasuredExactObjectV1 {
-                    binding_id: binding.binding_id.clone(),
-                    object,
-                });
-            }
-            if process_root_is_container && target_oci_entry_view.is_none() {
-                measured_mount_views.insert(view.mount_namespace_inode()?, view);
-            }
-        }
-        ensure!(
-            oci_entry_view.is_none() || oci_entry_view_used,
-            IdentityStateSnafu {
-                reason: "OCI entry view has no authenticated exact-object target",
-            }
-        );
-        Ok(PolicyMeasurements {
-            objects: measured,
-            routes: measured_mount_routes,
-            views: measured_mount_views,
-            resolved: resolved_path_binding_ids,
-        })
-    }
-
-    fn authoritative_mount_routes(
-        binding: &WorkloadBindingConfig,
-        mount_view_root_pid: u32,
-        mount_topology_generation: u64,
-        routes: Vec<crate::exact_object::LiveMountRootRouteV1>,
-    ) -> Vec<MeasuredMountRouteV1> {
-        routes
-            .into_iter()
-            .map(|route| MeasuredMountRouteV1 {
-                binding_id: binding.binding_id.clone(),
-                mount_view_root_pid,
-                mount_topology_generation,
-                route,
-            })
-            .collect()
-    }
-
-    #[cfg(feature = "test-support")]
-    fn resolve_test_exact_objects<I, S>(
-        config: &NodeConfig,
-        objects: I,
-    ) -> Result<Vec<MeasuredExactObjectV1>>
-    where
-        I: IntoIterator<Item = (S, ExactFileObjectConfig)>,
-        S: Into<String>,
-    {
-        let now_utc_ns = current_utc_ns()?;
-        let artifact_owner = PolicyArtifactOwner::default();
-        let mut artifacts = BTreeMap::new();
-        for candidate in &config.policy_candidates {
-            let artifact = artifact_owner
-                .load_verified_at(
-                    &candidate.artifact_path,
-                    &candidate.public_key_path,
-                    now_utc_ns,
-                )
-                .context(PolicySnafu)?;
-            artifacts.insert(artifact.header.profile_id.clone(), artifact);
-        }
-
-        objects
-            .into_iter()
-            .map(|(binding_id, mut object)| {
-                let binding_id = binding_id.into();
-                let binding = config
-                    .workload_bindings
-                    .iter()
-                    .find(|binding| binding.binding_id == binding_id)
-                    .context(IdentityStateSnafu {
-                        reason: format!("test object binding `{binding_id}` is not configured"),
-                    })?;
-                let artifact = artifacts.get(&binding.profile_id).context(IdentityStateSnafu {
-                    reason: format!("test object binding `{binding_id}` has no verified policy"),
-                })?;
-                let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
-                let mut selectors = artifact
-                    .policy_document
-                    .path_selectors
-                    .iter()
-                    .filter(|selector| {
-                        if !(selector.requires_exact_object()
-                            || entry_selector_ids.contains(&selector.path_selector_id))
-                            || selector.object_class_id != object.object_class_id
-                            || selector.device_class_id.as_deref()
-                                != object
-                                    .device
-                                    .as_ref()
-                                    .map(|device| device.device_class_id.as_str())
-                        {
-                            return false;
-                        }
-                        canonical_path_components(
-                            artifact.header.profile_id.as_str(),
-                            selector.path_expression(),
-                        )
-                        .is_ok_and(|components| {
-                            object.canonical_component_hex
-                                == components.iter().map(hex::encode).collect::<Vec<_>>()
-                        })
-                    });
-                let selector = selectors.next().context(IdentityStateSnafu {
-                    reason: format!(
-                        "test object for binding `{binding_id}` has no signed path selector"
-                    ),
-                })?;
-                ensure!(
-                    selectors.next().is_none(),
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "test object for binding `{binding_id}` matches more than one signed path selector"
-                        ),
-                    }
-                );
-                object.profile_generation_ref_id = binding.active_profile_generation_ref_id;
-                object.exact_object_key_id = selector.kernel_handle();
-                Ok(MeasuredExactObjectV1 { binding_id, object })
-            })
-            .collect()
-    }
-
-    #[cfg(feature = "test-support")]
-    fn resolve_test_mount_routes(
-        host: &KernelHost,
-        objects: &[MeasuredExactObjectV1],
-    ) -> Result<Vec<MeasuredMountRouteV1>> {
-        let mut targets = BTreeMap::<&str, u32>::new();
-        for measured in objects {
-            let root_pid = measured.object.mount_view_root_pid;
-            if let Some(existing) = targets.insert(measured.binding_id.as_str(), root_pid) {
-                ensure!(
-                    existing == root_pid,
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "test binding `{}` has more than one live mount view",
-                            measured.binding_id
-                        ),
-                    }
-                );
-            }
-        }
-        let topology_generation = Self::current_mount_topology_generation(host)?;
-        let mut measured_routes = Vec::new();
-        for (binding_id, root_pid) in targets {
-            let view = crate::exact_object::ExactFileObjectView::acquire(root_pid)?;
-            measured_routes.extend(view.mount_root_routes()?.into_iter().map(|route| {
-                MeasuredMountRouteV1 {
-                    binding_id: binding_id.to_owned(),
-                    mount_view_root_pid: root_pid,
-                    mount_topology_generation: topology_generation,
-                    route,
-                }
-            }));
-        }
-        Ok(measured_routes)
-    }
-
-    fn current_mount_topology_generation(host: &KernelHost) -> Result<u64> {
-        let key = 0_u32.to_ne_bytes();
-        let Some(bytes) = host
-            .lookup_map("mount_global_mutation_epoch", &key)
-            .context(InterceptorSnafu)?
-        else {
-            return Ok(1);
-        };
-        let epoch = u64::read_from_bytes(&bytes).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("global mount mutation epoch is invalid: {error}"),
-            }
-            .build()
-        })?;
-        Ok(epoch.max(1))
-    }
-
-    fn dynamic_generation_rows(
-        generations: &BTreeMap<u64, LoweredGeneration>,
-    ) -> BTreeMap<&'static str, BTreeSet<Vec<u8>>> {
-        let mut rows = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
-        for generation in generations.values() {
-            for (map, generation_rows) in [
-                ("entry_admission_rules", &generation.entry_admissions),
-                ("device_effect_decisions", &generation.device_decisions),
-                ("exact_file_objects", &generation.file_objects),
-                ("mount_security_views", &generation.mount_views),
-                ("mount_mutation_epochs", &generation.mount_epochs),
-                ("mount_security_view_locks", &generation.mount_locks),
-                ("canonical_mount_roots", &generation.mount_roots),
-            ] {
-                rows.entry(map)
-                    .or_default()
-                    .extend(generation_rows.keys().cloned());
-            }
-        }
-        rows
-    }
-
-    pub(crate) fn resolve_administrative_policy(
-        &self,
-        host: &KernelHost,
-        target: &AdministrativeBindingTargetV1,
-        requested_name: &[u8],
-        approved_role_id: &str,
-    ) -> Result<ResolvedAdministrativePolicyV1> {
-        ensure!(
-            (1..=4096).contains(&requested_name.len())
-                && !requested_name.contains(&0)
-                && !approved_role_id.is_empty(),
-            IdentityStateSnafu {
-                reason: "administrative command and role are not bounded",
-            }
-        );
-        let plans = self
-            .administrative_plans
-            .iter()
-            .filter(|plan| {
-                plan.binding_id == target.binding_id
-                    && plan.approved_role_id == approved_role_id
-                    && plan.profile.profile_id == target.profile_id
-                    && plan.profile_generation_ref_id == target.profile_generation_ref_id
-            })
-            .collect::<Vec<_>>();
-        ensure!(
-            plans.len() == 1,
-            IdentityStateSnafu {
-                reason: "signed profile does not have one administrative entry for the exact target and role",
-            }
-        );
-        let plan = plans[0];
-        let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
-        let mount_namespace_inode = view.mount_namespace_inode()?;
-        ensure!(
-            mount_namespace_inode > 0,
-            IdentityStateSnafu {
-                reason: "administrative target has no stable mount view",
-            }
-        );
-        let global_key = 0_u32.to_ne_bytes();
-        let global_epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?;
-        ensure!(
-            global_epoch > 0
-                && mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? == 0,
-            IdentityStateSnafu {
-                reason: "administrative executable mount view has an active mutation",
-            }
-        );
-        let active = host
-            .lookup_map("active_profile_generations", target.profile_id.as_bytes())
-            .context(InterceptorSnafu)?
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "administrative profile has no active generation".to_owned(),
-                }
-                .build()
-            })?;
-        ensure!(
-            u64::read_from_bytes(&active)
-                .is_ok_and(|generation| { generation == target.profile_generation_ref_id }),
-            IdentityStateSnafu {
-                reason: "administrative target profile generation is not active",
-            }
-        );
-        let requested = PathBuf::from(OsString::from_vec(requested_name.to_vec()));
-        let (resolution_mode, candidates) = if requested.is_absolute() {
-            (1, vec![requested])
-        } else if requested_name.contains(&b'/') {
-            (2, vec![target.working_directory.join(requested)])
-        } else {
-            (
-                3,
-                target
-                    .path_entries
-                    .iter()
-                    .map(|entry| entry.join(&requested))
-                    .collect::<Vec<_>>(),
-            )
-        };
-        let mut selected = None;
-        for path in candidates {
-            let Some(live) = view.try_inspect(host, &path)? else {
-                continue;
-            };
-            let is_regular_executable =
-                u32::from(live.mode) & 0o170_000 == 0o100_000 && u32::from(live.mode) & 0o111 != 0;
-            if !is_regular_executable && resolution_mode == 3 {
-                continue;
-            }
-            ensure!(
-                is_regular_executable,
-                IdentityStateSnafu {
-                    reason: "resolved administrative command is not a regular executable file",
-                }
-            );
-            selected = Some((path, live));
-            break;
-        }
-        let (path, live) = selected.ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "administrative command did not resolve in the target container view"
-                    .to_owned(),
-            }
-            .build()
-        })?;
-        ensure!(
-            live.mount_namespace_inode == mount_namespace_inode
-                && live.mount_snapshot_digest_id > 0
-                && live.inode_generation > 0
-                && view.mount_namespace_inode()? == mount_namespace_inode
-                && mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?
-                    == global_epoch
-                && mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? == 0,
-            IdentityStateSnafu {
-                reason: "administrative command resolution crossed a mount mutation",
-            }
-        );
-        let mount_namespace_id = derived_id(
-            b"MITHRIL-MOUNT-NAMESPACE-V1\0",
-            &[
-                portable_id_bytes(self.node_boot_id),
-                self.label_epoch.to_be_bytes().to_vec(),
-                mount_namespace_inode.to_be_bytes().to_vec(),
-            ],
-        )?;
-        let filesystem_instance_id = derived_id(
-            b"MITHRIL-FILESYSTEM-INSTANCE-V1\0",
-            &[
-                portable_id_bytes(mount_namespace_id),
-                live.filesystem_device.to_be_bytes().to_vec(),
-            ],
-        )?;
-        let exact_live_object_id = derived_id(
-            b"MITHRIL-EXACT-LIVE-FILE-V1\0",
-            &[
-                portable_id_bytes(filesystem_instance_id),
-                live.mount_id.to_be_bytes().to_vec(),
-                live.inode.to_be_bytes().to_vec(),
-                live.inode_generation.to_be_bytes().to_vec(),
-                global_epoch.to_be_bytes().to_vec(),
-            ],
-        )?;
-        let backing_identity = derived_id(
-            b"MITHRIL-ADMINISTRATIVE-EXECUTABLE-BACKING-V1\0",
-            &[
-                portable_id_bytes(plan.profile.profile_id),
-                plan.profile_generation_ref_id.to_be_bytes().to_vec(),
-                plan.admitted_entry_rule_id.to_be_bytes().to_vec(),
-            ],
-        )?;
-        let live_interval_id = derived_id(
-            b"MITHRIL-ADMINISTRATIVE-FILE-INTERVAL-V1\0",
-            &[
-                portable_id_bytes(target.binding_nonce),
-                portable_id_bytes(exact_live_object_id),
-                target.container_generation.to_be_bytes().to_vec(),
-            ],
-        )?;
-        let resolved_display_path = path.as_os_str().as_bytes().to_vec();
-        let container_working_directory = target.working_directory.as_os_str().as_bytes().to_vec();
-        let effective_path_entries = target
-            .path_entries
-            .iter()
-            .map(|entry| entry.as_os_str().as_bytes().to_vec())
-            .collect::<Vec<_>>();
-        ensure!(
-            (1..=4096).contains(&resolved_display_path.len())
-                && resolved_display_path.first() == Some(&b'/')
-                && (1..=4096).contains(&container_working_directory.len())
-                && container_working_directory.first() == Some(&b'/')
-                && effective_path_entries.len() <= 64
-                && effective_path_entries.iter().all(|entry| {
-                    (1..=4096).contains(&entry.len()) && entry.first() == Some(&b'/')
-                }),
-            IdentityStateSnafu {
-                reason: "administrative resolved path, working directory, or PATH exceeds its signed bounds",
-            }
-        );
-        Ok(ResolvedAdministrativePolicyV1 {
-            approved_role_numeric_id: plan.approved_role_numeric_id,
-            admitted_entry_rule_id: plan.admitted_entry_rule_id,
-            profile_generation_ref_id: plan.profile_generation_ref_id,
-            exception_numeric_handle: 0,
-            profile: plan.profile.clone(),
-            resolved_executable: ResolvedAdministrativeExecutableIdentityV1 {
-                requested_name: requested_name.to_vec(),
-                resolution_mode,
-                resolved_display_path,
-                container_working_directory,
-                effective_path_entries,
-                target_mount_namespace_id: mount_namespace_id,
-                target_mount_topology_generation: global_epoch,
-                executable_object: AdministrativeFileObjectIdentityV1 {
-                    mount_namespace_id,
-                    mount_topology_generation: global_epoch,
-                    mount_id: live.mount_id,
-                    filesystem_instance_id,
-                    inode: live.inode,
-                    inode_generation: live.inode_generation,
-                    exact_live_object_id,
-                    object_kind: 1,
-                    backing_identity,
-                    live_interval_id,
-                },
-            },
-            kernel_executable: ExactExecutableCandidateV1 {
-                inode: live.inode,
-                mount_namespace_inode,
-                mount_id: live.mount_id,
-                filesystem_device: live.filesystem_device,
-                inode_generation: live.inode_generation,
-                reserved: 0,
-            },
-        })
-    }
-
-    pub fn reconcile_policy_lifecycle(&self, host: &mut KernelHost) -> Result<bool> {
-        self.exception_authority
-            .lock()
-            .map_err(|_| {
-                IdentityStateSnafu {
-                    reason: "exception authority owner lock is poisoned".to_owned(),
-                }
-                .build()
-            })?
-            .reconcile(host, current_utc_ns()?)?;
-        let pending = reconcile_generation_retirement(host, self.node_boot_id, self.label_epoch)?;
-        self.retirement_pending.store(pending, Ordering::Release);
-        Ok(true)
-    }
-
-    pub(crate) fn retirement_pending(&self) -> bool {
-        self.retirement_pending.load(Ordering::Acquire)
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn retained_mount_views_are_readable_for_test(&self) -> Result<bool> {
-        if self.mount_view_handles.is_empty() {
-            return Ok(false);
-        }
-        for view in self.mount_view_handles.values() {
-            if !view.retained_mountinfo_is_readable_for_test()? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-}
-
-#[derive(Clone)]
-struct MountRootReconciliation {
-    mount_namespace_inode: u32,
-    configured: ExactFileObjectConfig,
-    canonical_path: PathBuf,
-}
-
-fn install_global_mount_barrier(
-    host: &KernelHost,
-    roots: &[MountRootReconciliation],
-) -> Result<()> {
-    let key = 0_u32.to_ne_bytes();
-    let zero = 0_u64.to_ne_bytes();
-    let topology_generation = roots
-        .iter()
-        .map(|root| root.configured.mount_topology_generation)
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    if host
-        .lookup_map("mount_global_mutation_epoch", &key)
-        .context(InterceptorSnafu)?
-        .is_none()
-    {
-        host.update_map(
-            "mount_global_mutation_epoch",
-            &key,
-            &topology_generation.to_ne_bytes(),
-        )
-        .context(InterceptorSnafu)?;
-    }
-    for map in ["mount_global_clean_epoch", "mount_global_pending_mutations"] {
-        if host
-            .lookup_map(map, &key)
-            .context(InterceptorSnafu)?
-            .is_none()
-        {
-            host.update_map(map, &key, &zero)
-                .context(InterceptorSnafu)?;
-        }
-    }
-    for map in [
-        "canonical_mount_cache_generation",
-        "mount_global_activity_sequence",
-        "mount_global_ambiguous_epoch",
-    ] {
-        if host
-            .lookup_map(map, &key)
-            .context(InterceptorSnafu)?
-            .is_none()
-        {
-            host.update_map(map, &key, &1_u64.to_ne_bytes())
-                .context(InterceptorSnafu)?;
-        }
-    }
-    let epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &key)?;
-    let clean = mount_epoch_from(host, "mount_global_clean_epoch", &key)?;
-    let pending = mount_epoch_from(host, "mount_global_pending_mutations", &key)?;
-    ensure!(
-        epoch != 0
-            && clean <= epoch
-            && pending == 0
-            && mount_epoch_from(host, "canonical_mount_cache_generation", &key)? != 0
-            && mount_epoch_from(host, "mount_global_activity_sequence", &key)? != 0
-            && mount_epoch_from(host, "mount_global_ambiguous_epoch", &key)? != 0,
-        IdentityStateSnafu {
-            reason: "global mount security barrier readback is invalid",
-        }
-    );
-    Ok(())
-}
-
-fn same_exact_file(left: &ExactFileObjectConfig, right: &ExactFileObjectConfig) -> bool {
-    left.mount_namespace_inode == right.mount_namespace_inode
-        && left.mount_id_unique == right.mount_id_unique
-        && left.filesystem_device == right.filesystem_device
-        && left.inode == right.inode
-        && left.inode_generation == right.inode_generation
-}
-
-fn validate_mount_view(
-    view: &crate::exact_object::ExactFileObjectView,
-    planned: &MountRootReconciliation,
-    retained: bool,
-) -> Result<()> {
-    let configured = &planned.configured;
-    let resolved = view.resolve(
-        &planned.canonical_path,
-        configured.profile_generation_ref_id,
-        configured.exact_object_key_id,
-        configured.object_class_id.clone(),
-        configured.inode_generation,
-        configured
-            .device
-            .as_ref()
-            .map(|device| device.device_class_id.clone()),
-    )?;
-    ensure!(
-        same_exact_file(configured, &resolved)
-            && resolved.canonical_component_hex == configured.canonical_component_hex
-            && resolved.mount_relative_component_count == configured.mount_relative_component_count
-            && (retained
-                || resolved.mount_snapshot_digest_id == configured.mount_snapshot_digest_id),
-        IdentityStateSnafu {
-            reason: format!(
-                "mount view differs from exact authority for {}: retained={retained}, configured mount/inode={}/{}, resolved mount/inode={}/{}",
-                planned.canonical_path.display(),
-                configured.mount_id_unique,
-                configured.inode,
-                resolved.mount_id_unique,
-                resolved.inode,
-            ),
-        }
-    );
-    Ok(())
-}
-
-#[derive(Default)]
-struct LoweredGeneration {
-    descriptor: ProfileGenerationDescriptorV1,
-    semantics: GenerationSemantics,
-    entry_admissions: BTreeMap<Vec<u8>, Vec<u8>>,
-    decisions: BTreeMap<Vec<u8>, Vec<u8>>,
-    defaults: BTreeMap<Vec<u8>, Vec<u8>>,
-    device_decisions: BTreeMap<Vec<u8>, Vec<u8>>,
-    process_control_rules: BTreeMap<Vec<u8>, Vec<u8>>,
-    ipc_relationships: BTreeMap<Vec<u8>, Vec<u8>>,
-    network_ipv4_classes: BTreeMap<Vec<u8>, Vec<u8>>,
-    network_ipv6_classes: BTreeMap<Vec<u8>, Vec<u8>>,
-    network_decisions: BTreeMap<Vec<u8>, Vec<u8>>,
-    exceptions: BTreeMap<Vec<u8>, Vec<u8>>,
-    exception_deadlines_utc: BTreeMap<Vec<u8>, i64>,
-    exception_bindings: BTreeMap<Vec<u8>, Vec<u8>>,
-    file_objects: BTreeMap<Vec<u8>, Vec<u8>>,
-    mount_views: BTreeMap<Vec<u8>, Vec<u8>>,
-    mount_epochs: BTreeMap<Vec<u8>, Vec<u8>>,
-    mount_locks: BTreeMap<Vec<u8>, Vec<u8>>,
-    mount_roots: BTreeMap<Vec<u8>, Vec<u8>>,
-    path_exact: BTreeMap<Vec<u8>, Vec<u8>>,
-    path_wildcards: BTreeMap<Vec<u8>, Vec<u8>>,
-    path_terminals: BTreeMap<Vec<u8>, Vec<u8>>,
-    path_tree_denials: BTreeMap<Vec<u8>, Vec<u8>>,
-    administrative_required: bool,
-    administrative_plans: Vec<AdministrativePolicyPlanV1>,
-    mount_reconciliation: Vec<MountRootReconciliation>,
-}
-
-struct PreparedSelector<'a> {
-    source: &'a PathSelectorV1,
-    handle: u64,
-    composite: u64,
-}
-
-struct PreparedGeneration<'a> {
-    artifact: &'a ProfileCandidateArtifactV1,
-    lowered: LoweredGeneration,
-    role_states: BTreeMap<String, (u32, u32)>,
-    composite_handles: BTreeMap<String, u64>,
-    signed_device_classes: BTreeSet<String>,
-    exception_handles: BTreeMap<String, u32>,
-    selectors: Vec<PreparedSelector<'a>>,
-    graph: mithril_control::DeterministicPathGraphV1,
-    network: LoweredNetworkPolicy,
-    node_id: Id128V1,
-    now_utc_ns: i64,
-    now_boottime_ns: u64,
-}
-
-impl<'a> PreparedGeneration<'a> {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        artifact: &'a ProfileCandidateArtifactV1,
-        generation: u64,
-        node_boot_id: Id128V1,
-        node_id: Id128V1,
-        label_epoch: u64,
-        now_utc_ns: i64,
-        now_boottime_ns: u64,
-    ) -> Result<Self> {
-        let semantics = GenerationSemantics::try_from(artifact)?;
-        let role_states = artifact
-            .policy_document
-            .roles
-            .iter()
-            .map(|role| {
-                Ok((
-                    role.role_id.clone(),
-                    (
-                        semantics.role_handles[&role.role_id],
-                        semantics
-                            .process_state_handles
-                            .get(&role.default_process_state_id)
-                            .map(|(handle, _)| *handle)
-                            .ok_or_else(|| {
-                                IdentityStateSnafu {
-                                    reason: format!(
-                                        "signed role `{}` references unknown process state `{}`",
-                                        role.role_id, role.default_process_state_id
-                                    ),
-                                }
-                                .build()
-                            })?,
-                    ),
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
-        let composite_handles = LoweredGeneration::composite_handles(artifact);
-        let signed_device_classes = artifact
-            .policy_document
-            .path_selectors
-            .iter()
-            .filter_map(|selector| selector.device_class_id.clone())
-            .collect::<BTreeSet<_>>();
-        let exception_handles = handles(
-            artifact
-                .policy_document
-                .exceptions
-                .iter()
-                .map(|exception| exception.exception_id.as_str())
-                .chain(
-                    artifact
-                        .policy_document
-                        .file_exception_grants
-                        .iter()
-                        .map(|grant| grant.grant_id.as_str()),
-                ),
-        );
-        let mut selectors = Vec::new();
-        // The candidate verifier checks selector IDs and signed class pairs.
-        for source in &artifact.policy_document.path_selectors {
-            selectors.push(PreparedSelector {
-                source,
-                handle: source.kernel_handle(),
-                composite: *composite_handles
-                    .get(&format!("PATH:{}", source.path_selector_id))
-                    .context(IdentityStateSnafu {
-                        reason: format!(
-                            "path selector `{}` has an unknown signed object class",
-                            source.path_selector_id
-                        ),
-                    })?,
-            });
-        }
-        let graph = LoweredGeneration::compile_path_graph(artifact)?;
-        let path_tables = PathTables::for_graph(
-            artifact,
-            &graph,
-            generation,
-            &composite_handles,
-            &semantics.role_handles,
-        )?;
-        let ipc_relationships = lower_ipc_relationships(
-            &artifact.policy_document,
-            generation,
-            &semantics.role_handles,
-            artifact.compiled_profile.mode,
-        )?;
-        let network = LoweredNetworkPolicy::lower(&artifact.policy_document, generation)?;
-        let descriptor = ProfileGenerationDescriptorV1 {
-            node_boot_id,
-            profile_id: semantics.profile_id,
-            label_epoch,
-            profile_generation_ref_id: generation,
-            owner_generation: artifact.header.profile_version,
-            row_count: 0,
-            default_count: 0,
-            state: PolicyGenerationStateV1::Preparing,
-            mode: match artifact.compiled_profile.mode {
-                ProfileModeV1::Observe => PolicyGenerationModeV1::Observe,
-                ProfileModeV1::Protect => PolicyGenerationModeV1::Protect,
-            },
-            reserved: [0; 6],
-            table_digest: [0; 32],
-            transition_version: 1,
-        };
-        Ok(Self {
-            artifact,
-            lowered: LoweredGeneration {
-                descriptor,
-                semantics,
-                ipc_relationships,
-                path_exact: path_tables.exact,
-                path_wildcards: path_tables.wildcards,
-                path_terminals: path_tables.terminals,
-                path_tree_denials: path_tables.path_tree_denials,
-                ..LoweredGeneration::default()
-            },
-            role_states,
-            composite_handles,
-            signed_device_classes,
-            exception_handles,
-            selectors,
-            graph,
-            network,
-            node_id,
-            now_utc_ns,
-            now_boottime_ns,
-        })
-    }
-
-    fn check_candidate(&self, artifact: &ProfileCandidateArtifactV1) -> Result<()> {
-        ensure!(
-            self.artifact == artifact,
-            IdentityStateSnafu {
-                reason: "one generation handle cannot name different candidate artifacts",
-            }
-        );
-        Ok(())
-    }
-
-    fn add_binding(
-        &mut self,
-        binding: &WorkloadBindingConfig,
-        measured_objects: &[ExactFileObjectConfig],
-        measured_mount_routes: &[MeasuredMountRouteV1],
-        defer_binding_entries: bool,
-    ) -> Result<()> {
-        let artifact = self.artifact;
-        let generation = binding.active_profile_generation_ref_id;
-        ensure!(
-            artifact.header.profile_id == binding.profile_id
-                && self.lowered.descriptor.profile_generation_ref_id == generation,
-            IdentityStateSnafu {
-                reason: "candidate profile or generation does not match its workload binding",
-            }
-        );
-        let semantics = &self.lowered.semantics;
-        let generation_objects = measured_objects
-            .iter()
-            .filter(|object| object.profile_generation_ref_id == generation);
-        let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
-        let mut proven = Vec::new();
-        for object in generation_objects.clone() {
-            let mut matching = self
-                .selectors
-                .iter()
-                .filter(|selector| selector.handle == object.exact_object_key_id);
-            let selector = matching
-                .clone()
-                .find(|selector| {
-                    selector.source.requires_exact_object()
-                        || entry_selector_ids.contains(&selector.source.path_selector_id)
-                })
-                .context(IdentityStateSnafu {
-                    reason: format!(
-                        "measured object handle {} has no signed path selector",
-                        object.exact_object_key_id
-                    ),
-                })?;
-            let signed = selector.source;
-            let signed_components = canonical_path_components(
-                artifact.header.profile_id.as_str(),
-                signed.path_expression(),
-            )
-            .context(PolicySnafu)?;
-            ensure!(
-                signed.object_class_id == object.object_class_id
-                    && signed.device_class_id.is_some() == object.device.is_some()
-                    && object.canonical_component_hex
-                        == signed_components
-                            .iter()
-                            .map(hex::encode)
-                            .collect::<Vec<_>>(),
-                IdentityStateSnafu {
-                    reason: "measured exact object differs from its signed path selector",
-                }
-            );
-            if let Some(device) = &object.device {
-                ensure!(
-                    signed.device_class_id.as_deref() == Some(device.device_class_id.as_str()),
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "device class `{}` is not signed for object class `{}`",
-                            device.device_class_id, object.object_class_id
-                        ),
-                    }
-                );
-            }
-            if matching
-                .clone()
-                .any(|selector| selector.source.requires_exact_object())
-            {
-                proven.push((object, matching.next().unwrap_or(selector)));
-            }
-        }
-        if let Some(selector) = self
-            .selectors
-            .iter()
-            .filter(|selector| {
-                selector.source.requires_exact_object()
-                    && !proven
-                        .iter()
-                        .any(|(object, _)| object.exact_object_key_id == selector.handle)
-            })
-            .min_by_key(|selector| selector.source.path_selector_id.as_str())
-        {
-            return IdentityStateSnafu {
-                reason: format!(
-                    "exact selector `{}` has no proven object in the container",
-                    selector.source.path_selector_id
-                ),
-            }
-            .fail();
-        }
-        let policy_exact_objects = proven.iter().map(|(object, _)| *object).collect::<Vec<_>>();
-        self.validate_binding_roles(binding)?;
-        let entry_admissions = self.lower_entry_admissions(binding, defer_binding_entries)?;
-        let mut decisions = BTreeMap::new();
-        let mut defaults = BTreeMap::new();
-        let mut device_decisions = BTreeMap::new();
-        let mut process_control_rules = BTreeMap::new();
-        let mut network = LoweredNetworkPolicy::default();
-        let mut used_exceptions = BTreeSet::new();
-        for cell in &artifact.compiled_profile.compiled_cells {
-            if !cell_matches_binding(&cell.key, binding, &artifact.policy_document) {
-                continue;
-            }
-            let mut key = EffectDefaultKeyV1 {
-                profile_generation_ref_id: generation,
-                active_role_id: *semantics.role_handles.get(&cell.key.role_id).context(
-                    IdentityStateSnafu {
-                        reason: format!("compiled cell has unknown role `{}`", cell.key.role_id),
-                    },
-                )?,
-                process_state_vector_id: semantics
-                    .process_state_handles
-                    .get(&cell.key.process_state_id)
-                    .map(|(handle, _)| *handle)
-                    .context(IdentityStateSnafu {
-                        reason: format!(
-                            "compiled cell has unknown process state `{}`",
-                            cell.key.process_state_id
-                        ),
-                    })?,
-                effect_family: KernelEffectFamilyV1::from(cell.key.effect_family) as u16,
-                operation: CompiledOperationV1::try_from(cell.key.operation_id.as_str())
-                    .ok()
-                    .context(IdentityStateSnafu {
-                        reason: format!("unsupported kernel operation `{}`", cell.key.operation_id),
-                    })?
-                    .kernel_id as u16,
-                composite_atom_id: 0,
-                binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                reserved_tail: [0; 3],
-            };
-            let exception_handle = if let Some(id) = cell.consuming_exception_id.as_deref() {
-                used_exceptions.insert(id);
-                *self.exception_handles.get(id).context(IdentityStateSnafu {
-                    reason: format!("compiled cell has unknown exception `{id}`"),
-                })?
-            } else {
-                0
-            };
-            let physical = physical_decision(cell.physical_result, cell.errno, exception_handle);
-            if let Some(capability) = LoweredGeneration::linux_capability(cell)? {
-                ensure!(
-                    key.effect_family == KernelEffectFamilyV1::Privilege as u16
-                        && key.operation == KernelEffectOperationV1::Capability as u16,
-                    IdentityStateSnafu {
-                        reason:
-                            "a Linux capability selector is valid only for PRIVILEGE/CAPABILITY",
-                    }
-                );
-                key.composite_atom_id = u64::from(capability) + 1;
-            } else if let Some(destination_id) =
-                cell.key.object_selector.strip_prefix("DESTINATION:")
-            {
-                ensure!(
-                    cell.key.effect_family == mithril_control::EffectFamilyV1::Network,
-                    IdentityStateSnafu {
-                        reason: "a destination selector lowered outside NETWORK".to_owned(),
-                    }
-                );
-                let destination = artifact
-                    .policy_document
-                    .network_policy
-                    .iter()
-                    .flat_map(|policy| &policy.destination_policies)
-                    .find(|policy| policy.destination_policy_id == destination_id)
-                    .context(IdentityStateSnafu {
-                        reason: format!("compiled cell has unknown destination `{destination_id}`"),
-                    })?;
-                let destination_policy_handle = self
-                    .network
-                    .destination_handle(destination_id)
-                    .context(IdentityStateSnafu {
-                        reason: format!(
-                            "compiled cell has no handle for destination `{destination_id}`"
-                        ),
-                    })?;
-                network.insert_decisions(
-                    NetworkDestinationDecisionKeyV1 {
-                        profile_generation_ref_id: generation,
-                        destination_policy_handle,
-                        active_role_id: key.active_role_id,
-                        process_state_vector_id: key.process_state_vector_id,
-                        operation: key.operation,
-                        binding_lifecycle_state: key.binding_lifecycle_state,
-                        ..NetworkDestinationDecisionKeyV1::default()
-                    },
-                    &destination.protocols,
-                    physical,
-                )?;
-                continue;
-            } else if lower_typed_effect(
-                cell,
-                &TypedEffectContext {
-                    profile_generation_ref_id: generation,
-                    actor_role_id: key.active_role_id,
-                    actor_process_state_vector_id: key.process_state_vector_id,
-                    binding_lifecycle_state: key.binding_lifecycle_state,
-                    exact_objects: &policy_exact_objects,
-                    signed_device_classes: &self.signed_device_classes,
-                    role_states: &self.role_states,
-                },
-                physical,
-                &mut device_decisions,
-                &mut process_control_rules,
-            )? {
-                continue;
-            } else if let Some(id) = cell.key.object_selector.strip_prefix("PATH:") {
-                let selector = self
-                    .selectors
-                    .iter()
-                    .find(|selector| selector.source.path_selector_id == id)
-                    .context(IdentityStateSnafu {
-                        reason: format!("compiled cell has unknown path selector `{id}`"),
-                    })?;
-                key.composite_atom_id = selector.composite;
-                if selector.source.requires_exact_object() {
-                    let exact_key = EffectDecisionKeyV1 {
-                        profile_generation_ref_id: generation,
-                        active_role_id: key.active_role_id,
-                        effect_family: key.effect_family,
-                        operation: key.operation,
-                        composite_atom_id: key.composite_atom_id,
-                        exact_object_key_id: selector.handle,
-                        process_state_vector_id: key.process_state_vector_id,
-                        binding_lifecycle_state: key.binding_lifecycle_state,
-                        reserved_tail: [0; 3],
-                    };
-                    insert_exact(&mut decisions, exact_key.as_bytes(), physical.as_bytes())?;
-                    continue;
-                }
-            } else if cell.key.object_selector != "DEFAULT" {
-                key.composite_atom_id = *self
-                    .composite_handles
-                    .get(&cell.key.object_selector)
-                    .context(IdentityStateSnafu {
-                        reason: format!(
-                            "compiled cell has unknown object selector `{}`",
-                            cell.key.object_selector
-                        ),
-                    })?;
-            }
-            insert_exact(&mut defaults, key.as_bytes(), physical.as_bytes())?;
-        }
-        ensure!(
-            !decisions.is_empty()
-                || !defaults.is_empty()
-                || !device_decisions.is_empty()
-                || !process_control_rules.is_empty()
-                || !network.decisions.is_empty(),
-            IdentityStateSnafu {
-                reason: format!(
-                    "binding `{}` selected no exact candidate cells",
-                    binding.binding_id
-                ),
-            }
-        );
-        for exception in &artifact.policy_document.exceptions {
-            let binding_key = ExceptionHandleBindingKeyV1 {
-                profile_generation_ref_id: generation,
-                exception_numeric_handle: self.exception_handles[&exception.exception_id],
-                reserved: 0,
-            };
-            if !used_exceptions.contains(exception.exception_id.as_str())
-                || self
-                    .lowered
-                    .exception_bindings
-                    .contains_key(binding_key.as_bytes())
-            {
-                continue;
-            }
-            ensure!(
-                exception.valid_from_utc_ns <= self.now_utc_ns
-                    && self.now_utc_ns < exception.valid_until_utc_ns,
-                IdentityStateSnafu {
-                    reason: format!(
-                        "exception `{}` is not valid at node activation",
-                        exception.exception_id
-                    ),
-                }
-            );
-            let remaining = exception
-                .valid_until_utc_ns
-                .checked_sub(self.now_utc_ns)
-                .context(IdentityStateSnafu {
-                    reason: "exception UTC lifetime overflow",
-                })?;
-            let lifetime =
-                remaining.min(i64::try_from(exception.maximum_lifetime_ns).unwrap_or(i64::MAX));
-            // The bounded lifetime is nonnegative and cannot exceed the checked remainder.
-            let deadline_utc_ns = exception.valid_until_utc_ns - (remaining - lifetime);
-            let deadline_boottime_ns = self
-                .now_boottime_ns
-                .checked_add(lifetime.unsigned_abs())
-                .context(IdentityStateSnafu {
-                    reason: "exception monotonic deadline overflow",
-                })?;
-            let exception_instance_id =
-                parse_id("exception_instance_id", &exception.exception_instance_id)?;
-            ensure!(
-                !exception_instance_id.is_zero(),
-                IdentityStateSnafu {
-                    reason: "exception_instance_id must be nonzero",
-                }
-            );
-            let runtime_state_key = ExceptionRuntimeStateKeyV1 {
-                node_id: self.node_id,
-                exception_instance_id,
-            };
-            let exception_definition_sha256 =
-                Sha256::digest(serde_json::to_vec(exception).map_err(|error| {
-                    IdentityStateSnafu {
-                        reason: format!("serialize signed exception definition: {error}"),
-                    }
-                    .build()
-                })?)
-                .into();
-            let value = ExceptionRuntimeStateV1 {
-                maximum_uses: exception.maximum_uses,
-                bound_profile_generation_refs: 1,
-                deadline_boottime_ns,
-                transition_version: 1,
-                exception_definition_sha256,
-                state: ExceptionRuntimeStateKindV1::Active,
-                ..ExceptionRuntimeStateV1::default()
-            };
-            insert_exact(
-                &mut self.lowered.exceptions,
-                runtime_state_key.as_bytes(),
-                value.as_bytes(),
-            )?;
-            ensure!(
-                self.lowered
-                    .exception_deadlines_utc
-                    .insert(runtime_state_key.as_bytes().to_vec(), deadline_utc_ns)
-                    .is_none_or(|existing| existing == deadline_utc_ns),
-                IdentityStateSnafu {
-                    reason: "one exception instance has unequal activation deadlines",
-                }
-            );
-            let binding_value = ExceptionHandleBindingV1 {
-                runtime_state_key,
-                state: ExceptionBindingStateV1::Active,
-                ..ExceptionHandleBindingV1::default()
-            };
-            insert_exact(
-                &mut self.lowered.exception_bindings,
-                binding_key.as_bytes(),
-                binding_value.as_bytes(),
-            )?;
-        }
-        let mut file_objects = BTreeMap::new();
-        for (object, selector) in proven {
-            let key = ExactFileObjectKeyV1 {
-                profile_generation_ref_id: object.profile_generation_ref_id,
-                mount_namespace_inode: object.mount_namespace_inode,
-                mount_id_unique: object.selected_mount_id_unique,
-                filesystem_device: object.filesystem_device,
-                inode: object.inode,
-                inode_generation: object.inode_generation,
-            };
-            let value = ExactObjectBindingV1 {
-                profile_generation_ref_id: object.profile_generation_ref_id,
-                exact_object_key_id: object.exact_object_key_id,
-                composite_atom_id: selector.composite,
-                state: ExactObjectBindingStateV1::ReadBack,
-                reserved: [0; 7],
-            };
-            insert_exact(&mut file_objects, key.as_bytes(), value.as_bytes())?;
-        }
-        let (administrative_required, administrative_plans) =
-            self.lower_administrative_plans(binding)?;
-        let mut path_tables = PathTables::default();
-        path_tables.add_binding(
-            &self.graph,
-            binding,
-            &policy_exact_objects,
-            measured_mount_routes,
-        )?;
-        path_tables.add_mount_namespace_guards(generation_objects)?;
-        let lowered = &mut self.lowered;
-        merge_rows(&mut lowered.entry_admissions, entry_admissions)?;
-        merge_rows(&mut lowered.decisions, decisions)?;
-        merge_rows(&mut lowered.defaults, defaults)?;
-        merge_rows(&mut lowered.device_decisions, device_decisions)?;
-        merge_rows(&mut lowered.process_control_rules, process_control_rules)?;
-        merge_rows(&mut self.network.decisions, network.decisions)?;
-        merge_rows(&mut lowered.file_objects, file_objects)?;
-        merge_rows(&mut lowered.mount_views, path_tables.mount_views)?;
-        merge_rows(&mut lowered.mount_epochs, path_tables.mount_epochs)?;
-        merge_rows(&mut lowered.mount_locks, path_tables.mount_locks)?;
-        merge_rows(&mut lowered.mount_roots, path_tables.mount_roots)?;
-        lowered.administrative_required |= administrative_required;
-        lowered.administrative_plans.extend(administrative_plans);
-        lowered
-            .mount_reconciliation
-            .extend(path_tables.reconciliation);
-        Ok(())
-    }
-
-    fn lower_entry_admissions(
-        &self,
-        binding: &WorkloadBindingConfig,
-        defer_entries: bool,
-    ) -> Result<GenerationRows> {
-        let artifact = self.artifact;
-        let semantics = &self.lowered.semantics;
-        let assignment_handles = handles(
-            artifact
-                .policy_document
-                .entry_role_assignments
-                .iter()
-                .map(|assignment| assignment.assignment_id.as_str()),
-        );
-        let binding_id = if defer_entries {
-            binding
-                .scheduled_binding_authority_id
-                .as_deref()
-                .map(|binding_id| parse_id("scheduled_binding_authority_id", binding_id))
-                .transpose()?
-                .unwrap_or(parse_id("binding_id", &binding.binding_id)?)
-        } else {
-            parse_id("binding_id", &binding.binding_id)?
-        };
-        let external_role_id = semantics
-            .role_handles
-            .iter()
-            .find_map(|(role, handle)| {
-                (*handle == binding.external_role_id).then_some(role.as_str())
-            })
-            .context(IdentityStateSnafu {
-                reason: "configured external role has no signed role ID",
-            })?;
-        let mut rows = GenerationRows::new();
-        for assignment in artifact
-            .policy_document
-            .entry_role_assignments
-            .iter()
-            .filter(|assignment| {
-                assignment
-                    .workload_selector_ids
-                    .contains(&binding.workload_selector_id)
-                    && assignment
-                        .container_kinds
-                        .contains(&policy_container_kind(binding.container_kind))
-                    && assignment.admission_execution_rule_id.is_some()
-            })
-        {
-            let [policy_entry_kind] = assignment.entry_kinds.as_slice() else {
-                return IdentityStateSnafu {
-                    reason: format!(
-                        "entry admission `{}` does not have one entry kind",
-                        assignment.assignment_id
-                    ),
-                }
-                .fail();
-            };
-            let source_role_id = match policy_entry_kind {
-                EntryKindV1::ContainerStart => assignment.resulting_role_id.as_str(),
-                EntryKindV1::DeclaredPostStart
-                | EntryKindV1::DeclaredPreStop
-                | EntryKindV1::DeclaredStartupProbe
-                | EntryKindV1::DeclaredReadinessProbe
-                | EntryKindV1::DeclaredLivenessProbe => external_role_id,
-                _ => {
-                    return IdentityStateSnafu {
-                        reason: format!(
-                            "entry admission `{}` uses an unsupported transition kind",
-                            assignment.assignment_id
-                        ),
-                    }
-                    .fail()
-                }
-            };
-            let rule_id =
-                assignment
-                    .admission_execution_rule_id
-                    .as_deref()
-                    .context(IdentityStateSnafu {
-                        reason: "entry admission lost its execution rule",
-                    })?;
-            let rule = artifact
-                .policy_document
-                .rules
-                .iter()
-                .find(|rule| rule.rule_id == rule_id)
-                .context(IdentityStateSnafu {
-                    reason: format!("entry admission rule `{rule_id}` is not signed"),
-                })?;
-            let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match else {
-                return IdentityStateSnafu {
-                    reason: format!("entry admission rule `{rule_id}` is not a local effect"),
-                }
-                .fail();
-            };
-            let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object else {
-                return IdentityStateSnafu {
-                    reason: format!("entry admission rule `{rule_id}` has no path selector"),
-                }
-                .fail();
-            };
-            let [path_selector_id] = path_selector_ids.as_slice() else {
-                return IdentityStateSnafu {
-                    reason: format!("entry admission rule `{rule_id}` is not one exact path match"),
-                }
-                .fail();
-            };
-            let selector = artifact
-                .policy_document
-                .path_selectors
-                .iter()
-                .find(|selector| selector.path_selector_id == *path_selector_id)
-                .context(IdentityStateSnafu {
-                    reason: format!(
-                        "entry admission rule `{rule_id}` has an unknown path selector"
-                    ),
-                })?;
-            ensure!(
-                rule.enabled
-                    && rule.requested_disposition == PolicyDispositionV1::Allow
-                    && effect.effect_families == [mithril_control::EffectFamilyV1::Exec]
-                    && effect.operation_ids.iter().any(|operation| operation == "EXECUTE")
-                    && effect.subject.role_ids == [assignment.resulting_role_id.as_str()]
-                    && effect
-                        .subject
-                        .entry_kind_ids
-                        .contains(policy_entry_kind)
-                    && !selector.requires_exact_object(),
-                IdentityStateSnafu {
-                    reason: format!(
-                        "entry admission rule `{rule_id}` is not one literal-path Allow Execute rule for its role and entry kind"
-                    ),
-                }
-            );
-            let target_role_id = semantics.role_handles[&assignment.resulting_role_id];
-            let target_role = artifact
-                .policy_document
-                .roles
-                .iter()
-                .find(|role| role.role_id == assignment.resulting_role_id)
-                .context(IdentityStateSnafu {
-                    reason: format!(
-                        "entry admission `{}` has no signed target role",
-                        assignment.assignment_id
-                    ),
-                })?;
-            let key = EntryAdmissionRuleKeyV1 {
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                binding_id,
-                composite_atom_id: self.composite_handles[&format!("PATH:{path_selector_id}")],
-                source_role_id: semantics.role_handles[source_role_id],
-                reserved: 0,
-            };
-            let value = EntryAdmissionRuleV1 {
-                target_role_id,
-                target_process_state_vector_id: semantics.process_state_handles
-                    [&target_role.default_process_state_id]
-                    .0,
-                admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
-                reserved: 0,
-                exact_object_key_id: 0,
-                executable_object: ExactFileObjectKeyV1::default(),
-            };
-            insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
-        }
-        Ok(rows)
-    }
-
-    fn validate_binding_roles(&self, binding: &WorkloadBindingConfig) -> Result<()> {
-        let artifact = self.artifact;
-        let semantics = &self.lowered.semantics;
-        for (entry_kind, configured_handle) in [
-            (EntryKindV1::ContainerStart, binding.initial_role_id),
-            (
-                EntryKindV1::ExternalRuntimeUnknown,
-                binding.external_role_id,
-            ),
-        ] {
-            let role_ids = artifact
-                .policy_document
-                .entry_role_assignments
-                .iter()
-                .filter(|assignment| {
-                    assignment
-                        .workload_selector_ids
-                        .contains(&binding.workload_selector_id)
-                        && assignment.entry_kinds.contains(&entry_kind)
-                        && assignment
-                            .container_kinds
-                            .contains(&policy_container_kind(binding.container_kind))
-                })
-                .map(|assignment| assignment.resulting_role_id.as_str())
-                .collect::<BTreeSet<_>>();
-            ensure!(
-                role_ids.len() == 1,
-                IdentityStateSnafu {
-                    reason: format!(
-                        "binding `{}` needs one exact signed {entry_kind:?} role assignment",
-                        binding.binding_id
-                    ),
-                }
-            );
-            let role_id = role_ids.iter().next().copied().ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!(
-                        "binding `{}` lost its signed {entry_kind:?} role assignment",
-                        binding.binding_id
-                    ),
-                }
-                .build()
-            })?;
-            ensure!(
-                semantics.role_handles.get(role_id) == Some(&configured_handle),
-                IdentityStateSnafu {
-                    reason: format!(
-                        "binding `{}` configured role handle does not match signed {entry_kind:?} role `{role_id}`",
-                        binding.binding_id
-                    ),
-                }
-            );
-            let role = artifact
-                .policy_document
-                .roles
-                .iter()
-                .find(|role| role.role_id == role_id)
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: format!("signed role `{role_id}` is not defined"),
-                    }
-                    .build()
-                })?;
-            let state = artifact
-                .policy_document
-                .process_state_definitions
-                .iter()
-                .find(|state| state.process_state_id == role.default_process_state_id)
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "signed role `{role_id}` references undefined process state `{}`",
-                            role.default_process_state_id
-                        ),
-                    }
-                    .build()
-                })?;
-            ensure!(
-                semantics
-                    .process_state_handles
-                    .get(&state.process_state_id)
-                    .is_some_and(|(handle, _)| *handle == 1)
-                    && state.state_bits.is_empty(),
-                IdentityStateSnafu {
-                    reason: format!(
-                        "signed role `{role_id}` needs the conservative empty process-state vector supported by the BPF root path"
-                    ),
-                }
-            );
-        }
-        Ok(())
-    }
-
-    fn lower_administrative_plans(
-        &self,
-        binding: &WorkloadBindingConfig,
-    ) -> Result<(bool, Vec<AdministrativePolicyPlanV1>)> {
-        let artifact = self.artifact;
-        let semantics = &self.lowered.semantics;
-        let assignments = artifact
-            .policy_document
-            .entry_role_assignments
-            .iter()
-            .filter(|assignment| {
-                assignment
-                    .workload_selector_ids
-                    .contains(&binding.workload_selector_id)
-                    && assignment.entry_kinds.as_slice()
-                        == [EntryKindV1::ApprovedAdministrativeExec]
-                    && assignment
-                        .container_kinds
-                        .contains(&policy_container_kind(binding.container_kind))
-                    && assignment.required_administrative_exec_approval
-            })
-            .collect::<Vec<_>>();
-        if assignments.is_empty() {
-            return Ok((false, Vec::new()));
-        }
-        ensure!(
-            assignments.len() == 1,
-            IdentityStateSnafu {
-                reason: "one container binding must have one administrative entry",
-            }
-        );
-        let assignment_handles = handles(
-            artifact
-                .policy_document
-                .entry_role_assignments
-                .iter()
-                .map(|assignment| assignment.assignment_id.as_str()),
-        );
-        let artifact_sha256 = decode_sha256(&artifact.header.policy_document_digest)?;
-        let profile = PortableProfileGenerationIdentityV1 {
-            profile_id: parse_id("profile_id", &artifact.header.profile_id)?,
-            owner_generation: artifact.header.profile_version,
-            artifact_sha256,
-        };
-        let mut plans = Vec::new();
-        for assignment in assignments {
-            let role = artifact
-                .policy_document
-                .roles
-                .iter()
-                .find(|role| role.role_id == assignment.resulting_role_id)
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "administrative assignment has no signed role".to_owned(),
-                    }
-                    .build()
-                })?;
-            let process_state = artifact
-                .policy_document
-                .process_state_definitions
-                .iter()
-                .find(|state| state.process_state_id == role.default_process_state_id)
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "administrative role has no signed process state".to_owned(),
-                    }
-                    .build()
-                })?;
-            ensure!(
-                role.permitted_entry_kinds
-                    .contains(&EntryKindV1::ApprovedAdministrativeExec)
-                    && process_state.state_bits.is_empty()
-                    && semantics
-                        .process_state_handles
-                        .get(&process_state.process_state_id)
-                        .is_some_and(|(handle, _)| *handle == 1),
-                IdentityStateSnafu {
-                    reason: "administrative role needs the supported approved entry and conservative process state",
-                }
-            );
-            let approved_role_numeric_id = semantics.role_handles[&role.role_id];
-            plans.push(AdministrativePolicyPlanV1 {
-                binding_id: parse_id("binding_id", &binding.binding_id)?,
-                approved_role_id: role.role_id.clone(),
-                approved_role_numeric_id,
-                admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
-                profile: profile.clone(),
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            });
-        }
-        Ok((true, plans))
-    }
-
-    fn finish(mut self) -> Result<LoweredGeneration> {
-        let lowered = &mut self.lowered;
-        lowered.network_ipv4_classes = self.network.ipv4_classes;
-        lowered.network_ipv6_classes = self.network.ipv6_classes;
-        lowered.network_decisions = self.network.decisions;
-        ensure!(
-            !lowered.decisions.is_empty()
-                || !lowered.defaults.is_empty()
-                || !lowered.device_decisions.is_empty()
-                || !lowered.process_control_rules.is_empty()
-                || !lowered.network_decisions.is_empty(),
-            IdentityStateSnafu {
-                reason: "generation selected no exact candidate cells",
-            }
-        );
-        let entry_authority = entry_admission_authority_rows(&lowered.entry_admissions)?;
-        lowered.descriptor.row_count = lowered
-            .decisions
-            .len()
-            .checked_add(entry_authority.len())
-            .and_then(|count| count.checked_add(lowered.process_control_rules.len()))
-            .and_then(|count| count.checked_add(lowered.ipc_relationships.len()))
-            .and_then(|count| count.checked_add(lowered.network_ipv4_classes.len()))
-            .and_then(|count| count.checked_add(lowered.network_ipv6_classes.len()))
-            .and_then(|count| count.checked_add(lowered.network_decisions.len()))
-            .and_then(|count| count.try_into().ok())
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "decision row count overflow".to_owned(),
-                }
-                .build()
-            })?;
-        lowered.descriptor.default_count = lowered.defaults.len().try_into().map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("default row count overflow: {error}"),
-            }
-            .build()
-        })?;
-        lowered.descriptor.table_digest = table_digest(&[
-            ("entry-admission", &entry_authority),
-            ("decision", &lowered.decisions),
-            ("default", &lowered.defaults),
-            ("process-control-rule", &lowered.process_control_rules),
-            ("ipc-relationship", &lowered.ipc_relationships),
-            ("network-ipv4-class", &lowered.network_ipv4_classes),
-            ("network-ipv6-class", &lowered.network_ipv6_classes),
-            ("network-decision", &lowered.network_decisions),
-            ("path-exact", &lowered.path_exact),
-            ("path-wildcard", &lowered.path_wildcards),
-            ("path-terminal", &lowered.path_terminals),
-            ("path-tree-denial", &lowered.path_tree_denials),
-        ]);
-        Ok(self.lowered)
-    }
-}
-
-impl LoweredGeneration {
-    #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    fn for_binding(
-        artifact: &ProfileCandidateArtifactV1,
-        binding: &WorkloadBindingConfig,
-        measured_objects: &[ExactFileObjectConfig],
-        node_boot_id: Id128V1,
-        node_id: Id128V1,
-        label_epoch: u64,
-        now_utc_ns: i64,
-        now_boottime_ns: u64,
-    ) -> Result<Self> {
-        Self::for_binding_with_mount_routes(
-            artifact,
-            binding,
-            measured_objects,
-            &[],
-            node_boot_id,
-            node_id,
-            label_epoch,
-            now_utc_ns,
-            now_boottime_ns,
-            false,
-        )
-    }
-
-    #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    fn for_binding_with_mount_routes(
-        artifact: &ProfileCandidateArtifactV1,
-        binding: &WorkloadBindingConfig,
-        measured_objects: &[ExactFileObjectConfig],
-        measured_mount_routes: &[MeasuredMountRouteV1],
-        node_boot_id: Id128V1,
-        node_id: Id128V1,
-        label_epoch: u64,
-        now_utc_ns: i64,
-        now_boottime_ns: u64,
-        defer_binding_entries: bool,
-    ) -> Result<Self> {
-        let mut prepared = PreparedGeneration::new(
-            artifact,
-            binding.active_profile_generation_ref_id,
-            node_boot_id,
-            node_id,
-            label_epoch,
-            now_utc_ns,
-            now_boottime_ns,
-        )?;
-        prepared.add_binding(
-            binding,
-            measured_objects,
-            measured_mount_routes,
-            defer_binding_entries,
-        )?;
-        prepared.finish()
-    }
-
-    fn planned_rows(&self) -> Vec<PlannedGenerationRow<'_>> {
-        vec![
-            ("entry_admission_rules", &self.entry_admissions),
-            ("effect_decisions", &self.decisions),
-            ("effect_defaults", &self.defaults),
-            ("device_effect_decisions", &self.device_decisions),
-            ("process_control_rules", &self.process_control_rules),
-            ("ipc_relationship_decisions", &self.ipc_relationships),
-            (
-                "network_ipv4_destination_classes",
-                &self.network_ipv4_classes,
-            ),
-            (
-                "network_ipv6_destination_classes",
-                &self.network_ipv6_classes,
-            ),
-            ("network_destination_decisions", &self.network_decisions),
-            ("exception_runtime_states", &self.exceptions),
-            ("exception_handle_bindings", &self.exception_bindings),
-            ("exact_file_objects", &self.file_objects),
-            ("mount_security_views", &self.mount_views),
-            ("mount_mutation_epochs", &self.mount_epochs),
-            ("mount_security_view_locks", &self.mount_locks),
-            ("canonical_mount_roots", &self.mount_roots),
-            ("path_graph_exact_transitions", &self.path_exact),
-            ("path_graph_wildcard_transitions", &self.path_wildcards),
-            ("path_graph_terminals", &self.path_terminals),
-            ("path_tree_denials", &self.path_tree_denials),
-        ]
-    }
-
-    fn decision_rows(&self) -> Vec<ActivationDecisionRow<'_>> {
-        vec![
-            (
-                PolicyActivationProbeMapKindV1::EffectDecision,
-                &self.decisions,
-            ),
-            (
-                PolicyActivationProbeMapKindV1::EffectDefault,
-                &self.defaults,
-            ),
-            (
-                PolicyActivationProbeMapKindV1::IpcRelationship,
-                &self.ipc_relationships,
-            ),
-            (
-                PolicyActivationProbeMapKindV1::DeviceEffect,
-                &self.device_decisions,
-            ),
-            (
-                PolicyActivationProbeMapKindV1::ProcessControl,
-                &self.process_control_rules,
-            ),
-            (
-                PolicyActivationProbeMapKindV1::NetworkDestination,
-                &self.network_decisions,
-            ),
-        ]
-    }
-
-    fn probe_staged_rows(&self, host: &mut KernelHost) -> Result<()> {
-        for (map_kind, rows) in self.decision_rows() {
-            for (key, value) in rows {
-                ensure!(
-                    key.len() <= MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
-                    IdentityStateSnafu {
-                        reason: "policy activation probe key exceeds its ABI bound",
-                    }
-                );
-                let expected = PhysicalDecisionV1::try_read_from_bytes(value).map_err(|error| {
-                    IdentityStateSnafu {
-                        reason: format!("policy activation probe decision is invalid: {error}"),
-                    }
-                    .build()
-                })?;
-                let mut probe_key = [0; MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1];
-                probe_key[..key.len()].copy_from_slice(key);
-                let request = PolicyActivationProbeV1 {
-                    map_kind,
-                    reserved: [0; 7],
-                    key_size: key.len().try_into().map_err(|error| {
-                        IdentityStateSnafu {
-                            reason: format!("policy activation probe key is invalid: {error}"),
-                        }
-                        .build()
-                    })?,
-                    reserved_alignment: 0,
-                    key: probe_key,
-                    expected,
-                };
-                host.run_policy_activation_probe(request.as_bytes())
-                    .context(InterceptorSnafu)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn install(
-        &self,
-        host: &KernelHost,
-        exception_authority: &mut ExceptionAuthorityOwner,
-        now_utc_ns: i64,
-        now_boottime_ns: u64,
-    ) -> Result<()> {
-        let descriptor_key = self.descriptor.profile_generation_ref_id.to_le_bytes();
-        let existing = host
-            .lookup_map("profile_generation_descriptors", &descriptor_key)
-            .context(InterceptorSnafu)?;
-        if let Some(existing) = existing.as_deref() {
-            let preparing = self.descriptor.as_bytes();
-            let read_back = self.read_back_descriptor();
-            let active = self.active_descriptor();
-            ensure!(
-                existing == preparing
-                    || existing == read_back.as_bytes()
-                    || existing == active.as_bytes(),
-                IdentityStateSnafu {
-                    reason: "generation handle already belongs to different content",
-                }
-            );
-            if existing == active.as_bytes() {
-                self.verify_immutable_rows(host)?;
-                install_rows(host, "device_effect_decisions", &self.device_decisions)?;
-                install_exception_rows(
-                    host,
-                    &self.exceptions,
-                    &self.exception_deadlines_utc,
-                    exception_authority,
-                    now_utc_ns,
-                    now_boottime_ns,
-                )?;
-                install_rows(host, "exception_handle_bindings", &self.exception_bindings)?;
-                install_rows(host, "exact_file_objects", &self.file_objects)?;
-                self.install_missing_mount_rows(host)?;
-                self.verify_dynamic_dependency_rows(host)?;
-                return Ok(());
-            }
-        }
-        if existing.is_none() {
-            host.update_map(
-                "profile_generation_descriptors",
-                &descriptor_key,
-                self.descriptor.as_bytes(),
-            )
-            .context(InterceptorSnafu)?;
-        }
-        install_rows(host, "effect_decisions", &self.decisions)?;
-        install_rows(host, "effect_defaults", &self.defaults)?;
-        install_rows(host, "device_effect_decisions", &self.device_decisions)?;
-        install_rows(host, "process_control_rules", &self.process_control_rules)?;
-        install_rows(host, "ipc_relationship_decisions", &self.ipc_relationships)?;
-        install_rows(
-            host,
-            "network_ipv4_destination_classes",
-            &self.network_ipv4_classes,
-        )?;
-        install_rows(
-            host,
-            "network_ipv6_destination_classes",
-            &self.network_ipv6_classes,
-        )?;
-        install_rows(
-            host,
-            "network_destination_decisions",
-            &self.network_decisions,
-        )?;
-        install_exception_rows(
-            host,
-            &self.exceptions,
-            &self.exception_deadlines_utc,
-            exception_authority,
-            now_utc_ns,
-            now_boottime_ns,
-        )?;
-        install_rows(host, "exception_handle_bindings", &self.exception_bindings)?;
-        install_rows(host, "exact_file_objects", &self.file_objects)?;
-        self.install_missing_mount_rows(host)?;
-        install_rows(host, "path_graph_exact_transitions", &self.path_exact)?;
-        install_rows(
-            host,
-            "path_graph_wildcard_transitions",
-            &self.path_wildcards,
-        )?;
-        install_rows(host, "path_graph_terminals", &self.path_terminals)?;
-        install_rows(host, "path_tree_denials", &self.path_tree_denials)?;
-        self.verify_immutable_rows(host)?;
-        self.verify_dynamic_dependency_rows(host)?;
-        let read_back = self.read_back_descriptor();
-        host.update_map(
-            "profile_generation_descriptors",
-            &descriptor_key,
-            read_back.as_bytes(),
-        )
-        .context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map("profile_generation_descriptors", &descriptor_key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(read_back.as_bytes()),
-            IdentityStateSnafu {
-                reason: "candidate descriptor READ_BACK verification failed",
-            }
-        );
-        let active = self.active_descriptor();
-        host.update_map(
-            "profile_generation_descriptors",
-            &descriptor_key,
-            active.as_bytes(),
-        )
-        .context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map("profile_generation_descriptors", &descriptor_key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(active.as_bytes()),
-            IdentityStateSnafu {
-                reason: "candidate descriptor ACTIVE publication readback failed",
-            }
-        );
-        Ok(())
-    }
-
-    fn active_descriptor(&self) -> ProfileGenerationDescriptorV1 {
-        let mut active = self.descriptor;
-        active.state = PolicyGenerationStateV1::Active;
-        active.transition_version = 3;
-        active
-    }
-
-    fn read_back_descriptor(&self) -> ProfileGenerationDescriptorV1 {
-        let mut read_back = self.descriptor;
-        read_back.state = PolicyGenerationStateV1::ReadBack;
-        read_back.transition_version = 2;
-        read_back
-    }
-
-    fn verify_immutable_rows(&self, host: &KernelHost) -> Result<()> {
-        for (map, rows) in [
-            ("effect_decisions", &self.decisions),
-            ("effect_defaults", &self.defaults),
-            ("process_control_rules", &self.process_control_rules),
-            ("ipc_relationship_decisions", &self.ipc_relationships),
-            (
-                "network_ipv4_destination_classes",
-                &self.network_ipv4_classes,
-            ),
-            (
-                "network_ipv6_destination_classes",
-                &self.network_ipv6_classes,
-            ),
-            ("network_destination_decisions", &self.network_decisions),
-            ("path_graph_exact_transitions", &self.path_exact),
-            ("path_graph_wildcard_transitions", &self.path_wildcards),
-            ("path_graph_terminals", &self.path_terminals),
-            ("path_tree_denials", &self.path_tree_denials),
-        ] {
-            verify_rows(host, map, rows)?;
-        }
-        Ok(())
-    }
-
-    fn verify_dynamic_dependency_rows(&self, host: &KernelHost) -> Result<()> {
-        for (map, rows) in [
-            ("device_effect_decisions", &self.device_decisions),
-            ("exact_file_objects", &self.file_objects),
-            ("canonical_mount_roots", &self.mount_roots),
-        ] {
-            verify_rows(host, map, rows)?;
-        }
-        Ok(())
-    }
-
-    fn install_entry_admissions(&self, host: &KernelHost) -> Result<()> {
-        install_rows(host, "entry_admission_rules", &self.entry_admissions)?;
-        verify_rows(host, "entry_admission_rules", &self.entry_admissions)
-    }
-
-    fn revoke_entry_admissions(&self, host: &KernelHost) -> Result<()> {
-        for (map, rows) in [("entry_admission_rules", &self.entry_admissions)] {
-            for key in rows.keys() {
-                if host
-                    .lookup_map(map, key)
-                    .context(InterceptorSnafu)?
-                    .is_some()
-                {
-                    host.delete_map_entry(map, key).context(InterceptorSnafu)?;
-                }
-                ensure!(
-                    host.lookup_map(map, key)
-                        .context(InterceptorSnafu)?
-                        .is_none(),
-                    IdentityStateSnafu {
-                        reason: "entry admission survived failed publication cleanup",
-                    }
-                );
-            }
-        }
-        Ok(())
-    }
-
-    fn install_missing_mount_rows(&self, host: &KernelHost) -> Result<()> {
-        for (map, rows) in [
-            ("mount_security_views", &self.mount_views),
-            ("mount_mutation_epochs", &self.mount_epochs),
-            ("mount_security_view_locks", &self.mount_locks),
-        ] {
-            install_missing_rows(host, map, rows)?;
-        }
-        install_rows(host, "canonical_mount_roots", &self.mount_roots)?;
-        Ok(())
-    }
-}
-
-fn preflight_policy_map_capacity(
-    host: &KernelHost,
-    generations: &BTreeMap<u64, LoweredGeneration>,
-    activations: &BTreeMap<Id128V1, ProfileActivation>,
-    process_generation_migrations: &GenerationRows,
-) -> Result<()> {
-    let mut planned = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
-    for map in [
-        "canonical_mount_cache_generation",
-        "mount_global_activity_sequence",
-        "mount_global_ambiguous_epoch",
-        "mount_global_mutation_epoch",
-        "mount_global_clean_epoch",
-        "mount_global_pending_mutations",
-    ] {
-        planned
-            .entry(map)
-            .or_default()
-            .insert(0_u32.to_ne_bytes().to_vec());
-    }
-    for (handle, generation) in generations {
-        planned
-            .entry("profile_generation_descriptors")
-            .or_default()
-            .insert(handle.to_ne_bytes().to_vec());
-        planned
-            .entry("profile_generation_task_refs")
-            .or_default()
-            .insert(handle.to_ne_bytes().to_vec());
-        planned
-            .entry("profile_generation_socket_refs")
-            .or_default()
-            .insert(handle.to_ne_bytes().to_vec());
-        for (map, rows) in generation.planned_rows() {
-            planned.entry(map).or_default().extend(rows.keys().cloned());
-        }
-        planned
-            .entry("mount_reconciliation_proposals")
-            .or_default()
-            .extend(generation.mount_views.keys().cloned());
-    }
-    for (profile_id, activation) in activations {
-        planned
-            .entry("active_profile_generations")
-            .or_default()
-            .insert(profile_id.as_bytes().to_vec());
-        for binding_id in activation.bindings.keys() {
-            planned
-                .entry("binding_activation_targets")
-                .or_default()
-                .insert(
-                    BindingActivationTargetKeyV1 {
-                        binding_id: *binding_id,
-                        profile_generation_ref_id: activation.generation,
-                    }
-                    .as_bytes()
-                    .to_vec(),
-                );
-        }
-    }
-    planned
-        .entry("process_generation_migrations")
-        .or_default()
-        .extend(process_generation_migrations.keys().cloned());
-    for (map, planned_keys) in planned {
-        let capacity = host
-            .manifest()
-            .maps
-            .iter()
-            .find(|candidate| candidate.name == map)
-            .map(|candidate| u64::from(candidate.max_entries))
-            .context(IdentityStateSnafu {
-                reason: format!("required policy map `{map}` has no manifest capacity"),
-            })?;
-        let existing = host.map_keys(map).context(InterceptorSnafu)?;
-        ensure_map_capacity(map, capacity, existing, planned_keys)?;
-    }
-    Ok(())
-}
-
-fn ensure_map_capacity(
-    map: &str,
-    capacity: u64,
-    existing: impl IntoIterator<Item = Vec<u8>>,
-    planned: impl IntoIterator<Item = Vec<u8>>,
-) -> Result<()> {
-    let mut keys = existing.into_iter().collect::<BTreeSet<_>>();
-    keys.extend(planned);
-    ensure!(
-        u64::try_from(keys.len()).unwrap_or(u64::MAX) <= capacity,
-        IdentityStateSnafu {
-            reason: format!(
-                "policy map `{map}` needs {} rows but its capacity is {capacity}",
-                keys.len()
-            ),
-        }
-    );
-    Ok(())
-}
-
-fn prepare_declared_entry_requests(host: &KernelHost, desired: &BTreeSet<Vec<u8>>) -> Result<()> {
-    let map = "declared_entry_requests";
-    let capacity = host
-        .manifest()
-        .maps
-        .iter()
-        .find(|candidate| candidate.name == map)
-        .map(|candidate| u64::from(candidate.max_entries))
-        .context(IdentityStateSnafu {
-            reason: "the declared-entry request map has no manifest capacity",
-        })?;
-    ensure_map_capacity(
-        map,
-        capacity,
-        host.map_keys(map).context(InterceptorSnafu)?,
-        desired.iter().cloned(),
-    )?;
-    for key in desired {
-        host.update_map(map, key, &[1]).context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map(map, key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some([1].as_slice()),
-            IdentityStateSnafu {
-                reason: "a declared-entry request failed exact readback",
-            }
-        );
-    }
-    Ok(())
-}
-
-fn retire_undeclared_entry_requests(host: &KernelHost, desired: &BTreeSet<Vec<u8>>) -> Result<()> {
-    let map = "declared_entry_requests";
-    for key in host.map_keys(map).context(InterceptorSnafu)? {
-        if desired.contains(&key) {
-            continue;
-        }
-        host.delete_map_entry(map, &key).context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map(map, &key)
-                .context(InterceptorSnafu)?
-                .is_none(),
-            IdentityStateSnafu {
-                reason: "an undeclared entry request remained after retirement",
-            }
-        );
-    }
-    Ok(())
-}
-
-fn reconcile_pending_activations(
-    host: &KernelHost,
-    rollback: &mut AntiRollbackStore,
-    node_boot_id: Id128V1,
-    label_epoch: u64,
-) -> Result<()> {
-    let node_boot_id = id_bytes(node_boot_id);
-    for pending in rollback.pending_activations() {
-        if pending.activation.node_boot_id != node_boot_id
-            || pending.activation.label_epoch != label_epoch
-        {
-            rollback
-                .clear_old_epoch_pending(&pending)
-                .context(PolicySnafu)?;
-            continue;
-        }
-        let profile_id = parse_id("pending profile_id", &pending.profile_id)?;
-        let observed = read_active_generation(host, &profile_id)?;
-        if observed == Some(pending.activation.profile_generation_ref_id) {
-            verify_pending_descriptor(host, &pending)?;
-            rollback.finalize_pending(&pending).context(PolicySnafu)?;
-        } else {
-            ensure!(
-                observed == pending.previous_profile_generation_ref_id,
-                IdentityStateSnafu {
-                    reason: format!(
-                        "pending profile `{}` has a missing or unexpected active pointer",
-                        pending.profile_id
-                    ),
-                }
-            );
-        }
-    }
-    Ok(())
-}
-
-fn verify_pending_descriptor(
-    host: &KernelHost,
-    pending: &PendingProfileActivationV1,
-) -> Result<()> {
-    let descriptor = host
-        .lookup_map(
-            "profile_generation_descriptors",
-            &pending.activation.profile_generation_ref_id.to_ne_bytes(),
-        )
-        .context(InterceptorSnafu)?
-        .context(IdentityStateSnafu {
-            reason: "committed pending activation has no generation descriptor",
-        })?;
-    ensure!(
-        <[u8; 32]>::from(Sha256::digest(&descriptor)) == pending.activation.descriptor_sha256,
-        IdentityStateSnafu {
-            reason: "committed pending activation descriptor failed durable digest proof",
-        }
-    );
-    Ok(())
-}
-
-fn read_active_generation(host: &KernelHost, profile_id: &Id128V1) -> Result<Option<u64>> {
-    host.lookup_map("active_profile_generations", profile_id.as_bytes())
-        .context(InterceptorSnafu)?
-        .as_deref()
-        .map(|bytes| {
-            u64::read_from_bytes(bytes).map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("active generation pointer is invalid: {error}"),
-                }
-                .build()
-            })
-        })
-        .transpose()
-}
-
-fn id_bytes(id: Id128V1) -> [u8; 16] {
-    let mut bytes = [0; 16];
-    bytes.copy_from_slice(id.as_bytes());
-    bytes
-}
-
-fn build_process_generation_migrations(
-    activations: &BTreeMap<Id128V1, ProfileActivation>,
-    generations: &BTreeMap<u64, GenerationSemantics>,
-) -> Result<GenerationRows> {
-    let mut rows = GenerationRows::new();
-    for (profile_id, activation) in activations {
-        let target = generations
-            .get(&activation.generation)
-            .context(IdentityStateSnafu {
-                reason: "active target generation has no semantic handle map",
-            })?;
-        ensure!(
-            target.profile_id == *profile_id,
-            IdentityStateSnafu {
-                reason: "active target generation has the wrong semantic profile",
-            }
-        );
-        for (source_generation, source) in generations.iter().filter(|(generation, source)| {
-            **generation != activation.generation && source.profile_id == *profile_id
-        }) {
-            for (role_name, state_name) in &source.live_role_states {
-                let Some(target_role_id) = target.role_handles.get(role_name) else {
-                    continue;
-                };
-                let Some((target_state_id, target_state_bits)) =
-                    target.process_state_handles.get(state_name)
-                else {
-                    continue;
-                };
-                if !target
-                    .live_role_states
-                    .contains(&(role_name.clone(), state_name.clone()))
-                {
-                    continue;
-                }
-                let (source_state_id, source_state_bits) = source.process_state_handles[state_name];
-                let key = ProcessGenerationMigrationKeyV1 {
-                    source_profile_generation_ref_id: *source_generation,
-                    target_profile_generation_ref_id: activation.generation,
-                    source_state_bits,
-                    source_role_id: source.role_handles[role_name],
-                    source_process_state_vector_id: source_state_id,
-                };
-                let value = ProcessGenerationMigrationV1 {
-                    target_state_bits: *target_state_bits,
-                    target_role_id: *target_role_id,
-                    target_process_state_vector_id: *target_state_id,
-                };
-                insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
-            }
-        }
-    }
-    Ok(rows)
-}
-
-fn add_binding_activation(
-    activations: &mut BTreeMap<Id128V1, ProfileActivation>,
-    profile_id: Id128V1,
-    binding_id: Id128V1,
-    binding: &WorkloadBindingConfig,
-) -> Result<()> {
-    let activation = activations
-        .entry(profile_id)
-        .or_insert_with(|| ProfileActivation {
-            generation: binding.active_profile_generation_ref_id,
-            bindings: BTreeMap::new(),
-        });
-    ensure!(
-        activation.generation == binding.active_profile_generation_ref_id,
-        IdentityStateSnafu {
-            reason: format!(
-                "profile `{}` cannot activate more than one node generation",
-                binding.profile_id
-            ),
-        }
-    );
-    ensure!(
-        activation
-            .bindings
-            .insert(
-                binding_id,
-                BindingActivationTarget {
-                    generation: binding.active_profile_generation_ref_id,
-                    initial_role_id: binding.initial_role_id,
-                    external_role_id: binding.external_role_id,
-                    requires_live_cgroup: binding.root_cgroup_path.is_some()
-                        && binding.scheduled_binding_authority_id.is_none(),
-                },
-            )
-            .is_none(),
-        IdentityStateSnafu {
-            reason: format!(
-                "binding `{}` occurs more than once in one activation",
-                binding.binding_id
-            ),
-        }
-    );
-    Ok(())
-}
-
-fn activate_profile(
-    host: &KernelHost,
-    profile_id: &Id128V1,
-    activation: &ProfileActivation,
-    rollback: &mut AntiRollbackStore,
-    validated: &ValidatedProfileCandidateV1,
-    node_boot_id: Id128V1,
-    label_epoch: u64,
-) -> Result<()> {
-    let descriptor_key = activation.generation.to_ne_bytes();
-    let descriptor = host
-        .lookup_map("profile_generation_descriptors", &descriptor_key)
-        .context(InterceptorSnafu)?
-        .context(IdentityStateSnafu {
-            reason: format!(
-                "generation {} has no staged descriptor",
-                activation.generation
-            ),
-        })?;
-    let descriptor_sha256 = Sha256::digest(&descriptor).into();
-    let descriptor =
-        ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("staged generation descriptor is invalid: {error}"),
-            }
-            .build()
-        })?;
-    ensure!(
-        descriptor.state == PolicyGenerationStateV1::Active
-            && descriptor.profile_generation_ref_id == activation.generation
-            && descriptor.profile_id == *profile_id,
-        IdentityStateSnafu {
-            reason: "staged generation descriptor does not match its activation",
-        }
-    );
-    ensure_generation_reference_row(
-        host,
-        "profile_generation_task_refs",
-        activation.generation,
-        "task",
-    )?;
-    ensure_generation_reference_row(
-        host,
-        "profile_generation_async_refs",
-        activation.generation,
-        "async",
-    )?;
-    ensure_generation_reference_row(
-        host,
-        "profile_generation_socket_refs",
-        activation.generation,
-        "socket",
-    )?;
-
-    let pointer_key = profile_id.as_bytes();
-    let expected_pointer = host
-        .lookup_map("active_profile_generations", pointer_key)
-        .context(InterceptorSnafu)?;
-    let expected_generation = expected_pointer
-        .as_deref()
-        .map(|bytes| {
-            u64::read_from_bytes(bytes).map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("active generation pointer is invalid: {error}"),
-                }
-                .build()
-            })
-        })
-        .transpose()?;
-
-    let mut live_bindings = BTreeMap::new();
-    for key in host
-        .map_keys("execution_set_bindings")
-        .context(InterceptorSnafu)?
-    {
-        let value = host
-            .lookup_map("execution_set_bindings", &key)
-            .context(InterceptorSnafu)?
-            .context(IdentityStateSnafu {
-                reason: "execution-set binding disappeared during activation",
-            })?;
-        let binding = ExecutionSetBindingStateV1::try_read_from_bytes(&value).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("execution-set binding is invalid: {error}"),
-            }
-            .build()
-        })?;
-        if binding.profile_id != *profile_id
-            || !crate::identity::binding_lifecycle_is_addressable(binding.lifecycle_state)
-        {
-            continue;
-        }
-        ensure!(
-            activation.bindings.contains_key(&binding.binding_id),
-            IdentityStateSnafu {
-                reason: "active profile contains a binding outside this activation",
-            }
-        );
-        ensure!(
-            live_bindings
-                .insert(binding.binding_id, (key, binding))
-                .is_none(),
-            IdentityStateSnafu {
-                reason: "one binding identity names more than one active cgroup",
-            }
-        );
-    }
-    // Scheduled placeholders can activate before a live cgroup exists; static bindings cannot.
-    ensure!(
-        activation.bindings.iter().all(|(binding_id, target)| {
-            !target.requires_live_cgroup || live_bindings.contains_key(binding_id)
-        }),
-        IdentityStateSnafu {
-            reason: "not every cgroup-backed activation binding is live",
-        }
-    );
-    let mut staged = Vec::with_capacity(live_bindings.len());
-    for (binding_id, (_, current)) in &live_bindings {
-        let target = &activation.bindings[binding_id];
-        ensure!(
-            target.generation == activation.generation,
-            IdentityStateSnafu {
-                reason: "binding target differs from its profile activation",
-            }
-        );
-        let mut desired = *current;
-        desired.lifecycle_state = BindingLifecycleStateV1::Active;
-        desired.active_profile_generation_ref_id = target.generation;
-        desired.initial_role_id = target.initial_role_id;
-        desired.external_role_id = target.external_role_id;
-        let key = BindingActivationTargetKeyV1 {
-            binding_id: *binding_id,
-            profile_generation_ref_id: target.generation,
-        };
-        let previous = host
-            .lookup_map("binding_activation_targets", key.as_bytes())
-            .context(InterceptorSnafu)?;
-        let previous_target = previous
-            .as_deref()
-            .map(ExecutionSetBindingStateV1::try_read_from_bytes)
-            .transpose()
-            .map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("binding activation target is invalid: {error}"),
-                }
-                .build()
-            })?;
-        ensure!(
-            previous_target.as_ref().is_none_or(|previous| {
-                WorkloadBindingOwner::activation_target_matches_desired(&desired, previous)
-            }),
-            IdentityStateSnafu {
-                reason: "generation-keyed binding activation target is immutable",
-            }
-        );
-        staged.push(StagedActivationTarget {
-            key: key.as_bytes().to_vec(),
-            previous,
-            desired,
-        });
-    }
-
-    let stage_result = (|| {
-        for target in &staged {
-            if target.previous.is_none() {
-                ensure!(
-                    host.insert_map(
-                        "binding_activation_targets",
-                        &target.key,
-                        target.desired.as_bytes(),
-                    )
-                    .context(InterceptorSnafu)?
-                        == MapInsertResult::Inserted,
-                    IdentityStateSnafu {
-                        reason: "binding activation target changed during staging",
-                    }
-                );
-            }
-            let observed = host
-                .lookup_map("binding_activation_targets", &target.key)
-                .context(InterceptorSnafu)?
-                .context(IdentityStateSnafu {
-                    reason: "binding activation target disappeared during staging",
-                })?;
-            let observed =
-                ExecutionSetBindingStateV1::try_read_from_bytes(&observed).map_err(|error| {
-                    IdentityStateSnafu {
-                        reason: format!("binding activation target is invalid: {error}"),
-                    }
-                    .build()
-                })?;
-            ensure!(
-                WorkloadBindingOwner::activation_target_matches_desired(&target.desired, &observed,),
-                IdentityStateSnafu {
-                    reason: "binding activation target failed readback",
-                }
-            );
-        }
-        Ok(())
-    })();
-    if let Err(error) = stage_result {
-        return match restore_activation_targets(host, &staged) {
-            Ok(()) => Err(error),
-            Err(rollback) => IdentityStateSnafu {
-                reason: format!(
-                    "binding activation failed: {error}; target rollback failed: {rollback}"
-                ),
-            }
-            .fail(),
-        };
-    }
-
-    for (binding_id, (_, current)) in &live_bindings {
-        let key = BindingActivationTargetKeyV1 {
-            binding_id: *binding_id,
-            profile_generation_ref_id: activation.generation,
-        };
-        let target = host
-            .lookup_map("binding_activation_targets", key.as_bytes())
-            .context(InterceptorSnafu)?
-            .context(IdentityStateSnafu {
-                reason: "binding activation target disappeared before publication",
-            })?;
-        let target = ExecutionSetBindingStateV1::try_read_from_bytes(&target).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("binding activation target is invalid: {error}"),
-            }
-            .build()
-        })?;
-        ensure!(
-            WorkloadBindingOwner::same_activation_identity(current, &target)
-                && target.active_profile_generation_ref_id == activation.generation,
-            IdentityStateSnafu {
-                reason: "binding activation target changed before publication",
-            }
-        );
-    }
-
-    let observed = host
-        .lookup_map("active_profile_generations", pointer_key)
-        .context(InterceptorSnafu)?;
-    if let Err(error) =
-        ensure_active_generation_unchanged(expected_pointer.as_deref(), observed.as_deref())
-    {
-        return match restore_activation_targets(host, &staged) {
-            Ok(()) => Err(error),
-            Err(rollback) => IdentityStateSnafu {
-                reason: format!(
-                    "active pointer changed: {error}; target rollback failed: {rollback}"
-                ),
-            }
-            .fail(),
-        };
-    }
-
-    let activation_metadata = ProfileActivationMetadataV1 {
-        profile_generation_ref_id: activation.generation,
-        node_boot_id: id_bytes(node_boot_id),
-        label_epoch,
-        descriptor_sha256,
-    };
-    if expected_generation == Some(activation.generation)
-        && rollback.is_current_activation(validated, &activation_metadata)
-    {
-        return Ok(());
-    }
-    let pending = rollback
-        .prepare_activation(validated, activation_metadata, expected_generation)
-        .context(PolicySnafu)?;
-    if expected_generation == Some(activation.generation) {
-        rollback.finalize_pending(&pending).context(PolicySnafu)?;
-        return Ok(());
-    }
-
-    let target = activation.generation.to_ne_bytes();
-    if let Err(error) = host
-        .update_map("active_profile_generations", pointer_key, &target)
-        .context(InterceptorSnafu)
-    {
-        let observed = host
-            .lookup_map("active_profile_generations", pointer_key)
-            .context(InterceptorSnafu)?;
-        if observed.as_deref() == expected_pointer.as_deref() {
-            return match restore_activation_targets(host, &staged) {
-                Ok(()) => Err(error),
-                Err(target_rollback) => IdentityStateSnafu {
-                    reason: format!(
-                        "active-generation update failed: {error}; target rollback failed: {target_rollback}"
-                    ),
-                }
-                .fail(),
-            };
-        }
-        if observed.as_deref() == Some(target.as_slice()) {
-            rollback.finalize_pending(&pending).context(PolicySnafu)?;
-            return Ok(());
-        }
-        return IdentityStateSnafu {
-            reason: format!(
-                "active-generation update failed with an ambiguous committed pointer: {error}"
-            ),
-        }
-        .fail();
-    }
-    let committed = host
-        .lookup_map("active_profile_generations", pointer_key)
-        .context(InterceptorSnafu)
-        .map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!(
-                    "active-generation publication committed, but readback failed: {error}"
-                ),
-            }
-            .build()
-        })?;
-    ensure_committed_generation(&target, committed.as_deref())?;
-    rollback.finalize_pending(&pending).context(PolicySnafu)
-}
-
-fn ensure_generation_reference_row(
-    host: &KernelHost,
-    map: &str,
-    generation: u64,
-    kind: &str,
-) -> Result<()> {
-    let key = generation.to_ne_bytes();
-    if let Some(references) = host.lookup_map(map, &key).context(InterceptorSnafu)? {
-        u64::read_from_bytes(&references).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("generation {kind} references are invalid: {error}"),
-            }
-            .build()
-        })?;
-        return Ok(());
-    }
-    let zero = 0_u64.to_ne_bytes();
-    host.update_map(map, &key, &zero)
-        .context(InterceptorSnafu)?;
-    ensure!(
-        host.lookup_map(map, &key)
-            .context(InterceptorSnafu)?
-            .as_deref()
-            == Some(zero.as_slice()),
-        IdentityStateSnafu {
-            reason: format!("generation {kind}-reference row failed readback"),
-        }
-    );
-    Ok(())
-}
-
-fn ensure_committed_generation(target: &[u8], observed: Option<&[u8]>) -> Result<()> {
-    ensure!(
-        observed == Some(target),
-        IdentityStateSnafu {
-            reason: "active-generation publication committed, but readback did not match",
-        }
-    );
-    Ok(())
-}
-
-fn restore_activation_targets(host: &KernelHost, staged: &[StagedActivationTarget]) -> Result<()> {
-    for target in staged {
-        if target.previous.is_none()
-            && host
-                .lookup_map("binding_activation_targets", &target.key)
-                .context(InterceptorSnafu)?
-                .is_some()
-        {
-            host.delete_map_entry("binding_activation_targets", &target.key)
-                .context(InterceptorSnafu)?;
-        }
-        ensure!(
-            host.lookup_map("binding_activation_targets", &target.key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == target.previous.as_deref(),
-            IdentityStateSnafu {
-                reason: "binding activation target rollback failed readback",
-            }
-        );
-    }
-    Ok(())
-}
-
-fn ensure_active_generation_unchanged(
-    expected: Option<&[u8]>,
-    observed: Option<&[u8]>,
-) -> Result<()> {
-    ensure!(
-        expected == observed,
-        IdentityStateSnafu {
-            reason: "active-generation handle changed during serialized publication",
-        }
-    );
-    Ok(())
-}
-
-fn reconcile_generation_retirement(
-    host: &KernelHost,
-    node_boot_id: Id128V1,
-    label_epoch: u64,
-) -> Result<bool> {
-    let mut pending = false;
-    let active_generations = host
-        .map_keys("active_profile_generations")
-        .context(InterceptorSnafu)?
-        .into_iter()
-        .map(|key| {
-            host.lookup_map("active_profile_generations", &key)
-                .context(InterceptorSnafu)?
-                .context(IdentityStateSnafu {
-                    reason: "active profile generation disappeared during retirement",
-                })
-                .and_then(|value| {
-                    u64::read_from_bytes(&value).map_err(|error| {
-                        IdentityStateSnafu {
-                            reason: format!("active profile generation is invalid: {error}"),
-                        }
-                        .build()
-                    })
-                })
-        })
-        .collect::<Result<BTreeSet<_>>>()?;
-
-    for descriptor_key in host
-        .map_keys("profile_generation_descriptors")
-        .context(InterceptorSnafu)?
-    {
-        let Some(bytes) = host
-            .lookup_map("profile_generation_descriptors", &descriptor_key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        let mut descriptor = read_abi_value::<ProfileGenerationDescriptorV1>(
-            &bytes,
-            "profile generation descriptor",
-        )?;
-        if descriptor.node_boot_id != node_boot_id || descriptor.label_epoch != label_epoch {
-            return IdentityStateSnafu {
-                reason: "profile generation survived a node boot or label epoch change".to_owned(),
-            }
-            .fail();
-        }
-        let generation = descriptor.profile_generation_ref_id;
-        ensure!(
-            descriptor_key.as_slice() == generation.to_ne_bytes(),
-            IdentityStateSnafu {
-                reason: "profile generation descriptor key does not match its value",
-            }
-        );
-        if active_generations.contains(&generation) {
-            ensure!(
-                descriptor.state == PolicyGenerationStateV1::Active,
-                IdentityStateSnafu {
-                    reason: "active profile pointer names a non-ACTIVE generation",
-                }
-            );
-            continue;
-        }
-        if descriptor.state == PolicyGenerationStateV1::Active {
-            descriptor.state = PolicyGenerationStateV1::Retiring;
-            descriptor.transition_version =
-                descriptor
-                    .transition_version
-                    .checked_add(1)
-                    .context(IdentityStateSnafu {
-                        reason: "profile generation transition version exhausted",
-                    })?;
-            host.update_map(
-                "profile_generation_descriptors",
-                &descriptor_key,
-                descriptor.as_bytes(),
-            )
-            .context(InterceptorSnafu)?;
-            ensure!(
-                host.lookup_map("profile_generation_descriptors", &descriptor_key)
-                    .context(InterceptorSnafu)?
-                    .as_deref()
-                    == Some(descriptor.as_bytes()),
-                IdentityStateSnafu {
-                    reason: "RETIRING profile generation failed readback",
-                }
-            );
-        }
-        ensure!(
-            matches!(
-                descriptor.state,
-                PolicyGenerationStateV1::Retiring | PolicyGenerationStateV1::Tombstoned
-            ),
-            IdentityStateSnafu {
-                reason: "inactive profile generation has an invalid lifecycle state",
-            }
-        );
-        if descriptor.state == PolicyGenerationStateV1::Retiring
-            && generation_has_retained_authority(host, generation)?
-        {
-            pending = true;
-            continue;
-        }
-        retire_generation_rows(host, generation, &mut descriptor, &descriptor_key)?;
-    }
-    Ok(pending)
-}
-
-fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Result<bool> {
-    let reference_key = generation.to_ne_bytes();
-    let references = host
-        .lookup_map("profile_generation_task_refs", &reference_key)
-        .context(InterceptorSnafu)?
-        .context(IdentityStateSnafu {
-            reason: "RETIRING generation lost its task-reference row",
-        })?;
-    if u64::read_from_bytes(&references).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("generation task references are invalid: {error}"),
-        }
-        .build()
-    })? != 0
-    {
-        return Ok(true);
-    }
-    let async_references = host
-        .lookup_map("profile_generation_async_refs", &reference_key)
-        .context(InterceptorSnafu)?
-        .context(IdentityStateSnafu {
-            reason: "RETIRING generation lost its async-reference row",
-        })?;
-    if u64::read_from_bytes(&async_references).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("generation async references are invalid: {error}"),
-        }
-        .build()
-    })? != 0
-    {
-        return Ok(true);
-    }
-    let socket_references = host
-        .lookup_map("profile_generation_socket_refs", &reference_key)
-        .context(InterceptorSnafu)?
-        .context(IdentityStateSnafu {
-            reason: "RETIRING generation lost its socket-reference row",
-        })?;
-    if u64::read_from_bytes(&socket_references).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("generation socket references are invalid: {error}"),
-        }
-        .build()
-    })? != 0
-    {
-        return Ok(true);
-    }
-
-    for key in host
-        .map_keys("io_uring_ring_states")
-        .context(InterceptorSnafu)?
-    {
-        let Some(value) = host
-            .lookup_map("io_uring_ring_states", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        if read_abi_value::<IoUringRingStateV1>(&value, "io_uring ring state")?
-            .owner
-            .profile_generation_ref_id
-            == generation
-        {
-            return Ok(true);
-        }
-    }
-    for key in host
-        .map_keys("io_uring_request_states")
-        .context(InterceptorSnafu)?
-    {
-        let Some(value) = host
-            .lookup_map("io_uring_request_states", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        if read_abi_value::<IoUringRequestStateV1>(&value, "io_uring request state")?
-            .actor
-            .profile_generation_ref_id
-            == generation
-        {
-            return Ok(true);
-        }
-    }
-
-    for key in host.map_keys("process_states").context(InterceptorSnafu)? {
-        let Some(value) = host
-            .lookup_map("process_states", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        let process = read_abi_value::<ProcessSecurityStateV1>(&value, "process state")?;
-        if process.active_profile_generation_ref_id == generation
-            && (process.live_thread_refs != 0
-                || process.state != ProcessSecurityStateKindV1::Reclaimable)
-        {
-            return Ok(true);
-        }
-    }
-    for key in host
-        .map_keys("authority_domains")
-        .context(InterceptorSnafu)?
-    {
-        let Some(value) = host
-            .lookup_map("authority_domains", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        let domain = read_abi_value::<AuthorityDomainStateV1>(&value, "authority domain")?;
-        if domain.retained_generation_set_ref_id == generation
-            && (domain.live_process_refs != 0
-                || domain.response_plan_refs != 0
-                || domain.reconciliation_hold_refs != 0)
-        {
-            return Ok(true);
-        }
-    }
-    for key in host
-        .map_keys("task_reference_tombstones")
-        .context(InterceptorSnafu)?
-    {
-        let Some(value) = host
-            .lookup_map("task_reference_tombstones", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        let tombstone =
-            read_abi_value::<TaskReferenceTombstoneV1>(&value, "task reference tombstone")?;
-        if tombstone.profile_generation_ref_id == generation
-            && tombstone.state != ReferenceTombstoneStateV1::Released
-            && tombstone.state != ReferenceTombstoneStateV1::Reclaimable
-        {
-            return Ok(true);
-        }
-    }
-    for key in host.map_keys("pending_execs").context(InterceptorSnafu)? {
-        let Some(value) = host
-            .lookup_map("pending_execs", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        let pending = read_abi_value::<PendingExecV1>(&value, "pending exec")?;
-        if pending.source_profile_generation_ref_id == generation
-            && pending_exec_retains_generation_authority(pending.state)
-        {
-            return Ok(true);
-        }
-    }
-    for key in host
-        .map_keys("pending_execution_approvals")
-        .context(InterceptorSnafu)?
-    {
-        let Some(value) = host
-            .lookup_map("pending_execution_approvals", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        if read_abi_value::<PendingExecutionApprovalV1>(&value, "pending execution approval")?
-            .profile_generation_ref_id
-            == generation
-        {
-            return Ok(true);
-        }
-    }
-    for key in host
-        .map_keys("execution_approval_slots")
-        .context(InterceptorSnafu)?
-    {
-        let Some(value) = host
-            .lookup_map("execution_approval_slots", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        let slot = read_abi_value::<ExecutionApprovalSlotV1>(&value, "execution approval slot")?;
-        if slot.profile_generation_ref_id == generation
-            && matches!(
-                slot.state,
-                ExecutionApprovalSlotStateV1::Armed | ExecutionApprovalSlotStateV1::Reserved
-            )
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn pending_exec_retains_generation_authority(state: PendingExecStateV1) -> bool {
-    matches!(
-        state,
-        PendingExecStateV1::Unknown
-            | PendingExecStateV1::Preparing
-            | PendingExecStateV1::CommitPending
-    )
-}
-
-pub(crate) fn generation_publication_is_absent(host: &KernelHost, generation: u64) -> Result<bool> {
-    if host
-        .lookup_map("profile_generation_descriptors", &generation.to_ne_bytes())
-        .context(InterceptorSnafu)?
-        .is_some()
-    {
-        return Ok(false);
-    }
-    for key in host
-        .map_keys("binding_activation_targets")
-        .context(InterceptorSnafu)?
-    {
-        let key = BindingActivationTargetKeyV1::try_read_from_bytes(&key).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("binding activation target key is invalid: {error}"),
-            }
-            .build()
-        })?;
-        if key.profile_generation_ref_id == generation {
-            return Ok(false);
-        }
-    }
-    for key in host
-        .map_keys("execution_set_bindings")
-        .context(InterceptorSnafu)?
-    {
-        let Some(value) = host
-            .lookup_map("execution_set_bindings", &key)
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        let binding = ExecutionSetBindingStateV1::try_read_from_bytes(&value).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("execution-set binding is invalid: {error}"),
-            }
-            .build()
-        })?;
-        if binding.active_profile_generation_ref_id == generation {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-fn retire_generation_rows(
-    host: &KernelHost,
-    generation: u64,
-    descriptor: &mut ProfileGenerationDescriptorV1,
-    descriptor_key: &[u8],
-) -> Result<()> {
-    if generation_retirement_needs_tombstone(descriptor.state)? {
-        descriptor.state = PolicyGenerationStateV1::Tombstoned;
-        descriptor.transition_version =
-            descriptor
-                .transition_version
-                .checked_add(1)
-                .context(IdentityStateSnafu {
-                    reason: "profile generation transition version exhausted",
-                })?;
-        host.update_map(
-            "profile_generation_descriptors",
-            descriptor_key,
-            descriptor.as_bytes(),
-        )
-        .context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map("profile_generation_descriptors", descriptor_key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(descriptor.as_bytes()),
-            IdentityStateSnafu {
-                reason: "TOMBSTONED profile generation failed readback",
-            }
-        );
-    }
-    ensure!(
-        descriptor.state == PolicyGenerationStateV1::Tombstoned,
-        IdentityStateSnafu {
-            reason: "generation row retirement requires a TOMBSTONED descriptor",
-        }
-    );
-
-    // A persisted tombstone resumes deletion here after any earlier process exit.
-    for map in [
-        "entry_admission_rules",
-        "effect_decisions",
-        "effect_defaults",
-        "ipc_relationship_decisions",
-        "network_destination_decisions",
-        "device_effect_decisions",
-        "process_control_rules",
-        "exception_handle_bindings",
-        "exact_file_objects",
-        "canonical_mount_roots",
-        "path_graph_exact_transitions",
-        "path_graph_wildcard_transitions",
-        "path_graph_terminals",
-        "path_tree_denials",
-    ] {
-        delete_generation_prefixed_rows(host, map, generation, 0)?;
-    }
-    delete_process_generation_migrations(host, generation)?;
-    for map in [
-        "network_ipv4_destination_classes",
-        "network_ipv6_destination_classes",
-    ] {
-        delete_generation_prefixed_rows(host, map, generation, 8)?;
-    }
-    delete_generation_prefixed_rows(host, "binding_activation_targets", generation, 16)?;
-    host.delete_map_entry("profile_generation_task_refs", &generation.to_ne_bytes())
-        .context(InterceptorSnafu)?;
-    host.delete_map_entry("profile_generation_async_refs", &generation.to_ne_bytes())
-        .context(InterceptorSnafu)?;
-    host.delete_map_entry("profile_generation_socket_refs", &generation.to_ne_bytes())
-        .context(InterceptorSnafu)?;
-    host.delete_map_entry("profile_generation_descriptors", descriptor_key)
-        .context(InterceptorSnafu)?;
-    ensure!(
-        host.lookup_map("profile_generation_descriptors", descriptor_key)
-            .context(InterceptorSnafu)?
-            .is_none(),
-        IdentityStateSnafu {
-            reason: "retired profile generation descriptor survived deletion",
-        }
-    );
-    Ok(())
-}
-
-fn generation_retirement_needs_tombstone(state: PolicyGenerationStateV1) -> Result<bool> {
-    ensure!(
-        matches!(
-            state,
-            PolicyGenerationStateV1::Retiring | PolicyGenerationStateV1::Tombstoned
-        ),
-        IdentityStateSnafu {
-            reason: "generation row retirement has an invalid lifecycle state",
-        }
-    );
-    Ok(state == PolicyGenerationStateV1::Retiring)
-}
-
-fn delete_generation_prefixed_rows(
-    host: &KernelHost,
-    map: &str,
-    generation: u64,
-    offset: usize,
-) -> Result<()> {
-    for key in host.map_keys(map).context(InterceptorSnafu)? {
-        let end = offset
-            .checked_add(size_of::<u64>())
-            .context(IdentityStateSnafu {
-                reason: "generation key offset overflow",
-            })?;
-        ensure!(
-            key.len() >= end,
-            IdentityStateSnafu {
-                reason: format!("map `{map}` has a truncated generation key"),
-            }
-        );
-        let mut bytes = [0; size_of::<u64>()];
-        bytes.copy_from_slice(&key[offset..end]);
-        if u64::from_ne_bytes(bytes) == generation {
-            host.delete_map_entry(map, &key).context(InterceptorSnafu)?;
-        }
-    }
-    Ok(())
-}
-
-fn delete_process_generation_migrations(host: &KernelHost, generation: u64) -> Result<()> {
-    for key in host
-        .map_keys("process_generation_migrations")
-        .context(InterceptorSnafu)?
-    {
-        let migration = read_abi_value::<ProcessGenerationMigrationKeyV1>(
-            &key,
-            "process generation migration key",
-        )?;
-        if migration.source_profile_generation_ref_id == generation
-            || migration.target_profile_generation_ref_id == generation
-        {
-            host.delete_map_entry("process_generation_migrations", &key)
-                .context(InterceptorSnafu)?;
-        }
-    }
-    Ok(())
-}
-
-fn install_rows(host: &KernelHost, map: &str, rows: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<()> {
-    for (key, value) in rows {
-        host.update_map(map, key, value).context(InterceptorSnafu)?;
-        let actual = host.lookup_map(map, key).context(InterceptorSnafu)?;
-        ensure!(
-            actual.as_ref() == Some(value),
-            IdentityStateSnafu {
-                reason: row_readback_failure("install", map, key, value, actual.as_deref()),
-            }
-        );
-    }
-    Ok(())
-}
-
-fn verify_rows(host: &KernelHost, map: &str, rows: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<()> {
-    for (key, value) in rows {
-        let actual = host.lookup_map(map, key).context(InterceptorSnafu)?;
-        ensure!(
-            actual.as_ref() == Some(value),
-            IdentityStateSnafu {
-                reason: row_readback_failure("verification", map, key, value, actual.as_deref()),
-            }
-        );
-    }
-    Ok(())
-}
-
-fn row_readback_failure(
-    stage: &str,
-    map: &str,
-    key_bytes: &[u8],
-    expected_bytes: &[u8],
-    actual_bytes: Option<&[u8]>,
-) -> String {
-    if map == "canonical_mount_roots" {
-        let key = CanonicalMountRootKeyV1::try_read_from_bytes(key_bytes);
-        let expected = CanonicalMountRootV1::try_read_from_bytes(expected_bytes);
-        let actual =
-            actual_bytes.and_then(|bytes| CanonicalMountRootV1::try_read_from_bytes(bytes).ok());
-        if let (Ok(key), Ok(expected)) = (key, expected) {
-            return format!(
-                "candidate `{map}` row {stage} readback failed: profile_generation_ref_id={}, binding_id={:016x}{:016x}, topology_generation={}, root_inode={}, mount_namespace_inode={}, filesystem_device={}, expected_selected_mount_id_unique={}, expected_snapshot_digest_id={}, expected_graph_prefix_state_ids={:?}, expected_graph_prefix_state_count={}, actual={actual:?}",
-                key.profile_generation_ref_id,
-                key.binding_id.high,
-                key.binding_id.low,
-                key.topology_generation,
-                key.root_inode,
-                key.mount_namespace_inode,
-                key.filesystem_device,
-                expected.selected_mount_id_unique,
-                expected.snapshot_digest_id,
-                &expected.graph_prefix_state_ids[..expected.graph_prefix_state_count as usize],
-                expected.graph_prefix_state_count,
-            );
-        }
-    }
-    format!(
-        "candidate `{map}` row {stage} readback failed: key={}, expected={}, actual={}",
-        hex::encode(key_bytes),
-        hex::encode(expected_bytes),
-        actual_bytes.map_or_else(|| "missing".to_owned(), hex::encode),
-    )
-}
-
-fn install_exception_rows(
-    host: &KernelHost,
-    rows: &BTreeMap<Vec<u8>, Vec<u8>>,
-    deadlines_utc: &BTreeMap<Vec<u8>, i64>,
-    authority: &mut ExceptionAuthorityOwner,
-    now_utc_ns: i64,
-    now_boottime_ns: u64,
-) -> Result<()> {
-    for (key, desired_bytes) in rows {
-        let existing_bytes = host
-            .lookup_map_locked("exception_runtime_states", key)
-            .context(InterceptorSnafu)?;
-        let desired = read_abi_value::<ExceptionRuntimeStateV1>(
-            desired_bytes,
-            "signed exception runtime state",
-        )?;
-        let deadline_utc_ns = *deadlines_utc.get(key).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "signed exception runtime state has no UTC deadline".to_owned(),
-            }
-            .build()
-        })?;
-        let installed = authority.prepare_runtime(
-            key,
-            desired,
-            deadline_utc_ns,
-            existing_bytes.as_deref(),
-            now_utc_ns,
-            now_boottime_ns,
-        )?;
-        if let Some(existing) = existing_bytes {
-            let existing = read_abi_value::<ExceptionRuntimeStateV1>(
-                &existing,
-                "existing exception runtime state",
-            )?;
-            ensure!(
-                existing.maximum_uses == desired.maximum_uses
-                    && existing.bound_profile_generation_refs
-                        == desired.bound_profile_generation_refs
-                    && existing.exception_definition_sha256
-                        == desired.exception_definition_sha256
-                    && exception_counter_is_consistent(
-                        existing.maximum_uses,
-                        existing.consumed_uses,
-                        existing.state,
-                    )
-                    && existing.deadline_boottime_ns <= desired.deadline_boottime_ns
-                    && existing.transition_version > 0,
-                IdentityStateSnafu {
-                    reason: "existing exception runtime state is inconsistent with the signed generation",
-                }
-            );
-            continue;
-        }
-        host.update_map("exception_runtime_states", key, installed.as_bytes())
-            .context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map_locked("exception_runtime_states", key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(installed.as_bytes()),
-            IdentityStateSnafu {
-                reason: "exception runtime state readback failed",
-            }
-        );
-    }
-    Ok(())
-}
-
-fn exception_counter_is_consistent(
-    maximum_uses: u32,
-    consumed_uses: u32,
-    state: ExceptionRuntimeStateKindV1,
-) -> bool {
-    maximum_uses > 0
-        && consumed_uses <= maximum_uses
-        && ((state == ExceptionRuntimeStateKindV1::Active && consumed_uses < maximum_uses)
-            || (state == ExceptionRuntimeStateKindV1::Exhausted && consumed_uses == maximum_uses)
-            || state == ExceptionRuntimeStateKindV1::Expired)
-}
-
-fn install_missing_rows(
-    host: &KernelHost,
-    map: &str,
-    rows: &BTreeMap<Vec<u8>, Vec<u8>>,
-) -> Result<()> {
-    for (key, value) in rows {
-        if host
-            .lookup_map(map, key)
-            .context(InterceptorSnafu)?
-            .is_none()
-        {
-            host.update_map(map, key, value).context(InterceptorSnafu)?;
-            ensure!(
-                host.lookup_map(map, key)
-                    .context(InterceptorSnafu)?
-                    .as_ref()
-                    == Some(value),
-                IdentityStateSnafu {
-                    reason: format!("candidate `{map}` mutable row readback failed"),
-                }
-            );
-        }
-    }
-    Ok(())
-}
-
-fn mount_epoch_from(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {
-    let bytes = host
-        .lookup_map(map, key)
-        .context(InterceptorSnafu)?
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!("mount mutation epoch `{map}` disappeared during reconciliation"),
-            }
-            .build()
-        })?;
-    u64::read_from_bytes(&bytes).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("mount mutation epoch has an invalid ABI value: {error}"),
-        }
-        .build()
-    })
-}
-
-fn retire_unreachable_mount_cache_rows(host: &KernelHost) -> Result<()> {
-    let global_key = 0_u32.to_ne_bytes();
-    let security_view_epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?;
-    let cache_generation = mount_epoch_from(host, "canonical_mount_cache_generation", &global_key)?;
-    for (map, key_size) in [
-        (
-            "canonical_mount_cache_states",
-            CANONICAL_MOUNT_CACHE_STATE_KEY_SIZE_V1,
-        ),
-        ("canonical_mount_cache", CANONICAL_MOUNT_CACHE_KEY_SIZE_V1),
-    ] {
-        for key in host.map_keys(map).context(InterceptorSnafu)? {
-            if mount_cache_row_is_unreachable(
-                map,
-                &key,
-                key_size,
-                security_view_epoch,
-                cache_generation,
-            )? {
-                host.delete_map_entry_if_present(map, &key)
-                    .context(InterceptorSnafu)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn mount_cache_row_is_unreachable(
-    map: &str,
-    key: &[u8],
-    expected_key_size: usize,
-    security_view_epoch: u64,
-    cache_generation: u64,
-) -> Result<bool> {
-    ensure!(
-        key.len() == expected_key_size,
-        IdentityStateSnafu {
-            reason: format!(
-                "mount cache map `{map}` has a key of size {}, expected {expected_key_size}",
-                key.len()
-            ),
-        }
-    );
-    let row_security_view_epoch = u64::from_ne_bytes(
-        key[CANONICAL_MOUNT_CACHE_SECURITY_VIEW_EPOCH_OFFSET_V1
-            ..CANONICAL_MOUNT_CACHE_SECURITY_VIEW_EPOCH_OFFSET_V1 + size_of::<u64>()]
-            .try_into()
-            .map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!(
-                        "mount cache map `{map}` has an invalid security-view epoch: {error}"
-                    ),
-                }
-                .build()
-            })?,
-    );
-    let row_cache_generation = u64::from_ne_bytes(
-        key[CANONICAL_MOUNT_CACHE_GENERATION_OFFSET_V1
-            ..CANONICAL_MOUNT_CACHE_GENERATION_OFFSET_V1 + size_of::<u64>()]
-            .try_into()
-            .map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!(
-                        "mount cache map `{map}` has an invalid cache generation: {error}"
-                    ),
-                }
-                .build()
-            })?,
-    );
-    Ok(row_security_view_epoch < security_view_epoch || row_cache_generation < cache_generation)
-}
-
-fn read_abi_value<T: KnownLayout + TryFromBytes>(bytes: &[u8], name: &str) -> Result<T> {
-    T::try_read_from_bytes(bytes).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("{name} has an invalid ABI value: {error}"),
-        }
-        .build()
-    })
-}
-
-fn cell_matches_binding(
-    key: &StaticDecisionKeyV1,
-    binding: &WorkloadBindingConfig,
-    document: &PolicyDocumentV1,
-) -> bool {
-    // A scheduled binding gives the signed policy slot a unique runtime execution-set identity.
-    let execution_set_id = if binding.scheduled_binding_authority_id.is_some() {
-        let [execution_set_id] = document.protected_universe.execution_set_ids.as_slice() else {
-            return false;
-        };
-        execution_set_id
-    } else {
-        &binding.execution_set_id
-    };
-    key.workload_selector_id == binding.workload_selector_id
-        && key.protected_scope_id == binding.protected_scope_id
-        && key.execution_set_id == *execution_set_id
-}
-
-fn entry_admission_path_selector_ids(
-    artifact: &ProfileCandidateArtifactV1,
-    binding: &WorkloadBindingConfig,
-) -> Result<BTreeSet<String>> {
-    let mut selector_ids = BTreeSet::new();
-    for assignment in artifact
-        .policy_document
-        .entry_role_assignments
-        .iter()
-        .filter(|assignment| {
-            assignment
-                .workload_selector_ids
-                .contains(&binding.workload_selector_id)
-                && assignment
-                    .container_kinds
-                    .contains(&policy_container_kind(binding.container_kind))
-                && assignment.admission_execution_rule_id.is_some()
-        })
-    {
-        let rule_id =
-            assignment
-                .admission_execution_rule_id
-                .as_deref()
-                .context(IdentityStateSnafu {
-                    reason: "entry admission lost its execution rule",
-                })?;
-        let rule = artifact
-            .policy_document
-            .rules
-            .iter()
-            .find(|rule| rule.rule_id == rule_id)
-            .context(IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` is not signed"),
-            })?;
-        let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match else {
-            return IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` is not a local effect"),
-            }
-            .fail();
-        };
-        let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object else {
-            return IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` has no path selector"),
-            }
-            .fail();
-        };
-        let [selector_id] = path_selector_ids.as_slice() else {
-            return IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` is not one exact path match"),
-            }
-            .fail();
-        };
-        let selector = artifact
-            .policy_document
-            .path_selectors
-            .iter()
-            .find(|selector| selector.path_selector_id == *selector_id)
-            .context(IdentityStateSnafu {
-                reason: format!("entry admission rule `{rule_id}` has an unknown path selector"),
-            })?;
-        let components = selector
-            .target
-            .pattern_components(artifact.header.profile_id.as_str())
-            .context(PolicySnafu)?;
-        ensure!(
-            !selector.requires_exact_object()
-                && components
-                    .iter()
-                    .all(|component| matches!(component, PathPatternComponentV1::Exact(_))),
-            IdentityStateSnafu {
-                reason: format!(
-                    "entry admission rule `{rule_id}` does not use one literal request path"
-                ),
-            }
-        );
-        selector_ids.insert(selector_id.clone());
-    }
-    Ok(selector_ids)
-}
-
-fn entry_admission_authority_rows(rows: &GenerationRows) -> Result<GenerationRows> {
-    let mut authority = GenerationRows::new();
-    for (key, value) in rows {
-        let mut key: EntryAdmissionRuleKeyV1 = read_abi_value(key, "entry admission rule key")?;
-        key.binding_id = Id128V1::default();
-        let mut rule: EntryAdmissionRuleV1 = read_abi_value(value, "entry admission rule")?;
-        rule.exact_object_key_id = 0;
-        rule.executable_object = ExactFileObjectKeyV1::default();
-        insert_exact(&mut authority, key.as_bytes(), rule.as_bytes())?;
-    }
-    Ok(authority)
-}
 
 fn decode_sha256(value: &str) -> Result<[u8; 32]> {
     let bytes = hex::decode(value).map_err(|error| {
@@ -4974,633 +322,6 @@ const fn lifecycle(state: mithril_control::BindingLifecycleV1) -> BindingLifecyc
     }
 }
 
-#[derive(Default)]
-struct PathTables {
-    mount_views: BTreeMap<Vec<u8>, Vec<u8>>,
-    mount_epochs: BTreeMap<Vec<u8>, Vec<u8>>,
-    mount_locks: BTreeMap<Vec<u8>, Vec<u8>>,
-    mount_roots: BTreeMap<Vec<u8>, Vec<u8>>,
-    exact: BTreeMap<Vec<u8>, Vec<u8>>,
-    wildcards: BTreeMap<Vec<u8>, Vec<u8>>,
-    terminals: BTreeMap<Vec<u8>, Vec<u8>>,
-    path_tree_denials: BTreeMap<Vec<u8>, Vec<u8>>,
-    reconciliation: Vec<MountRootReconciliation>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct MountRouteIdentity {
-    mount_namespace_inode: u32,
-    filesystem_device: u32,
-    root_inode: u64,
-    topology_generation: u64,
-}
-
-struct MountRoutePlan {
-    prefixes: Vec<Vec<Vec<u8>>>,
-    mount_view_root_pid: u32,
-    selected_mount_id_unique: u64,
-    snapshot_digest_id: u64,
-    has_known_route: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct GraphPrefixStates {
-    ids: [u32; MAX_CANONICAL_ROUTE_STATES_V1],
-    count: u32,
-}
-
-impl GraphPrefixStates {
-    fn compile(
-        graph: &mithril_control::DeterministicPathGraphV1,
-        prefixes: &[Vec<Vec<u8>>],
-    ) -> Result<Option<Self>> {
-        let ids = prefixes
-            .iter()
-            .filter_map(|prefix| graph.state_after(prefix))
-            .collect::<BTreeSet<_>>();
-        if ids.is_empty() {
-            return Ok(None);
-        }
-        ensure!(
-            ids.len() <= MAX_CANONICAL_ROUTE_STATES_V1,
-            IdentityStateSnafu {
-                reason: format!(
-                    "one mount source exceeds {MAX_CANONICAL_ROUTE_STATES_V1} policy path routes"
-                ),
-            }
-        );
-        let count = ids.len() as u32;
-        let mut state_ids = [0; MAX_CANONICAL_ROUTE_STATES_V1];
-        for (slot, state_id) in state_ids.iter_mut().zip(ids) {
-            *slot = state_id;
-        }
-        Ok(Some(Self {
-            ids: state_ids,
-            count,
-        }))
-    }
-
-    fn mount_root(
-        &self,
-        selected_mount_id_unique: u64,
-        snapshot_digest_id: u64,
-    ) -> CanonicalMountRootV1 {
-        CanonicalMountRootV1 {
-            selected_mount_id_unique,
-            snapshot_digest_id,
-            graph_prefix_state_ids: self.ids,
-            graph_prefix_state_count: self.count,
-            reserved: 0,
-        }
-    }
-}
-
-impl MountRoutePlan {
-    fn new(
-        prefix: Vec<Vec<u8>>,
-        mount_view_root_pid: u32,
-        selected_mount_id_unique: u64,
-        snapshot_digest_id: u64,
-        has_known_route: bool,
-    ) -> Result<Self> {
-        ensure!(
-            mount_view_root_pid > 0 && selected_mount_id_unique > 0,
-            IdentityStateSnafu {
-                reason: "known mount route has no live view or unique mount",
-            }
-        );
-        Ok(Self {
-            prefixes: vec![prefix],
-            mount_view_root_pid,
-            selected_mount_id_unique,
-            snapshot_digest_id,
-            has_known_route,
-        })
-    }
-
-    fn merge(
-        &mut self,
-        prefix: Vec<Vec<u8>>,
-        mount_view_root_pid: u32,
-        selected_mount_id_unique: u64,
-        snapshot_digest_id: u64,
-        has_known_route: bool,
-    ) -> Result<()> {
-        ensure!(
-            self.mount_view_root_pid == mount_view_root_pid && selected_mount_id_unique > 0,
-            IdentityStateSnafu {
-                reason: "one mount source has unequal live security views",
-            }
-        );
-        ensure!(
-            self.snapshot_digest_id == 0
-                || snapshot_digest_id == 0
-                || self.snapshot_digest_id == snapshot_digest_id,
-            IdentityStateSnafu {
-                reason: "one mount source has unequal topology snapshots",
-            }
-        );
-        self.prefixes.push(prefix);
-        self.selected_mount_id_unique = self.selected_mount_id_unique.min(selected_mount_id_unique);
-        self.snapshot_digest_id = self.snapshot_digest_id.max(snapshot_digest_id);
-        self.has_known_route |= has_known_route;
-        Ok(())
-    }
-}
-
-impl PathTables {
-    fn add_mount_namespace_guard(
-        &mut self,
-        mount_namespace_inode: u32,
-        topology_generation: u64,
-    ) -> Result<()> {
-        let key = mount_namespace_inode.to_ne_bytes();
-        let view = MountSecurityViewStateV1 {
-            topology_generation,
-            snapshot_digest_id: 0,
-            pending_mutations: 0,
-            state: MountTopologyStateV1::Dirty,
-            reserved: [0; 7],
-            transition_version: 1,
-        };
-        insert_exact(&mut self.mount_views, &key, view.as_bytes())?;
-        insert_exact(
-            &mut self.mount_epochs,
-            &key,
-            &topology_generation.to_ne_bytes(),
-        )?;
-        insert_exact(&mut self.mount_locks, &key, &0_u32.to_ne_bytes())?;
-        Ok(())
-    }
-
-    fn add_mount_namespace_guards<'a>(
-        &mut self,
-        objects: impl IntoIterator<Item = &'a ExactFileObjectConfig>,
-    ) -> Result<()> {
-        for object in objects {
-            self.add_mount_namespace_guard(
-                object.mount_namespace_inode,
-                object.mount_topology_generation,
-            )?;
-        }
-        Ok(())
-    }
-}
-
-impl LoweredGeneration {
-    fn composite_handles(artifact: &ProfileCandidateArtifactV1) -> BTreeMap<String, u64> {
-        let mut handles = artifact
-            .policy_document
-            .protected_universe
-            .object_class_ids
-            .iter()
-            .map(|id| format!("CLASS:{id}"))
-            .chain(
-                artifact
-                    .compiled_profile
-                    .compiled_cells
-                    .iter()
-                    .map(|cell| cell.key.object_selector.clone()),
-            )
-            .filter(|id| {
-                !id.starts_with("PATH:") && !id.starts_with(LINUX_CAPABILITY_SELECTOR_PREFIX)
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .enumerate()
-            .map(|(index, id)| (id, index as u64 + 1))
-            .collect::<BTreeMap<_, _>>();
-        for selector in &artifact.policy_document.path_selectors {
-            let object_class = format!("CLASS:{}", selector.object_class_id);
-            let handle = handles[&object_class];
-            handles.insert(format!("PATH:{}", selector.path_selector_id), handle);
-        }
-        handles
-    }
-
-    fn linux_capability(cell: &mithril_control::CompiledDecisionCellV1) -> Result<Option<u32>> {
-        let Some(value) = cell
-            .key
-            .object_selector
-            .strip_prefix(LINUX_CAPABILITY_SELECTOR_PREFIX)
-        else {
-            return Ok(None);
-        };
-        let capability = value.parse::<u32>().map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("invalid compiled Linux capability `{value}`: {error}"),
-            }
-            .build()
-        })?;
-        ensure!(
-            capability <= 40,
-            IdentityStateSnafu {
-                reason: format!("unsupported compiled Linux capability `{capability}`"),
-            }
-        );
-        Ok(Some(capability))
-    }
-
-    fn compile_path_graph(
-        artifact: &ProfileCandidateArtifactV1,
-    ) -> Result<mithril_control::DeterministicPathGraphV1> {
-        let mut patterns = Vec::new();
-        for selector in &artifact.policy_document.path_selectors {
-            let components = selector
-                .target
-                .pattern_components(artifact.header.profile_id.as_str())
-                .context(PolicySnafu)?;
-            patterns.push(PathPatternV1 {
-                rule_id: selector.path_selector_id.clone(),
-                components,
-                candidate_object_class_id: selector.object_class_id.clone(),
-                physical_result_id: format!("CLASS:{}", selector.object_class_id),
-                overrides_rule_ids: Vec::new(),
-            });
-        }
-        let path_tree_denies = artifact
-            .policy_document
-            .path_tree_deny_floors
-            .iter()
-            .map(|floor| {
-                let mut operations = floor
-                    .operation_ids
-                    .iter()
-                    .map(|operation| {
-                        CompiledOperationV1::try_from(operation.as_str())
-                            .map(|operation| operation.kernel_id as u16)
-                            .map_err(|_| {
-                                IdentityStateSnafu {
-                                    reason: format!(
-                                        "path-tree rule has unknown operation `{operation}`"
-                                    ),
-                                }
-                                .build()
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                operations.sort_unstable();
-                let components = PathSelectorTargetV1::Path {
-                    path_pattern: floor.path.clone(),
-                }
-                .pattern_components(artifact.header.profile_id.as_str())
-                .context(PolicySnafu)?;
-                Ok(PathTreeDenyPatternV1 {
-                    role_id: floor.role_id.clone(),
-                    components,
-                    operations,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let graph = CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence(
-            artifact.header.profile_id.as_str(),
-            &patterns,
-            &path_tree_denies,
-            artifact.policy_document.path_pattern_precedence,
-        )
-        .context(PolicySnafu)?;
-        let graph = graph
-            .determinize(artifact.header.profile_id.as_str())
-            .context(PolicySnafu)?;
-        Ok(graph)
-    }
-
-    #[cfg(test)]
-    fn lower_path_tables(
-        artifact: &ProfileCandidateArtifactV1,
-        binding: &WorkloadBindingConfig,
-        objects: &[&ExactFileObjectConfig],
-        measured_mount_routes: &[MeasuredMountRouteV1],
-        composite_handles: &BTreeMap<String, u64>,
-        role_handles: &BTreeMap<String, u32>,
-    ) -> Result<PathTables> {
-        let graph = Self::compile_path_graph(artifact)?;
-        let mut tables = PathTables::for_graph(
-            artifact,
-            &graph,
-            binding.active_profile_generation_ref_id,
-            composite_handles,
-            role_handles,
-        )?;
-        tables.add_binding(&graph, binding, objects, measured_mount_routes)?;
-        Ok(tables)
-    }
-}
-
-impl PathTables {
-    fn for_graph(
-        artifact: &ProfileCandidateArtifactV1,
-        graph: &mithril_control::DeterministicPathGraphV1,
-        generation: u64,
-        composite_handles: &BTreeMap<String, u64>,
-        role_handles: &BTreeMap<String, u32>,
-    ) -> Result<Self> {
-        let mut tables = Self::default();
-        for transition in &graph.exact_transitions {
-            let component = path_component(&transition.component)?;
-            let key = PathGraphTransitionKeyV1 {
-                profile_generation_ref_id: generation,
-                current_state_id: transition.current_state_id,
-                component,
-                reserved: 0,
-            };
-            let value = PathGraphTransitionV1 {
-                next_state_id: transition.next_state_id,
-                reserved: 0,
-            };
-            insert_exact(&mut tables.exact, key.as_bytes(), value.as_bytes())?;
-        }
-        for transition in &graph.wildcard_transitions {
-            let key = PathGraphStateKeyV1 {
-                profile_generation_ref_id: generation,
-                state_id: transition.current_state_id,
-                reserved: 0,
-            };
-            let value = PathGraphTransitionV1 {
-                next_state_id: transition.next_state_id,
-                reserved: 0,
-            };
-            insert_exact(&mut tables.wildcards, key.as_bytes(), value.as_bytes())?;
-        }
-        let rule_handles = handles(
-            graph
-                .terminals
-                .iter()
-                .map(|terminal| terminal.rule_id.as_str()),
-        );
-        let mut terminal_values = BTreeMap::<u32, PathGraphTerminalV1>::new();
-        for terminal in &graph.terminals {
-            let selector = artifact
-                .policy_document
-                .path_selectors
-                .iter()
-                .find(|selector| selector.path_selector_id == terminal.rule_id)
-                .context(IdentityStateSnafu {
-                    reason: format!("path terminal has unknown selector `{}`", terminal.rule_id),
-                })?;
-            let composite_atom_id = *composite_handles
-                .get(&format!("PATH:{}", terminal.rule_id))
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "path terminal has no composite atom for `{}`",
-                            terminal.rule_id
-                        ),
-                    }
-                    .build()
-                })?;
-            let value = PathGraphTerminalV1 {
-                composite_atom_id,
-                rule_numeric_id: rule_handles[&terminal.rule_id],
-                exact_object_required: u8::from(selector.requires_exact_object()),
-                reserved: [0; 3],
-            };
-            ensure!(
-                terminal_values.insert(terminal.state_id, value).is_none(),
-                IdentityStateSnafu {
-                    reason: "deterministic path state has multiple exact terminals",
-                }
-            );
-        }
-        for (state_id, value) in terminal_values {
-            let key = PathGraphStateKeyV1 {
-                profile_generation_ref_id: generation,
-                state_id,
-                reserved: 0,
-            };
-            insert_exact(&mut tables.terminals, key.as_bytes(), value.as_bytes())?;
-        }
-        for floor in &graph.path_tree_deny_floors {
-            let active_role_id = *role_handles.get(&floor.role_id).ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!("path-tree denial has unknown role `{}`", floor.role_id),
-                }
-                .build()
-            })?;
-            let key = PathTreeDenyKeyV1 {
-                profile_generation_ref_id: generation,
-                state_id: floor.state_id,
-                active_role_id,
-            };
-            insert_exact(
-                &mut tables.path_tree_denials,
-                key.as_bytes(),
-                &floor.operation_mask.to_ne_bytes(),
-            )?;
-        }
-        Ok(tables)
-    }
-
-    fn add_binding(
-        &mut self,
-        graph: &mithril_control::DeterministicPathGraphV1,
-        binding: &WorkloadBindingConfig,
-        objects: &[&ExactFileObjectConfig],
-        measured_mount_routes: &[MeasuredMountRouteV1],
-    ) -> Result<()> {
-        let mut route_plans = BTreeMap::<MountRouteIdentity, MountRoutePlan>::new();
-        for measured in measured_mount_routes {
-            ensure!(
-                measured.binding_id == binding.binding_id
-                    && measured.mount_topology_generation > 0
-                    && measured.route.mount_namespace_inode > 0
-                    && measured.route.root_inode > 0,
-                IdentityStateSnafu {
-                    reason: "known mount route differs from its workload binding",
-                }
-            );
-            let identity = MountRouteIdentity {
-                mount_namespace_inode: measured.route.mount_namespace_inode,
-                filesystem_device: measured.route.filesystem_device,
-                root_inode: measured.route.root_inode,
-                topology_generation: measured.mount_topology_generation,
-            };
-            match route_plans.entry(identity) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(MountRoutePlan::new(
-                        measured.route.mountpoint_components.clone(),
-                        measured.mount_view_root_pid,
-                        measured.route.selected_mount_id_unique,
-                        measured.route.mount_snapshot_digest_id,
-                        true,
-                    )?);
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().merge(
-                        measured.route.mountpoint_components.clone(),
-                        measured.mount_view_root_pid,
-                        measured.route.selected_mount_id_unique,
-                        measured.route.mount_snapshot_digest_id,
-                        true,
-                    )?;
-                }
-            }
-        }
-        for object in objects {
-            let components = object
-                .canonical_component_hex
-                .iter()
-                .map(|component| {
-                    hex::decode(component).map_err(|error| {
-                        IdentityStateSnafu {
-                            reason: format!(
-                                "measured canonical path component is invalid: {error}"
-                            ),
-                        }
-                        .build()
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let prefix_len = components
-                .len()
-                .checked_sub(usize::from(object.mount_relative_component_count))
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "mount-relative path count exceeds the canonical path".to_owned(),
-                    }
-                    .build()
-                })?;
-            let identity = MountRouteIdentity {
-                mount_namespace_inode: object.mount_namespace_inode,
-                filesystem_device: object.mount_root_filesystem_device,
-                root_inode: object.mount_root_inode,
-                topology_generation: object.mount_topology_generation,
-            };
-            match route_plans.entry(identity) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(MountRoutePlan::new(
-                        components[..prefix_len].to_vec(),
-                        object.mount_view_root_pid,
-                        object.selected_mount_id_unique,
-                        object.mount_snapshot_digest_id,
-                        false,
-                    )?);
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().merge(
-                        components[..prefix_len].to_vec(),
-                        object.mount_view_root_pid,
-                        object.selected_mount_id_unique,
-                        object.mount_snapshot_digest_id,
-                        false,
-                    )?;
-                }
-            }
-        }
-        let mut route_states = BTreeMap::new();
-        for (identity, plan) in &route_plans {
-            if let Some(states) = GraphPrefixStates::compile(graph, &plan.prefixes)? {
-                route_states.insert(*identity, states);
-            } else if plan.has_known_route {
-                route_states.insert(
-                    *identity,
-                    GraphPrefixStates {
-                        ids: [0; MAX_CANONICAL_ROUTE_STATES_V1],
-                        count: 0,
-                    },
-                );
-            }
-        }
-        self.add_mount_namespace_guards(objects.iter().copied())?;
-        let binding_id = parse_id("binding_id", &binding.binding_id)?;
-        for (identity, graph_prefix_states) in &route_states {
-            let plan = &route_plans[identity];
-            self.add_mount_namespace_guard(
-                identity.mount_namespace_inode,
-                identity.topology_generation,
-            )?;
-            let root_key = CanonicalMountRootKeyV1 {
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                mount_namespace_inode: identity.mount_namespace_inode,
-                binding_id,
-                topology_generation: if plan.has_known_route {
-                    0
-                } else {
-                    identity.topology_generation
-                },
-                filesystem_device: identity.filesystem_device,
-                root_inode: identity.root_inode,
-            };
-            let root = graph_prefix_states
-                .mount_root(plan.selected_mount_id_unique, plan.snapshot_digest_id);
-            insert_exact(&mut self.mount_roots, root_key.as_bytes(), root.as_bytes())?;
-        }
-        for object in objects {
-            let components = object
-                .canonical_component_hex
-                .iter()
-                .map(|component| {
-                    hex::decode(component).map_err(|error| {
-                        IdentityStateSnafu {
-                            reason: format!(
-                                "measured canonical path component is invalid: {error}"
-                            ),
-                        }
-                        .build()
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let identity = MountRouteIdentity {
-                mount_namespace_inode: object.mount_namespace_inode,
-                topology_generation: object.mount_topology_generation,
-                filesystem_device: object.mount_root_filesystem_device,
-                root_inode: object.mount_root_inode,
-            };
-            ensure!(
-                route_states.contains_key(&identity),
-                IdentityStateSnafu {
-                    reason: "canonical mount prefix is absent from its path graph",
-                }
-            );
-            self.reconciliation.push(MountRootReconciliation {
-                mount_namespace_inode: object.mount_namespace_inode,
-                configured: (*object).clone(),
-                canonical_path: canonical_path(&components),
-            });
-        }
-        Ok(())
-    }
-}
-
-fn path_component(bytes: &[u8]) -> Result<CanonicalPathComponentV1> {
-    ensure!(
-        !bytes.is_empty() && bytes.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1 && !bytes.contains(&0),
-        IdentityStateSnafu {
-            reason: "canonical path component is invalid",
-        }
-    );
-    let mut component = CanonicalPathComponentV1 {
-        length: bytes.len() as u16,
-        ..CanonicalPathComponentV1::default()
-    };
-    component.bytes[..bytes.len()].copy_from_slice(bytes);
-    Ok(component)
-}
-
-fn canonical_path(components: &[Vec<u8>]) -> PathBuf {
-    let mut path = PathBuf::from("/");
-    for component in components {
-        path.push(OsStr::from_bytes(component));
-    }
-    path
-}
-
-type MapRows = BTreeMap<Vec<u8>, Vec<u8>>;
-
-fn table_digest(tables: &[(&str, &MapRows)]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    for (domain, rows) in tables {
-        for (key, value) in rows.iter() {
-            digest.update(domain.as_bytes());
-            digest.update((key.len() as u64).to_le_bytes());
-            digest.update(key);
-            digest.update((value.len() as u64).to_le_bytes());
-            digest.update(value);
-        }
-    }
-    digest.finalize().into()
-}
-
 fn insert_exact(map: &mut BTreeMap<Vec<u8>, Vec<u8>>, key: &[u8], value: &[u8]) -> Result<()> {
     if let Some(existing) = map.insert(key.to_vec(), value.to_vec()) {
         ensure!(
@@ -5609,16 +330,6 @@ fn insert_exact(map: &mut BTreeMap<Vec<u8>, Vec<u8>>, key: &[u8], value: &[u8]) 
                 reason: "node lowering produced an unequal exact-key conflict",
             }
         );
-    }
-    Ok(())
-}
-
-fn merge_rows(
-    target: &mut BTreeMap<Vec<u8>, Vec<u8>>,
-    source: BTreeMap<Vec<u8>, Vec<u8>>,
-) -> Result<()> {
-    for (key, value) in source {
-        insert_exact(target, &key, &value)?;
     }
     Ok(())
 }
@@ -5727,13 +438,12 @@ mod tests {
     use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
     use super::{
-        add_binding_activation, build_process_generation_migrations,
-        ensure_active_generation_unchanged, ensure_committed_generation, ensure_map_capacity,
-        entry_admission_path_selector_ids, exception_counter_is_consistent,
-        generation_retirement_needs_tombstone, handles, mount_cache_row_is_unreachable, parse_id,
-        pending_exec_retains_generation_authority, read_abi_value, same_exact_file,
-        GenerationSemantics, LoweredGeneration, MeasuredMountRouteV1, PreparedGeneration,
-        ProfileActivation, CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
+        build_process_generation_migrations, ensure_active_generation_unchanged,
+        ensure_committed_generation, ensure_map_capacity, entry_admission_path_selector_ids,
+        exception_counter_is_consistent, generation_retirement_needs_tombstone, handles,
+        mount_cache_row_is_unreachable, parse_id, pending_exec_retains_generation_authority,
+        read_abi_value, same_exact_file, GenerationBinding, GenerationSemantics, LoweredGeneration,
+        MeasuredMountRouteV1, NativeTable, ProfileActivation, CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
@@ -5952,34 +662,58 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
-        let mut prepared = PreparedGeneration::new(
-            &artifact,
-            1,
-            Id128V1::new(1, 2),
-            Id128V1::new(3, 4),
-            3,
-            1_800_000_000_000_000_000,
-            100,
-        )?;
-        prepared.add_binding(&binding, std::slice::from_ref(&object), &[], false)?;
+        let compile = |bindings: &[GenerationBinding<'_>]| {
+            LoweredGeneration::compile(
+                &artifact,
+                1,
+                bindings,
+                Id128V1::new(1, 2),
+                Id128V1::new(3, 4),
+                3,
+                1_800_000_000_000_000_000,
+                100,
+            )
+        };
+        let first = GenerationBinding {
+            config: &binding,
+            objects: std::slice::from_ref(&object),
+            routes: &[],
+            deferred: false,
+        };
         let second = WorkloadBindingConfig {
             binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
             ..binding.clone()
         };
-        assert!(prepared.add_binding(&second, &[], &[], false).is_err());
+        assert!(compile(&[
+            first,
+            GenerationBinding {
+                config: &second,
+                objects: &[],
+                routes: &[],
+                deferred: false,
+            },
+        ])
+        .is_err());
         let empty = WorkloadBindingConfig {
             execution_set_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
             ..second.clone()
         };
-        let error = prepared
-            .add_binding(&empty, std::slice::from_ref(&object), &[], false)
-            .err()
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "a binding reused another binding's selected cells",
-                }
-                .build()
-            })?;
+        let error = compile(&[
+            first,
+            GenerationBinding {
+                config: &empty,
+                objects: std::slice::from_ref(&object),
+                routes: &[],
+                deferred: false,
+            },
+        ])
+        .err()
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "a binding reused another binding's selected cells",
+            }
+            .build()
+        })?;
         assert!(error
             .to_string()
             .contains("selected no exact candidate cells"));
@@ -5988,19 +722,61 @@ mod tests {
             inode: object.inode + 1,
             ..object.clone()
         };
-        prepared.add_binding(&second, std::slice::from_ref(&other), &[], false)?;
-        assert_eq!(prepared.lowered.descriptor.row_count, 0);
-        assert_eq!(prepared.lowered.descriptor.table_digest, [0; 32]);
-        let generation = prepared.finish()?;
+        let generation = compile(&[
+            first,
+            GenerationBinding {
+                config: &second,
+                objects: std::slice::from_ref(&other),
+                routes: &[],
+                deferred: false,
+            },
+        ])?;
+        assert_ne!(generation.descriptor.row_count, 0);
+        assert_ne!(generation.descriptor.table_digest, [0; 32]);
         assert_eq!(generation.descriptor, expected.descriptor);
         assert_eq!(generation.semantics, expected.semantics);
-        assert_eq!(generation.decisions, expected.decisions);
-        assert_eq!(generation.path_exact, expected.path_exact);
-        assert_eq!(generation.path_wildcards, expected.path_wildcards);
-        assert_eq!(generation.path_terminals, expected.path_terminals);
-        assert_eq!(generation.path_tree_denials, expected.path_tree_denials);
-        assert_eq!(generation.file_objects.len(), 2);
-        assert_eq!(generation.mount_roots.len(), 2);
+        assert_eq!(
+            generation.rows[NativeTable::EffectDecision]
+                .iter()
+                .collect::<Vec<_>>(),
+            expected.rows[NativeTable::EffectDecision]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            generation.rows[NativeTable::PathExact]
+                .iter()
+                .collect::<Vec<_>>(),
+            expected.rows[NativeTable::PathExact]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            generation.rows[NativeTable::PathWildcard]
+                .iter()
+                .collect::<Vec<_>>(),
+            expected.rows[NativeTable::PathWildcard]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            generation.rows[NativeTable::PathTerminal]
+                .iter()
+                .collect::<Vec<_>>(),
+            expected.rows[NativeTable::PathTerminal]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            generation.rows[NativeTable::PathTreeDenial]
+                .iter()
+                .collect::<Vec<_>>(),
+            expected.rows[NativeTable::PathTreeDenial]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(generation.rows[NativeTable::FileObject].len(), 2);
+        assert_eq!(generation.rows[NativeTable::MountRoot].len(), 2);
         for measured in [&object, &other] {
             let key = ExactFileObjectKeyV1 {
                 profile_generation_ref_id: 1,
@@ -6010,7 +786,7 @@ mod tests {
                 inode: measured.inode,
                 inode_generation: measured.inode_generation,
             };
-            assert!(generation.file_objects.contains_key(key.as_bytes()));
+            assert!(generation.rows[NativeTable::FileObject].contains_key(key.as_bytes()));
         }
         let mut document = artifact.policy_document;
         document.path_selectors.push(PathSelectorV1::exact(
@@ -6046,17 +822,17 @@ mod tests {
         artifact
             .verify_at(&key.verifying_key(), 1_800_000_000_000_000_000)
             .context(crate::error::PolicySnafu)?;
-        let mut prepared = PreparedGeneration::new(
-            &artifact,
-            1,
-            Id128V1::new(1, 2),
-            Id128V1::new(3, 4),
-            3,
-            1_800_000_000_000_000_000,
-            100,
-        )?;
         assert!(matches!(
-            prepared.add_binding(&binding, &[], &[], false),
+            LoweredGeneration::for_binding(
+                &artifact,
+                &binding,
+                &[],
+                Id128V1::new(1, 2),
+                Id128V1::new(3, 4),
+                3,
+                1_800_000_000_000_000_000,
+                100,
+            ),
             Err(crate::Error::IdentityState { reason, .. })
                 if reason == "exact selector `a-missing` has no proven object in the container"
         ));
@@ -6065,25 +841,37 @@ mod tests {
 
     #[test]
     fn generation_rejects_candidate_changes() -> crate::Result<()> {
+        use snafu::ResultExt as _;
+
         let (artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
-        let mut prepared = PreparedGeneration::new(
+        let key = SigningKey::from_bytes(&[9; 32]);
+        artifact
+            .clone()
+            .verify(&key.verifying_key())
+            .context(crate::error::PolicySnafu)?;
+        let mut other = artifact.clone();
+        other.compiled_profile.compiled_cells[0].errno = Some(-1);
+        assert!(other.verify(&key.verifying_key()).is_err());
+        let other = WorkloadBindingConfig {
+            active_profile_generation_ref_id: 2,
+            ..binding
+        };
+        assert!(LoweredGeneration::compile(
             &artifact,
             1,
+            &[GenerationBinding {
+                config: &other,
+                objects: &[object],
+                routes: &[],
+                deferred: false,
+            }],
             Id128V1::new(1, 2),
             Id128V1::new(3, 4),
             3,
             1_800_000_000_000_000_000,
             100,
-        )?;
-        prepared.check_candidate(&artifact.clone())?;
-        let mut other = artifact.clone();
-        other.compiled_profile.compiled_cells[0].errno = Some(-1);
-        assert!(prepared.check_candidate(&other).is_err());
-        let other = WorkloadBindingConfig {
-            active_profile_generation_ref_id: 2,
-            ..binding
-        };
-        assert!(prepared.add_binding(&other, &[object], &[], false).is_err());
+        )
+        .is_err());
         Ok(())
     }
 
@@ -6100,26 +888,112 @@ mod tests {
         cell.physical_result = mithril_control::CompiledPhysicalResultV1::AllowEffect;
         cell.errno = None;
         artifact.compiled_profile.compiled_cells.push(cell);
-        let mut prepared = PreparedGeneration::new(
+        LoweredGeneration::for_binding(
             &artifact,
-            1,
+            &binding,
+            std::slice::from_ref(&object),
             Id128V1::new(1, 2),
             Id128V1::new(3, 4),
             3,
             1_800_000_000_000_000_000,
             100,
         )?;
-        prepared.add_binding(&binding, std::slice::from_ref(&object), &[], false)?;
-        let error = prepared
-            .add_binding(&second, &[object], &[], false)
-            .err()
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "unequal exact rows were accepted in one generation",
-                }
-                .build()
-            })?;
+        let error = LoweredGeneration::compile(
+            &artifact,
+            1,
+            &[
+                GenerationBinding {
+                    config: &binding,
+                    objects: std::slice::from_ref(&object),
+                    routes: &[],
+                    deferred: false,
+                },
+                GenerationBinding {
+                    config: &second,
+                    objects: std::slice::from_ref(&object),
+                    routes: &[],
+                    deferred: false,
+                },
+            ],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )
+        .err()
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "unequal exact rows were accepted in one generation",
+            }
+            .build()
+        })?;
         assert!(error.to_string().contains("unequal exact-key conflict"));
+        Ok(())
+    }
+
+    #[test]
+    fn generation_requires_device_witness() -> crate::Result<()> {
+        let (mut artifact, binding, mut object) = exact_artifact(ProfileModeV1::Protect)?;
+        artifact.policy_document.path_selectors[0].device_class_id = Some("gpu".to_owned());
+        let cell = &mut artifact.compiled_profile.compiled_cells[0];
+        cell.key.effect_family = EffectFamilyV1::Device;
+        cell.key.operation_id = "IOCTL".to_owned();
+        cell.key.object_selector = "DEVICE:gpu:*".to_owned();
+        object.device = Some(crate::ExactDeviceConfig {
+            device_class_id: "gpu".to_owned(),
+            device_type: crate::ExactDeviceType::Character,
+            major: 226,
+            minor: 128,
+        });
+        let second = WorkloadBindingConfig {
+            binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            ..binding.clone()
+        };
+        let compile = |candidate: &ProfileCandidateArtifactV1, second: &WorkloadBindingConfig| {
+            LoweredGeneration::compile(
+                candidate,
+                1,
+                &[
+                    GenerationBinding {
+                        config: &binding,
+                        objects: std::slice::from_ref(&object),
+                        routes: &[],
+                        deferred: false,
+                    },
+                    GenerationBinding {
+                        config: second,
+                        objects: std::slice::from_ref(&object),
+                        routes: &[],
+                        deferred: false,
+                    },
+                ],
+                Id128V1::new(1, 2),
+                Id128V1::new(3, 4),
+                3,
+                1_800_000_000_000_000_000,
+                100,
+            )
+        };
+        let generation = compile(&artifact, &second)?;
+        assert_eq!(generation.rows[NativeTable::DeviceEffect].len(), 1);
+        let second = WorkloadBindingConfig {
+            execution_set_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+            ..second
+        };
+        let mut unavailable = artifact.clone();
+        let mut selector = PathSelectorV1::path("other-gpu", "/dev/other-gpu", "PROJECTED_TOKEN");
+        selector.device_class_id = Some("other-gpu".to_owned());
+        unavailable.policy_document.path_selectors.push(selector);
+        let mut cell = unavailable.compiled_profile.compiled_cells[0].clone();
+        cell.key.execution_set_id = second.execution_set_id.clone();
+        cell.key.object_selector = "DEVICE:other-gpu:*".to_owned();
+        unavailable.compiled_profile.compiled_cells.push(cell);
+        assert!(matches!(
+            compile(&unavailable, &second),
+            Err(crate::Error::IdentityState { reason, .. })
+                if reason.contains("selected no exact candidate cells")
+        ));
         Ok(())
     }
 
@@ -6133,22 +1007,32 @@ mod tests {
             scheduled_binding_authority_id: Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc".to_owned()),
             ..binding.clone()
         };
-        let mut prepared = PreparedGeneration::new(
+        let generation = LoweredGeneration::compile(
             &artifact,
             1,
+            &[
+                GenerationBinding {
+                    config: &binding,
+                    objects: &[],
+                    routes: &[],
+                    deferred: true,
+                },
+                GenerationBinding {
+                    config: &second,
+                    objects: &[],
+                    routes: &[],
+                    deferred: false,
+                },
+            ],
             Id128V1::new(1, 2),
             Id128V1::new(3, 4),
             3,
             1_800_000_000_000_000_000,
             100,
         )?;
-        prepared.add_binding(&binding, &[], &[], true)?;
-        prepared.add_binding(&second, &[], &[], false)?;
-        let generation = prepared.finish()?;
         let staged = parse_id("binding_id", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?;
         let runtime = parse_id("binding_id", &second.binding_id)?;
-        let rows = generation
-            .entry_admissions
+        let rows = generation.rows[NativeTable::EntryAdmission]
             .keys()
             .map(|key| read_abi_value::<EntryAdmissionRuleKeyV1>(key, "test entry key"))
             .collect::<crate::Result<Vec<_>>>()?;
@@ -6221,74 +1105,131 @@ mod tests {
         artifact.policy_document.exceptions = vec![exception, unused];
         artifact.compiled_profile.compiled_cells[0].consuming_exception_id =
             Some("lease".to_owned());
-        let mut prepared = PreparedGeneration::new(
+        let first = LoweredGeneration::for_binding(
             &artifact,
-            1,
+            &binding,
+            std::slice::from_ref(&object),
             Id128V1::new(1, 2),
             Id128V1::new(3, 4),
             3,
             now,
             100,
         )?;
-        prepared.add_binding(&binding, std::slice::from_ref(&object), &[], false)?;
-        let rows = prepared.lowered.exceptions.clone();
-        let deadlines = prepared.lowered.exception_deadlines_utc.clone();
+        let rows = first
+            .rows
+            .exceptions
+            .iter()
+            .map(|(key, row)| (key.clone(), row.state))
+            .collect::<BTreeMap<_, _>>();
+        let deadlines = first
+            .rows
+            .exceptions
+            .iter()
+            .map(|(key, row)| (key.clone(), row.deadline_utc_ns))
+            .collect::<BTreeMap<_, _>>();
         let second = WorkloadBindingConfig {
             binding_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
             ..binding.clone()
         };
-        prepared.add_binding(&second, std::slice::from_ref(&object), &[], false)?;
-        let generation = prepared.finish()?;
-        assert_eq!(generation.exceptions, rows);
-        assert_eq!(generation.exception_deadlines_utc, deadlines);
-        assert_eq!(generation.exception_bindings.len(), 1);
-        assert_eq!(generation.exceptions.len(), 1);
-        let row = generation.exceptions.values().next().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "test exception has no runtime state",
-            }
-            .build()
-        })?;
+        let generation = LoweredGeneration::compile(
+            &artifact,
+            1,
+            &[
+                GenerationBinding {
+                    config: &binding,
+                    objects: std::slice::from_ref(&object),
+                    routes: &[],
+                    deferred: false,
+                },
+                GenerationBinding {
+                    config: &second,
+                    objects: std::slice::from_ref(&object),
+                    routes: &[],
+                    deferred: false,
+                },
+            ],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            now,
+            100,
+        )?;
+        assert_eq!(
+            generation
+                .rows
+                .exceptions
+                .iter()
+                .map(|(key, row)| (key.clone(), row.state))
+                .collect::<BTreeMap<_, _>>(),
+            rows
+        );
+        assert_eq!(
+            generation
+                .rows
+                .exceptions
+                .iter()
+                .map(|(key, row)| (key.clone(), row.deadline_utc_ns))
+                .collect::<BTreeMap<_, _>>(),
+            deadlines
+        );
+        assert_eq!(generation.rows[NativeTable::ExceptionBinding].len(), 1);
+        assert_eq!(generation.rows.exceptions.len(), 1);
+        let row = generation
+            .rows
+            .exceptions
+            .values()
+            .map(|row| row.state.as_bytes())
+            .next()
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "test exception has no runtime state",
+                }
+                .build()
+            })?;
         let state: super::ExceptionRuntimeStateV1 = read_abi_value(row, "test exception state")?;
         assert_eq!(state.deadline_boottime_ns, 140);
         assert_eq!(state.maximum_uses, 2);
         assert_eq!(state.consumed_uses, 0);
         assert_eq!(state.bound_profile_generation_refs, 1);
         assert_eq!(
-            generation.exception_deadlines_utc.values().next(),
+            generation
+                .rows
+                .exceptions
+                .values()
+                .map(|row| &row.deadline_utc_ns)
+                .next(),
             Some(&(now + 40))
         );
         let mut overflow = artifact.clone();
         overflow.policy_document.exceptions[0].valid_from_utc_ns = i64::MIN;
         overflow.policy_document.exceptions[0].valid_until_utc_ns = i64::MAX;
-        let mut prepared = PreparedGeneration::new(
-            &overflow,
-            1,
-            Id128V1::new(1, 2),
-            Id128V1::new(3, 4),
-            3,
-            i64::MIN,
-            100,
-        )?;
         assert!(matches!(
-            prepared.add_binding(&binding, std::slice::from_ref(&object), &[], false),
+            LoweredGeneration::for_binding(
+                &overflow,
+                &binding,
+                std::slice::from_ref(&object),
+                Id128V1::new(1, 2),
+                Id128V1::new(3, 4),
+                3,
+                i64::MIN,
+                100,
+            ),
             Err(crate::Error::IdentityState { reason, .. })
                 if reason == "exception UTC lifetime overflow"
         ));
         let mut expired = artifact.clone();
         expired.policy_document.exceptions[0].valid_until_utc_ns = now;
-        let mut prepared = PreparedGeneration::new(
+        assert!(LoweredGeneration::for_binding(
             &expired,
-            1,
+            &binding,
+            &[object],
             Id128V1::new(1, 2),
             Id128V1::new(3, 4),
             3,
             now,
             100,
-        )?;
-        assert!(prepared
-            .add_binding(&binding, &[object], &[], false)
-            .is_err());
+        )
+        .is_err());
         Ok(())
     }
 
@@ -6306,8 +1247,7 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
-        let terminal = generation
-            .path_terminals
+        let terminal = generation.rows[NativeTable::PathTerminal]
             .values()
             .find_map(|value| {
                 PathGraphTerminalV1::read_from_bytes(value)
@@ -6332,15 +1272,18 @@ mod tests {
             reserved_tail: [0; 3],
         };
         assert_eq!(
-            generation.decisions.keys().next(),
+            generation.rows[NativeTable::EffectDecision].keys().next(),
             Some(&expected.as_bytes().to_vec())
         );
-        let object_key = generation.file_objects.keys().next().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "test generation has no exact object row".to_owned(),
-            }
-            .build()
-        })?;
+        let object_key = generation.rows[NativeTable::FileObject]
+            .keys()
+            .next()
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "test generation has no exact object row".to_owned(),
+                }
+                .build()
+            })?;
         assert_eq!(
             ExactFileObjectKeyV1::read_from_bytes(object_key)
                 .map_err(|error| {
@@ -6353,7 +1296,7 @@ mod tests {
             object.selected_mount_id_unique
         );
         assert_eq!(
-            generation.mount_views.keys().next(),
+            generation.rows[NativeTable::MountView].keys().next(),
             Some(&object.mount_namespace_inode.to_ne_bytes().to_vec())
         );
         let expected_binding = ExactObjectBindingV1 {
@@ -6363,8 +1306,7 @@ mod tests {
             state: ExactObjectBindingStateV1::ReadBack,
             reserved: [0; 7],
         };
-        assert!(generation
-            .file_objects
+        assert!(generation.rows[NativeTable::FileObject]
             .values()
             .any(|binding| binding == expected_binding.as_bytes()));
 
@@ -6427,8 +1369,7 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
-        let decision = generation
-            .decisions
+        let decision = generation.rows[NativeTable::EffectDecision]
             .values()
             .find_map(|value| PhysicalDecisionV1::try_read_from_bytes(value).ok())
             .ok_or_else(|| {
@@ -6439,8 +1380,8 @@ mod tests {
             })?;
         assert_eq!(decision.decision, PhysicalDecisionKindV1::Allow);
         assert_eq!(decision.exception_numeric_handle, 1);
-        assert!(generation.exception_bindings.is_empty());
-        assert!(generation.exceptions.is_empty());
+        assert!(generation.rows[NativeTable::ExceptionBinding].is_empty());
+        assert!(generation.rows.exceptions.is_empty());
         Ok(())
     }
 
@@ -6474,7 +1415,10 @@ mod tests {
         );
         assert_eq!(generation.active_descriptor().transition_version, 3);
         assert_eq!(
-            generation.decisions.values().next().map(|value| value[0]),
+            generation.rows[NativeTable::EffectDecision]
+                .values()
+                .next()
+                .map(|value| value[0]),
             Some(PhysicalDecisionKindV1::Deny as u8)
         );
         Ok(())
@@ -6497,7 +1441,7 @@ mod tests {
             100,
         )?;
 
-        assert_eq!(generation.decisions.len(), 1);
+        assert_eq!(generation.rows[NativeTable::EffectDecision].len(), 1);
         Ok(())
     }
 
@@ -6515,12 +1459,17 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
-        assert_eq!(generation.entry_admissions.len(), 6);
-        assert!(!generation.mount_views.is_empty());
-        assert_eq!(generation.mount_views.len(), generation.mount_epochs.len());
-        assert_eq!(generation.mount_views.len(), generation.mount_locks.len());
-        let rows = generation
-            .entry_admissions
+        assert_eq!(generation.rows[NativeTable::EntryAdmission].len(), 6);
+        assert!(!generation.rows[NativeTable::MountView].is_empty());
+        assert_eq!(
+            generation.rows[NativeTable::MountView].len(),
+            generation.rows[NativeTable::MountEpoch].len()
+        );
+        assert_eq!(
+            generation.rows[NativeTable::MountView].len(),
+            generation.rows[NativeTable::MountLock].len()
+        );
+        let rows = generation.rows[NativeTable::EntryAdmission]
             .iter()
             .map(|(key, value)| {
                 Ok((
@@ -6563,7 +1512,7 @@ mod tests {
         );
         assert_eq!(generation.administrative_plans.len(), 1);
         assert_ne!(generation.administrative_plans[0].admitted_entry_rule_id, 0);
-        assert!(generation.administrative_required);
+        assert!(!generation.administrative_plans.is_empty());
         Ok(())
     }
 
@@ -6594,9 +1543,23 @@ mod tests {
             100,
         )?;
 
-        assert_eq!(recovered.entry_admissions, held.entry_admissions);
-        assert_eq!(recovered.file_objects, held.file_objects);
-        assert!(recovered.file_objects.is_empty());
+        assert_eq!(
+            recovered.rows[NativeTable::EntryAdmission]
+                .iter()
+                .collect::<Vec<_>>(),
+            held.rows[NativeTable::EntryAdmission]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            recovered.rows[NativeTable::FileObject]
+                .iter()
+                .collect::<Vec<_>>(),
+            held.rows[NativeTable::FileObject]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert!(recovered.rows[NativeTable::FileObject].is_empty());
         Ok(())
     }
 
@@ -6649,11 +1612,13 @@ mod tests {
             binding_lifecycle_state: super::lifecycle(capability_lifecycle),
             reserved_tail: [0; 3],
         };
-        assert!(generation.defaults.iter().any(|(key, value)| {
-            key == expected_key.as_bytes()
-                && PhysicalDecisionV1::try_read_from_bytes(value)
-                    .is_ok_and(|decision| decision.decision == PhysicalDecisionKindV1::Allow)
-        }));
+        assert!(generation.rows[NativeTable::EffectDefault]
+            .iter()
+            .any(|(key, value)| {
+                key == expected_key.as_bytes()
+                    && PhysicalDecisionV1::try_read_from_bytes(value)
+                        .is_ok_and(|decision| decision.decision == PhysicalDecisionKindV1::Allow)
+            }));
         assert!(LoweredGeneration::composite_handles(&artifact)
             .keys()
             .all(|selector| !selector.starts_with("SECURITY:LINUX_CAPABILITY:")));
@@ -6676,13 +1641,15 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
-        assert!(generation.file_objects.is_empty());
-        assert!(generation.entry_admissions.values().all(|value| {
-            EntryAdmissionRuleV1::try_read_from_bytes(value).is_ok_and(|rule| {
-                rule.exact_object_key_id == 0
-                    && rule.executable_object == ExactFileObjectKeyV1::default()
-            })
-        }));
+        assert!(generation.rows[NativeTable::FileObject].is_empty());
+        assert!(generation.rows[NativeTable::EntryAdmission]
+            .values()
+            .all(|value| {
+                EntryAdmissionRuleV1::try_read_from_bytes(value).is_ok_and(|rule| {
+                    rule.exact_object_key_id == 0
+                        && rule.executable_object == ExactFileObjectKeyV1::default()
+                })
+            }));
         Ok(())
     }
 
@@ -6700,11 +1667,13 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
-        assert_eq!(staged.entry_admissions.len(), 6);
-        assert!(staged.entry_admissions.values().all(|value| {
-            EntryAdmissionRuleV1::try_read_from_bytes(value)
-                .is_ok_and(|rule| rule.exact_object_key_id == 0)
-        }));
+        assert_eq!(staged.rows[NativeTable::EntryAdmission].len(), 6);
+        assert!(staged.rows[NativeTable::EntryAdmission]
+            .values()
+            .all(|value| {
+                EntryAdmissionRuleV1::try_read_from_bytes(value)
+                    .is_ok_and(|rule| rule.exact_object_key_id == 0)
+            }));
 
         let mut objects = entry_role_objects(&artifact, &binding)?;
         let shared = objects[0].clone();
@@ -6731,10 +1700,12 @@ mod tests {
             active.descriptor.table_digest
         );
         assert_eq!(staged.descriptor.row_count, active.descriptor.row_count);
-        assert!(active.entry_admissions.values().all(|value| {
-            EntryAdmissionRuleV1::try_read_from_bytes(value)
-                .is_ok_and(|rule| rule.exact_object_key_id == 0)
-        }));
+        assert!(active.rows[NativeTable::EntryAdmission]
+            .values()
+            .all(|value| {
+                EntryAdmissionRuleV1::try_read_from_bytes(value)
+                    .is_ok_and(|rule| rule.exact_object_key_id == 0)
+            }));
 
         let retry_binding = WorkloadBindingConfig {
             binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
@@ -6782,13 +1753,15 @@ mod tests {
             100,
             true,
         )?;
-        assert!(staged.entry_admissions.iter().all(|(key, value)| {
-            EntryAdmissionRuleKeyV1::try_read_from_bytes(key).is_ok_and(|key| {
-                key.binding_id == authority
-                    && EntryAdmissionRuleV1::try_read_from_bytes(value)
-                        .is_ok_and(|rule| rule.exact_object_key_id == 0)
-            })
-        }));
+        assert!(staged.rows[NativeTable::EntryAdmission]
+            .iter()
+            .all(|(key, value)| {
+                EntryAdmissionRuleKeyV1::try_read_from_bytes(key).is_ok_and(|key| {
+                    key.binding_id == authority
+                        && EntryAdmissionRuleV1::try_read_from_bytes(value)
+                            .is_ok_and(|rule| rule.exact_object_key_id == 0)
+                })
+            }));
 
         let final_rows = LoweredGeneration::for_binding_with_mount_routes(
             &artifact,
@@ -6803,13 +1776,15 @@ mod tests {
             false,
         )?;
         let runtime_binding = parse_id("binding_id", &binding.binding_id)?;
-        assert!(final_rows.entry_admissions.iter().all(|(key, value)| {
-            EntryAdmissionRuleKeyV1::try_read_from_bytes(key).is_ok_and(|key| {
-                key.binding_id == runtime_binding
-                    && EntryAdmissionRuleV1::try_read_from_bytes(value)
-                        .is_ok_and(|rule| rule.exact_object_key_id == 0)
-            })
-        }));
+        assert!(final_rows.rows[NativeTable::EntryAdmission]
+            .iter()
+            .all(|(key, value)| {
+                EntryAdmissionRuleKeyV1::try_read_from_bytes(key).is_ok_and(|key| {
+                    key.binding_id == runtime_binding
+                        && EntryAdmissionRuleV1::try_read_from_bytes(value)
+                            .is_ok_and(|rule| rule.exact_object_key_id == 0)
+                })
+            }));
         assert_eq!(
             staged.descriptor.table_digest,
             final_rows.descriptor.table_digest
@@ -6834,15 +1809,14 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
-        assert!(generation.file_objects.is_empty());
-        assert!(generation.mount_views.is_empty());
-        assert!(generation.decisions.is_empty());
-        assert!(generation
-            .path_terminals
+        assert!(generation.rows[NativeTable::FileObject].is_empty());
+        assert!(generation.rows[NativeTable::MountView].is_empty());
+        assert!(generation.rows[NativeTable::EffectDecision].is_empty());
+        assert!(generation.rows[NativeTable::PathTerminal]
             .values()
             .any(|value| PathGraphTerminalV1::read_from_bytes(value)
                 .is_ok_and(|terminal| terminal.exact_object_required == 0)));
-        assert_eq!(generation.defaults.len(), 1);
+        assert_eq!(generation.rows[NativeTable::EffectDefault].len(), 1);
         Ok(())
     }
 
@@ -6863,11 +1837,10 @@ mod tests {
             100,
         )?;
 
-        assert!(generation.file_objects.is_empty());
-        assert!(generation.mount_views.is_empty());
-        assert!(generation.decisions.is_empty());
-        let terminal = generation
-            .path_terminals
+        assert!(generation.rows[NativeTable::FileObject].is_empty());
+        assert!(generation.rows[NativeTable::MountView].is_empty());
+        assert!(generation.rows[NativeTable::EffectDecision].is_empty());
+        let terminal = generation.rows[NativeTable::PathTerminal]
             .values()
             .find_map(|value| PathGraphTerminalV1::read_from_bytes(value).ok())
             .filter(|terminal| {
@@ -6889,7 +1862,7 @@ mod tests {
             binding_lifecycle_state: BindingLifecycleStateV1::Active,
             reserved_tail: [0; 3],
         };
-        assert!(generation.defaults.contains_key(expected.as_bytes()));
+        assert!(generation.rows[NativeTable::EffectDefault].contains_key(expected.as_bytes()));
         Ok(())
     }
 
@@ -6933,10 +1906,9 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
-        assert_eq!(generation.decisions.len(), 1);
-        assert_eq!(generation.defaults.len(), 1);
-        let terminal = generation
-            .path_terminals
+        assert_eq!(generation.rows[NativeTable::EffectDecision].len(), 1);
+        assert_eq!(generation.rows[NativeTable::EffectDefault].len(), 1);
+        let terminal = generation.rows[NativeTable::PathTerminal]
             .values()
             .find_map(|value| PathGraphTerminalV1::read_from_bytes(value).ok())
             .ok_or_else(|| {
@@ -6955,7 +1927,7 @@ mod tests {
             binding_lifecycle_state: BindingLifecycleStateV1::Active,
             reserved_tail: [0; 3],
         };
-        assert!(generation.defaults.contains_key(expected.as_bytes()));
+        assert!(generation.rows[NativeTable::EffectDefault].contains_key(expected.as_bytes()));
         Ok(())
     }
 
@@ -7034,19 +2006,21 @@ mod tests {
     #[test]
     fn one_profile_activation_has_one_node_generation() -> crate::Result<()> {
         let (_, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
-        let profile_id = parse_id("profile_id", &binding.profile_id)?;
         let binding_id = parse_id("binding_id", &binding.binding_id)?;
-        let mut activations = BTreeMap::<Id128V1, ProfileActivation>::new();
-        add_binding_activation(&mut activations, profile_id, binding_id, &binding)?;
+        let mut activation = ProfileActivation {
+            generation: binding.active_profile_generation_ref_id,
+            bindings: BTreeMap::new(),
+        };
+        activation.add_binding(binding_id, &binding)?;
 
         let mut second = binding.clone();
         second.binding_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned();
         let second_id = parse_id("binding_id", &second.binding_id)?;
-        add_binding_activation(&mut activations, profile_id, second_id, &second)?;
-        assert_eq!(activations[&profile_id].bindings.len(), 2);
+        activation.add_binding(second_id, &second)?;
+        assert_eq!(activation.bindings.len(), 2);
 
         second.active_profile_generation_ref_id += 1;
-        assert!(add_binding_activation(&mut activations, profile_id, second_id, &second).is_err());
+        assert!(activation.add_binding(second_id, &second).is_err());
         Ok(())
     }
 
@@ -7082,13 +2056,16 @@ mod tests {
             100,
         )?;
 
-        assert!(generation.decisions.is_empty());
-        let key = generation.defaults.keys().next().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "default test generation has no kernel row".to_owned(),
-            }
-            .build()
-        })?;
+        assert!(generation.rows[NativeTable::EffectDecision].is_empty());
+        let key = generation.rows[NativeTable::EffectDefault]
+            .keys()
+            .next()
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "default test generation has no kernel row".to_owned(),
+                }
+                .build()
+            })?;
         let offset = offset_of!(
             erebor_interceptor_abi::EffectDefaultKeyV1,
             composite_atom_id
@@ -7126,7 +2103,7 @@ mod tests {
                 .iter()
                 .map(|role| role.role_id.as_str()),
         );
-        let tables = LoweredGeneration::lower_path_tables(
+        let (tables, reconciliation) = LoweredGeneration::lower_path_tables(
             &artifact,
             &binding,
             &[],
@@ -7136,21 +2113,23 @@ mod tests {
         )?;
         let open_read_mask = 1_u64 << KernelEffectOperationV1::OpenRead as u16;
 
-        assert!(tables.mount_roots.is_empty());
-        assert!(tables.reconciliation.is_empty());
-        assert!(!tables.exact.is_empty());
-        assert!(tables.terminals.values().all(|value| {
+        assert!(tables[NativeTable::MountRoot].is_empty());
+        assert!(reconciliation.is_empty());
+        assert!(!tables[NativeTable::PathExact].is_empty());
+        assert!(tables[NativeTable::PathTerminal].values().all(|value| {
             PathGraphTerminalV1::read_from_bytes(value)
                 .is_ok_and(|terminal| terminal.composite_atom_id != 0)
         }));
-        assert!(tables.path_tree_denials.iter().any(|(key, value)| {
-            let Ok(mask) = <[u8; 8]>::try_from(value.as_slice()).map(u64::from_ne_bytes) else {
-                return false;
-            };
-            PathTreeDenyKeyV1::read_from_bytes(key).is_ok_and(|key| {
-                key.active_role_id == role_handles["converter"] && mask & open_read_mask != 0
-            })
-        }));
+        assert!(tables[NativeTable::PathTreeDenial]
+            .iter()
+            .any(|(key, value)| {
+                let Ok(mask) = <[u8; 8]>::try_from(value.as_slice()).map(u64::from_ne_bytes) else {
+                    return false;
+                };
+                PathTreeDenyKeyV1::read_from_bytes(key).is_ok_and(|key| {
+                    key.active_role_id == role_handles["converter"] && mask & open_read_mask != 0
+                })
+            }));
         Ok(())
     }
 
@@ -7233,7 +2212,7 @@ mod tests {
                 .iter()
                 .map(|role| role.role_id.as_str()),
         );
-        let first = LoweredGeneration::lower_path_tables(
+        let (first, _) = LoweredGeneration::lower_path_tables(
             &artifact,
             &binding,
             &[],
@@ -7241,7 +2220,7 @@ mod tests {
             &composite_handles,
             &role_handles,
         )?;
-        let second = LoweredGeneration::lower_path_tables(
+        let (second, _) = LoweredGeneration::lower_path_tables(
             &artifact,
             &binding,
             &[],
@@ -7251,31 +2230,99 @@ mod tests {
         )?;
 
         assert_eq!(baseline.descriptor, routed.descriptor);
-        assert_eq!(baseline.path_exact, routed.path_exact);
-        assert_eq!(baseline.path_wildcards, routed.path_wildcards);
-        assert_eq!(baseline.path_terminals, routed.path_terminals);
-        assert_eq!(baseline.path_tree_denials, routed.path_tree_denials);
-        assert_eq!(routed.descriptor, refreshed.descriptor);
-        assert_eq!(routed.path_exact, refreshed.path_exact);
-        assert_eq!(routed.path_wildcards, refreshed.path_wildcards);
-        assert_eq!(routed.path_terminals, refreshed.path_terminals);
-        assert_eq!(routed.path_tree_denials, refreshed.path_tree_denials);
         assert_eq!(
-            routed.mount_roots.keys().collect::<Vec<_>>(),
-            refreshed.mount_roots.keys().collect::<Vec<_>>()
+            baseline.rows[NativeTable::PathExact]
+                .iter()
+                .collect::<Vec<_>>(),
+            routed.rows[NativeTable::PathExact]
+                .iter()
+                .collect::<Vec<_>>()
         );
-        assert_ne!(routed.mount_roots, refreshed.mount_roots);
-        let refreshed_digests = refreshed
-            .mount_roots
+        assert_eq!(
+            baseline.rows[NativeTable::PathWildcard]
+                .iter()
+                .collect::<Vec<_>>(),
+            routed.rows[NativeTable::PathWildcard]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            baseline.rows[NativeTable::PathTerminal]
+                .iter()
+                .collect::<Vec<_>>(),
+            routed.rows[NativeTable::PathTerminal]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            baseline.rows[NativeTable::PathTreeDenial]
+                .iter()
+                .collect::<Vec<_>>(),
+            routed.rows[NativeTable::PathTreeDenial]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(routed.descriptor, refreshed.descriptor);
+        assert_eq!(
+            routed.rows[NativeTable::PathExact]
+                .iter()
+                .collect::<Vec<_>>(),
+            refreshed.rows[NativeTable::PathExact]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            routed.rows[NativeTable::PathWildcard]
+                .iter()
+                .collect::<Vec<_>>(),
+            refreshed.rows[NativeTable::PathWildcard]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            routed.rows[NativeTable::PathTerminal]
+                .iter()
+                .collect::<Vec<_>>(),
+            refreshed.rows[NativeTable::PathTerminal]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            routed.rows[NativeTable::PathTreeDenial]
+                .iter()
+                .collect::<Vec<_>>(),
+            refreshed.rows[NativeTable::PathTreeDenial]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            routed.rows[NativeTable::MountRoot]
+                .keys()
+                .collect::<Vec<_>>(),
+            refreshed.rows[NativeTable::MountRoot]
+                .keys()
+                .collect::<Vec<_>>()
+        );
+        assert_ne!(
+            routed.rows[NativeTable::MountRoot]
+                .iter()
+                .collect::<Vec<_>>(),
+            refreshed.rows[NativeTable::MountRoot]
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        let refreshed_digests = refreshed.rows[NativeTable::MountRoot]
             .values()
             .filter_map(|value| CanonicalMountRootV1::read_from_bytes(value).ok())
             .map(|root| root.snapshot_digest_id)
             .collect::<BTreeSet<_>>();
         assert_eq!(refreshed_digests, BTreeSet::from([16, 60]));
-        assert_eq!(first.mount_roots, second.mount_roots);
-        assert_eq!(first.mount_roots.len(), 2);
-        let roots = first
-            .mount_roots
+        assert_eq!(
+            first[NativeTable::MountRoot].iter().collect::<Vec<_>>(),
+            second[NativeTable::MountRoot].iter().collect::<Vec<_>>()
+        );
+        assert_eq!(first[NativeTable::MountRoot].len(), 2);
+        let roots = first[NativeTable::MountRoot]
             .values()
             .filter_map(|value| CanonicalMountRootV1::read_from_bytes(value).ok())
             .collect::<Vec<_>>();
@@ -7293,17 +2340,19 @@ mod tests {
             root.selected_mount_id_unique == 14 && root.graph_prefix_state_count == 0
         }));
         let open_read_mask = 1_u64 << KernelEffectOperationV1::OpenRead as u16;
-        assert!(first.path_tree_denials.iter().any(|(key, value)| {
-            let Ok(mask) = <[u8; 8]>::try_from(value.as_slice()).map(u64::from_ne_bytes) else {
-                return false;
-            };
-            PathTreeDenyKeyV1::read_from_bytes(key).is_ok_and(|key| {
-                root.graph_prefix_state_ids[..root.graph_prefix_state_count as usize]
-                    .contains(&key.state_id)
-                    && key.active_role_id == role_handles["converter"]
-                    && mask & open_read_mask != 0
-            })
-        }));
+        assert!(first[NativeTable::PathTreeDenial]
+            .iter()
+            .any(|(key, value)| {
+                let Ok(mask) = <[u8; 8]>::try_from(value.as_slice()).map(u64::from_ne_bytes) else {
+                    return false;
+                };
+                PathTreeDenyKeyV1::read_from_bytes(key).is_ok_and(|key| {
+                    root.graph_prefix_state_ids[..root.graph_prefix_state_count as usize]
+                        .contains(&key.state_id)
+                        && key.active_role_id == role_handles["converter"]
+                        && mask & open_read_mask != 0
+                })
+            }));
         Ok(())
     }
 
@@ -7343,7 +2392,7 @@ mod tests {
                 .iter()
                 .map(|role| role.role_id.as_str()),
         );
-        let mut tables = LoweredGeneration::lower_path_tables(
+        let (mut tables, reconciliation) = LoweredGeneration::lower_path_tables(
             &artifact,
             &binding,
             &[],
@@ -7353,11 +2402,11 @@ mod tests {
         )?;
         tables.add_mount_namespace_guards(std::iter::once(&object))?;
 
-        assert_eq!(tables.mount_views.len(), 1);
-        assert_eq!(tables.mount_epochs.len(), 1);
-        assert_eq!(tables.mount_locks.len(), 1);
-        assert!(tables.mount_roots.is_empty());
-        assert!(tables.reconciliation.is_empty());
+        assert_eq!(tables[NativeTable::MountView].len(), 1);
+        assert_eq!(tables[NativeTable::MountEpoch].len(), 1);
+        assert_eq!(tables[NativeTable::MountLock].len(), 1);
+        assert!(tables[NativeTable::MountRoot].is_empty());
+        assert!(reconciliation.is_empty());
         Ok(())
     }
 
@@ -7381,7 +2430,7 @@ mod tests {
                 .iter()
                 .map(|role| role.role_id.as_str()),
         );
-        let first = LoweredGeneration::lower_path_tables(
+        let (first, _) = LoweredGeneration::lower_path_tables(
             &artifact,
             &binding,
             &[],
@@ -7393,7 +2442,7 @@ mod tests {
             active_profile_generation_ref_id: 2,
             ..binding
         };
-        let second = LoweredGeneration::lower_path_tables(
+        let (second, _) = LoweredGeneration::lower_path_tables(
             &artifact,
             &second_binding,
             &[],
@@ -7402,38 +2451,36 @@ mod tests {
             &role_handles,
         )?;
 
-        assert!(first.exact.keys().all(|key| {
+        assert!(first[NativeTable::PathExact].keys().all(|key| {
             PathGraphTransitionKeyV1::read_from_bytes(key)
                 .is_ok_and(|key| key.profile_generation_ref_id == 1)
         }));
-        assert!(second.exact.keys().all(|key| {
+        assert!(second[NativeTable::PathExact].keys().all(|key| {
             PathGraphTransitionKeyV1::read_from_bytes(key)
                 .is_ok_and(|key| key.profile_generation_ref_id == 2)
         }));
-        assert!(first.terminals.keys().all(|key| {
+        assert!(first[NativeTable::PathTerminal].keys().all(|key| {
             PathGraphStateKeyV1::read_from_bytes(key)
                 .is_ok_and(|key| key.profile_generation_ref_id == 1)
         }));
-        assert!(second.terminals.keys().all(|key| {
+        assert!(second[NativeTable::PathTerminal].keys().all(|key| {
             PathGraphStateKeyV1::read_from_bytes(key)
                 .is_ok_and(|key| key.profile_generation_ref_id == 2)
         }));
-        assert!(first.path_tree_denials.keys().all(|key| {
+        assert!(first[NativeTable::PathTreeDenial].keys().all(|key| {
             PathTreeDenyKeyV1::read_from_bytes(key)
                 .is_ok_and(|key| key.profile_generation_ref_id == 1)
         }));
-        assert!(second.path_tree_denials.keys().all(|key| {
+        assert!(second[NativeTable::PathTreeDenial].keys().all(|key| {
             PathTreeDenyKeyV1::read_from_bytes(key)
                 .is_ok_and(|key| key.profile_generation_ref_id == 2)
         }));
-        assert!(first
-            .exact
+        assert!(first[NativeTable::PathExact]
             .keys()
-            .all(|key| !second.exact.contains_key(key)));
-        assert!(first
-            .terminals
+            .all(|key| !second[NativeTable::PathExact].contains_key(key)));
+        assert!(first[NativeTable::PathTerminal]
             .keys()
-            .all(|key| !second.terminals.contains_key(key)));
+            .all(|key| !second[NativeTable::PathTerminal].contains_key(key)));
         Ok(())
     }
 

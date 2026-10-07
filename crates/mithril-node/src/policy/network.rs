@@ -12,15 +12,12 @@ use zerocopy::IntoBytes as _;
 use crate::error::IdentityStateSnafu;
 use crate::Result;
 
-use super::insert_exact;
+use super::{GenerationPlan, NativeTable};
 
 const LPM_FIXED_PREFIX_BITS: u32 = 160;
 
 #[derive(Default)]
 pub(super) struct LoweredNetworkPolicy {
-    pub(super) ipv4_classes: BTreeMap<Vec<u8>, Vec<u8>>,
-    pub(super) ipv6_classes: BTreeMap<Vec<u8>, Vec<u8>>,
-    pub(super) decisions: BTreeMap<Vec<u8>, Vec<u8>>,
     handles: BTreeMap<String, u64>,
 }
 
@@ -28,8 +25,9 @@ impl LoweredNetworkPolicy {
     pub(super) fn lower(
         document: &PolicyDocumentV1,
         profile_generation_ref_id: u64,
+        rows: &mut GenerationPlan,
     ) -> Result<Self> {
-        let mut tables = Self {
+        let tables = Self {
             handles: document
                 .network_policy
                 .iter()
@@ -37,7 +35,6 @@ impl LoweredNetworkPolicy {
                 .zip(1_u64..)
                 .map(|(policy, handle)| (policy.destination_policy_id.clone(), handle))
                 .collect(),
-            ..Self::default()
         };
         for policy in document
             .network_policy
@@ -58,7 +55,11 @@ impl LoweredNetworkPolicy {
                         address: address.octets(),
                         reserved_tail: [0; 4],
                     };
-                    insert_exact(&mut tables.ipv4_classes, key.as_bytes(), value.as_bytes())?;
+                    rows.insert(
+                        NativeTable::NetworkIpv4Class,
+                        key.as_bytes(),
+                        value.as_bytes(),
+                    )?;
                 }
                 for prefix in &policy.ipv6_prefixes {
                     let (address, length) = parse_ipv6(prefix)?;
@@ -70,7 +71,11 @@ impl LoweredNetworkPolicy {
                         reserved: [0; 7],
                         address: address.octets(),
                     };
-                    insert_exact(&mut tables.ipv6_classes, key.as_bytes(), value.as_bytes())?;
+                    rows.insert(
+                        NativeTable::NetworkIpv6Class,
+                        key.as_bytes(),
+                        value.as_bytes(),
+                    )?;
                 }
             }
         }
@@ -80,8 +85,10 @@ impl LoweredNetworkPolicy {
     pub(super) fn destination_handle(&self, destination_id: &str) -> Option<u64> {
         self.handles.get(destination_id).copied()
     }
+}
 
-    pub(super) fn insert_decisions(
+impl GenerationPlan {
+    pub(super) fn add_network_decisions(
         &mut self,
         mut key: NetworkDestinationDecisionKeyV1,
         protocols: &[NetworkProtocolV1],
@@ -89,7 +96,11 @@ impl LoweredNetworkPolicy {
     ) -> Result<()> {
         for protocol in protocols {
             key.protocol = (*protocol).into();
-            insert_exact(&mut self.decisions, key.as_bytes(), decision.as_bytes())?;
+            self.insert(
+                NativeTable::NetworkDecision,
+                key.as_bytes(),
+                decision.as_bytes(),
+            )?;
         }
         Ok(())
     }
@@ -180,7 +191,7 @@ mod tests {
     };
     use zerocopy::{FromBytes as _, TryFromBytes as _};
 
-    use super::LoweredNetworkPolicy;
+    use super::{GenerationPlan, LoweredNetworkPolicy, NativeTable};
 
     fn network_document() -> crate::Result<PolicyDocumentV1> {
         let mut document = PolicyDocumentV1::parse(
@@ -213,13 +224,17 @@ mod tests {
     #[test]
     fn destination_classes_are_generation_scoped_lpm_rows() -> crate::Result<()> {
         let document = network_document()?;
-        let lowered = LoweredNetworkPolicy::lower(&document, 17)?;
-        let (key, value) = lowered.ipv4_classes.first_key_value().ok_or_else(|| {
-            crate::error::IdentityStateSnafu {
-                reason: "network test has no IPv4 class".to_owned(),
-            }
-            .build()
-        })?;
+        let mut rows = GenerationPlan::default();
+        let _lowered = LoweredNetworkPolicy::lower(&document, 17, &mut rows)?;
+        let (key, value) = rows[NativeTable::NetworkIpv4Class]
+            .iter()
+            .next()
+            .ok_or_else(|| {
+                crate::error::IdentityStateSnafu {
+                    reason: "network test has no IPv4 class".to_owned(),
+                }
+                .build()
+            })?;
         let key = NetworkIpv4LpmKeyV1::try_read_from_bytes(key).map_err(|error| {
             crate::error::IdentityStateSnafu {
                 reason: format!("network IPv4 key is invalid: {error}"),
@@ -237,14 +252,15 @@ mod tests {
         assert_eq!(key.profile_generation_ref_id, 17);
         assert_eq!(value.destination_policy_handle, 1);
         assert_eq!(value.port_ranges[0].first, 8_443);
-        assert_eq!(lowered.ipv6_classes.len(), 1);
+        assert_eq!(rows[NativeTable::NetworkIpv6Class].len(), 1);
         Ok(())
     }
 
     #[test]
     fn destination_decisions_keep_protocol_and_actor_dimensions() -> crate::Result<()> {
         let document = network_document()?;
-        let mut lowered = LoweredNetworkPolicy::lower(&document, 17)?;
+        let mut rows = GenerationPlan::default();
+        let lowered = LoweredNetworkPolicy::lower(&document, 17, &mut rows)?;
         let decision = PhysicalDecisionV1 {
             decision: PhysicalDecisionKindV1::Deny,
             reserved: 0,
@@ -253,7 +269,7 @@ mod tests {
             transition_id: 0,
             exception_numeric_handle: 0,
         };
-        lowered.insert_decisions(
+        rows.add_network_decisions(
             NetworkDestinationDecisionKeyV1 {
                 profile_generation_ref_id: 17,
                 destination_policy_handle: lowered
@@ -274,12 +290,15 @@ mod tests {
             &[NetworkProtocolV1::Tcp],
             decision,
         )?;
-        let key = lowered.decisions.keys().next().ok_or_else(|| {
-            crate::error::IdentityStateSnafu {
-                reason: "network test has no destination decision".to_owned(),
-            }
-            .build()
-        })?;
+        let key = rows[NativeTable::NetworkDecision]
+            .keys()
+            .next()
+            .ok_or_else(|| {
+                crate::error::IdentityStateSnafu {
+                    reason: "network test has no destination decision".to_owned(),
+                }
+                .build()
+            })?;
         let key = NetworkDestinationDecisionKeyV1::try_read_from_bytes(key).map_err(|error| {
             crate::error::IdentityStateSnafu {
                 reason: format!("network destination decision key is invalid: {error}"),
