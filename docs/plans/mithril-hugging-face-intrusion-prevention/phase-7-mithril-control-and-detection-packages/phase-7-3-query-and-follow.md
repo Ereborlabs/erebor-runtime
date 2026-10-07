@@ -36,13 +36,18 @@ A batch arrives before an earlier source range
 
 Follow is requested
   -> QueryOwner registers dependency notifications before the initial snapshot
-  -> owner sends metadata, initial result and a checkpoint on one stream
+  -> owner returns one lazy QueryStream without starting SQL
+  -> consumer polling produces metadata, initial result and a checkpoint
   -> relevant commits mark one evaluation dirty
   -> append reads new committed positions; replace evaluates a complete snapshot
   -> supported time-window expiry also triggers replacement without new input
   -> owner closes all DB readers and evaluations before waiting
 
-Reader is slow, cancelled or disconnected
+Reader pauses
+  -> owner starts no further evaluation
+  -> bounded retained frames keep their reservations until consumption or drop
+
+Reader cancels or disconnects
   -> owner stops this bounded read; source intake continues
   -> retry checks the scope, epoch and last complete checkpoint
   -> a checkpoint below the tenant replay floor returns CursorExpired
@@ -99,6 +104,15 @@ Reader is slow, cancelled or disconnected
    overflow; never calculate a partial aggregate.
    Register watch before snapshot capture. Use one evaluation and one dirty
    flag per stream; recheck dependency revisions before waiting.
+   QueryStream owns the plan, checkpoint, subscriptions and one pending
+   next-frame future. The stream implements Stream directly. Construction
+   starts no SQL. Polling advances that future and returns one frame. Do not
+   add a separate producer task, output channel or subscription driver.
+   Construction needs no runtime. Poll with the Tokio timer enabled. Polling
+   outside Tokio returns a typed QueryInvalid error.
+   Drain the current metadata/data/checkpoint sequence before another
+   evaluation. A paused consumer starts no further evaluation. An admitted
+   native task can finish; retain its capacity until cleanup returns.
 7. Check the checkpoint schema, store UUID/epoch, operation, read revision and
    position. The caller retains the exact plan, parameters and input selection.
    A checkpoint grants no access. Retention commits a per-tenant replay floor
@@ -125,8 +139,12 @@ Reader is slow, cancelled or disconnected
    scan/input/output bytes, deadlines, evaluation concurrency and stream count.
    Reserve concurrent input and output capacity before extraction. Close all
    segment leases and metadata readers before evaluation or output waits.
-   Cancel native evaluation, release buffers on every exit and enforce the
-   output-stall timeout. Native memory settings are not an OS process cap.
+   Cancel native evaluation and release buffers on every exit. The client
+   transport enforces the output-stall timeout. The transport checks the
+   elapsed interval when it receives demand after a returned frame. A pending
+   read that waits for a change is not a stalled client. A timeout closes
+   the read, not trace execution. Do not add an idle driver to reclaim an
+   unpolled stream. Native memory settings are not an OS process cap.
    Observability 3 adds client admission and current caller grants. Its
    asynchronous entry point uses bounded blocking tasks on the host's existing
    Tokio runtime. Do not add a query process or an OS-isolation requirement.
@@ -156,6 +174,11 @@ result. Public SQL admission, unsigned bookmark checks, current caller grants,
 disclosure, bounded asynchronous execution and wire-level gRPC tests belong
 to Observability 3. Compare each trusted template with full scoped-input
 execution in the pinned DuckDB.
+Check that construction performs no query work and that paused consumption
+starts no further evaluation. Drop a pending stream and require cancellation
+and capacity release. Revoke authority or invalidate retained trace reads
+between staged frames; no denied frame can be returned. Test slow-client
+deadlines at the client transport, not through a producer queue.
 
 Add `query-follow` to `mithril_discovery_test`. Use actual AnalysisStore
 commits and QueryOwner streams. Use deterministic commit barriers. Verify
@@ -498,3 +521,43 @@ Evidence paths:
 - Workspace log: `/tmp/araphor-query-proof-ci.log`.
 - Standalone command log: `/tmp/araphor-query-follow-correctness.log`.
 - Standalone receipt: `/tmp/araphor-query-follow-correctness/result.json`.
+
+### Consumer-driven follow correction
+
+Implementation: `7b828c0a`. Final code corrections: `11b3a725`.
+Qualification: **Done** for scoped correctness. The final workspace procedure
+passed after the last code edit.
+This correction replaces the task and queue from the earlier proof record.
+
+One QueryStream owns the passive state and the next-frame future. Creation
+does not start SQL or require a Tokio runtime. Consumer polling produces each
+frame. A paused consumer starts no further evaluation. An admitted native read
+can finish; its capacity remains charged until cleanup. Drop requests
+cancellation. Checkpoints advance only after the authorized frame is returned.
+Polling outside a Tokio runtime returns QueryInvalid. Timer support is required.
+
+Cleanup proof must check both input destruction and reservation release. Input
+tables can drop before the native work releases its lease. An expired Weak
+reference alone does not prove that full query capacity is available.
+
+Control checks the output deadline on the next request for a frame. It closes
+only that read. A quiet read with a pending request remains valid. No separate
+producer, output channel or idle cleanup task is required.
+
+Focused checks pass: 131 data query tests, 14 Control gRPC tests and one E2E
+test that calls all eight production-owner cases. The standalone `query-follow`
+command also passes all eight cases. Its receipt is
+`/tmp/araphor-profile-follow.tPl3zk/query-follow-final/result.json`.
+The full procedure is `bash .github/scripts/verify-rust-ci.sh` at `11b3a725`.
+Its log is `/tmp/araphor-profile-follow.tPl3zk/rust-ci-final-5.log`.
+Formatting, workspace check, strict Clippy and all-target/all-feature tests
+passed with exit code 0: 1,626 tests passed, zero failed and 544 were ignored.
+The counts exclude nested recovery helpers. Ignored tests remain unqualified.
+The six environment settings in the profile result apply to this run.
+These checks do not add a performance or physical qualification claim.
+
+The cleanup regression fails before the fixture correction and passes after
+it. The five `query_follow_wait_` cases also pass. They preserve the original
+timeouts and all cancellation and capacity assertions. Logs are
+`/tmp/araphor-profile-follow.tPl3zk/query-cleanup-before.log`,
+`query-cleanup-after.log` and `query-follow-wait-final.log` in that directory.

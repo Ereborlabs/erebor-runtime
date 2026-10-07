@@ -43,7 +43,7 @@ and has checks only when delivered.
 | `DE-RETENTION` | Stall required processor; unexpired witnesses; pin/delete race; mark/unlink/cleanup crash; idle-segment sealing; disable/retire; quota; late context; raw expiry; pinned-segment amplification | Commit exact expiry and Deleting state before unlink. Resume only recorded deletions. Charge each full pinned segment once. Optional discovery expiry records a gap and does not block intake. Required security input blocks reclamation and intake only at protected age/byte or physical capacity bounds. Summaries and exact pinned witnesses survive raw expiry. No external cursor pins history. |
 | `DE-TENANT` | Foreign profile ID, evidence link, cursor, client attachment, report ID, and publication request | Reject before content access. No identifier, timing-detail, or audit-content leak. |
 | `DE-LIMIT` | Every byte/row/interval/page/worker limit at N and N+1; cancellation; slow reader; concurrent policy rollout | Bounded work, clear quota result, no priority inversion or wildcard fallback. |
-| `DE-MODEL` | No external client; malformed assessment; NaN; absent evidence with high score; client timeout/refusal; forged citations; unapproved disclosure; foreign references; unverified model/cost claims | Deterministic fallback and unchanged core digests. Explicit abstention/failure and score semantics; no authority or unapproved disclosure. Retained-response replay does not rerun inference. |
+| `DE-MODEL` | No external client; malformed assessment; NaN; absent evidence with high score; client timeout/refusal; forged citations; unapproved disclosure; foreign references; unverified model/cost claims | Deterministic fallback and unchanged core values. Explicit abstention/failure and score semantics; no authority or unapproved disclosure. Retained-response replay does not rerun inference. |
 | `DE-NOISE` | Repeated routine controller work; rare required recovery; benign release change; repeated forbidden credential read; one new malicious member; changed entry/result/coverage; expired prior review | Repetition reduces review items, not exact evidence. Rare valid work is not automatically malicious; frequent forbidden work is not required. New risk remains visible. Measure review errors/time, not only row reduction. |
 | `DE-TEST-REQUEST` | Missing shutdown; unsupported platform; destructive suggested test; unavailable fixture; fabricated model fixture ID | Valid request or unsupported reason. No arbitrary command execution. |
 | `DE-REVIEW` | Edit after preview; expired approval; changed target; conflicting reviewers; self-approval on protected widening | Old approval cannot authorize new content. Enforce current reviewer policy. |
@@ -99,8 +99,8 @@ Include at least:
 - a local defender that exits after submission and resumes through another
   client, with a lost response reply and a replacement workload.
 
-Use synthetic credentials and isolated targets. Retain build/image/configuration
-digests and case labels. Do not use real secret values, copy private production
+Use synthetic credentials and isolated targets. Retain the exact build revision,
+image/configuration security identities and case labels. Do not use real secret values, copy private production
 traces without permission, or relabel an illustrative incident as actual data.
 
 Keep training, tuning, held-out valid-work, and forbidden-case partitions
@@ -154,12 +154,12 @@ use the first one reached.
 | SQL input/result | 16 KiB SQL; 200 rows/1 MiB output | Explicit limited normal result; oversized replacement fails without changing the displayed snapshot. |
 | Query evaluations | 2/process, 1/tenant; 1-second evaluation deadline | Configure in 7.3. Reserve concurrent input/output capacity before extraction. Close readers before evaluation or output waits. |
 | Query native evaluation | Same evaluation slots; 64 MiB native buffer target and one engine thread | Observability 3 uses bounded Tokio blocking tasks. Only authorized input enters the temporary evaluator. Disable external access and extension loading. Deadline or cancellation requests native interruption. Keep capacity until cleanup returns. This is not an OS memory cap or forced termination. |
-| Follow | 16 streams/process, 4/tenant; one evaluation and one queued frame/stream | One dirty flag coalesces changes. No read transaction while waiting. |
-| Follow timing | 15-second heartbeat, 500-ms minimum replacement interval, 10-second output-stall timeout | Recheck grants/health; close slow readers without blocking intake. |
+| Follow | 16 streams/process, 4/tenant; one evaluation and one bounded staged result/stream | One dirty flag coalesces changes. Consumer polling returns each frame. No producer task, output channel or read transaction while waiting. |
+| Follow timing | 15-second heartbeat, 500-ms minimum replacement interval, 10-second transport output-stall timeout | Recheck grants/health while a read is pending. Check the stall deadline on demand after a returned frame; a quiet pending read is not stalled. Close the read without blocking intake or cancelling trace execution. |
 | Moving-window follow | 1–86,400-second lower window, one-second expiry resolution | Bind one evaluation clock; timer removes expired rows without new commits. Other volatile forms reject. |
 | Node context | 16 KiB/event; 16 MiB immutable lookup snapshot | Keep base event with explicit missing-context reason. |
 | Pinned Control context | 32 KiB/record | Explicit CONTEXT_LIMIT before copying. |
-| Context document/packet | 64 KiB document; 256 KiB packet; 100 handles | Keep omission counts; no hidden truncation of required facts. |
+| Context document/packet | 32 KiB serialized document revision; 256 KiB packet; 100 handles | The document bound includes metadata, not only text. Keep omission counts; no hidden truncation of required facts. |
 | Assessment | 64 KiB and 100 claims/references | Reject malformed/oversized reports; no transcript store. |
 | Agent experiment | 12 calls, 120 seconds, fixed token/cost budget per task | Record incomplete tasks; no claim to enforce an external client's onward use. |
 | Trace | Observability 1 source/probe/output limits; separate Node spool reserve | Stop diagnostics before exhausting enforcement reserve; local expiry remains active. |
@@ -176,7 +176,7 @@ does not bound segment files, a metadata database, or its native WAL. Keep a sep
 policy/control-state commits; the data budget cannot consume that reserve.
 
 Managed backups use unique private subdirectories under AnalysisStore/backups.
-Copy the complete segment/metadata bundle and its digest manifest. Reserve
+Copy the complete segment/metadata bundle and its manifest. Reserve
 the copy size plus 25 percent, manifest bytes, and actual file/directory entries.
 Preserve ordinary free-space admission. Count incomplete copies after failure
 and restart. Restore also accepts a complete externally copied bundle.
@@ -354,7 +354,7 @@ npm run test:e2e
 
 The phase files specify the new case, harness, and evaluator command interfaces
 to implement. Record nonzero test counts,
-actual arguments, revision, result path, and output digests with the test output.
+actual arguments, revision, result path, and exact output values with the test output.
 Full Rust verification runs after the final covered Rust edit; a focused check
 cannot replace it.
 
@@ -363,7 +363,8 @@ cannot replace it.
 Add new case values to the existing binaries; names below are implementation
 requirements, not claims that all commands exist today. Each case writes
 result.json with revision, capability set, assertion count, owner transitions,
-IDs/digests, coverage, limits and cleanup. A filter that runs zero tests fails.
+exact IDs/revisions, coverage, limits and cleanup. Retain a security digest only
+where its security contract requires that value. A filter that runs zero tests fails.
 Use external clock/runtime/network doubles only; call production owner APIs.
 
 | Phase | Crate-local unit test families | mithril-e2e case |

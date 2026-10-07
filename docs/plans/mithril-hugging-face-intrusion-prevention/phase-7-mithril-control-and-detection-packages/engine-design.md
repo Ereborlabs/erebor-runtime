@@ -1004,6 +1004,8 @@ No general incremental SQL engine or persistent result cache is required.
 ```text
 Client requests follow
   -> QueryOwner validates grants, SQL and dependencies, then registers watch
+  -> QueryOwner returns one lazy QueryStream without starting SQL
+  -> consumer polling starts one bounded evaluation future
   -> trusted reader captures one metadata snapshot, committed segment ends, and revision
   -> a bounded Tokio task evaluates the initial retained range or complete snapshot
   -> QueryOwner emits metadata, result frames and a committed checkpoint
@@ -1013,13 +1015,19 @@ Client requests follow
   -> QueryOwner rechecks dependencies after evaluation and before waiting
 
 Client disconnects
-  -> current read/evaluation is cancelled within its deadline
+  -> QueryStream requests read cancellation and native interruption
+  -> native work keeps its capacity until cleanup returns
   -> collection and trace execution continue
   -> reconnect validates the last completely received checkpoint
   -> append replays later retained positions; replace emits a fresh snapshot
 ```
 
 Use Tokio watch for the latest committed revision, not a queue of raw rows.
+QueryStream owns the plan, checkpoint, notifications and pending evaluation.
+The same stream produces and returns frames. Do not add a separate follow
+task, producer channel or subscription driver. Construction starts no SQL.
+Paused consumption starts no further evaluation. An admitted native task can
+finish; keep capacity charged through cleanup. Drop interrupts pending work.
 Bind actual table dependencies, including CTEs, joins, context and coverage.
 After registration and each evaluation, compare durable relation revisions
 before sleeping. A missed/coalesced wake-up cannot skip committed input.
@@ -1028,8 +1036,10 @@ current auth, storage health and revisions; it does not rerun unchanged SQL.
 
 Use a 15-second maximum heartbeat and a 500-ms minimum replacement interval.
 Admission also limits active evaluations; continuous writes cannot create an
-unbounded task queue. An authorization-change signal stops affected readers
-immediately; expiry deadlines also wake them. Check grants before each frame.
+unbounded task queue. An authorization-change signal wakes a pending read;
+expiry deadlines also wake it. The next poll rejects revoked access before
+disclosure. These timers run only while the next-frame future is polled.
+Check grants before each frame.
 When authorization state is unavailable, do not disclose data.
 
 Support moving windows only in replace mode. Initially accept the proven
@@ -1068,8 +1078,12 @@ This conservative rejection does not prove a matching record was lost.
 Replacement resumption promises current
 state, not all intermediate states; metadata states this contract. Query errors
 are error frames followed by stream close, never empty successful results.
-Keep at most one outgoing frame per reader; on a 10-second blocked write,
-close with the last completed checkpoint when transport permits.
+Keep at most one outgoing transport frame per reader. The client transport
+checks the 10-second output-stall deadline when demand resumes after a returned
+frame. A quiet pending read is not a stalled client. Expired demand returns
+DEADLINE_EXCEEDED and drops read state. The client retains the last complete
+checkpoint. This timeout does not cancel trace execution. Do not add an idle
+driver for this deadline.
 
 This uses the useful pattern in the local Mangroves
 `src/sql/src/execution/subscribe.rs`: dependency notification, evaluation,

@@ -57,14 +57,24 @@ prove that the SQL or selection is unchanged. Policy signatures and signed
 Control-to-Node execution leases remain required.
 
 `QueryStream` implements `futures::Stream<Item = Result<QueryFrame>>`.
-Committed changes wake follow. An evaluation future returns bounded append
-rows or one complete replacement. The stream returns frames in order, then
-waits for the next relevant commit or expiry. Keep one bounded output channel.
+QueryStream owns production and returns frames when the consumer polls it.
+Construction starts no SQL. Committed changes wake a pending follow read.
+One evaluation future returns bounded append rows or one complete replacement.
+The stream returns frames in order, then waits for the next relevant commit
+or expiry. Do not add a separate producer task or output channel. Paused
+consumption starts no further evaluation. An admitted native task can finish;
+keep its capacity charged through cleanup. Stream drop interrupts pending
+work and releases retained frames.
 Existing stream admission bounds the number of capacity waiters. An admitted
 stream waits for evaluation, input and output capacity within its existing
 extraction deadline. Stop, reader closure and authority changes also wake
 this wait. Check current authority and cancellation before native work.
 Direct query admission still returns Busy when its capacity is full.
+The shared client transport checks the configured output-stall deadline on
+the next demand after a returned frame. A quiet pending read is not a stalled
+client. Expired demand returns DEADLINE_EXCEEDED and drops the read stream.
+This timeout does not cancel trace execution. No idle cleanup task or second
+subscription driver is required.
 Use the notification, evaluation-future and output-stream pattern in
 `mangroves/src/sql/src/execution/subscribe.rs`; do not add DataFusion or copy
 its buffer and error behavior.
@@ -696,6 +706,30 @@ Read `/tmp/araphor-cli-rename.02oJID66/rust-ci-final-gate.log` and
 `table.stdout` in the native result directory contains the built follow output.
 Temporary stores used tmpfs. These checks do not qualify disk durability,
 physical capture or performance. Performance remains **UNQUALIFIED**.
+
+### Consumer-driven stream correction
+
+Implementation: `7b828c0a`. Final code corrections: `11b3a725`.
+Qualification: **Done** for scoped correctness. The final workspace procedure
+passed after the last code edit.
+The data owner returns one lazy QueryStream. All existing clients poll that
+stream through the same transport. No producer task or output channel remains.
+
+ClientGrpcOwner uses one output adapter for query and trace reads. The adapter
+checks elapsed time on the next request for a frame. Slow demand closes that
+read; it does not cancel the trace execution. A quiet pending read remains
+valid. Grant and retained-read checks still apply before disclosure.
+
+The 131 data query tests, 14 Control gRPC tests and eight standalone follow
+cases pass. The transport tests check slow demand, a quiet pending read and
+continued trace output after a read timeout. Read
+`/tmp/araphor-profile-follow.tPl3zk/query-follow-final/result.json` and
+`/tmp/araphor-profile-follow.tPl3zk/rust-ci-final-5.log`.
+The full Rust procedure passed at `11b3a725` after the last code edit. It returned
+zero: 1,626 tests passed, zero failed and 544 were ignored. The counts exclude
+nested recovery helpers. Ignored tests remain unqualified.
+No browser, physical case or performance test ran for this correction.
+Earlier browser and physical proofs retain their recorded source limits.
 
 ## Stop point
 

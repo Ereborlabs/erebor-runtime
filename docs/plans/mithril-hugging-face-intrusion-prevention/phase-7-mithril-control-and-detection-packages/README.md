@@ -161,14 +161,28 @@ Full-capacity memory and the original latency target remain unqualified.
 A separate preliminary
 kernel-cache setup check failed; this closure does not qualify that behavior.
 The data crate now owns segment storage. The DuckDB raw-row path and
-Control-owned raw writer are removed. 7.4 removes discovery's copied raw
-export archive. At that storage closure, 7.3 had not started.
+Control-owned raw writer are removed. The portable discovery owner also removes
+the copied raw export archive. At that storage closure, 7.3 had not started.
 
 7.3 is now **Done** for trusted internal query and follow at source `17d8262e`.
 The complete workspace procedure and all eight standalone query-follow cases
 passed. Read its [final result](phase-7-3-query-and-follow.md#additional-correctness-checks)
 for commands, counts, and proof limits. Public SQL and asynchronous execution still
 belong to Observability 3. This closure does not start another phase.
+
+The approved consumer-driven follow correction is implemented at `7b828c0a`,
+with final code corrections at `11b3a725`. Read its
+[current result](phase-7-3-query-and-follow.md#consumer-driven-follow-correction).
+It replaces the producer task and output queue. Public clients keep the same
+transport, grant and read contracts.
+
+7.4 implementation is committed at `0119e395`, with final code corrections at
+`11b3a725`. It is **Done** for implementation and scoped correctness. The final
+workspace procedure passed. Read its
+[implementation result](phase-7-4-profiles-and-context.md#implementation-result)
+for the portable owner, direct segment reads, exact profiles, retained context,
+crash/replay checks and proof limits. No performance test is part of this
+implementation approval. Performance remains **UNQUALIFIED**.
 
 Observability 1 is **Done** at source `8e752bdb`. Its
 [corrected result](../../araphor-observability/phase-1-contracts-and-backend.md#corrected-backend-proof)
