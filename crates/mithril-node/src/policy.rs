@@ -32,8 +32,8 @@ use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
     CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
     ExceptionActivationStateV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1,
-    LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathPatternComponentV1, PathPatternV1,
-    PathSelectorTargetV1, PathTreeDenyPatternV1, PendingProfileActivationV1, PolicyArtifactOwner,
+    LocalObjectSelectorV1, PathPatternComponentV1, PathPatternV1, PathSelectorTargetV1,
+    PathSelectorV1, PathTreeDenyPatternV1, PendingProfileActivationV1, PolicyArtifactOwner,
     PolicyDispositionV1, PolicyDocumentV1, ProfileActivationMetadataV1, ProfileCandidateArtifactV1,
     ProfileModeV1, RuleMatchV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
 };
@@ -1855,6 +1855,12 @@ struct LoweredGeneration {
     mount_reconciliation: Vec<MountRootReconciliation>,
 }
 
+struct PreparedSelector<'a> {
+    source: &'a PathSelectorV1,
+    handle: u64,
+    composite: u64,
+}
+
 struct PreparedGeneration<'a> {
     artifact: &'a ProfileCandidateArtifactV1,
     lowered: LoweredGeneration,
@@ -1863,7 +1869,7 @@ struct PreparedGeneration<'a> {
     composite_handles: BTreeMap<String, u64>,
     signed_device_classes: BTreeSet<String>,
     exception_handles: BTreeMap<String, u32>,
-    exact_object_handles: BTreeMap<String, (u64, u64)>,
+    selectors: Vec<PreparedSelector<'a>>,
     graph: mithril_control::DeterministicPathGraphV1,
     network: LoweredNetworkPolicy,
     node_id: Id128V1,
@@ -1944,35 +1950,21 @@ impl<'a> PreparedGeneration<'a> {
                         .map(|grant| grant.grant_id.as_str()),
                 ),
         );
-        let mut exact_object_handles = BTreeMap::new();
-        for selector in artifact
-            .policy_document
-            .path_selectors
-            .iter()
-            .filter(|selector| selector.requires_exact_object())
-        {
-            let composite_atom_id = *composite_handles
-                .get(&format!("PATH:{}", selector.path_selector_id))
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
+        let mut selectors = Vec::new();
+        // The candidate verifier checks selector IDs and signed class pairs.
+        for source in &artifact.policy_document.path_selectors {
+            selectors.push(PreparedSelector {
+                source,
+                handle: source.kernel_handle(),
+                composite: *composite_handles
+                    .get(&format!("PATH:{}", source.path_selector_id))
+                    .context(IdentityStateSnafu {
                         reason: format!(
                             "path selector `{}` has an unknown signed object class",
-                            selector.path_selector_id
+                            source.path_selector_id
                         ),
-                    }
-                    .build()
-                })?;
-            ensure!(
-                exact_object_handles
-                    .insert(
-                        selector.path_selector_id.clone(),
-                        (selector.kernel_handle(), composite_atom_id),
-                    )
-                    .is_none(),
-                IdentityStateSnafu {
-                    reason: "signed path selector IDs are not unique",
-                }
-            );
+                    })?,
+            });
         }
         let graph = LoweredGeneration::compile_path_graph(artifact)?;
         let path_tables = PathTables::for_graph(
@@ -2023,7 +2015,7 @@ impl<'a> PreparedGeneration<'a> {
             composite_handles,
             signed_device_classes,
             exception_handles,
-            exact_object_handles,
+            selectors,
             graph,
             network,
             node_id,
@@ -2050,61 +2042,47 @@ impl<'a> PreparedGeneration<'a> {
         defer_binding_entries: bool,
     ) -> Result<()> {
         let artifact = self.artifact;
+        let generation = binding.active_profile_generation_ref_id;
         ensure!(
             artifact.header.profile_id == binding.profile_id
-                && self.lowered.descriptor.profile_generation_ref_id
-                    == binding.active_profile_generation_ref_id,
+                && self.lowered.descriptor.profile_generation_ref_id == generation,
             IdentityStateSnafu {
                 reason: "candidate profile or generation does not match its workload binding",
             }
         );
         let role_handles = &self.lowered.semantics.role_handles;
         let process_state_handles = &self.process_state_handles;
-        let role_states = &self.role_states;
-        let composite_handles = &self.composite_handles;
-        let signed_device_classes = &self.signed_device_classes;
-        let exception_handles = &self.exception_handles;
-        let exact_object_handles = &self.exact_object_handles;
-        let node_id = self.node_id;
-        let now_utc_ns = self.now_utc_ns;
-        let now_boottime_ns = self.now_boottime_ns;
         let generation_objects = measured_objects
             .iter()
-            .filter(|object| {
-                object.profile_generation_ref_id == binding.active_profile_generation_ref_id
-            })
-            .collect::<Vec<_>>();
+            .filter(|object| object.profile_generation_ref_id == generation);
         let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
-        let defer_entry_admissions = defer_binding_entries;
-        for object in &generation_objects {
-            let selector = artifact
-                .policy_document
-                .path_selectors
+        let mut proven = Vec::new();
+        for object in generation_objects.clone() {
+            let mut matching = self
+                .selectors
                 .iter()
+                .filter(|selector| selector.handle == object.exact_object_key_id);
+            let selector = matching
+                .clone()
                 .find(|selector| {
-                    (selector.requires_exact_object()
-                        || entry_selector_ids.contains(&selector.path_selector_id))
-                        && selector.kernel_handle() == object.exact_object_key_id
+                    selector.source.requires_exact_object()
+                        || entry_selector_ids.contains(&selector.source.path_selector_id)
                 })
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "measured object handle {} has no signed path selector",
-                            object.exact_object_key_id
-                        ),
-                    }
-                    .build()
+                .context(IdentityStateSnafu {
+                    reason: format!(
+                        "measured object handle {} has no signed path selector",
+                        object.exact_object_key_id
+                    ),
                 })?;
-            let handle = selector.kernel_handle();
+            let signed = selector.source;
             let signed_components = canonical_path_components(
                 artifact.header.profile_id.as_str(),
-                selector.path_expression(),
+                signed.path_expression(),
             )
             .context(PolicySnafu)?;
             ensure!(
-                handle == object.exact_object_key_id
-                    && selector.object_class_id == object.object_class_id
-                    && selector.device_class_id.is_some() == object.device.is_some()
+                signed.object_class_id == object.object_class_id
+                    && signed.device_class_id.is_some() == object.device.is_some()
                     && object.canonical_component_hex
                         == signed_components
                             .iter()
@@ -2116,17 +2094,7 @@ impl<'a> PreparedGeneration<'a> {
             );
             if let Some(device) = &object.device {
                 ensure!(
-                    selector.device_class_id.as_deref() == Some(device.device_class_id.as_str())
-                        && artifact
-                            .policy_document
-                            .classifier_bindings
-                            .iter()
-                            .any(|binding| {
-                                binding.object_class_id == selector.object_class_id
-                                    && matches!(&binding.selector,
-                                    ObjectClassifierSelectorV1::Device { device_class_ids }
-                                        if device_class_ids.contains(&device.device_class_id))
-                            }),
+                    signed.device_class_id.as_deref() == Some(device.device_class_id.as_str()),
                     IdentityStateSnafu {
                         reason: format!(
                             "device class `{}` is not signed for object class `{}`",
@@ -2135,110 +2103,100 @@ impl<'a> PreparedGeneration<'a> {
                     }
                 );
             }
+            if matching
+                .clone()
+                .any(|selector| selector.source.requires_exact_object())
+            {
+                proven.push((object, matching.next().unwrap_or(selector)));
+            }
         }
-        for (selector_id, (handle, _)) in exact_object_handles {
-            ensure!(
-                generation_objects
-                    .iter()
-                    .any(|object| object.exact_object_key_id == *handle),
-                IdentityStateSnafu {
-                    reason: format!(
-                        "exact selector `{selector_id}` has no proven object in the container"
-                    ),
-                }
-            );
-        }
-        let exact_handles = exact_object_handles
-            .values()
-            .map(|(handle, _)| *handle)
-            .collect::<BTreeSet<_>>();
-        let policy_exact_objects = generation_objects
+        if let Some(selector) = self
+            .selectors
             .iter()
-            .copied()
-            .filter(|object| exact_handles.contains(&object.exact_object_key_id))
-            .collect::<Vec<_>>();
+            .filter(|selector| {
+                selector.source.requires_exact_object()
+                    && !proven
+                        .iter()
+                        .any(|(object, _)| object.exact_object_key_id == selector.handle)
+            })
+            .min_by_key(|selector| selector.source.path_selector_id.as_str())
+        {
+            return IdentityStateSnafu {
+                reason: format!(
+                    "exact selector `{}` has no proven object in the container",
+                    selector.source.path_selector_id
+                ),
+            }
+            .fail();
+        }
+        let policy_exact_objects = proven.iter().map(|(object, _)| *object).collect::<Vec<_>>();
         validate_binding_roles(artifact, binding, role_handles, process_state_handles)?;
         let entry_admissions = lower_entry_admissions(
             artifact,
             binding,
             role_handles,
             process_state_handles,
-            composite_handles,
-            defer_entry_admissions,
+            &self.composite_handles,
+            defer_binding_entries,
         )?;
         let mut decisions = BTreeMap::new();
         let mut defaults = BTreeMap::new();
         let mut device_decisions = BTreeMap::new();
         let mut process_control_rules = BTreeMap::new();
         let mut network = LoweredNetworkPolicy::default();
+        let mut used_exceptions = BTreeSet::new();
         for cell in &artifact.compiled_profile.compiled_cells {
             if !cell_matches_binding(&cell.key, binding, &artifact.policy_document) {
                 continue;
             }
-            let role = *role_handles.get(&cell.key.role_id).ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!("compiled cell has unknown role `{}`", cell.key.role_id),
-                }
-                .build()
-            })?;
-            let process_state = *process_state_handles
-                .get(&cell.key.process_state_id)
-                .ok_or_else(|| {
+            let mut key = EffectDefaultKeyV1 {
+                profile_generation_ref_id: generation,
+                active_role_id: *role_handles.get(&cell.key.role_id).context(
                     IdentityStateSnafu {
+                        reason: format!("compiled cell has unknown role `{}`", cell.key.role_id),
+                    },
+                )?,
+                process_state_vector_id: *process_state_handles
+                    .get(&cell.key.process_state_id)
+                    .context(IdentityStateSnafu {
                         reason: format!(
                             "compiled cell has unknown process state `{}`",
                             cell.key.process_state_id
                         ),
-                    }
-                    .build()
-                })?;
-            let family = KernelEffectFamilyV1::from(cell.key.effect_family) as u16;
-            let operation = CompiledOperationV1::try_from(cell.key.operation_id.as_str())
-                .map_err(|_| {
-                    IdentityStateSnafu {
+                    })?,
+                effect_family: KernelEffectFamilyV1::from(cell.key.effect_family) as u16,
+                operation: CompiledOperationV1::try_from(cell.key.operation_id.as_str())
+                    .ok()
+                    .context(IdentityStateSnafu {
                         reason: format!("unsupported kernel operation `{}`", cell.key.operation_id),
-                    }
-                    .build()
+                    })?
+                    .kernel_id as u16,
+                composite_atom_id: 0,
+                binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
+                reserved_tail: [0; 3],
+            };
+            let exception_handle = if let Some(id) = cell.consuming_exception_id.as_deref() {
+                used_exceptions.insert(id);
+                *self.exception_handles.get(id).context(IdentityStateSnafu {
+                    reason: format!("compiled cell has unknown exception `{id}`"),
                 })?
-                .kernel_id as u16;
-            let exception_numeric_handle = cell
-                .consuming_exception_id
-                .as_ref()
-                .map(|exception_id| {
-                    exception_handles.get(exception_id).copied().ok_or_else(|| {
-                        IdentityStateSnafu {
-                            reason: format!("compiled cell has unknown exception `{exception_id}`"),
-                        }
-                        .build()
-                    })
-                })
-                .transpose()?
-                .unwrap_or_default();
-            let physical =
-                physical_decision(cell.physical_result, cell.errno, exception_numeric_handle);
+            } else {
+                0
+            };
+            let physical = physical_decision(cell.physical_result, cell.errno, exception_handle);
             if let Some(capability) = LoweredGeneration::linux_capability(cell)? {
                 ensure!(
-                    family == KernelEffectFamilyV1::Privilege as u16
-                        && operation == KernelEffectOperationV1::Capability as u16,
+                    key.effect_family == KernelEffectFamilyV1::Privilege as u16
+                        && key.operation == KernelEffectOperationV1::Capability as u16,
                     IdentityStateSnafu {
                         reason:
                             "a Linux capability selector is valid only for PRIVILEGE/CAPABILITY",
                     }
                 );
-                let key = EffectDefaultKeyV1 {
-                    profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                    active_role_id: role,
-                    effect_family: family,
-                    operation,
-                    composite_atom_id: u64::from(capability) + 1,
-                    process_state_vector_id: process_state,
-                    binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                    reserved_tail: [0; 3],
-                };
-                insert_exact(&mut defaults, key.as_bytes(), physical.as_bytes())?;
-                continue;
-            }
-            if let Some(destination_id) = cell.key.object_selector.strip_prefix("DESTINATION:") {
+                key.composite_atom_id = u64::from(capability) + 1;
+            } else if let Some(destination_id) =
+                cell.key.object_selector.strip_prefix("DESTINATION:")
+            {
                 ensure!(
                     cell.key.effect_family == mithril_control::EffectFamilyV1::Network,
                     IdentityStateSnafu {
@@ -2251,133 +2209,83 @@ impl<'a> PreparedGeneration<'a> {
                     .iter()
                     .flat_map(|policy| &policy.destination_policies)
                     .find(|policy| policy.destination_policy_id == destination_id)
-                    .ok_or_else(|| {
-                        IdentityStateSnafu {
-                            reason: format!(
-                                "compiled cell has unknown destination `{destination_id}`"
-                            ),
-                        }
-                        .build()
+                    .context(IdentityStateSnafu {
+                        reason: format!("compiled cell has unknown destination `{destination_id}`"),
                     })?;
                 let destination_policy_handle = self
                     .network
                     .destination_handle(destination_id)
-                    .ok_or_else(|| {
-                        IdentityStateSnafu {
-                            reason: format!(
-                                "compiled cell has no handle for destination `{destination_id}`"
-                            ),
-                        }
-                        .build()
+                    .context(IdentityStateSnafu {
+                        reason: format!(
+                            "compiled cell has no handle for destination `{destination_id}`"
+                        ),
                     })?;
                 network.insert_decisions(
                     NetworkDestinationDecisionKeyV1 {
-                        profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                        profile_generation_ref_id: generation,
                         destination_policy_handle,
-                        active_role_id: role,
-                        process_state_vector_id: process_state,
-                        operation,
-                        protocol: Default::default(),
-                        binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                        reserved: [0; 4],
+                        active_role_id: key.active_role_id,
+                        process_state_vector_id: key.process_state_vector_id,
+                        operation: key.operation,
+                        binding_lifecycle_state: key.binding_lifecycle_state,
+                        ..NetworkDestinationDecisionKeyV1::default()
                     },
                     &destination.protocols,
                     physical,
                 )?;
                 continue;
-            }
-            if lower_typed_effect(
+            } else if lower_typed_effect(
                 cell,
                 &TypedEffectContext {
-                    profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                    actor_role_id: role,
-                    actor_process_state_vector_id: process_state,
-                    binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
+                    profile_generation_ref_id: generation,
+                    actor_role_id: key.active_role_id,
+                    actor_process_state_vector_id: key.process_state_vector_id,
+                    binding_lifecycle_state: key.binding_lifecycle_state,
                     exact_objects: &policy_exact_objects,
-                    signed_device_classes,
-                    role_states,
+                    signed_device_classes: &self.signed_device_classes,
+                    role_states: &self.role_states,
                 },
                 physical,
                 &mut device_decisions,
                 &mut process_control_rules,
             )? {
                 continue;
-            }
-            if let Some(path_selector_id) = cell.key.object_selector.strip_prefix("PATH:") {
-                let selector = artifact
-                    .policy_document
-                    .path_selectors
+            } else if let Some(id) = cell.key.object_selector.strip_prefix("PATH:") {
+                let selector = self
+                    .selectors
                     .iter()
-                    .find(|selector| selector.path_selector_id == path_selector_id)
+                    .find(|selector| selector.source.path_selector_id == id)
+                    .context(IdentityStateSnafu {
+                        reason: format!("compiled cell has unknown path selector `{id}`"),
+                    })?;
+                key.composite_atom_id = selector.composite;
+                if selector.source.requires_exact_object() {
+                    let exact_key = EffectDecisionKeyV1 {
+                        profile_generation_ref_id: generation,
+                        active_role_id: key.active_role_id,
+                        effect_family: key.effect_family,
+                        operation: key.operation,
+                        composite_atom_id: key.composite_atom_id,
+                        exact_object_key_id: selector.handle,
+                        process_state_vector_id: key.process_state_vector_id,
+                        binding_lifecycle_state: key.binding_lifecycle_state,
+                        reserved_tail: [0; 3],
+                    };
+                    insert_exact(&mut decisions, exact_key.as_bytes(), physical.as_bytes())?;
+                    continue;
+                }
+            } else if cell.key.object_selector != "DEFAULT" {
+                key.composite_atom_id = *self
+                    .composite_handles
+                    .get(&cell.key.object_selector)
                     .context(IdentityStateSnafu {
                         reason: format!(
-                            "compiled cell has unknown path selector `{path_selector_id}`"
+                            "compiled cell has unknown object selector `{}`",
+                            cell.key.object_selector
                         ),
                     })?;
-                match &selector.target {
-                    PathSelectorTargetV1::Path { .. } => {
-                        let key = EffectDefaultKeyV1 {
-                            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                            active_role_id: role,
-                            effect_family: family,
-                            operation,
-                            composite_atom_id: composite_handles[&cell.key.object_selector],
-                            process_state_vector_id: process_state,
-                            binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                            reserved_tail: [0; 3],
-                        };
-                        insert_exact(&mut defaults, key.as_bytes(), physical.as_bytes())?;
-                    }
-                    PathSelectorTargetV1::Exact { .. } => {
-                        let (exact_object_key_id, composite_atom_id) = exact_object_handles
-                            .get(path_selector_id)
-                            .copied()
-                            .context(IdentityStateSnafu {
-                                reason: format!(
-                                    "exact selector `{path_selector_id}` has no object handle"
-                                ),
-                            })?;
-                        let key = EffectDecisionKeyV1 {
-                            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                            active_role_id: role,
-                            effect_family: family,
-                            operation,
-                            composite_atom_id,
-                            exact_object_key_id,
-                            process_state_vector_id: process_state,
-                            binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                            reserved_tail: [0; 3],
-                        };
-                        insert_exact(&mut decisions, key.as_bytes(), physical.as_bytes())?;
-                    }
-                }
-            } else {
-                let key = EffectDefaultKeyV1 {
-                    profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                    active_role_id: role,
-                    effect_family: family,
-                    operation,
-                    composite_atom_id: if cell.key.object_selector == "DEFAULT" {
-                        0
-                    } else {
-                        *composite_handles
-                            .get(&cell.key.object_selector)
-                            .ok_or_else(|| {
-                                IdentityStateSnafu {
-                                    reason: format!(
-                                        "compiled cell has unknown object selector `{}`",
-                                        cell.key.object_selector
-                                    ),
-                                }
-                                .build()
-                            })?
-                    },
-                    process_state_vector_id: process_state,
-                    binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                    reserved_tail: [0; 3],
-                };
-                insert_exact(&mut defaults, key.as_bytes(), physical.as_bytes())?;
             }
+            insert_exact(&mut defaults, key.as_bytes(), physical.as_bytes())?;
         }
         ensure!(
             !decisions.is_empty()
@@ -2393,29 +2301,22 @@ impl<'a> PreparedGeneration<'a> {
             }
         );
         for exception in &artifact.policy_document.exceptions {
-            let handle = exception_handles[&exception.exception_id];
-            if !artifact.compiled_profile.compiled_cells.iter().any(|cell| {
-                cell_matches_binding(&cell.key, binding, &artifact.policy_document)
-                    && cell.consuming_exception_id.as_deref()
-                        == Some(exception.exception_id.as_str())
-            }) {
-                continue;
-            }
             let binding_key = ExceptionHandleBindingKeyV1 {
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                exception_numeric_handle: handle,
+                profile_generation_ref_id: generation,
+                exception_numeric_handle: self.exception_handles[&exception.exception_id],
                 reserved: 0,
             };
-            if self
-                .lowered
-                .exception_bindings
-                .contains_key(binding_key.as_bytes())
+            if !used_exceptions.contains(exception.exception_id.as_str())
+                || self
+                    .lowered
+                    .exception_bindings
+                    .contains_key(binding_key.as_bytes())
             {
                 continue;
             }
             ensure!(
-                exception.valid_from_utc_ns <= now_utc_ns
-                    && now_utc_ns < exception.valid_until_utc_ns,
+                exception.valid_from_utc_ns <= self.now_utc_ns
+                    && self.now_utc_ns < exception.valid_until_utc_ns,
                 IdentityStateSnafu {
                     reason: format!(
                         "exception `{}` is not valid at node activation",
@@ -2423,20 +2324,21 @@ impl<'a> PreparedGeneration<'a> {
                     ),
                 }
             );
-            let remaining_ns =
-                u64::try_from(exception.valid_until_utc_ns - now_utc_ns).map_err(|error| {
-                    IdentityStateSnafu {
-                        reason: format!("exception UTC lifetime overflow: {error}"),
-                    }
-                    .build()
+            let remaining = exception
+                .valid_until_utc_ns
+                .checked_sub(self.now_utc_ns)
+                .context(IdentityStateSnafu {
+                    reason: "exception UTC lifetime overflow",
                 })?;
-            let deadline_boottime_ns = now_boottime_ns
-                .checked_add(remaining_ns.min(exception.maximum_lifetime_ns))
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "exception monotonic deadline overflow".to_owned(),
-                    }
-                    .build()
+            let lifetime =
+                remaining.min(i64::try_from(exception.maximum_lifetime_ns).unwrap_or(i64::MAX));
+            // The bounded lifetime is nonnegative and cannot exceed the checked remainder.
+            let deadline_utc_ns = exception.valid_until_utc_ns - (remaining - lifetime);
+            let deadline_boottime_ns = self
+                .now_boottime_ns
+                .checked_add(lifetime.unsigned_abs())
+                .context(IdentityStateSnafu {
+                    reason: "exception monotonic deadline overflow",
                 })?;
             let exception_instance_id =
                 parse_id("exception_instance_id", &exception.exception_instance_id)?;
@@ -2447,7 +2349,7 @@ impl<'a> PreparedGeneration<'a> {
                 }
             );
             let runtime_state_key = ExceptionRuntimeStateKeyV1 {
-                node_id,
+                node_id: self.node_id,
                 exception_instance_id,
             };
             let exception_definition_sha256 =
@@ -2459,54 +2361,32 @@ impl<'a> PreparedGeneration<'a> {
                 })?)
                 .into();
             let value = ExceptionRuntimeStateV1 {
-                lock: 0,
                 maximum_uses: exception.maximum_uses,
-                consumed_uses: 0,
                 bound_profile_generation_refs: 1,
                 deadline_boottime_ns,
                 transition_version: 1,
                 exception_definition_sha256,
                 state: ExceptionRuntimeStateKindV1::Active,
-                reserved: [0; 7],
+                ..ExceptionRuntimeStateV1::default()
             };
             insert_exact(
                 &mut self.lowered.exceptions,
                 runtime_state_key.as_bytes(),
                 value.as_bytes(),
             )?;
-            let deadline_utc_ns = now_utc_ns
-                .checked_add(
-                    i64::try_from(remaining_ns.min(exception.maximum_lifetime_ns)).map_err(
-                        |error| {
-                            IdentityStateSnafu {
-                                reason: format!("exception UTC deadline overflow: {error}"),
-                            }
-                            .build()
-                        },
-                    )?,
-                )
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "exception UTC deadline overflow".to_owned(),
-                    }
-                    .build()
-                })?;
-            if let Some(existing) = self
-                .lowered
-                .exception_deadlines_utc
-                .insert(runtime_state_key.as_bytes().to_vec(), deadline_utc_ns)
-            {
-                ensure!(
-                    existing == deadline_utc_ns,
-                    IdentityStateSnafu {
-                        reason: "one exception instance has unequal activation deadlines",
-                    }
-                );
-            }
+            ensure!(
+                self.lowered
+                    .exception_deadlines_utc
+                    .insert(runtime_state_key.as_bytes().to_vec(), deadline_utc_ns)
+                    .is_none_or(|existing| existing == deadline_utc_ns),
+                IdentityStateSnafu {
+                    reason: "one exception instance has unequal activation deadlines",
+                }
+            );
             let binding_value = ExceptionHandleBindingV1 {
                 runtime_state_key,
                 state: ExceptionBindingStateV1::Active,
-                reserved: [0; 7],
+                ..ExceptionHandleBindingV1::default()
             };
             insert_exact(
                 &mut self.lowered.exception_bindings,
@@ -2515,7 +2395,7 @@ impl<'a> PreparedGeneration<'a> {
             )?;
         }
         let mut file_objects = BTreeMap::new();
-        for object in &policy_exact_objects {
+        for (object, selector) in proven {
             let key = ExactFileObjectKeyV1 {
                 profile_generation_ref_id: object.profile_generation_ref_id,
                 mount_namespace_inode: object.mount_namespace_inode,
@@ -2527,21 +2407,7 @@ impl<'a> PreparedGeneration<'a> {
             let value = ExactObjectBindingV1 {
                 profile_generation_ref_id: object.profile_generation_ref_id,
                 exact_object_key_id: object.exact_object_key_id,
-                composite_atom_id: artifact
-                    .policy_document
-                    .path_selectors
-                    .iter()
-                    .find(|selector| selector.kernel_handle() == object.exact_object_key_id)
-                    .and_then(|selector| {
-                        composite_handles.get(&format!("PATH:{}", selector.path_selector_id))
-                    })
-                    .copied()
-                    .ok_or_else(|| {
-                        IdentityStateSnafu {
-                            reason: "measured object lost its signed selector class".to_owned(),
-                        }
-                        .build()
-                    })?,
+                composite_atom_id: selector.composite,
                 state: ExactObjectBindingStateV1::ReadBack,
                 reserved: [0; 7],
             };
@@ -2556,7 +2422,7 @@ impl<'a> PreparedGeneration<'a> {
             &policy_exact_objects,
             measured_mount_routes,
         )?;
-        path_tables.add_mount_namespace_guards(&generation_objects)?;
+        path_tables.add_mount_namespace_guards(generation_objects)?;
         let lowered = &mut self.lowered;
         merge_rows(&mut lowered.entry_admissions, entry_admissions)?;
         merge_rows(&mut lowered.decisions, decisions)?;
@@ -5273,7 +5139,10 @@ impl PathTables {
         Ok(())
     }
 
-    fn add_mount_namespace_guards(&mut self, objects: &[&ExactFileObjectConfig]) -> Result<()> {
+    fn add_mount_namespace_guards<'a>(
+        &mut self,
+        objects: impl IntoIterator<Item = &'a ExactFileObjectConfig>,
+    ) -> Result<()> {
         for object in objects {
             self.add_mount_namespace_guard(
                 object.mount_namespace_inode,
@@ -5638,7 +5507,7 @@ impl PathTables {
                 );
             }
         }
-        self.add_mount_namespace_guards(objects)?;
+        self.add_mount_namespace_guards(objects.iter().copied())?;
         let binding_id = parse_id("binding_id", &binding.binding_id)?;
         for (identity, graph_prefix_states) in &route_states {
             let plan = &route_plans[identity];
@@ -6076,6 +5945,8 @@ mod tests {
 
     #[test]
     fn generation_shares_binding_rows() -> crate::Result<()> {
+        use snafu::ResultExt as _;
+
         let (artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
         let expected = LoweredGeneration::for_binding(
             &artifact,
@@ -6147,6 +6018,54 @@ mod tests {
             };
             assert!(generation.file_objects.contains_key(key.as_bytes()));
         }
+        let mut document = artifact.policy_document;
+        document.path_selectors.push(PathSelectorV1::exact(
+            "a-missing",
+            "/var/run/other-token",
+            "PROJECTED_TOKEN",
+        ));
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let artifact = ProfileCandidateArtifactV1::sign(
+            &document,
+            PolicyCompiler
+                .compile(&document)
+                .context(crate::error::PolicySnafu)?,
+            ProfileSealRequestV1 {
+                signing_key_id: "test-key".to_owned(),
+                issuer_id: "88888888-8888-4888-8888-888888888888".to_owned(),
+                sequence_epoch: 1,
+                issuer_sequence: 1,
+                rollback_authorization_id: None,
+                registry_digests: RegistryDigestsV1 {
+                    provider_numeric_registry_bundle_digest: "1".repeat(64),
+                    required_capability_schema_digest: "2".repeat(64),
+                    source_selector_registry_digest: "3".repeat(64),
+                    object_classifier_registry_digest: "4".repeat(64),
+                    reason_code_registry_digest: "5".repeat(64),
+                    correlation_package_registry_digest: "6".repeat(64),
+                    provider_vocabulary_registry_digest: "7".repeat(64),
+                },
+            },
+            &key,
+        )
+        .context(crate::error::PolicySnafu)?;
+        artifact
+            .verify_at(&key.verifying_key(), 1_800_000_000_000_000_000)
+            .context(crate::error::PolicySnafu)?;
+        let mut prepared = PreparedGeneration::new(
+            &artifact,
+            1,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert!(matches!(
+            prepared.add_binding(&binding, &[], &[], false),
+            Err(crate::Error::IdentityState { reason, .. })
+                if reason == "exact selector `a-missing` has no proven object in the container"
+        ));
         Ok(())
     }
 
@@ -6345,6 +6264,23 @@ mod tests {
             generation.exception_deadlines_utc.values().next(),
             Some(&(now + 40))
         );
+        let mut overflow = artifact.clone();
+        overflow.policy_document.exceptions[0].valid_from_utc_ns = i64::MIN;
+        overflow.policy_document.exceptions[0].valid_until_utc_ns = i64::MAX;
+        let mut prepared = PreparedGeneration::new(
+            &overflow,
+            1,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            i64::MIN,
+            100,
+        )?;
+        assert!(matches!(
+            prepared.add_binding(&binding, std::slice::from_ref(&object), &[], false),
+            Err(crate::Error::IdentityState { reason, .. })
+                if reason == "exception UTC lifetime overflow"
+        ));
         let mut expired = artifact.clone();
         expired.policy_document.exceptions[0].valid_until_utc_ns = now;
         let mut prepared = PreparedGeneration::new(
@@ -7421,7 +7357,7 @@ mod tests {
             &composite_handles,
             &role_handles,
         )?;
-        tables.add_mount_namespace_guards(&[&object])?;
+        tables.add_mount_namespace_guards(std::iter::once(&object))?;
 
         assert_eq!(tables.mount_views.len(), 1);
         assert_eq!(tables.mount_epochs.len(), 1);
