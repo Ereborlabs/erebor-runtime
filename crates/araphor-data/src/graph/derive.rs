@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use erebor_interceptor_abi::{
-    KernelEffectFamilyV1, KernelEffectOperationV1, PhysicalDecisionKindV1,
+    EffectPhysicalResultV1, KernelEffectFamilyV1, KernelEffectOperationV1,
 };
 use snafu::ResultExt as _;
 
@@ -335,12 +335,22 @@ impl GraphDerivation<'_> {
             source_reason: wire.reason,
             configured_errno: wire.configured_errno,
             kernel_result: wire.kernel_result,
-            physical_result: if wire.decision == PhysicalDecisionKindV1::Deny as u32
-                && wire.kernel_result < 0
-            {
-                GraphPhysicalResultV1::Prevented
-            } else {
-                GraphPhysicalResultV1::Unknown
+            physical_result: match wire.decision {
+                result
+                    if result == EffectPhysicalResultV1::DeniedBeforeEffect as u32
+                        && wire.kernel_result < 0 =>
+                {
+                    GraphPhysicalResultV1::Prevented
+                }
+                result if result == EffectPhysicalResultV1::PacketDroppedAfterRewrite as u32 => {
+                    GraphPhysicalResultV1::PacketDropped
+                }
+                result
+                    if result == EffectPhysicalResultV1::TerminationQueuedBeforeUserMode as u32 =>
+                {
+                    GraphPhysicalResultV1::TerminationQueued
+                }
+                _ => GraphPhysicalResultV1::Unknown,
             },
             proof_quality: self.proof(record),
         }
@@ -496,6 +506,11 @@ impl GraphDerivation<'_> {
         let wire = record.decode()?;
         let task = self.task(record, &wire);
         let detail = self.effect(record, &wire);
+        let enforced = wire.decision == EffectPhysicalResultV1::DeniedBeforeEffect as u32
+            || matches!(
+                detail.physical_result,
+                GraphPhysicalResultV1::PacketDropped | GraphPhysicalResultV1::TerminationQueued
+            );
         let identity = wire.task_cookie > 0
             && detail.process_instance_id.is_some()
             && detail.entry_instance_id.is_some()
@@ -655,6 +670,14 @@ impl GraphDerivation<'_> {
         if detail.physical_result == GraphPhysicalResultV1::Unknown {
             limits.push("PHYSICAL_EFFECT_UNPROVEN".into());
         }
+        if detail.physical_result == GraphPhysicalResultV1::PacketDropped {
+            limits.push("LOCAL_PACKET_DROP_ONLY".into());
+            limits.push("SYSCALL_COMPLETION_UNPROVEN".into());
+            limits.push("PROVIDER_WRITE_AND_CONTENT_UNPROVEN".into());
+        }
+        if detail.physical_result == GraphPhysicalResultV1::TerminationQueued {
+            limits.push("TERMINATION_COMPLETION_UNPROVEN".into());
+        }
         if deviations.len() > 1 || self.policy_conflict(record) {
             self.states[0] = GraphPackageStateV1::Contradicted;
             self.finding(
@@ -666,15 +689,11 @@ impl GraphDerivation<'_> {
                 vec![record.id.clone()],
                 limits,
             )?;
-        } else if !identity
-            || wire.decision == PhysicalDecisionKindV1::Deny as u32
-            || deviations.contains(&true)
-            || baseline_unproved
-        {
+        } else if !identity || enforced || deviations.contains(&true) || baseline_unproved {
             self.states[0] = GraphPackageStateV1::NativeEffect;
             let reason = if !identity {
                 FindingReasonV1::LineageCoverageGap
-            } else if wire.decision == PhysicalDecisionKindV1::Deny as u32 {
+            } else if enforced {
                 FindingReasonV1::UnexpectedEffect
             } else {
                 FindingReasonV1::AuditedRoleDeviation
@@ -786,7 +805,8 @@ impl GraphDerivation<'_> {
                 let task = self.task(record, &wire);
                 let process = self.effect(record, &wire).process_instance_id;
                 let policy_proven = self.reviewed_policy(record, &reviewed_policy_revision);
-                let bytes_proven = wire.decision != PhysicalDecisionKindV1::Deny as u32
+                let bytes_proven = wire.decision
+                    == EffectPhysicalResultV1::UnknownAfterPreEffect as u32
                     && policy_proven
                     && Self::qualified_result(proof_quality)
                     && proof_quality.operation_result_authority
@@ -935,7 +955,8 @@ impl GraphDerivation<'_> {
                                     && completion.principal_id.as_ref() == Some(principal_id)
                             })
                             && carried
-                            && channel_wire.decision != PhysicalDecisionKindV1::Deny as u32
+                            && channel_wire.decision
+                                == EffectPhysicalResultV1::UnknownAfterPreEffect as u32
                             && self.proof(channel_record).temporal_coverage
                                 == TemporalCoverageV1::Complete
                             && proof_quality.source_authority

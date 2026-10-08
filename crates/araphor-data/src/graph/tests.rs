@@ -1,5 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use erebor_interceptor_abi::EffectPhysicalResultV1;
+use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
+
 use super::*;
 use crate::*;
 
@@ -18,7 +21,7 @@ fn source() -> EvidenceIntakeIdentityV1 {
 
 fn wire(
     cursor: u64,
-    decision: u32,
+    physical_result: EffectPhysicalResultV1,
     family: u32,
     operation: u32,
     object: [u8; 16],
@@ -34,11 +37,19 @@ fn wire(
         execution_set_id: vec![7; 16].into(),
         exact_object_id: object.to_vec().into(),
         reason: 9,
-        decision,
+        decision: physical_result as u32,
         effect_family: family,
         operation,
-        configured_errno: -13,
-        kernel_result: if decision == 2 { -13 } else { 0 },
+        configured_errno: if physical_result == DeniedBeforeEffect {
+            -13
+        } else {
+            0
+        },
+        kernel_result: if physical_result == DeniedBeforeEffect {
+            -13
+        } else {
+            0
+        },
         temporal_coverage: EvidenceTemporalCoverage::Complete as i32,
         decision_context: Some(EvidenceDecisionContext {
             schema_version: 1,
@@ -215,9 +226,15 @@ fn credential_input() -> Result<GraphReplayInputV1> {
 
 fn credential_input_from(first: u64) -> Result<GraphReplayInputV1> {
     let records = vec![
-        record(first, &wire(first, 0, 2, 4, [20; 16]))?,
-        record(first + 1, &wire(first + 1, 0, 3, 13, [21; 16]))?,
-        record(first + 2, &wire(first + 2, 0, 3, 13, [21; 16]))?,
+        record(first, &wire(first, UnknownAfterPreEffect, 2, 4, [20; 16]))?,
+        record(
+            first + 1,
+            &wire(first + 1, UnknownAfterPreEffect, 3, 13, [21; 16]),
+        )?,
+        record(
+            first + 2,
+            &wire(first + 2, UnknownAfterPreEffect, 3, 13, [21; 16]),
+        )?,
     ];
     let mut input = input(records);
     for (index, record) in input.records.iter().enumerate() {
@@ -330,8 +347,105 @@ fn control_graph_subject_lifetime_does_not_use_collector_epoch() {
 }
 
 #[test]
+fn control_graph_accepted_physical_results_keep_stage_semantics() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
+    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs(Mutex::new(vec![]))))?;
+    let stages = [
+        (DeniedBeforeEffect, 2, 2),
+        (EffectPhysicalResultV1::PacketDroppedAfterRewrite, 3, 13),
+        (
+            EffectPhysicalResultV1::TerminationQueuedBeforeUserMode,
+            1,
+            1,
+        ),
+    ];
+    let records = stages
+        .into_iter()
+        .enumerate()
+        .map(|(index, (result, family, operation))| {
+            let cursor = index as u64 + 1;
+            record(cursor, &wire(cursor, result, family, operation, [20; 16]))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    accept(&store, &records)?;
+    coverage(&store, 3, 1, "HEALTHY")?;
+    assert_eq!(owner.process(10)?, 1);
+    let current = owner.current_findings(source().tenant_id)?;
+    assert_eq!(current.len(), 3);
+    for (result_id, finding) in current {
+        let effect = finding.effects.first().ok_or("effect")?;
+        assert_eq!(finding.reason, FindingReasonV1::UnexpectedEffect);
+        match effect.source_decision {
+            1 => {
+                assert_eq!(effect.physical_result, GraphPhysicalResultV1::Prevented);
+                assert_eq!(effect.kernel_result, -13);
+            }
+            2 => {
+                assert_eq!(effect.physical_result, GraphPhysicalResultV1::PacketDropped);
+                assert_eq!(effect.kernel_result, 0);
+                assert!(finding
+                    .limits
+                    .contains(&"SYSCALL_COMPLETION_UNPROVEN".into()));
+                assert!(finding
+                    .limits
+                    .contains(&"PROVIDER_WRITE_AND_CONTENT_UNPROVEN".into()));
+            }
+            3 => {
+                assert_eq!(
+                    effect.physical_result,
+                    GraphPhysicalResultV1::TerminationQueued
+                );
+                assert_eq!(effect.kernel_result, 0);
+                assert!(finding
+                    .limits
+                    .contains(&"TERMINATION_COMPLETION_UNPROVEN".into()));
+            }
+            _ => return Err("the source physical result changed".into()),
+        }
+        let snapshot = owner
+            .snapshot_result(source().tenant_id, &result_id)?
+            .ok_or("exact snapshot")?;
+        assert_eq!(snapshot.input_manifest, finding.revision);
+        assert!(snapshot.findings.contains(&finding));
+        assert!(owner.snapshot_result([99; 16], &result_id)?.is_none());
+    }
+    let mut unknown = wire(4, UnknownAfterPreEffect, 2, 2, [20; 16]);
+    unknown.kernel_result = -13;
+    assert!(
+        GraphAndFindingOwner::derive(&input(vec![record(4, &unknown)?]))?
+            .findings
+            .is_empty()
+    );
+    let mut denied_read = credential_input()?;
+    let mut read = denied_read.records[0].decode()?;
+    read.decision = DeniedBeforeEffect as u32;
+    read.kernel_result = -13;
+    denied_read.records[0] = record(1, &read)?;
+    assert!(GraphAndFindingOwner::derive(&denied_read)?
+        .findings
+        .iter()
+        .all(|finding| {
+            finding.package_id != "HF-DW-001" || finding.reason != FindingReasonV1::CredentialPivot
+        }));
+    let mut dropped_channel = credential_input()?;
+    for record in dropped_channel.records.iter_mut().skip(1) {
+        let mut wire = record.decode()?;
+        wire.decision = EffectPhysicalResultV1::PacketDroppedAfterRewrite as u32;
+        record.wire_record = Vec::<u8>::try_from(&wire)?;
+    }
+    assert!(GraphAndFindingOwner::derive(&dropped_channel)?
+        .findings
+        .iter()
+        .all(|finding| {
+            finding.package_id != "HF-DW-001" || finding.reason != FindingReasonV1::CredentialPivot
+        }));
+    Ok(())
+}
+
+#[test]
 fn control_graph_denial_and_missing_lifetime() -> TestResult {
-    let mut denied = wire(1, 2, 2, 2, [20; 16]);
+    let mut denied = wire(1, DeniedBeforeEffect, 2, 2, [20; 16]);
     let graph = GraphAndFindingOwner::derive(&input(vec![record(1, &denied)?]))?;
     assert_eq!(graph.findings[0].state, FindingStateV1::Confirmed);
     assert_eq!(
@@ -373,7 +487,10 @@ fn control_graph_denial_and_missing_lifetime() -> TestResult {
 
 #[test]
 fn control_graph_native_parent_is_exact_and_local() -> TestResult {
-    let mut input = input(vec![record(1, &wire(1, 2, 2, 2, [20; 16]))?]);
+    let mut input = input(vec![record(
+        1,
+        &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]),
+    )?]);
     let parent = GraphSubjectKeyV1::native(
         &source(),
         GraphSubjectKindV1::Task,
@@ -599,7 +716,10 @@ fn control_graph_credential_versions_cannot_overwrite_conflict() -> TestResult {
 
 #[test]
 fn control_graph_kubernetes_preserves_partial_stages() -> TestResult {
-    let mut input = input(vec![record(1, &wire(1, 0, 3, 13, [20; 16]))?]);
+    let mut input = input(vec![record(
+        1,
+        &wire(1, UnknownAfterPreEffect, 3, 13, [20; 16]),
+    )?]);
     let stage = KubernetesStageProofV1 {
         cluster_id: "cluster".into(),
         carried_request_id: Some("request".into()),
@@ -737,7 +857,10 @@ fn control_graph_required_registration_precedes_intake_without_discovery() -> Te
     )?);
     let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
     assert!(!store.discovery_enabled());
-    accept(&store, &[record(1, &wire(1, 2, 2, 2, [20; 16]))?])?;
+    accept(
+        &store,
+        &[record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?],
+    )?;
     let health = store
         .processor_health(&ProcessorScopeV1 {
             processor_id: GRAPH_PROCESSOR.into(),
@@ -762,7 +885,10 @@ fn control_graph_required_registration_precedes_intake_without_discovery() -> Te
     );
     drop(owner);
     assert!(!store.graph_enabled());
-    accept(&store, &[record(2, &wire(2, 2, 2, 2, [20; 16]))?])?;
+    accept(
+        &store,
+        &[record(2, &wire(2, DeniedBeforeEffect, 2, 2, [20; 16]))?],
+    )?;
     assert_eq!(
         EvidenceRetentionOwner::new(&store)
             .retain(&source(), 12)?
@@ -784,7 +910,7 @@ fn control_graph_new_source_registration_preserves_pending_other_source() -> Tes
         Default::default(),
     )?);
     let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
-    let observation = record(1, &wire(1, 2, 2, 2, [20; 16]))?;
+    let observation = record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?;
     accept(&store, &[observation.clone()])?;
     let mut other = source();
     other.source_id = [4; 16];
@@ -832,7 +958,7 @@ fn control_graph_committed_revision_retry_late_expiry_and_restart() -> TestResul
     )?);
     let provider = Arc::new(Inputs::default());
     let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
-    let observation = record(1, &wire(1, 2, 2, 2, [20; 16]))?;
+    let observation = record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?;
     accept(&store, &[observation.clone()])?;
     owner.process(10)?;
     let original = owner.findings(source().tenant_id)?.remove(0);
@@ -864,7 +990,10 @@ fn control_graph_committed_revision_retry_late_expiry_and_restart() -> TestResul
         .remove(0)
         .limits
         .contains(&"RETAINED_INPUT_EXPIRED".into()));
-    accept(&store, &[record(2, &wire(2, 2, 2, 2, [20; 16]))?])?;
+    accept(
+        &store,
+        &[record(2, &wire(2, DeniedBeforeEffect, 2, 2, [20; 16]))?],
+    )?;
     owner.process(deadline + 3)?;
     owner.process(deadline + 3)?;
     assert_eq!(
@@ -1118,7 +1247,7 @@ fn control_graph_window_boundary_preserves_credential_join() -> TestResult {
     let provider = Arc::new(Inputs(Mutex::new(input.facts)));
     let owner = GraphAndFindingOwner::new(store.clone(), provider)?;
     let mut records = (1..256)
-        .map(|cursor| record(cursor, &wire(cursor, 0, 2, 2, [30; 16])))
+        .map(|cursor| record(cursor, &wire(cursor, UnknownAfterPreEffect, 2, 2, [30; 16])))
         .collect::<Result<Vec<_>>>()?;
     records.extend(input.records);
     for batch in records.chunks(128) {
@@ -1165,7 +1294,10 @@ fn control_graph_many_coverage_revisions_preserve_frozen_input() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
     let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
-    accept(&store, &[record(1, &wire(1, 2, 2, 2, [20; 16]))?])?;
+    accept(
+        &store,
+        &[record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?],
+    )?;
     coverage(&store, 1, 1, "HEALTHY")?;
     owner.process(10)?;
     let original = owner.current_findings(source().tenant_id)?.remove(0);
@@ -1210,7 +1342,10 @@ fn control_graph_required_failure_is_unhealthy_and_recovers() -> TestResult {
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
     let provider = Arc::new(FailingInputs(std::sync::atomic::AtomicBool::new(true)));
     let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
-    accept(&store, &[record(1, &wire(1, 2, 2, 2, [20; 16]))?])?;
+    accept(
+        &store,
+        &[record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?],
+    )?;
     assert!(owner.process(10).is_err());
     assert_eq!(
         store
@@ -1219,7 +1354,10 @@ fn control_graph_required_failure_is_unhealthy_and_recovers() -> TestResult {
             .state,
         ProcessorStateV1::ProcessingFailed
     );
-    accept(&store, &[record(2, &wire(2, 2, 2, 2, [20; 16]))?])?;
+    accept(
+        &store,
+        &[record(2, &wire(2, DeniedBeforeEffect, 2, 2, [20; 16]))?],
+    )?;
     provider
         .0
         .store(false, std::sync::atomic::Ordering::Release);
@@ -1257,7 +1395,7 @@ fn control_graph_context_and_result_bounds_keep_required_progress() -> TestResul
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
     let records = (1..=256)
-        .map(|cursor| record(cursor, &wire(cursor, 2, 2, 2, [20; 16])))
+        .map(|cursor| record(cursor, &wire(cursor, DeniedBeforeEffect, 2, 2, [20; 16])))
         .collect::<Result<Vec<_>>>()?;
     let mut facts = Vec::new();
     for (index, record) in records.iter().enumerate() {

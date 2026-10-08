@@ -490,6 +490,8 @@ mod tests {
             &record.decode()?,
         )?;
         observation.profile_generation_ref_id = Some(8);
+        observation.effect.decision =
+            erebor_interceptor_abi::EffectPhysicalResultV1::DeniedBeforeEffect as u8;
         observation.effect.execution_set_id = Some(
             uuid::Uuid::parse_str(&workload.execution_set_id)?
                 .into_bytes()

@@ -703,6 +703,14 @@ impl GraphAndFindingOwner {
             .transpose()
     }
 
+    pub fn snapshot_result(
+        &self,
+        tenant: [u8; 16],
+        result_id: &str,
+    ) -> Result<Option<GraphSnapshotV1>> {
+        self.store.graph_result(tenant, result_id)
+    }
+
     pub fn findings(&self, tenant: [u8; 16]) -> Result<Vec<FindingV1>> {
         Ok(self
             .current_findings(tenant)?

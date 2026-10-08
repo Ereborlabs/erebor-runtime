@@ -323,6 +323,8 @@ pub struct GraphBranchV1 {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GraphPhysicalResultV1 {
     Prevented,
+    PacketDropped,
+    TerminationQueued,
     Unknown,
 }
 
