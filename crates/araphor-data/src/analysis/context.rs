@@ -85,8 +85,33 @@ impl AnalysisContextVersionV1 {
 }
 
 impl AnalysisStore {
+    pub(crate) fn context_tenant_page(
+        &self,
+        owner: &str,
+        after: Option<[u8; 16]>,
+    ) -> Result<Vec<[u8; 16]>> {
+        self.read_snapshot(|reader| {
+            let mut statement = reader.prepare("SELECT DISTINCT tenant_id FROM context_versions
+                WHERE owner_id = ? AND (CAST(? AS BLOB) IS NULL OR tenant_id > ?) ORDER BY tenant_id LIMIT 256")
+                .context(AnalysisDatabaseSnafu { operation: "prepare context tenants" })?;
+            let rows = statement.query_map(params![owner, after.as_ref().map(|id| id.as_slice()), after.as_ref().map(|id| id.as_slice())],
+                |row| row.get::<_, Vec<u8>>(0)).context(AnalysisDatabaseSnafu { operation: "read context tenants" })?;
+            rows.map(|row| row.context(AnalysisDatabaseSnafu { operation: "decode context tenant" })?
+                .try_into().map_err(|_| self.state_error("the context tenant is invalid"))).collect()
+        })
+    }
+
     pub fn commit_context(&self, input: &AnalysisContextVersionV1) -> Result<u64> {
-        self.commit_context_value(input, false)
+        self.commit_context_value(input, false, None)
+            .map(|reference| reference.commit_revision)
+    }
+
+    pub(crate) fn commit_context_checked(
+        &self,
+        input: &AnalysisContextVersionV1,
+        expected: u64,
+    ) -> Result<u64> {
+        self.commit_context_value(input, false, Some(expected))
             .map(|reference| reference.commit_revision)
     }
 
@@ -100,13 +125,14 @@ impl AnalysisStore {
         ) {
             return self.reject("the qualified context owner is invalid");
         }
-        self.commit_context_value(input, true)
+        self.commit_context_value(input, true, None)
     }
 
     fn commit_context_value(
         &self,
         input: &AnalysisContextVersionV1,
         intern: bool,
+        expected: Option<u64>,
     ) -> Result<super::AnalysisContextRefV1> {
         if !input.valid() {
             return self.reject("the context version identity or bounds are invalid");
@@ -162,6 +188,28 @@ impl AnalysisStore {
                 key: key.clone(),
                 commit_revision: revision,
             });
+        }
+        if let Some(expected) = expected {
+            let latest: Option<u64> = transaction
+                .query_row(
+                    "SELECT MAX(owner_revision) FROM context_versions
+                 WHERE tenant_id = ? AND owner_id = ? AND entity_key = ? AND lifetime_key = ?",
+                    params![
+                        key.tenant_id.as_slice(),
+                        key.owner_id,
+                        key.entity_key.as_slice(),
+                        key.lifetime_key.as_slice()
+                    ],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read expected context head",
+                })?;
+            if latest.unwrap_or(0) != expected
+                || expected.checked_add(1) != Some(key.owner_revision)
+            {
+                return AnalysisConflictSnafu.fail();
+            }
         }
         if let Some(imported) = imported {
             let previous: Option<(Vec<u8>, u64)> = transaction
@@ -262,6 +310,64 @@ impl AnalysisStore {
         }
         self.read_snapshot(|reader| {
             Ok(Self::read_context_from(reader, &self.root, key)?.map(|(version, _)| version))
+        })
+    }
+
+    pub(crate) fn context_heads(
+        &self,
+        tenant: [u8; 16],
+        owner: &str,
+        limit: usize,
+    ) -> Result<Vec<AnalysisContextVersionV1>> {
+        if tenant == [0; 16]
+            || owner.is_empty()
+            || owner.len() > 128
+            || !(1..=4096).contains(&limit)
+        {
+            return self.reject("the context head scope is invalid");
+        }
+        self.read_snapshot(|reader| {
+            let mut statement = reader
+                .prepare(
+                    "SELECT entity_key, lifetime_key, MAX(owner_revision) FROM context_versions
+                 WHERE tenant_id = ? AND owner_id = ?
+                 GROUP BY entity_key, lifetime_key ORDER BY entity_key, lifetime_key LIMIT ?",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare context heads",
+                })?;
+            let rows = statement
+                .query_map(
+                    params![tenant.as_slice(), owner, (limit + 1) as u32],
+                    |row| {
+                        Ok(AnalysisContextKeyV1 {
+                            tenant_id: tenant,
+                            owner_id: owner.to_owned(),
+                            entity_key: row.get(0)?,
+                            lifetime_key: row.get(1)?,
+                            owner_revision: row.get(2)?,
+                        })
+                    },
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read context heads",
+                })?;
+            let mut versions = Vec::new();
+            for row in rows {
+                let key = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode context head",
+                })?;
+                if versions.len() == limit {
+                    return crate::AnalysisInputTooLargeSnafu {
+                        resource: "context heads",
+                    }
+                    .fail();
+                }
+                let (version, _) = Self::read_context_from(reader, &self.root, &key)?
+                    .ok_or_else(|| self.state_error("the context head is absent"))?;
+                versions.push(version);
+            }
+            Ok(versions)
         })
     }
 
