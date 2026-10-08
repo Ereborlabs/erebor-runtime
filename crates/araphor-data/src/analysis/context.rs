@@ -313,6 +313,127 @@ impl AnalysisStore {
         })
     }
 
+    pub(crate) fn context_head(
+        &self,
+        tenant: [u8; 16],
+        owner: &str,
+        entity: &[u8],
+        lifetime: &[u8],
+    ) -> Result<Option<AnalysisContextVersionV1>> {
+        if tenant == [0; 16]
+            || owner.is_empty()
+            || owner.len() > 128
+            || !(1..=MAX_CONTEXT_KEY_BYTES).contains(&entity.len())
+            || !(1..=MAX_CONTEXT_KEY_BYTES).contains(&lifetime.len())
+        {
+            return self.reject("the context head scope is invalid");
+        }
+        self.read_snapshot(|reader| {
+            let revision: Option<u64> = reader
+                .query_row(
+                    "SELECT MAX(owner_revision) FROM context_versions
+                 WHERE tenant_id = ? AND owner_id = ? AND entity_key = ? AND lifetime_key = ?",
+                    params![tenant.as_slice(), owner, entity, lifetime],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read exact context head",
+                })?;
+            let Some(owner_revision) = revision else {
+                return Ok(None);
+            };
+            let key = AnalysisContextKeyV1 {
+                tenant_id: tenant,
+                owner_id: owner.into(),
+                entity_key: entity.into(),
+                lifetime_key: lifetime.into(),
+                owner_revision,
+            };
+            Ok(Self::read_context_from(reader, &self.root, &key)?.map(|(version, _)| version))
+        })
+    }
+
+    pub(crate) fn context_head_page(
+        &self,
+        tenant: [u8; 16],
+        owner: &str,
+        after: Option<&AnalysisContextKeyV1>,
+    ) -> Result<Vec<AnalysisContextVersionV1>> {
+        if tenant == [0; 16]
+            || owner.is_empty()
+            || owner.len() > 128
+            || after
+                .is_some_and(|key| !key.valid() || key.tenant_id != tenant || key.owner_id != owner)
+        {
+            return self.reject("the context page scope is invalid");
+        }
+        self.read_snapshot(|reader| {
+            let mut statement = reader
+                .prepare(
+                    "SELECT entity_key, lifetime_key, MAX(owner_revision) FROM context_versions
+                 WHERE tenant_id = ? AND owner_id = ? AND (CAST(? AS BLOB) IS NULL
+                    OR entity_key > ? OR (entity_key = ? AND lifetime_key > ?))
+                 GROUP BY entity_key, lifetime_key ORDER BY entity_key, lifetime_key LIMIT ?",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare context head page",
+                })?;
+            let entity = after.map(|key| key.entity_key.as_slice());
+            let lifetime = after.map(|key| key.lifetime_key.as_slice());
+            let rows = statement
+                .query_map(
+                    params![
+                        tenant.as_slice(),
+                        owner,
+                        entity,
+                        entity,
+                        entity,
+                        lifetime,
+                        super::MAX_ANALYSIS_PAGE_RECORDS as u32
+                    ],
+                    |row| {
+                        Ok(AnalysisContextKeyV1 {
+                            tenant_id: tenant,
+                            owner_id: owner.into(),
+                            entity_key: row.get(0)?,
+                            lifetime_key: row.get(1)?,
+                            owner_revision: row.get(2)?,
+                        })
+                    },
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read context head page",
+                })?;
+            let mut versions = Vec::new();
+            let mut bytes = 0usize;
+            for row in rows {
+                let key = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode context head page",
+                })?;
+                let (version, _) = Self::read_context_from(reader, &self.root, &key)?
+                    .ok_or_else(|| self.state_error("the context head is absent"))?;
+                let next_bytes = bytes
+                    .checked_add(std::mem::size_of::<AnalysisContextVersionV1>())
+                    .and_then(|bytes| bytes.checked_add(version.key.owner_id.len()))
+                    .and_then(|bytes| bytes.checked_add(version.key.entity_key.len()))
+                    .and_then(|bytes| bytes.checked_add(version.key.lifetime_key.len()))
+                    .and_then(|bytes| bytes.checked_add(version.body.len()))
+                    .ok_or_else(|| {
+                        crate::AnalysisInputTooLargeSnafu {
+                            resource: "context head page",
+                        }
+                        .build()
+                    })?;
+                if next_bytes > super::MAX_ANALYSIS_PAGE_BYTES {
+                    break;
+                }
+                bytes = next_bytes;
+                versions.push(version);
+            }
+            Ok(versions)
+        })
+    }
+
     pub(crate) fn context_heads(
         &self,
         tenant: [u8; 16],
@@ -426,6 +547,99 @@ impl AnalysisStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_graph_context_head_pages_keep_exact_versions_and_bounds(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let tenant = [1; 16];
+        let owner = "paging-owner";
+        let original = AnalysisContextVersionV1 {
+            key: AnalysisContextKeyV1 {
+                tenant_id: tenant,
+                owner_id: owner.into(),
+                entity_key: 1u32.to_be_bytes().to_vec(),
+                lifetime_key: b"a".to_vec(),
+                owner_revision: 1,
+            },
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: vec![1],
+        };
+        for entity in 1..=257u32 {
+            let mut version = original.clone();
+            version.key.entity_key = entity.to_be_bytes().to_vec();
+            store.commit_context(&version)?;
+        }
+        let mut later = original.clone();
+        later.key.owner_revision = 2;
+        later.body = vec![2];
+        store.commit_context_checked(&later, 1)?;
+        let mut other_lifetime = original.clone();
+        other_lifetime.key.lifetime_key = b"b".to_vec();
+        store.commit_context(&other_lifetime)?;
+        let first = store.context_head_page(tenant, owner, None)?;
+        assert_eq!(first.len(), super::super::MAX_ANALYSIS_PAGE_RECORDS);
+        assert_eq!(first[0], later);
+        assert_eq!(first[1], other_lifetime);
+        assert!(first.windows(2).all(|pair| pair[0].key < pair[1].key));
+        let last = &first.last().ok_or("page cursor")?.key;
+        let second = store.context_head_page(tenant, owner, Some(last))?;
+        assert_eq!(second.len(), 2);
+        assert!(second.iter().all(|version| &version.key > last));
+        assert!(store
+            .context_head_page(tenant, owner, Some(&second.last().ok_or("last")?.key))?
+            .is_empty());
+        assert!(store.context_heads(tenant, owner, 256).is_err());
+        assert_eq!(
+            store.context_head(tenant, owner, &original.key.entity_key, b"a")?,
+            Some(later)
+        );
+        assert_eq!(
+            store.context_version(&original.key)?,
+            Some(original.clone())
+        );
+        assert!(store
+            .context_head([2; 16], owner, &original.key.entity_key, b"a")?
+            .is_none());
+        assert!(store
+            .context_head(tenant, "other-owner", &original.key.entity_key, b"a")?
+            .is_none());
+        assert!(store.context_head(tenant, owner, b"", b"a").is_err());
+        let mut foreign = last.clone();
+        foreign.tenant_id = [2; 16];
+        assert!(store
+            .context_head_page(tenant, owner, Some(&foreign))
+            .is_err());
+        foreign = last.clone();
+        foreign.owner_id = "other-owner".into();
+        assert!(store
+            .context_head_page(tenant, owner, Some(&foreign))
+            .is_err());
+
+        for entity in 1..=34u32 {
+            let mut version = original.clone();
+            version.key.owner_id = "large-owner".into();
+            version.key.entity_key = entity.to_be_bytes().to_vec();
+            version.body = vec![1; MAX_CONTEXT_BYTES];
+            store.commit_context(&version)?;
+        }
+        let page = store.context_head_page(tenant, "large-owner", None)?;
+        assert!(!page.is_empty() && page.len() < 34);
+        assert!(
+            page.iter().map(|version| version.body.len()).sum::<usize>()
+                <= super::super::MAX_ANALYSIS_PAGE_BYTES
+        );
+        let next = store.context_head_page(
+            tenant,
+            "large-owner",
+            Some(&page.last().ok_or("byte cursor")?.key),
+        )?;
+        assert_eq!(page.len() + next.len(), 34);
+        Ok(())
+    }
 
     #[test]
     fn analysis_store_context_versions() -> std::result::Result<(), Box<dyn std::error::Error>> {

@@ -755,6 +755,75 @@ impl GraphAndFindingOwner {
             .collect())
     }
 
+    pub fn next_current_finding(
+        &self,
+        tenant: [u8; 16],
+        after_finding_id: Option<&str>,
+    ) -> Result<Option<(String, FindingV1)>> {
+        self.select_current_finding(tenant, after_finding_id, None)
+    }
+
+    pub fn current_finding(
+        &self,
+        tenant: [u8; 16],
+        finding_id: &str,
+    ) -> Result<Option<(String, FindingV1)>> {
+        self.select_current_finding(tenant, None, Some(finding_id))
+    }
+
+    fn select_current_finding(
+        &self,
+        tenant: [u8; 16],
+        after_finding_id: Option<&str>,
+        exact_finding_id: Option<&str>,
+    ) -> Result<Option<(String, FindingV1)>> {
+        if tenant == [0; 16]
+            || [after_finding_id, exact_finding_id]
+                .into_iter()
+                .flatten()
+                .any(|id| id.is_empty() || id.len() > 4096)
+        {
+            return GraphInvalidSnafu {
+                field: "finding page scope",
+            }
+            .fail();
+        }
+        let _operation = self.operation.lock().map_err(|_| {
+            GraphInvalidSnafu {
+                field: "worker lock",
+            }
+            .build()
+        })?;
+        let mut selected: Option<(u64, String, FindingV1)> = None;
+        let mut after = None;
+        loop {
+            let page = self
+                .store
+                .graph_snapshots(tenant, None, after.as_deref(), true)?;
+            if page.is_empty() {
+                break;
+            }
+            after = page.last().map(|row| row.0.clone());
+            for (result_id, snapshot, revision) in page {
+                for finding in snapshot.findings {
+                    if after_finding_id.is_some_and(|id| finding.finding_id.as_str() <= id)
+                        || exact_finding_id.is_some_and(|id| finding.finding_id != id)
+                    {
+                        continue;
+                    }
+                    if selected.as_ref().is_none_or(|(prior_revision, _, prior)| {
+                        finding.finding_id < prior.finding_id
+                            || (finding.finding_id == prior.finding_id
+                                && revision > *prior_revision)
+                    }) {
+                        selected = Some((revision, result_id.clone(), finding));
+                    }
+                }
+            }
+        }
+        Ok(selected.map(|(_, result_id, finding)| (result_id, finding)))
+    }
+
     pub fn finding_result(
         &self,
         tenant: [u8; 16],

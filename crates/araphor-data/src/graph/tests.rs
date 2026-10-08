@@ -973,6 +973,29 @@ fn control_graph_committed_revision_retry_late_expiry_and_restart() -> TestResul
     assert!(owner.refresh(&source(), 12)?);
     let current = owner.findings(source().tenant_id)?.remove(0);
     assert_ne!(original.revision, current.revision);
+    let receipt = owner.current_findings(source().tenant_id)?.remove(0);
+    assert_eq!(receipt.1, current);
+    assert_eq!(
+        owner.next_current_finding(source().tenant_id, None)?,
+        Some(receipt.clone())
+    );
+    assert_eq!(
+        owner.current_finding(source().tenant_id, &current.finding_id)?,
+        Some(receipt)
+    );
+    assert!(owner
+        .current_finding([99; 16], &current.finding_id)?
+        .is_none());
+    assert!(owner
+        .current_finding(source().tenant_id, "absent finding")?
+        .is_none());
+    assert!(owner
+        .next_current_finding(source().tenant_id, Some(&current.finding_id))?
+        .is_none());
+    assert!(owner.next_current_finding([99; 16], None)?.is_none());
+    assert!(owner
+        .next_current_finding(source().tenant_id, Some(""))
+        .is_err());
     assert_eq!(
         owner.finding(source().tenant_id, &original.finding_id, &original.revision)?,
         Some(original.clone())
@@ -1286,6 +1309,18 @@ fn control_graph_window_boundary_preserves_credential_join() -> TestResult {
         owner.finding_result([99; 16], &result_id, &finding.finding_id)?,
         None
     );
+    let expected = owner.current_findings(source().tenant_id)?;
+    let mut after = None;
+    for receipt in expected {
+        assert_eq!(
+            owner.next_current_finding(source().tenant_id, after.as_deref())?,
+            Some(receipt.clone())
+        );
+        after = Some(receipt.1.finding_id);
+    }
+    assert!(owner
+        .next_current_finding(source().tenant_id, after.as_deref())?
+        .is_none());
     Ok(())
 }
 
