@@ -118,50 +118,54 @@ impl GraphNotificationQualification {
             .collect::<TestResult<Vec<_>>>()?;
         let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
         let graph = GraphAndFindingOwner::new(data.clone(), Arc::new(store.clone()))?;
+        let mut consumed = false;
         for _ in 0..1024 {
             graph.process(now)?;
-            let benign_scope = ProcessorScopeV1 {
-                processor_id: GRAPH_PROCESSOR.into(),
-                method_version: u64::from(GRAPH_SCHEMA_VERSION),
-                identity: allowed_record.id.stream.clone(),
-            };
-            if data
-                .processor_health(&benign_scope)?
-                .is_some_and(|health| health.consumed_cursor >= allowed_record.id.durable_cursor)
-                && graph.current_findings(tenant)?.iter().any(|(_, finding)| {
-                    finding
-                        .effects
-                        .iter()
-                        .any(|effect| effect.evidence == denied_record.id)
-                })
-            {
+            consumed = true;
+            for record in [&denied_record, &allowed_record] {
+                let scope = ProcessorScopeV1 {
+                    processor_id: GRAPH_PROCESSOR.into(),
+                    method_version: u64::from(GRAPH_SCHEMA_VERSION),
+                    identity: record.id.stream.clone(),
+                };
+                consumed &= data
+                    .processor_health(&scope)?
+                    .is_some_and(|health| health.consumed_cursor >= record.id.durable_cursor);
+            }
+            if consumed {
                 break;
             }
         }
-        let current = graph.current_findings(tenant)?;
-        let (result_id, finding) = current
-            .iter()
-            .find(|(_, finding)| {
-                finding.package_id == "HF-PROC-001"
-                    && finding
-                        .effects
-                        .iter()
-                        .any(|effect| effect.evidence == denied_record.id)
-            })
-            .ok_or("the physical denial finding is absent")?
-            .clone();
+        assert!(consumed, "graph did not consume both incident records");
+        let mut after = None;
+        let mut selected = None;
+        let mut finding_count = 0;
+        while let Some((result_id, finding)) =
+            graph.next_current_finding(tenant, after.as_deref())?
+        {
+            finding_count += 1;
+            assert!(!finding
+                .effects
+                .iter()
+                .any(|effect| effect.evidence == allowed_record.id));
+            after = Some(finding.finding_id.clone());
+            if finding.package_id == "HF-PROC-001"
+                && finding
+                    .effects
+                    .iter()
+                    .any(|effect| effect.evidence == denied_record.id)
+            {
+                assert!(selected.is_none());
+                selected = Some((result_id, finding));
+            }
+        }
+        let (result_id, finding) = selected.ok_or("the physical denial finding is absent")?;
         let decision = Self::decision(&finding);
         super::super::write_json(&self.output.join("observed-graph-decision.json"), &decision)?;
         let paired = contracts
             .iter()
             .find(|contract| contract["decision"] == decision)
             .ok_or("the physical graph decision has no matching lightweight input condition")?;
-        assert!(current.iter().all(|(_, finding)| {
-            !finding
-                .effects
-                .iter()
-                .any(|effect| effect.evidence == allowed_record.id)
-        }));
         assert_eq!(
             finding.effects[0].physical_result,
             GraphPhysicalResultV1::Prevented
@@ -171,6 +175,18 @@ impl GraphNotificationQualification {
             .ok_or("physical graph absent")?;
         assert_eq!(snapshot.input_manifest, finding.revision);
         assert!(snapshot.findings.contains(&finding));
+        super::super::write_json(
+            &self.output.join("observed-graph-input.json"),
+            &json!({
+                "graph_result_id": result_id, "finding_id": finding.finding_id,
+                "finding_revision": finding.revision,
+                "current_findings": finding_count, "graph_decision": decision,
+                "source_coverage": snapshot.input_manifest.coverage,
+                "accepted_denied_record": denied_record.id,
+                "accepted_allowed_record": allowed_record.id, "evidence_digests": digests,
+                "original_volume_used": true, "pending_evidence_records": 0,
+            }),
+        )?;
         Self::check_replay(
             &Self::replay(&data, &denied_record.id.stream, &snapshot)?,
             &snapshot,
@@ -198,6 +214,7 @@ impl GraphNotificationQualification {
                 "schema_version": 1, "case": "graph-notification", "result": "PASS",
                 "qualification": "KUBERNETES", "paired_input": paired["input"],
                 "graph_result_id": result_id,
+                "current_findings": finding_count,
                 "graph_decision": decision, "graph_revision": snapshot.input_manifest,
                 "finding_id": finding.finding_id, "finding_revision": finding.revision,
                 "source_coverage": snapshot.input_manifest.coverage, "notification": notification,

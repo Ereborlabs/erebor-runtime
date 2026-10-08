@@ -37,6 +37,7 @@ pub(super) fn run(now: u64) -> std::result::Result<serde_json::Value, Box<dyn St
     let authorization = authority::run(now)?;
     let local = fixture.local_contract()?;
     let nodes = fixture.nodes()?;
+    let density = ReplayQualification::new(now)?.notification_density()?;
     Ok(json!({"incident_cards": results, "HF-LOCAL-001": {
         "families": ["exec", "file", "network", "device"],
         "qualification": "RECORDED_GRAPH_REPLAY", "physical_incident_reproduced": false,
@@ -45,12 +46,261 @@ pub(super) fn run(now: u64) -> std::result::Result<serde_json::Value, Box<dyn St
         "healthy": "confirmed-native-denial", "gapped": "coverage-insufficient",
         "legitimate_control_unflagged": true,
     }, "local_contract": local, "HF-XNODE-001": nodes,
+        "NOTIFICATION-DENSITY-001": density,
         "HF-011-READ-RESULT-001": reads, "HF-004-RESULT-001": sends,
         "AUTHORIZATION-REPLAY-004": authorization,
         "proof_boundary": "Recorded kernel, Control, read-completion, and remote audit inputs check production package contracts. No provider collector, provider issuance, cross-node physical result, or response execution is qualified."}))
 }
 
 impl ReplayQualification {
+    fn notification_density(self) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
+        let mut sources = Vec::new();
+        for first in (0..257).step_by(8) {
+            let raw = (first..(first + 8).min(257))
+                .map(|index| {
+                    let mut record =
+                        GraphNotificationQualification::native(index - first + 1, true);
+                    record.task_cookie = index + 1;
+                    record.process_instance_id = EvidenceIdV1::new(8, index + 1);
+                    record.admitted_entry_rule_id = 0;
+                    record
+                })
+                .collect::<Vec<_>>();
+            sources.push(self.accept_node(
+                u8::try_from(200 + first / 8)?,
+                &raw,
+                &self.authenticated,
+                false,
+            )?);
+        }
+        let graph = GraphAndFindingOwner::new(self.data.clone(), self.inputs.clone())?;
+        for _ in 0..512 {
+            graph.process(self.now)?;
+            let mut complete = true;
+            for source in &sources {
+                complete &= graph.snapshot(source)?.is_some();
+            }
+            if complete {
+                break;
+            }
+        }
+        let findings = graph.current_findings(self.authenticated.tenant_id)?;
+        assert_eq!(findings.len(), 257);
+        let grants = GraphNotificationQualification::grants(self.authenticated.tenant_id, self.now);
+        let store = ControlStore::open(self.root.path().join("notification-control"))?;
+        let authority = Arc::new(ConfiguredNotificationAuthority::new(
+            store.clone(),
+            &grants,
+        )?);
+        let router = NotificationRouter::new(self.data.clone(), authority)?;
+        assert_eq!(router.route(&graph, self.now)?, 256);
+        let health = router.health(&grants[1], self.now)?;
+        assert_eq!(health.obligations, 256);
+        assert_eq!(health.unrouted, 256);
+        assert!(!health.routing_available);
+        let prefix = router.obligations(&grants[1], self.now)?;
+        let (_, first) = findings.first().ok_or("first finding absent")?.clone();
+        let (_, tail) = findings.last().ok_or("tail finding absent")?.clone();
+        assert!(prefix.iter().all(|state| {
+            state
+                .finding
+                .as_ref()
+                .is_none_or(|reference| reference.finding_id != tail.finding_id)
+        }));
+        drop(router);
+        drop(graph);
+        drop(store);
+        let Self {
+            root,
+            intake,
+            data,
+            inputs,
+            authenticated,
+            now,
+        } = self;
+        drop(intake);
+        drop(data);
+        let data = Arc::new(AnalysisStore::open(root.path().join("analysis"))?);
+        let store = ControlStore::open(root.path().join("notification-control"))?;
+        let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone())?;
+        let authority = Arc::new(ConfiguredNotificationAuthority::new(
+            store.clone(),
+            &grants,
+        )?);
+        let router = NotificationRouter::new(data.clone(), authority)?;
+        assert_eq!(router.obligations(&grants[1], now)?, prefix);
+        assert_eq!(router.route(&graph, now)?, 0);
+        assert_eq!(router.route(&graph, now)?, 1);
+        let dense = router.health(&grants[1], now)?;
+        assert_eq!(dense.obligations, 257);
+        assert_eq!(dense.unrouted, 257);
+        assert!(matches!(
+            router.obligations(&grants[1], now),
+            Err(Error::Notification {
+                code: NotificationErrorCodeV1::Limit,
+                field: "notification read count",
+                ..
+            })
+        ));
+        let mut after = None;
+        let mut retained = Vec::new();
+        loop {
+            let (page, next) = router.obligations_page(&grants[1], after, now)?;
+            assert!(page.len() <= 256);
+            retained.extend(page);
+            let Some(next) = next else {
+                break;
+            };
+            after = Some(next);
+        }
+        assert_eq!(retained.len(), 257);
+        for state in &prefix {
+            assert!(retained.contains(state));
+        }
+        assert!(retained.iter().any(|state| {
+            state
+                .finding
+                .as_ref()
+                .is_some_and(|reference| reference.finding_id == tail.finding_id)
+        }));
+        drop(router);
+        let mut lifecycle =
+            GraphNotificationQualification::notify(&store, data.clone(), &graph, &first, now)?;
+        assert_eq!(lifecycle["unrouted_health"]["obligations"], 257);
+        assert_eq!(
+            lifecycle["ambient_heads"].as_array().map(Vec::len),
+            Some(256)
+        );
+        drop(graph);
+        drop(data);
+        drop(store);
+        let data = Arc::new(AnalysisStore::open(root.path().join("analysis"))?);
+        let store = ControlStore::open(root.path().join("notification-control"))?;
+        let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone())?;
+        GraphNotificationQualification::resume(&store, &data, &graph, &first, now, &mut lifecycle)?;
+        assert_eq!(lifecycle["final_health"]["obligations"], 257);
+        assert_eq!(lifecycle["final_health"]["unrouted"], 256);
+        let authority = Arc::new(ConfiguredNotificationAuthority::new(
+            store.clone(),
+            &grants,
+        )?);
+        let router = NotificationRouter::new(data.clone(), authority)?;
+        let before = GraphNotificationQualification::one(&router, &grants[1], &first, now + 103)?;
+        assert_eq!(router.route(&graph, now + 103)?, 255);
+        let old = GraphNotificationQualification::finding_ref(&graph, &first)?;
+        let record = first
+            .effects
+            .first()
+            .ok_or("first effect absent")?
+            .evidence
+            .clone();
+        inputs.insert(
+            GraphFactV1 {
+                record_id: record.clone(),
+                value: GraphFactValueV1::Baseline {
+                    role_id: 1,
+                    state_id: 1,
+                    outside_reviewed_baseline: true,
+                    reviewed_policy_revision: "recorded-reviewed-source".into(),
+                },
+            },
+            "late-dense-baseline",
+            1,
+        )?;
+        assert!(graph.refresh(&record.stream, now + 104)?);
+        let (result_id, revised) = graph
+            .current_finding(authenticated.tenant_id, &first.finding_id)?
+            .ok_or("revised first finding absent")?;
+        assert_ne!(revised.revision, first.revision);
+        assert_eq!(revised.required_action, first.required_action);
+        assert_eq!(
+            graph.finding_result(first.tenant_id, &old.result_id, &old.finding_id)?,
+            Some(first)
+        );
+        assert!(matches!(
+            router.route_finding(&graph, authenticated.tenant_id, &old, now + 104),
+            Err(Error::Notification {
+                code: NotificationErrorCodeV1::Conflict,
+                field: "current finding reference",
+                ..
+            })
+        ));
+        router.configure(
+            &grants[0],
+            NotificationPolicyV1 {
+                tenant_id: authenticated.tenant_id,
+                route_id: "primary".into(),
+                revision: 2,
+                package_ids: vec!["HF-PROC-001".into()],
+                minimum_priority: NotificationPriorityV1::High,
+                acknowledgement_ns: 1_000,
+                retry_limit: 3,
+                retry_delay_ns: 10,
+                escalation_route_id: "human".into(),
+                max_sensitivity: ContextSensitivityV1::Tenant,
+                allow_concerns: false,
+            },
+            now + 104,
+        )?;
+        assert_eq!(router.route(&graph, now + 104)?, 1);
+        assert_eq!(router.route(&graph, now + 104)?, 256);
+        let updated =
+            GraphNotificationQualification::one(&router, &grants[1], &revised, now + 104)?;
+        assert_eq!(updated.key, before.key);
+        assert_eq!(updated.first_seen_utc_ns, before.first_seen_utc_ns);
+        assert_eq!(updated.deadline_utc_ns, before.deadline_utc_ns);
+        assert_eq!(updated.attempts, before.attempts);
+        assert_eq!(updated.minimum_priority, before.minimum_priority);
+        assert!(updated.source_priority >= before.source_priority);
+        assert_ne!(updated.finding_revision, before.finding_revision);
+        assert_eq!(updated.route.as_ref().map(|route| route.revision), Some(2));
+        assert_eq!(
+            updated
+                .finding
+                .as_ref()
+                .map(|reference| &reference.result_id),
+            Some(&result_id)
+        );
+        assert!(updated.overdue(now + 104));
+        let sink = IncidentSink {
+            failed: AtomicBool::new(true),
+            finding_id: revised.finding_id.clone(),
+        };
+        let mut capacity = None;
+        for _ in 0..4 {
+            match router.deliver(&graph, &sink, now + 104) {
+                Ok(_) => {}
+                Err(Error::StorageCapacity { resource, .. }) => {
+                    capacity = Some(resource);
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        assert_eq!(capacity, Some("tenant retained revisions"));
+        let pressure = router.health(&grants[1], now + 104)?;
+        assert_eq!(pressure.obligations, 257);
+        assert_eq!(pressure.unrouted, 0);
+        assert_eq!(graph.current_findings(authenticated.tenant_id)?.len(), 257);
+        Ok(json!({
+            "qualification": "RECORDED_GRAPH_REPLAY",
+            "input": "257-denied-effects-before-route-configuration",
+            "current_findings": findings.len(),
+            "persisted_obligations": dense.obligations,
+            "result": "PASS", "work_bound": 256, "page_bound": 256,
+            "analysis_store_reopened": true, "restart_prefix_unchanged": true,
+            "tail_progress_after_restart": true, "earlier_key_revisited": true,
+            "route_revision": 2, "original_deadline_preserved": true,
+            "priority_floors_preserved": true, "attempts_preserved": true,
+            "point_notification": lifecycle,
+            "capacity_error": {"code": "STORAGE_CAPACITY", "resource": capacity},
+            "storage_quotas": {"tenant_retained_revisions": 1024, "global_retained_revisions": 4096},
+            "backpressure_health": pressure,
+            "empty_configuration_healthy": false,
+            "findings_retained": true, "bound_disabled": false,
+        }))
+    }
+
     fn new(now: u64) -> std::result::Result<Self, Box<dyn StdError>> {
         let root = tempfile::tempdir()?;
         let store = ControlStore::open(root.path().join("control"))?;
@@ -918,5 +1168,14 @@ impl ReplayQualification {
                 "finding_revision": finding.revision}));
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn graph_notification_dense_progress_and_capacity() -> crate::platform::TestResult<()> {
+        super::ReplayQualification::new(1_791_400_000_000_000_000)?.notification_density()?;
+        Ok(())
     }
 }

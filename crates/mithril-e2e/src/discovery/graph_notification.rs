@@ -577,6 +577,13 @@ impl GraphNotificationQualification {
         )?);
         let router = NotificationRouter::new(data, authority)?;
         router.route(graph, now)?;
+        router.route(graph, now)?;
+        let reference = Self::finding_ref(graph, finding)?;
+        router.route_finding(graph, finding.tenant_id, &reference, now)?;
+        let unrouted = router.health(&grants[1], now)?;
+        assert!(unrouted.unrouted > 0);
+        assert!(!unrouted.routing_available);
+        let ambient = Self::ambient_heads(&router, &grants[1], finding, now)?;
         for (route, package) in [("human", "unused-package"), ("primary", "HF-PROC-001")] {
             router.configure(
                 &grants[0],
@@ -596,7 +603,7 @@ impl GraphNotificationQualification {
                 now + 1,
             )?;
         }
-        router.route(graph, now + 1)?;
+        router.route_finding(graph, finding.tenant_id, &reference, now + 1)?;
         let state = Self::one(&router, &grants[1], finding, now + 1)?;
         assert_eq!(state.deadline_utc_ns, Some(now + 100));
         assert_eq!(state.priority(), NotificationPriorityV1::Critical);
@@ -615,12 +622,15 @@ impl GraphNotificationQualification {
         assert!(router
             .acknowledge(&grants[2], state.key, [5; 16], now + 1)
             .is_err());
-        router.deliver(
+        let failed = Self::deliver_until(
+            &router,
             graph,
             &IncidentSink::new(finding.finding_id.clone()),
+            &grants[1],
+            finding,
             now + 1,
+            |state| state.failure == Some(NotificationFailureV1::TransportFailed),
         )?;
-        let failed = Self::one(&router, &grants[1], finding, now + 1)?;
         assert_eq!(
             failed
                 .attempts
@@ -632,11 +642,18 @@ impl GraphNotificationQualification {
         assert_eq!(failed.failure, Some(NotificationFailureV1::TransportFailed));
         assert_eq!(failed.deadline_utc_ns, state.deadline_utc_ns);
         assert!(failed.human_acknowledgement.is_none());
-        router.route(graph, now + 2)?;
+        router.route_finding(graph, finding.tenant_id, &reference, now + 2)?;
         assert_eq!(Self::one(&router, &grants[1], finding, now + 2)?, failed);
+        assert_eq!(
+            Self::ambient_heads(&router, &grants[1], finding, now + 2)?,
+            ambient
+        );
         Ok(
             json!({"before_restart": failed, "deadline": state.deadline_utc_ns,
-            "original_deadline_preserved": true, "single_obligation_per_finding": true}),
+            "original_deadline_preserved": true, "single_obligation_per_finding_action_route": true,
+            "routing_operation": "EXACT_CURRENT_COMMITTED_FINDING",
+            "unrouted_health": unrouted, "ambient_heads": ambient,
+            "ambient_obligations_preserved": true}),
         )
     }
 
@@ -657,13 +674,33 @@ impl GraphNotificationQualification {
         let before: NotificationObligationV1 =
             serde_json::from_value(result["before_restart"].clone())?;
         assert_eq!(Self::one(&router, &grants[1], finding, now + 11)?, before);
-        router.route(graph, now + 11)?;
+        router.route_finding(
+            graph,
+            finding.tenant_id,
+            &Self::finding_ref(graph, finding)?,
+            now + 11,
+        )?;
         let sink = IncidentSink {
             failed: AtomicBool::new(true),
             finding_id: finding.finding_id.clone(),
         };
-        router.deliver(graph, &sink, now + 11)?;
-        let retried = Self::one(&router, &grants[1], finding, now + 11)?;
+        let retried = Self::deliver_until(
+            &router,
+            graph,
+            &sink,
+            &grants[1],
+            finding,
+            now + 11,
+            |state| {
+                state.failure.is_none()
+                    && state
+                        .attempts
+                        .iter()
+                        .filter(|attempt| attempt.kind == NotificationDeliveryKindV1::Finding)
+                        .count()
+                        == 2
+            },
+        )?;
         assert!(retried.failure.is_none());
         assert_eq!(
             retried
@@ -674,8 +711,19 @@ impl GraphNotificationQualification {
             2
         );
         assert!(retried.human_acknowledgement.is_none());
-        router.deliver(graph, &sink, now + 101)?;
-        let overdue = Self::one(&router, &grants[1], finding, now + 101)?;
+        let overdue = Self::deliver_until(
+            &router,
+            graph,
+            &sink,
+            &grants[1],
+            finding,
+            now + 101,
+            |state| {
+                state.attempts.iter().any(|attempt| {
+                    attempt.kind == NotificationDeliveryKindV1::AcknowledgementEscalation
+                })
+            },
+        )?;
         assert!(overdue.overdue(now + 101));
         assert_eq!(overdue.overdue_since_utc_ns, Some(now + 100));
         assert!(overdue
@@ -702,6 +750,16 @@ impl GraphNotificationQualification {
         result["overdue"] = serde_json::to_value(overdue)?;
         result["human_receipt"] = serde_json::to_value(human.human_acknowledgement)?;
         result["final"] = serde_json::to_value(human)?;
+        assert_eq!(
+            serde_json::to_value(Self::ambient_heads(
+                &router,
+                &grants[1],
+                finding,
+                now + 103
+            )?)?,
+            result["ambient_heads"],
+        );
+        result["final_health"] = serde_json::to_value(router.health(&grants[1], now + 103)?)?;
         result["transitions"] = json!([
             "unrouted",
             "required-route",
@@ -720,21 +778,89 @@ impl GraphNotificationQualification {
         finding: &FindingV1,
         now: u64,
     ) -> std::result::Result<NotificationObligationV1, Box<dyn StdError>> {
-        let states: Vec<_> = router
-            .obligations(grant, now)?
-            .into_iter()
-            .filter(|state| {
-                state
+        let mut state = None;
+        let mut after = None;
+        loop {
+            let (page, next) = router.obligations_page(grant, after, now)?;
+            for candidate in page.into_iter().filter(|candidate| {
+                candidate
                     .finding
                     .as_ref()
                     .is_some_and(|reference| reference.finding_id == finding.finding_id)
-            })
-            .collect();
-        assert_eq!(states.len(), 1);
-        states
-            .into_iter()
-            .next()
-            .ok_or_else(|| "required obligation absent".into())
+                    && candidate.required_action == finding.required_action
+                    && candidate
+                        .route
+                        .as_ref()
+                        .is_some_and(|route| route.route_id == "primary")
+            }) {
+                assert!(state.is_none());
+                state = Some(candidate);
+            }
+            let Some(next) = next else {
+                return state.ok_or_else(|| "required obligation absent".into());
+            };
+            after = Some(next);
+        }
+    }
+
+    fn finding_ref(
+        graph: &GraphAndFindingOwner,
+        finding: &FindingV1,
+    ) -> std::result::Result<NotificationFindingRefV1, Box<dyn StdError>> {
+        let (result_id, current) = graph
+            .current_finding(finding.tenant_id, &finding.finding_id)?
+            .ok_or("current finding absent")?;
+        assert_eq!(&current, finding);
+        Ok(NotificationFindingRefV1 {
+            result_id,
+            finding_id: finding.finding_id.clone(),
+        })
+    }
+
+    fn ambient_heads(
+        router: &NotificationRouter,
+        grant: &NotificationGrantV1,
+        finding: &FindingV1,
+        now: u64,
+    ) -> std::result::Result<Vec<(NotificationKeyV1, u64)>, Box<dyn StdError>> {
+        let mut after = None;
+        let mut heads = Vec::new();
+        loop {
+            let (page, next) = router.obligations_page(grant, after, now)?;
+            heads.extend(
+                page.into_iter()
+                    .filter(|state| {
+                        state
+                            .finding
+                            .as_ref()
+                            .is_none_or(|reference| reference.finding_id != finding.finding_id)
+                    })
+                    .map(|state| (state.key, state.revision)),
+            );
+            let Some(next) = next else {
+                return Ok(heads);
+            };
+            after = Some(next);
+        }
+    }
+
+    fn deliver_until(
+        router: &NotificationRouter,
+        graph: &GraphAndFindingOwner,
+        sink: &dyn NotificationSink,
+        grant: &NotificationGrantV1,
+        finding: &FindingV1,
+        now: u64,
+        complete: impl Fn(&NotificationObligationV1) -> bool,
+    ) -> std::result::Result<NotificationObligationV1, Box<dyn StdError>> {
+        for _ in 0..1024 {
+            router.deliver(graph, sink, now)?;
+            let state = Self::one(router, grant, finding, now)?;
+            if complete(&state) {
+                return Ok(state);
+            }
+        }
+        Err("bounded delivery did not reach the selected finding".into())
     }
 }
 
