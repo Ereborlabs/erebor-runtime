@@ -2,6 +2,8 @@ use ed25519_dalek::SigningKey;
 
 use super::*;
 
+mod replay;
+
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 fn body() -> AuthorityLeaseBodyV1 {

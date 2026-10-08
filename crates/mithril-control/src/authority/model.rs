@@ -576,14 +576,7 @@ pub struct AuthorityAuditHandleV1 {
     pub public_audit_id: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AuthorityReplayKeyV1 {
-    pub trust_domain_id: [u8; 16],
-    pub issuer_id: [u8; 16],
-    pub key_id: Vec<u8>,
-    pub sequence_epoch: u64,
-}
+pub(crate) type AuthorityReplayKeyV1 = super::IntentReplayKeyV1<[u8; 16]>;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

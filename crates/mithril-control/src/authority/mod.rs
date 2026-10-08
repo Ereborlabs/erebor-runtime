@@ -123,18 +123,22 @@ impl AuthorityLeaseOwner {
                     && !state.slots.contains(&*intent.slots[0]),
                 "authority proof or slot replay",
             )?;
-            AuthorityErrorCodeV1::Unavailable.require(
-                state.proofs.len() < MAX_AUTHORITY_RECORDS
-                    && state.slots.len() < MAX_AUTHORITY_RECORDS
-                    && state.windows.len() < 256,
-                "authority replay capacity",
-            )?;
             let replay = AuthorityReplayKeyV1 {
                 trust_domain_id: intent.trust_domain_id,
                 issuer_id: intent.issuer_id,
                 key_id: issuer.key_id.clone(),
                 sequence_epoch: intent.sequence_epoch,
             };
+            AuthorityErrorCodeV1::Denied.require(
+                !state.windows.keys().any(|key| key.conflicts(&replay)),
+                "authority signing key epoch",
+            )?;
+            AuthorityErrorCodeV1::Unavailable.require(
+                state.proofs.len() < MAX_AUTHORITY_RECORDS
+                    && state.slots.len() < MAX_AUTHORITY_RECORDS
+                    && (state.windows.contains_key(&replay) || state.windows.len() < 256),
+                "authority replay capacity",
+            )?;
             state
                 .windows
                 .entry(replay)

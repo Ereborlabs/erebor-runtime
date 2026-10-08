@@ -4,7 +4,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use erebor_interceptor_abi::Id128V1;
-use mithril_control::IntentReplayWindowV1 as ReplayWindow;
+use mithril_control::{IntentReplayKeyV1, IntentReplayWindowV1 as ReplayWindow};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
@@ -15,13 +15,7 @@ const MAX_REPLAY_WINDOWS: usize = 4096;
 const MAX_PROOF_TOMBSTONES: usize = 65_536;
 const MAX_SLOT_TOMBSTONES: usize = 262_144;
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) struct ReplayKey {
-    pub trust_domain_id: Id128V1,
-    pub issuer_id: Id128V1,
-    pub key_id: Vec<u8>,
-    pub sequence_epoch: u64,
-}
+pub(super) type ReplayKey = IntentReplayKeyV1<Id128V1>;
 
 #[derive(Clone, Debug)]
 pub(super) struct AcceptedProof<'a> {
@@ -720,12 +714,7 @@ impl ReplayLedger {
             }
             .fail();
         }
-        if self.windows.keys().any(|key| {
-            key.trust_domain_id == proof.key.trust_domain_id
-                && key.issuer_id == proof.key.issuer_id
-                && key.sequence_epoch == proof.key.sequence_epoch
-                && key.key_id != proof.key.key_id
-        }) {
+        if self.windows.keys().any(|key| key.conflicts(&proof.key)) {
             return AuthorizationSnafu {
                 reason: "signing-key rotation requires a new sequence epoch".to_owned(),
             }
