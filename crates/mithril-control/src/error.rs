@@ -10,7 +10,8 @@ use snafu::{IntoError as _, Location, Snafu};
 pub enum Error {
     #[snafu(display("Authority CBOR decode failed: {source}"))]
     AuthorityCborDecode {
-        source: minicbor::decode::Error,
+        #[snafu(source(from(minicbor::decode::Error, Box::new)))]
+        source: Box<minicbor::decode::Error>,
         #[snafu(implicit)]
         location: Location,
     },

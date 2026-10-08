@@ -30,7 +30,13 @@ struct Sink {
 }
 impl NotificationSink for Sink {
     fn deliver(&self, request: &NotificationDeliveryV1) -> NotificationSinkResultV1 {
-        self.calls.lock().expect("sink lock").push(request.clone());
+        let Ok(mut calls) = self.calls.lock() else {
+            return NotificationSinkResultV1::Failed {
+                reason: NotificationFailureV1::SinkUnavailable,
+            };
+        };
+        calls.push(request.clone());
+        drop(calls);
         if self.fail_primary && request.kind == NotificationDeliveryKindV1::Finding {
             NotificationSinkResultV1::Failed {
                 reason: NotificationFailureV1::SinkUnavailable,
@@ -259,14 +265,14 @@ fn control_notification_stronger_revision_delivers_without_deadline_reset() -> T
     assert_eq!(latest.key, original.key);
     assert_eq!(latest.deadline_utc_ns, Some(200));
     assert_eq!(latest.priority(), NotificationPriorityV1::Critical);
-    let calls = sink.calls.lock().expect("sink lock");
+    let calls = sink.calls.lock().map_err(|_| "sink lock")?;
     assert_eq!(
-        calls[1].finding.as_ref().expect("finding").revision,
+        calls[1].finding.as_ref().ok_or("finding absent")?.revision,
         finding(2, FindingSeverityV1::Critical).revision
     );
     assert_ne!(
-        calls[0].finding.as_ref().expect("finding").revision,
-        calls[1].finding.as_ref().expect("finding").revision
+        calls[0].finding.as_ref().ok_or("finding absent")?.revision,
+        calls[1].finding.as_ref().ok_or("finding absent")?.revision
     );
     drop(calls);
     assert_eq!(latest.attempts.len(), 2);
@@ -385,7 +391,7 @@ fn control_notification_failure_acceptance_does_not_acknowledge_overdue_obligati
     assert!(sink
         .calls
         .lock()
-        .expect("sink lock")
+        .map_err(|_| "sink lock")?
         .iter()
         .any(|call| call.kind == NotificationDeliveryKindV1::AcknowledgementEscalation));
     assert!(router
@@ -451,8 +457,11 @@ fn control_notification_restart_reuses_pending_attempt_and_original_deadline() -
     assert_eq!(states[0].key, key);
     assert_eq!(states[0].deadline_utc_ns, Some(200));
     assert_eq!(states[0].attempts.len(), 1);
-    assert_eq!(sink.calls.lock().expect("sink lock")[0].attempt, 1);
-    assert_eq!(sink.calls.lock().expect("sink lock")[0].route_revision, 1);
+    assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?[0].attempt, 1);
+    assert_eq!(
+        sink.calls.lock().map_err(|_| "sink lock")?[0].route_revision,
+        1
+    );
     assert_eq!(states[0].route.as_ref().ok_or("route absent")?.revision, 2);
     let mut foreign = grant(NotificationPrincipalV1::Human);
     foreign.tenant_id = [7; 16];
@@ -513,7 +522,7 @@ fn control_notification_full_window_keeps_exact_revision_in_immutable_graph_resu
     let sink = Sink::default();
     assert_eq!(router.deliver(&graph, &sink, 301)?, 1);
     assert_eq!(
-        sink.calls.lock().expect("sink lock")[0]
+        sink.calls.lock().map_err(|_| "sink lock")?[0]
             .finding
             .as_ref()
             .ok_or("delivery finding is absent")?
@@ -570,13 +579,13 @@ fn control_notification_route_change_keeps_deadline_floors_and_bounded_retry_evi
     assert!(sink
         .calls
         .lock()
-        .expect("sink lock")
+        .map_err(|_| "sink lock")?
         .iter()
         .all(|delivery| delivery.priority >= NotificationPriorityV1::High));
     assert_eq!(
         sink.calls
             .lock()
-            .expect("sink lock")
+            .map_err(|_| "sink lock")?
             .iter()
             .filter(|delivery| delivery.kind == NotificationDeliveryKindV1::Finding)
             .map(|delivery| (delivery.route_id.as_str(), delivery.route_revision))
@@ -618,7 +627,7 @@ fn control_notification_disclosure_denial_keeps_failure_and_authorized_escalatio
     router.route(&graph, 100)?;
     let sink = Sink::default();
     assert_eq!(router.deliver(&graph, &sink, 100)?, 2);
-    let calls = sink.calls.lock().expect("sink lock");
+    let calls = sink.calls.lock().map_err(|_| "sink lock")?;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].kind, NotificationDeliveryKindV1::FailureEscalation);
     drop(calls);
@@ -675,7 +684,7 @@ fn control_notification_approved_concern_stays_unconfirmed_and_requires_human_re
             .submit_concern(
                 &agent,
                 "primary",
-                state.unconfirmed_concern.clone().expect("concern"),
+                state.unconfirmed_concern.clone().ok_or("concern absent")?,
                 150
             )?
             .deadline_utc_ns,
@@ -690,7 +699,7 @@ fn control_notification_approved_concern_stays_unconfirmed_and_requires_human_re
         .remove(0);
     assert!(state.overdue(202));
     assert!(state.human_acknowledgement.is_none());
-    assert!(sink.calls.lock().expect("sink lock")[0]
+    assert!(sink.calls.lock().map_err(|_| "sink lock")?[0]
         .unconfirmed_concern
         .is_some());
     Ok(())

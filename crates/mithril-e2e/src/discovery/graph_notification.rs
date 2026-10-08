@@ -222,7 +222,7 @@ impl GraphNotificationQualification {
             })
             .await?;
             if index == 1 {
-                let mithril_node::Error::ControlRpc { source, .. } = response.unwrap_err() else {
+                let Err(mithril_node::Error::ControlRpc { source, .. }) = response else {
                     return Err("pending upload did not return a Control RPC error".into());
                 };
                 assert_eq!(source.code(), tonic::Code::Unavailable);
