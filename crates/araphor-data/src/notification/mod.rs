@@ -17,7 +17,23 @@ mod tests;
 pub struct NotificationRouter {
     store: Arc<AnalysisStore>,
     authority: Arc<dyn NotificationAuthorization>,
-    operation: Mutex<()>,
+    operation: Mutex<WorkCursors>,
+}
+
+#[derive(Default)]
+struct WorkCursors {
+    routing: Option<RoutingCursor>,
+    delivery: Option<DeliveryCursor>,
+}
+
+struct RoutingCursor {
+    tenant: [u8; 16],
+    finding_id: Option<String>,
+}
+
+struct DeliveryCursor {
+    tenant: [u8; 16],
+    context: Option<AnalysisContextKeyV1>,
 }
 
 impl NotificationRouter {
@@ -35,7 +51,7 @@ impl NotificationRouter {
         Ok(Self {
             store,
             authority,
-            operation: Mutex::new(()),
+            operation: Mutex::new(WorkCursors::default()),
         })
     }
 
@@ -96,26 +112,70 @@ impl NotificationRouter {
     }
 
     pub fn route(&self, graph: &GraphAndFindingOwner, now: u64) -> Result<usize> {
-        let _guard = self.lock()?;
+        let mut work = self.lock()?;
         NotificationErrorCodeV1::Invalid.require(now > 0, "routing time")?;
-        let mut after = None;
+        let mut tenant = match &work.routing {
+            Some(cursor) => Some(cursor.tenant),
+            None => self.store.tenant_page(None)?.first().copied(),
+        };
+        let mut after = work
+            .routing
+            .as_ref()
+            .and_then(|cursor| cursor.finding_id.clone());
         let mut count = 0;
-        loop {
-            let tenants = self.store.tenant_page(after)?;
-            if tenants.is_empty() {
+        for _ in 0..MAX_NOTIFICATION_STATES {
+            let Some(current) = tenant else {
+                work.routing = None;
                 break;
+            };
+            if let Some((result_id, finding)) =
+                graph.next_current_finding(current, after.as_deref())?
+            {
+                let routes = self.routes(current)?;
+                let mut states = self.related_states(&finding)?;
+                count += self.schedule(graph, &finding, &result_id, &routes, &mut states, now)?;
+                after = Some(finding.finding_id);
+                work.routing = Some(RoutingCursor {
+                    tenant: current,
+                    finding_id: after.clone(),
+                });
+            } else {
+                tenant = self.store.tenant_page(Some(current))?.first().copied();
+                after = None;
+                work.routing = tenant.map(|tenant| RoutingCursor {
+                    tenant,
+                    finding_id: None,
+                });
             }
-            for tenant in &tenants {
-                let routes = self.routes(*tenant)?;
-                let mut states = self.states(*tenant)?;
-                for (result_id, finding) in graph.current_findings(*tenant)? {
-                    count +=
-                        self.schedule(graph, &finding, &result_id, &routes, &mut states, now)?;
-                }
-            }
-            after = tenants.last().copied();
         }
         Ok(count)
+    }
+
+    pub fn route_finding(
+        &self,
+        graph: &GraphAndFindingOwner,
+        tenant: [u8; 16],
+        reference: &NotificationFindingRefV1,
+        now: u64,
+    ) -> Result<usize> {
+        let _guard = self.lock()?;
+        NotificationErrorCodeV1::Invalid.require(now > 0, "routing time")?;
+        let (result_id, finding) = graph
+            .current_finding(tenant, &reference.finding_id)?
+            .ok_or_else(|| {
+                crate::NotificationSnafu {
+                    code: NotificationErrorCodeV1::Denied,
+                    field: "current finding scope",
+                }
+                .build()
+            })?;
+        NotificationErrorCodeV1::Conflict.require(
+            result_id == reference.result_id,
+            "current finding reference",
+        )?;
+        let routes = self.routes(tenant)?;
+        let mut states = self.related_states(&finding)?;
+        self.schedule(graph, &finding, &result_id, &routes, &mut states, now)
     }
 
     pub fn deliver(
@@ -124,63 +184,54 @@ impl NotificationRouter {
         sink: &dyn NotificationSink,
         now: u64,
     ) -> Result<usize> {
-        let _guard = self.lock()?;
+        let mut work = self.lock()?;
         NotificationErrorCodeV1::Invalid.require(now > 0, "delivery time")?;
-        let mut after = None;
-        let mut delivered = 0;
-        loop {
-            let tenants = self
+        let mut tenant = match &work.delivery {
+            Some(cursor) => Some(cursor.tenant),
+            None => self
                 .store
-                .context_tenant_page(NOTIFICATION_STATE_OWNER, after)?;
-            if tenants.is_empty() {
+                .context_tenant_page(NOTIFICATION_STATE_OWNER, None)?
+                .first()
+                .copied(),
+        };
+        let mut after = work
+            .delivery
+            .as_ref()
+            .and_then(|cursor| cursor.context.clone());
+        let mut delivered = 0;
+        let mut examined = 0;
+        while examined < MAX_NOTIFICATION_STATES {
+            let Some(current) = tenant else {
+                work.delivery = None;
                 break;
+            };
+            let page = self.state_page(current, after.as_ref())?;
+            if page.is_empty() {
+                examined += 1;
+                tenant = self
+                    .store
+                    .context_tenant_page(NOTIFICATION_STATE_OWNER, Some(current))?
+                    .first()
+                    .copied();
+                after = None;
+                work.delivery = tenant.map(|tenant| DeliveryCursor {
+                    tenant,
+                    context: None,
+                });
+                continue;
             }
-            for tenant in &tenants {
-                for mut state in self.states(*tenant)? {
-                    if state
-                        .human_acknowledgement
-                        .is_some_and(|ack| ack.finding_revision == state.finding_revision)
-                    {
-                        continue;
-                    }
-                    if state.overdue(now) && state.overdue_since_utc_ns.is_none() {
-                        state.overdue_since_utc_ns = state.deadline_utc_ns;
-                        self.save(&mut state)?;
-                    }
-                    if self.send(
-                        &mut state,
-                        graph,
-                        sink,
-                        NotificationDeliveryKindV1::Finding,
-                        now,
-                    )? {
-                        delivered += 1;
-                    }
-                    if state.failure.is_some()
-                        && self.send(
-                            &mut state,
-                            graph,
-                            sink,
-                            NotificationDeliveryKindV1::FailureEscalation,
-                            now,
-                        )?
-                    {
-                        delivered += 1;
-                    }
-                    if state.overdue(now)
-                        && self.send(
-                            &mut state,
-                            graph,
-                            sink,
-                            NotificationDeliveryKindV1::AcknowledgementEscalation,
-                            now,
-                        )?
-                    {
-                        delivered += 1;
-                    }
+            for mut state in page {
+                delivered += self.deliver_state(&mut state, graph, sink, now)?;
+                after = Some(Self::state_key(&state));
+                work.delivery = Some(DeliveryCursor {
+                    tenant: current,
+                    context: after.clone(),
+                });
+                examined += 1;
+                if examined == MAX_NOTIFICATION_STATES {
+                    break;
                 }
             }
-            after = tenants.last().copied();
         }
         Ok(delivered)
     }
@@ -190,14 +241,50 @@ impl NotificationRouter {
         grant: &NotificationGrantV1,
         now: u64,
     ) -> Result<Vec<NotificationObligationV1>> {
+        let mut states = Vec::new();
+        let mut after = None;
+        loop {
+            let (page, next) = self.obligations_page(grant, after, now)?;
+            NotificationErrorCodeV1::Limit.require(
+                states.len() + page.len() <= MAX_NOTIFICATION_STATES,
+                "notification read count",
+            )?;
+            states.extend(page);
+            let Some(next) = next else {
+                return Ok(states);
+            };
+            after = Some(next);
+        }
+    }
+
+    pub fn obligations_page(
+        &self,
+        grant: &NotificationGrantV1,
+        after: Option<NotificationKeyV1>,
+        now: u64,
+    ) -> Result<(Vec<NotificationObligationV1>, Option<NotificationKeyV1>)> {
         grant.validate()?;
         self.authority.check(grant, now)?;
         NotificationErrorCodeV1::Denied.require(
             now < grant.expires_utc_ns && grant.operations.contains(&NotificationOperationV1::Read),
             "notification read",
         )?;
-        Ok(self
-            .states(grant.tenant_id)?
+        NotificationErrorCodeV1::Denied.require(
+            after.is_none_or(|key| {
+                key.tenant_id == grant.tenant_id && key.notification_id != [0; 16]
+            }),
+            "notification page scope",
+        )?;
+        let cursor = after.map(|key| AnalysisContextKeyV1 {
+            tenant_id: key.tenant_id,
+            owner_id: NOTIFICATION_STATE_OWNER.into(),
+            entity_key: key.notification_id.to_vec(),
+            lifetime_key: b"obligation".to_vec(),
+            owner_revision: 1,
+        });
+        let page = self.state_page(grant.tenant_id, cursor.as_ref())?;
+        let next = page.last().map(|state| state.key);
+        let visible = page
             .into_iter()
             .filter(|state| {
                 state
@@ -206,11 +293,39 @@ impl NotificationRouter {
                     .is_none_or(|route| grant.routes.contains(&route.route_id))
                     && NotificationGrantV1::sensitivity(grant.max_sensitivity, state.sensitivity)
             })
-            .collect())
+            .collect();
+        Ok((visible, next))
     }
 
     pub fn health(&self, grant: &NotificationGrantV1, now: u64) -> Result<NotificationHealthV1> {
-        let states = self.obligations(grant, now)?;
+        let mut after = None;
+        let mut health = NotificationHealthV1 {
+            routing_available: false,
+            configured_routes: 0,
+            obligations: 0,
+            unrouted: 0,
+            failed: 0,
+            overdue: 0,
+            acknowledged: 0,
+        };
+        loop {
+            let (page, next) = self.obligations_page(grant, after, now)?;
+            for state in page {
+                health.obligations += 1;
+                health.unrouted += usize::from(state.route.is_none());
+                health.failed += usize::from(state.failure.is_some());
+                health.overdue += usize::from(state.overdue(now));
+                health.acknowledged += usize::from(
+                    state
+                        .human_acknowledgement
+                        .is_some_and(|ack| ack.finding_revision == state.finding_revision),
+                );
+            }
+            let Some(next) = next else {
+                break;
+            };
+            after = Some(next);
+        }
         let configured_routes = self
             .routes(grant.tenant_id)?
             .iter()
@@ -219,25 +334,9 @@ impl NotificationRouter {
                     && self.authority.check(&route.grant, now).is_ok()
             })
             .count();
-        Ok(NotificationHealthV1 {
-            routing_available: configured_routes > 0,
-            configured_routes,
-            obligations: states.len(),
-            unrouted: states.iter().filter(|state| state.route.is_none()).count(),
-            failed: states
-                .iter()
-                .filter(|state| state.failure.is_some())
-                .count(),
-            overdue: states.iter().filter(|state| state.overdue(now)).count(),
-            acknowledged: states
-                .iter()
-                .filter(|state| {
-                    state
-                        .human_acknowledgement
-                        .is_some_and(|ack| ack.finding_revision == state.finding_revision)
-                })
-                .count(),
-        })
+        health.routing_available = configured_routes > 0;
+        health.configured_routes = configured_routes;
+        Ok(health)
     }
 
     pub fn acknowledge(
@@ -385,7 +484,16 @@ impl NotificationRouter {
                 "concern context sensitivity",
             )?;
         }
-        let mut states = self.states(grant.tenant_id)?;
+        let mut states = self.states_matching(grant.tenant_id, |state| {
+            state
+                .unconfirmed_concern
+                .as_ref()
+                .is_some_and(|prior| prior.concern_id == concern.concern_id)
+                && state
+                    .route
+                    .as_ref()
+                    .is_some_and(|route| route.route_id == route_id)
+        })?;
         if let Some(state) = states.iter().find(|state| {
             state
                 .unconfirmed_concern
@@ -468,9 +576,16 @@ impl NotificationRouter {
         NotificationErrorCodeV1::Denied
             .require(grant.tenant_id == key.tenant_id, "notification tenant")?;
         let state = self
-            .states(key.tenant_id)?
-            .into_iter()
-            .find(|state| state.key == key)
+            .store
+            .context_head(
+                key.tenant_id,
+                NOTIFICATION_STATE_OWNER,
+                &key.notification_id,
+                b"obligation",
+            )?
+            .as_ref()
+            .map(NotificationObligationV1::try_from)
+            .transpose()?
             .ok_or_else(|| {
                 crate::NotificationSnafu {
                     code: NotificationErrorCodeV1::Denied,
@@ -525,8 +640,45 @@ impl NotificationRouter {
             .min()
             .unwrap_or(now);
         if matching.is_empty() {
+            let mut count = 0;
+            for state in states.iter_mut().filter(|state| related(state)) {
+                let prior = state
+                    .finding
+                    .as_ref()
+                    .map(|reference| {
+                        graph.finding_result(
+                            finding.tenant_id,
+                            &reference.result_id,
+                            &reference.finding_id,
+                        )
+                    })
+                    .transpose()?
+                    .flatten();
+                if prior
+                    .as_ref()
+                    .is_none_or(|prior| prior.revision != finding.revision)
+                {
+                    state.finding = Some(NotificationFindingRefV1 {
+                        finding_id: finding.finding_id.clone(),
+                        result_id: result_id.into(),
+                    });
+                    state.finding_revision = state.revision.checked_add(1).ok_or_else(|| {
+                        crate::NotificationSnafu {
+                            code: NotificationErrorCodeV1::Limit,
+                            field: "finding delivery revision",
+                        }
+                        .build()
+                    })?;
+                    state.source_priority = state.source_priority.max(finding.severity.into());
+                    if !NotificationGrantV1::sensitivity(state.sensitivity, finding.sensitivity) {
+                        state.sensitivity = finding.sensitivity;
+                    }
+                    self.save(state)?;
+                    count += 1;
+                }
+            }
             if states.iter().any(related) {
-                return Ok(0);
+                return Ok(count);
             }
             let mut state = self.obligation(finding, result_id, first_seen);
             state.failure = Some(NotificationFailureV1::NoRoute);
@@ -697,8 +849,10 @@ impl NotificationRouter {
         state: &mut NotificationObligationV1,
         states: &mut Vec<NotificationObligationV1>,
     ) -> Result<()> {
-        NotificationErrorCodeV1::Limit
-            .require(states.len() < MAX_NOTIFICATION_STATES, "obligation count")?;
+        NotificationErrorCodeV1::Limit.require(
+            states.len() < MAX_NOTIFICATION_ROUTES + 1,
+            "related obligation count",
+        )?;
         self.save(state)?;
         states.push(state.clone());
         Ok(())
@@ -972,12 +1126,99 @@ impl NotificationRouter {
         NotificationObligationV1::try_from(&version)
     }
 
-    fn states(&self, tenant: [u8; 16]) -> Result<Vec<NotificationObligationV1>> {
+    fn state_page(
+        &self,
+        tenant: [u8; 16],
+        after: Option<&AnalysisContextKeyV1>,
+    ) -> Result<Vec<NotificationObligationV1>> {
         self.store
-            .context_heads(tenant, NOTIFICATION_STATE_OWNER, MAX_NOTIFICATION_STATES)?
+            .context_head_page(tenant, NOTIFICATION_STATE_OWNER, after)?
             .iter()
             .map(NotificationObligationV1::try_from)
             .collect()
+    }
+
+    fn states_matching(
+        &self,
+        tenant: [u8; 16],
+        matches: impl Fn(&NotificationObligationV1) -> bool,
+    ) -> Result<Vec<NotificationObligationV1>> {
+        let mut after = None;
+        let mut states = Vec::new();
+        loop {
+            let page = self.state_page(tenant, after.as_ref())?;
+            let Some(last) = page.last() else {
+                return Ok(states);
+            };
+            after = Some(Self::state_key(last));
+            for state in page.into_iter().filter(&matches) {
+                NotificationErrorCodeV1::Limit.require(
+                    states.len() < MAX_NOTIFICATION_ROUTES + 1,
+                    "related obligation count",
+                )?;
+                states.push(state);
+            }
+        }
+    }
+
+    fn related_states(&self, finding: &FindingV1) -> Result<Vec<NotificationObligationV1>> {
+        self.states_matching(finding.tenant_id, |state| {
+            state
+                .finding
+                .as_ref()
+                .is_some_and(|reference| reference.finding_id == finding.finding_id)
+                && state.required_action == finding.required_action
+        })
+    }
+
+    fn state_key(state: &NotificationObligationV1) -> AnalysisContextKeyV1 {
+        AnalysisContextKeyV1 {
+            tenant_id: state.key.tenant_id,
+            owner_id: NOTIFICATION_STATE_OWNER.into(),
+            entity_key: state.key.notification_id.to_vec(),
+            lifetime_key: b"obligation".to_vec(),
+            owner_revision: state.revision,
+        }
+    }
+
+    fn deliver_state(
+        &self,
+        state: &mut NotificationObligationV1,
+        graph: &GraphAndFindingOwner,
+        sink: &dyn NotificationSink,
+        now: u64,
+    ) -> Result<usize> {
+        if state
+            .human_acknowledgement
+            .is_some_and(|ack| ack.finding_revision == state.finding_revision)
+        {
+            return Ok(0);
+        }
+        if state.overdue(now) && state.overdue_since_utc_ns.is_none() {
+            state.overdue_since_utc_ns = state.deadline_utc_ns;
+            self.save(state)?;
+        }
+        let mut delivered =
+            usize::from(self.send(state, graph, sink, NotificationDeliveryKindV1::Finding, now)?);
+        if state.failure.is_some() {
+            delivered += usize::from(self.send(
+                state,
+                graph,
+                sink,
+                NotificationDeliveryKindV1::FailureEscalation,
+                now,
+            )?);
+        }
+        if state.overdue(now) {
+            delivered += usize::from(self.send(
+                state,
+                graph,
+                sink,
+                NotificationDeliveryKindV1::AcknowledgementEscalation,
+                now,
+            )?);
+        }
+        Ok(delivered)
     }
 
     fn save(&self, state: &mut NotificationObligationV1) -> Result<()> {
@@ -990,18 +1231,7 @@ impl NotificationRouter {
             .build()
         })?;
         state.validate()?;
-        let result = self.persist(
-            &AnalysisContextKeyV1 {
-                tenant_id: state.key.tenant_id,
-                owner_id: NOTIFICATION_STATE_OWNER.into(),
-                entity_key: state.key.notification_id.to_vec(),
-                lifetime_key: b"obligation".to_vec(),
-                owner_revision: state.revision,
-            },
-            state,
-            previous,
-            state.sensitivity,
-        );
+        let result = self.persist(&Self::state_key(state), state, previous, state.sensitivity);
         if result.is_err() {
             state.revision = previous;
         }
@@ -1030,7 +1260,7 @@ impl NotificationRouter {
         Ok(())
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, ()>> {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, WorkCursors>> {
         self.operation.lock().map_err(|_| {
             crate::NotificationSnafu {
                 code: NotificationErrorCodeV1::Unavailable,

@@ -5,6 +5,7 @@ use crate::{ContextSensitivityV1, FindingSeverityV1, GraphRevisionV1, Result};
 
 pub const NOTIFICATION_ROUTE_OWNER: &str = "notification-route-v1";
 pub const NOTIFICATION_STATE_OWNER: &str = "notification-state-v1";
+/// This value limits one read page or one routing or delivery call.
 pub const MAX_NOTIFICATION_STATES: usize = 256;
 pub const MAX_NOTIFICATION_ROUTES: usize = 32;
 
@@ -502,7 +503,7 @@ pub trait NotificationSink: Send + Sync {
     fn deliver(&self, delivery: &NotificationDeliveryV1) -> NotificationSinkResultV1;
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct NotificationHealthV1 {
     pub routing_available: bool,
     pub configured_routes: usize,
