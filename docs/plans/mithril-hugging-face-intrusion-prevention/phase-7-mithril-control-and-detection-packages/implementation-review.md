@@ -3243,7 +3243,7 @@ future owner exists. UI code and the console-only plan family are excluded.
 | [research](research-and-demand.md), [verification contract](verification.md) | Record incident-inspired demand, upstream design references, and acceptance requirements. Research is not a claim that upstream runtime code was copied or deployed. |
 | [proposal plan](phase-7-6-methods-and-preview.md), [classification plan](phase-7-7-agent-investigation-and-classification.md), [publication plan](phase-7-8-console-and-publication.md), [final qualification plan](phase-7-10-qualification.md) | Future Discovery work. No production proposal generator, classifier/model runner, assessment publication API, or new response authority exists in this branch. Console-only implementation is excluded from this guide. |
 | [CLI/API plan](../../araphor-observability/phase-3-cli-api-and-console.md), [declarative capture plan](../../araphor-observability/phase-4-declarative-captures.md) | `araphor sql`, `araphor trace` and shared client gRPC are implemented. Native, browser and current-image physical checks pass. The final Rust procedure passes at `6cb2de82`. The optional Kubernetes Trace resource remains future work. |
-| [Control/detection plan](README.md), [distributed causality plan](../phase-8-kubernetes-distributed-causality.md) | Plan amendments require later detection and graph owners to reuse shared storage and owner-qualified references. These amendments do not implement those owners. |
+| [Control/detection plan](README.md), [distributed causality plan](../phase-8-kubernetes-distributed-causality.md) | Read the graph, finding, notification, and authority owner section below for current source. Distributed causality remains future work. |
 | [response plan](../phase-9-local-and-distributed-response.md), [provider plan](../phase-10-provider-connectors-and-recovery.md), [installation/conformance plan](../phase-11-production-installation-and-final-conformance.md) | Plan amendments keep approval, physical response, provider evidence, recovery, and deployment proof distinct. A diagnostic trace cannot substitute for those results. |
 
 Node diagnostic enablement requires at least five paired runs, the exact
@@ -4596,3 +4596,341 @@ across 77 top-level suites. Read `/tmp/araphor-startup-rust-ci.log`.
 The paired diagnostic run passes with the failed-run production images.
 Read the [investigation record](../../araphor-observability/phase-3-cli-api-and-console.md#protected-start-investigation)
 for its exact inputs and limits. The original startup cause remains unknown.
+
+## Discovery isolation clock correction
+
+Read the [current result](phase-7-5-graphs-findings-and-notifications.md#discovery-isolation-failure)
+and [isolation case](../../../../crates/mithril-e2e/src/discovery/isolation.rs)
+before the source flow below. The unchanged case uses a one-nanosecond raw age
+with a periodic wall-clock sweep. That sweep can remove evidence or diagnostic
+output before the case reads cursor 1.
+
+[ControlConfig::into_parts_with_clock](../../../../crates/mithril-control/src/config.rs)
+receives the production or test clock.
+-> [EvidenceIntakeOwner](../../../../crates/mithril-control/src/evidence.rs)
+uses that clock for intake and periodic retention.
+-> [ControlPlane::exchange_trace](../../../../crates/mithril-control/src/service.rs)
+passes the same clock value to diagnostic append.
+-> [TraceOwner::append_at](../../../../crates/araphor-observability/src/owner.rs)
+commits diagnostic frames with that intake time.
+-> [EvidenceRetentionOwner](../../../../crates/araphor-data/src/analysis/retention.rs)
+applies the existing age and byte limits.
+-> [AnalysisStore::read_raw](../../../../crates/araphor-data/src/analysis/raw.rs)
+returns the existing retained-range error after expiry.
+
+`into_parts` and standalone `TraceOwner::append` keep the system clock.
+The isolation case supplies a fixed clock. Both discovery modes must retain
+trace sequence 1 through restart, remove two evidence records at the explicit
+sweep, and remove one diagnostic record at intake time plus one nanosecond.
+The final diagnostic read must fail with cursor 1 expired. No source type is
+exempt from retention.
+
+The five-file correction is committed at
+`03dbee33bcfd53014d550c95fb8eec8846f723e6`. The exact isolation test passes one
+case, `observability_intake_clock` passes one case, and the trace-owner suite
+passes 11 cases. The standalone `owner-isolation` case passes both modes.
+Read `/tmp/mithril-discovery-isolation-after-638987ce/result.json`.
+These focused checks cover the correction patch on `638987ce`. Later graph,
+routing, and authority changes require the final repository Rust procedure.
+No physical or performance qualification follows from this correction.
+
+## Graph, finding, notification, and authority owners
+
+Read the [current result](phase-7-5-graphs-findings-and-notifications.md#implementation-result)
+for source commits and verification. The paths below identify the implementation.
+They do not replace the recorded lightweight and physical results.
+This section covers code at `dd7e52b500ba6373125d90e4a2d649074798dd0f`.
+
+### Read order and owner boundaries
+
+| Read this source | Check this contract |
+| --- | --- |
+| [graph model](../../../../crates/araphor-data/src/graph/model.rs), [proof model](../../../../crates/araphor-data/src/graph/proof.rs) | Exact tenant, authority, subject lifetime, observation, context, coverage, and missing-range keys. A revision contains canonical values. A result ID identifies a stored row. It does not establish causality. |
+| [graph derivation](../../../../crates/araphor-data/src/graph/derive.rs) | Package inputs, proof checks, contradiction branches, result states, and explicit limits. Native parentage requires the observed child and the same node, boot, and label lifetime. Names and time cannot create an exact edge. |
+| [live graph owner](../../../../crates/araphor-data/src/graph/live.rs), [graph metadata](../../../../crates/araphor-data/src/analysis/graph.rs) | Direct accepted-segment reads, frozen context and coverage, bounded windows, required progress, current finding selection, immutable result lookup, and failure health. |
+| [shared progress](../../../../crates/araphor-data/src/analysis/progress.rs), [accepted append](../../../../crates/araphor-data/src/analysis/raw.rs), [processor health](../../../../crates/araphor-data/src/analysis/health.rs) | Required registration precedes accepted append under the writer lease. One result transaction commits the manifest, exact witnesses, context references, and processor progress. Required retention remains after the graph owner stops. |
+| [Control graph facts](../../../../crates/mithril-control/src/store/graph.rs) | Exact source revision, compiled cell, signed candidate, target, workload lifetime, node generation, and activation acknowledgement. Historical transitions do not replace proof for the observed generation. |
+| [notification model](../../../../crates/araphor-data/src/notification/model.rs), [router](../../../../crates/araphor-data/src/notification/mod.rs) | Approved routes, disclosure limits, priority floors, immutable finding references, bounded attempts, failure escalation, human deadlines, and scoped owner operations. |
+| [Control notification owner](../../../../crates/mithril-control/src/notification.rs), [authority store](../../../../crates/mithril-control/src/store/authority.rs) | Current authorization and durable grant revocation. Restart cannot restore a revoked grant from an equal or older configuration revision. |
+| [authority model](../../../../crates/mithril-control/src/authority/model.rs), [authority owner](../../../../crates/mithril-control/src/authority/mod.rs), [shared proof validation](../../../../crates/mithril-control/src/authority/proof.rs) | Exact signed scope, issuer, key, trust domain, tenant, principal, nonce, resource revision, validity interval, proof, slot, and sequence. Acceptance commits replay state and approval together in ControlStore. |
+| [administrative signer](../../../../crates/mithril-control/src/administrative_exec.rs), [Node proof owner](../../../../crates/mithril-node/src/identity/authorization/mod.rs), [Node replay owner](../../../../crates/mithril-node/src/identity/authorization/replay.rs) | Reuse canonical envelope validation and the replay window. The signer keeps its sequence owner. Node keeps its durable proof and replay owners. |
+| [Control configuration](../../../../crates/mithril-control/src/config.rs), [ControlPlane](../../../../crates/mithril-control/src/service.rs), [server](../../../../crates/mithril-control/src/server.rs) | Graph processing can run with discovery absent. The existing server runs graph and notification maintenance beside intake and policy maintenance. A worker error does not grant policy authority. |
+| [graph query](../../../../crates/araphor-data/src/query/graph.rs), [notification query](../../../../crates/araphor-data/src/query/notification.rs), [extraction](../../../../crates/araphor-data/src/analysis/extraction.rs), [query plan](../../../../crates/araphor-data/src/query/plan.rs) | Authorized source selection precedes graph materialization. Existing extraction and query limits apply. Follow uses shared store revisions. A disabled owner returns an explicit unsupported result. |
+
+### Accepted evidence to immutable findings
+
+```mermaid
+sequenceDiagram
+    participant Node
+    participant Intake
+    participant Store as AnalysisStore
+    participant Graph as GraphAndFindingOwner
+    participant Control as ControlStore
+    participant Router as NotificationRouter
+    participant Sink
+    Node->>Intake: Send WAL evidence
+    Intake->>Store: Commit accepted evidence
+    Graph->>Store: Read accepted segments
+    Graph->>Control: Read exact context
+    Graph->>Store: Commit result, witnesses, progress
+    Router->>Graph: Read current finding receipt
+    Router->>Store: Commit attempt
+    Router->>Sink: Deliver approved notification
+    Router->>Store: Commit delivery result
+```
+
+Control creates the graph and notification owners with the shared store.
+The Node retains its WAL frame until Control acknowledges the accepted frame.
+The graph commit does not change enforcement. The router retains the attempt
+before sink delivery so that restart can retry the same attempt.
+Dropping an owner releases its local lease. The shared store retains committed
+results and obligations under its existing retention and quota rules.
+
+[AnalysisStore accepted append](../../../../crates/araphor-data/src/analysis/raw.rs)
+registers the enabled graph processor before it accepts a new source.
+-> [GraphAndFindingOwner::process](../../../../crates/araphor-data/src/graph/live.rs)
+reads committed evidence from shared segments and restores required progress.
+-> [ControlStore::graph_context](../../../../crates/mithril-control/src/store/graph.rs)
+supplies exact Control facts through `GraphContextProvider`.
+-> [GraphAndFindingOwner::derive](../../../../crates/araphor-data/src/graph/derive.rs)
+compares canonical input values and computes the graph outside the transaction.
+-> [AnalysisStore::commit_graph](../../../../crates/araphor-data/src/analysis/progress.rs)
+checks the exact manifest, witnesses, and cursor before the shared result commit.
+-> [GraphAndFindingOwner::current_findings](../../../../crates/araphor-data/src/graph/live.rs)
+selects the latest committed revision of each exact finding key across source windows.
+
+The owner adds no raw archive, database, or service. The data crate does not
+depend on Control. Context is immutable and uses the existing context store.
+Each window stays within the existing context-reference and result-byte limits.
+The producer limits normal derived windows to 4 MiB and at most 256 records.
+The linked expiry revision uses the shared 16 MiB result limit.
+The shared result limit remains 16 MiB and the native memory limit remains
+64 MiB. The package checkpoint records the window bounds.
+If a window must omit an earlier range, the result records that range as missing.
+It cannot use the omitted range to prove a complete negative result.
+
+The result pins all retained evidence in its input manifest through the existing
+whole-segment witness rules. A late revision keeps the original witness deadline.
+Expired input produces a linked `CoverageInsufficient` revision with
+`RETAINED_INPUT_EXPIRED`. It does not extend the pin or remove the old finding.
+`snapshot(source)` returns the result tied to the last processor progress
+receipt. A late refresh leaves that pointer unchanged. To read a current
+finding, use `current_findings(tenant)` and then `snapshot_result(tenant,
+result_id)`. The latter returns the complete immutable graph for that exact
+finding receipt. It prevents an output bundle from joining a finding to a
+different source window or an earlier refresh revision.
+`current_finding(tenant, finding_id)` returns one exact current receipt.
+`next_current_finding(tenant, after_finding_id)` returns the next finding key.
+Both methods select the highest committed revision of that key across current
+source windows. Each scan holds one graph snapshot and one selected finding.
+The methods use the existing graph operation lock and snapshot reader.
+Required processor failure remains visible in shared processor health, including
+when its consumed cursor has reached the accepted cursor. Existing retention
+bounds govern intake backpressure.
+
+Required registration checks the exact existing scope before it changes
+metadata. A new source first projects pending accepted segments through the
+existing raw owner. Then it commits registration and refreshes the catalog.
+An already registered source skips that refresh. This order preserves pending
+accepted segments from the same source and from other sources.
+
+`HF-PROC-001` uses exact local process, reviewed baseline, executable, and
+operation facts. `HF-DW-001` keeps credential-read completion, socket/request
+binding, provider result, and policy permission separate. File-open admission
+does not prove bytes read. A send admission does not prove a packet or provider
+write. A mmap address does not prove credential bytes. Shared names, principals,
+or tokens can retain a contextual branch but cannot establish an exact lifetime.
+
+The Node canonicalizer stores `EffectPhysicalResultV1` in
+`EvidenceRecord.decision`. `GraphEffectV1.source_decision` preserves that value:
+0 means unknown after admission, 1 means denied before the effect, 2 means a
+packet was dropped after rewrite, and 3 means termination was queued before
+user mode. The ABI field `PhysicalDecisionV1.decision` uses the separate policy
+decision enum. A queued termination does not prove completed termination.
+
+`HF-XNODE-001` retains the schema, package state, partial Kubernetes stage proof,
+and replay contract. Missing Kubernetes bridges or provider result proof remain
+explicit. These records do not qualify cross-node physical causality.
+
+### Finding revision to human obligation
+
+[NotificationRouter::route](../../../../crates/araphor-data/src/notification/mod.rs) The router reads committed findings and current approved routes.
+-> [NotificationRouter::schedule](../../../../crates/araphor-data/src/notification/mod.rs) The router persists one obligation per finding, required action, and route.
+-> [NotificationRouter::deliver](../../../../crates/araphor-data/src/notification/mod.rs) The router reads the next current obligation page.
+-> [NotificationRouter::deliver_state](../../../../crates/araphor-data/src/notification/mod.rs) The router processes finding, failure, and overdue delivery kinds.
+-> [NotificationRouter::send](../../../../crates/araphor-data/src/notification/mod.rs) The router commits a new pending attempt or resumes the retained pending attempt.
+-> [GraphAndFindingOwner::finding_result](../../../../crates/araphor-data/src/graph/live.rs) The router resolves the exact immutable graph result for that attempt.
+-> [NotificationSink::deliver](../../../../crates/araphor-data/src/notification/model.rs) The external sink returns the delivery result.
+-> [NotificationRouter::save](../../../../crates/araphor-data/src/notification/mod.rs) The router commits the sink result after the call.
+
+Notification context stores the existing graph result ID and exact finding key.
+Delivery resolves that row and retains the exact canonical revision. This avoids
+copying a full input manifest into every context body. Each attempt stores the
+exact notification context revision that captured its finding and route. A new
+retry can use an updated approved route. A pending attempt keeps its captured
+route through restart. Retry budgets and human acknowledgements use the
+obligation marker for the canonical finding revision. A route update does
+not reset them.
+
+The source and approved route set minimum priority. A later revision can raise
+the floor. It cannot reset the original deadline. A different required action
+gets a separate obligation. Sink acceptance and agent receipt cannot satisfy
+human acknowledgement. Failure escalation and overdue acknowledgement use
+separate attempt kinds. An accepted failure alert cannot conceal a later overdue
+human obligation. Prior acknowledgements remain in immutable context history;
+a later finding revision requires its own current human acknowledgement.
+
+Scoped reads, `acknowledge`, `record_agent`, and `submit_concern` check the current
+grant, tenant, route, operation, principal type, and sensitivity. An approved
+model concern remains `unconfirmed_concern`. It cannot become a proved finding
+or response grant. A benign label or model refusal cannot lower mandatory
+priority or discharge a human deadline.
+
+Control uses `UnavailableNotificationSink` unless the application supplies a
+sink through `with_sink`. The router records `SinkUnavailable`. The test sink
+proves the router contract; it does not qualify an external provider connector.
+The owner accepts at most 32 routes per tenant.
+One routing call processes at most 256 finding or tenant steps.
+One delivery call processes at most 256 obligation or tenant steps.
+Each finding or related-state lookup can scan multiple bounded pages.
+The owner reads current obligation pages through the shared context reader.
+The aggregate `obligations` method returns at most 256 visible states.
+`obligations_page` returns a continuation key even when disclosure rules hide
+every state in that page. `health` counts all authorized pages.
+Related state holds at most 32 route obligations and one unrouted obligation
+for the same finding and required action.
+
+The router keeps routing and delivery scan positions in memory. The router
+commits progress in each obligation's exact finding reference, revision, and
+attempt state. Restart begins a new scan. An equal committed finding and route
+do not create a new obligation or reset a deadline or retry budget.
+A complete scan returns to earlier keys so that late finding and route revisions
+can update their existing obligations.
+`route_finding` validates the exact current tenant finding and result reference.
+The method calls the same scheduling owner as the default complete scan.
+The default scan still processes all tenant findings.
+
+The first paired physical case finds a tenant with at least 257 current
+findings. Routing fails at the former obligation count limit. The exact
+condition is reproduced in a normal Rust lightweight case before the router
+correction. Read the [count failure record](phase-7-5-graphs-findings-and-notifications.md#physical-finding-count-failure).
+This failure does not qualify the physical notification lifecycle.
+The shared context quota remains 1024 retained revisions per tenant and 4096
+retained revisions in the store.
+
+The corrected Rust case derives 257 findings, closes and reopens AnalysisStore,
+and resumes the default routing scan after the committed 256-state prefix.
+It retains the other 256 states through the selected finding's delivery and
+human acknowledgement. A later scan revisits an earlier canonical finding
+revision and route revision. Delivery reaches the unchanged context quota
+with an explicit `StorageCapacity` error. Read the
+[dense regression result](phase-7-5-graphs-findings-and-notifications.md#physical-finding-count-failure)
+for the exact source, command, case count, and log.
+The [paired physical result](phase-7-5-graphs-findings-and-notifications.md#final-paired-physical-run)
+passes against the original store with 255 current findings. It preserves
+the selected deadline and human acknowledgement and the other 254 obligations.
+The physical count above 256 remains unqualified. The production lightweight
+case supplies that count, restart, and capacity proof.
+
+[AnalysisStore::context_head_page](../../../../crates/araphor-data/src/analysis/context.rs)
+reads current context heads in entity and lifetime order.
+The cursor must have the exact tenant and owner. One page has at most 256
+records and 1 MiB of charged metadata, keys, and bodies.
+One scoped native query joins the current heads to their exact bodies.
+The shared row decoder validates each body before the page byte check.
+This order rejects a malformed body instead of returning a false empty page.
+The [read control](../../../../crates/araphor-data/src/analysis/read.rs) keeps
+its one-second default stage deadline and cancellation checks.
+`context_head` reads one exact tenant, owner, entity, and lifetime head.
+Both methods keep immutable context history and the existing commit quota.
+
+### Signed authority and query limits
+
+[AuthorityLeaseOwner::approve](../../../../crates/mithril-control/src/authority/mod.rs)
+uses the existing administrative signer after the caller authenticates the
+approver. `accept` verifies the exact signed request and current trust record.
+ControlStore commits approval and proof, slot, and sequence replay state together.
+The owner stores no credential secret. An unknown lease has no provider issuance
+proof. The records do not grant response execution. Public API exposure remains
+outside this implementation.
+
+[ControlContextOwner](../../../../crates/mithril-control/src/store/context.rs)
+projects bounded request, approval, lease, and audit summaries into shared
+context. Signed proof bytes remain with Control. ControlStore rejects its prior
+schema at startup; it does not silently omit authority state.
+
+Shared SQL exposes `findings`, `relationships`, `graph_subjects`, `graph_branches`,
+`correlation_packages`, `policy_observations`, and `notifications`. Current
+findings use exact finding keys and committed revisions. Notification rows
+resolve graph references only within the authorized tenant and source selection.
+The query uses the existing tenant, node, source, binding, and investigate grant.
+It preserves sensitivity labels. That query grant has no separate sensitivity
+ceiling. The router applies its own disclosure ceiling to delivery and owner
+operations. Query output does not grant notification or policy authority.
+
+### Checks to read
+
+Read [graph tests](../../../../crates/araphor-data/src/graph/tests.rs),
+[notification tests](../../../../crates/araphor-data/src/notification/tests.rs),
+[authority tests](../../../../crates/mithril-control/src/authority/tests.rs),
+the [query tests](../../../../crates/araphor-data/src/query/graph_tests.rs),
+and [Control provenance tests](../../../../crates/mithril-control/src/store/graph.rs)
+for owner limits. Read the
+[lightweight incident](../../../../crates/mithril-e2e/src/discovery/graph_notification.rs),
+[replay cases](../../../../crates/mithril-e2e/src/discovery/graph_notification/replay.rs),
+and [physical incident](../../../../crates/mithril-e2e/src/discovery/graph_notification/physical.rs)
+for the production-owner sequence and paired result fields. The current result
+must report nonzero focused case counts, the lightweight result before the
+physical result, and the final repository Rust procedure after the last covered
+edit. Observability performance remains **UNQUALIFIED**.
+
+The existing [authorization rejection and replay tests](../../../../crates/mithril-e2e/src/identity/authorization_tests.rs)
+check the shared signature denial through Node. The signature check requires
+the exact typed Control denial, Node permission status, retry hint, and source.
+The rejected proof must not add an acceptance record to the replay WAL.
+The correction at `44368ec549efac0a5eb8842c5cfe3be3a61f3ed0` changes only that
+test assertion. Production owners and both graph-notification qualification
+cases remain identical to the qualified `dd7e52b5` source. Read the
+[final Rust record](phase-7-5-graphs-findings-and-notifications.md#final-repository-rust-procedure)
+for the exact final test source and result. The final procedure passes at
+`44368ec5`: 1709 tests pass, zero fail, and 546 are ignored across 76 top-level
+suites. Formatting, workspace check, and workspace Clippy also pass.
+
+Both incident layers use normal Rust tests. The physical test uses the existing
+Kubernetes platform framework. The added shell entry is removed at
+`2fe83ce0e24da6bf90fdebea83bc26f313266681`. No new shell test framework remains.
+The two proof worktrees are removed after verification that their work is
+committed in the primary checkout. All further work uses that checkout.
+
+### Local source comparison and incident limits
+
+The local `security-analytics` checkout was read at
+`e33c62506efcb15ae795847484357704b539bcf1`. Its `JoinEngine` joins detector
+categories and related documents within a time range. Its
+`VectorEmbeddingsEngine` uses nearest-vector results and a time range.
+`CorrelationRuleScheduler` evaluates rules and configured actions.
+`NotificationService` calls the destination plugin.
+`TransportAckCorrelationAlertsAction` checks backend roles before it updates
+alert acknowledgement records. These sources provide a workflow comparison.
+They do not supply exact native lifetimes, coverage proof, provider completion,
+or the router's original human deadline. No code or dependency was copied.
+
+The new local `discovery-engine` checkout was read at
+`0b5b73425c5aec89b803e737b188b2a331d0e218`, which matches the existing
+[research record](research-and-demand.md). `systemPolicy.go` combines observed
+workload, process, file, and source data. `pathAggregator.go` can replace more
+than three child paths with their directory. Generated directory rules allow
+recursive access. `networkPolicy.go` groups observed ingress and egress by
+workload selector. `policy_deployment.go` reports activation after policy create
+or patch; it has no Node readback proof. The system-log type uses names without
+source boot, epoch, sequence, or image fields. These inputs cannot replace the
+graph's exact lifetime and accepted-record keys. The local source was read
+without changes. Its test suite was not run.
+
+Graph tests reject native parentage across node or boot lifetimes. Kubernetes
+records can preserve partial stage links with
+`CROSS_NODE_CAUSALITY_UNQUALIFIED`. A recorded fixture with two node names does
+not prove a physical connection between those nodes. Hugging Face replay cases
+use recorded inputs and explicit proof limits. They do not reproduce the full
+HDF5, Jinja, token, cloud, or controller environment. Read the current result
+for the exact lightweight and physical cases that ran.

@@ -49,7 +49,7 @@ Implement the graph, finding and notification data owners in `crates/araphor-dat
 keep signed provider-neutral authority records in Control. No second service,
 incident graph, source collector, or query database is required.
 
-Status: **Not done**.
+Status: **Done**.
 
 Implement `GraphAndFindingOwner` under proposed `src/graph/` and
 `NotificationRouter` under proposed `src/notification/` in `araphor-data`.
@@ -171,3 +171,697 @@ No new Appendix C fixture ID, cross-node physical claim, provider issuance
 binding, source publication, or response actuation. Mithril 8 extends this
 graph with Kubernetes causality; Mithril 10 supplies provider bindings.
 Stop before the detection-recipe and proposal work in Phase 7.6.
+
+## Implementation result
+
+Status: **Done**. Implementation and qualification are complete.
+The graph and notification source is `dd7e52b5`. The final workspace Rust
+procedure passes at `44368ec5` after the existing authorization assertion
+correction. The production owners and paired incident source are identical
+between those commits.
+
+### Discovery isolation failure
+
+The unchanged test fails at source
+`638987ce1bac0f22c746141f14c3eba467e0c395` with this command:
+
+```sh
+rtk cargo test -p mithril-e2e --lib discovery::isolation::tests::discovery_owner_service_isolation -- --exact --nocapture
+```
+
+The test returns exit code 101 with 0 passed, 1 failed, and 691 filtered tests.
+One run removes evidence before the raw query. The next run returns
+`RetainedRangeExpired { first_cursor: 1, last_cursor: 1 }` through trace output.
+The error starts in `araphor-data/src/analysis/raw.rs` and passes through
+`araphor-observability/src/error.rs`.
+
+The test sets the shared raw age to one nanosecond. Control runs a periodic
+retention sweep with the wall clock. The sweep can remove evidence or
+diagnostic output before the test reads that input. Diagnostic output uses
+the same retention policy. The correction must control the test clock and
+prove diagnostic expiry. The correction must not exempt diagnostic output
+or increase the retention age to conceal the race.
+
+The correction is **Done** at
+`03dbee33bcfd53014d550c95fb8eec8846f723e6`.
+Control uses the intake clock for retention and diagnostic append. The default
+clock remains the system clock. The isolation case uses a fixed clock. Its
+one-nanosecond age limit remains unchanged. Each mode removes two evidence
+records and then removes one diagnostic record at the next nanosecond.
+The final diagnostic read must return `RetainedRangeExpired` for cursor 1.
+
+The exact isolation test passes one case. The intake-clock test passes one
+case. The trace-owner tests pass 11 cases. Formatting passes. The standalone
+`owner-isolation` command passes both disabled and lagged discovery modes.
+Read `/tmp/mithril-discovery-isolation-after-638987ce/result.json` for the
+recorded cursors, counts, and expiry times. These checks cover the correction
+patch on source `638987ce`, which matches the committed five-file change.
+
+### Committed owner deliverables
+
+| Deliverable | Result and source |
+| --- | --- |
+| Checked context updates and bounded reads | **Done** at `df94c2e0fb7c1fbed381a725d44dcd019fab284e`, `b1d5450d2925be0fe97b9629c0d242bec493007c`, and `f48ed13092d08a995494de5407eb6ea48ecde3d1`. The existing context transaction checks the exact next owner revision and retains an identical retry. Current heads use a bounded native page. |
+| Graph owner, retained results, Control facts, and runtime wiring | **Done** at core source `5f55fba58bced4501d1753a136d4822f2998ec2e` and correction `9f71b53b006c2bbdedfa46fc7b9190c5b1f18b5e`. Thirty graph/query cases and two Control cases pass. |
+| Data notification router | **Done** at `8810c9d2014ed8e89c96a5649fb348a2844e7344` and bounded correction `d9ba9308e7c42b8bbe956e604d111d1696887336`. Ten focused cases pass after the correction. Each attempt retains its exact context revision through restart. A route update retains the finding retry budget and human deadline. |
+| Control authority, durable grants, and shared signed-proof validation | **Done** at `6eaa1655b00ffc9e05d5bfd8dc4f69fea774a4c9`. Six authority cases, one grant-revocation case, and 12 Node proof and replay regressions pass. |
+| Query projections | **Done** at `7854457b8c63b9f592ddd9c68c63554d8cbce5e8`. The query family passes 144 cases. Eight graph query cases pass after the outcome correction. |
+| Lightweight incident | **Done** at `870e8c072714ea772f1f0eef75ec09f2a30ed97c` and final source `dd7e52b500ba6373125d90e4a2d649074798dd0f`. The fresh CLI case includes the 257-finding regression. The earlier Rust round-trip test also passes. |
+| Paired physical incident | **Done** at `dd7e52b500ba6373125d90e4a2d649074798dd0f`. The Rust Kubernetes case passes one test with 694 filtered tests. |
+| Final Rust procedure | **Done** at `44368ec549efac0a5eb8842c5cfe3be3a61f3ed0`. Formatting, workspace check, workspace Clippy, and all-target, all-feature tests pass. The final count is 1709 passed, zero failed, and 546 ignored across 76 top-level suites. |
+
+The router patch passes `cargo check -p araphor-data -p mithril-control
+--all-features --all-targets` without warnings in the isolated proof checkout.
+Its focused command passes 9 cases with 319 filtered tests:
+
+```sh
+rtk proxy cargo test -p araphor-data --all-features --lib control_notification_ -- --test-threads=1
+```
+
+Read `/tmp/mithril-notification-foundation-check.log` and
+`/tmp/mithril-notification-staged-unit.log`.
+
+These focused commands cover the committed Control authority and grant code:
+
+```sh
+rtk proxy cargo test -p mithril-control --all-features --lib control_authority_ -- --test-threads=1
+rtk proxy cargo test -p mithril-control --all-features --lib control_notification_ -- --test-threads=1
+rtk proxy cargo test -p mithril-node --lib identity::authorization -- --test-threads=1
+```
+
+The counts are 6 passed with 172 filtered, 1 passed with 177 filtered, and
+12 passed with 271 filtered. Read `/tmp/mithril-authority-commit-unit.log`,
+`/tmp/mithril-control-notification-commit-unit.log`, and
+`/tmp/mithril-authority-node-commit-regression.log`. These checks do not replace
+the final Rust procedure.
+
+### Production outcome interpretation
+
+The lightweight case uses the production Node canonicalizer, WAL, and mutual
+TLS intake. It exposed a missing finding for a real denied event before the
+physical incident ran. The canonicalizer stores `EffectPhysicalResultV1` in
+the accepted record's `decision` field. Denied-before-effect has value 1.
+The initial graph code compared this field with policy decision `Deny`, whose
+value is 2. Direct unit fixtures used the same wrong value and concealed the
+error. The initial one-finding assertion failed. The final round-trip log
+records the passing case after the correction.
+
+The correction is **Done** at `9f71b53b006c2bbdedfa46fc7b9190c5b1f18b5e`.
+The graph uses the existing physical outcome enum. Value 1 with a negative
+kernel result gives `Prevented`. Value 2 gives `PacketDropped` with syscall,
+provider, and content limits. Value 3 gives `TerminationQueued` with a completion
+limit. Value 0 remains `Unknown`. Denied, dropped, and queued outcomes cannot
+supply credential-byte or direct channel-completion proof. Node is unchanged.
+The owner also supplies `snapshot_result(tenant, result_id)` for an exact
+immutable graph/finding bundle.
+
+These focused commands pass after the correction:
+
+```sh
+rtk cargo test -p araphor-data --all-features control_graph_ -- --nocapture
+rtk cargo test -p mithril-control --all-features control_graph_ -- --nocapture
+```
+
+The Data count is 30 passed with 307 filtered: 22 graph owner cases and eight
+query cases. The Control unit count is two passed with 175 filtered. Read
+`/tmp/mithril-graph-normalized-data-unit.log` and
+`/tmp/mithril-graph-normalized-control-unit.log`. The exact staged correction
+also passes `cargo check -p araphor-data -p mithril-control --all-features
+--all-targets` without warnings in the isolated proof checkout. Read
+`/tmp/mithril-graph-normalized-staged-check.log`.
+
+The query commands are:
+
+```sh
+rtk cargo test -p araphor-data --all-features query_ -- --nocapture
+rtk cargo test -p araphor-data --all-features control_graph_query_ -- --nocapture
+```
+
+The first count is 144 passed with 192 filtered. The second count is eight
+passed with 329 filtered after the physical outcome correction. Read
+`/tmp/mithril-graph-query-verification-20261008.txt` for the query receipt.
+That file is a receipt, not a complete test log.
+
+### Rust incident tests and checkout cleanup
+
+The lightweight case uses `crates/mithril-e2e/src/discovery/graph_notification.rs`.
+Replay and physical cases use Rust in
+`crates/mithril-e2e/src/discovery/graph_notification/`. The physical incident
+uses the existing Kubernetes platform test framework. The added shell entry
+is removed at `2fe83ce0e24da6bf90fdebea83bc26f313266681`.
+No new shell test framework remains.
+
+All work continues in the provided primary checkout. The two proof worktrees,
+`discovery-retention-proof` and `mithril-graph-proof`, are removed. Each of the
+five modified retention files was equal to its committed file at `03dbee33`.
+The graph proof checkout was clean, and its commit was already an ancestor
+of `main`. The test-refactor worktree was not changed.
+
+### Lightweight incident result
+
+These commands pass at `870e8c072714ea772f1f0eef75ec09f2a30ed97c`:
+
+```sh
+rtk proxy cargo run -p mithril-e2e --bin mithril_discovery_test -- --case graph-notification --output-directory /tmp/mithril-graph-notification-lightweight-20261008
+rtk proxy cargo test -p mithril-e2e --lib graph_notification_roundtrip -- --nocapture --test-threads=1
+```
+
+The Rust test passes one case with 693 filtered tests. Read
+`/tmp/mithril-graph-notification-lightweight.log`,
+`/tmp/mithril-graph-notification-roundtrip.log`, and
+`/tmp/mithril-graph-notification-lightweight-20261008/result.json`.
+The case runs production Node canonicalization, WAL, mutual TLS intake,
+AnalysisStore, graph, Control context, authority, and notification owners with
+optional discovery disabled. Reordered duplicate delivery produces accepted
+cursors `[0, 0, 2, 2]` and acknowledgements `[null, null, 2, 2]`.
+The pending range returns `UNAVAILABLE` until the earlier range is accepted.
+Canonical replay values remain equal. An injected result-commit failure does
+not advance graph progress.
+
+The result retains 12 recorded incident cards, nine read-result variants,
+five send-stage variants, and four local coverage and activation contracts.
+Signed proof mismatch, expiry, replay, foreign scope, and store restart remain
+explicit. The notification has one obligation and the original deadline,
+`1791400000000000100`. Its transitions are unrouted, required route, failed
+delivery, restart, retry, overdue human acknowledgement, and human
+acknowledgement. A benign model label and agent receipt do not discharge it.
+
+This result qualifies recorded package replay. It does not reproduce the full
+HDF5, Jinja, token, cloud, or controller environment. The two-node fixture
+qualifies schema and owner replay only. Cross-node physical causality and
+provider issuance remain unqualified.
+
+### Final source corrections
+
+`2917354f10db3a89a955e6b1a3c757000d49ae0a` resolves graph lint errors.
+The Kubernetes fact check keeps the same invalid-input predicate. Two fixtures
+use references instead of cloned one-element slices. The graph library passes
+Clippy, and the Kubernetes partial-stage test passes one case with 336 filtered.
+
+`6aeb308b98985134d2ff05206389612ecbde56a5` resolves the remaining owner and
+fixture lint errors. The new CBOR decode error uses the existing boxed-source
+pattern. It preserves the error source, status, and retry result. Existing Node
+policy callers are unchanged. Rust fixtures propagate missing values and lock
+errors. Pending intake uses an explicit `Err(ControlRpc)` pattern.
+
+Data, Control, Node, and E2E pass this command after those corrections:
+
+```sh
+rtk proxy cargo clippy -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-targets --all-features -- -D warnings
+```
+
+Read `/tmp/mithril-graph-owner-clippy-final-boxed.log`.
+The router passes nine cases with 328 filtered, authority passes six with
+172 filtered, and Node proof and replay pass 12 with 271 filtered. Read
+`/tmp/mithril-notification-test-lint-unit.log`,
+`/tmp/mithril-authority-boxed-unit.log`, and
+`/tmp/mithril-authority-boxed-node-regression.log`.
+These checks do not replace the final repository procedure.
+
+### Physical finding count failure
+
+The lightweight CLI case passes again at
+`6aeb308b98985134d2ff05206389612ecbde56a5`:
+
+```sh
+rtk proxy cargo run -p mithril-e2e --bin mithril_discovery_test -- --case graph-notification --output-directory /tmp/mithril-graph-notification-lightweight-6aeb308
+```
+
+Read `/tmp/mithril-graph-notification-lightweight-frozen.log` and
+`/tmp/mithril-graph-notification-lightweight-6aeb308/result.json`.
+The production images and Rust test binary in the existing qualification VM
+match the source receipt in
+`/tmp/mithril-graph-notification-provenance-6aeb308.json`.
+
+The paired Rust physical case reaches accepted Node evidence through the WAL
+and mutual TLS intake. A denied file open returns errno 13 and zero bytes.
+The benign read returns errno zero and positive bytes. The committed physical
+graph decision matches the lightweight `initial-health-missing` decision.
+The finding state is `COVERAGE_INSUFFICIENT`. The effect is `PREVENTED`, but
+native ancestry, exact policy provenance, and source coverage remain missing.
+The policy stage records `ACTIVATION_ACKNOWLEDGEMENT_MISSING`.
+Routing then fails with `Notification { code: Limit, field: "obligation count" }`.
+The test returns 0 passed, 1 failed, and exit code 101. It does not qualify the
+notification lifecycle. Read `/tmp/mithril-graph-notification-physical.log` and
+`/tmp/mithril-graph-notification-physical-observed-6aeb308.json`.
+The existing VM runner sources `/var/tmp/mithril-manual.env` and runs this
+Rust test:
+
+```sh
+"$MITHRIL_TEST_BIN" discovery::graph_notification::physical::graph_notification_incident --exact --ignored --nocapture --test-threads=1
+```
+
+Read `/tmp/mithril-graph-notification-physical-invocation-6aeb308.json` for the
+exact VM UUID, provider operation, environment, input, output, and failure.
+
+The router reads all current obligations into one tenant collection. It rejects
+the 257th obligation. The physical tenant has at least 257 current findings;
+the failed case did not export the exact total before resource cleanup.
+The shared context quota is separate: 1024 retained revisions per tenant and
+4096 retained revisions in the store. Those limits must remain unchanged.
+
+This normal Rust case reproduces the exact count condition before the owner
+correction:
+
+```sh
+rtk proxy cargo test -p mithril-e2e --lib graph_notification_dense_unrouted_limit -- --nocapture --test-threads=1
+```
+
+It passes one case with 694 filtered tests. It uses production Node WAL,
+intake, graph, and routing owners. It derives 257 findings, requires the exact
+limit error, retains 256 unrouted obligations, and leaves all findings intact.
+Read `/tmp/mithril-graph-notification-density-light.log`.
+The fixture patch for this reproduction against `6aeb308b` is retained at
+`/tmp/mithril-graph-notification-density-before-6aeb308.patch`.
+At that source, the correction and paired rerun are **Not done**.
+
+The shared page and exact lookup correction is **Done** at
+`b1d5450d2925be0fe97b9629c0d242bec493007c`.
+`context_head_page` retains the existing 256-record and 1 MiB page bounds.
+`context_head` reads one exact tenant, owner, entity, and lifetime head.
+The graph supplies exact current and next finding receipts across overlapping
+source windows. The store schema, context quotas, and existing aggregate methods
+remain unchanged.
+
+These commands each pass one case with 337 filtered tests:
+
+```sh
+rtk proxy cargo test -p araphor-data --all-features control_graph_context_head_pages -- --nocapture
+rtk proxy cargo test -p araphor-data --all-features control_graph_committed_revision_retry_late_expiry_and_restart -- --nocapture
+rtk proxy cargo test -p araphor-data --all-features control_graph_window_boundary_preserves_credential_join -- --nocapture
+```
+
+Read `/tmp/mithril-notification-pages-context-unit-20261008.log`,
+`/tmp/mithril-notification-pages-late-unit-20261008.log`, and
+`/tmp/mithril-notification-pages-overlap-unit-20261008.log`.
+Data also passes Clippy with all targets and features and warnings denied.
+Read `/tmp/mithril-notification-pages-clippy-20261008.log`.
+
+The original router filter passes on the paging correction with nine cases and
+329 filtered tests:
+
+```sh
+rtk proxy cargo test -p araphor-data --all-features --lib control_notification_ -- --test-threads=1
+```
+
+Read `/tmp/mithril-notification-paged-original-unit-20261008.log`.
+At that check, the new count and restart regression, fresh lightweight incident,
+and paired physical rerun are **Not done**.
+
+The extended router filter passes ten cases with 329 filtered tests.
+The added case checks continuation across a page with no visible state,
+foreign page and finding scope, an old current-result reference, concern
+deduplication after the first page, and exact human acknowledgement of a state
+after that page. Read `/tmp/mithril-notification-paged-owner-unit-20261008.log`.
+The command is the same `control_notification_` filter shown above.
+
+The new dense Rust regression compiles, then returns `AnalysisReadDeadline`
+after 300.43 seconds. The deadline error comes from the shared read control.
+Its default stage deadline is one second. The test's total time does not set
+that deadline. Read
+`/tmp/mithril-notification-paged-density-read-deadline-20261008.log`.
+The initial error does not identify the read operation. No deadline or quota
+is increased to pass the case.
+The stage rerun returns the same deadline error after 262.35 seconds inside
+the first default `router.route` call. No store reopen or delivery has started.
+Read `/tmp/mithril-notification-paged-density-stage-20261008.log`.
+The related-state page used one head query and up to 256 body queries inside
+one read stage. The correction must read one scoped native page and preserve
+the existing key, body, page, cancellation, and deadline checks.
+
+The shared reader correction is **Done** at
+`f48ed13092d08a995494de5407eb6ea48ecde3d1`.
+One scoped native query selects current heads and their exact bodies.
+The existing row decoder validates each version before the page byte check.
+A malformed body cannot become a false empty page at that check.
+The returned page stays within 256 records and 1 MiB. Body validation stays
+within 32 KiB. The native memory budget, deadline, cancellation, schema,
+and context quotas remain unchanged.
+
+These commands pass:
+
+```sh
+rtk proxy cargo test -p araphor-data --all-features --lib control_graph_context_head_pages -- --test-threads=1
+rtk proxy cargo clippy -p araphor-data --all-targets --all-features -- -D warnings
+```
+
+The count is one passed with 338 filtered tests. Clippy returns exit code zero
+without warnings. Read
+`/tmp/mithril-notification-context-native-page-unit-20261008.log` and
+`/tmp/mithril-notification-context-native-page-clippy-20261008.log`.
+The dense case passes after this correction. At that run, the router and Rust
+incident changes were pending in the primary checkout:
+
+```sh
+rtk proxy cargo test -p mithril-e2e --lib graph_notification_dense_progress_and_capacity -- --nocapture --test-threads=1
+```
+
+The count is one passed with 694 filtered tests. The run takes 1135.36 seconds.
+Read `/tmp/mithril-notification-paged-density-native-page-20261008.log`.
+The case derives 257 findings through production Node WAL and intake owners.
+The first routing call commits 256 obligations. The case closes and reopens
+the same AnalysisStore. It verifies the retained prefix, then commits the last
+obligation through the default routing owner.
+
+The selected finding retains failed delivery, retry, the original human
+deadline, and human acknowledgement while the other 256 obligations remain
+unchanged. A complete scan revisits an earlier key after a late canonical
+finding revision and an approved route revision. The old finding receipt
+remains immutable. An old human acknowledgement does not discharge the new
+finding revision. The final delivery scan returns the existing
+`StorageCapacity { resource: "tenant retained revisions" }` error at the
+1024-revision quota. All 257 findings and obligations remain available.
+No quota or read deadline is increased. This is a functional qualification.
+At that check, the fresh lightweight incident and paired physical rerun are
+**Not done**.
+
+The final router filter passes after the native page correction and removal
+of temporary test output:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 cargo test -p araphor-data --all-features --lib control_notification_ -- --test-threads=1
+```
+
+The count is ten passed with 329 filtered tests. The run takes 30.40 seconds.
+Read `/tmp/mithril-notification-paged-owner-final-20261008.log`.
+`CARGO_INCREMENTAL=0` disables the generated build cache. It does not change
+test or storage behavior.
+
+The final Data, Control, Node, and E2E Clippy command passes without warnings:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 cargo clippy -p araphor-data -p mithril-control -p mithril-node -p mithril-e2e --all-targets --all-features -- -D warnings
+```
+
+The run returns exit code zero in 17.59 seconds. Read
+`/tmp/mithril-notification-paged-four-package-clippy-20261008.log`.
+The first attempt found a redundant `Id128V1` conversion in the dense fixture.
+The conversion is removed. Read
+`/tmp/mithril-notification-paged-four-package-clippy-conversion-20261008.log`
+for that failed attempt. The fresh lightweight result must cover this last
+fixture edit.
+
+A source review finds a missing assertion in the physical fixture. Its bounded
+graph-processing loop can end before both incident cursors are consumed.
+The fixture now requires both exact processor-health receipts before it checks
+the benign record for absence of a finding. No production owner changes.
+The first fresh lightweight run is stopped after this assertion edit, with
+exit code 143. Read
+`/tmp/mithril-graph-notification-lightweight-paged-interrupted-assertion-20261008.log`.
+That interrupted run is not a passing result.
+The same four-package Clippy command passes after the assertion edit in
+18.90 seconds, without warnings. Workspace formatting also passes. Read
+`/tmp/mithril-notification-paged-four-package-clippy-final-20261008.log`.
+
+The router correction is committed at
+`d9ba9308e7c42b8bbe956e604d111d1696887336`.
+The Rust count, lifecycle, and physical assertion changes are committed at
+`dd7e52b500ba6373125d90e4a2d649074798dd0f`.
+The final Clippy and formatting checks cover these six source files.
+The fresh lightweight and paired physical results are **Done**.
+The two final result sections below state their commands and proof limits.
+
+### Final lightweight result
+
+This command passes on source
+`dd7e52b500ba6373125d90e4a2d649074798dd0f`:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case graph-notification --output-directory /tmp/mithril-graph-notification-lightweight-paged-final-v2-20261008
+```
+
+Read `/tmp/mithril-graph-notification-lightweight-paged-final-v2-20261008.log`
+and `/tmp/mithril-graph-notification-lightweight-paged-final-v2-20261008/result.json`.
+The result is `PASS`, qualification is `LIGHTWEIGHT`, and optional discovery
+is disabled. It retains 12 incident cards, nine read-result variants, five
+send-stage variants, and four local coverage and activation contracts.
+Accepted cursors remain `[0, 0, 2, 2]`, and acknowledgements remain
+`[null, null, 2, 2]`. The pending range is `UNAVAILABLE`. Canonical replay is
+equal, and failed result commit preserves progress.
+
+`NOTIFICATION-DENSITY-001` is `PASS`. It retains 257 findings and obligations,
+the reopened store, the unchanged prefix, and progress to the last obligation.
+The complete scan revisits the earlier finding and route revision 2.
+The original deadline, priority floors, and attempts remain unchanged.
+The page and work bounds remain 256. The quotas remain 1024 tenant revisions
+and 4096 global revisions. The recorded error is `STORAGE_CAPACITY` for
+`tenant retained revisions`. At that error, health retains 257 obligations,
+zero unrouted obligations, and 256 overdue obligations.
+
+The result does not qualify cross-node physical causality, provider issuance,
+response execution, or performance. The paired physical result must use this
+exact expected result and the matched source artifacts in
+`/tmp/mithril-graph-notification-provenance-dd7e52b5.json`.
+The command returns exit code zero. The expected result file has SHA-256
+`6e1e0098e544ad98d1a3d0f3495089f0fbf4a324903b8e62aa6ca6a6bae16edf`.
+Its copied guest file has the same hash.
+
+### Final paired physical run
+
+The matching Rust physical case starts on source `dd7e52b5` after the fresh
+lightweight result passes. The existing VM is
+`mithril-runtime-qualification-1337814`, UUID
+`8512ec77-3d93-4376-842d-adebedb6620d`.
+The host and guest binary hashes and image IDs match.
+Read `/tmp/mithril-graph-notification-physical-invocation-dd7e52b5.json` for the
+exact provider command, environment, source, test filter, input hash, and output.
+Read `/tmp/mithril-graph-notification-physical-dd7e52b5.log` for the test log.
+The paired lifecycle is **Done**. The Rust test returns exit code zero with
+one passed, zero failed, and 694 filtered tests in 846.85 seconds.
+The exact command is:
+
+```sh
+"$MITHRIL_TEST_BIN" discovery::graph_notification::physical::graph_notification_incident --exact --ignored --nocapture --test-threads=1
+```
+
+The run exports its graph input before notification completes. Read
+`/tmp/mithril-graph-notification-physical-dd7e52b5/observed-graph-input.json`
+and `observed-graph-decision.json` in the same directory.
+The actual current finding count is 255. This rerun does not qualify a physical
+count above 256. The exact count-limit condition remains qualified by the
+257-finding production lightweight case.
+The accepted denied and allowed records have cursors 806 and 815 in the same
+exact source lifetime. Both are consumed before finding selection.
+The original volume is used, and pending evidence is zero.
+The graph decision matches `initial-health-missing`: `COVERAGE_INSUFFICIENT`,
+`UNEXPECTED_EFFECT`, Critical, and `inspect-denied-effect`.
+The native effect is `PREVENTED`, decision 1, with configured and kernel errno
+`-13`. Task binding is exact, operation authority is pre-effect, and transport
+integrity is authenticated. Temporal coverage is unknown. Native ancestry,
+policy provenance, source coverage, and activation acknowledgement remain
+missing. These limits must remain in the final result.
+
+Read `/tmp/mithril-graph-notification-physical-dd7e52b5/result.json` and
+`graph.json` in the same directory for the final copied artifacts.
+The result is `PASS` with `KUBERNETES` qualification.
+The protected open returns errno 13 and zero bytes. The benign read returns
+errno zero and 558 bytes. Canonical replay is equal. ControlStore reopens
+against the original volume. Pending evidence is zero.
+
+The notification has the same result fields and seven transitions as the
+lightweight notification. Its original deadline is `1791478501485624490`.
+Critical priority, failed delivery, retry, overdue human acknowledgement,
+and the human receipt remain in the retained obligation.
+The other 254 obligations remain unchanged. Final health records 255
+obligations, one human acknowledgement, and 254 unrouted obligations.
+The test uses the exact current committed finding operation and retains one
+obligation per finding, required action, and route.
+
+This result qualifies one protected file-open denial and one benign read
+through the real kernel, Node WAL, mutual TLS intake, Control context, graph,
+and notification owners. It does not qualify HDF5, Jinja, projected-token
+semantics, controller operations, remote payload, cloud effects, provider
+issuance, cross-node physical causality, or performance.
+The copied graph manifest equals the selected finding revision.
+The paired decision and all seven transitions equal the fresh lightweight
+contract. Read `qualification-receipt.json` in the same artifact directory
+for each file hash and the exact namespace cleanup proof.
+The two namespace API responses have empty `items` for
+`mithril-pid-33808-523653838` and
+`mithril-work-graph-notification-33808-523653838`.
+
+### Verification storage recovery
+
+The first full procedure at `6aeb308b` passes formatting, workspace check,
+and workspace Clippy. Test compilation then fails with
+`No space left on device` for the Control binary and E2E library test.
+The log writer also fails. Read
+`/tmp/mithril-graph-final-rust-ci-disk-6aeb308.log`; its capture note identifies
+the part that the runner returned after the disk could no longer write the log.
+This run does not qualify the full test suite.
+
+No primary Cargo or Rust compiler process remained before cache removal.
+The cleanup removes only 109 generated incremental-cache directories for the
+five changed crates, with update times after this goal started. It recovers
+`33123164160` bytes. Source, built binaries, native libraries, other crate
+caches, and the test-refactor checkout remain available. Read
+`/tmp/mithril-owned-incremental-cleanup-20261008.json` for each removed path.
+The imported image export is also removed. Source was `6aeb308b` during cleanup.
+That failure required a new run after this recovery.
+
+After the final source builds stop at `dd7e52b5`, a second cleanup removes
+nine new incremental-cache directories for the same five crates. Their path
+inventory totals `7589453824` allocated bytes. Free storage rises from 15 GiB
+to 21 GiB while VM file copies run. The separate test-refactor workspace is running
+its own test binary and remains untouched. Source, final binaries, and images
+remain available. Read
+`/tmp/mithril-owned-incremental-cleanup-final-20261008.json` for the exact paths
+and source. The final build uses `CARGO_INCREMENTAL=0`.
+
+The owned VM cleanup is **Done**. The existing command is:
+
+```sh
+rtk proxy env XDG_STATE_HOME=/tmp/mithril-graph-notification-vm-state MITHRIL_VM_WORK_ROOT=/tmp/mithril-graph-notification-vm-work bash crates/mithril-e2e/harness/vm/manual.sh destroy
+```
+
+It returns exit code zero. The exact owned domain, work directory, and state
+record are absent. Both owned namespaces were absent before VM removal.
+Physical artifacts remain in `/tmp/mithril-graph-notification-physical-dd7e52b5/`.
+Free host storage is 29 GiB after cleanup. Read
+`/tmp/mithril-graph-notification-vm-cleanup-dd7e52b5.json` and its `.log` file.
+
+### Final repository Rust procedure
+
+Status: **Done** at `44368ec549efac0a5eb8842c5cfe3be3a61f3ed0`.
+The final procedure passes after the last covered edit.
+The first full procedure ran on code source
+`dd7e52b500ba6373125d90e4a2d649074798dd0f` after the covered edits at that source:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=4 bash -c 'set -o pipefail
+bash .github/scripts/verify-rust-ci.sh 2>&1 | tee /tmp/mithril-graph-final-rust-ci-dd7e52b5.log'
+```
+
+It runs workspace formatting, check, Clippy with all targets and features and
+warnings denied, then tests with all targets and features. The environment
+limits build and test concurrency and disables the incremental cache.
+It does not omit packages, targets, features, or tests.
+For that run, only the result and review documents differed from the code source.
+
+Formatting, workspace check, and workspace Clippy pass. Test linking fills
+the disk. The `erebor-codex-hook` test and `araphor-cli` library test return
+linker signal 7, `Bus error`. The log writer returns `No space left on device`.
+The procedure returns exit code one. It does not qualify the full test suite.
+The log ends inside a linker command. Read
+`/tmp/mithril-graph-final-rust-ci-disk-dd7e52b5.json` for the capture note and
+runner outcome after log capture stops.
+
+No Cargo, Rust compiler, or Clippy process remains before cleanup.
+The cleanup removes sixteen inactive test executables for the same five crates.
+Each file was generated after this goal started and before the final code
+commit. The path inventory totals `17411104768` allocated bytes. The final
+physical binary and the final focused Data binary remain available.
+No source, native library, image, or other workspace is removed.
+Read `/tmp/mithril-owned-obsolete-test-binary-cleanup-dd7e52b5.json` for each
+path, inode, size, time, and removal. Free storage is 17 GiB after cleanup.
+
+The complete procedure ran again on unchanged source:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=4 bash -c 'set -o pipefail
+bash .github/scripts/verify-rust-ci.sh 2>&1 | tee /tmp/mithril-graph-final-rust-ci-dd7e52b5-v2.log'
+```
+
+One build job reduces peak temporary link storage. All packages, targets,
+features, and tests remain in the procedure.
+
+Formatting, workspace check, workspace Clippy, and test compilation pass.
+The E2E suite returns 168 passed, one failed, and 526 ignored in 1472.39 seconds.
+Both `graph_notification_dense_progress_and_capacity` and
+`graph_notification_roundtrip` pass. The procedure returns exit code 101.
+It does not qualify the full workspace suite.
+
+The failure is `identity::authorization_tests::invalid_auth_is_rejected`.
+The test expects the old `Ed25519 verification failed` diagnostic.
+The shared validator still rejects the changed signature with `verify_strict`.
+Node retains the typed Control denial in `Error::AuthorizationProof` with
+`PermissionDenied` and `NonRetryable`. Validation fails before replay acceptance.
+The exact unchanged test reproduces the failure with zero passed, one failed,
+and 694 filtered tests in 0.11 seconds:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p mithril-e2e --lib identity::authorization_tests::invalid_auth_is_rejected -- --exact --nocapture --test-threads=1
+```
+
+Read `/tmp/mithril-authorization-invalid-original-dd7e52b5-20261009.log`.
+The correction must check the exact typed denial and preserve the replay-WAL
+assertion. It must not change the production validator or accept the signature.
+
+The correction is **Done** at
+`44368ec549efac0a5eb8842c5cfe3be3a61f3ed0`.
+Only the existing `identity/authorization_tests.rs` assertion changes.
+It requires Node `AuthorizationProof`, Control `Authority` with `Denied` and
+`field: "intent signature"`, `PermissionDenied`, `NonRetryable`, and the typed
+Control source. The replay WAL must still contain only its two owner records.
+The production owners and graph-notification qualification source are identical
+to `dd7e52b5`. The lightweight and physical receipts retain that exact source;
+the final workspace procedure must also cover the corrected test source.
+
+The existing authorization tests and E2E Clippy pass:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p mithril-e2e --lib identity::authorization_tests:: -- --nocapture --test-threads=1
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p mithril-e2e --all-targets --all-features -- -D warnings
+```
+
+The tests return two passed, zero failed, and 693 filtered in 0.10 seconds.
+Clippy returns exit code zero without warnings in 22.94 seconds.
+Read `/tmp/mithril-authorization-typed-boundary-unit-20261009.log` and
+`/tmp/mithril-authorization-typed-boundary-clippy-20261008.log`.
+
+The complete Node suite also passes at `44368ec5`:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=4 cargo test -p mithril-node --all-targets --all-features
+```
+
+The library has 282 passed and one ignored test. Binary and integration tests
+add 12 passed tests. The total is 294 passed, zero failed, and one ignored.
+Read `/tmp/mithril-node-full-after-typed-authorization-44368ec5-20261008.log`.
+
+That separate build leaves 4.0 GiB free. With no active Cargo or Rust compiler,
+the cleanup removes its six inactive test executables. Each exact path comes
+from the Node run's Cargo `Running` record. Each file is newer than the test
+correction commit. The cleanup checks its parent, inode, size, time, and absence
+from active process executables before removal. The path inventory totals
+`4524412928` allocated bytes. Source, libraries, images, and result records
+remain available. Free storage is 8.2 GiB after cleanup. Read
+`/tmp/mithril-owned-node-preflight-binary-cleanup-44368ec5.json`.
+
+The final complete procedure passes on the corrected test source:
+
+```sh
+rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=4 bash -c 'set -o pipefail
+bash .github/scripts/verify-rust-ci.sh 2>&1 | tee /tmp/mithril-graph-final-rust-ci-44368ec5-v3-20261009.log'
+```
+
+Its source is `44368ec549efac0a5eb8842c5cfe3be3a61f3ed0`.
+Only the result and review documents differ from that committed source.
+The command retains all workspace packages, targets, features, and tests.
+
+The runner returns exit code zero. Formatting, workspace check, and workspace
+Clippy with warnings denied pass. Test compilation passes in 68 seconds.
+All 76 top-level test suites pass: 1709 passed, zero failed, 546 ignored,
+zero measured, and zero filtered tests. Each Cargo `Running` block contributes
+its last test summary. The count excludes seven subprocess-helper summaries.
+An independent read of the complete log gives the same totals.
+
+| Suite | Final result |
+| --- | --- |
+| Data library | 336 passed, zero failed, three ignored; 245.08 seconds. |
+| Control library | 177 passed, zero failed, one ignored; 11.44 seconds. |
+| E2E library | 169 passed, zero failed, 526 ignored; 1410.29 seconds. Both graph-notification tests and both authorization tests pass. |
+| Node library | 282 passed, zero failed, one ignored; 6.27 seconds. Node binary and integration suites add 12 passed tests. |
+
+Read `/tmp/mithril-graph-final-rust-ci-44368ec5-v3-20261009.json` for the exact
+command, source, suite rows, totals, and complete-log SHA-256. The log SHA-256 is
+`5237dddaca340e7dd1a3ed57c456ab6b18944f985fdd5ca201b7ed0d477f7b4e`.
+The final source differs from the qualified `dd7e52b5` tree only in the existing
+authorization test assertion. No production owner, paired incident, Cargo,
+CI, or verification-script file changes after the passing incident runs.
+The lightweight and physical receipts retain their exact `dd7e52b5` source.
+The final workspace procedure covers the corrected `44368ec5` test source.
+Only the result and review documents change after this final Rust procedure.
+
+Observability performance remains **UNQUALIFIED**. No performance test is
+added by this approval.
