@@ -11,7 +11,7 @@ use k8s_cri::v1::{
     ListContainersRequest, VersionRequest,
 };
 use procfs::process::Process;
-use snafu::{ensure, ResultExt as _};
+use snafu::{ensure, OptionExt as _, ResultExt as _};
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
@@ -82,7 +82,8 @@ impl RuntimeContainerIdentity {
                             &configured.container_name,
                         )
                     && configured.root_cgroup_path.is_none()
-                    && self.matches_scheduled(configured),
+                    && self.matches_scheduled(configured)
+                    && self.generation >= configured.container_generation,
                 IdentityStateSnafu {
                     reason: "running CRI identity differs from its signed scheduled target",
                 }
@@ -341,6 +342,77 @@ impl ContainerRuntimeInventory {
 }
 
 impl CriRuntimeContainerObservationV1 {
+    fn identity(
+        &self,
+        expected: &WorkloadBindingConfig,
+        cgroup_root: &Path,
+        state: RuntimeContainerState,
+    ) -> Result<RuntimeContainerIdentity> {
+        let status = self.status.status.as_ref().context(IdentityStateSnafu {
+            reason: format!("CRI returned no status for container `{}`", self.listed.id),
+        })?;
+        let metadata = status.metadata.as_ref().context(IdentityStateSnafu {
+            reason: format!(
+                "CRI returned no metadata for container `{}`",
+                self.listed.id
+            ),
+        })?;
+        let generation = u64::try_from(status.created_at).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("CRI container creation time is invalid: {error}"),
+            }
+            .build()
+        })?;
+        let pod_uid = status
+            .labels
+            .get(POD_UID_LABEL)
+            .context(IdentityStateSnafu {
+                reason: format!("CRI status is missing `{POD_UID_LABEL}`"),
+            })?;
+        let namespace = status
+            .labels
+            .get(POD_NAMESPACE_LABEL)
+            .context(IdentityStateSnafu {
+                reason: format!("CRI status is missing `{POD_NAMESPACE_LABEL}`"),
+            })?;
+        let container_name =
+            status
+                .labels
+                .get(CONTAINER_NAME_LABEL)
+                .context(IdentityStateSnafu {
+                    reason: format!("CRI status is missing `{CONTAINER_NAME_LABEL}`"),
+                })?;
+        ensure!(
+            status.id == self.listed.id
+                && namespace == &expected.namespace
+                && pod_uid == &expected.pod_uid
+                && container_name == &expected.container_name
+                && metadata.name == expected.container_name
+                && status.image_ref.ends_with(&expected.image_digest),
+            IdentityStateSnafu {
+                reason: format!(
+                    "CRI identity for `{}` differs from its workload binding",
+                    self.listed.id
+                ),
+            }
+        );
+        let process = runtime_process_from_info(&self.status.info, cgroup_root, state)?;
+        Ok(RuntimeContainerIdentity {
+            full_container_id: status.id.clone(),
+            namespace: namespace.clone(),
+            pod_uid: pod_uid.clone(),
+            sandbox_id: self.listed.pod_sandbox_id.clone(),
+            container_name: container_name.clone(),
+            image_digest: expected.image_digest.clone(),
+            generation,
+            cgroup_path: process.cgroup_path,
+            init_pid: process.init_pid,
+            working_directory: process.working_directory,
+            path_entries: process.path_entries,
+            state,
+        })
+    }
+
     pub(super) fn created_identity(
         &self,
         expected: &WorkloadBindingConfig,
@@ -354,71 +426,33 @@ impl CriRuntimeContainerObservationV1 {
                 reason: "runtime admission container is not one exact Created CRI record",
             }
         );
-        let response = &self.status;
-        let status = response.status.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime admission CRI response has no status".to_owned(),
-            }
-            .build()
-        })?;
-        let metadata = status.metadata.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime admission CRI status has no metadata".to_owned(),
-            }
-            .build()
-        })?;
-        let generation = u64::try_from(status.created_at)
-            .ok()
-            .filter(|generation| *generation > 0)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "runtime admission CRI creation time is invalid".to_owned(),
-                }
-                .build()
-            })?;
-        let pod_uid = status.labels.get(POD_UID_LABEL).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime admission CRI status has no Pod UID".to_owned(),
-            }
-            .build()
-        })?;
-        let namespace = status.labels.get(POD_NAMESPACE_LABEL).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime admission CRI status has no namespace".to_owned(),
-            }
-            .build()
-        })?;
-        let container_name = status.labels.get(CONTAINER_NAME_LABEL).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime admission CRI status has no container name".to_owned(),
-            }
-            .build()
+        let status = self.status.status.as_ref().context(IdentityStateSnafu {
+            reason: "runtime admission CRI response has no status",
         })?;
         ensure!(
-            status.id == expected.container_id
-                && status.state == ContainerState::ContainerCreated as i32
-                && namespace == &expected.namespace
-                && pod_uid == &expected.pod_uid
-                && container_name == &expected.container_name
-                && metadata.name == expected.container_name
-                && status.image_ref.ends_with(&expected.image_digest),
+            status.created_at > 0,
+            IdentityStateSnafu {
+                reason: "runtime admission CRI creation time is invalid",
+            }
+        );
+        ensure!(
+            status.state == ContainerState::ContainerCreated as i32,
             IdentityStateSnafu {
                 reason: "runtime admission CRI identity differs from signed workload material",
             }
         );
         // Runtime admission verifies this CRI cgroup while the initial task is held.
-        let process =
-            runtime_process_from_info(&response.info, cgroup_root, RuntimeContainerState::Created)?;
+        let identity = self.identity(expected, cgroup_root, RuntimeContainerState::Created)?;
         ensure!(
-            process.init_pid == 0,
+            identity.init_pid == 0,
             IdentityStateSnafu {
                 reason: "runtime admission CRI record already has a running initial process",
             }
         );
         if let Some(expected_cgroup) = expected.root_cgroup_path.as_ref() {
             ensure!(
-                fs::canonicalize(&process.cgroup_path).context(IoSnafu {
-                    path: &process.cgroup_path,
+                fs::canonicalize(&identity.cgroup_path).context(IoSnafu {
+                    path: &identity.cgroup_path,
                 })? == fs::canonicalize(expected_cgroup).context(IoSnafu {
                     path: expected_cgroup,
                 })?,
@@ -427,20 +461,7 @@ impl CriRuntimeContainerObservationV1 {
                 }
             );
         }
-        Ok(RuntimeContainerIdentity {
-            full_container_id: status.id.clone(),
-            namespace: namespace.clone(),
-            pod_uid: pod_uid.clone(),
-            sandbox_id: self.listed.pod_sandbox_id.clone(),
-            container_name: container_name.clone(),
-            image_digest: expected.image_digest.clone(),
-            generation,
-            cgroup_path: process.cgroup_path,
-            init_pid: process.init_pid,
-            working_directory: process.working_directory,
-            path_entries: process.path_entries,
-            state: RuntimeContainerState::Created,
-        })
+        Ok(identity)
     }
 }
 
@@ -457,10 +478,10 @@ pub(super) fn runtime_identities_from_observations(
     let mut seen = BTreeSet::new();
     let mut identities = Vec::with_capacity(observations.len());
     for observation in observations {
-        let container = observation.listed;
+        let container = &observation.listed;
         let expected = match expected.get(container.id.as_str()) {
             Some(expected) => Some(*expected),
-            None => scheduled_recovery_target(&container, configured)?,
+            None => scheduled_recovery_target(container, configured)?,
         };
         let Some(expected) = expected else {
             continue;
@@ -471,98 +492,37 @@ pub(super) fn runtime_identities_from_observations(
                 reason: format!("CRI returned duplicate container `{}`", container.id),
             }
         );
-        if runtime_state_for_reconciliation(container.state, expected.container_generation)
-            .is_none()
-        {
+        let Some(state) =
+            runtime_state_for_reconciliation(container.state, expected.container_generation)
+        else {
             continue;
-        }
-        let requested_container_id = container.id.clone();
-        let response = observation.status;
-        let status = response.status.ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!(
-                    "CRI returned no status for container `{}`",
-                    requested_container_id
-                ),
-            }
-            .build()
-        })?;
+        };
+        let status = observation
+            .status
+            .status
+            .as_ref()
+            .context(IdentityStateSnafu {
+                reason: format!("CRI returned no status for container `{}`", container.id),
+            })?;
         if status.state != container.state {
             continue;
         }
-        let metadata = status.metadata.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!(
-                    "CRI returned no metadata for container `{}`",
-                    requested_container_id
-                ),
-            }
-            .build()
-        })?;
-        let generation = u64::try_from(status.created_at).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("CRI container creation time is invalid: {error}"),
-            }
-            .build()
-        })?;
-        let pod_uid = status.labels.get(POD_UID_LABEL).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!("CRI status is missing `{POD_UID_LABEL}`"),
-            }
-            .build()
-        })?;
-        let namespace = status.labels.get(POD_NAMESPACE_LABEL).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!("CRI status is missing `{POD_NAMESPACE_LABEL}`"),
-            }
-            .build()
-        })?;
-        let container_name = status.labels.get(CONTAINER_NAME_LABEL).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!("CRI status is missing `{CONTAINER_NAME_LABEL}`"),
-            }
-            .build()
-        })?;
-        let Some(status_state) = runtime_state(status.state) else {
-            continue;
-        };
-        let scheduled = expected.container_id.starts_with("scheduled:");
         ensure!(
-            status.id == requested_container_id
-                && namespace == &expected.namespace
-                && pod_uid == &expected.pod_uid
-                && container_name == &expected.container_name
-                && metadata.name == expected.container_name
-                && status.image_ref.ends_with(&expected.image_digest)
-                && if scheduled {
-                    status_state == RuntimeContainerState::Running
-                } else {
-                    status.id == expected.container_id
-                        && generation == expected.container_generation
-                        && container.pod_sandbox_id == expected.sandbox_id
-                },
+            if expected.container_id.starts_with("scheduled:") {
+                state == RuntimeContainerState::Running
+            } else {
+                status.id == expected.container_id
+                    && u64::try_from(status.created_at).ok() == Some(expected.container_generation)
+                    && container.pod_sandbox_id == expected.sandbox_id
+            },
             IdentityStateSnafu {
                 reason: format!(
                     "CRI identity for `{}` differs from its workload binding",
-                    requested_container_id
+                    container.id
                 ),
             }
         );
-        let runtime = runtime_process_from_info(&response.info, cgroup_root, status_state)?;
-        identities.push(RuntimeContainerIdentity {
-            full_container_id: status.id,
-            namespace: namespace.clone(),
-            pod_uid: pod_uid.clone(),
-            sandbox_id: container.pod_sandbox_id,
-            container_name: container_name.clone(),
-            image_digest: expected.image_digest.clone(),
-            generation,
-            cgroup_path: runtime.cgroup_path,
-            init_pid: runtime.init_pid,
-            working_directory: runtime.working_directory,
-            path_entries: runtime.path_entries,
-            state: status_state,
-        });
+        identities.push(observation.identity(expected, cgroup_root, state)?);
     }
     identities.sort_by(|left, right| left.full_container_id.cmp(&right.full_container_id));
     Ok(identities)
@@ -857,6 +817,7 @@ mod tests {
     use k8s_cri::v1::{
         Container, ContainerMetadata, ContainerState, ContainerStatus, ContainerStatusResponse,
     };
+    use snafu::OptionExt as _;
     use tonic::codec::{Codec, ProstCodec};
     use tonic::transport::Endpoint;
 
@@ -1014,7 +975,7 @@ mod tests {
             external_role_id: 2,
             arm_initial_root: true,
         };
-        let observation = CriRuntimeContainerObservationV1 {
+        let mut observation = CriRuntimeContainerObservationV1 {
             listed: Container {
                 id: id.clone(),
                 state: ContainerState::ContainerRunning as i32,
@@ -1031,11 +992,106 @@ mod tests {
         };
 
         assert!(runtime_identities_from_observations(
-            vec![observation],
-            &[configured],
+            vec![observation.clone()],
+            std::slice::from_ref(&configured),
             Path::new("/sys/fs/cgroup"),
         )?
         .is_empty());
+
+        observation.listed.state = ContainerState::ContainerCreated as i32;
+        observation.listed.pod_sandbox_id = configured.sandbox_id.clone();
+        observation.status.status = Some(ContainerStatus {
+            id: configured.container_id.clone(),
+            state: ContainerState::ContainerCreated as i32,
+            metadata: Some(ContainerMetadata {
+                name: configured.container_name.clone(),
+                attempt: 0,
+            }),
+            created_at: 7,
+            image_ref: format!("fixture@{}", configured.image_digest),
+            labels: [
+                (POD_NAMESPACE_LABEL.to_owned(), configured.namespace.clone()),
+                (POD_UID_LABEL.to_owned(), configured.pod_uid.clone()),
+                (
+                    CONTAINER_NAME_LABEL.to_owned(),
+                    configured.container_name.clone(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..ContainerStatus::default()
+        });
+        let mut info = serde_json::json!({
+            "pid": 0,
+            "runtimeSpec": {
+                "process": { "cwd": "/workspace", "env": ["PATH=/bin"] },
+                "linux": { "cgroupsPath": "/workload" }
+            }
+        });
+        observation
+            .status
+            .info
+            .insert("info".to_owned(), info.to_string());
+        let root = Path::new("/sys/fs/cgroup");
+        let created = observation.created_identity(&configured, root)?;
+        assert_eq!(
+            (created.generation, created.state, created.init_pid),
+            (7, RuntimeContainerState::Created, 0)
+        );
+        assert_eq!(
+            runtime_identities_from_observations(
+                vec![observation.clone()],
+                std::slice::from_ref(&configured),
+                root,
+            )?,
+            vec![created]
+        );
+
+        info["pid"] = serde_json::json!(42);
+        observation
+            .status
+            .info
+            .insert("info".to_owned(), info.to_string());
+        assert!(observation.created_identity(&configured, root).is_err());
+        assert_eq!(
+            runtime_identities_from_observations(
+                vec![observation.clone()],
+                std::slice::from_ref(&configured),
+                root,
+            )?[0]
+                .init_pid,
+            42
+        );
+
+        observation.listed.state = ContainerState::ContainerRunning as i32;
+        observation
+            .status
+            .status
+            .as_mut()
+            .context(crate::error::IdentityStateSnafu {
+                reason: "runtime fixture has no status",
+            })?
+            .state = ContainerState::ContainerRunning as i32;
+        assert_eq!(
+            runtime_identities_from_observations(
+                vec![observation.clone()],
+                std::slice::from_ref(&configured),
+                root,
+            )?[0]
+                .state,
+            RuntimeContainerState::Running
+        );
+        info["pid"] = serde_json::json!(0);
+        observation
+            .status
+            .info
+            .insert("info".to_owned(), info.to_string());
+        assert!(runtime_identities_from_observations(
+            vec![observation],
+            std::slice::from_ref(&configured),
+            root,
+        )
+        .is_err());
         Ok(())
     }
 
@@ -1216,6 +1272,9 @@ mod tests {
             resolved.root_cgroup_path,
             Some(PathBuf::from("/sys/fs/cgroup/workload"))
         );
+        let mut stale = configured.clone();
+        stale.container_generation = identity.generation + 1;
+        assert!(identity.resolve(&stale).is_err());
         assert!(!resolved.arm_initial_root);
         Ok(())
     }

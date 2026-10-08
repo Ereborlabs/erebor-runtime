@@ -53,12 +53,25 @@ pub struct NodeBindingReconciliation<'a> {
 }
 
 impl NodeBindingReconciliation<'_> {
+    fn restore_config(&mut self) -> Result<()> {
+        let mut config = self.base_config.clone();
+        self.delivery.restore_config_for_session(
+            &mut config,
+            self.trust,
+            &self.node_boot_id.to_be_bytes(),
+            self.label_epoch,
+        )?;
+        *self.config = config;
+        Ok(())
+    }
+
     /// Uses supplied CRI observations or reads them from the configured runtime.
     pub async fn reconcile(
         &mut self,
         host: &mut KernelHost,
         observations: Option<Vec<crate::CriRuntimeContainerObservationV1>>,
     ) -> Result<bool> {
+        self.restore_config()?;
         let (runtime, changed) = match observations {
             Some(observations) => self.bindings.reconcile_observed(
                 host,
@@ -75,21 +88,17 @@ impl NodeBindingReconciliation<'_> {
             return Ok(false);
         }
         for binding in &runtime.recovered_bindings {
-            self.delivery.record_runtime_binding(binding)?;
+            let transition = self
+                .delivery
+                .prepare_runtime_binding(binding, &self.config.workload_bindings)?;
+            self.delivery.record_runtime_binding(&transition)?;
         }
         if !runtime.retired_binding_ids.is_empty() {
             self.delivery
                 .retire_runtime_bindings(&runtime.retired_binding_ids)?;
         }
         if !runtime.recovered_bindings.is_empty() || !runtime.retired_binding_ids.is_empty() {
-            let mut config = self.base_config.clone();
-            self.delivery.restore_config_for_session(
-                &mut config,
-                self.trust,
-                &self.node_boot_id.to_be_bytes(),
-                self.label_epoch,
-            )?;
-            *self.config = config;
+            self.restore_config()?;
         }
         let policy_authority_present =
             self.policy.is_some() || self.delivery.inventory_retirement().is_some();
@@ -110,6 +119,7 @@ impl NodeBindingReconciliation<'_> {
         bundle: &PolicyBundleV1,
         capabilities: &[CapabilityRecord],
     ) -> Result<()> {
+        self.restore_config()?;
         let generation = crate::NodePolicyGenerationOwner::next_generation_ref_id(
             self.config,
             host,
@@ -301,7 +311,6 @@ enum ReconciliationOutcome {
 
 pub struct NodeChassis {
     trace: Option<Arc<std::sync::Mutex<crate::NodeTraceOwner>>>,
-    base_config: NodeConfig,
     config: NodeConfig,
     effect_reader: Option<EffectObservationReader>,
     effect_worker: Option<crate::observation::EffectObservationWorker>,
@@ -328,6 +337,17 @@ pub struct NodeChassis {
 }
 
 impl NodeChassis {
+    fn current_config(&mut self) -> Result<NodeConfig> {
+        let mut config = self.config.clone();
+        self.policy_delivery.restore_config_for_session(
+            &mut config,
+            &self.trust,
+            &self.node_boot_id.to_be_bytes(),
+            self.label_epoch,
+        )?;
+        Ok(config)
+    }
+
     pub async fn start(config: NodeConfig) -> Result<Self> {
         Self::start_with_held_initial_pids(config, &[]).await
     }
@@ -417,12 +437,10 @@ impl NodeChassis {
             return Ok(());
         }
         let container_id = request.container_id.clone();
+        let configured = self.current_config()?.workload_bindings;
         // The first ordered hook stages facts only. The second hook owns CRI
         // Created-state proof and exact prepared-binding publication.
-        if let Err(error) = self
-            .bindings
-            .stage_runtime_admission(&self.config.workload_bindings, &request)
-        {
+        if let Err(error) = self.bindings.stage_runtime_admission(&configured, &request) {
             let delivered = call
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
@@ -464,7 +482,8 @@ impl NodeChassis {
         let request = request.clone();
         // Only a valid first-use request can wait; malformed and replayed requests fail immediately.
         let malformed = KubernetesRuntimeIdentityV1::prepare(&request).is_err();
-        let reused = self.config.workload_bindings.iter().any(|binding| {
+        let configured = self.current_config()?.workload_bindings;
+        let reused = configured.iter().any(|binding| {
             binding.scheduled_binding_authority_id.is_some()
                 && binding.container_id == request.container_id
         });
@@ -472,7 +491,7 @@ impl NodeChassis {
             let readiness = *self.readiness.borrow();
             readiness.admits_protected_runtime_start(self.policy.is_some())
                 && crate::runtime_admission::ScheduledRuntimeBindingV1::resolve(
-                    &self.config.workload_bindings,
+                    &configured,
                     &request,
                 )
                 .is_ok()
@@ -494,9 +513,8 @@ impl NodeChassis {
             }
             return Ok(());
         }
-        let mut preparation = RuntimePreparation::new(self);
-        match preparation.prepare(&call, &request).await {
-            Ok(()) => {
+        match RuntimePreparation::begin(self, &call, &request, &configured).await {
+            Ok(preparation) => {
                 let delivered = call
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: true,
@@ -504,7 +522,9 @@ impl NodeChassis {
                     })
                     .await;
                 if delivered.is_err() {
-                    preparation.rollback()?;
+                    preparation
+                        .rollback()
+                        .inspect_err(|_| self.close_kernel_claims())?;
                 } else {
                     // Log allow only after the hook receives it and no rollback is required.
                     log_runtime_admission_decision(
@@ -516,8 +536,8 @@ impl NodeChassis {
                 }
             }
             Err(error) => {
-                let error = error.with_rollback(preparation.rollback());
                 if error.fatal {
+                    self.close_kernel_claims();
                     return Err(*error.source);
                 }
                 let delivered = call
@@ -547,9 +567,10 @@ impl NodeChassis {
         let bundle = PathBuf::from(std::ffi::OsString::from_vec(request.oci_bundle.clone()));
         let prepared = (|| {
             call.ensure_active()?;
+            let config = self.current_config()?;
             let (binding_id, held_initial_pid) = self
                 .bindings
-                .verify_runtime_entry_preparation(&self.config.workload_bindings, &request)?;
+                .verify_runtime_entry_preparation(&config.workload_bindings, &request)?;
             let policy = self.policy.as_mut().context(IdentityStateSnafu {
                 reason: "declared-entry preparation has no active policy owner",
             })?;
@@ -557,7 +578,7 @@ impl NodeChassis {
                 reason: "declared-entry preparation has no live kernel host",
             })?;
             policy.reconcile_cri_exact_bindings_for_oci_entries(
-                &self.config,
+                &config,
                 host,
                 &self.bindings,
                 &binding_id,
@@ -625,10 +646,11 @@ impl NodeChassis {
                     reason: "runtime exec request does not match its runc process state",
                 }
             );
+            let configured = self.current_config()?.workload_bindings;
             let binding_id = self
                 .bindings
                 .verify_runtime_exec_notification(
-                    &self.config.workload_bindings,
+                    &configured,
                     &envelope.process,
                     notification_pid,
                     initial_exec,
@@ -724,13 +746,14 @@ impl NodeChassis {
     }
 
     fn reconcile_runtime_exact_bindings(&mut self) -> Result<()> {
+        let config = self.current_config()?;
         let Some(policy) = self.policy.as_mut() else {
             return Ok(());
         };
         let host = self.host.as_mut().context(IdentityStateSnafu {
             reason: "exact filesystem reconciliation has no live kernel host",
         })?;
-        policy.reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
+        policy.reconcile_cri_exact_bindings(&config, host, &self.bindings)
     }
 
     fn refresh_registration_authority_state(&mut self) -> Result<()> {
@@ -759,8 +782,9 @@ impl NodeChassis {
         if self.policy_delivery.exception_cleanup_pending()? {
             return Ok(false);
         }
+        let mut config = self.current_config()?;
         self.policy_delivery
-            .omit_inventory_retirement_from_config(&mut self.config)?;
+            .omit_inventory_retirement_from_config(&mut config)?;
         let host = self.host.as_mut().context(IdentityStateSnafu {
             reason: "stale policy retirement has no live kernel host",
         })?;
@@ -781,11 +805,11 @@ impl NodeChassis {
             self.label_epoch,
         )?;
 
-        let next_policy = if self.config.policy_candidates.is_empty() {
+        let next_policy = if config.policy_candidates.is_empty() {
             None
         } else {
             Some(crate::NodePolicyGenerationOwner::install_bindings(
-                &self.config,
+                &config,
                 host,
                 &self.bindings,
                 self.node_boot_id,
@@ -806,7 +830,7 @@ impl NodeChassis {
             .set_effect_policy(host, self.policy.is_some() || !generation_retired)?;
         if let Some(policy) = self.policy.as_ref() {
             self.bindings
-                .adopt_activated_profiles(host, &self.config.workload_bindings)?;
+                .adopt_activated_profiles(host, &config.workload_bindings)?;
             let prevention_enabled = policy.prevention_enabled();
             self.registration.effect_prevention_claims_enabled &= prevention_enabled;
             self.readiness.send_modify(|readiness| {
@@ -851,6 +875,7 @@ impl NodeChassis {
         if let Err(outcome) = self.check_evidence(recover_evidence) {
             return outcome;
         }
+        let mut config = self.config.clone();
         let Some(host) = self.host.as_mut() else {
             return ReconciliationOutcome::KernelUnhealthy(
                 "the kernel host is not open".to_owned(),
@@ -873,8 +898,8 @@ impl NodeChassis {
             }
         }
         if let Err(error) = (NodeBindingReconciliation {
-            base_config: &self.base_config,
-            config: &mut self.config,
+            base_config: &self.config,
+            config: &mut config,
             trust: &self.trust,
             delivery: &mut self.policy_delivery,
             bindings: &mut self.bindings,
@@ -932,15 +957,16 @@ impl NodeChassis {
     }
 
     fn prepare_control_policy(
-        &self,
+        &mut self,
         bundle: &PolicyBundleV1,
     ) -> Result<crate::policy_delivery::PreparedPolicyActivationV1> {
+        let config = self.current_config()?;
         let host = self.host.as_ref().context(IdentityStateSnafu {
             reason: "the policy activation owner has no live kernel host",
         })?;
         // Reserve a node-local handle only after durable and live-map reconciliation.
         let generation = crate::NodePolicyGenerationOwner::next_generation_ref_id(
-            &self.config,
+            &config,
             host,
             self.node_boot_id,
             self.label_epoch,
@@ -949,7 +975,7 @@ impl NodeChassis {
         self.policy_delivery.prepare_activation_for_session(
             bundle,
             &self.trust,
-            &self.config,
+            &config,
             &self.registration.capabilities,
             generation,
             crate::policy::current_utc_ns()?,
@@ -1182,12 +1208,13 @@ impl NodeChassis {
         prepared: crate::policy_delivery::PreparedPolicyActivationV1,
         evidence_healthy: bool,
     ) -> Result<()> {
+        let mut config = self.config.clone();
         let host = self.host.as_mut().context(IdentityStateSnafu {
             reason: "the policy activation owner has no live kernel host",
         })?;
         NodeBindingReconciliation {
-            base_config: &self.base_config,
-            config: &mut self.config,
+            base_config: &self.config,
+            config: &mut config,
             trust: &self.trust,
             delivery: &mut self.policy_delivery,
             bindings: &mut self.bindings,
@@ -1743,6 +1770,44 @@ mod tests {
     };
 
     #[test]
+    fn reconciliation_restores_signed_targets() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let fixture = crate::policy_delivery::tests::pending_exception_fixture(directory.path())?;
+        let base_config = fixture.config;
+        let trust = fixture.trust;
+        let mut delivery = fixture.owner;
+        let node_boot_id = Id128V1::from([1; 16]);
+        let mut config = base_config.clone();
+        delivery.restore_config_for_session(&mut config, &trust, &[1; 16], 7)?;
+        let expected = config.workload_bindings.clone();
+        assert_eq!(expected.len(), 1);
+        let forged = config
+            .workload_bindings
+            .first_mut()
+            .ok_or("the signed fixture has no scheduled target")?;
+        forged.scheduled_target_digest = Some("f".repeat(64));
+        forged.namespace = "forged".to_owned();
+        forged.image_digest = format!("sha256:{}", "f".repeat(64));
+        let mut bindings = WorkloadBindingOwner::system(node_boot_id, 7)?;
+        let mut policy = None;
+        let identity = NativeSecurityStateOwner::new(node_boot_id, 7);
+        super::NodeBindingReconciliation {
+            base_config: &base_config,
+            config: &mut config,
+            trust: &trust,
+            delivery: &mut delivery,
+            bindings: &mut bindings,
+            policy: &mut policy,
+            identity: &identity,
+            node_boot_id,
+            label_epoch: 7,
+        }
+        .restore_config()?;
+        assert_eq!(config.workload_bindings, expected);
+        Ok(())
+    }
+
+    #[test]
     fn transient_reader_lag_defers_without_coverage_churn() -> Result<(), Box<dyn std::error::Error>>
     {
         let directory = tempfile::tempdir()?;
@@ -2197,7 +2262,6 @@ mod tests {
                 location: snafu::Location::default(),
             })?;
             let config = admission_test_config(state.path());
-            let base_config = config.clone();
             let node_boot_id = Id128V1::new(1, 2);
             let connector = NodeControlConnector::new(
                 config.control.clone(),
@@ -2213,7 +2277,6 @@ mod tests {
             });
             let node = NodeChassis {
                 trace: None,
-                base_config,
                 config,
                 effect_reader: None,
                 effect_worker: None,

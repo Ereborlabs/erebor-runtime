@@ -592,40 +592,37 @@ impl ScheduledRuntimeBindingV1 {
                 reason: "runtime admission does not resolve to one signed scheduled target",
             }
         );
-        let binding_index = matches[0].0;
-        let current = matches[0].1;
-        let authority_binding_id = current
+        let (binding_index, current) = matches[0];
+        let authority_id = current
             .scheduled_binding_authority_id
             .as_deref()
             .ok_or_else(|| {
                 IdentityStateSnafu {
-                    reason: "scheduled binding lost its signed authority".to_owned(),
+                    reason: "scheduled binding lost its signed authority",
                 }
                 .build()
             })?;
         ensure!(
-            authority_binding_id
-                == Self::authority_binding_id(&identity.pod_uid, &identity.container_name),
+            authority_id == Self::authority_binding_id(&identity.pod_uid, &identity.container_name),
             IdentityStateSnafu {
                 reason: "scheduled binding authority does not match its Pod and container",
             }
         );
-        // A placeholder authorizes the first lifetime; a concrete binding authorizes no replay.
-        let current_is_placeholder = current.container_id.starts_with("scheduled:");
+        let placeholder = current.container_id.starts_with("scheduled:");
         ensure!(
-            (current_is_placeholder && current.binding_id == authority_binding_id)
-                || (!current_is_placeholder
+            (placeholder && current.binding_id == authority_id)
+                || (!placeholder
                     && current.binding_id
-                        == Self::runtime_binding_id(authority_binding_id, &current.container_id)),
+                        == Self::runtime_binding_id(authority_id, &current.container_id)),
             IdentityStateSnafu {
                 reason: "runtime binding is not derived from its signed scheduled authority",
             }
         );
-        let mut resolved = current.clone();
         // Derive a distinct binding from signed authority and the runtime container identity.
-        resolved.binding_id = Self::runtime_binding_id(authority_binding_id, container_id);
+        let mut resolved = current.clone();
+        resolved.binding_id = Self::runtime_binding_id(authority_id, container_id);
         ensure!(
-            current_is_placeholder || resolved.binding_id != current.binding_id,
+            placeholder || resolved.binding_id != current.binding_id,
             IdentityStateSnafu {
                 reason: "runtime admission attempted to reuse one container lifetime",
             }
@@ -633,8 +630,9 @@ impl ScheduledRuntimeBindingV1 {
         resolved.container_id = container_id.to_owned();
         resolved.sandbox_id = identity.sandbox_id;
         resolved.root_cgroup_path = None;
-        resolved.container_generation = if current_is_placeholder {
-            1
+        // An absent slot carries the minimum generation from the durable floor.
+        resolved.container_generation = if placeholder {
+            current.container_generation
         } else {
             current.container_generation.checked_add(1).ok_or_else(|| {
                 IdentityStateSnafu {
@@ -643,7 +641,7 @@ impl ScheduledRuntimeBindingV1 {
                 .build()
             })?
         };
-        resolved.lifecycle_generation = if current_is_placeholder {
+        resolved.lifecycle_generation = if placeholder {
             current.lifecycle_generation
         } else {
             current.lifecycle_generation.checked_add(1).ok_or_else(|| {
@@ -655,7 +653,7 @@ impl ScheduledRuntimeBindingV1 {
         };
         Ok(Self {
             binding_index,
-            previous_binding_id: (!current_is_placeholder).then(|| current.binding_id.clone()),
+            previous_binding_id: (!placeholder).then(|| current.binding_id.clone()),
             resolved,
         })
     }
@@ -1164,9 +1162,44 @@ mod tests {
         let request = request();
         let resolved = ScheduledRuntimeBindingV1::resolve(&[scheduled], &request)?;
         assert_eq!(resolved.binding_index, 0);
+        assert_eq!(
+            resolved.resolved.binding_id,
+            ScheduledRuntimeBindingV1::runtime_binding_id(
+                &ScheduledRuntimeBindingV1::authority_binding_id("pod-a", "worker"),
+                &request.container_id,
+            )
+        );
         assert_eq!(resolved.resolved.container_id, request.container_id);
         assert_eq!(resolved.resolved.root_cgroup_path.as_deref(), None);
         assert!(resolved.previous_binding_id.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn retired_target_advances_lifetime() -> crate::Result<()> {
+        let mut scheduled = scheduled_binding();
+        scheduled.container_generation = 42;
+        let mut input = request();
+        input
+            .annotations
+            .insert(POLICY_SOURCE_REVISION_ANNOTATION.to_owned(), "a".repeat(64));
+        let resolved =
+            ScheduledRuntimeBindingV1::resolve(std::slice::from_ref(&scheduled), &input)?;
+        assert_eq!(
+            resolved.resolved.scheduled_binding_authority_id,
+            scheduled.scheduled_binding_authority_id
+        );
+        assert_eq!(
+            resolved.resolved.scheduled_target_digest,
+            scheduled.scheduled_target_digest
+        );
+        assert_eq!(resolved.resolved.container_generation, 42);
+        assert_eq!(
+            resolved.resolved.lifecycle_generation,
+            scheduled.lifecycle_generation
+        );
+        assert!(resolved.previous_binding_id.is_none());
+        assert!(scheduled.container_id.starts_with("scheduled:"));
         Ok(())
     }
 

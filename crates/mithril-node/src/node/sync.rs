@@ -226,13 +226,14 @@ impl PolicyControlWorkV1 {
             return Ok(PolicyControlStepV1::Continue);
         }
         let node_boot_id = node.node_boot_id.to_be_bytes();
+        let config = node.current_config()?;
         let host = node.host.as_ref().context(IdentityStateSnafu {
             reason: "exception delivery has no live kernel host",
         })?;
         if let Some(prepared) = node.policy_delivery.reconcile_exception_candidate(
             host,
             &node.trust,
-            &node.config,
+            &config,
             &node_boot_id,
             node.label_epoch,
         )? {
@@ -243,10 +244,11 @@ impl PolicyControlWorkV1 {
         let inventory = node
             .await_control_rpc(connection.exception_inventory(candidate_ids))
             .await?;
+        let config = node.current_config()?;
         if let Some(prepared) = node.policy_delivery.accept_exception_inventory(
             inventory,
             &node.trust,
-            &node.config,
+            &config,
             &node_boot_id,
             node.label_epoch,
         )? {

@@ -16,7 +16,6 @@ use crate::{
 
 // Durable authority and the boot identity are restored before kernel acquisition.
 pub(super) struct NodeState {
-    base_config: NodeConfig,
     config: NodeConfig,
     trust: TrustCache,
     policy_delivery: crate::NodePolicyDeliveryOwner,
@@ -28,9 +27,8 @@ pub(super) struct NodeState {
 }
 
 impl NodeState {
-    pub(super) fn restore(mut config: NodeConfig, held_initial_pids: &[u32]) -> Result<Self> {
+    pub(super) fn restore(config: NodeConfig, held_initial_pids: &[u32]) -> Result<Self> {
         config.validate()?;
-        let base_config = config.clone();
         // Load trust and delivery state before BPF recovery can accept dynamic policy material.
         let trust = TrustCache::load(&config.state_directory)?;
         let mut policy_delivery =
@@ -81,8 +79,8 @@ impl NodeState {
         );
         let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
         // Restore signed policy, but restore scheduled targets only for this boot and label epoch.
-        policy_delivery.restore_config_for_session(&mut config, &trust, &boot_id, label_epoch)?;
-        config.validate()?;
+        let mut current = config.clone();
+        policy_delivery.restore_config_for_session(&mut current, &trust, &boot_id, label_epoch)?;
         let identity = match config.container_runtime.as_ref() {
             Some(runtime) => NativeSecurityStateOwner::for_effect_controller(
                 node_boot_id,
@@ -92,7 +90,6 @@ impl NodeState {
             None => NativeSecurityStateOwner::new(node_boot_id, label_epoch),
         };
         Ok(Self {
-            base_config,
             config,
             trust,
             policy_delivery,
@@ -124,10 +121,9 @@ impl NodeState {
         evidence: Evidence,
     ) -> Result<NodeChassis> {
         let Self {
-            base_config,
             config,
             trust,
-            policy_delivery,
+            mut policy_delivery,
             decommission,
             identity,
             node_boot_id,
@@ -135,6 +131,13 @@ impl NodeState {
             ..
         } = self;
         let manifest = host.manifest();
+        let mut current = config.clone();
+        policy_delivery.restore_config_for_session(
+            &mut current,
+            &trust,
+            &node_boot_id.to_be_bytes(),
+            label_epoch,
+        )?;
         let capabilities = enforcement.capabilities(&config, evidence.healthy);
         let registration = registration(
             manifest,
@@ -142,7 +145,7 @@ impl NodeState {
             enforcement.prevention_enabled && evidence.healthy,
             capabilities.clone(),
             config.kubernetes_node_name.as_deref(),
-            &config.workload_bindings,
+            &current.workload_bindings,
         )?;
         let connector = NodeControlConnector::new(
             config.control.clone(),
@@ -208,7 +211,6 @@ impl NodeState {
         };
         let mut chassis = NodeChassis {
             trace,
-            base_config,
             config,
             effect_reader: evidence.effect_reader,
             effect_worker: evidence.effect_worker,
@@ -263,17 +265,18 @@ impl Enforcement {
         host: &mut KernelHost,
         held_initial_pids: &[u32],
     ) -> Result<Self> {
-        let config = &mut state.config;
+        let mut config = state.config.clone();
         let trust = &state.trust;
         let policy_delivery = &mut state.policy_delivery;
         let identity = &state.identity;
         let node_boot_id = state.node_boot_id;
         let label_epoch = state.label_epoch;
         let boot_id = node_boot_id.to_be_bytes();
+        policy_delivery.restore_config_for_session(&mut config, trust, &boot_id, label_epoch)?;
         policy_delivery.reconcile_old_session_delivery(
             host,
             trust,
-            config,
+            &config,
             &boot_id,
             label_epoch,
         )?;
@@ -284,17 +287,35 @@ impl Enforcement {
         } else {
             WorkloadBindingOwner::system(node_boot_id, label_epoch)?
         };
-        if held_initial_pids.is_empty() {
-            let runtime_reconciliation = bindings
+        let runtime = if held_initial_pids.is_empty() {
+            let runtime = bindings
                 .publish_configured(host, &config.workload_bindings)
                 .await?;
-            if !runtime_reconciliation.retired_binding_ids.is_empty() {
-                policy_delivery
-                    .retire_runtime_bindings(&runtime_reconciliation.retired_binding_ids)?;
-                *config = state.base_config.clone();
-                policy_delivery.restore_config_for_session(config, trust, &boot_id, label_epoch)?;
-                config.validate()?;
+            if !runtime.retired_binding_ids.is_empty() {
+                policy_delivery.retire_runtime_bindings(&runtime.retired_binding_ids)?;
+                config = state.config.clone();
+                policy_delivery.restore_config_for_session(
+                    &mut config,
+                    trust,
+                    &boot_id,
+                    label_epoch,
+                )?;
             }
+            for recovered in &runtime.recovered_bindings {
+                let target = config
+                    .workload_bindings
+                    .iter_mut()
+                    .find(|target| {
+                        target.profile_id == recovered.profile_id
+                            && target.scheduled_binding_authority_id
+                                == recovered.scheduled_binding_authority_id
+                    })
+                    .context(IdentityStateSnafu {
+                        reason: "recovered runtime binding has no signed startup target",
+                    })?;
+                target.clone_from(recovered);
+            }
+            runtime
         } else {
             let created = config
                 .workload_bindings
@@ -303,12 +324,13 @@ impl Enforcement {
                 .zip(held_initial_pids.iter().copied())
                 .collect::<Vec<_>>();
             bindings.publish_held_initial_roots(host, &created)?;
-        }
+            Default::default()
+        };
         let policy = if config.policy_candidates.is_empty() {
             None
         } else {
             Some(crate::NodePolicyGenerationOwner::install_bindings(
-                config,
+                &config,
                 host,
                 &bindings,
                 node_boot_id,
@@ -323,15 +345,20 @@ impl Enforcement {
             // Normal installation must finish the same durable candidate with exact readback.
             policy_delivery.commit_pending_activation_from_readback(
                 host,
-                config,
+                &config,
                 crate::policy::current_utc_ns()?,
             )?;
+        }
+        for binding in &runtime.recovered_bindings {
+            let transition =
+                policy_delivery.prepare_runtime_binding(binding, &config.workload_bindings)?;
+            policy_delivery.record_runtime_binding(&transition)?;
         }
         // Reconcile durable exception intent before this node can report readiness to Control.
         let pending_exception = policy_delivery.reconcile_pending_exception(
             host,
             trust,
-            config,
+            &config,
             &boot_id,
             label_epoch,
             crate::policy::current_utc_ns()?,

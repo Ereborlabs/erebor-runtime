@@ -293,115 +293,89 @@ impl RuntimeSeccompServer {
             state_pid = %state_pid,
             protected_admission = %protected_admission
         );
-        let first_noninitial_continued = process.status() == "running"
-            && continue_first_noninitial_notification(&listener, timeout)?;
+        if process.status() == "running" {
+            continue_first_noninitial_notification(&listener, timeout)?;
+        }
         let listener = AsyncFd::new(listener).context(IoSnafu { path: socket_path })?;
-        let mut sequence = u64::from(first_noninitial_continued);
+        let mut initial_pending = process.status() == "creating";
         loop {
-            if sequence > 0 || process.status() == "running" {
+            if !initial_pending {
                 if !continue_noninitial_notification(&listener).await? {
                     return Ok(());
                 }
-                sequence = sequence.checked_add(1).context(IdentityStateSnafu {
-                    reason: "runtime exec notification sequence overflowed",
-                })?;
                 continue;
             }
             let Some(notification) = receive_notification(&listener).await? else {
                 return Ok(());
             };
-            let initial_exec = sequence == 0 && process.status() == "creating";
-            validate_notification(&process, &notification, initial_exec)?;
+            validate_notification(&process, &notification)?;
             if !notification_is_valid(&listener, notification.id)? {
                 continue;
             }
-            let executable_path = if initial_exec {
-                match read_executable_path(&notification) {
-                    Ok(path) => Some(path),
+            let executable_path = match read_executable_path(&notification) {
+                Ok(path) => path,
+                Err(_error) if !notification_is_valid(&listener, notification.id)? => continue,
+                Err(error) => return Err(error),
+            };
+            let deadline = Instant::now() + timeout;
+            let dispatched = if protected_admission {
+                let pid = Pid::from_raw(notification.pid as i32).context(IdentityStateSnafu {
+                    reason: "runtime exec notification has an invalid PID",
+                })?;
+                let pidfd = match pidfd_open(pid, PidfdFlags::empty()) {
+                    Ok(pidfd) => pidfd,
                     Err(_error) if !notification_is_valid(&listener, notification.id)? => continue,
-                    Err(error) => return Err(error),
-                }
+                    Err(error) => {
+                        return Err(std::io::Error::from(error)).context(IoSnafu {
+                            path: PathBuf::from(format!("/proc/{}", notification.pid)),
+                        });
+                    }
+                };
+                let (response, dispatched) = oneshot::channel();
+                notifications
+                    .send(RuntimeSeccompEnvelope {
+                        process: process.clone(),
+                        notification: RuntimeExecNotificationV1 {
+                            id: notification.id,
+                            pid: notification.pid,
+                            syscall: notification.data.nr,
+                            executable_path: Some(executable_path.clone()),
+                            initial_exec: true,
+                        },
+                        pidfd,
+                        deadline,
+                        response,
+                    })
+                    .await
+                    .map_err(|_closed| {
+                        IdentityStateSnafu {
+                            reason: "runtime seccomp notification receiver stopped".to_owned(),
+                        }
+                        .build()
+                    })?;
+                tokio::time::timeout_at(deadline, dispatched)
+                    .await
+                    .ok()
+                    .and_then(std::result::Result::ok)
             } else {
                 None
             };
-            let expected_executable_path = executable_path.clone();
-            if !process.requires_protected_admission() {
-                if respond_to_notification(
-                    &listener,
-                    &process,
-                    notification,
-                    initial_exec,
-                    expected_executable_path.as_deref(),
-                    true,
-                    Instant::now() + timeout,
-                )
-                .await?
-                {
-                    sequence = sequence.checked_add(1).context(IdentityStateSnafu {
-                        reason: "runtime exec notification sequence overflowed",
-                    })?;
-                }
-                continue;
-            }
-            let pid = Pid::from_raw(notification.pid as i32).context(IdentityStateSnafu {
-                reason: "runtime exec notification has an invalid PID",
-            })?;
-            let pidfd = match pidfd_open(pid, PidfdFlags::empty()) {
-                Ok(pidfd) => pidfd,
-                Err(_error) if !notification_is_valid(&listener, notification.id)? => continue,
-                Err(error) => {
-                    return Err(std::io::Error::from(error)).context(IoSnafu {
-                        path: PathBuf::from(format!("/proc/{}", notification.pid)),
-                    });
-                }
-            };
-            let deadline = Instant::now() + timeout;
-            let (response, dispatched) = oneshot::channel();
-            notifications
-                .send(RuntimeSeccompEnvelope {
-                    process: process.clone(),
-                    notification: RuntimeExecNotificationV1 {
-                        id: notification.id,
-                        pid: notification.pid,
-                        syscall: notification.data.nr,
-                        executable_path,
-                        initial_exec,
-                    },
-                    pidfd,
-                    deadline,
-                    response,
-                })
-                .await
-                .map_err(|_closed| {
-                    IdentityStateSnafu {
-                        reason: "runtime seccomp notification receiver stopped".to_owned(),
-                    }
-                    .build()
-                })?;
-            let dispatched = tokio::time::timeout_at(deadline, dispatched)
-                .await
-                .ok()
-                .and_then(std::result::Result::ok)
-                .unwrap_or(RuntimeSeccompDispatch {
-                    allowed: false,
-                    delivered: oneshot::channel().0,
-                });
-            let allowed = dispatched.allowed;
+            let allowed = !protected_admission
+                || dispatched.as_ref().is_some_and(|dispatch| dispatch.allowed);
             let delivered = respond_to_notification(
                 &listener,
                 &process,
                 notification,
-                initial_exec,
-                expected_executable_path.as_deref(),
+                &executable_path,
                 allowed,
                 deadline,
             )
             .await?;
-            let _result = dispatched.delivered.send(delivered);
+            if let Some(dispatched) = dispatched {
+                let _result = dispatched.delivered.send(delivered);
+            }
             if delivered {
-                sequence = sequence.checked_add(1).context(IdentityStateSnafu {
-                    reason: "runtime exec notification sequence overflowed",
-                })?;
+                initial_pending = false;
             }
         }
     }
@@ -487,36 +461,9 @@ fn continue_first_noninitial_notification(listener: &OwnedFd, timeout: Duration)
 
 async fn continue_noninitial_notification(listener: &AsyncFd<OwnedFd>) -> Result<bool> {
     loop {
-        let mut ready = listener.readable().await.context(IoSnafu {
-            path: Path::new("seccomp notification fd"),
-        })?;
-        match notification_listener_readiness(listener.get_ref()).context(IoSnafu {
-            path: Path::new("seccomp notification fd"),
-        })? {
-            NotificationListenerReadiness::Closed => return Ok(false),
-            NotificationListenerReadiness::Pending => {
-                ready.clear_ready();
-                continue;
-            }
-            NotificationListenerReadiness::Readable => ready.clear_ready(),
-        }
-        let mut notification = empty_notification();
-        let received = unsafe {
-            rustix::ioctl::ioctl(
-                listener.get_ref(),
-                Updater::<SECCOMP_IOCTL_NOTIF_RECV, libc::seccomp_notif>::new(&mut notification),
-            )
+        let Some(notification) = receive_notification(listener).await? else {
+            return Ok(false);
         };
-        if let Err(error) = received {
-            let error = std::io::Error::from(error);
-            if notification_receive_was_canceled(&error) {
-                tokio::task::yield_now().await;
-                continue;
-            }
-            return Err(error).context(IoSnafu {
-                path: Path::new("seccomp notification fd"),
-            });
-        }
         ensure!(
             notification_is_one_exec(&notification),
             IdentityStateSnafu {
@@ -801,8 +748,7 @@ async fn respond_to_notification(
     listener: &AsyncFd<OwnedFd>,
     process: &OciContainerProcessStateV1,
     mut notification: libc::seccomp_notif,
-    initial_exec: bool,
-    expected_executable_path: Option<&Path>,
+    expected_executable_path: &Path,
     allowed: bool,
     deadline: Instant,
 ) -> Result<bool> {
@@ -840,26 +786,24 @@ async fn respond_to_notification(
             },
             Err(_elapsed) => return Ok(false),
         };
-        validate_notification(process, &notification, initial_exec)?;
+        validate_notification(process, &notification)?;
         ensure!(
             notification.data.nr == syscall,
             IdentityStateSnafu {
                 reason: "retried runtime seccomp notification changed syscall",
             }
         );
-        if initial_exec {
-            let executable_path = match read_executable_path(&notification) {
-                Ok(path) => path,
-                Err(_error) if !notification_is_valid(listener, notification.id)? => continue,
-                Err(error) => return Err(error),
-            };
-            ensure!(
-                expected_executable_path == Some(executable_path.as_path()),
-                IdentityStateSnafu {
-                    reason: "retried runtime seccomp notification changed executable",
-                }
-            );
-        }
+        let executable_path = match read_executable_path(&notification) {
+            Ok(path) => path,
+            Err(_error) if !notification_is_valid(listener, notification.id)? => continue,
+            Err(error) => return Err(error),
+        };
+        ensure!(
+            expected_executable_path == executable_path,
+            IdentityStateSnafu {
+                reason: "retried runtime seccomp notification changed executable",
+            }
+        );
     }
 }
 
@@ -884,11 +828,9 @@ fn notification_is_valid(listener: &AsyncFd<OwnedFd>, id: u64) -> Result<bool> {
 fn validate_notification(
     process: &OciContainerProcessStateV1,
     notification: &libc::seccomp_notif,
-    initial_exec: bool,
 ) -> Result<()> {
     ensure!(
-        notification_is_one_exec(notification)
-            && (!initial_exec || notification.pid == process.process_pid() as u32),
+        notification_is_one_exec(notification) && notification.pid == process.process_pid() as u32,
         IdentityStateSnafu {
             reason: "seccomp notification is not one exact exec request",
         }
@@ -1054,8 +996,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn closed_notification_listener_is_detected_before_receive() -> std::io::Result<()> {
+    #[tokio::test]
+    async fn closed_notification_listener_is_detected_before_receive() -> std::io::Result<()> {
         let mut descriptors = [-1; 2];
         let status = unsafe { libc::pipe(descriptors.as_mut_ptr()) };
         assert_eq!(status, 0);
@@ -1079,6 +1021,23 @@ mod tests {
             notification_listener_readiness(&reader)?,
             NotificationListenerReadiness::Closed
         );
+        let listener = tokio::io::unix::AsyncFd::new(reader)?;
+        let received = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::receive_notification(&listener),
+        )
+        .await
+        .map_err(std::io::Error::other)?
+        .map_err(std::io::Error::other)?;
+        assert!(received.is_none());
+        let continued = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::continue_noninitial_notification(&listener),
+        )
+        .await
+        .map_err(std::io::Error::other)?
+        .map_err(std::io::Error::other)?;
+        assert!(!continued);
         Ok(())
     }
 
@@ -1096,13 +1055,13 @@ mod tests {
                 args: [0; 6],
             },
         };
-        validate_notification(&state, &notification, true)?;
+        validate_notification(&state, &notification)?;
 
         notification.pid = 43;
-        assert!(validate_notification(&state, &notification, true).is_err());
+        assert!(validate_notification(&state, &notification).is_err());
         notification.pid = 42;
         notification.data.nr = libc::SYS_mount as i32;
-        assert!(validate_notification(&state, &notification, true).is_err());
+        assert!(validate_notification(&state, &notification).is_err());
         Ok(())
     }
 }
