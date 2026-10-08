@@ -24,11 +24,12 @@ use crate::{
     StoredNodeDecommissionV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
 };
 
-const STORE_SCHEMA_VERSION: u32 = 8;
+const STORE_SCHEMA_VERSION: u32 = 9;
 
 mod context;
 mod discovery_context;
 mod graph;
+mod authority;
 pub use context::ControlContextOwner;
 #[cfg(test)]
 mod raw_bench;
@@ -160,6 +161,20 @@ impl ControlStateOwner {
             }
             .fail();
         }
+        let header: ControlStateHeaderV1 = rmp_serde::from_slice(encoded).map_err(|error| {
+            ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: format!("current Control state decoding failed: {error}"),
+            }
+            .build()
+        })?;
+        if header.schema_version != STORE_SCHEMA_VERSION {
+            return ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: "the current Control state schema is invalid".to_owned(),
+            }
+            .fail();
+        }
         let durable: DurableControlStateV1 = rmp_serde::from_slice(encoded).map_err(|error| {
             ControlStoreSnafu {
                 path: self.path.clone(),
@@ -167,13 +182,6 @@ impl ControlStateOwner {
             }
             .build()
         })?;
-        if durable.schema_version != STORE_SCHEMA_VERSION {
-            return ControlStoreSnafu {
-                path: self.path.clone(),
-                reason: "the current Control state schema is invalid".to_owned(),
-            }
-            .fail();
-        }
         Ok(Some(durable.state))
     }
 
@@ -328,6 +336,7 @@ impl Drop for ControlStorePriorityGuard<'_> {
 #[serde(deny_unknown_fields)]
 struct ControlStoreState {
     commit_index: u64,
+    authority: crate::authority::AuthorityStateV1,
     source_revisions: BTreeMap<String, PolicySourceRevisionV1>,
     policy_documents: BTreeMap<String, PolicyDocumentV1>,
     latest_sources: BTreeMap<PolicyObjectKeyV1, String>,
@@ -354,6 +363,11 @@ struct ControlStoreState {
         BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
 }
 
+#[derive(Deserialize)]
+struct ControlStateHeaderV1 {
+    schema_version: u32,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct DurableControlStateV1 {
@@ -378,6 +392,10 @@ struct PolicyRolloutKeyV1 {
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 // Each variant contains all state that must become durable in one transaction.
 enum ControlTransactionV1 {
+    AuthorityUpdated {
+        expected_revision: u64,
+        state: Box<crate::authority::AuthorityStateV1>,
+    },
     NodeSessionAdvanced {
         advance: Box<NodeSessionAdvanceTransactionV1>,
     },
@@ -2652,6 +2670,11 @@ fn apply_transaction(
     path: &Path,
 ) -> Result<()> {
     match transaction {
+        ControlTransactionV1::AuthorityUpdated { expected_revision, state: authority } => {
+            crate::AuthorityErrorCodeV1::Conflict.require(state.authority.revision == *expected_revision
+                && expected_revision.checked_add(1) == Some(authority.revision), "authority commit revision")?;
+            state.authority = *authority.clone();
+        }
         ControlTransactionV1::NodeSessionAdvanced { advance } => {
             validate_node_session_advance(state, advance, path)?;
             for rollout in &advance.policy_rollout_states {

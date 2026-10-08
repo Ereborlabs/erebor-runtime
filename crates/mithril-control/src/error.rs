@@ -8,6 +8,25 @@ use snafu::{IntoError as _, Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Authority CBOR decode failed: {source}"))]
+    AuthorityCborDecode {
+        source: minicbor::decode::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Authority CBOR encode failed: {source}"))]
+    AuthorityCborEncode {
+        source: minicbor::encode::Error<std::convert::Infallible>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Authority rejected {field}: {code:?}"))]
+    Authority {
+        code: crate::AuthorityErrorCodeV1,
+        field: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Client listener operation {operation} failed"))]
     ClientListener {
         operation: &'static str,
@@ -160,6 +179,18 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl From<minicbor::decode::Error> for Error {
+    fn from(source: minicbor::decode::Error) -> Self {
+        AuthorityCborDecodeSnafu.into_error(source)
+    }
+}
+
+impl From<minicbor::encode::Error<std::convert::Infallible>> for Error {
+    fn from(source: minicbor::encode::Error<std::convert::Infallible>) -> Self {
+        AuthorityCborEncodeSnafu.into_error(source)
+    }
+}
+
 impl From<araphor_data::Error> for Error {
     fn from(source: araphor_data::Error) -> Self {
         DataStoreSnafu.into_error(source)
@@ -175,6 +206,19 @@ impl From<araphor_observability::Error> for Error {
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::AuthorityCborDecode { .. } | Self::AuthorityCborEncode { .. } => {
+                StatusCode::InvalidArguments
+            }
+            Self::Authority { code, .. } => match code {
+                crate::AuthorityErrorCodeV1::Invalid => StatusCode::InvalidArguments,
+                crate::AuthorityErrorCodeV1::Denied | crate::AuthorityErrorCodeV1::Expired => {
+                    StatusCode::PermissionDenied
+                }
+                crate::AuthorityErrorCodeV1::Replay | crate::AuthorityErrorCodeV1::Conflict => {
+                    StatusCode::AlreadyExists
+                }
+                crate::AuthorityErrorCodeV1::Unavailable => StatusCode::Unavailable,
+            },
             Self::ClientUnauthenticated { .. }
             | Self::ClientDenied { .. }
             | Self::ClientOidc {
@@ -188,6 +232,7 @@ impl ErrorExt for Error {
                 if matches!(
                     source.as_ref(),
                     araphor_data::Error::CanonicalEncoding { .. }
+                        | araphor_data::Error::Notification { .. }
                         | araphor_data::Error::DiscoveryInvalid { .. }
                         | araphor_data::Error::DiscoveryConflict { .. }
                         | araphor_data::Error::TraceInvalid { .. }
@@ -221,6 +266,10 @@ impl ErrorExt for Error {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::AuthorityCborDecode { .. } | Self::AuthorityCborEncode { .. } => {
+                RetryHint::NonRetryable
+            }
+            Self::Authority { .. } => RetryHint::NonRetryable,
             Self::ClientState { .. }
             | Self::ClientListener { .. }
             | Self::ClientOidc {

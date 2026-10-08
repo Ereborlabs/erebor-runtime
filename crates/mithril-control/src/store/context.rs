@@ -33,11 +33,43 @@ struct PolicyContext<'a> {
     document: &'a crate::PolicyDocumentV1,
 }
 
+#[derive(Serialize)]
+struct PublicAuthorityApproval<'a> {
+    request_id: &'a [u8; 16],
+    tenant_id: &'a [u8; 16],
+    approver_principal_id: &'a [u8; 16],
+    trust_revision: u64,
+    proof_id: &'a [u8; 16],
+    claim_slot_id: &'a [u8; 16],
+    accepted_utc_ns: i64,
+    expires_utc_ns: i64,
+    state: crate::AuthorityIntentStateV1,
+    provider_proof: crate::ProviderAuthorityProofV1,
+}
+
+impl<'a> From<&'a crate::AuthorityApprovalV1> for PublicAuthorityApproval<'a> {
+    fn from(approval: &'a crate::AuthorityApprovalV1) -> Self {
+        Self {
+            request_id: &approval.request_id,
+            tenant_id: &approval.tenant_id,
+            approver_principal_id: &approval.approver_principal_id,
+            trust_revision: approval.trust_revision,
+            proof_id: &approval.proof_id,
+            claim_slot_id: &approval.claim_slot_id,
+            accepted_utc_ns: approval.accepted_utc_ns,
+            expires_utc_ns: approval.expires_utc_ns,
+            state: approval.state,
+            provider_proof: crate::ProviderAuthorityProofV1::Missing,
+        }
+    }
+}
+
 enum ContextCursor {
     Policy(Option<String>),
     Trust(Option<u64>),
     Rollout(Option<PolicyRolloutKeyV1>),
     Target(Option<String>, usize, usize),
+    Authority(u8, Option<[u8; 16]>),
     End,
 }
 
@@ -207,7 +239,7 @@ impl ControlStore {
                     .range::<String, _>(bounds)
                     .next()
                 else {
-                    return Ok((None, ContextCursor::End));
+                    return Ok((None, ContextCursor::Authority(0, None)));
                 };
                 let (target_index, fact_index) = if after.as_ref() == Some(id) {
                     (*target_index, *fact_index)
@@ -220,7 +252,7 @@ impl ControlStore {
                         .target_snapshots
                         .range::<String, _>((Excluded(id), Unbounded))
                         .next()
-                        .map_or(ContextCursor::End, |(id, _)| {
+                        .map_or(ContextCursor::Authority(0, None), |(id, _)| {
                             ContextCursor::Target(Some(id.clone()), 0, 0)
                         });
                     return Ok((None, next));
@@ -255,6 +287,100 @@ impl ControlStore {
                     )
                 });
                 (record, next)
+            }
+            ContextCursor::Authority(stage, after) => {
+                let bounds = (
+                    after.as_ref().map_or(Unbounded, Excluded),
+                    Unbounded::<&[u8; 16]>,
+                );
+                let key =
+                    |owner: &str, entity: [u8; 16], lifetime: [u8; 16]| AnalysisContextKeyV1 {
+                        tenant_id: tenant,
+                        owner_id: owner.into(),
+                        entity_key: entity.to_vec(),
+                        lifetime_key: lifetime.to_vec(),
+                        owner_revision: 1,
+                    };
+                let authority = &inner.state.authority;
+                match stage {
+                    0 => {
+                        let Some((id, request)) = authority.requests.range::<[u8; 16], _>(bounds).next() else {
+                            return Ok((None, ContextCursor::Authority(1, None)));
+                        };
+                        (
+                            (request.tenant_id == tenant).then(|| {
+                                Self::encode_context(
+                                    &inner.root,
+                                    key(
+                                        "mithril-control/authority-request",
+                                        *id,
+                                        request.body.request_nonce,
+                                    ),
+                                    request,
+                                )
+                            }),
+                            ContextCursor::Authority(0, Some(*id)),
+                        )
+                    }
+                    1 => {
+                        let Some((id, approval)) = authority.approvals.range::<[u8; 16], _>(bounds).next() else {
+                            return Ok((None, ContextCursor::Authority(2, None)));
+                        };
+                        (
+                            (approval.tenant_id == tenant).then(|| {
+                                Self::encode_context(
+                                    &inner.root,
+                                    key(
+                                        "mithril-control/authority-approval",
+                                        *id,
+                                        approval.proof_id,
+                                    ),
+                                    &PublicAuthorityApproval::from(approval),
+                                )
+                            }),
+                            ContextCursor::Authority(1, Some(*id)),
+                        )
+                    }
+                    2 => {
+                        let Some((id, lease)) = authority.leases.range::<[u8; 16], _>(bounds).next() else {
+                            return Ok((None, ContextCursor::Authority(3, None)));
+                        };
+                        (
+                            (lease.tenant_id == tenant).then(|| {
+                                Self::encode_context(
+                                    &inner.root,
+                                    key(
+                                        "mithril-control/authority-lease",
+                                        *id,
+                                        lease.request_nonce,
+                                    ),
+                                    lease,
+                                )
+                            }),
+                            ContextCursor::Authority(2, Some(*id)),
+                        )
+                    }
+                    3 => {
+                        let Some((id, handle)) = authority.handles.range::<[u8; 16], _>(bounds).next() else {
+                            return Ok((None, ContextCursor::End));
+                        };
+                        (
+                            (handle.tenant_id == tenant).then(|| {
+                                Self::encode_context(
+                                    &inner.root,
+                                    key("mithril-control/authority-audit", *id, handle.lease_id),
+                                    handle,
+                                )
+                            }),
+                            ContextCursor::Authority(3, Some(*id)),
+                        )
+                    }
+                    _ => {
+                        return Err(
+                            crate::AuthorityErrorCodeV1::Invalid.error("authority context cursor")
+                        )
+                    }
+                }
             }
             ContextCursor::End => (None, ContextCursor::End),
         };

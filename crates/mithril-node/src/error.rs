@@ -7,6 +7,12 @@ use snafu::{IntoError as _, Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Mithril authorization proof failed: {source}"))]
+    AuthorizationProof {
+        source: mithril_control::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Araphor diagnostic contract failed: {source}"))]
     Trace {
         #[snafu(source(from(araphor_observability::Error, Box::new)))]
@@ -126,6 +132,12 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl From<mithril_control::Error> for Error {
+    fn from(source: mithril_control::Error) -> Self {
+        AuthorizationProofSnafu.into_error(source)
+    }
+}
+
 impl From<araphor_observability::Error> for Error {
     fn from(source: araphor_observability::Error) -> Self {
         TraceSnafu.into_error(source)
@@ -165,7 +177,9 @@ impl ErrorExt for Error {
             | Self::EvidenceModel { .. }
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => StatusCode::InvalidArguments,
-            Self::Authorization { .. } => StatusCode::PermissionDenied,
+            Self::Authorization { .. } | Self::AuthorizationProof { .. } => {
+                StatusCode::PermissionDenied
+            }
             Self::Interceptor { source, .. } => source.status_code(),
             Self::Policy { source, .. } => source.status_code(),
             Self::Trace { source, .. } => source.status_code(),
@@ -198,6 +212,7 @@ impl ErrorExt for Error {
             | Self::EvidenceState { .. }
             | Self::EvidenceModel { .. }
             | Self::Authorization { .. }
+            | Self::AuthorizationProof { .. }
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => RetryHint::NonRetryable,
         }

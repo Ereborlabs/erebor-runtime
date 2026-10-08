@@ -3,7 +3,7 @@ mod replay;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     ExceptionBindingStateV1, ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1,
@@ -12,8 +12,8 @@ use erebor_interceptor_abi::{
     Id128V1, PendingExecutionApprovalStateV1, PendingExecutionApprovalV1,
     EXECUTION_ARGV_CHUNK_BYTES_V1, EXECUTION_ARGV_CHUNK_TERMINAL_V1,
 };
-use minicbor::data::Token;
-use minicbor::{Decoder, Encoder};
+use minicbor::Decoder;
+use mithril_control::{CanonicalIntentV1, SignedIntentEnvelopeV1};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 
@@ -25,12 +25,10 @@ use crate::Result;
 
 const ADMINISTRATIVE_EXEC_KIND: u8 = 8;
 const MAX_PAYLOAD_BYTES: usize = 32 * 1024;
-const MAX_AGGREGATE_BYTES: usize = 24 * 1024;
-const MAX_ARRAY_MEMBERS: usize = 512;
-const MAX_NESTING_DEPTH: usize = 8;
 const MAX_CLOCK_SKEW_NS: i64 = 5 * 60 * 1_000_000_000;
 const MAX_PROOF_LIFETIME_NS: i64 = 24 * 60 * 60 * 1_000_000_000;
-const SIGNATURE_DOMAIN: &[u8] = b"MITHRIL-INTENT-V1\0";
+#[cfg(test)]
+const SIGNATURE_DOMAIN: &[u8] = mithril_control::INTENT_SIGNATURE_DOMAIN;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct IntentPayloadV1 {
@@ -158,12 +156,6 @@ pub struct AuthorizationProofOwner {
     replay: ReplayLedger,
 }
 
-struct DecodedEnvelope<'a> {
-    key_id: &'a [u8],
-    payload_bytes: &'a [u8],
-    signature: &'a [u8],
-}
-
 impl AuthorizationProofOwner {
     #[must_use]
     pub const fn node_boot_id(&self) -> Id128V1 {
@@ -198,10 +190,12 @@ impl AuthorizationProofOwner {
         now_utc_ns: i64,
         now_boottime_ns: u64,
     ) -> Result<PreparedAuthorizationProofV1> {
-        let envelope = DecodedEnvelope::decode(envelope_bytes)?;
-        let payload = IntentPayloadV1::decode(envelope.payload_bytes)?;
-        let issuer = self.trust.issuer(&payload, envelope.key_id)?;
-        issuer.verify_signature(envelope.payload_bytes, envelope.signature)?;
+        let envelope = SignedIntentEnvelopeV1::try_from(envelope_bytes)?;
+        let payload = IntentPayloadV1::decode(&envelope.payload)?;
+        let issuer = self.trust.issuer(&payload, &envelope.key_id)?;
+        let key = VerifyingKey::from_bytes(&issuer.public_key)
+            .map_err(|error| authorization_error(format!("invalid Ed25519 key: {error}")))?;
+        envelope.verify(&key)?;
         self.trust
             .validate_scope_and_time(&payload, expected, now_utc_ns, issuer)?;
         ensure!(
@@ -867,60 +861,6 @@ impl TrustBundleV1 {
     }
 }
 
-impl IssuerTrustV1 {
-    fn verify_signature(&self, payload: &[u8], signature: &[u8]) -> Result<()> {
-        let key = VerifyingKey::from_bytes(&self.public_key)
-            .map_err(|error| authorization_error(format!("invalid Ed25519 key: {error}")))?;
-        let signature = Signature::from_slice(signature)
-            .map_err(|error| authorization_error(format!("invalid Ed25519 signature: {error}")))?;
-        let mut message = Vec::with_capacity(SIGNATURE_DOMAIN.len() + 32);
-        message.extend_from_slice(SIGNATURE_DOMAIN);
-        message.extend_from_slice(&Sha256::digest(payload));
-        key.verify_strict(&message, &signature)
-            .map_err(|error| authorization_error(format!("Ed25519 verification failed: {error}")))
-    }
-}
-
-impl<'a> DecodedEnvelope<'a> {
-    fn decode(bytes: &'a [u8]) -> Result<Self> {
-        validate_canonical_cbor(bytes)?;
-        let mut decoder = Decoder::new(bytes);
-        expect_map(&mut decoder, 5, "signed intent")?;
-        expect_key(&mut decoder, 0)?;
-        ensure!(
-            decode_u64(&mut decoder)? == 1,
-            AuthorizationSnafu {
-                reason: "signed-intent wire version is not 1",
-            }
-        );
-        expect_key(&mut decoder, 1)?;
-        let key_id = decode_bytes(&mut decoder, 1, 128, false, "signing key ID")?;
-        expect_key(&mut decoder, 2)?;
-        ensure!(
-            decode_u64(&mut decoder)? == 1,
-            AuthorizationSnafu {
-                reason: "signed-intent algorithm is not Ed25519",
-            }
-        );
-        expect_key(&mut decoder, 3)?;
-        let payload_bytes =
-            decode_bytes(&mut decoder, 1, MAX_PAYLOAD_BYTES, false, "intent payload")?;
-        expect_key(&mut decoder, 4)?;
-        let signature = decode_bytes(&mut decoder, 64, 64, false, "Ed25519 signature")?;
-        ensure!(
-            decoder.position() == bytes.len(),
-            AuthorizationSnafu {
-                reason: "signed intent has trailing bytes",
-            }
-        );
-        Ok(Self {
-            key_id,
-            payload_bytes,
-            signature,
-        })
-    }
-}
-
 impl IntentPayloadV1 {
     fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
@@ -929,7 +869,7 @@ impl IntentPayloadV1 {
                 reason: "intent payload exceeds its byte bound",
             }
         );
-        validate_canonical_cbor(bytes)?;
+        CanonicalIntentV1::validate(bytes)?;
         let mut decoder = Decoder::new(bytes);
         let fields = decoder
             .map()
@@ -1341,156 +1281,6 @@ fn decode_digest(decoder: &mut Decoder<'_>, name: &str) -> Result<[u8; 32]> {
     sha256.try_into().map_err(|error| {
         authorization_error(format!("{name} has the wrong SHA-256 width: {error:?}"))
     })
-}
-
-fn validate_canonical_cbor(bytes: &[u8]) -> Result<()> {
-    let mut decoder = Decoder::new(bytes);
-    let tokens = decoder
-        .tokens()
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(cbor_error)?;
-    ensure!(
-        decoder.position() == bytes.len()
-            && !tokens.iter().any(|token| {
-                matches!(
-                    token,
-                    Token::BeginBytes
-                        | Token::BeginString
-                        | Token::BeginArray
-                        | Token::BeginMap
-                        | Token::Break
-                        | Token::F16(_)
-                        | Token::F32(_)
-                        | Token::F64(_)
-                        | Token::Tag(_)
-                        | Token::Simple(_)
-                        | Token::Null
-                        | Token::Undefined
-                )
-            }),
-        AuthorizationSnafu {
-            reason: "CBOR contains trailing, indefinite, floating, tagged, simple, or null data",
-        }
-    );
-    let mut position = 0;
-    let mut counters = CborCounters::default();
-    validate_token_item(&tokens, &mut position, 1, &mut counters)?;
-    ensure!(
-        position == tokens.len()
-            && counters.aggregate_bytes <= MAX_AGGREGATE_BYTES
-            && counters.array_members <= MAX_ARRAY_MEMBERS,
-        AuthorizationSnafu {
-            reason: "CBOR exceeds aggregate byte/member bounds or has extra items",
-        }
-    );
-    let mut canonical = Vec::with_capacity(bytes.len());
-    Encoder::new(&mut canonical)
-        .tokens(&tokens)
-        .map_err(cbor_error)?;
-    ensure!(
-        canonical == bytes,
-        AuthorizationSnafu {
-            reason: "CBOR is not in deterministic shortest form",
-        }
-    );
-    Ok(())
-}
-
-#[derive(Default)]
-struct CborCounters {
-    aggregate_bytes: usize,
-    array_members: usize,
-}
-
-fn validate_token_item(
-    tokens: &[Token<'_>],
-    position: &mut usize,
-    depth: usize,
-    counters: &mut CborCounters,
-) -> Result<()> {
-    ensure!(
-        depth <= MAX_NESTING_DEPTH,
-        AuthorizationSnafu {
-            reason: "CBOR nesting exceeds 8 levels",
-        }
-    );
-    let token = tokens
-        .get(*position)
-        .ok_or_else(|| authorization_error("CBOR container is truncated"))?;
-    *position += 1;
-    match token {
-        Token::Map(length) => {
-            let mut previous_key = None;
-            for _ in 0..*length {
-                let key = unsigned_token(
-                    tokens
-                        .get(*position)
-                        .ok_or_else(|| authorization_error("CBOR map key is missing"))?,
-                )?;
-                ensure!(
-                    previous_key.is_none_or(|previous| key > previous),
-                    AuthorizationSnafu {
-                        reason: "CBOR map keys are not unique ascending integers",
-                    }
-                );
-                previous_key = Some(key);
-                *position += 1;
-                validate_token_item(tokens, position, depth + 1, counters)?;
-            }
-        }
-        Token::Array(length) => {
-            let length = usize::try_from(*length).map_err(|error| {
-                authorization_error(format!("CBOR array is too large: {error}"))
-            })?;
-            counters.array_members = counters
-                .array_members
-                .checked_add(length)
-                .ok_or_else(|| authorization_error("CBOR array-member count overflow"))?;
-            for _ in 0..length {
-                validate_token_item(tokens, position, depth + 1, counters)?;
-            }
-        }
-        Token::Bytes(value) => add_bytes(counters, value.len())?,
-        Token::String(value) => add_bytes(counters, value.len())?,
-        Token::Bool(_)
-        | Token::U8(_)
-        | Token::U16(_)
-        | Token::U32(_)
-        | Token::U64(_)
-        | Token::I8(_)
-        | Token::I16(_)
-        | Token::I32(_)
-        | Token::I64(_)
-        | Token::Int(_) => {}
-        _ => {
-            return AuthorizationSnafu {
-                reason: "CBOR contains an unsupported token".to_owned(),
-            }
-            .fail()
-        }
-    }
-    Ok(())
-}
-
-fn add_bytes(counters: &mut CborCounters, amount: usize) -> Result<()> {
-    counters.aggregate_bytes = counters
-        .aggregate_bytes
-        .checked_add(amount)
-        .ok_or_else(|| authorization_error("CBOR aggregate byte count overflow"))?;
-    Ok(())
-}
-
-fn unsigned_token(token: &Token<'_>) -> Result<u64> {
-    match token {
-        Token::U8(value) => Ok(u64::from(*value)),
-        Token::U16(value) => Ok(u64::from(*value)),
-        Token::U32(value) => Ok(u64::from(*value)),
-        Token::U64(value) => Ok(*value),
-        _ => AuthorizationSnafu {
-            reason: "CBOR map key is not an unsigned integer".to_owned(),
-        }
-        .fail(),
-    }
 }
 
 fn expect_map(decoder: &mut Decoder<'_>, expected: u64, name: &str) -> Result<()> {
@@ -2140,6 +1930,14 @@ mod tests {
         };
         let payload_bytes = encode_payload(&payload)?;
         let envelope = signed_envelope(&signing_key, b"operator-key", &payload_bytes)?;
+        assert_eq!(
+            envelope,
+            mithril_control::SignedIntentEnvelopeV1::sign(
+                &payload_bytes,
+                b"operator-key",
+                &signing_key
+            )?
+        );
         let trust = TrustBundleV1 {
             trust_domain_id: id(3),
             bundle_generation: 1,

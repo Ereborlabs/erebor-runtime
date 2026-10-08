@@ -75,6 +75,10 @@ pub struct ControlConfig {
     pub kubernetes_nodes: Option<KubernetesNodeControlConfigV1>,
     #[serde(default)]
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
+    #[serde(default)]
+    pub notifications: crate::NotificationControlConfigV1,
+    #[serde(default)]
+    pub authority_trust: Option<crate::AuthorityTrustV1>,
 }
 
 pub struct ControlRuntimeParts {
@@ -153,6 +157,12 @@ impl ControlConfig {
         if self.graph_enabled {
             control = control.with_graph()?;
         }
+        if control.analysis_store().is_some() {
+            control = control.with_notifications(self.notifications)?;
+        }
+        if let Some(trust) = self.authority_trust {
+            control = control.with_authority_trust(trust)?;
+        }
         if let Some(policy) = self.kubernetes_policy {
             let owner = PolicyDesiredStateOwner::open(policy, store.clone())?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
@@ -189,6 +199,10 @@ impl ControlConfig {
 
     fn validate(&self) -> Result<()> {
         self.evidence_admission.validate()?;
+        self.notifications.validate()?;
+        if let Some(trust) = &self.authority_trust {
+            trust.validate()?;
+        }
         ensure!(
             self.discovery.as_ref().is_none_or(|config| config.valid()),
             InvalidConfigurationSnafu {

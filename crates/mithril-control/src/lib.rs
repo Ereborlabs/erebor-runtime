@@ -1,5 +1,6 @@
 mod administrative_exec;
 mod administrative_http;
+mod authority;
 mod client_auth;
 mod client_grpc;
 mod client_listener;
@@ -8,6 +9,7 @@ mod decommission;
 mod discovery;
 mod error;
 mod evidence;
+mod notification;
 mod policy;
 mod protocol;
 mod server;
@@ -17,6 +19,7 @@ mod trust;
 
 pub use administrative_exec::*;
 pub use administrative_http::*;
+pub use authority::*;
 pub use araphor_data::DiscoveryDigestV1;
 pub use araphor_observability::{
     TraceAcceptedV1, TraceAccessV1, TraceAcknowledgementV1, TraceBatchV1, TraceCleanupV1,
@@ -38,6 +41,7 @@ pub use decommission::*;
 pub use discovery::*;
 pub use error::{Error, Result};
 pub use evidence::*;
+pub use notification::*;
 pub use policy::*;
 pub use protocol::*;
 pub use server::{serve, ControlServerTls};

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ed25519_dalek::{Signer as _, SigningKey};
+use ed25519_dalek::SigningKey;
 use erebor_interceptor_abi::Id128V1;
 use minicbor::{Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,6 @@ use crate::{
     ResolveAdministrativeExec, Result,
 };
 
-const SIGNATURE_DOMAIN: &[u8] = b"MITHRIL-INTENT-V1\0";
 const ADMINISTRATIVE_EXEC_KIND: u8 = 8;
 const MAX_LIVE_APPROVALS: usize = 4096;
 
@@ -160,6 +159,82 @@ struct SequenceOwner {
 }
 
 impl AdministrativeApprovalOwner {
+    pub(crate) fn sign_authority(
+        &self,
+        request: &crate::AuthorityLeaseRequestV1,
+        trust: &crate::AuthorityTrustV1,
+        now: i64,
+    ) -> Result<Vec<u8>> {
+        request.validate()?;
+        trust.validate()?;
+        crate::AuthorityErrorCodeV1::Denied.require(
+            request.tenant_id.as_slice() == portable_id_bytes(self.config.tenant_id)
+                && now >= request.requested_utc_ns,
+            "authority signer tenant or time",
+        )?;
+        crate::AuthorityErrorCodeV1::Denied.require(
+            trust.trust_domain_id.as_slice() == portable_id_bytes(self.config.trust_domain_id)
+                && trust.issuers.iter().any(|issuer| {
+                    issuer.issuer_id.as_slice() == portable_id_bytes(self.config.issuer_id)
+                        && issuer.key_id == self.config.key_id
+                        && issuer.public_key == self.signing_key.verifying_key().to_bytes()
+                        && issuer.sequence_epoch == self.config.sequence_epoch
+                        && !issuer.revoked
+                        && now >= issuer.valid_from_utc_ns
+                        && now < issuer.valid_until_utc_ns
+                        && issuer
+                            .scopes
+                            .iter()
+                            .any(|scope| scope.permits(request.tenant_id, &request.body))
+                }),
+            "authority signing scope",
+        )?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| crate::AuthorityErrorCodeV1::Unavailable.error("authority signer lock"))?;
+        let sequence = state.sequence.issue()?;
+        let ttl = i64::try_from(request.body.maximum_ttl_ns)
+            .map_err(|_| crate::AuthorityErrorCodeV1::Invalid.error("authority maximum lifetime"))?
+            .min(self.config.authorization_lifetime_ns);
+        let expires = now.checked_add(ttl).ok_or_else(|| {
+            crate::AuthorityErrorCodeV1::Invalid.error("authority signer expiration")
+        })?;
+        let intent = crate::authority::AuthorityIntentPayloadV1 {
+            version: 1,
+            kind: 3,
+            proof_id: *Uuid::new_v4().as_bytes(),
+            tenant_id: request.tenant_id,
+            trust_domain_id: portable_id_bytes(self.config.trust_domain_id)
+                .try_into()
+                .map_err(|_| {
+                    crate::AuthorityErrorCodeV1::Invalid.error("authority trust domain identity")
+                })?,
+            issuer_id: portable_id_bytes(self.config.issuer_id)
+                .try_into()
+                .map_err(|_| {
+                    crate::AuthorityErrorCodeV1::Invalid.error("authority issuer identity")
+                })?,
+            sequence_epoch: self.config.sequence_epoch,
+            sequence,
+            issued_utc_ns: now,
+            not_before_utc_ns: now,
+            expires_utc_ns: expires,
+            slots: vec![minicbor::bytes::ByteArray::from(*Uuid::new_v4().as_bytes())],
+            body: crate::authority::AuthorityIntentBodyV1 {
+                tag: 3,
+                lease: request.body.clone(),
+            },
+            parent: None,
+            triggers: None,
+        };
+        crate::SignedIntentEnvelopeV1::sign(
+            &intent.bytes()?,
+            &self.config.key_id,
+            &self.signing_key,
+        )
+    }
+
     pub fn load(config: &AdministrativeApprovalConfigV1, control: ControlPlane) -> Result<Self> {
         let tenant_id = parse_id("tenant_id", &config.tenant_id)?;
         let cluster_uid = parse_id("cluster_uid", &config.cluster_uid)?;
@@ -1048,35 +1123,7 @@ fn encode_signed_intent(
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(cbor_error)?;
     encoder.tokens(&tokens).map_err(cbor_error)?;
-    let mut message = Vec::with_capacity(SIGNATURE_DOMAIN.len() + 32);
-    message.extend_from_slice(SIGNATURE_DOMAIN);
-    message.extend_from_slice(&Sha256::digest(&payload));
-    let signature = signing_key.sign(&message).to_bytes();
-    let mut envelope = Vec::new();
-    Encoder::new(&mut envelope)
-        .map(5)
-        .map_err(cbor_error)?
-        .u8(0)
-        .map_err(cbor_error)?
-        .u8(1)
-        .map_err(cbor_error)?
-        .u8(1)
-        .map_err(cbor_error)?
-        .bytes(&config.key_id)
-        .map_err(cbor_error)?
-        .u8(2)
-        .map_err(cbor_error)?
-        .u8(1)
-        .map_err(cbor_error)?
-        .u8(3)
-        .map_err(cbor_error)?
-        .bytes(&payload)
-        .map_err(cbor_error)?
-        .u8(4)
-        .map_err(cbor_error)?
-        .bytes(&signature)
-        .map_err(cbor_error)?;
-    Ok(envelope)
+    crate::SignedIntentEnvelopeV1::sign(&payload, &config.key_id, signing_key)
 }
 
 fn encode_digest(encoder: &mut Encoder<&mut Vec<u8>>, bytes: &[u8]) -> Result<()> {

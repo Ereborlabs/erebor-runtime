@@ -4,14 +4,13 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use erebor_interceptor_abi::Id128V1;
+use mithril_control::IntentReplayWindowV1 as ReplayWindow;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use crate::error::{AuthorizationSnafu, IoSnafu, JsonSnafu};
 use crate::Result;
 
-const REPLAY_WINDOW_BITS: usize = 4096;
-const REPLAY_WINDOW_WORDS: usize = REPLAY_WINDOW_BITS / u64::BITS as usize;
 const MAX_REPLAY_WINDOWS: usize = 4096;
 const MAX_PROOF_TOMBSTONES: usize = 65_536;
 const MAX_SLOT_TOMBSTONES: usize = 262_144;
@@ -43,12 +42,6 @@ pub(super) struct ReplayLedger {
     proofs: BTreeMap<Id128V1, i64>,
     slots: BTreeMap<Id128V1, SlotRecord>,
     poisoned: bool,
-}
-
-#[derive(Clone, Debug)]
-struct ReplayWindow {
-    highest_sequence: u64,
-    seen: [u64; REPLAY_WINDOW_WORDS],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -774,63 +767,6 @@ fn ensure_slot_matches(slot: &SlotRecord, proof_id: Id128V1, body_sha256: [u8; 3
     Ok(())
 }
 
-impl Default for ReplayWindow {
-    fn default() -> Self {
-        Self {
-            highest_sequence: 0,
-            seen: [0; REPLAY_WINDOW_WORDS],
-        }
-    }
-}
-
-impl ReplayWindow {
-    fn accept(&mut self, sequence: u64) -> Result<()> {
-        if sequence == 0 {
-            return AuthorizationSnafu {
-                reason: "issuer sequence must be nonzero".to_owned(),
-            }
-            .fail();
-        }
-        if self.highest_sequence == 0 {
-            self.highest_sequence = sequence;
-            self.seen[0] = 1;
-            return Ok(());
-        }
-        if sequence > self.highest_sequence {
-            let shift = sequence - self.highest_sequence;
-            let previous = self.seen;
-            self.seen.fill(0);
-            if shift < REPLAY_WINDOW_BITS as u64 {
-                for distance in 0..REPLAY_WINDOW_BITS - shift as usize {
-                    if bit_is_set(&previous, distance) {
-                        set_bit(&mut self.seen, distance + shift as usize);
-                    }
-                }
-            }
-            self.highest_sequence = sequence;
-            set_bit(&mut self.seen, 0);
-            return Ok(());
-        }
-        let distance = (self.highest_sequence - sequence) as usize;
-        if distance >= REPLAY_WINDOW_BITS || bit_is_set(&self.seen, distance) {
-            return AuthorizationSnafu {
-                reason: "issuer sequence is outside the replay window or already used".to_owned(),
-            }
-            .fail();
-        }
-        set_bit(&mut self.seen, distance);
-        Ok(())
-    }
-}
-
-fn bit_is_set(bits: &[u64; REPLAY_WINDOW_WORDS], distance: usize) -> bool {
-    bits[distance / u64::BITS as usize] & (1_u64 << (distance % u64::BITS as usize)) != 0
-}
-
-fn set_bit(bits: &mut [u64; REPLAY_WINDOW_WORDS], distance: usize) {
-    bits[distance / u64::BITS as usize] |= 1_u64 << (distance % u64::BITS as usize);
-}
-
 impl From<StoredId> for Id128V1 {
     fn from(value: StoredId) -> Self {
         Self::new(value.high, value.low)
@@ -860,7 +796,8 @@ mod tests {
     }
 
     #[test]
-    fn window_accepts_out_of_order_once_and_rejects_replay() -> crate::Result<()> {
+    fn window_accepts_out_of_order_once_and_rejects_replay(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut window = ReplayWindow::default();
         window.accept(5)?;
         window.accept(3)?;

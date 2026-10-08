@@ -152,6 +152,8 @@ pub struct ControlPlane {
     policy_rollout: Option<crate::PolicyRolloutOwner>,
     policy_desired_state: Option<crate::PolicyDesiredStateOwner>,
     trace_signer: Option<Arc<(String, u64, ed25519_dalek::SigningKey)>>,
+    notifications: Option<Arc<crate::ControlNotificationOwner>>,
+    authority: Option<Arc<crate::AuthorityLeaseOwner>>,
     trace_admission: Arc<tokio::sync::Semaphore>,
     evidence_admission: Arc<crate::evidence::EvidenceAdmission>,
     #[cfg(feature = "test-fixtures")]
@@ -234,6 +236,113 @@ impl ControlPlane {
                 Err(error) => {
                     if !failed {
                         erebor_telemetry::warn!("Graph worker failed", error = %error);
+                    }
+                    failed = true;
+                }
+            }
+        }
+    }
+
+    pub fn with_notification_owner(mut self, owner: crate::ControlNotificationOwner) -> Self {
+        self.notifications = Some(Arc::new(owner));
+        self
+    }
+
+    pub fn with_notifications(
+        self,
+        config: crate::NotificationControlConfigV1,
+    ) -> crate::Result<Self> {
+        let data = self.analysis_store().ok_or_else(|| {
+            crate::error::InvalidConfigurationSnafu {
+                reason: "notifications require the analysis store",
+            }
+            .build()
+        })?;
+        let store = self.policy_store.clone().ok_or_else(|| {
+            crate::error::InvalidConfigurationSnafu {
+                reason: "notifications require the Control store",
+            }
+            .build()
+        })?;
+        let now = self
+            .evidence
+            .as_ref()
+            .map_or_else(std::time::SystemTime::now, |evidence| evidence.now())
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|time| u64::try_from(time.as_nanos()).ok())
+            .filter(|time| *time > 0)
+            .ok_or_else(|| {
+                crate::error::InvalidConfigurationSnafu {
+                    reason: "notification clock is invalid",
+                }
+                .build()
+            })?;
+        Ok(
+            self.with_notification_owner(crate::ControlNotificationOwner::new(
+                store, data, config, now,
+            )?),
+        )
+    }
+
+    pub fn with_authority_trust(mut self, trust: crate::AuthorityTrustV1) -> crate::Result<Self> {
+        let store = self.policy_store.clone().ok_or_else(|| {
+            crate::AuthorityErrorCodeV1::Unavailable.error("authority Control store")
+        })?;
+        self.authority = Some(Arc::new(crate::AuthorityLeaseOwner::new(store, trust)?));
+        Ok(self)
+    }
+
+    pub fn notification_owner(&self) -> Option<Arc<crate::ControlNotificationOwner>> {
+        self.notifications.clone()
+    }
+    pub fn authority_owner(&self) -> Option<Arc<crate::AuthorityLeaseOwner>> {
+        self.authority.clone()
+    }
+
+    pub(crate) async fn run_notifications(&self) -> std::convert::Infallible {
+        let (Some(owner), Some(graph), Some(evidence)) = (
+            self.notification_owner(),
+            self.graph_owner(),
+            self.evidence.clone(),
+        ) else {
+            return std::future::pending().await;
+        };
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut failed = false;
+        loop {
+            timer.tick().await;
+            let owner = owner.clone();
+            let graph = graph.clone();
+            let now = evidence
+                .now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|time| u64::try_from(time.as_nanos()).ok());
+            let result = tokio::task::spawn_blocking(move || {
+                let now = now.ok_or_else(|| {
+                    crate::AuthorityErrorCodeV1::Unavailable.error("notification clock")
+                })?;
+                owner.process(&graph, now)
+            })
+            .await;
+            match result {
+                Ok(Ok(_)) => {
+                    if failed {
+                        erebor_telemetry::info!("Notification processing resumed");
+                    }
+                    failed = false;
+                }
+                Ok(Err(error)) => {
+                    if !failed {
+                        erebor_telemetry::warn!("Notification processing failed", error = %error);
+                    }
+                    failed = true;
+                }
+                Err(error) => {
+                    if !failed {
+                        erebor_telemetry::warn!("Notification worker failed", error = %error);
                     }
                     failed = true;
                 }
@@ -326,6 +435,8 @@ impl ControlPlane {
             policy_rollout: None,
             policy_desired_state: None,
             trace_signer: None,
+            notifications: None,
+            authority: None,
             trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             #[cfg(feature = "test-fixtures")]
             evidence_commit_hook: None,
@@ -391,6 +502,8 @@ impl ControlPlane {
             policy_rollout: None,
             policy_desired_state: None,
             trace_signer: None,
+            notifications: None,
+            authority: None,
             trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
             #[cfg(feature = "test-fixtures")]
             evidence_commit_hook: None,
