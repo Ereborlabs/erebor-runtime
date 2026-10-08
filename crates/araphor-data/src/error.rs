@@ -6,6 +6,19 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Notification {code:?} rejects {field}"))]
+    Notification {
+        code: crate::NotificationErrorCodeV1,
+        field: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Notification encoding failed: {source}"))]
+    NotificationEncoding {
+        source: serde_json::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Graph {field} is invalid"))]
     GraphInvalid {
         field: &'static str,
@@ -209,6 +222,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::Notification { code, .. } => match code {
+                crate::NotificationErrorCodeV1::Invalid | crate::NotificationErrorCodeV1::Limit => {
+                    StatusCode::InvalidArguments
+                }
+                crate::NotificationErrorCodeV1::Denied => StatusCode::PermissionDenied,
+                crate::NotificationErrorCodeV1::Conflict => StatusCode::AlreadyExists,
+                crate::NotificationErrorCodeV1::Unavailable => StatusCode::Unavailable,
+            },
+            Self::NotificationEncoding { .. } => StatusCode::Internal,
             Self::CanonicalEncoding { .. }
             | Self::DiscoveryInvalid { .. }
             | Self::TraceInvalid { .. }

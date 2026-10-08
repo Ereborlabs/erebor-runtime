@@ -101,6 +101,7 @@ pub struct AnalysisStore {
     read_slots: Arc<tokio::sync::Semaphore>,
     read_next: AtomicUsize,
     pub(crate) discovery_owners: AtomicUsize,
+    pub(crate) notification_owner: AtomicBool,
     pub(crate) graph_owner: AtomicBool,
     graph_failures: Mutex<std::collections::BTreeSet<EvidenceIntakeIdentityV1>>,
     maintenance: RwLock<()>,
@@ -496,6 +497,7 @@ impl AnalysisStore {
         Ok(Self {
             root,
             store_uuid: meta.store_uuid,
+            notification_owner: AtomicBool::new(false),
             graph_owner: AtomicBool::new(false),
             graph_failures: Mutex::new(std::collections::BTreeSet::new()),
             _lease: lease,

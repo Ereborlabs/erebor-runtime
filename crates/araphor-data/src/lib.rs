@@ -9,6 +9,7 @@ mod discovery;
 mod error;
 mod evidence;
 mod graph;
+mod notification;
 mod query;
 mod trace;
 mod workload;
@@ -24,6 +25,7 @@ pub use evidence::{
     MAX_EVIDENCE_RECORD_BYTES,
 };
 pub use graph::*;
+pub use notification::*;
 pub use query::{
     Column, QueryAuthorization, QueryBinding, QueryCheckpoint, QueryClock, QueryColumn,
     QueryCoverage, QueryCoverageRows, QueryCoverageState, QueryErrorCode, QueryFrame, QueryGrant,
