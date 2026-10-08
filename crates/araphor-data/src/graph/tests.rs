@@ -911,7 +911,7 @@ fn control_graph_new_source_registration_preserves_pending_other_source() -> Tes
     )?);
     let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
     let observation = record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?;
-    accept(&store, &[observation.clone()])?;
+    accept(&store, std::slice::from_ref(&observation))?;
     let mut other = source();
     other.source_id = [4; 16];
     assert_eq!(
@@ -959,7 +959,7 @@ fn control_graph_committed_revision_retry_late_expiry_and_restart() -> TestResul
     let provider = Arc::new(Inputs::default());
     let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
     let observation = record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?;
-    accept(&store, &[observation.clone()])?;
+    accept(&store, std::slice::from_ref(&observation))?;
     owner.process(10)?;
     let original = owner.findings(source().tenant_id)?.remove(0);
     let revision = store.meta()?.commit_revision;

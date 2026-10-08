@@ -356,6 +356,7 @@ impl GraphDerivation<'_> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finding(
         &mut self,
         package: &str,

@@ -997,7 +997,7 @@ impl GraphFactV1 {
                     .fail();
                 }
             }
-            GraphFactValueV1::Kubernetes(stage) => {
+            GraphFactValueV1::Kubernetes(stage)
                 if stage.cluster_id.is_empty()
                     || stage.cluster_id.len() > 256
                     || [
@@ -1013,13 +1013,12 @@ impl GraphFactV1 {
                     ]
                     .into_iter()
                     .flatten()
-                    .any(|id| id.is_empty() || id.len() > 256)
-                {
-                    return GraphInvalidSnafu {
-                        field: "Kubernetes fact",
-                    }
-                    .fail();
+                    .any(|id| id.is_empty() || id.len() > 256) =>
+            {
+                return GraphInvalidSnafu {
+                    field: "Kubernetes fact",
                 }
+                .fail();
             }
             _ => {}
         }
