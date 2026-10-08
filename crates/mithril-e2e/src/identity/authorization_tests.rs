@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use ed25519_dalek::SigningKey;
 use erebor_interceptor_abi::Id128V1;
+use erebor_runtime_error::{ErrorExt as _, RetryHint, StatusCode};
 use mithril_control::{
     encode_administrative_authorization_fixture, AdministrativeExecResolution,
     AdministrativeFileObject, ResolvedAdministrativeExecutable,
@@ -116,10 +117,25 @@ fn invalid_auth_is_rejected() -> crate::Result<()> {
     *bad_sig
         .last_mut()
         .ok_or_else(|| invalid_state("signed authorization is empty"))? ^= 1;
-    assert!(has_error(
-        owner.verify_and_accept(&bad_sig, case.target, case.now, 100),
-        "Ed25519 verification failed",
+    let error = owner
+        .verify_and_accept(&bad_sig, case.target, case.now, 100)
+        .err()
+        .ok_or_else(|| invalid_state("invalid signature was accepted"))?;
+    assert!(matches!(
+        &error,
+        mithril_node::Error::AuthorizationProof {
+            source: mithril_control::Error::Authority {
+                code: mithril_control::AuthorityErrorCodeV1::Denied,
+                field: "intent signature",
+                ..
+            },
+            ..
+        }
     ));
+    assert_eq!(error.status_code(), StatusCode::PermissionDenied);
+    assert_eq!(error.retry_hint(), RetryHint::NonRetryable);
+    assert!(std::error::Error::source(&error)
+        .is_some_and(|source| source.is::<mithril_control::Error>()));
     let wal_path = case.state.join("authorization-replay-v1.jsonl");
     let wal = fs::read(&wal_path).context(IoSnafu { path: &wal_path })?;
     assert_eq!(record_count(&wal), 2);
