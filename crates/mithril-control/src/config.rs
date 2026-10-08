@@ -66,6 +66,8 @@ pub struct ControlConfig {
     #[serde(default)]
     pub discovery: Option<araphor_data::DiscoveryConfigV1>,
     #[serde(default)]
+    pub graph_enabled: bool,
+    #[serde(default)]
     pub control_store_directory: Option<PathBuf>,
     #[serde(default)]
     pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
@@ -148,6 +150,9 @@ impl ControlConfig {
             ),
         };
         control = control.with_evidence_limits(self.evidence_admission)?;
+        if self.graph_enabled {
+            control = control.with_graph()?;
+        }
         if let Some(policy) = self.kubernetes_policy {
             let owner = PolicyDesiredStateOwner::open(policy, store.clone())?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
@@ -330,6 +335,66 @@ fn is_sha256_hex(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_graph_config_is_independent_of_discovery(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("control.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "listen": "127.0.0.1:0",
+                "tls": { "certificate_path": directory.path().join("control.pem"), "private_key_path": directory.path().join("control-key.pem"), "node_ca_path": directory.path().join("node-ca.pem") },
+                "allowed_nodes": [{ "node_id": "node-a", "certificate_sha256": "a".repeat(64), "tenant_id": "00000000-0000-0001-0000-000000000002" }],
+                "trust": { "generation": 1, "bundle_digest": "b".repeat(64), "policy_issuer_sequence_epoch": 0, "policy_signers": [] },
+                "client": null, "evidence_directory": directory.path(), "graph_enabled": true, "discovery": null,
+                "data_retention": { "raw_max_age_ns": 1, "raw_max_bytes": 100_000 }
+            }))?,
+        )?;
+        let parts = ControlConfig::load(&path)?.into_parts()?;
+        assert!(parts.discovery.is_none());
+        let owner = parts.control.graph_owner().ok_or("graph owner")?;
+        let data = parts.control.analysis_store().ok_or("data owner")?;
+        assert!(data.graph_enabled());
+        assert!(!data.discovery_enabled());
+        let manifest = araphor_data::DiscoveryInputManifestV1::try_from(
+            include_bytes!("../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
+        )?;
+        let record = manifest.records.first().ok_or("record")?;
+        let stream = record.id.stream.clone();
+        data.accept_validated_batch(
+            stream.clone(),
+            araphor_data::ValidatedEvidenceBatchV1 {
+                cpu_id: record.id.cpu_id,
+                first_cursor: record.id.durable_cursor,
+                last_cursor: record.id.durable_cursor,
+                intake_utc_ns: 1,
+                framed_records: record.wire_record.clone().into(),
+                frame_ends: vec![record.wire_record.len()],
+            },
+        )?;
+        let scope = araphor_data::ProcessorScopeV1 {
+            processor_id: araphor_data::GRAPH_PROCESSOR.into(),
+            method_version: 1,
+            identity: stream.clone(),
+        };
+        assert_eq!(
+            data.processor_health(&scope)?
+                .ok_or("required scope")?
+                .class,
+            araphor_data::ProcessorClassV1::Required
+        );
+        assert_eq!(
+            araphor_data::EvidenceRetentionOwner::new(&data)
+                .retain(&stream, 10)?
+                .removed_records,
+            0
+        );
+        assert_eq!(parts.control.process_graph(10)?, 1);
+        assert!(owner.snapshot(&stream)?.is_some());
+        Ok(())
+    }
 
     #[test]
     fn analysis_startup_is_independent() -> std::result::Result<(), Box<dyn std::error::Error>> {

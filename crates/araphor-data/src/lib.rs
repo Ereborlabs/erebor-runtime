@@ -8,6 +8,7 @@ mod digest;
 mod discovery;
 mod error;
 mod evidence;
+mod graph;
 mod query;
 mod trace;
 mod workload;
@@ -22,6 +23,7 @@ pub use evidence::{
     EvidenceExactFileObject, EvidenceRecord, EvidenceRecords, EvidenceTemporalCoverage,
     MAX_EVIDENCE_RECORD_BYTES,
 };
+pub use graph::*;
 pub use query::{
     Column, QueryAuthorization, QueryBinding, QueryCheckpoint, QueryClock, QueryColumn,
     QueryCoverage, QueryCoverageRows, QueryCoverageState, QueryErrorCode, QueryFrame, QueryGrant,

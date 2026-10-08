@@ -28,6 +28,7 @@ const STORE_SCHEMA_VERSION: u32 = 8;
 
 mod context;
 mod discovery_context;
+mod graph;
 pub use context::ControlContextOwner;
 #[cfg(test)]
 mod raw_bench;

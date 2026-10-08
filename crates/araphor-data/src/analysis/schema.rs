@@ -9,6 +9,10 @@ use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
 const MAX_SOURCES: u64 = 4096;
 
 impl EvidenceIntakeIdentityV1 {
+    pub fn exact_key(&self) -> Vec<u8> {
+        self.key()
+    }
+
     pub(crate) fn valid(&self) -> bool {
         crate::node_id_is_valid(&self.node_id)
             && self.tenant_id != [0; 16]
@@ -91,11 +95,12 @@ impl AnalysisStore {
                 WHERE (stream_key IS NULL AND (method_version IS NOT NULL OR interval_id IS NOT NULL
                     OR profile_revision IS NOT NULL OR facts_revision IS NOT NULL
                     OR coverage_revision IS NOT NULL OR first_cursor IS NOT NULL))
-                OR (stream_key IS NOT NULL AND (processor_id <> 'discovery'
+                OR (stream_key IS NOT NULL AND (processor_id NOT IN ('discovery', 'graph-findings')
                     OR octet_length(stream_key) NOT BETWEEN 68 AND 195
                     OR method_version IS NULL OR method_version = 0
                     OR interval_id IS NULL OR interval_id = '' OR length(interval_id) > 256
-                    OR profile_revision IS NULL OR profile_revision = 0
+                    OR (processor_id = 'discovery' AND (profile_revision IS NULL OR profile_revision = 0))
+                    OR (processor_id = 'graph-findings' AND profile_revision IS NOT NULL)
                     OR facts_revision IS NULL OR coverage_revision IS NULL OR first_cursor IS NULL))"),
             ("invalid witness reference", "SELECT 1 FROM evidence_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id

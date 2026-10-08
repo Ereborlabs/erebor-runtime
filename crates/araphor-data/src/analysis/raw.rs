@@ -558,12 +558,29 @@ impl AnalysisStore {
         identity: RawIdentity,
         batch: RawBatch,
     ) -> Result<(EvidenceStoreOutcomeV1, RawReceipt)> {
-        let writer = self.raw_access()?;
+        let mut writer = self.raw_access()?;
         let mut raw = self
             .raw
             .lock()
             .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
         self.require_retention()?;
+        if let RawIdentity::Evidence(source) = &identity {
+            if self.graph_enabled() && self.graph_registration_required(writer.get()?, source)? {
+                if self.raw_pending.load(Ordering::Acquire) {
+                    self.write_ready.store(false, Ordering::Release);
+                    raw.project(writer.get_mut()?, None)?;
+                    self.raw_pending.store(false, Ordering::Release);
+                    self.write_ready.store(true, Ordering::Release);
+                }
+                let floor = raw
+                    .sources
+                    .get(&source.key())
+                    .map_or(0, |source| source.receipt.floor());
+                self.register_graph_locked(writer.get_mut()?, source, floor)?;
+                raw.refresh_budget(writer.get()?)?;
+                self.raw_dirty.store(false, Ordering::Release);
+            }
+        }
         let key = identity.key();
         let tenant = identity.tenant();
         if let RawIdentity::Diagnostic(trace) = &identity {

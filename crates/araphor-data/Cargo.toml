@@ -11,6 +11,7 @@ test-fixtures = []
 [dependencies]
 crc32c.workspace = true
 duckdb = { workspace = true, features = ["vtab"] }
+erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 futures-core = "0.3"
 minicbor.workspace = true

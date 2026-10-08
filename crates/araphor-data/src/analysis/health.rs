@@ -195,6 +195,7 @@ pub enum ProcessorStateV1 {
     ExpiredInput(AnalysisGapV1),
     RecoveryLoss(AnalysisGapV1),
     Retired,
+    ProcessingFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -343,8 +344,12 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "read processor coverage health",
                 })?;
+            let failed = scope.processor_id == crate::GRAPH_PROCESSOR
+                && self.graph_processing_failed(snapshot, &scope.identity)?;
             let state = if retired {
                 ProcessorStateV1::Retired
+            } else if failed {
+                ProcessorStateV1::ProcessingFailed
             } else if let Some((gap, recovery)) = gap {
                 if recovery {
                     ProcessorStateV1::RecoveryLoss(gap)
@@ -365,7 +370,7 @@ impl AnalysisStore {
                 consumed_cursor,
                 resume_floor,
                 cursor_lag,
-                incomplete: recorded_gap || gap.is_some(),
+                incomplete: recorded_gap || gap.is_some() || failed,
                 read_revision: Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?
                     .commit_revision,
             }))

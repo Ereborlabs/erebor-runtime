@@ -154,6 +154,7 @@ version = "0.1.0"
 dependencies = [
  "crc32c",
  "duckdb",
+ "erebor-interceptor-abi",
  "erebor-runtime-error",
  "futures-core",
  "futures-util",

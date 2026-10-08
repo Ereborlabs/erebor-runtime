@@ -6,6 +6,24 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Graph {field} is invalid"))]
+    GraphInvalid {
+        field: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Graph encoding failed: {source}"))]
+    GraphEncoding {
+        source: serde_json::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Graph context failed: {source}"))]
+    GraphContext {
+        source: Box<dyn std::error::Error + Send + Sync>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Discovery {field} is invalid"))]
     DiscoveryInvalid {
         field: &'static str,
@@ -197,6 +215,7 @@ impl ErrorExt for Error {
             | Self::QueryInvalid { .. }
             | Self::QueryLimit { .. }
             | Self::AnalysisInputTooLarge { .. } => StatusCode::InvalidArguments,
+            Self::GraphInvalid { .. } => StatusCode::InvalidArguments,
             Self::QueryUnsupported { .. } => StatusCode::Unsupported,
             Self::QueryDenied { .. } => StatusCode::PermissionDenied,
             Self::QueryCursorExpired { .. } | Self::RetainedRangeExpired { .. } => {
@@ -220,6 +239,8 @@ impl ErrorExt for Error {
             | Self::QueryExecution { .. }
             | Self::DiscoveryContext { .. }
             | Self::DiscoveryExecution { .. } => StatusCode::External,
+            Self::GraphContext { .. } => StatusCode::External,
+            Self::GraphEncoding { .. } => StatusCode::Internal,
             Self::QueryEncoding { .. } | Self::DiscoveryEncoding { .. } => StatusCode::Internal,
         }
     }

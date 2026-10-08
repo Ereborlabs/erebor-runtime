@@ -147,6 +147,7 @@ pub struct ControlPlane {
     trust: crate::TrustBundleOwner,
     state: Arc<Mutex<ControlState>>,
     evidence: Option<crate::EvidenceIntakeOwner>,
+    graph: Option<Arc<araphor_data::GraphAndFindingOwner>>,
     policy_store: Option<crate::ControlStore>,
     policy_rollout: Option<crate::PolicyRolloutOwner>,
     policy_desired_state: Option<crate::PolicyDesiredStateOwner>,
@@ -158,6 +159,88 @@ pub struct ControlPlane {
 }
 
 impl ControlPlane {
+    pub fn with_graph(mut self) -> crate::Result<Self> {
+        let data = self.analysis_store().ok_or_else(|| {
+            crate::error::InvalidConfigurationSnafu {
+                reason: "graph processing requires the analysis store",
+            }
+            .build()
+        })?;
+        let store = self.policy_store.clone().ok_or_else(|| {
+            crate::error::InvalidConfigurationSnafu {
+                reason: "graph processing requires the Control store",
+            }
+            .build()
+        })?;
+        self.graph = Some(Arc::new(araphor_data::GraphAndFindingOwner::new(
+            data,
+            Arc::new(store),
+        )?));
+        Ok(self)
+    }
+
+    pub fn graph_owner(&self) -> Option<Arc<araphor_data::GraphAndFindingOwner>> {
+        self.graph.clone()
+    }
+
+    pub fn process_graph(&self, now: u64) -> crate::Result<usize> {
+        let owner = self.graph_owner().ok_or_else(|| {
+            crate::error::InvalidConfigurationSnafu {
+                reason: "graph processing is disabled",
+            }
+            .build()
+        })?;
+        owner.process(now).map_err(Into::into)
+    }
+
+    pub(crate) async fn run_graph(&self) -> std::convert::Infallible {
+        let (Some(owner), Some(evidence)) = (self.graph_owner(), self.evidence.clone()) else {
+            return std::future::pending().await;
+        };
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut failed = false;
+        loop {
+            timer.tick().await;
+            let owner = owner.clone();
+            let now = evidence
+                .now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|time| u64::try_from(time.as_nanos()).ok());
+            let result = tokio::task::spawn_blocking(move || {
+                let now = now.filter(|now| *now > 0).ok_or_else(|| {
+                    araphor_data::Error::GraphInvalid {
+                        field: "clock",
+                        location: snafu::Location::default(),
+                    }
+                })?;
+                owner.process(now)
+            })
+            .await;
+            match result {
+                Ok(Ok(_)) => {
+                    if failed {
+                        erebor_telemetry::info!("Graph processing resumed");
+                    }
+                    failed = false;
+                }
+                Ok(Err(error)) => {
+                    if !failed {
+                        erebor_telemetry::warn!("Graph processing failed", error = %error);
+                    }
+                    failed = true;
+                }
+                Err(error) => {
+                    if !failed {
+                        erebor_telemetry::warn!("Graph worker failed", error = %error);
+                    }
+                    failed = true;
+                }
+            }
+        }
+    }
+
     pub(crate) async fn run_context(&self) -> std::convert::Infallible {
         let (Some(store), Some(data)) = (&self.policy_store, self.analysis_store()) else {
             return std::future::pending().await;
@@ -238,6 +321,7 @@ impl ControlPlane {
             trust: crate::TrustBundleOwner::static_generation(trust),
             state: Arc::new(Mutex::new(ControlState::default())),
             evidence: None,
+            graph: None,
             policy_store: None,
             policy_rollout: None,
             policy_desired_state: None,
@@ -302,6 +386,7 @@ impl ControlPlane {
             trust,
             state: Arc::new(Mutex::new(ControlState::default())),
             evidence,
+            graph: None,
             policy_store: Some(store),
             policy_rollout: None,
             policy_desired_state: None,

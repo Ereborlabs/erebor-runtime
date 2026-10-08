@@ -24,6 +24,7 @@ mod context;
 mod crash;
 mod dependencies;
 mod extraction;
+mod graph;
 mod health;
 mod progress;
 mod quota;
@@ -66,6 +67,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
+pub(crate) const NATIVE_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 const ANALYSIS_SCHEMA_VERSION: i64 = 17;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
@@ -99,6 +101,8 @@ pub struct AnalysisStore {
     read_slots: Arc<tokio::sync::Semaphore>,
     read_next: AtomicUsize,
     pub(crate) discovery_owners: AtomicUsize,
+    pub(crate) graph_owner: AtomicBool,
+    graph_failures: Mutex<std::collections::BTreeSet<EvidenceIntakeIdentityV1>>,
     maintenance: RwLock<()>,
     revision: watch::Sender<u64>,
     retention_healthy: AtomicBool,
@@ -492,6 +496,8 @@ impl AnalysisStore {
         Ok(Self {
             root,
             store_uuid: meta.store_uuid,
+            graph_owner: AtomicBool::new(false),
+            graph_failures: Mutex::new(std::collections::BTreeSet::new()),
             _lease: lease,
             writer: Mutex::new(Some(writer)),
             raw: Mutex::new(raw),

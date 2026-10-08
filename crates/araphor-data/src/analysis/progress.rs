@@ -484,6 +484,51 @@ impl AnalysisStore {
         self.commit_progress(input, None, true, None)
     }
 
+    pub(crate) fn commit_graph(
+        &self,
+        input: &AnalysisResultCommitV1,
+        advance: bool,
+    ) -> Result<AnalysisResultReceiptV1> {
+        if input.scope.processor_id != crate::GRAPH_PROCESSOR {
+            return self.reject("the graph result owner is invalid");
+        }
+        let graph = crate::GraphSnapshotV1::try_from(input.body.as_slice())?;
+        let expected: Vec<_> = graph
+            .input_manifest
+            .evidence
+            .iter()
+            .filter(|id| {
+                !graph
+                    .missing_ranges
+                    .iter()
+                    .any(|(first, last)| (*first..=*last).contains(&id.durable_cursor))
+            })
+            .map(|id| {
+                (
+                    super::AnalysisStreamIdentityV1::Evidence(id.stream.clone()),
+                    id.durable_cursor,
+                )
+            })
+            .collect();
+        let actual: Vec<_> = input
+            .witnesses
+            .iter()
+            .map(|witness| (witness.identity.clone(), witness.cursor))
+            .collect();
+        if graph.scope != input.scope
+            || expected != actual
+            || input
+                .witnesses
+                .iter()
+                .any(|witness| witness.expires_utc_ns != graph.witness_deadline_utc_ns)
+            || (advance && graph.last_cursor != input.consumed_cursor)
+            || (!advance && input.expected_cursor != input.consumed_cursor)
+        {
+            return self.reject("the graph input manifest, witnesses, or progress differ");
+        }
+        self.commit_progress(input, None, advance, None)
+    }
+
     pub(crate) fn commit_working(
         &self,
         input: &AnalysisResultCommitV1,
@@ -566,7 +611,30 @@ impl AnalysisStore {
         }) {
             return self.reject("the profile header or references differ from its commit");
         }
-        let header = profile.map(ProfileHeader::from).unwrap_or_default();
+        let header = if input.scope.processor_id == crate::GRAPH_PROCESSOR {
+            let graph = crate::GraphSnapshotV1::try_from(input.body.as_slice())?;
+            if graph.scope != input.scope
+                || graph.input_manifest.context
+                    != input
+                        .context_refs
+                        .iter()
+                        .map(|reference| reference.key.clone())
+                        .collect::<Vec<_>>()
+            {
+                return self.reject("the graph manifest differs from its result commit");
+            }
+            ProfileHeader {
+                stream_key: Some(input.scope.identity.key()),
+                method_version: Some(input.scope.method_version),
+                interval_id: Some(graph.first_cursor.to_string()),
+                profile_revision: None,
+                facts_revision: Some(input.context_revision),
+                coverage_revision: Some(input.coverage_revision),
+                first_cursor: Some(graph.first_cursor),
+            }
+        } else {
+            profile.map(ProfileHeader::from).unwrap_or_default()
+        };
         if !input.scope.valid()
             || input.result_id.is_empty()
             || input.result_id.len() > 256

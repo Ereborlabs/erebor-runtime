@@ -686,7 +686,7 @@ impl DiscoveryOwner {
         }
     }
 
-    fn coverage(
+    pub(crate) fn coverage(
         status: &AnalysisSourceStatusV1,
         records: &[DiscoveryRecordV1],
     ) -> Result<Vec<DiscoveryCoverageV1>> {
