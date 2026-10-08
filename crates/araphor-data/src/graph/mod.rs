@@ -2,12 +2,19 @@ use std::sync::{Arc, Mutex};
 
 use crate::{AnalysisContextVersionV1, AnalysisStore, DiscoveryRecordV1, Result};
 
+mod chunks;
+mod commit;
+mod coverage;
 mod derive;
+mod expiry;
+mod input;
 mod live;
 mod model;
 mod proof;
+mod read;
 #[cfg(test)]
 mod tests;
+mod window;
 
 pub use model::*;
 pub use proof::*;

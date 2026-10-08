@@ -26,6 +26,7 @@ mod dependencies;
 mod extraction;
 mod graph;
 mod health;
+mod notification;
 mod progress;
 mod quota;
 mod raw;
@@ -50,6 +51,7 @@ pub use extraction::{
     AnalysisRelationV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1, Selection,
 };
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
+pub(crate) use notification::NotificationLookup;
 pub use progress::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisProcessorResultV1, AnalysisResultCommitV1,
     AnalysisResultReceiptV1, AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,

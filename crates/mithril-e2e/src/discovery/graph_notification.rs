@@ -620,7 +620,13 @@ impl GraphNotificationQualification {
         assert_eq!(benign.priority(), NotificationPriorityV1::Critical);
         assert!(benign.human_acknowledgement.is_none());
         assert!(router
-            .acknowledge(&grants[2], state.key, [5; 16], now + 1)
+            .acknowledge(
+                &grants[2],
+                state.key,
+                state.finding_revision,
+                [5; 16],
+                now + 1
+            )
             .is_err());
         let failed = Self::deliver_until(
             &router,
@@ -733,12 +739,30 @@ impl GraphNotificationQualification {
         let mut foreign = grants[1].clone();
         foreign.tenant_id = [99; 16];
         assert!(router
-            .acknowledge(&foreign, overdue.key, [6; 16], now + 101)
+            .acknowledge(
+                &foreign,
+                overdue.key,
+                overdue.finding_revision,
+                [6; 16],
+                now + 101
+            )
             .is_err());
-        let human = router.acknowledge(&grants[1], overdue.key, [6; 16], now + 102)?;
+        let human = router.acknowledge(
+            &grants[1],
+            overdue.key,
+            overdue.finding_revision,
+            [6; 16],
+            now + 102,
+        )?;
         assert_eq!(human.deadline_utc_ns, Some(now + 100));
         assert_eq!(
-            router.acknowledge(&grants[1], overdue.key, [6; 16], now + 103)?,
+            router.acknowledge(
+                &grants[1],
+                overdue.key,
+                overdue.finding_revision,
+                [6; 16],
+                now + 103
+            )?,
             human
         );
         assert!(!human.overdue(now + 103));

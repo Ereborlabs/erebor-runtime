@@ -8,6 +8,12 @@ use crate::*;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+mod evidence_recovery;
+mod paging;
+mod processing;
+mod source_recovery;
+mod window_expiry;
+
 fn source() -> EvidenceIntakeIdentityV1 {
     EvidenceIntakeIdentityV1 {
         tenant_id: [1; 16],

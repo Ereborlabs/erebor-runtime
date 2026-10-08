@@ -209,8 +209,10 @@ impl ControlNotificationOwner {
         &self.authority
     }
     pub fn process(&self, graph: &GraphAndFindingOwner, now: u64) -> Result<usize> {
-        self.router.route(graph, now)?;
-        Ok(self.router.deliver(graph, self.sink.as_ref(), now)?)
+        let routing = self.router.route(graph, now);
+        let delivery = self.router.deliver(graph, self.sink.as_ref(), now);
+        routing?;
+        Ok(delivery?)
     }
 }
 
@@ -223,43 +225,4 @@ fn notification_denied(field: &'static str) -> araphor_data::Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn control_notification_revocation_survives_restart_and_requires_new_revision(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let grant = NotificationGrantV1 {
-            tenant_id: [1; 16],
-            principal_id: [2; 16],
-            principal: araphor_data::NotificationPrincipalV1::Human,
-            authorization_revision: 1,
-            routes: vec!["route".into()],
-            operations: vec![araphor_data::NotificationOperationV1::Read],
-            max_sensitivity: araphor_data::ContextSensitivityV1::Tenant,
-            expires_utc_ns: 1000,
-        };
-        {
-            let owner = ConfiguredNotificationAuthority::new(
-                crate::ControlStore::open(dir.path())?,
-                std::slice::from_ref(&grant),
-            )?;
-            owner.check(&grant, 100)?;
-            owner.revoke(grant.tenant_id, grant.principal_id, 1)?;
-            assert!(owner.check(&grant, 100).is_err());
-        }
-        let owner = ConfiguredNotificationAuthority::new(
-            crate::ControlStore::open(dir.path())?,
-            std::slice::from_ref(&grant),
-        )?;
-        assert!(owner.check(&grant, 101).is_err());
-        assert!(owner.replace(grant.clone()).is_err());
-        let mut next = grant.clone();
-        next.authorization_revision = 2;
-        owner.replace(next.clone())?;
-        assert!(owner.check(&grant, 102).is_err());
-        owner.check(&next, 102)?;
-        Ok(())
-    }
-}
+mod tests;
