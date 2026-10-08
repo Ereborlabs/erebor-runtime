@@ -2,6 +2,7 @@ use std::{
     error::Error as StdError,
     fs,
     path::Path,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -11,9 +12,9 @@ use araphor_data::{
 };
 use duckdb::types::Value;
 use mithril_control::{
-    EvidenceIdV1, PolicyDesiredStateConfigV1, PolicySignerConfigV1, PolicySignerTrustV1,
-    ProfileSealRequestV1, TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1,
-    TraceOwner, TraceUploadV1,
+    EvidenceIdV1, IntakeClock, PolicyDesiredStateConfigV1, PolicySignerConfigV1,
+    PolicySignerTrustV1, ProfileSealRequestV1, TraceBatchV1, TraceExchangeV1, TraceFrameKindV1,
+    TraceFrameV1, TraceOwner, TraceUploadV1,
 };
 use mithril_node::{
     ControlConnection, EffectObservationStore, EvidenceWalLimits, NodeControlMessage,
@@ -30,6 +31,14 @@ use crate::{
     error::InvalidInputSnafu,
     ObservabilityQualification,
 };
+
+struct Clock(SystemTime);
+
+impl IntakeClock for Clock {
+    fn now(&self) -> SystemTime {
+        self.0
+    }
+}
 
 pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
     ensure!(
@@ -73,7 +82,9 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 candidate_validity_ns: 900_000_000_000,
             },
         });
-        let parts = config.into_parts()?;
+        let clock = Arc::new(Clock(SystemTime::now()));
+        let now = u64::try_from(clock.now().duration_since(UNIX_EPOCH)?.as_nanos())?;
+        let parts = config.into_parts_with_clock(clock)?;
         ensure!(
             parts.data_error.is_none() && parts.discovery_error.is_none(),
             InvalidInputSnafu {
@@ -94,7 +105,6 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
         let store = fixture.owner.store();
         let policy = fixture.resource(1)?;
         let facts = fixture.inventory(&policy)?;
-        let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
         let initial =
             fixture
                 .owner
@@ -263,7 +273,7 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 reason: "optional discovery changed durable intake progress",
             }
         );
-        let retained_at = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
+        let retained_at = now + 1;
         let retained = EvidenceRetentionOwner::new(&data).retain(&source, retained_at)?;
         ensure!(
             retained.removed_records == 2 && retained.retained_floor == 2,
@@ -333,11 +343,35 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 }
             );
         }
+        let trace = TraceOwner::new(data.clone())
+            .read(source.tenant_id, request.request_id, &access, resumed_at)?
+            .1
+            .binding(0)?
+            .identity;
+        let diagnostic = EvidenceRetentionOwner::new(&data).retain_trace(&trace, retained_at)?;
+        ensure!(
+            diagnostic.removed_records == 1
+                && diagnostic.retained_floor == 1
+                && matches!(
+                    data.read_trace(&trace, 1, &araphor_data::AnalysisReadControl::default()),
+                    Err(araphor_data::Error::RetainedRangeExpired {
+                        first_cursor: 1,
+                        last_cursor: 1,
+                        ..
+                    })
+                ),
+            InvalidInputSnafu {
+                path: output,
+                reason: "diagnostic retention did not expire its frame at the configured age",
+            }
+        );
         cases.push(serde_json::json!({
             "state": if enabled { "lagged" } else { "disabled" }, "result": "PASS",
             "accepted_cursor": 3, "queried_before_retention": 2,
             "queried_after_retention": 1, "trace_output_sequence": 1,
             "retention_removed_records": retained.removed_records,
+            "diagnostic_removed_records": diagnostic.removed_records,
+            "intake_utc_ns": now, "expiry_utc_ns": retained_at,
             "discovery_consumed_before": enabled.then_some(1),
             "discovery_consumed_after": enabled.then_some(3),
             "profile_count_before": enabled.then_some(1),

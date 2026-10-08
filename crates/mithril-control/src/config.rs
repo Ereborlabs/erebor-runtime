@@ -96,6 +96,13 @@ impl ControlConfig {
     }
 
     pub fn into_parts(self) -> Result<ControlRuntimeParts> {
+        self.into_parts_with_clock(Arc::new(SystemIntakeClock))
+    }
+
+    pub fn into_parts_with_clock(
+        self,
+        clock: Arc<dyn crate::IntakeClock>,
+    ) -> Result<ControlRuntimeParts> {
         self.validate()?;
         let store_directory = self
             .control_store_directory
@@ -122,7 +129,7 @@ impl ControlConfig {
                     ControlPlane::from_intake(
                         self.allowed_nodes,
                         self.trust.clone(),
-                        EvidenceIntakeOwner::new(store.clone(), data, Arc::new(SystemIntakeClock))?,
+                        EvidenceIntakeOwner::new(store.clone(), data, clock)?,
                     )?,
                     None,
                     discovery,

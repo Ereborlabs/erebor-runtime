@@ -1925,13 +1925,19 @@ impl ControlPlane {
             // The current enrolled node can return its retained output from an earlier boot.
             let id = upload.batch.execution_id;
             let receipt = owner
-                .append(
+                .append_at(
                     tenant,
                     upload.request_id,
                     upload.target_index,
                     node,
                     upload.original_node_boot_id,
                     upload.batch,
+                    self.evidence
+                        .as_ref()
+                        .ok_or_else(|| {
+                            Status::unavailable("diagnostic data storage is unavailable")
+                        })?
+                        .now(),
                 )
                 .map_err(trace_status)?;
             reply.acknowledgement = Some(crate::TraceAcknowledgementV1 {

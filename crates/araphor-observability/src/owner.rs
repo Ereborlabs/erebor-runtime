@@ -253,6 +253,28 @@ impl TraceOwner {
         node_boot_id: [u8; 16],
         batch: TraceBatchV1,
     ) -> Result<TraceOutputReceiptV1> {
+        self.append_at(
+            tenant,
+            request,
+            target_index,
+            node_id,
+            node_boot_id,
+            batch,
+            SystemTime::now(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_at(
+        &self,
+        tenant: [u8; 16],
+        request: [u8; 16],
+        target_index: u16,
+        node_id: &str,
+        node_boot_id: [u8; 16],
+        batch: TraceBatchV1,
+        intake_time: SystemTime,
+    ) -> Result<TraceOutputReceiptV1> {
         batch.validate()?;
         let (_, accepted) = self.accepted(tenant, request)?;
         let identity = accepted.binding(target_index)?.identity;
@@ -262,7 +284,7 @@ impl TraceOwner {
                 && identity.execution_id == batch.execution_id,
             "trace output does not match the authenticated execution",
         )?;
-        let intake = SystemTime::now()
+        let intake = intake_time
             .duration_since(UNIX_EPOCH)
             .ok()
             .and_then(|elapsed| u64::try_from(elapsed.as_nanos()).ok())
@@ -528,6 +550,56 @@ mod tests {
     use super::*;
     use crate::{TraceFrameKindV1, TraceFrameV1, TraceSourceV1, TraceTerminalV1};
     use std::collections::BTreeSet;
+
+    #[test]
+    fn observability_intake_clock() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use araphor_data::{EvidenceRetentionOwner, RetentionLimitsV1};
+        use std::time::Duration;
+
+        let directory = tempfile::tempdir()?;
+        let store = Arc::new(AnalysisStore::open_with_limits(
+            directory.path().join("data"),
+            RetentionLimitsV1 {
+                raw_max_age_ns: 1,
+                ..Default::default()
+            },
+            Default::default(),
+        )?);
+        let owner = TraceOwner::new(store.clone());
+        owner.accept(request()?, access(), 1)?;
+        let (_, accepted) = owner.read([1; 16], [6; 16], &access(), 2)?;
+        let identity = accepted.binding(0)?.identity;
+        let batch = TraceBatchV1 {
+            execution_id: identity.execution_id,
+            frames: vec![TraceFrameV1 {
+                execution_id: identity.execution_id,
+                sequence: 1,
+                kind: TraceFrameKindV1::Data,
+                bytes: vec![1],
+            }],
+            terminal: None,
+        };
+        let append =
+            |time| owner.append_at([1; 16], [6; 16], 0, "node-a", [2; 16], batch.clone(), time);
+        assert!(append(UNIX_EPOCH).is_err());
+        assert!(append(UNIX_EPOCH - Duration::from_nanos(1)).is_err());
+        assert_eq!(
+            append(UNIX_EPOCH + Duration::from_nanos(100))?.last_sequence,
+            1
+        );
+        let retention = EvidenceRetentionOwner::new(&store);
+        assert_eq!(retention.retain_trace(&identity, 100)?.removed_records, 0);
+        assert_eq!(retention.retain_trace(&identity, 101)?.removed_records, 1);
+        assert!(matches!(
+            store.read_trace(&identity, 1, &AnalysisReadControl::default()),
+            Err(araphor_data::Error::RetainedRangeExpired {
+                first_cursor: 1,
+                last_cursor: 1,
+                ..
+            })
+        ));
+        Ok(())
+    }
 
     #[test]
     fn observability_recovery_source_once() -> std::result::Result<(), Box<dyn std::error::Error>> {

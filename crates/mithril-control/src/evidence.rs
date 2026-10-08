@@ -116,6 +116,10 @@ impl EvidenceBatchInputV1 {
 }
 
 impl EvidenceIntakeOwner {
+    pub(crate) fn now(&self) -> SystemTime {
+        self.clock.now()
+    }
+
     pub(crate) async fn run_retention(&self) -> std::convert::Infallible {
         let data = &self.data;
         let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
