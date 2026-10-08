@@ -49,13 +49,61 @@ Implement the graph, finding and notification data owners in `crates/araphor-dat
 keep signed provider-neutral authority records in Control. No second service,
 incident graph, source collector, or query database is required.
 
-Status: **Done**.
+Status: **Done**. The nine review corrections pass the focused Rust checks,
+final shared Rust procedure, and fresh lightweight and paired physical
+incidents at `6beb143d`. The owned qualification VM is removed.
 
 Implement `GraphAndFindingOwner` under proposed `src/graph/` and
 `NotificationRouter` under proposed `src/notification/` in `araphor-data`.
 Reuse policy provenance and authorization-proof owners. Each graph result
 transaction commits its input manifest, revisions, witness references and
 processor progress through AnalysisStore. Compute outside the transaction.
+
+## Review correction TODOs
+
+The review covers source `ace760dd`. Keep each correction in its current
+owner. Use small owner modules and short functions. Reuse shared validation
+and reads. Do not add a service, database, dependency, worktree, or shell test.
+
+- [x] **1. Bind human acknowledgement to the expected finding revision.**
+  `NotificationRouter::acknowledge` must reject a stale acknowledgement.
+  Test an acknowledgement retry after a new finding revision arrives.
+- [x] **2. Keep delivery attempts bounded for the current finding revision.**
+  Keep completed evidence in immutable context history. Keep a pending
+  attempt and its captured input. Test more than 48 delivered revisions and
+  restart without losing the retry budget or original deadline.
+- [x] **3. Isolate notification failures.**
+  Control must attempt routing and delivery independently. Router scans must
+  continue after one failed item and retry that item on a later scan.
+  Test a tenant at its storage limit beside a tenant with available capacity.
+- [x] **4. Apply escalation route changes to current obligations.**
+  Compare the approved escalation reference during scheduling. Keep the
+  original deadline, finding marker, retry budget, and pending attempt.
+  Test a missing route added later and an escalation-only route update.
+- [x] **5. Check graph input expiry before the unchanged-input return.**
+  Test the normal `process` path after the witness deadline and raw retention.
+  Require the linked result to report `RETAINED_INPUT_EXPIRED`.
+- [x] **6. Retry a failed graph refresh before clearing failure health.**
+  Test the normal `process` path while the context provider still fails.
+  Clear `ProcessingFailed` only after a successful refresh.
+  Keep a failed source from stopping healthy sources in the same page.
+  Return the first typed error after processing the remaining sources.
+  Retry failed older windows before new evidence can clear failure health.
+  Test an older window outside the next input overlap.
+- [x] **7. Preserve replay rejection across issuer removal and reintroduction.**
+  Reuse the historical issuer, sequence epoch, and key ID check. Test a
+  still-valid, unseen old sequence after the issuer returns with a key alias.
+- [x] **8. Permit existing replay windows at capacity.**
+  Apply the count limit only when a new window is necessary. Test an existing
+  window at the 256-window limit and reject a new window at that limit.
+- [x] **9. Remove repeated full scans from notification routing.**
+  Read a bounded current-finding batch once. Use scoped related-obligation
+  reads. Keep canonical latest-revision selection and bounded memory.
+  Test duplicate windows, page continuation, and more than 256 findings.
+
+Each correction requires a focused Rust regression. The final shared Rust
+procedure must run after the last source or test edit. Performance remains
+**UNQUALIFIED**. This work does not approve a performance test or benchmark.
 
 ## Required changes
 
@@ -174,11 +222,112 @@ Stop before the detection-recipe and proposal work in Phase 7.6.
 
 ## Implementation result
 
-Status: **Done**. Implementation and qualification are complete.
-The graph and notification source is `dd7e52b5`. The final workspace Rust
+Status: **Done**. All nine review corrections and the fresh lightweight and
+paired physical incidents pass at `6beb143d`. The owned VM cleanup passes.
+The retained implementation and qualification record below covers the earlier
+source. The earlier graph and notification source is `dd7e52b5`. The final workspace Rust
 procedure passes at `44368ec5` after the existing authorization assertion
 correction. The production owners and paired incident source are identical
 between those commits.
+
+### Review correction result
+
+The graph, context, and notification corrections are committed at
+`7915e7ae532cd4979f5ac1dfe8830d5dcfea487b`. The shared Control and Node replay
+corrections are committed at `6beb143d7810f8bbf10c949c84c4c180d6d04b78`.
+All work uses the primary checkout. No worktree or shell test is added.
+The new production modules have at most 258 lines. The existing owners keep
+validation, retention, immutable history, quotas, and transaction boundaries.
+The context writer, context decoder, graph context references, notification
+scheduling, and replay-key checks have one shared implementation each.
+
+The three additional graph cases first fail with the expected conditions:
+a healthy source remains at cursor zero after another source fails; a failed
+older window keeps its old finding after new evidence; an expired overlapping
+window returns an invalid-witness error. Read
+`/tmp/mithril-review-fixes-graph-red-workspace-v2-20261008.log` and its source
+receipt, `/tmp/mithril-review-fixes-graph-red-source-20261008.json`.
+The final process-path regressions pass after the owner corrections.
+
+The focused workspace command uses `control_` and passes every required group:
+39 `control_graph_`, 20 `control_notification_`, and eight `control_authority_`
+cases. The shared Node authorization command passes 12 cases. Read
+`/tmp/mithril-review-fixes-control-green-20261008.log` and
+`/tmp/mithril-review-fixes-node-20261008.log`.
+
+```sh
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RUST_TEST_THREADS=4 cargo test --workspace --all-targets --all-features control_ -- --nocapture
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RUST_TEST_THREADS=4 cargo test --workspace --all-targets --all-features identity::authorization -- --nocapture
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RUST_TEST_THREADS=4 bash .github/scripts/verify-rust-ci.sh
+```
+
+The final shared Rust procedure passes formatting, workspace check, Clippy
+with warnings denied, and all-target, all-feature tests. Its 76 top-level suites
+report 1726 passed, zero failed, and 546 ignored. Nested crash subprocess
+results are not added to this count. The full procedure includes the incident
+round-trip and finding-density cases. Read
+`/tmp/mithril-review-fixes-rust-ci-v2-20261008.log`,
+`/tmp/mithril-review-fixes-rust-ci-result-20261008.json`, and
+`/tmp/mithril-review-fixes-source-20261008.json` for exact source hashes and
+verification settings. Rust debug assertions remain enabled. Debug information
+and incremental compilation are disabled to reduce generated storage.
+
+The final workspace build passes at the same source. The freshly built
+production-owner CLI passes this command:
+
+```sh
+target/debug/mithril_discovery_test --case graph-notification --output-directory /tmp/mithril-review-fixes-lightweight-final-20261008
+```
+
+Read `/tmp/mithril-review-fixes-build-final-20261008.log`,
+`/tmp/mithril-review-fixes-lightweight-final-20261008.log`,
+`/tmp/mithril-review-fixes-lightweight-final-20261008/result.json`, and
+`/tmp/mithril-review-fixes-lightweight-final-receipt-20261008.json`.
+The receipt records the exact CLI SHA-256 and arguments. Accepted cursors are
+`[0, 0, 2, 2]`; acknowledgements are `[null, null, 2, 2]`. Canonical replay is
+equal. An injected transaction failure keeps graph progress unchanged.
+The result retains 12 recorded incident cards and the 257-finding check.
+Notification restart, retry, and human acknowledgement keep the original
+deadline.
+
+The paired Rust physical case passes one test with zero failures and 694
+filtered cases on Linux `6.8.0-142-generic` with K3s `v1.35.5+k3s1`.
+The existing VM helper builds current production images and copies the test
+and helper binaries. Host and guest SHA-256 values match. Imported Node and
+Control image identities match the fresh host images. Read
+`/tmp/mithril-review-fixes-physical-provenance-20261008.json`.
+The guest runs the existing Rust entry point:
+
+```sh
+"$MITHRIL_TEST_BIN" discovery::graph_notification::physical::graph_notification_incident --exact --ignored --nocapture --test-threads=1
+```
+
+Read `/tmp/mithril-review-fixes-physical-20261008.log`,
+`/tmp/mithril-review-fixes-physical-invocation-20261008.json`, and
+`/tmp/mithril-review-fixes-physical-20261008/result.json`.
+The protected open returns errno 13 and zero bytes. The benign read returns
+errno zero and 558 bytes. The graph decision matches the lightweight
+`initial-health-missing` condition. It reports `PREVENTED` and
+`COVERAGE_INSUFFICIENT`, with missing ancestry, policy provenance, and source
+coverage. These limits prevent a complete malicious-lineage or policy claim.
+The owner exposes 255 current findings. The exact selected notification
+lifecycle has seven transitions. It keeps the original deadline through
+restart, retry, overdue acknowledgement, and human acknowledgement.
+Original volumes, store reopen, immutable graph replay, and zero pending
+evidence are verified. No complete Hugging Face incident is claimed.
+
+Both exact test namespaces are absent. The owned VM name and UUID, work
+directory, and retained state record are absent. The unrelated running VM
+keeps its UUID and state. Read
+`/tmp/mithril-review-fixes-vm-cleanup-20261008.json`. All 59 frozen owner-source
+files and seven existing helper-source hashes remain unchanged after the
+physical case. The final Rust procedure still covers this source.
+
+Performance remains **UNQUALIFIED**. Interleaved finding result IDs can cause
+repeated immutable point reads because the materializer caches one snapshot.
+No benchmark or additional cache is added. Full HDF5, Jinja, token, cloud,
+controller, provider-binding, response, and cross-node physical environments
+remain outside this qualification boundary.
 
 ### Discovery isolation failure
 
