@@ -370,10 +370,17 @@ impl AnalysisStore {
         self.read_snapshot(|reader| {
             let mut statement = reader
                 .prepare(
-                    "SELECT entity_key, lifetime_key, MAX(owner_revision) FROM context_versions
+                    "WITH heads AS (
+                 SELECT entity_key, lifetime_key, MAX(owner_revision) AS owner_revision FROM context_versions
                  WHERE tenant_id = ? AND owner_id = ? AND (CAST(? AS BLOB) IS NULL
                     OR entity_key > ? OR (entity_key = ? AND lifetime_key > ?))
-                 GROUP BY entity_key, lifetime_key ORDER BY entity_key, lifetime_key LIMIT ?",
+                 GROUP BY entity_key, lifetime_key ORDER BY entity_key, lifetime_key LIMIT ?
+                 ) SELECT h.entity_key, h.lifetime_key, h.owner_revision,
+                    c.valid_from_utc_ns, c.valid_until_utc_ns, c.sensitivity, c.body, c.commit_revision
+                 FROM heads h JOIN context_versions c ON c.tenant_id = ? AND c.owner_id = ?
+                    AND c.entity_key = h.entity_key AND c.lifetime_key = h.lifetime_key
+                    AND c.owner_revision = h.owner_revision
+                 ORDER BY h.entity_key, h.lifetime_key",
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare context head page",
@@ -389,16 +396,27 @@ impl AnalysisStore {
                         entity,
                         entity,
                         lifetime,
-                        super::MAX_ANALYSIS_PAGE_RECORDS as u32
+                        super::MAX_ANALYSIS_PAGE_RECORDS as u32,
+                        tenant.as_slice(),
+                        owner
                     ],
                     |row| {
-                        Ok(AnalysisContextKeyV1 {
-                            tenant_id: tenant,
-                            owner_id: owner.into(),
-                            entity_key: row.get(0)?,
-                            lifetime_key: row.get(1)?,
-                            owner_revision: row.get(2)?,
-                        })
+                        Ok((
+                            AnalysisContextKeyV1 {
+                                tenant_id: tenant,
+                                owner_id: owner.into(),
+                                entity_key: row.get(0)?,
+                                lifetime_key: row.get(1)?,
+                                owner_revision: row.get(2)?,
+                            },
+                            (
+                                row.get(3)?,
+                                row.get(4)?,
+                                row.get(5)?,
+                                row.get(6)?,
+                                row.get(7)?,
+                            ),
+                        ))
                     },
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -407,11 +425,10 @@ impl AnalysisStore {
             let mut versions = Vec::new();
             let mut bytes = 0usize;
             for row in rows {
-                let key = row.context(AnalysisDatabaseSnafu {
+                let (key, stored) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode context head page",
                 })?;
-                let (version, _) = Self::read_context_from(reader, &self.root, &key)?
-                    .ok_or_else(|| self.state_error("the context head is absent"))?;
+                let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
                 let next_bytes = bytes
                     .checked_add(std::mem::size_of::<AnalysisContextVersionV1>())
                     .and_then(|bytes| bytes.checked_add(version.key.owner_id.len()))
@@ -523,15 +540,22 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read context version",
             })?;
-        let Some((from, until, sensitivity, body, revision)) = stored else {
-            return Ok(None);
-        };
+        stored
+            .map(|stored| Self::decode_context_row(root, key.clone(), stored))
+            .transpose()
+    }
+
+    fn decode_context_row(
+        root: &Path,
+        key: AnalysisContextKeyV1,
+        (from, until, sensitivity, body, revision): ContextRow,
+    ) -> Result<(AnalysisContextVersionV1, u64)> {
         let sensitivity = match ContextSensitivityV1::try_from(sensitivity.as_str()) {
             Ok(value) => value,
             Err(()) => return Self::reject_path(root, "the context sensitivity is invalid"),
         };
         let result = AnalysisContextVersionV1 {
-            key: key.clone(),
+            key,
             valid_from_utc_ns: from,
             valid_until_utc_ns: until,
             sensitivity,
@@ -540,7 +564,7 @@ impl AnalysisStore {
         if !result.valid() || revision == 0 {
             return Self::reject_path(root, "the retained context version is invalid");
         }
-        Ok(Some((result, revision)))
+        Ok((result, revision))
     }
 }
 
@@ -638,6 +662,25 @@ mod tests {
             Some(&page.last().ok_or("byte cursor")?.key),
         )?;
         assert_eq!(page.len() + next.len(), 34);
+        {
+            let mut writer = store.writer()?;
+            writer.get_mut()?.execute(
+                "UPDATE context_versions SET body = ? WHERE tenant_id = ? AND owner_id = ?
+                 AND entity_key = ? AND lifetime_key = ? AND owner_revision = ?",
+                params![
+                    vec![1u8; super::super::MAX_ANALYSIS_PAGE_BYTES + 1].as_slice(),
+                    tenant.as_slice(),
+                    "large-owner",
+                    original.key.entity_key.as_slice(),
+                    original.key.lifetime_key.as_slice(),
+                    original.key.owner_revision
+                ],
+            )?;
+        }
+        assert!(matches!(
+            store.context_head_page(tenant, "large-owner", None),
+            Err(crate::Error::AnalysisState { .. })
+        ));
         Ok(())
     }
 
