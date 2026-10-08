@@ -23,7 +23,11 @@ mod follow;
 #[cfg(test)]
 mod follow_tests;
 mod frame;
+mod graph;
+#[cfg(test)]
+mod graph_tests;
 mod input;
+mod notification;
 #[cfg(test)]
 mod owner_tests;
 mod plan;
@@ -322,7 +326,7 @@ impl QueryOwner {
         mut lease: QueryLease,
     ) -> Result<QueryResult> {
         let selection = plan.dependencies(now_ns)?;
-        let project = InputProjection::new(&plan.template, &selection);
+        let project = InputProjection::new(&plan.template, &selection, now_ns);
         let bounds = crate::analysis::AnalysisExtractLimits {
             scan_bytes: self.limits.scan_bytes,
             input_bytes: self.limits.input_bytes,

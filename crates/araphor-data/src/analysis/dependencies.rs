@@ -149,7 +149,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare context dependencies",
                 })?;
-            for key in selection.contexts.as_slice() {
+            for key in selection.contexts.as_slice().iter().chain(&selection.obligations) {
                 control.check()?;
                 let changed: Option<u64> = contexts
                     .query_row(
@@ -187,6 +187,18 @@ impl AnalysisStore {
                     .context(AnalysisDatabaseSnafu {
                         operation: "read discovery dependencies",
                     })?;
+                revision = revision.max(changed.unwrap_or(0));
+            }
+            let mut graphs = snapshot.prepare(
+                "SELECT MAX(commit_revision) FROM analysis_results
+                 WHERE tenant_id = ? AND processor_id = ? AND result_id = ? AND commit_revision <= ?",
+            ).context(AnalysisDatabaseSnafu { operation: "prepare graph dependencies" })?;
+            for id in &selection.graphs {
+                control.check()?;
+                let changed: Option<u64> = graphs.query_row(
+                    params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, id, meta.commit_revision],
+                    |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "read graph dependencies" })?;
                 revision = revision.max(changed.unwrap_or(0));
             }
             let mut traces = snapshot

@@ -9,6 +9,8 @@ use snafu::{IntoError as _, ResultExt as _};
 
 use super::adapter::{InputColumn, InputTable};
 use super::discovery::{BEHAVIORS, CONTEXT};
+use super::graph::{BRANCHES, FINDINGS, PACKAGES, POLICY, RELATIONSHIPS, SUBJECTS};
+use super::notification::NOTIFICATIONS;
 use super::QueryTemplate;
 use crate::{
     AnalysisContextVersionV1, AnalysisExtractionV1, AnalysisGapV1, AnalysisInputV1,
@@ -802,6 +804,13 @@ pub(super) const SCHEMAS: &[InputSchema] = &[
     TRACE_RECIPES,
     BEHAVIORS,
     CONTEXT,
+    FINDINGS,
+    RELATIONSHIPS,
+    SUBJECTS,
+    BRANCHES,
+    PACKAGES,
+    POLICY,
+    NOTIFICATIONS,
 ];
 
 #[derive(Debug)]
@@ -809,7 +818,8 @@ pub(super) struct InputRow(pub(super) Vec<Value>);
 
 pub(super) struct InputProjection<'a> {
     template: &'a QueryTemplate,
-    selection: &'a crate::AnalysisSelectionV1,
+    pub(super) selection: &'a crate::AnalysisSelectionV1,
+    now_utc_ns: u64,
     recipes: Vec<RecipeInput>,
 }
 
@@ -822,10 +832,12 @@ impl<'a> InputProjection<'a> {
     pub(super) fn new(
         template: &'a QueryTemplate,
         selection: &'a crate::AnalysisSelectionV1,
+        now_utc_ns: u64,
     ) -> Self {
         Self {
             template,
             selection,
+            now_utc_ns,
             recipes: Vec::new(),
         }
     }
@@ -834,7 +846,7 @@ impl<'a> InputProjection<'a> {
         !matches!(self.template, QueryTemplate::Client(sql) if !sql.dependencies().contains(relation))
     }
 
-    fn expands(&self, relation: &str) -> bool {
+    pub(super) fn expands(&self, relation: &str) -> bool {
         matches!(self.template, QueryTemplate::Client(sql) if sql.dependencies().contains(relation))
     }
 
@@ -862,6 +874,12 @@ impl<'a> InputProjection<'a> {
             AnalysisInputV1::Profile { .. } => {
                 return crate::QueryInvalidSnafu {
                     field: "unexpanded profile",
+                }
+                .fail()
+            }
+            AnalysisInputV1::Graph { .. } | AnalysisInputV1::Notification { .. } => {
+                return crate::QueryInvalidSnafu {
+                    field: "unexpanded owner input",
                 }
                 .fail()
             }
@@ -966,6 +984,43 @@ impl crate::analysis::AnalysisProjection for InputProjection<'_> {
                     )?;
                 }
                 Ok(true)
+            }
+            AnalysisInputV1::Graph {
+                result_id,
+                graph,
+                commit_revision,
+                sensitivity,
+            } => {
+                if graph.scope.identity.tenant_id != self.selection.tenant_id
+                    || (!self.selection.sources.is_all()
+                        && !self
+                            .selection
+                            .sources
+                            .as_slice()
+                            .contains(&graph.scope.identity))
+                {
+                    return crate::QueryDeniedSnafu.fail();
+                }
+                self.graph_rows(graph, result_id, *commit_revision, *sensitivity, sink)
+            }
+            AnalysisInputV1::Notification {
+                obligation,
+                finding,
+                commit_revision,
+            } => {
+                if obligation.key.tenant_id != self.selection.tenant_id
+                    || finding.is_some_and(|finding| !self.permits_finding(finding))
+                {
+                    return crate::QueryDeniedSnafu.fail();
+                }
+                let row = super::notification::notification_row(
+                    obligation,
+                    *finding,
+                    *commit_revision,
+                    self.now_utc_ns,
+                )?;
+                let bytes = row.allocation_bytes()?;
+                sink.emit(AnalysisRelationV1::Notifications, (row, bytes))
             }
             AnalysisInputV1::Trace {
                 intent,
@@ -1298,6 +1353,12 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
                 Value::Boolean(measurement.atomic_snapshot),
                 Value::Text(measurement.unit.clone()),
             ])),
+            AnalysisInputV1::Graph { .. } | AnalysisInputV1::Notification { .. } => {
+                crate::QueryUnsupportedSnafu {
+                    relation: "unexpanded owner input",
+                }
+                .fail()
+            }
             AnalysisInputV1::Profile { .. } => crate::QueryUnsupportedSnafu {
                 relation: "unexpanded profile",
             }
@@ -1482,7 +1543,7 @@ impl InputRelations {
     ) -> Result<Self> {
         let mut bytes = extraction.input_bytes;
         Self::charge(&mut bytes, 0, limit)?;
-        let mut counts = [0_usize; 11];
+        let mut counts = [0_usize; 18];
         if !extraction.missing_results.is_empty() {
             return crate::QueryUnsupportedSnafu {
                 relation: "results",
@@ -1490,22 +1551,7 @@ impl InputRelations {
             .fail();
         }
         for page in &extraction.pages {
-            let index = match page.relation {
-                AnalysisRelationV1::Events => 0,
-                AnalysisRelationV1::Context => 2,
-                AnalysisRelationV1::Behaviors => 9,
-                AnalysisRelationV1::DiscoveryContext => 10,
-                AnalysisRelationV1::Traces => 4,
-                AnalysisRelationV1::TraceOutput => 5,
-                AnalysisRelationV1::TraceMeasurements => 6,
-                AnalysisRelationV1::Targets => 7,
-                AnalysisRelationV1::Results => {
-                    return crate::QueryUnsupportedSnafu {
-                        relation: "results",
-                    }
-                    .fail();
-                }
-            };
+            let index = Self::relation_index(page.relation)?;
             counts[index] = counts[index].checked_add(page.rows.len()).ok_or_else(|| {
                 crate::QueryLimitSnafu {
                     resource: "query input bytes",
@@ -1526,25 +1572,17 @@ impl InputRelations {
             Self::table(&TRACE_RECIPES, 0, &mut bytes, limit)?,
             Self::table(&BEHAVIORS, counts[9], &mut bytes, limit)?,
             Self::table(&CONTEXT, counts[10], &mut bytes, limit)?,
+            Self::table(&FINDINGS, counts[11], &mut bytes, limit)?,
+            Self::table(&RELATIONSHIPS, counts[12], &mut bytes, limit)?,
+            Self::table(&SUBJECTS, counts[13], &mut bytes, limit)?,
+            Self::table(&BRANCHES, counts[14], &mut bytes, limit)?,
+            Self::table(&PACKAGES, counts[15], &mut bytes, limit)?,
+            Self::table(&POLICY, counts[16], &mut bytes, limit)?,
+            Self::table(&NOTIFICATIONS, counts[17], &mut bytes, limit)?,
         ];
         Self::charge(&mut bytes, size_of::<Self>(), limit)?;
         for page in &mut extraction.pages {
-            let index = match page.relation {
-                AnalysisRelationV1::Events => 0,
-                AnalysisRelationV1::Context => 2,
-                AnalysisRelationV1::Behaviors => 9,
-                AnalysisRelationV1::DiscoveryContext => 10,
-                AnalysisRelationV1::Traces => 4,
-                AnalysisRelationV1::TraceOutput => 5,
-                AnalysisRelationV1::TraceMeasurements => 6,
-                AnalysisRelationV1::Targets => 7,
-                AnalysisRelationV1::Results => {
-                    return crate::QueryUnsupportedSnafu {
-                        relation: "results",
-                    }
-                    .fail();
-                }
-            };
+            let index = Self::relation_index(page.relation)?;
             for row in take(&mut page.rows) {
                 tables[index].rows.push(row.0);
             }
@@ -1618,6 +1656,18 @@ impl InputRelations {
                             Value::Text(
                                 if schema.name == "behaviors" {
                                     if extraction.discovery_enabled {
+                                        "enabled"
+                                    } else {
+                                        "disabled"
+                                    }
+                                } else if super::graph::RELATIONS.contains(&schema.name) {
+                                    if extraction.graph_enabled {
+                                        "enabled"
+                                    } else {
+                                        "disabled"
+                                    }
+                                } else if schema.name == "notifications" {
+                                    if extraction.notification_enabled {
                                         "enabled"
                                     } else {
                                         "disabled"
@@ -1756,6 +1806,13 @@ impl InputRelations {
                 "trace_recipes" => "_query_trace_recipes",
                 "behaviors" => "_query_behaviors",
                 "context" => "_query_discovery_context",
+                "findings" => "_query_findings",
+                "relationships" => "_query_relationships",
+                "graph_subjects" => "_query_graph_subjects",
+                "graph_branches" => "_query_graph_branches",
+                "correlation_packages" => "_query_correlation_packages",
+                "policy_observations" => "_query_policy_observations",
+                "notifications" => "_query_notifications",
                 _ => {
                     return crate::QueryInvalidSnafu {
                         field: "query relation",
@@ -1764,6 +1821,12 @@ impl InputRelations {
                 }
             };
             table.register(connection, function, schema.name)?;
+            if schema.name == "findings" {
+                connection.execute_batch(
+                    "CREATE OR REPLACE TEMP VIEW findings AS SELECT * FROM _query_findings()
+                     QUALIFY ROW_NUMBER() OVER (PARTITION BY tenant_id, finding_id ORDER BY commit_revision DESC) = 1",
+                ).context(crate::AnalysisDatabaseSnafu { operation: "create current finding view" })?;
+            }
         }
         Ok(())
     }
@@ -1810,6 +1873,32 @@ impl InputRelations {
             rows,
             #[cfg(test)]
             scan_gate: Default::default(),
+        })
+    }
+
+    fn relation_index(relation: AnalysisRelationV1) -> Result<usize> {
+        Ok(match relation {
+            AnalysisRelationV1::Events => 0,
+            AnalysisRelationV1::Context => 2,
+            AnalysisRelationV1::Behaviors => 9,
+            AnalysisRelationV1::DiscoveryContext => 10,
+            AnalysisRelationV1::Traces => 4,
+            AnalysisRelationV1::TraceOutput => 5,
+            AnalysisRelationV1::TraceMeasurements => 6,
+            AnalysisRelationV1::Targets => 7,
+            AnalysisRelationV1::Findings => 11,
+            AnalysisRelationV1::Relationships => 12,
+            AnalysisRelationV1::GraphSubjects => 13,
+            AnalysisRelationV1::GraphBranches => 14,
+            AnalysisRelationV1::CorrelationPackages => 15,
+            AnalysisRelationV1::PolicyObservations => 16,
+            AnalysisRelationV1::Notifications => 17,
+            AnalysisRelationV1::Results => {
+                return crate::QueryUnsupportedSnafu {
+                    relation: "results",
+                }
+                .fail()
+            }
         })
     }
 
@@ -2063,6 +2152,8 @@ mod tests {
     fn empty_input() -> AnalysisExtractionV1<InputRow> {
         AnalysisExtractionV1 {
             discovery_enabled: false,
+            graph_enabled: false,
+            notification_enabled: false,
             meta: AnalysisStoreMetaV1 {
                 store_uuid: uuid::Uuid::from_u128(1),
                 schema_version: 1,

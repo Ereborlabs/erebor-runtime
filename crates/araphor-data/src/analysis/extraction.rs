@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::mem::size_of;
 use std::ops::Bound;
 
-use duckdb::{params, Connection};
+use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::raw::{RawIdentity, TracePayload, TraceRecord};
@@ -83,6 +83,10 @@ pub struct AnalysisSelectionV1 {
     pub(crate) targets_only: bool,
     pub(crate) discovery: bool,
     pub(crate) profiles: Vec<String>,
+    pub(crate) graph: bool,
+    pub(crate) graphs: Vec<String>,
+    pub(crate) notifications: bool,
+    pub(crate) obligations: Vec<AnalysisContextKeyV1>,
     pub traces: Selection<TraceIdentityV1>,
     /// Node IDs narrow evidence, coverage, and targets, not context versions.
     pub nodes: Vec<String>,
@@ -102,6 +106,10 @@ impl AnalysisSelectionV1 {
             targets_only: false,
             discovery: false,
             profiles: Vec::new(),
+            graph: false,
+            graphs: Vec::new(),
+            notifications: false,
+            obligations: Vec::new(),
             traces: Selection::Exact(Vec::new()),
             nodes: Vec::new(),
             binding_ids: Vec::new(),
@@ -127,17 +135,7 @@ impl AnalysisSelectionV1 {
             && self.nodes.len() <= MAX_EXTRACT_KEYS
             && self.nodes.iter().all(|node| crate::node_id_is_valid(node))
             && self.nodes.iter().collect::<BTreeSet<_>>().len() == self.nodes.len()
-            && [
-                self.sources.as_slice().len(),
-                self.contexts.as_slice().len(),
-                self.results.len(),
-                self.profiles.len(),
-                self.traces.as_slice().len(),
-                self.binding_ids.len(),
-            ]
-            .into_iter()
-            .try_fold(MAX_EXTRACT_KEYS, usize::checked_sub)
-            .is_some()
+            && self.key_count() <= MAX_EXTRACT_KEYS
             && self.binding_ids.iter().all(|id| *id != [0; 16])
             && self.binding_ids.iter().collect::<BTreeSet<_>>().len() == self.binding_ids.len()
             && self
@@ -159,6 +157,15 @@ impl AnalysisSelectionV1 {
                 .iter()
                 .all(|id| !id.is_empty() && id.len() <= 256)
             && self
+                .graphs
+                .iter()
+                .all(|id| !id.is_empty() && id.len() <= 256)
+            && self.obligations.iter().all(|key| {
+                key.tenant_id == self.tenant_id
+                    && key.owner_id == crate::NOTIFICATION_STATE_OWNER
+                    && key.valid()
+            })
+            && self
                 .sources
                 .as_slice()
                 .iter()
@@ -174,6 +181,8 @@ impl AnalysisSelectionV1 {
                 == self.contexts.as_slice().len()
             && self.results.iter().collect::<BTreeSet<_>>().len() == self.results.len()
             && self.profiles.iter().collect::<BTreeSet<_>>().len() == self.profiles.len()
+            && self.graphs.iter().collect::<BTreeSet<_>>().len() == self.graphs.len()
+            && self.obligations.iter().collect::<BTreeSet<_>>().len() == self.obligations.len()
             && self
                 .traces
                 .as_slice()
@@ -181,6 +190,31 @@ impl AnalysisSelectionV1 {
                 .all(|identity| identity.tenant_id == self.tenant_id && identity.validate().is_ok())
             && self.traces.as_slice().iter().collect::<BTreeSet<_>>().len()
                 == self.traces.as_slice().len()
+    }
+
+    fn key_count(&self) -> usize {
+        self.sources.as_slice().len()
+            + self.contexts.as_slice().len()
+            + self.results.len()
+            + self.profiles.len()
+            + self.graphs.len()
+            + self.obligations.len()
+            + self.traces.as_slice().len()
+            + self.binding_ids.len()
+    }
+
+    pub(crate) fn permits_graph(&self, graph: &crate::GraphSnapshotV1) -> bool {
+        self.binding_ids.is_empty()
+            || graph.input_manifest.evidence.iter().all(|record| {
+                graph.findings.iter().any(|finding| {
+                    finding.effects.iter().any(|effect| {
+                        &effect.evidence == record
+                            && effect
+                                .binding_id
+                                .is_some_and(|binding| self.binding_ids.contains(&binding))
+                    })
+                })
+            })
     }
 
     fn allocation_bytes(&self) -> usize {
@@ -198,6 +232,12 @@ impl AnalysisSelectionV1 {
             .saturating_add(self.nodes.capacity().saturating_mul(size_of::<String>()))
             .saturating_add(self.results.capacity().saturating_mul(size_of::<String>()));
         bytes = bytes.saturating_add(self.profiles.capacity().saturating_mul(size_of::<String>()));
+        bytes = bytes.saturating_add(self.graphs.capacity().saturating_mul(size_of::<String>()));
+        bytes = bytes.saturating_add(
+            self.obligations
+                .capacity()
+                .saturating_mul(size_of::<AnalysisContextKeyV1>()),
+        );
         bytes = bytes.saturating_add(
             self.traces
                 .capacity()
@@ -211,13 +251,19 @@ impl AnalysisSelectionV1 {
         for source in self.sources.as_slice() {
             bytes = bytes.saturating_add(source.node_id.capacity());
         }
-        for key in self.contexts.as_slice() {
+        for key in self.contexts.as_slice().iter().chain(&self.obligations) {
             bytes = bytes
                 .saturating_add(key.owner_id.capacity())
                 .saturating_add(key.entity_key.capacity())
                 .saturating_add(key.lifetime_key.capacity());
         }
-        for key in self.nodes.iter().chain(&self.results).chain(&self.profiles) {
+        for key in self
+            .nodes
+            .iter()
+            .chain(&self.results)
+            .chain(&self.profiles)
+            .chain(&self.graphs)
+        {
             bytes = bytes.saturating_add(key.capacity());
         }
         for identity in self.traces.as_slice() {
@@ -269,6 +315,17 @@ pub enum AnalysisInputV1<'a> {
         sources: &'a [EvidenceIntakeIdentityV1],
         discovery_enabled: bool,
     },
+    Graph {
+        result_id: &'a str,
+        graph: &'a crate::GraphSnapshotV1,
+        commit_revision: u64,
+        sensitivity: crate::ContextSensitivityV1,
+    },
+    Notification {
+        obligation: &'a crate::NotificationObligationV1,
+        finding: Option<&'a crate::FindingV1>,
+        commit_revision: u64,
+    },
     Trace {
         state: &'a TraceStateV1,
         intent: &'a TraceIntentV1,
@@ -303,6 +360,8 @@ impl AnalysisInputV1<'_> {
             Self::Target { .. } => AnalysisRelationV1::Targets,
             Self::TraceMeasurement { .. } => AnalysisRelationV1::TraceMeasurements,
             Self::Profile { .. } => AnalysisRelationV1::Behaviors,
+            Self::Graph { .. } => AnalysisRelationV1::Results,
+            Self::Notification { .. } => AnalysisRelationV1::Notifications,
             Self::Trace { .. } => AnalysisRelationV1::Traces,
             Self::TraceOutput { .. } => AnalysisRelationV1::TraceOutput,
             Self::Result { .. } => AnalysisRelationV1::Results,
@@ -402,6 +461,13 @@ pub enum AnalysisRelationV1 {
     Traces,
     TraceOutput,
     TraceMeasurements,
+    Findings,
+    Relationships,
+    GraphSubjects,
+    GraphBranches,
+    CorrelationPackages,
+    PolicyObservations,
+    Notifications,
 }
 
 #[derive(Debug)]
@@ -424,6 +490,8 @@ pub struct AnalysisSourceSnapshotV1 {
 #[derive(Debug)]
 pub struct AnalysisExtractionV1<T = Box<[u8]>> {
     pub discovery_enabled: bool,
+    pub graph_enabled: bool,
+    pub notification_enabled: bool,
     pub meta: AnalysisStoreMetaV1,
     pub sources: Vec<AnalysisSourceSnapshotV1>,
     pub missing_contexts: Vec<AnalysisContextKeyV1>,
@@ -600,11 +668,29 @@ impl AnalysisStore {
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
+        if selection.graph && !self.graph_enabled() {
+            return crate::QueryUnsupportedSnafu {
+                relation: "graph owner disabled",
+            }
+            .fail();
+        }
+        if selection.notifications
+            && !self
+                .notification_owner
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return crate::QueryUnsupportedSnafu {
+                relation: "notification owner disabled",
+            }
+            .fail();
+        }
         if !selection.sources.is_all()
             && !selection.contexts.is_all()
             && !selection.traces.is_all()
             && !selection.targets_only
             && !selection.discovery
+            && !selection.graph
+            && !selection.notifications
             && selection.nodes.is_empty()
         {
             return Ok((Cow::Borrowed(selection), 0));
@@ -632,6 +718,8 @@ impl AnalysisStore {
             Selection::Exact(keys) => keys,
         });
         resolved.discovery = false;
+        resolved.graph = false;
+        resolved.notifications = false;
         if selection.targets_only {
             resolved
                 .contexts
@@ -670,14 +758,7 @@ impl AnalysisStore {
                     if !resolved.nodes.is_empty() && !resolved.nodes.contains(&source.node_id) {
                         continue;
                     }
-                    if resolved.sources.as_slice().len()
-                        + resolved.contexts.as_slice().len()
-                        + resolved.results.len()
-                        + resolved.profiles.len()
-                        + resolved.traces.as_slice().len()
-                        + resolved.binding_ids.len()
-                        == MAX_EXTRACT_KEYS
-                    {
+                    if resolved.key_count() == MAX_EXTRACT_KEYS {
                         return Err(error());
                     }
                     let sources = resolved.sources.exact_mut().ok_or_else(|| {
@@ -694,12 +775,7 @@ impl AnalysisStore {
             }
         }
         if selection.contexts.is_all() {
-            let remaining = MAX_EXTRACT_KEYS
-                - resolved.sources.as_slice().len()
-                - resolved.results.len()
-                - resolved.profiles.len()
-                - resolved.traces.as_slice().len()
-                - resolved.binding_ids.len();
+            let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
             let mut statement = snapshot.prepare(
                 "SELECT owner_id, entity_key, lifetime_key, owner_revision FROM context_versions
                  WHERE tenant_id = ? AND (NOT ? OR owner_id = 'mithril-control/target')
@@ -785,14 +861,7 @@ impl AnalysisStore {
                     {
                         continue;
                     }
-                    if resolved.sources.as_slice().len()
-                        + resolved.contexts.as_slice().len()
-                        + resolved.results.len()
-                        + resolved.profiles.len()
-                        + resolved.traces.as_slice().len()
-                        + resolved.binding_ids.len()
-                        == MAX_EXTRACT_KEYS
-                    {
+                    if resolved.key_count() == MAX_EXTRACT_KEYS {
                         return Err(error());
                     }
                     let traces = resolved.traces.exact_mut().ok_or_else(|| {
@@ -825,13 +894,7 @@ impl AnalysisStore {
                 })?;
             for source in resolved.sources.as_slice() {
                 control.check()?;
-                let remaining = MAX_EXTRACT_KEYS
-                    - resolved.sources.as_slice().len()
-                    - resolved.contexts.as_slice().len()
-                    - resolved.results.len()
-                    - resolved.profiles.len()
-                    - resolved.traces.as_slice().len()
-                    - resolved.binding_ids.len();
+                let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
                 let rows = statement
                     .query_map(
                         params![
@@ -853,14 +916,7 @@ impl AnalysisStore {
                     if id.is_empty() || id.len() > 256 {
                         return self.reject("the discovery profile key is invalid");
                     }
-                    if resolved.sources.as_slice().len()
-                        + resolved.contexts.as_slice().len()
-                        + resolved.results.len()
-                        + resolved.profiles.len()
-                        + resolved.traces.as_slice().len()
-                        + resolved.binding_ids.len()
-                        == MAX_EXTRACT_KEYS
-                    {
+                    if resolved.key_count() == MAX_EXTRACT_KEYS {
                         return Err(error());
                     }
                     let added =
@@ -875,6 +931,112 @@ impl AnalysisStore {
             }
             resolved.profiles.sort();
             resolved.profiles.dedup();
+        }
+        if selection.graph {
+            let mut statement = snapshot.prepare(
+                "SELECT result_id FROM analysis_results
+                 WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND stream_key = ?
+                 QUALIFY ROW_NUMBER() OVER (PARTITION BY first_cursor ORDER BY commit_revision DESC) = 1
+                 ORDER BY commit_revision, result_id LIMIT ?",
+            ).context(AnalysisDatabaseSnafu { operation: "prepare graph result keys" })?;
+            for source in resolved.sources.as_slice() {
+                control.check()?;
+                let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
+                let rows = statement
+                    .query_map(
+                        params![
+                            selection.tenant_id.as_slice(),
+                            crate::GRAPH_PROCESSOR,
+                            crate::GRAPH_SCHEMA_VERSION,
+                            source.key().as_slice(),
+                            (remaining + 1) as u32
+                        ],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read graph result keys",
+                    })?;
+                for row in rows {
+                    control.check()?;
+                    let id = row.context(AnalysisDatabaseSnafu {
+                        operation: "decode graph result key",
+                    })?;
+                    if id.is_empty() || id.len() > 256 {
+                        return self.reject("the graph result key is invalid");
+                    }
+                    if resolved.key_count() == MAX_EXTRACT_KEYS {
+                        return Err(error());
+                    }
+                    let added =
+                        AnalysisExtractionV1::<()>::grow(&mut resolved.graphs, bytes, limit)?;
+                    bytes = bytes
+                        .checked_add(added)
+                        .and_then(|bytes| bytes.checked_add(id.capacity()))
+                        .filter(|bytes| *bytes <= limit)
+                        .ok_or_else(error)?;
+                    resolved.graphs.push(id);
+                }
+            }
+        }
+        if selection.notifications {
+            let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
+            let mut statement = snapshot
+                .prepare(
+                    "SELECT entity_key, lifetime_key, owner_revision FROM context_versions
+                 WHERE tenant_id = ? AND owner_id = ?
+                 QUALIFY ROW_NUMBER() OVER (PARTITION BY entity_key, lifetime_key
+                     ORDER BY owner_revision DESC, commit_revision DESC) = 1
+                 ORDER BY entity_key, lifetime_key LIMIT ?",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare notification keys",
+                })?;
+            let rows = statement
+                .query_map(
+                    params![
+                        selection.tenant_id.as_slice(),
+                        crate::NOTIFICATION_STATE_OWNER,
+                        (remaining + 1) as u32
+                    ],
+                    |row| {
+                        Ok(AnalysisContextKeyV1 {
+                            tenant_id: selection.tenant_id,
+                            owner_id: crate::NOTIFICATION_STATE_OWNER.into(),
+                            entity_key: row.get(0)?,
+                            lifetime_key: row.get(1)?,
+                            owner_revision: row.get(2)?,
+                        })
+                    },
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read notification keys",
+                })?;
+            for row in rows {
+                control.check()?;
+                let key = row.context(AnalysisDatabaseSnafu {
+                    operation: "decode notification key",
+                })?;
+                if !key.valid() {
+                    return self.reject("the notification key is invalid");
+                }
+                if resolved.key_count() == MAX_EXTRACT_KEYS {
+                    return Err(error());
+                }
+                let added =
+                    AnalysisExtractionV1::<()>::grow(&mut resolved.obligations, bytes, limit)?;
+                bytes = bytes
+                    .checked_add(added)
+                    .and_then(|bytes| {
+                        bytes.checked_add(
+                            key.owner_id.capacity()
+                                + key.entity_key.capacity()
+                                + key.lifetime_key.capacity(),
+                        )
+                    })
+                    .filter(|bytes| *bytes <= limit)
+                    .ok_or_else(error)?;
+                resolved.obligations.push(key);
+            }
         }
         control.check()?;
         Ok((Cow::Owned(resolved), bytes))
@@ -986,6 +1148,9 @@ impl AnalysisStore {
         }
         let coordinator = self.read_coordinator(control)?;
         let explicit_traces = !selection.traces.is_all() && !selection.traces.as_slice().is_empty();
+        let unscoped_notifications = selection.sources.is_all()
+            && selection.nodes.is_empty()
+            && selection.binding_ids.is_empty();
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
@@ -1007,6 +1172,8 @@ impl AnalysisStore {
             drop(coordinator);
             let mut output = AnalysisExtractionV1 {
                 discovery_enabled: self.discovery_enabled(),
+                graph_enabled: self.graph_enabled(),
+                notification_enabled: self.notification_owner.load(std::sync::atomic::Ordering::Acquire),
                 meta,
                 sources: Vec::new(),
                 missing_contexts: Vec::new(),
@@ -1325,6 +1492,64 @@ impl AnalysisStore {
                     None,
                 )?;
             }
+            for id in &selection.graphs {
+                control.check()?;
+                let (key, revision, length): (Vec<u8>, u64, u64) = snapshot.query_row(
+                    "SELECT stream_key, commit_revision, octet_length(body) FROM analysis_results
+                     WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?",
+                    params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, crate::GRAPH_SCHEMA_VERSION, id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).context(AnalysisDatabaseSnafu { operation: "read graph result metadata" })?;
+                let source = selection.sources.as_slice().iter().find(|source| source.key() == key)
+                    .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
+                output.scan(usize::try_from(length).map_err(|_| self.state_error("the graph result length is invalid"))?)?;
+                let body = self.read_result_from(snapshot, selection.tenant_id, id)?
+                    .ok_or_else(|| self.state_error("the selected graph result is absent"))?;
+                output.charge(body.capacity().saturating_mul(2))?;
+                let graph = crate::GraphSnapshotV1::try_from(body.as_slice())?;
+                if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
+                if !selection.permits_graph(&graph) { continue; }
+                let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
+                output.project(&mut project, AnalysisInputV1::Graph {
+                    result_id: id, graph: &graph, commit_revision: revision, sensitivity,
+                }, control, None)?;
+            }
+            for key in &selection.obligations {
+                control.check()?;
+                let (context, revision) = Self::read_context_from(snapshot, &self.root, key)?
+                    .ok_or_else(|| self.state_error("the selected notification state is absent"))?;
+                output.scan(context.body.len())?;
+                output.charge(context.body.capacity().saturating_mul(2))?;
+                let obligation = crate::NotificationObligationV1::try_from(&context)?;
+                let finding = if let Some(reference) = &obligation.finding {
+                    let header: Option<(Vec<u8>, u64)> = snapshot.query_row(
+                        "SELECT stream_key, octet_length(body) FROM analysis_results
+                         WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?",
+                        params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, crate::GRAPH_SCHEMA_VERSION,
+                            reference.result_id], |row| Ok((row.get(0)?, row.get(1)?)),
+                    ).optional().context(AnalysisDatabaseSnafu { operation: "read notification finding metadata" })?;
+                    if let Some((source_key, length)) = header {
+                        let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
+                        output.scan(usize::try_from(length).map_err(|_| self.state_error("the notification finding length is invalid"))?)?;
+                        let body = self.read_result_from(snapshot, selection.tenant_id, &reference.result_id)?
+                            .ok_or_else(|| self.state_error("the notification finding result is absent"))?;
+                        output.charge(body.capacity().saturating_mul(2))?;
+                        let mut graph = crate::GraphSnapshotV1::try_from(body.as_slice())?;
+                        if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
+                        if !selection.permits_graph(&graph) { continue; }
+                        graph.findings.iter().position(|finding| finding.finding_id == reference.finding_id)
+                            .map(|index| graph.findings.swap_remove(index))
+                    } else if unscoped_notifications { None } else { continue; }
+                } else if unscoped_notifications { None } else { continue; };
+                if !selection.binding_ids.is_empty() && finding.as_ref().is_none_or(|finding| {
+                    finding.effects.is_empty() || finding.effects.iter().any(|effect| {
+                        effect.binding_id.is_none_or(|binding| !selection.binding_ids.contains(&binding))
+                    })
+                }) { continue; }
+                output.project(&mut project, AnalysisInputV1::Notification {
+                    obligation: &obligation, finding: finding.as_ref(), commit_revision: revision,
+                }, control, None)?;
+            }
             for id in &selection.results {
                 control.check()?;
                 match self.read_result_from(snapshot, selection.tenant_id, id)? {
@@ -1375,6 +1600,43 @@ impl AnalysisStore {
         control
             .lock(|| self.raw.try_lock())?
             .select_position(selection, after, revision, limit, control)
+    }
+
+    fn graph_sensitivity(
+        &self,
+        snapshot: &Connection,
+        revision: &crate::GraphRevisionV1,
+        control: &AnalysisReadControl,
+    ) -> Result<crate::ContextSensitivityV1> {
+        let mut sensitivity = crate::ContextSensitivityV1::Tenant;
+        for key in &revision.context {
+            control.check()?;
+            let label: Option<String> = snapshot
+                .query_row(
+                    "SELECT sensitivity FROM context_versions WHERE tenant_id = ? AND owner_id = ?
+                 AND entity_key = ? AND lifetime_key = ? AND owner_revision = ?",
+                    params![
+                        key.tenant_id.as_slice(),
+                        key.owner_id,
+                        key.entity_key.as_slice(),
+                        key.lifetime_key.as_slice(),
+                        key.owner_revision
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read graph context sensitivity",
+                })?;
+            let label =
+                label.ok_or_else(|| self.state_error("the graph context version is absent"))?;
+            let label = crate::ContextSensitivityV1::try_from(label.as_str())
+                .map_err(|_| self.state_error("the graph context sensitivity is invalid"))?;
+            if label == crate::ContextSensitivityV1::HostRestricted {
+                sensitivity = label;
+            }
+        }
+        Ok(sensitivity)
     }
 
     fn check_selected_source(
@@ -2352,6 +2614,8 @@ mod tests {
                 | AnalysisInputV1::Target { .. }
                 | AnalysisInputV1::DiscoveryContext(_)
                 | AnalysisInputV1::Profile { .. }
+                | AnalysisInputV1::Graph { .. }
+                | AnalysisInputV1::Notification { .. }
                 | AnalysisInputV1::Behavior { .. } => {
                     return store.reject("unselected input entered an evidence-only snapshot")
                 }

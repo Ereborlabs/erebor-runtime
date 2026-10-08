@@ -186,8 +186,14 @@ impl QueryPlan {
         let target_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("targets"));
         let behavior_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("behaviors"));
         let context_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("context"));
+        let graph_sql = matches!(&self.template, QueryTemplate::Client(sql) if super::graph::RELATIONS.iter().any(|relation| sql.dependencies().contains(*relation)));
+        let notification_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("notifications"));
         selection.discovery = behavior_sql;
         selection.profiles.clear();
+        selection.graph = graph_sql;
+        selection.graphs.clear();
+        selection.notifications = notification_sql;
+        selection.obligations.clear();
         selection.targets = target_sql;
         selection.targets_only = matches!(&self.template, QueryTemplate::Client(sql) if target_sql && !context_sql && !sql.dependencies().contains("context_versions"));
         if !trace_sql {
@@ -212,6 +218,8 @@ impl QueryPlan {
                 if !sql.dependencies().contains("events")
                     && !sql.dependencies().contains("coverage")
                     && !behavior_sql
+                    && !graph_sql
+                    && !notification_sql
                 {
                     selection.sources = Selection::Exact(Vec::new());
                     if !trace_sql && !target_sql {

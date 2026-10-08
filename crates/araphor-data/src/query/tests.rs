@@ -914,7 +914,10 @@ fn query_input_catalog() -> TestResult {
     for (row, (name, position)) in result.rows.iter().zip(expected) {
         assert_eq!(row[relation], Value::Text(name.into()));
         assert_eq!(row[ordinal], Value::UInt(position));
-        let state = if name == "behaviors" {
+        let state = if name == "behaviors"
+            || super::graph::RELATIONS.contains(&name)
+            || name == "notifications"
+        {
             "disabled"
         } else {
             "available"

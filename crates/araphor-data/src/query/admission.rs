@@ -586,7 +586,8 @@ impl Binder {
                         .iter()
                         .find(|schema| {
                             schema.name == name
-                                && (schema.readiness == "available" || schema.name == "behaviors")
+                                && (matches!(schema.readiness, "available" | "conditional")
+                                    || schema.name == "behaviors")
                         })
                         .ok_or_else(|| Self::invalid("SQL relation"))?
                         .columns
