@@ -18,6 +18,7 @@ enum Case {
     DataStoreRollout,
     DataStoreInspect,
     QueryFollow,
+    GraphNotification,
 }
 
 #[derive(Parser)]
@@ -70,6 +71,11 @@ async fn main() {
         error.exit();
     }
     let result = match cli.case {
+        Case::GraphNotification => {
+            mithril_e2e::GraphNotificationQualification::new(cli.output_directory)
+                .run()
+                .await
+        }
         Case::OfflineExact => mithril_e2e::run_discovery_offline(&cli.output_directory)
             .map_err(Box::<dyn std::error::Error>::from),
         Case::QueryFollow => {

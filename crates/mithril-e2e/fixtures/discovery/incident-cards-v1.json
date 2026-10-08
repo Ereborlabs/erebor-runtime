@@ -1,0 +1,166 @@
+[
+  {
+    "id": "HF-001",
+    "family": 1,
+    "operation": 1,
+    "contexts": [
+      [
+        "external-root",
+        "OUTSIDE_AUTHORITY"
+      ]
+    ],
+    "action": "Root shell in an external evaluation sandbox"
+  },
+  {
+    "id": "HF-002",
+    "family": 2,
+    "operation": 2,
+    "contexts": [
+      [
+        "external-reconnaissance",
+        "OUTSIDE_AUTHORITY"
+      ],
+      [
+        "resident-environment",
+        "IN_MEMORY"
+      ]
+    ],
+    "action": "Identity, environment, mount, cgroup, filesystem, and process reconnaissance"
+  },
+  {
+    "id": "HF-003",
+    "family": 1,
+    "operation": 1,
+    "contexts": [
+      [
+        "external-tools",
+        "OUTSIDE_AUTHORITY"
+      ]
+    ],
+    "action": "Bundled or fallback network tools"
+  },
+  {
+    "id": "HF-004",
+    "family": 3,
+    "operation": 13,
+    "contexts": [
+      [
+        "external-publication",
+        "OUTSIDE_AUTHORITY"
+      ],
+      [
+        "allowed-tls-send",
+        "PAYLOAD_UNOBSERVABLE"
+      ]
+    ],
+    "action": "Publish environment or secrets to public capture endpoints"
+  },
+  {
+    "id": "HF-005",
+    "family": 2,
+    "operation": 4,
+    "contexts": [
+      [
+        "external-staged-file",
+        "OUTSIDE_AUTHORITY"
+      ],
+      [
+        "unclassified-source-file",
+        "IN_MEMORY"
+      ]
+    ],
+    "action": "Execute staged Python disguised as a source file"
+  },
+  {
+    "id": "HF-006",
+    "family": 3,
+    "operation": 13,
+    "contexts": [
+      [
+        "pure-packing",
+        "IN_MEMORY"
+      ]
+    ],
+    "action": "Compress and encode payloads in memory"
+  },
+  {
+    "id": "HF-007",
+    "family": 3,
+    "operation": 12,
+    "contexts": [
+      [
+        "external-search",
+        "OUTSIDE_AUTHORITY"
+      ],
+      [
+        "service-query-without-audit",
+        "PAYLOAD_UNOBSERVABLE"
+      ]
+    ],
+    "action": "Search public code and platform APIs for infrastructure names"
+  },
+  {
+    "id": "HF-008",
+    "family": 2,
+    "operation": 2,
+    "contexts": [
+      [
+        "revision-without-dispatch-proof",
+        "OUTSIDE_AUTHORITY"
+      ]
+    ],
+    "action": "Hostile HDF5 external-file reference reaches the conversion worker"
+  },
+  {
+    "id": "HF-009",
+    "family": 2,
+    "operation": 2,
+    "contexts": [
+      [
+        "resident-environment",
+        "IN_MEMORY"
+      ],
+      [
+        "same-allowed-tls-channel",
+        "PAYLOAD_UNOBSERVABLE"
+      ]
+    ],
+    "action": "Worker environment or secrets disclosed through output or network"
+  },
+  {
+    "id": "HF-010",
+    "family": 1,
+    "operation": 1,
+    "contexts": [
+      [
+        "pure-in-process-expression",
+        "IN_MEMORY"
+      ]
+    ],
+    "action": "Jinja expression executes Python in the existing worker"
+  },
+  {
+    "id": "HF-011",
+    "family": 2,
+    "operation": 2,
+    "contexts": [
+      [
+        "resident-token",
+        "IN_MEMORY"
+      ]
+    ],
+    "action": "Projected ServiceAccount token and namespace files opened or read"
+  },
+  {
+    "id": "HF-012",
+    "family": 3,
+    "operation": 12,
+    "contexts": [
+      [
+        "controller-tls-verb-without-audit",
+        "PAYLOAD_UNOBSERVABLE"
+      ]
+    ],
+    "action": "Probe Kubernetes API and cloud metadata destinations"
+  }
+]
