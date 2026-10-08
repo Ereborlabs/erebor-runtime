@@ -19,7 +19,6 @@ mod trust;
 
 pub use administrative_exec::*;
 pub use administrative_http::*;
-pub use authority::*;
 pub use araphor_data::DiscoveryDigestV1;
 pub use araphor_observability::{
     TraceAcceptedV1, TraceAccessV1, TraceAcknowledgementV1, TraceBatchV1, TraceCleanupV1,
@@ -30,6 +29,7 @@ pub use araphor_observability::{
     TraceTerminalV1, TraceUploadV1, MAX_TRACE_FRAME_BYTES, MAX_TRACE_GRPC_MESSAGE_BYTES,
     MAX_TRACE_OUTPUT_BYTES, MAX_TRACE_SOURCE_BYTES, MAX_TRACE_TARGETS,
 };
+pub use authority::*;
 pub use client_auth::{
     ClientAccess, ClientAuth, ClientAuthConfig, ClientLogin, ClientSession, InvestigateGrant,
     OidcConfig, OidcOwner, ServiceAuthConfig,

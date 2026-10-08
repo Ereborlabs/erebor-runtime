@@ -26,10 +26,10 @@ use crate::{
 
 const STORE_SCHEMA_VERSION: u32 = 9;
 
+mod authority;
 mod context;
 mod discovery_context;
 mod graph;
-mod authority;
 pub use context::ControlContextOwner;
 #[cfg(test)]
 mod raw_bench;
@@ -2670,9 +2670,15 @@ fn apply_transaction(
     path: &Path,
 ) -> Result<()> {
     match transaction {
-        ControlTransactionV1::AuthorityUpdated { expected_revision, state: authority } => {
-            crate::AuthorityErrorCodeV1::Conflict.require(state.authority.revision == *expected_revision
-                && expected_revision.checked_add(1) == Some(authority.revision), "authority commit revision")?;
+        ControlTransactionV1::AuthorityUpdated {
+            expected_revision,
+            state: authority,
+        } => {
+            crate::AuthorityErrorCodeV1::Conflict.require(
+                state.authority.revision == *expected_revision
+                    && expected_revision.checked_add(1) == Some(authority.revision),
+                "authority commit revision",
+            )?;
             state.authority = *authority.clone();
         }
         ControlTransactionV1::NodeSessionAdvanced { advance } => {

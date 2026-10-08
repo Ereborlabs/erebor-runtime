@@ -304,7 +304,9 @@ impl ControlStore {
                 let authority = &inner.state.authority;
                 match stage {
                     0 => {
-                        let Some((id, request)) = authority.requests.range::<[u8; 16], _>(bounds).next() else {
+                        let Some((id, request)) =
+                            authority.requests.range::<[u8; 16], _>(bounds).next()
+                        else {
                             return Ok((None, ContextCursor::Authority(1, None)));
                         };
                         (
@@ -323,7 +325,9 @@ impl ControlStore {
                         )
                     }
                     1 => {
-                        let Some((id, approval)) = authority.approvals.range::<[u8; 16], _>(bounds).next() else {
+                        let Some((id, approval)) =
+                            authority.approvals.range::<[u8; 16], _>(bounds).next()
+                        else {
                             return Ok((None, ContextCursor::Authority(2, None)));
                         };
                         (
@@ -342,7 +346,9 @@ impl ControlStore {
                         )
                     }
                     2 => {
-                        let Some((id, lease)) = authority.leases.range::<[u8; 16], _>(bounds).next() else {
+                        let Some((id, lease)) =
+                            authority.leases.range::<[u8; 16], _>(bounds).next()
+                        else {
                             return Ok((None, ContextCursor::Authority(3, None)));
                         };
                         (
@@ -361,7 +367,9 @@ impl ControlStore {
                         )
                     }
                     3 => {
-                        let Some((id, handle)) = authority.handles.range::<[u8; 16], _>(bounds).next() else {
+                        let Some((id, handle)) =
+                            authority.handles.range::<[u8; 16], _>(bounds).next()
+                        else {
                             return Ok((None, ContextCursor::End));
                         };
                         (
