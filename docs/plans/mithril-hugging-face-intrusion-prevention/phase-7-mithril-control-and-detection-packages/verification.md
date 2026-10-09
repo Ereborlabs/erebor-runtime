@@ -373,7 +373,10 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | 7.2 | analysis_store_, analysis_startup_, control_retention_ | data-store-recovery through production intake with ACK/storage measurements; data-store-startup on clean development state |
 | 7.3 | query_input_, query_scope_, query_follow_, frame and configured extraction-limit tests | internal query-follow, durable pending ranges, replay-floor restart and input cleanup |
 | 7.4 | discovery_derivation_, discovery_context_, discovery_comparison_ | context-roundtrip; profile-restart |
-| 7.5 | control_graph_, control_notification_, control_authority_ | graph-notification |
+| 7.5 | control_graph_, control_notification_, control_authority_; native-row storage, SDK, package lifecycle, execution isolation, and parity tests | graph-notification; analysis-packages under the [child qualification matrix](phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md) |
+| 7.5.4 | AR-01 through AR-07 migration equivalence, host context/proof checks, and component limits | context-roundtrip; profile-restart; graph-notification; analysis-packages with real Wasm execution |
+| 7.5.8 | Every Discovery Engine source algorithm and variant in the [coverage inventory](phase-7-5-graphs-findings-and-notifications/algorithm-coverage.md#discovery-engine-algorithms); package semantic and recovery tests | discovery-engine-algorithms through installed SDK packages and production owners |
+| 7.5.9 | Every Security Analytics source algorithm, operator, rule mapping, and delegated computation in the [coverage inventory](phase-7-5-graphs-findings-and-notifications/algorithm-coverage.md#security-analytics-algorithms) | security-analytics-algorithms; full corpus compatibility report, package execution, recovery, and mandatory notification checks |
 | 7.6 | discovery_detection_, discovery_proposal_, discovery_suggestion_ | detection-context; proposal-preview; poisoned-window |
 | 7.7 | discovery_assessment_, discovery_disclosure_, assessment gRPC validation | assessment-loop |
 | 7.8 | discovery_grpc_, discovery_publish_, UI review tests | review-publish |
@@ -383,6 +386,13 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | Observability 2 | observability_target_, observability_recovery_, measurement validation | owned-capture; existing owned/pods/disk-full physical pairs |
 | Observability 3 | query_admission_, disclosure, asynchronous execution, observability_cli_, observability_grpc_, UI stream tests | query-trace-client with public SQL security and native/browser stream parity |
 | Observability 4 | observability_crd_ | trace-crd; physical Kubernetes pair |
+
+Phase 7.5.2 must resolve inventory and contract requirements before SDK freeze.
+Phase 7.5.3 requires Observability 3 for the public package API and qualifies SQL
+execution only. Phase 7.5.7 uses the migrated algorithms and qualified runtime
+fixtures; it does not depend on 7.5.8 or 7.5.9. Those two phases qualify the full
+upstream catalogue separately. Each 7.5 child ends with its completion scope and
+an expected example; the example does not replace its full acceptance matrix.
 
 Keep discovery cases in `src/discovery/` and their entry point in
 `src/bin/mithril_discovery_test.rs`. Keep observability cases in the existing

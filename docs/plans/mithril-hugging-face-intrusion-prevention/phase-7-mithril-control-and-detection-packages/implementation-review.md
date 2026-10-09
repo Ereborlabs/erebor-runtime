@@ -4599,7 +4599,7 @@ for its exact inputs and limits. The original startup cause remains unknown.
 
 ## Discovery isolation clock correction
 
-Read the [current result](phase-7-5-graphs-findings-and-notifications.md#discovery-isolation-failure)
+Read the [current result](phase-7-5-graphs-findings-and-notifications/README.md#discovery-isolation-failure)
 and [isolation case](../../../../crates/mithril-e2e/src/discovery/isolation.rs)
 before the source flow below. The unchanged case uses a one-nanosecond raw age
 with a periodic wall-clock sweep. That sweep can remove evidence or diagnostic
@@ -4636,7 +4636,7 @@ No physical or performance qualification follows from this correction.
 
 ## Graph, finding, notification, and authority owners
 
-Read the [current result](phase-7-5-graphs-findings-and-notifications.md#implementation-result)
+Read the [current result](phase-7-5-graphs-findings-and-notifications/README.md#implementation-result)
 for source commits and verification. The paths below identify the implementation.
 They do not replace the recorded lightweight and physical results.
 This section covers the review corrections in primary `main` at
@@ -4872,7 +4872,7 @@ The default scan still processes all tenant findings.
 The first paired physical case finds a tenant with at least 257 current
 findings. Routing fails at the former obligation count limit. The exact
 condition is reproduced in a normal Rust lightweight case before the router
-correction. Read the [count failure record](phase-7-5-graphs-findings-and-notifications.md#physical-finding-count-failure).
+correction. Read the [count failure record](phase-7-5-graphs-findings-and-notifications/README.md#physical-finding-count-failure).
 This failure does not qualify the physical notification lifecycle.
 The shared context quota remains 1024 retained revisions per tenant and 4096
 retained revisions in the store.
@@ -4883,9 +4883,9 @@ It retains the other 256 states through the selected finding's delivery and
 human acknowledgement. A later scan revisits an earlier canonical finding
 revision and route revision. Delivery reaches the unchanged context quota
 with an explicit `StorageCapacity` error. Read the
-[dense regression result](phase-7-5-graphs-findings-and-notifications.md#physical-finding-count-failure)
+[dense regression result](phase-7-5-graphs-findings-and-notifications/README.md#physical-finding-count-failure)
 for the exact source, command, case count, and log.
-The [paired physical result](phase-7-5-graphs-findings-and-notifications.md#final-paired-physical-run)
+The [paired physical result](phase-7-5-graphs-findings-and-notifications/README.md#final-paired-physical-run)
 passes against the original store with 255 current findings. It preserves
 the selected deadline and human acknowledgement and the other 254 obligations.
 The physical count above 256 remains unqualified. The production lightweight
@@ -4959,7 +4959,7 @@ The correction at `44368ec549efac0a5eb8842c5cfe3be3a61f3ed0` changes only that
 test assertion. At that earlier check, production owners and both
 graph-notification qualification cases remain identical to the qualified
 `dd7e52b5` source. Read the
-[final Rust record](phase-7-5-graphs-findings-and-notifications.md#final-repository-rust-procedure)
+[final Rust record](phase-7-5-graphs-findings-and-notifications/README.md#final-repository-rust-procedure)
 for the exact final test source and result. The final procedure passes at
 `44368ec5`: 1709 tests pass, zero fail, and 546 are ignored across 76 top-level
 suites. Formatting, workspace check, and workspace Clippy also pass.

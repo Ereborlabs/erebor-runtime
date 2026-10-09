@@ -2,6 +2,8 @@
 
 Implement deterministic local detection, policy provenance, mandatory routing,
 and provider-neutral authority records inside Mithril Control.
+Extend the same owners with installable algorithms and detectors through one
+SDK and package contract. Parent: [Control and detection](../README.md).
 
 ## Intended end state
 
@@ -33,6 +35,134 @@ Control restarts or a notification sink fails
   -> installed enforcement remains independent
 ```
 
+## Approved extension and child phases
+
+The user approved the SDK and execution direction for this plan on 2026-10-09.
+The child phases below are **Not done**. The completed graph and notification
+results remain below; those results do not qualify package execution.
+
+Use one versioned analysis contract for typed inputs, parameters, named outputs,
+evidence, and checkpoints. Supply a Rust SDK first. Use Wasm components with
+Wasmtime as the default compiled target. Keep SQL on the existing evaluator.
+Supply a native target for qualified workloads and dependencies. Python is an
+optional target; compiled algorithms do not require it. The SDK hides transport
+bindings. Host owners enforce authorization, limits, validation, and commits.
+
+| Child phase | Deliverable | Entry gate |
+| --- | --- | --- |
+| [7.5.1 Native graph storage](phase-7-5-1-native-graph-storage.md) | Complete the retained native-row TODOs below without a second graph representation. | Existing graph owners and tests. |
+| [7.5.2 Analysis contract and SDK](phase-7-5-2-analysis-contract-and-sdk.md) | Complete contract requirements inventory, typed authoring, generated descriptors/interface declarations, and portable fixture tests. | 7.5.1. |
+| [7.5.3 Package lifecycle](phase-7-5-3-package-lifecycle.md) | Local SQL installation, dependency evaluation, atomic state, updates, and CLI/agent inspection. | 7.5.2 and Observability 3. |
+| [7.5.4 Wasm execution and current algorithms](phase-7-5-4-wasm-execution.md) | Embedded Wasmtime and explicit migration of current discovery, context integration, and HF-PROC/HF-DW/HF-XNODE algorithms. | 7.5.3. |
+| [7.5.5 Native execution](phase-7-5-5-native-execution.md) | Isolated compiled workers under the same model and package contract. | 7.5.4. |
+| [7.5.6 Optional Python execution](phase-7-5-6-python-execution.md) | A bundled interpreter and locked dependencies when Python support is selected. | 7.5.5; optional for the core release. |
+| [7.5.7 Package qualification](phase-7-5-7-package-qualification.md) | Integrated current-algorithm migration, package installation, replay, isolation, and paired incident proof. | 7.5.5; also 7.5.6 if Python is advertised. |
+| [7.5.8 Discovery Engine algorithms](phase-7-5-8-discovery-engine-algorithms.md) | All pinned upstream system/network discovery, aggregation, summaries, recommendations, and candidate-conversion algorithms as packages. | 7.5.7. |
+| [7.5.9 Security Analytics algorithms](phase-7-5-9-security-analytics-algorithms.md) | All pinned upstream rule, aggregate, correlation, vector, indicator, and monitor-decision algorithms as packages. | 7.5.7; independent of 7.5.8. |
+
+The core order is 7.5.1 through 7.5.5, then 7.5.7. Include 7.5.6 before 7.5.7
+only if Python is advertised. Each entry gate must pass its own checks; final
+qualification does not replace them. After 7.5.7, 7.5.8 and 7.5.9 can proceed
+independently. Both are required for the requested full algorithm scope.
+
+```mermaid
+flowchart LR
+    A["7.5.1 Storage"] --> B["7.5.2 Contract and SDK"]
+    B --> C["7.5.3 SQL package lifecycle"]
+    O["Observability 3"] --> C
+    C --> D["7.5.4 Wasm and current migration"]
+    D --> E["7.5.5 Native execution"]
+    E --> G["7.5.7 Runtime qualification"]
+    E --> F["7.5.6 Optional Python"]
+    F -.->|if advertised| G
+    G --> H["7.5.8 Discovery Engine"]
+    G --> I["7.5.9 Security Analytics"]
+    H --> J["7.6 Policy preview"]
+    I --> J
+    J --> K["7.7 Agent assessment"]
+    K --> L["7.8 Approval and publication"]
+```
+
+The [algorithm inventory](algorithm-coverage.md) pins the three source revisions,
+names current migration items and upstream families, and defines the completion
+gate. Phase 7.5.2 completes the contract requirements audit; 7.5.8 and 7.5.9
+implement the upstream catalogue. Missing algorithms remain Not done. Missing
+deployment inputs are recorded separately. Package computation can complete
+without policy activation; 7.6 and
+7.8 retain preview and publication authority.
+
+```text
+Operator installs a built package for an authorized scope
+  -> AnalysisPackageOwner validates the descriptor and locked dependencies
+  -> AnalysisStore records the admitted revision and eligible exports
+
+Accepted evidence changes a model input
+  -> AnalysisPackageOwner selects pinned inputs and a compatible implementation
+  -> the existing extractor returns bounded authorized data and closes readers
+  -> the selected evaluator returns datasets, evidence references, and next state
+  -> DiscoveryOwner or GraphAndFindingOwner validates domain results
+  -> AnalysisStore commits results, checkpoints, references, and progress together
+  -> NotificationRouter applies existing mandatory routes
+
+Evaluation fails or its grant expires
+  -> the execution owner stops work and releases temporary resources
+  -> AnalysisStore retains the last complete commit
+  -> the package owner records incomplete coverage without reporting a negative
+```
+
+`AnalysisPackageOwner` is a proposed owner in `araphor-data`, embedded with the
+existing owners. It adds no service or database. Control retains grant and trust
+decisions. Package installation cannot attach probes, change policy, or execute
+a response. Existing bpftrace collection remains available without this work.
+
+Keep computations in SQL or ordinary algorithm code. Package metadata declares
+interfaces, dependencies, artifacts, and limits; it does not repeat filter, join,
+or aggregation logic. CLI and agent descriptions use the same descriptor.
+Local folders and built files are sufficient for installation. OCI transport
+remains optional and requires the existing registry plan's owner; it is not an
+entry gate for these child phases.
+
+The [algorithm evaluation](../algorithm-and-detection-extension-evaluation.md)
+and [package design](../extensible-security-packages-design.md) retain research
+and examples. This section and its child phases own the selected execution
+direction. Earlier native-first and mandatory Python-to-Wasm choices are not
+requirements. Use small modules and functions, shared bindings and validation,
+and Rust or platform tests. Continue in the primary checkout; add no worktree.
+
+### Plan expansion result
+
+**Done** for documentation on 2026-10-09. The phase is an expanded directory
+with seven child plans. Parent links, research decisions, and the verification
+matrix point to this plan. Checks pass for local links, anchors, Markdown fences,
+whitespace, child structure, and removal of references to the old leaf path.
+The historical result body and all seven storage TODOs are preserved exactly.
+No runtime code, dependency, incident test, or benchmark changed or ran.
+Implementation remains **Not done** for the new child phases.
+
+The subsequent algorithm-scope update makes all seven current migration items
+explicit in 7.5.4 and adds 7.5.8 and 7.5.9. There are now nine child plans. The
+source inventory and new phases are recorded; algorithm implementation and
+full per-function coverage remain **Not done**. This update changes plans only.
+The plan update is **Done**. Checks pass for 15 Markdown files, 125 local links
+and anchors, fences, whitespace, nine child structures, and algorithm IDs.
+Historical results and the storage checklist remain unchanged.
+`git diff --check` passes. No algorithm test or benchmark ran for this
+documentation update.
+
+### Consistency review result
+
+**Done** for the plan review. Each of the nine child phases ends with its scope
+and an expected example. SDK contract work, SQL installation, compiled dispatch,
+current migration, runtime qualification, and upstream development have separate
+completion points. The public API prerequisite and later policy handoff are
+explicit. Python remains optional.
+
+Checks pass for 15 Markdown files, 126 local links and anchors, phase structure,
+end examples, and an acyclic dependency graph with and without Python. Historical
+results and storage TODOs remain unchanged. The diff whitespace check passes.
+No Rust, runtime, physical, or performance test ran for this documentation edit.
+New implementation phases remain **Not done**.
+
 ## Entry gate and owners
 
 Require Phase 7.4. GraphAndFindingOwner owns graph and finding revisions;
@@ -49,7 +179,8 @@ Implement the graph, finding and notification data owners in `crates/araphor-dat
 keep signed provider-neutral authority records in Control. No second service,
 incident graph, source collector, or query database is required.
 
-Status: **Done**. The nine review corrections pass the focused Rust checks,
+Status: **Not done**. Native graph storage and the new child phases are pending.
+The nine review corrections are **Done**. They pass the focused Rust checks,
 final shared Rust procedure, and fresh lightweight and paired physical
 incidents at `6beb143d`. The owned qualification VM is removed.
 
@@ -104,6 +235,62 @@ and reads. Do not add a service, database, dependency, worktree, or shell test.
 Each correction requires a focused Rust regression. The final shared Rust
 procedure must run after the last source or test edit. Performance remains
 **UNQUALIFIED**. This work does not approve a performance test or benchmark.
+
+## Native graph storage improvement TODOs
+
+Status: **Not done**. [7.5.1](phase-7-5-1-native-graph-storage.md) owns this checklist.
+Current finding reads decode complete graph snapshots.
+Store native graph rows so the existing owners can select records directly.
+Expose exact join keys through the shared query views for authorized clients,
+including agents. Reuse `GraphAndFindingOwner`, its validation rules, and the
+existing VTab. AnalysisStore remains the durable owner.
+
+- [ ] **1. Store native graph rows.** Reuse the existing result metadata.
+  Add versioned subject, relationship, and finding tables keyed by `result_id`.
+  Preserve complete identities, lifetimes, evidence, branches, facts, input
+  manifests, positions, deadlines, and package checkpoints. Keep one
+  authoritative stored graph representation.
+- [ ] **2. Extend the atomic commit.** Update `AnalysisStore::commit_graph` in
+  `crates/araphor-data/src/analysis/progress.rs`. Commit graph rows, evidence
+  and context references, progress, revisions, and quota charges together.
+  Keep graph computation outside the transaction. An identical retry must
+  return the original receipt. A changed retry must fail.
+- [ ] **3. Replace snapshot scans with native reads.** Update
+  `crates/araphor-data/src/graph/read.rs` and the AnalysisStore graph readers
+  to fetch bounded selected rows. Select the latest version per source window,
+  then the latest finding across those windows. A replacement window must stop
+  contributing findings that it removed. Preserve the progress-linked
+  snapshot and exact historical result reads.
+- [ ] **4. Feed the existing VTab directly.** Update trusted query extraction
+  in `crates/araphor-data/src/analysis/extraction.rs` and the graph projections
+  in `crates/araphor-data/src/query/graph.rs` to read the required native rows.
+  Expose typed join keys for subjects, relationship endpoints, and finding
+  subjects. Preserve exact tenant, graph version, and subject lifetime identity.
+  Preserve whole-version authorization before row selection, sensitivity
+  checks, cancellation, and byte limits. Close durable readers before SQL
+  evaluation. Client SQL must receive detached authorized rows.
+- [ ] **5. Reconstruct snapshots for existing APIs.** Build `GraphSnapshotV1`
+  from stored rows for snapshot, replay, and export requests. Preserve
+  deterministic ordering, historical result references, and the existing
+  JSON output from generic result reads. Do not retain a second complete
+  snapshot body beside the native graph rows.
+- [ ] **6. Update recovery and existing-data handling.** Extend schema
+  validation, quota reconstruction, and backup/restore checks. Convert all
+  retained graph versions through a checked schema migration. Preserve result
+  IDs, commit revisions, progress, and references. Validate exact reconstruction
+  before retiring old bodies. Check temporary disk use. Preserve originals if
+  conversion fails.
+- [ ] **7. Verify the complete path.** Add focused Rust tests for snapshot
+  round trips, exact retries, overlapping windows, typed joins, authorization,
+  rollback, reopen, migration, quotas, and backup/restore. Keep notification
+  references valid after migration and restore. Reuse the existing lightweight
+  and physical qualification cases. Run the lightweight case before the paired
+  physical case and run the shared Rust procedure after the final source or
+  test edit.
+
+Keep the code in the existing owners, with small modules and short functions.
+Share validation, row encoding, and reconstruction between reads, retries, and
+migration. Work in the primary checkout. Use Rust or platform tests.
 
 ## Required changes
 
@@ -189,7 +376,7 @@ allowed, payload-unobservable, contextual, or outside-authority stage.
   None may reset or discharge the required escalation deadline.
 - Rerun `AUTHORIZATION-REPLAY-004`, `HF-LOCAL-001`,
   `HF-004-RESULT-001`, and `HF-011-READ-RESULT-001` through package replay.
-- Use the [Phase 7 runbook](../manual-testing/phase-7-manual-acceptance.md)
+- Use the [Phase 7 runbook](../../manual-testing/phase-7-manual-acceptance.md)
   for the graph, provenance, routing, and authority checks.
 - Run focused `control_graph_`, `control_notification_`, and
   `control_authority_` tests, then `bash .github/scripts/verify-rust-ci.sh`.
@@ -219,11 +406,19 @@ No new Appendix C fixture ID, cross-node physical claim, provider issuance
 binding, source publication, or response actuation. Mithril 8 extends this
 graph with Kubernetes causality; Mithril 10 supplies provider bindings.
 Stop before the detection-recipe and proposal work in Phase 7.6.
+The child phases add the package runtime and detector installation. Phase 7.6
+retains investigation recipes, proposal construction, and exact policy preview.
+Phase 7.5.8 produces candidate datasets and exports before preview exists.
+Packages can return typed analysis results; they cannot approve or activate a
+policy. Optional Python and OCI support do not block the core path. Performance
+remains unqualified until a separately approved workload and limits are tested.
 
 ## Implementation result
 
 Status: **Done**. All nine review corrections and the fresh lightweight and
 paired physical incidents pass at `6beb143d`. The owned VM cleanup passes.
+This result covers the completed corrections. The native graph storage
+improvements and new child phases remain **Not done** and require fresh verification.
 The retained implementation and qualification record below covers the earlier
 source. The earlier graph and notification source is `dd7e52b5`. The final workspace Rust
 procedure passes at `44368ec5` after the existing authorization assertion
@@ -1014,3 +1209,20 @@ Only the result and review documents change after this final Rust procedure.
 
 Observability performance remains **UNQUALIFIED**. No performance test is
 added by this approval.
+
+## End scope and example
+
+Complete when all required children pass: native graph storage, the SDK and
+contract inventory, SQL package lifecycle, current algorithm migration, Wasm and
+native execution, runtime qualification, and the full pinned Discovery Engine
+and Security Analytics algorithm catalogues. Include Python only if advertised.
+Each algorithm has implementation proof and a separate live-input readiness
+record. Performance remains unqualified until its separately approved checks run.
+
+Example at completion: an operator installs network discovery and finding
+correlation packages over qualified inputs. The same installation exposes their
+versioned summaries, candidate datasets, findings, and evidence through authorized
+queries. Restart preserves checkpoints and required notification deadlines.
+A candidate policy waits for the later preview, approval, and publication path;
+a finding does not itself block an action. This scope adds no new cross-node
+physical-prevention claim or automatic response authority.

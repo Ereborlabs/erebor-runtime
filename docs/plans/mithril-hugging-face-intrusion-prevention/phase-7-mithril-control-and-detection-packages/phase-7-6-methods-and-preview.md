@@ -55,11 +55,20 @@ The test planner only references reviewed fixtures; it cannot execute them.
 `GraphAndFindingOwner` retains incident graph ownership. Existing
 policy finding/disposition source types do not implement this query catalog.
 
+Phase [7.5.8](phase-7-5-graphs-findings-and-notifications/phase-7-5-8-discovery-engine-algorithms.md)
+owns upstream discovery and recommendation algorithms. This phase consumes their
+typed candidate datasets through the package contract; it does not implement a
+second copy. A candidate does not satisfy declared requirements or approve its
+own broadening. Preview supports only its qualified policy operations. Other
+candidate types retain explicit Unsupported results until their policy owner
+supports them; package computation does not change that boundary.
+
 ## Required changes
 
 ### Prerequisites and delivery boundary
 
-Require Phase 7.3 query and Phase 7.5 findings. Status: **Not done**.
+Require Phase 7.3 query and the expanded Phase 7.5 scope, including 7.5.8 and
+7.5.9. Python 7.5.6 is required only if advertised. Status: **Not done**.
 Use QueryOwner and AnalysisStore; do not implement another SQL path.
 Observability 3 can already expose query/trace without these algorithms.
 
@@ -161,3 +170,16 @@ when method views change query dependencies.
 No model runtime, detector installation, live source mutation, automatic rollback, or external
 network-policy enforcement. Stop with reproducible review artifacts before
 the optional assistance and live review work.
+
+## End scope and example
+
+Complete when supported candidate datasets can become validated proposal and
+preview revisions under declared requirements. The existing compiler and
+simulator report exact permission changes and unknown cases. Package algorithms
+remain owned by 7.5; review approval and publication remain in 7.8.
+
+Example at completion: an owner declares that a workload role must read one
+exact file. A discovery candidate cites the observed access. This phase builds
+the supported file-rule edit, compares it with the current source, and records
+preview results. The active policy remains unchanged until separate approval
+and publication. An unsupported network candidate receives an explicit reason.

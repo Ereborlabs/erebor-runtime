@@ -8,6 +8,15 @@ repository and API-group names.
 Master: [Mithril implementation plan](../README.md).
 Read [engine-design.md](engine-design.md) for shared contracts and
 [verification.md](verification.md) for limits and test cases.
+The [pluggable analysis artifacts proposal](pluggable-analysis-artifacts-proposal.md)
+retains the first design candidate.
+The [extensible security packages design](extensible-security-packages-design.md)
+retains researched examples and evidence and authority requirements.
+The [algorithm and detector extension evaluation](algorithm-and-detection-extension-evaluation.md)
+compares runtime choices. The approved [7.5 child phases](phase-7-5-graphs-findings-and-notifications/README.md#approved-extension-and-child-phases)
+select one SDK and package contract, default Wasm execution for compiled code,
+existing SQL, native execution, and optional Python. These additions are
+**Not done**. The new plan does not claim runtime implementation or qualification.
 
 ## Intended end state
 
@@ -36,6 +45,10 @@ unsupported stored formats without changing them. Do not add old-store imports,
 schema migrations, or mixed-version support. Current-format restart, replay,
 backup and restore remain required.
 
+The user-approved [native graph conversion](phase-7-5-graphs-findings-and-notifications/phase-7-5-1-native-graph-storage.md)
+is a narrow exception: preserve and convert retained graph versions through a
+checked migration. It does not authorize other old-store imports or migrations.
+
 Do not calculate application digests for bookkeeping or storage corruption
 checks. Use exact owner keys, lifetimes, revisions, positions, and retained
 values. Raw frames retain their CRC32C checks. Current signatures, approvals,
@@ -54,6 +67,7 @@ Node produces evidence under installed local policy
   -> AnalysisStore syncs self-contained raw commits and publishes its raw receipt
   -> Control acknowledges the durable contiguous source position
   -> QueryOwner wakes interested readers
+  -> AnalysisPackageOwner selects admitted exports and exact dependency revisions
   -> DiscoveryOwner derives profiles, context, methods and draft changes
   -> GraphAndFindingOwner commits qualified findings
   -> NotificationRouter applies required routes and human-acknowledgement deadlines
@@ -91,6 +105,7 @@ replaces a complete bounded query result. It has no public read-job lifecycle.
 | AnalysisStore | One segment/metadata writer, result/progress transactions, bundle backup and recovery | Change policy/control-state persistence |
 | EvidenceRetentionOwner | Age, quota, required security progress and exact witness checks | Let optional discovery lag pin raw input or stop intake |
 | QueryOwner | SQL admission, tenant-selected input, bounded Tokio execution and follow | Mutate policy or attach probes |
+| AnalysisPackageOwner | Admitted package revisions, dependency selection, execution dispatch, and lifecycle through AnalysisStore | Grant its own authority or replace domain result validation |
 | DiscoveryOwner | Exact profiles, context, recipes, assessments and proposals | Infer authority from repetition or model labels |
 | GraphAndFindingOwner | Evidence-qualified graph and finding revisions | Infer causality from time or similarity alone |
 | NotificationRouter | Mandatory priority, retries and human receipt deadlines | Let AI silence required escalation |
@@ -103,7 +118,7 @@ owner-qualified records across a narrow API; neither placement exposes raw
 database writes. Embedded mode calls the crate in process. Remote mode uses
 private authenticated protobuf gRPC operations for the same owner methods.
 No DataFusion layer, mandatory broker, second raw-event database, model gateway,
-model runtime or Control-owned agent loop is part of this design. A generic public producer API
+AI model runtime or Control-owned agent loop is part of this design. A generic public producer API
 remains outside scope; use the existing authenticated Node service contracts.
 
 ## Discovery algorithm
@@ -143,7 +158,7 @@ Each row is a bounded deliverable. The required test level appears below.
 | 4 | [Observability 1](../../araphor-observability/phase-1-contracts-and-backend.md), then [2](../../araphor-observability/phase-2-owned-capture.md) | Backend proof can run alongside 7.1–7.3. Capture integration requires 7.2 and backend proof. |
 | 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Production SQL admission, disclosure and bounded Tokio execution before public access; shared gRPC, SQL/trace CLI, console and old client-route retirement; needs 7.3 and Observability 2. |
 | 6 | [7.4 Profiles and context](phase-7-4-profiles-and-context.md) | Exact discovery, baseline differences and context; start after 7.2, close view/e2e work after 7.3. Can run alongside trace work. |
-| 7 | [7.5 Graphs and notifications](phase-7-5-graphs-findings-and-notifications.md) | Local packages, provenance, mandatory routes and authority records; needs 7.4. |
+| 7 | [7.5 Graphs, notifications, and analysis packages](phase-7-5-graphs-findings-and-notifications/README.md) | Existing graph and routing proof; children add native storage, SDK, package lifecycle, current algorithm migration, execution targets, qualification, and all pinned Discovery Engine and Security Analytics algorithms; needs 7.4 and Observability 3 before 7.5.3. |
 | 8 | [7.6 Methods and preview](phase-7-6-methods-and-preview.md) | Deterministic recipes, typed suggestions, requirements and exact native preview; needs 7.3 and 7.5. |
 | 9 | [7.7 Agent classification](phase-7-7-agent-investigation-and-classification.md) | Assessment owner/API, disclosure and recorded-client proof; optional external-agent measurements are separate; needs 7.6 and Observability 3. |
 | 10 | [7.8 Console and publication](phase-7-8-console-and-publication.md) | Shared review, independent approval, conditional source write and activation display; needs 7.7 and console fixture work. |
@@ -199,10 +214,20 @@ Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 �
 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 if selected → 7.10.
 Independent work may use the entry gates in the table, not skip them.
 
-The decoder and query engine belong to the data crate from 7.3. Discovery
-algorithms belong there from 7.4. Neither depends on a running Control process
-or Control-local files. Phase 7.9 packages those same owners outside Control;
-it does not move or rewrite them. Control still owns authorization and effects.
+Within 7.5, complete 7.5.1 through 7.5.5, then 7.5.7. Include 7.5.6 only when
+Python support is selected. Require Observability 3 before 7.5.3's public package
+API. Then complete 7.5.8 and 7.5.9; they are independent after 7.5.7. Phase 7.5.2
+audits all algorithm contract requirements before SDK freeze. Existing discovery
+and detector migration belongs to 7.5.4. Phase 7.5.7 verifies that migration
+without requiring either later upstream port. Each child requires its own checks.
+Historical graph results do not qualify new runtimes or upstream algorithms.
+
+The decoder and query engine belong to the data crate from 7.3. Discovery input,
+validation, and persistence belong there from 7.4. Phase 7.5.4 moves reusable
+computation into SDK packages while the data owners retain these boundaries.
+They do not depend on Control-local files. Phase 7.9 places the same owners,
+package contract, and qualified execution adapters outside Control; it does not
+add another implementation. Control still owns authorization and effects.
 
 Mithril 8 follows the bounded Phase 7 release and adds Kubernetes causality
 and exception tools. Mithril 9 adds verified local/distributed response.
@@ -220,7 +245,9 @@ production owners without Kubernetes; run a physical case only where listed.
 | 7.2 | Check segment-sync/catalog commits, pin/delete races, bounded extraction, bundle backup and clean-start refusal. | Run `data-store-recovery` through Node mTLS with durable ACK and storage measurements, `data-store-startup` on a fresh development state and the paired physical storage/partition case. |
 | 7.3 | Check reader/rotation progress, shared decoding, trusted scope, extraction limits, moving/fixed windows, follow frames, pending-source visibility and replay floors. | Run internal `query-follow` against AnalysisStore and QueryOwner. Public SQL admission, disclosure and bounded Tokio execution are tested in Observability 3; physical qualification follows in 7.10. |
 | 7.4 | Check exact atoms, context selection, comparison and deterministic replay. | Run `context-roundtrip` and `profile-restart` from Node WAL through mTLS and DiscoveryOwner; physical qualification follows in 7.10. |
-| 7.5 | Check graph, finding, provenance and routing decisions under gaps and retries. | Run `graph-notification` through intake, graph and router owners, then run the paired physical incident case. |
+| 7.5 | Check graph storage, graph/finding validation, package contracts, runtime isolation, replay, provenance, and routing. | Run `analysis-packages` and `graph-notification` through production owners, then the paired physical incident case. The child plans define new case requirements. |
+| 7.5.4 | Check all AR-01 through AR-07 migration items against prior results, including host context integration. | Run `context-roundtrip`, `profile-restart`, and `graph-notification` through the migrated path; exercise new Wasm packages in `analysis-packages`. |
+| 7.5.8, 7.5.9 | Check every pinned upstream algorithm, semantic variant, and source-to-package mapping. | Run `discovery-engine-algorithms` and `security-analytics-algorithms`; record complete inventory results separately from live-input readiness. |
 | 7.6 | Check method matches, suggestion validation and exact preview counterexamples. | Run `detection-context`, `proposal-preview` and `poisoned-window` through production owners; physical policy proof follows in 7.8 and 7.10. |
 | 7.7 | Check assessment citations, disclosure, abstention and grant rejection. | Run `assessment-loop` with a recorded agent through CLI and gRPC; no live model or physical effect is required. |
 | 7.8 | Check gRPC authorization, approval, publication and accessible UI states. | Run `review-publish` through production owners, browser gRPC-Web tests on built assets and the paired physical publication case. |
