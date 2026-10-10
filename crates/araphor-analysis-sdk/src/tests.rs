@@ -1,3 +1,4 @@
+mod arrays;
 mod boundaries;
 mod graph;
 mod semantics;

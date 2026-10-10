@@ -33,6 +33,7 @@ pub enum Error {
         location: Location,
     },
     #[snafu(display("Analysis batch is invalid: {source}"))]
+    #[snafu(context(false))]
     Batch {
         source: arrow_schema::ArrowError,
         #[snafu(implicit)]

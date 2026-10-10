@@ -218,8 +218,8 @@ impl Model {
                 return Err(Error::contract(ErrorCode::Limit, "schema depth or fields"));
             }
             match field.data_type() {
-                DataType::Null
-                | DataType::Boolean
+                DataType::Null if field.is_nullable() => {}
+                DataType::Boolean
                 | DataType::Int8
                 | DataType::Int16
                 | DataType::Int32

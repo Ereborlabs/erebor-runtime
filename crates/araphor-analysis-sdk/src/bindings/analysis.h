@@ -133,6 +133,7 @@ typedef struct {
 /* The parameter pointer is null only when its declared schema is empty. */
 /* Each parameter stream and reason detail stream contains exactly one row. */
 /* Zero the response before each call. Release the response after every call. */
+/* Evaluate returns an error code equal to response.error.code. */
 /* Consumers release each received Arrow array before they release the response. */
 /* The producer releases unread output streams and all response buffers. */
 /* Release clears owned fields. A second release does not change state. */

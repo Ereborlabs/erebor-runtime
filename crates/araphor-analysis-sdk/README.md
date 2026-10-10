@@ -74,7 +74,11 @@ Use the same metadata for field descriptions and units in inspection output.
 identity bytes. The host supplies that selection. A record without source time
 must declare the missing time; the SDK does not generate an event timestamp.
 
-Floating-point values must be finite. Integer and timestamp comparisons are
+Selected, non-null floating-point values must be finite. Validation applies
+list offsets and parent null masks before it checks nested values. Arrow
+buffer validation and memory bounds still apply to retained backing storage.
+The `Null` type requires a nullable field, including inside nested types.
+Integer and timestamp comparisons are
 exact. `NumericTolerance` declares nonnegative absolute and relative bounds
 for later comparison across targets. The comparison rule is
 `abs(a - b) <= max(absolute, relative * max(abs(a), abs(b)))`.

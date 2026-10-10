@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arrow_array::{Array, Float32Array, Float64Array};
-use snafu::ResultExt as _;
-
 use crate::{
-    BatchSnafu, Checkpoint, Dataset, Error, ErrorCode, Evaluation, Limits, Model, Output, Package,
-    Port, RecordBatch, Result, RowRef, Schema,
+    Checkpoint, Dataset, Error, ErrorCode, Evaluation, Limits, Model, Output, Package, Port,
+    Result, RowRef,
 };
+
+mod batch;
+use batch::BatchBudget;
 
 impl Package {
     pub fn validate_evaluation(&self, evaluation: &Evaluation) -> Result<()> {
@@ -206,69 +206,5 @@ impl Dataset {
             .iter()
             .map(|batch| batch.num_rows() as u64)
             .sum()
-    }
-}
-
-struct BatchBudget {
-    bytes_left: u64,
-    rows_left: u64,
-    batches_left: u32,
-}
-
-impl BatchBudget {
-    fn new(bytes: u64, limits: &Limits) -> Self {
-        Self {
-            bytes_left: bytes,
-            rows_left: limits.max_rows,
-            batches_left: limits.max_batches,
-        }
-    }
-
-    fn bytes(&mut self, bytes: u64) -> Result<()> {
-        self.bytes_left = self
-            .bytes_left
-            .checked_sub(bytes)
-            .ok_or_else(|| Error::contract(ErrorCode::Limit, "batch bytes"))?;
-        Ok(())
-    }
-
-    fn batch(&mut self, batch: &RecordBatch, schema: &Schema) -> Result<()> {
-        if batch.schema().as_ref() != schema {
-            return Err(Error::contract(ErrorCode::Incompatible, "batch schema"));
-        }
-        self.batches_left = self
-            .batches_left
-            .checked_sub(1)
-            .ok_or_else(|| Error::contract(ErrorCode::Limit, "batches"))?;
-        self.rows_left = self
-            .rows_left
-            .checked_sub(batch.num_rows() as u64)
-            .ok_or_else(|| Error::contract(ErrorCode::Limit, "rows"))?;
-        self.bytes(batch.get_array_memory_size() as u64)?;
-        for (field, array) in schema.fields().iter().zip(batch.columns()) {
-            if !field.is_nullable() && array.null_count() > 0 {
-                return Err(Error::contract(ErrorCode::Invalid, field.name()));
-            }
-            array.to_data().validate_full().context(BatchSnafu)?;
-            Self::finite(array.as_ref())?;
-        }
-        Ok(())
-    }
-
-    fn finite(array: &dyn Array) -> Result<()> {
-        let invalid = if let Some(values) = array.as_any().downcast_ref::<Float32Array>() {
-            values.iter().flatten().any(|value| !value.is_finite())
-        } else if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
-            values.iter().flatten().any(|value| !value.is_finite())
-        } else {
-            false
-        };
-        if invalid {
-            return Err(Error::contract(ErrorCode::Invalid, "nonfinite number"));
-        }
-        for child in array.to_data().child_data() {
-            Self::finite(arrow_array::make_array(child.clone()).as_ref())?;
-        }
-        Ok(())
     }
 }
