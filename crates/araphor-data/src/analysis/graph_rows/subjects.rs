@@ -2,7 +2,7 @@ use super::GraphRows;
 use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, GraphInvalidSnafu, GraphSubjectKeyV1, Result,
 };
-use duckdb::{params, Connection, Row, Statement};
+use duckdb::{params, params_from_iter, types::Value, Connection, Row, Statement};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
@@ -80,6 +80,94 @@ impl SubjectRow {
 }
 
 impl GraphRows {
+    pub(in crate::analysis) fn subject_permission() -> &'static str {
+        "EXISTS (
+            SELECT 1 FROM graph_findings finding
+            WHERE finding.result_id = subject.result_id AND finding.subject_id = seed.subject_id
+         ) OR EXISTS (
+            SELECT 1 FROM graph_relationships edge
+            WHERE edge.result_id = subject.result_id AND edge.evidence <> '[]'::BLOB
+                AND (edge.from_subject_id = seed.subject_id OR edge.to_subject_id = seed.subject_id)
+         )"
+    }
+
+    pub(in crate::analysis) fn subject_fields(subject: &GraphSubjectKeyV1) -> Result<[Value; 4]> {
+        let row = SubjectRow::encode(subject)?;
+        Ok([
+            Value::Blob(row.tenant),
+            Value::Text(row.kind),
+            Value::Blob(row.authority),
+            Value::Blob(row.identity),
+        ])
+    }
+
+    pub(in crate::analysis) fn selected_subjects(
+        reader: &Connection,
+        result_id: &str,
+        keys: &[GraphSubjectKeyV1],
+        control: &AnalysisReadControl,
+        binding_scope: bool,
+    ) -> Result<Vec<GraphSubjectKeyV1>> {
+        let mut selected = Vec::new();
+        for keys in keys.chunks(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS) {
+            control.check()?;
+            let values = std::iter::repeat_n("(?, ?, ?, ?, ?)", keys.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut parameters = Vec::new();
+            for key in keys {
+                parameters.push(Value::Blob(Self::json(key)?));
+                parameters.extend(Self::subject_fields(key)?);
+            }
+            parameters.push(Value::Text(result_id.to_owned()));
+            parameters.push(Value::Boolean(binding_scope));
+            let columns = SubjectRow::COLUMNS
+                .split(',')
+                .map(|column| format!("subject.{}", column.trim()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let permission = Self::subject_permission();
+            let mut statement = reader
+                .prepare(&format!(
+                    "WITH requested(subject_id, tenant_id, subject_kind, authority, identity)
+                 AS (VALUES {values})
+                 SELECT {columns} FROM graph_subjects subject JOIN requested seed
+                 USING (tenant_id, subject_kind, authority, identity)
+                 WHERE subject.result_id = ? AND (NOT ? OR {permission})
+                 ORDER BY subject.ordinal"
+                ))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare selected graph subjects",
+                })?;
+            let mut rows = statement
+                .query(params_from_iter(parameters.iter()))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read selected graph subjects",
+                })?;
+            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                operation: "advance selected graph subjects",
+            })? {
+                control.check()?;
+                if selected.len() >= 2048 {
+                    return GraphInvalidSnafu {
+                        field: "selected graph subject count",
+                    }
+                    .fail();
+                }
+                selected.push(
+                    SubjectRow::columns(row)
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "decode selected graph subject columns",
+                        })?
+                        .decode()?,
+                );
+            }
+        }
+        selected.sort();
+        control.check()?;
+        Ok(selected)
+    }
+
     pub(in crate::analysis) fn read_subjects(
         writer: &Connection,
         result_id: &str,

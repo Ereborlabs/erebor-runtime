@@ -87,6 +87,7 @@ pub struct AnalysisSelectionV1 {
     pub(crate) profiles: Vec<String>,
     pub(crate) graph: bool,
     pub(crate) graphs: Vec<String>,
+    pub(crate) graph_traversal: Option<crate::GraphTraversalV1>,
     pub(crate) notifications: bool,
     pub(crate) obligations: Vec<AnalysisContextKeyV1>,
     pub traces: Selection<TraceIdentityV1>,
@@ -110,6 +111,7 @@ impl AnalysisSelectionV1 {
             profiles: Vec::new(),
             graph: false,
             graphs: Vec::new(),
+            graph_traversal: None,
             notifications: false,
             obligations: Vec::new(),
             traces: Selection::Exact(Vec::new()),
@@ -133,6 +135,13 @@ impl AnalysisSelectionV1 {
 
     pub(crate) fn valid(&self) -> bool {
         self.tenant_id != [0; 16]
+            && self.graph_traversal.as_ref().is_none_or(|request| {
+                request.validate().is_ok()
+                    && request
+                        .seeds
+                        .iter()
+                        .all(|seed| seed.tenant_id == self.tenant_id)
+            })
             && (!self.targets_only || self.targets)
             && self.nodes.len() <= MAX_EXTRACT_KEYS
             && self.nodes.iter().all(|node| crate::node_id_is_valid(node))
@@ -235,6 +244,9 @@ impl AnalysisSelectionV1 {
             .saturating_add(self.results.capacity().saturating_mul(size_of::<String>()));
         bytes = bytes.saturating_add(self.profiles.capacity().saturating_mul(size_of::<String>()));
         bytes = bytes.saturating_add(self.graphs.capacity().saturating_mul(size_of::<String>()));
+        if let Some(request) = &self.graph_traversal {
+            bytes = bytes.saturating_add(request.heap_bytes());
+        }
         bytes = bytes.saturating_add(
             self.obligations
                 .capacity()
@@ -322,6 +334,7 @@ pub enum AnalysisInputV1<'a> {
         graph: &'a crate::GraphSnapshotV1,
         commit_revision: u64,
         sensitivity: crate::ContextSensitivityV1,
+        traversal_depths: Option<&'a [(crate::GraphSubjectKeyV1, u32)]>,
     },
     Notification {
         obligation: &'a crate::NotificationObligationV1,
@@ -513,6 +526,7 @@ pub struct AnalysisExtractionV1<T = Box<[u8]>> {
     /// Includes projected bytes, row descriptors, page headers, and coverage metadata.
     pub input_bytes: usize,
     pub(crate) trace_reads: Vec<[u8; 16]>,
+    pub(crate) graph_traversal: Option<crate::GraphTraversalReceiptV1>,
     pub(crate) limits: AnalysisExtractLimits,
 }
 
@@ -678,7 +692,7 @@ impl AnalysisStore {
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
-        if selection.graph && !self.graph_enabled() {
+        if (selection.graph || selection.graph_traversal.is_some()) && !self.graph_enabled() {
             return crate::QueryUnsupportedSnafu {
                 relation: "graph owner disabled",
             }
@@ -1193,6 +1207,7 @@ impl AnalysisStore {
                 projected_bytes: 0,
                 input_bytes: 0,
                 trace_reads: Vec::new(),
+                graph_traversal: None,
                 limits,
                 replay_floor: Self::replay_floor_from(snapshot, selection.tenant_id)?,
             };
@@ -1502,7 +1517,10 @@ impl AnalysisStore {
                     None,
                 )?;
             }
-            for id in &selection.graphs {
+            if let Some(request) = &selection.graph_traversal {
+                self.traverse_graphs(snapshot, selection, request, &mut output, control, &mut project)?;
+            }
+            for id in selection.graphs.iter().filter(|_| selection.graph_traversal.is_none()) {
                 control.check()?;
                 let (key, revision): (Vec<u8>, u64) = snapshot.query_row(
                     "SELECT stream_key, commit_revision FROM analysis_results
@@ -1535,6 +1553,7 @@ impl AnalysisStore {
                 graph.validate()?;
                 output.project(&mut project, AnalysisInputV1::Graph {
                     result_id: id, graph: &graph, commit_revision: revision, sensitivity,
+                    traversal_depths: None,
                 }, control, None)?;
             }
             for key in &selection.obligations {

@@ -12,13 +12,13 @@ use crate::*;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-struct Authority {
+pub(crate) struct Authority {
     tenant: [u8; 16],
     changes: watch::Sender<u64>,
 }
 
 impl Authority {
-    fn new(tenant: [u8; 16]) -> Self {
+    pub(crate) fn new(tenant: [u8; 16]) -> Self {
         Self {
             tenant,
             changes: watch::channel(1).0,

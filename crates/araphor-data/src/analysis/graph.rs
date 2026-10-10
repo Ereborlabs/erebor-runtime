@@ -9,6 +9,7 @@ use crate::{AnalysisConflictSnafu, GraphSnapshotV1, GRAPH_PROCESSOR, GRAPH_SCHEM
 use super::graph_rows::GraphRows;
 
 mod findings;
+pub(super) mod traversal;
 
 impl AnalysisStore {
     pub(crate) fn graph_set_health(

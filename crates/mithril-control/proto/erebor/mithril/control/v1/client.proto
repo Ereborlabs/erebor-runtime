@@ -26,6 +26,20 @@ message QueryRequest {
   bool follow = 4;
   bytes bookmark = 5;
   optional uint64 duration_ns = 6 [jstype = JS_STRING];
+  GraphTraversal graph_traversal = 7;
+}
+
+message GraphTraversal {
+  bytes definition_json = 1;
+}
+
+message GraphTraversalReceipt {
+  repeated string result_ids = 1;
+  uint64 unique_subject_count = 2 [jstype = JS_STRING];
+  uint64 versioned_subject_count = 3 [jstype = JS_STRING];
+  uint64 relationship_count = 4 [jstype = JS_STRING];
+  uint32 max_hops = 5;
+  bool hop_boundary = 6;
 }
 
 message InputSelection {
@@ -127,6 +141,7 @@ message QueryRows {
   bool limited = 3;
   uint64 evaluated_utc_ns = 4 [jstype = JS_STRING];
   repeated ContextKey missing_contexts = 5;
+  GraphTraversalReceipt graph_traversal = 6;
 }
 
 message ContextKey {

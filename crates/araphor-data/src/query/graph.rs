@@ -92,6 +92,7 @@ pub(super) const SUBJECTS: InputSchema = InputSchema {
         InputField("subject_kind", Varchar, "unchanged subject kind", ""),
         InputField("authority", Blob, "JSON native, provider, Kubernetes, or external authority", ""),
         InputField("identity", Blob, "exact identity within the stated authority", ""),
+        InputField("traversal_depth", UInteger, "minimum hops from the selected seeds", "This is not a traversal input."),
     ],
     join_keys: KEY,
     owner: OWNER,
@@ -278,6 +279,7 @@ impl InputProjection<'_> {
         result_id: &str,
         revision: u64,
         sensitivity: crate::ContextSensitivityV1,
+        depths: Option<&[(crate::GraphSubjectKeyV1, u32)]>,
         sink: &mut crate::analysis::ProjectionSink<'_, InputRow>,
     ) -> Result<bool> {
         if !self.selection.permits_graph(graph) {
@@ -355,7 +357,8 @@ impl InputProjection<'_> {
         if self.expands("graph_subjects") {
             for subject in &graph.graph.subjects {
                 sink.check()?;
-                if !self.selection.binding_ids.is_empty()
+                if depths.is_none()
+                    && !self.selection.binding_ids.is_empty()
                     && !graph.findings.iter().any(|finding| {
                         self.permits_finding(finding) && finding.subject_id == *subject
                     })
@@ -372,6 +375,11 @@ impl InputProjection<'_> {
                     InputRow::label(&subject.kind)?,
                     InputRow::json(&subject.authority)?,
                     Value::Blob(subject.identity.clone()),
+                    depths.map_or(Value::Null, |depths| {
+                        depths
+                            .binary_search_by(|(key, _)| key.cmp(subject))
+                            .map_or(Value::Null, |index| Value::UInt(depths[index].1))
+                    }),
                 ]);
                 self.graph_emit(AnalysisRelationV1::GraphSubjects, row, sink)?;
             }

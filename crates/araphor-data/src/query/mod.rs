@@ -25,7 +25,7 @@ mod follow_tests;
 mod frame;
 mod graph;
 #[cfg(test)]
-mod graph_tests;
+pub(crate) mod graph_tests;
 mod input;
 mod notification;
 #[cfg(test)]
@@ -144,6 +144,7 @@ pub struct QueryResult {
     pub meta: AnalysisStoreMetaV1,
     pub sources: Arc<QueryCoverageRows>,
     pub missing_contexts: Vec<AnalysisContextKeyV1>,
+    pub graph_traversal: Option<crate::GraphTraversalReceiptV1>,
     /// Internal counters are absent from client results.
     pub scanned_bytes: Option<usize>,
     pub input_bytes: Option<usize>,
@@ -423,6 +424,12 @@ impl QueryOwner {
         let mut summary_bytes = coverage_bytes + read_bytes + std::mem::size_of::<QueryFrame>();
         summary_bytes = summary_bytes.saturating_add(
             page.extraction
+                .graph_traversal
+                .as_ref()
+                .map_or(0, crate::GraphTraversalReceiptV1::heap_bytes),
+        );
+        summary_bytes = summary_bytes.saturating_add(
+            page.extraction
                 .missing_contexts
                 .capacity()
                 .saturating_mul(std::mem::size_of::<AnalysisContextKeyV1>()),
@@ -474,6 +481,7 @@ impl QueryOwner {
             meta: page.extraction.meta,
             sources,
             missing_contexts: page.extraction.missing_contexts,
+            graph_traversal: page.extraction.graph_traversal,
             scanned_bytes: plan
                 .grant()
                 .is_none()
@@ -629,6 +637,11 @@ impl QueryResult {
 
     fn allocation_bytes(&self) -> Result<usize> {
         let mut bytes = std::mem::size_of::<QueryFrame>();
+        bytes = bytes.saturating_add(
+            self.graph_traversal
+                .as_ref()
+                .map_or(0, crate::GraphTraversalReceiptV1::heap_bytes),
+        );
         bytes = bytes.saturating_add(
             self.positions
                 .capacity()

@@ -253,6 +253,16 @@ impl WireFrame {
             limited: result.limited,
             evaluated_utc_ns: result.evaluated_utc_ns,
             missing_contexts: result.missing_contexts.iter().map(Self::context).collect(),
+            graph_traversal: result.graph_traversal.as_ref().map(|receipt| {
+                proto::GraphTraversalReceipt {
+                    result_ids: receipt.result_ids.clone(),
+                    unique_subject_count: receipt.unique_subject_count as u64,
+                    versioned_subject_count: receipt.versioned_subject_count as u64,
+                    relationship_count: receipt.relationship_count as u64,
+                    max_hops: receipt.max_hops,
+                    hop_boundary: receipt.hop_boundary,
+                }
+            }),
         })
     }
 

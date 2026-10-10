@@ -14,10 +14,12 @@ mod proof;
 mod read;
 #[cfg(test)]
 pub(crate) mod tests;
+mod traversal;
 mod window;
 
 pub use model::*;
 pub use proof::*;
+pub use traversal::*;
 
 pub const GRAPH_PROCESSOR: &str = "graph-findings";
 pub const GRAPH_SCHEMA_VERSION: u32 = 1;

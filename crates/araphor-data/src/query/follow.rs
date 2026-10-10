@@ -233,6 +233,12 @@ impl QueryOwner {
         let QueryTemplate::Client(sql) = &plan.template else {
             return crate::QueryDeniedSnafu.fail();
         };
+        if plan.graph_traversal().is_some() && checkpoint.is_some() {
+            return crate::QueryUnsupportedSnafu {
+                relation: "graph traversal bookmark",
+            }
+            .fail();
+        }
         if !sql.follow() && checkpoint.is_some() {
             return crate::QueryInvalidSnafu {
                 field: "checkpoint requires follow",

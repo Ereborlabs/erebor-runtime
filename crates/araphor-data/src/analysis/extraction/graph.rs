@@ -3,6 +3,8 @@ use snafu::ResultExt as _;
 use super::super::graph_rows::{GraphHeader, GraphRows};
 use super::*;
 
+mod traversal;
+
 impl AnalysisStore {
     pub(super) fn graph_input<T>(
         &self,

@@ -181,6 +181,13 @@ impl Output {
                     rows.missing_contexts.len(),
                     rows.evaluated_utc_ns
                 );
+                if let Some(receipt) = &rows.graph_traversal {
+                    let _ = writeln!(text,
+                        "graph_traversal\tversions={:?}\tunique_subjects={}\tversioned_subjects={}\trelationships={}\tmax_hops={}\thop_boundary={}",
+                        receipt.result_ids.iter().map(|id| Self::text(id)).collect::<Vec<_>>(),
+                        receipt.unique_subject_count, receipt.versioned_subject_count,
+                        receipt.relationship_count, receipt.max_hops, receipt.hop_boundary);
+                }
             }
             Payload::Checkpoint(_) => {}
             Payload::Health(health) => Self::health(&mut text, health),
@@ -454,6 +461,42 @@ mod tests {
         })?;
         assert!(text.contains("│ count"));
         assert!(!text.contains("│ 42"));
+        Ok(())
+    }
+
+    #[test]
+    fn graph_traversal_cli_receipt() -> Result<()> {
+        let frame = wire::QueryFrame {
+            operation: wire::QueryOperation::Replace as i32,
+            payload: Some(wire::query_frame::Payload::Rows(wire::QueryRows {
+                graph_traversal: Some(wire::GraphTraversalReceipt {
+                    result_ids: vec!["graph-v1\u{1b}[2J".into()],
+                    unique_subject_count: 2,
+                    versioned_subject_count: 3,
+                    relationship_count: 1,
+                    max_hops: 1,
+                    hop_boundary: true,
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let bytes = Output::new(Some(OutputMode::Table), false).query(&frame)?;
+        let table = String::from_utf8_lossy(&bytes);
+        assert!(table.contains(
+            "unique_subjects=2\tversioned_subjects=3\trelationships=1\tmax_hops=1\thop_boundary=true"
+        ));
+        assert!(!table.contains('\u{1b}'));
+        let bytes = Output::new(Some(OutputMode::Jsonl), false).query(&frame)?;
+        let decoded: serde_json::Value = serde_json::from_slice(&bytes).context(EncodeSnafu)?;
+        assert_eq!(
+            decoded["frame"]["payload"]["Rows"]["graph_traversal"]["hop_boundary"],
+            true
+        );
+        assert_eq!(
+            decoded["frame"]["payload"]["Rows"]["graph_traversal"]["versioned_subject_count"],
+            3
+        );
         Ok(())
     }
 

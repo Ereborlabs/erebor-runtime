@@ -5,8 +5,8 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use araphor_data::{
-    QueryCheckpoint, QueryErrorCode, QueryFrame, QueryGrant, QueryPayload, QueryPlan, QuerySql,
-    QueryStream,
+    GraphTraversalV1, QueryCheckpoint, QueryErrorCode, QueryFrame, QueryGrant, QueryPayload,
+    QueryPlan, QuerySql, QueryStream,
 };
 use futures_util::Stream;
 use tokio::time::Sleep;
@@ -49,14 +49,23 @@ impl ClientGrpcOwner {
         let sql = QuerySql::admit(&request.sql, parameters, request.follow)
             .map_err(QueryTransport::failure)?;
         let selection = self.select(request.selection, access.tenant_id())?;
-        let plan = QueryPlan::client(
-            QueryGrant {
-                principal: access.principal().to_owned(),
-                revision: access.revision(),
-                selection,
-            },
-            sql,
-        )
+        let grant = QueryGrant {
+            principal: access.principal().to_owned(),
+            revision: access.revision(),
+            selection,
+        };
+        let plan = if let Some(traversal) = request.graph_traversal {
+            if !request.bookmark.is_empty() {
+                return Err(Status::unimplemented(
+                    "Graph traversal does not support bookmarks.",
+                ));
+            }
+            let traversal = GraphTraversalV1::try_from(traversal.definition_json.as_slice())
+                .map_err(QueryTransport::failure)?;
+            QueryPlan::client_graph(grant, sql, traversal)
+        } else {
+            QueryPlan::client(grant, sql)
+        }
         .map_err(QueryTransport::failure)?;
         let checkpoint = QueryTransport::checkpoint(&request.bookmark)?;
         let inner = self

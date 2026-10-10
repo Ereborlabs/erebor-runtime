@@ -17,6 +17,8 @@ use crate::{
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 const WAIT: Duration = Duration::from_secs(5);
 
+mod graph_traversal;
+
 struct Fixture {
     service: ClientGrpcOwner,
     session: ClientSession,

@@ -3,7 +3,7 @@ use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, GraphEdgeKeyV1, GraphEdgeV1, GraphInvalidSnafu,
     Result,
 };
-use duckdb::{params, Connection, Row, Statement};
+use duckdb::{params, params_from_iter, types::Value, Connection, Row, Statement};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
@@ -125,6 +125,85 @@ impl RelationshipRow {
 }
 
 impl GraphRows {
+    pub(in crate::analysis) fn edge_name(kind: &crate::GraphEdgeTypeV1) -> Result<String> {
+        Self::label(kind)
+    }
+
+    pub(in crate::analysis) fn selected_edges(
+        reader: &Connection,
+        result_id: &str,
+        ordinals: &[u32],
+        control: &AnalysisReadControl,
+    ) -> Result<Vec<GraphEdgeV1>> {
+        if ordinals.len() > 4096 || ordinals.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return GraphInvalidSnafu {
+                field: "selected graph edge ordinals",
+            }
+            .fail();
+        }
+        let mut selected = Vec::new();
+        for ordinals in ordinals.chunks(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS) {
+            control.check()?;
+            let values = std::iter::repeat_n("(?)", ordinals.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut parameters = ordinals
+                .iter()
+                .map(|ordinal| Value::UInt(*ordinal))
+                .collect::<Vec<_>>();
+            parameters.push(Value::Text(result_id.to_owned()));
+            let columns = RelationshipRow::COLUMNS
+                .split(',')
+                .map(|column| format!("edge.{}", column.trim()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut statement = reader
+                .prepare(&format!(
+                    "WITH requested(ordinal) AS (VALUES {values}) SELECT {columns}
+                 FROM graph_relationships edge JOIN requested USING (ordinal)
+                 WHERE result_id = ? ORDER BY edge.ordinal"
+                ))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare selected graph relationships",
+                })?;
+            let mut rows = statement
+                .query(params_from_iter(parameters.iter()))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read selected graph relationships",
+                })?;
+            let start = selected.len();
+            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                operation: "advance selected graph relationships",
+            })? {
+                control.check()?;
+                let ordinal: u32 = row.get(0).context(AnalysisDatabaseSnafu {
+                    operation: "decode selected graph edge ordinal",
+                })?;
+                if ordinals.get(selected.len() - start) != Some(&ordinal) {
+                    return GraphInvalidSnafu {
+                        field: "selected graph edge ordinals",
+                    }
+                    .fail();
+                }
+                selected.push(
+                    RelationshipRow::columns(row)
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "decode selected graph relationship columns",
+                        })?
+                        .decode()?,
+                );
+            }
+            if selected.len() - start != ordinals.len() {
+                return GraphInvalidSnafu {
+                    field: "selected graph edge ordinals",
+                }
+                .fail();
+            }
+        }
+        control.check()?;
+        Ok(selected)
+    }
+
     pub(in crate::analysis) fn read_edges(
         writer: &Connection,
         result_id: &str,

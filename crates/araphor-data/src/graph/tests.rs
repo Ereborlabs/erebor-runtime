@@ -13,6 +13,7 @@ pub(crate) mod native_storage;
 mod paging;
 mod processing;
 mod source_recovery;
+mod traversal;
 mod window_expiry;
 
 fn source() -> EvidenceIntakeIdentityV1 {

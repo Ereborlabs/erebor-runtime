@@ -999,6 +999,7 @@ impl crate::analysis::AnalysisProjection for InputProjection<'_> {
                 graph,
                 commit_revision,
                 sensitivity,
+                traversal_depths,
             } => {
                 if graph.scope.identity.tenant_id != self.selection.tenant_id
                     || (!self.selection.sources.is_all()
@@ -1010,7 +1011,14 @@ impl crate::analysis::AnalysisProjection for InputProjection<'_> {
                 {
                     return crate::QueryDeniedSnafu.fail();
                 }
-                self.graph_rows(graph, result_id, *commit_revision, *sensitivity, sink)
+                self.graph_rows(
+                    graph,
+                    result_id,
+                    *commit_revision,
+                    *sensitivity,
+                    *traversal_depths,
+                    sink,
+                )
             }
             AnalysisInputV1::Notification {
                 obligation,
@@ -2178,6 +2186,7 @@ mod tests {
             projected_bytes: 0,
             input_bytes: size_of::<AnalysisExtractionV1<InputRow>>(),
             trace_reads: Vec::new(),
+            graph_traversal: None,
             limits: Default::default(),
         }
     }

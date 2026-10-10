@@ -64,6 +64,9 @@ pub(crate) struct SqlArgs {
     sql: Option<String>,
     #[arg(short = 'f', long)]
     file: Option<PathBuf>,
+    /// Read graph seeds, direction, and limits from a JSON file.
+    #[arg(long, conflicts_with = "follow")]
+    graph: Option<PathBuf>,
     #[command(flatten)]
     selection: SelectionArgs,
     #[arg(long)]
@@ -141,6 +144,13 @@ impl AraphorCommand {
         match self {
             AraphorCommand::Catalog(args) => args.prepare(),
             AraphorCommand::Sql(args) => {
+                ensure!(
+                    !(args.file.as_deref() == Some(Path::new("-"))
+                        && args.graph.as_deref() == Some(Path::new("-"))),
+                    InvalidSnafu {
+                        field: "SQL and graph input cannot both use stdin"
+                    },
+                );
                 let bytes =
                     SourceInput::read(args.file.as_deref(), args.sql.as_deref(), 16 * 1024)?;
                 let sql = String::from_utf8(bytes)
@@ -153,6 +163,14 @@ impl AraphorCommand {
                         follow: args.follow,
                         bookmark: Vec::new(),
                         duration_ns: args.duration.map(|span| span.0.as_nanos() as u64),
+                        graph_traversal: args
+                            .graph
+                            .as_deref()
+                            .map(|path| {
+                                SourceInput::read(Some(path), None, 1024 * 1024)
+                                    .map(|definition_json| wire::GraphTraversal { definition_json })
+                            })
+                            .transpose()?,
                     },
                 })
             }
@@ -615,6 +633,65 @@ mod tests {
         );
         assert!(SourceInput::read(None, Some("\0"), 1).is_err());
         assert!(SourceInput::read(None, Some("  "), 2).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn graph_traversal_cli_bounds() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let definition = r#"{"seeds":[],"max_hops":2}"#;
+        let file = crate::cli::test_support::TempJsonFile::write(definition)?;
+        let path = file
+            .path()
+            .to_str()
+            .context(InvalidSnafu { field: "test path" })?;
+        let args = Cli::try_parse_from([
+            "araphor",
+            "sql",
+            "SELECT * FROM graph_subjects",
+            "--graph",
+            path,
+            "--node",
+            "node-a",
+        ])
+        .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
+        let Prepared::Sql { request } = prepare(args)? else {
+            return Err(InvalidSnafu {
+                field: "test query",
+            }
+            .build()
+            .into());
+        };
+        assert_eq!(
+            request.graph_traversal.map(|value| value.definition_json),
+            Some(definition.as_bytes().to_vec())
+        );
+        assert_eq!(request.sql, "SELECT * FROM graph_subjects");
+        assert_eq!(
+            request.selection.map(|selection| selection.node_ids),
+            Some(vec!["node-a".into()])
+        );
+        std::fs::write(file.path(), vec![b'x'; 1024 * 1024 + 1])?;
+        let args = Cli::try_parse_from([
+            "araphor",
+            "sql",
+            "SELECT * FROM graph_subjects",
+            "--graph",
+            path,
+        ])
+        .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
+        assert!(prepare(args).is_err());
+        assert!(Cli::try_parse_from([
+            "araphor",
+            "sql",
+            "SELECT * FROM graph_subjects",
+            "--graph",
+            path,
+            "--follow",
+        ])
+        .is_err());
+        let args = Cli::try_parse_from(["araphor", "sql", "--file", "-", "--graph", "-"])
+            .map_err(|_| InvalidSnafu { field: "test args" }.build())?;
+        assert!(prepare(args).is_err());
         Ok(())
     }
 }

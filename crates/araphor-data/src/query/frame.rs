@@ -1055,6 +1055,7 @@ mod tests {
                 meta: self.meta.clone(),
                 sources,
                 missing_contexts: Vec::new(),
+                graph_traversal: None,
                 scanned_bytes: Some(64),
                 input_rows: 1,
                 input_bytes: Some(128),

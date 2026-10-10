@@ -4,7 +4,11 @@ use std::sync::Arc;
 use duckdb::types::Value;
 
 use super::{QueryGrant, QuerySql};
-use crate::{AnalysisSelectionV1, Result, Selection};
+use crate::{AnalysisSelectionV1, GraphTraversalV1, Result, Selection};
+
+#[cfg(test)]
+#[path = "traversal_tests.rs"]
+mod traversal_tests;
 
 pub const QUERY_SCHEMA_VERSION: u32 = 1;
 
@@ -34,6 +38,7 @@ pub enum QueryOperation {
 pub struct QueryPlan {
     scope: QueryScope,
     pub(super) template: QueryTemplate,
+    graph_traversal: Option<GraphTraversalV1>,
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +103,7 @@ impl QueryPlan {
         Ok(Self {
             scope: QueryScope::Trusted(Arc::new(selection)),
             template,
+            graph_traversal: None,
         })
     }
 
@@ -109,7 +115,47 @@ impl QueryPlan {
         Ok(Self {
             scope: QueryScope::Client(Arc::new(grant)),
             template: QueryTemplate::Client(sql),
+            graph_traversal: None,
         })
+    }
+
+    pub fn client_graph(
+        grant: QueryGrant,
+        sql: QuerySql,
+        traversal: GraphTraversalV1,
+    ) -> Result<Self> {
+        traversal.validate()?;
+        if sql.follow()
+            || !sql
+                .dependencies()
+                .iter()
+                .any(|name| matches!(name.as_str(), "graph_subjects" | "relationships"))
+            || sql.dependencies().iter().any(|name| {
+                !matches!(
+                    name.as_str(),
+                    "graph_subjects" | "relationships" | "catalog"
+                )
+            })
+        {
+            return crate::QueryUnsupportedSnafu {
+                relation: "graph traversal query",
+            }
+            .fail();
+        }
+        if traversal
+            .seeds
+            .iter()
+            .any(|seed| seed.tenant_id != grant.selection.tenant_id)
+        {
+            return crate::QueryDeniedSnafu.fail();
+        }
+        let mut plan = Self::client(grant, sql)?;
+        plan.graph_traversal = Some(traversal);
+        Ok(plan)
+    }
+
+    pub fn graph_traversal(&self) -> Option<&GraphTraversalV1> {
+        self.graph_traversal.as_ref()
     }
 
     pub(super) fn base_selection(&self) -> &AnalysisSelectionV1 {
@@ -192,6 +238,13 @@ impl QueryPlan {
         selection.profiles.clear();
         selection.graph = graph_sql;
         selection.graphs.clear();
+        selection.graph_traversal = self.graph_traversal.clone();
+        if let Some(traversal) = &self.graph_traversal {
+            if !traversal.result_ids.is_empty() {
+                selection.graph = false;
+                selection.graphs = traversal.result_ids.clone();
+            }
+        }
         selection.notifications = notification_sql;
         selection.obligations.clear();
         selection.targets = target_sql;
