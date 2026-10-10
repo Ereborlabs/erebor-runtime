@@ -72,7 +72,7 @@ impl GraphWalk<'_> {
                      , e.edge_type
                  FROM graph_relationships e JOIN requested USING (result_id)
                  WHERE NOT ? OR e.evidence <> '[]'::BLOB
-             ), edges AS NOT MATERIALIZED (
+             ), edges AS MATERIALIZED (
                  SELECT result_id, ordinal, from_subject_id, to_subject_id
                  FROM eligible_edges e {filter}
              ), links AS ({links}),

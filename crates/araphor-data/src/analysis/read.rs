@@ -77,6 +77,7 @@ impl AnalysisReadControl {
         Ok(())
     }
 
+    #[track_caller]
     pub(crate) fn check(&self) -> Result<()> {
         if self.cancelled.load(Ordering::Acquire) {
             return crate::AnalysisReadCancelledSnafu.fail();
