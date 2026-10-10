@@ -55,6 +55,32 @@ cargo test -p araphor-analysis-sdk --all-targets
 The example uses fixture subject IDs. Production subject identities and proof
 qualification remain with the host.
 
+## Develop a detector
+
+The [sensitive access example](examples/sensitive_access.rs) compares observed
+subject/resource pairs with an exact audited baseline. It returns each access
+outside that baseline as a `Findings` row, with a typed
+`sensitive-access.OUTSIDE_BASELINE` reason and evidence for the observed event.
+The result retains the baseline revision. An empty baseline retains its revision.
+A gapped baseline, an unknown baseline, or a selection limit returns
+`Incomplete` because the detector cannot establish complete membership.
+
+Use `evaluation.input("baseline")?` to select a named input. Use Arrow's
+`RecordBatch::column_by_name` and typed casts to read columns. Use the declared
+schemas to make output and reason batches. Arrow batch errors convert into the
+SDK error without a separate error mapping. Test the detector with
+`package.test(&fixture, SensitiveAccess::evaluate)`.
+
+```sh
+cargo run -p araphor-analysis-sdk --example sensitive_access
+```
+
+This example uses local fixtures. It reports a difference from an audited
+baseline. It does not establish malicious intent, grant policy authority, or
+prevent an operation. Zero findings means that the supplied events contain no
+match. Check the input coverage in the report before you assess that result.
+Installation and target execution remain later work.
+
 ## Data and result rules
 
 Each named dataset contains ordered Arrow `RecordBatch` values. Every declared

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use araphor_analysis_sdk::arrow_array::cast::AsArray as _;
+use araphor_analysis_sdk::arrow_array::types::UInt64Type;
 use araphor_analysis_sdk::arrow_array::{Array, StringArray, UInt64Array};
 use araphor_analysis_sdk::*;
 
@@ -33,21 +35,15 @@ impl FilesCount {
         let model = Self::package();
         let mut groups = BTreeMap::<String, BTreeSet<u64>>::new();
         let mut source_rows = Vec::new();
-        let events = input
-            .inputs
-            .iter()
-            .find(|input| input.data.name == "events")
-            .ok_or_else(|| Error::contract(ErrorCode::Incomplete, "events"))?;
+        let events = input.input("events")?;
         for batch in &events.data.batches {
             let subjects = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
+                .column_by_name("subject")
+                .and_then(|column| column.as_string_opt::<i32>())
                 .ok_or_else(|| Error::contract(ErrorCode::Invalid, "subjects"))?;
             let ids = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
+                .column_by_name("event_id")
+                .and_then(|column| column.as_primitive_opt::<UInt64Type>())
                 .ok_or_else(|| Error::contract(ErrorCode::Invalid, "event IDs"))?;
             for row in 0..batch.num_rows() {
                 if subjects.is_null(row) || subjects.value(row).is_empty() || ids.is_null(row) {
@@ -87,8 +83,7 @@ impl FilesCount {
                 Arc::new(StringArray::from(subjects)),
                 Arc::new(UInt64Array::from(counts)),
             ],
-        )
-        .map_err(|_| Error::contract(ErrorCode::Invalid, "count batch"))?;
+        )?;
         Ok(Output {
             datasets: vec![Dataset {
                 name: "counts".into(),
@@ -107,8 +102,7 @@ impl FilesCount {
                 Arc::new(StringArray::from(vec!["subject.1"; 3])),
                 Arc::new(UInt64Array::from(vec![1, 2, 3])),
             ],
-        )
-        .map_err(|_| Error::contract(ErrorCode::Invalid, "event batch"))?;
+        )?;
         Ok(Fixture {
             implementation: "portable-rust.1".into(),
             revision: "three-events.1".into(),
