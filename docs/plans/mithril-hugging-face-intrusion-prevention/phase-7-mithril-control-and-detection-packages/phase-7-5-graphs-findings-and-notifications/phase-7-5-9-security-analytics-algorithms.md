@@ -109,8 +109,9 @@ algorithm inventory and package checks pass. Benchmarks need separate approval.
 
 ## Result
 
-**Not done.** Source families and the implementation owner are recorded. Full
-source/variant enumeration, rule compatibility, development, and proof remain.
+**Not done.** The [contract inventory](security-contract-inventory.md) records
+the source computations, variants, delegates, and all rule files.
+Rule compatibility, semantic reference checks, development, and proof remain.
 
 ## End scope and example
 

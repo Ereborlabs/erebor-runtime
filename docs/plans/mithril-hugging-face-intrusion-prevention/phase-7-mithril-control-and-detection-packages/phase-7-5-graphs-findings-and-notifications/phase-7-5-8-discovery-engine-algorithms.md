@@ -105,8 +105,9 @@ algorithm implementation. No benchmark runs without separate workload approval.
 
 ## Result
 
-**Not done.** Source families and the implementation owner are recorded. The
-complete function/variant audit, package development, and qualification remain.
+**Not done.** The [contract inventory](discovery-contract-inventory.md) records
+the source computations, variants, delegates, and required differences.
+Package development, semantic reference checks, and qualification remain.
 
 ## End scope and example
 

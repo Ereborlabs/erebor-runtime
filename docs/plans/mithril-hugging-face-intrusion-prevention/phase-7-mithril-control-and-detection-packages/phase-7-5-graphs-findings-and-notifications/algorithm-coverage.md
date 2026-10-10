@@ -18,14 +18,24 @@ analysis entry points. It does not mean all future upstream features. Source
 revision changes require an inventory delta. The Security Analytics checkout has
 an untracked `bin/` directory; this inventory uses tracked source only.
 
-The tables below identify source families. They are not a completed audit of
-every function. Phase 7.5.2 expands the families into individual algorithms,
-variants, and delegated operations before freezing the SDK contract. For each
-item record source symbol, tests,
-input fields, output schema, state, dependencies, package export, execution
-target, expected differences, and verification result. Check the full source
-tree and reachable delegated operations; do not limit the audit to these rows.
-Phases 7.5.8 and 7.5.9 verify that inventory against the pinned source, implement
+The tables below identify source families. The contract requirements audit is
+**Done** on 2026-10-10. Use the detailed records below for individual algorithms,
+variants, delegated operations, inputs, outputs, state, host checks, package
+exports, execution constraints, and expected differences:
+
+- [Current Araphor records](current-contract-inventory.md) cover AR-01 through
+  AR-07 and identify the operations that remain host-owned.
+- [Discovery Engine records](discovery-contract-inventory.md) cover the complete
+  tracked source tree and 58 computation records, including retained variants.
+- [Security Analytics records](security-contract-inventory.md) cover the complete
+  tracked source tree, delegated computations, and all 2,326 rule files.
+
+These records establish interface requirements. They do not prove computation
+parity or installed-package execution. Keep exact source symbols, fields,
+schemas, state, dependencies, exports, targets, differences, and test results
+with each later port. Check the full source tree and reachable delegated
+operations when the pinned source changes.
+Phases 7.5.8 and 7.5.9 verify the inventory against the pinned source, implement
 the declared exports, and fill in verification results. A new contract gap must
 be resolved and the affected runtimes checked before its package is qualified.
 
