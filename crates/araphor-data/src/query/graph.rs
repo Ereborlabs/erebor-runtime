@@ -214,14 +214,7 @@ impl InputRow {
         }
     }
 
-    fn finding(
-        graph: &GraphSnapshotV1,
-        result_id: &str,
-        revision: u64,
-        finding: &FindingV1,
-        sensitivity: crate::ContextSensitivityV1,
-    ) -> Result<Self> {
-        let mut row = Self::graph_base(graph, result_id, revision, sensitivity)?;
+    fn finding(mut row: Self, finding: &FindingV1) -> Result<Self> {
         row.0.extend([
             Value::Text(finding.finding_id.clone()),
             Self::json(&finding.revision)?,
@@ -285,19 +278,31 @@ impl InputProjection<'_> {
         if !self.selection.permits_graph(graph) {
             return Ok(true);
         }
+        let mut base: Option<InputRow> = None;
+        let mut base_row =
+            |sink: &mut crate::analysis::ProjectionSink<'_, InputRow>| -> Result<InputRow> {
+                if let Some(row) = &base {
+                    return Ok(InputRow(row.0.clone()));
+                }
+                let row = InputRow::graph_base(graph, result_id, revision, sensitivity)?;
+                sink.charge(row.allocation_bytes()?)?;
+                let copy = InputRow(row.0.clone());
+                base = Some(row);
+                Ok(copy)
+            };
         for finding in &graph.findings {
             sink.check()?;
             if !self.permits_finding(finding) {
                 continue;
             }
             if self.expands("findings") {
-                let row = InputRow::finding(graph, result_id, revision, finding, sensitivity)?;
+                let row = InputRow::finding(base_row(sink)?, finding)?;
                 self.graph_emit(AnalysisRelationV1::Findings, row, sink)?;
             }
             if self.expands("policy_observations") {
                 for policy in &finding.policy_provenance {
                     sink.check()?;
-                    let mut row = InputRow::graph_base(graph, result_id, revision, sensitivity)?;
+                    let mut row = base_row(sink)?;
                     row.0.extend([
                         Value::Text(finding.finding_id.clone()),
                         Value::UBigInt(policy.profile_generation_ref_id),
@@ -337,7 +342,7 @@ impl InputProjection<'_> {
                 if !self.permits_evidence(graph, &edge.key.evidence) {
                     continue;
                 }
-                let mut row = InputRow::graph_base(graph, result_id, revision, sensitivity)?;
+                let mut row = base_row(sink)?;
                 row.0.extend([
                     InputRow::json(&edge.key)?,
                     InputRow::json(&edge.key.from)?,
@@ -369,7 +374,7 @@ impl InputProjection<'_> {
                 {
                     continue;
                 }
-                let mut row = InputRow::graph_base(graph, result_id, revision, sensitivity)?;
+                let mut row = base_row(sink)?;
                 row.0.extend([
                     InputRow::json(subject)?,
                     InputRow::label(&subject.kind)?,
@@ -390,7 +395,7 @@ impl InputProjection<'_> {
                 if !self.permits_evidence(graph, &branch.evidence) {
                     continue;
                 }
-                let mut row = InputRow::graph_base(graph, result_id, revision, sensitivity)?;
+                let mut row = base_row(sink)?;
                 row.0.extend([
                     Value::Text(branch.package_id.clone()),
                     InputRow::json(&branch.seed)?,
@@ -406,7 +411,7 @@ impl InputProjection<'_> {
         {
             for package in &graph.packages {
                 sink.check()?;
-                let mut row = InputRow::graph_base(graph, result_id, revision, sensitivity)?;
+                let mut row = base_row(sink)?;
                 row.0.extend([
                     Value::Text(package.package_id.clone()),
                     Value::UBigInt(package.package_version),
