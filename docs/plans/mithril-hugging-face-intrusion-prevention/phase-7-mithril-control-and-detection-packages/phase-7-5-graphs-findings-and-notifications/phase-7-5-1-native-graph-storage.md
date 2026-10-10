@@ -61,39 +61,43 @@ paths. Preserve `GraphAndFindingOwner` validation and graph construction.
 
 ### Native traversal and large-graph TODOs
 
-- [ ] Define a bounded graph input request and receipt under the graph model
+- [x] Define a bounded graph input request and receipt under the graph model
   owner. Preserve complete seed authority and lifetime. Include direction,
   edge types, exact historical result IDs or current heads, hop, subject, and
   relationship limits. Use existing query byte, capacity, and deadline limits.
-- [ ] Check complete versions before traversal. Preserve tenant, source, Node,
+- [x] Check complete versions before traversal. Preserve tenant, source, Node,
   binding, and sensitivity rules. An excluded replacement cannot restore the
   old version. Keep one read revision for version selection and native reads.
-- [ ] Execute fixed parameterized recursive DuckDB SQL with `USING KEY`.
+- [x] Execute fixed parameterized recursive DuckDB SQL with `USING KEY`.
   Exclude visited keys and deduplicate candidates. Keep minimum hop depth.
   Bound narrow work inputs and output keys before selected proof payload reads.
-- [ ] Add direct native subject and relationship reads. Share row decoding with
+- [x] Add direct native subject and relationship reads. Share row decoding with
   reconstruction. Add no complete Rust graph, second graph body, or custom
   graph engine. Use no index unless a query plan proves its use.
-- [ ] Connect graph input to QueryPlan, ClientGrpcOwner, and `araphor query`.
+- [x] Connect graph input to QueryPlan, ClientGrpcOwner, and `araphor sql --graph`.
   Use one JSON file for the CLI input. Return a receipt with exact result IDs,
   counts, and hop-boundary state. Add no listener or permission.
-- [ ] Qualify at least 16,385 distinct subjects and 32,769 relationships across
+- [x] Qualify at least 16,385 distinct subjects and 32,769 relationships across
   multiple current source windows. Keep existing per-version limits. Include
   disconnected records, chains, diamonds, cycles, high fanout, directions,
   type filters, exact seeds, and hop boundaries.
-- [ ] Verify row and byte limits, cancellation, deadlines, source replacements,
+- [x] Verify row and byte limits, cancellation, deadlines, source replacements,
   historical versions, tenant and lifetime isolation, whole-version grants,
   retained proof, reopen, and backup/restore with focused Rust tests.
-- [ ] Extend the existing lightweight graph-notification case, then its paired
-  physical Rust case. Run the final shared Rust gate. Update the review guide
-  and results. Commit each completed deliverable in the primary checkout.
+- [x] Extend the existing lightweight graph-notification case, then its paired
+  physical Rust case. Include the captured 185-record window with 370
+  relationships. Verify all relationships through bounded output queries under
+  the existing 200-row cap. Retain the inner read error during diagnosis.
+  Run the final shared Rust gate. Update the review guide and results. Commit
+  each completed deliverable in the primary checkout.
 
-The initial graph input supports `graph_subjects`, `relationships`, and catalog
-inspection. It supports joins between the graph datasets. Follow, bookmarks,
-and other datasets are rejected for this request. Existing queries retain their
-current behavior. Client recursion remains outside the admitted SQL subset;
-the graph owner controls native recursion. A zero-hop request reads exact seeds.
-Positive-hop reads retain filtered relationships between reached subjects.
+Traversal SQL must read `graph_subjects` or `relationships`. It can join these
+datasets and `catalog`. Use the ordinary catalog command for catalog-only
+inspection. Follow, bookmarks, and other datasets are rejected for this request.
+Existing queries retain their current behavior. Client recursion remains
+outside the admitted SQL subset; the graph owner controls native recursion.
+A zero-hop request reads exact seeds. Positive-hop reads retain filtered
+relationships between reached subjects.
 
 The pinned DuckDB 1.5.5 supports
 [recursive USING KEY queries](https://duckdb.org/docs/current/sql/query_syntax/with).
@@ -122,8 +126,183 @@ Stop before SDK implementation.
 
 ## Result
 
-**Not done** for the expanded scope. Native traversal, direct large-graph
-access, and their qualification are pending.
+**Done** for native storage, direct large-graph reads, and bounded native
+DuckDB traversal. The storage baseline is `91afc657`. Native traversal and
+large-graph access are committed as `88b3e8c`. Commit `763b7f1` shares the
+filtered native edge relation and records an expired deadline's caller.
+Commit `d20420c0` reuses full-source authorization. Commit `adf4d14b` encodes
+shared projection metadata once per version. The existing raw-recovery test
+uses a fresh control for each independent read in `bb49d538`.
+The full lightweight and paired physical cases and the final shared Rust
+procedure pass on the metadata source below. Read the
+[native traversal review](native-traversal-review.md) for the implemented flow,
+limits, caller examples, and proof. Read `/tmp/araphor-native-traversal.OC49oX`
+for the source records and logs.
+
+The scoped source record is `source-state-scoped.json`. It covers 1,348 files
+with SHA-256
+`0a5066e7016021d98c26afbfd1f0e36e8f08771d7c32565b520fc28f90c5002f`.
+Commit `d20420c` skips binding-proof SQL filters for full-source grants after
+whole-version authorization. Binding grants retain those filters. Nine native
+checks pass after that change; read `native-scoped.log`. The full lightweight
+case passes on this source. Its result is `lightweight-scoped/result.json`, with
+SHA-256
+`9bcb5d538e02c7653f3c90ee11eba68338c32562fc44b8711b4c847c03690b76`.
+Read `lightweight-scoped-receipt.json`. All 1,348 source files match after the
+run. The 64-record window selects five subjects and 192 relationships. The
+selected density version has four subjects and three relationships. Both
+queries return equal data after reopen. The paired physical run uses this source and lightweight input. Its failure is
+recorded below. At that source, further qualification and the final Rust gate
+remain pending.
+
+The earlier source record is `source-state-shared2.json`. It covers 1,348 files
+with SHA-256
+`8fb48077944aa1211858ca7cb4484270d58051df80d3746e20358799a51b2a66`.
+Read `native-shared.log`, `control-shared.log`, and `window-shared.log`.
+The earlier lightweight result is `lightweight-shared/result.json`, with SHA-256
+`061124b5a7068922f9e235d834eebb9d829b0b690acde7da408756d2cdf623a8`.
+Read `lightweight-shared-receipt.json`. All 1,348 covered source files match
+after the run. The 64-record query selects five subjects and 192 relationships.
+The density query selects four subjects and three relationships from one exact
+version. These selected lightweight snapshots contain no context facts or
+manifest contexts. That run does not qualify physical context inputs.
+The earlier full lightweight case passes on `source-state-qualified.json`,
+which covers 1,347 files with SHA-256
+`d4af099f0297dc8747f4c5fd262225f3afc5040ff0f699fdc926bd9ffbf45644`.
+Its result is `lightweight-qualified/result.json`, with SHA-256
+`6a49679120c9f37ba1aab92f17c67ac48c14681d9aec20d648cc3f9077beaaa5`.
+That case selects one exact version through a fresh QueryOwner in a store with
+257 findings across 33 source windows and returns equal data after reopen.
+Read `lightweight-qualified-receipt.json`. The new source retains that condition
+and adds a 64-record window with one task, mixed allowed and denied events,
+missing initial health, and the same default-budget query after reopen.
+The physical case now exports its graph, request, SQL, counts, limits, and
+canonical replay before its first traversal.
+
+The initial physical run failed on its first traversal with
+`AnalysisReadDeadline`. Its owned resources and VM were removed. The dense
+first-query condition now exists in the lightweight case. Traversal reuses
+validated header bytes, revision, and sensitivity in the same pinned read.
+The retained bytes and vector storage count toward the input limit. The first
+shared Rust run failed one existing raw-recovery test. That test reused one
+absolute deadline across independent reads, writes, and reopen. Commit
+`bb49d538` gives each independent read a fresh control. Its focused check passes.
+These changes keep the existing memory and deadline limits.
+
+An earlier serial physical run also fails on its first traversal with
+`AnalysisReadDeadline`. It does not reach reopen. Read
+`physical-qualified-invocation.json` and `physical-qualified-test.log`.
+The test lifecycle removed the original store before return. Only the decision
+was exported before the failed query. Resource and VM cleanup pass; read
+`physical-qualified/vm-cleanup.json`. The owned namespace, domain, work, and
+active state are absent. The original ACL is restored. The other VM is unchanged.
+This run supplies no physical traversal pass. The exact internal timeout stage
+is not established by its log.
+
+The next physical provision fails before VM creation. The test-only replay
+export uses an internal type with no Serialize implementation. Read
+`physical-shared-invocation.json`, `physical-shared-vm-start.log`, and
+`replay-export-build-failed.log`. The export now uses the existing serializable
+replay fields. The focused 64-record check passes; read `window-capture.log`.
+No production serialization contract or deadline limit changes. Read
+`physical-shared-pretest-cleanup.json` for cleanup and ACL restoration. This
+attempt supplies no physical test result.
+
+The scoped physical pair fails its first traversal with
+`AnalysisReadDeadline`, observed at `analysis/read.rs:161`. It does not reach
+reopen. The final check follows snapshot close and does not identify the inner
+failure. The exported graph has 185 records, three subjects, 370 relationships,
+one finding, and no context facts or manifest contexts. All relationships
+originate at the selected seed. This condition was absent from the lightweight
+case. Its one-row-per-relationship query also exceeds the existing 200-row
+output cap. Read `physical-scoped/graph.json`,
+`physical-scoped/observed-graph-input.json`, and `physical-scoped/replay.json`.
+The graph has SHA-256
+`bf77f290329f51e49df0f8870fb57f90938dae7ac2bc3a298d7c27018f06ec73`.
+The replay has SHA-256
+`1ff3ff15b846cde78521d4ff1619bd109e1c19b37d64c3095fbb865b614ae1d4`.
+All 1,348 covered source files match after the test. Cleanup passes; read
+`physical-scoped/vm-cleanup.json`, with SHA-256
+`61b45d85f2e1f57ee1dac0a01ccf8f23d370db00d4e845bbf0041d4446a98107`.
+The owned namespaces, VM, work and state roots are absent. The original ACL is
+restored, and the other VM is unchanged. This run supplies no physical traversal
+pass. At that source, the 185-record regression and its bounded output checks
+were not yet present.
+
+The new 185-record Rust fixture first stops at an intermediate 128-record
+snapshot. It now calls the public process and snapshot APIs until the complete
+window is present. The complete fixture reproduces `AnalysisReadDeadline`.
+A temporary test-only diagnostic retains the inner error at
+`ProjectionSink::check`, in `analysis/extraction.rs:443`. This observation does
+not give a timing breakdown. Read `window-before2.log` and its receipt. That
+source has SHA-256
+`833c3ef8acc3252ec8574b6145e385d4646f0e045c4201c2f0d7c882f4dc12ee`.
+Commit `adf4d14b` makes the shared graph projection encode its six metadata
+columns once per version, on the first eligible row. The cache has an explicit heap charge.
+Each output row still owns and charges its values. Permission checks and all
+limits remain unchanged. The same 185-record fixture passes after this sole
+production change, including all 370 relationship checks and reopen. Read
+`window-after.log` and `window-after-receipt.json`. The temporary diagnostic is
+removed. The final source record is `source-state-metadata.json`, with 1,348
+files and SHA-256
+`ecd499969fcfc73ccf162ee92f8f68934ba42dd5611fc5c155e0be7ca9114b40`.
+Nine native and ten graph-query checks pass on this source. Read
+`native-metadata.log` and `graph-query-metadata.log`. The fresh full lightweight
+case passes on this source. Read `lightweight-metadata/result.json`, with
+SHA-256
+`a104a944a5895de35035aa3dc6e9ce701029ed08dbaca0475f750a3fcf786f6b`.
+Its 185-record fixture has a 66,874-byte manifest and checks all 370
+relationships through two output queries with the same complete native receipt.
+The 64-record and density cases also pass. Read
+`lightweight-metadata-receipt.json`; all 1,348 source files match after the run.
+The fresh paired physical Rust case passes on the same source and lightweight
+input. Read `physical-metadata/result.json`, with SHA-256
+`31f718d784080127bb9177729939a6bb16600845a7cf1ebe75ccb0f3f00528a7`.
+The recorded platform is Linux `6.8.0-142-generic` and Kubernetes
+`v1.35.5+k3s1`. The selected physical window has 187 records, three subjects,
+374 relationships, one finding, no context facts or manifest contexts, and a
+60,376-byte manifest. Two SQL queries return all 374 relationships in chunks of
+200 and 174 rows. The complete receipt and traversal value are equal after
+reopen. Canonical replay also remains equal. Both stages keep their one-second
+default and the SQL output cap remains 200 rows. The protected read returns
+errno 13 and zero bytes. The benign read returns 558 bytes. Notification retries,
+restart, overdue human acknowledgement, and final acknowledgement pass.
+The finding remains `COVERAGE_INSUFFICIENT`; native ancestry, policy provenance,
+and source coverage limits remain explicit. Read `physical-metadata-test.log`
+and `physical-metadata-invocation.json`. The latter has SHA-256
+`8286d603b7875830790d241e5b2621a39443960a2616c2bfb32991c9b65a99fe`.
+
+Resource and VM cleanup pass. Read `physical-metadata/vm-cleanup.json`, with
+SHA-256
+`4420341fcb678aada147024abd471a22b311f8439c5eb219dba45ec80361bf23`.
+Both owned namespaces, the owned domain, work directory, active state, and
+metadata work and state roots are absent. The original ACL and mode are
+restored. The other VM is unchanged. All 1,348 source files still match.
+Earlier failure, setup, and regression records retain their hashes.
+This proof covers one protected file-open denial and one benign read through
+kernel, Node WAL, mTLS intake, Control, graph, and notification owners. The
+query uses a fixed qualification grant. Full incident reproduction, remote
+provider effects, physical cross-node causality, physical multiwindow traversal,
+and performance remain **UNQUALIFIED**.
+
+The final shared Rust procedure passes with exit code 0. Its command is
+`env RUST_TEST_THREADS=1 CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`.
+It checks formatting, the workspace build, Clippy with warnings denied, and
+all workspace targets and features. The data suite passes 391 tests with three
+existing ignored qualifications. The Control suite passes 182 tests with one
+ignored qualification. The Node library passes 282 tests with one ignored
+qualification. The Mithril e2e suite passes 171 tests with 526 existing ignored
+cases. Its dense, mixed-window, captured-window, and
+complete graph-notification roundtrip checks pass. The paired physical case
+passes separately as recorded above. No test suite fails.
+Read `rust-ci-metadata.log`, with SHA-256
+`6f6e2bfde05ad50d633a33bb54ea317c923835cf1a852c98f20f66c16e8b3a57`.
+Read `rust-ci-metadata-receipt.json`, with SHA-256
+`17557083614419ccecf1345208ae8e4ce8c9cbbb7e6216ef56d28762ec8a2b9b`.
+The run starts at `2026-10-10T09:21:49Z` and finishes at
+`2026-10-10T10:05:09Z`. All 1,348 covered source files match before and after
+the procedure. SDK, package runtime, and algorithm migration remain outside
+this completed scope.
 
 The storage baseline is **Done**. All seven storage TODOs pass their required
 checks in the primary checkout. Commit: `91afc657`. SDK, package lifecycle, runtime,

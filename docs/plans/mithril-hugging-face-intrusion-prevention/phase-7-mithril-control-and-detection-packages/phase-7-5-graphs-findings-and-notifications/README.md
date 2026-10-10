@@ -38,9 +38,8 @@ Control restarts or a notification sink fails
 ## Approved extension and child phases
 
 The user approved the SDK and execution direction for this plan on 2026-10-09.
-The native graph storage baseline is **Done**. Its user-approved large-graph
-and native traversal extension is **Not done**. The other child phases below
-are **Not done**.
+Native graph storage, direct large-graph reads, and bounded native DuckDB
+traversal are **Done**. The other child phases below are **Not done**.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 
@@ -182,8 +181,8 @@ Implement the graph, finding and notification data owners in `crates/araphor-dat
 keep signed provider-neutral authority records in Control. No second service,
 incident graph, source collector, or query database is required.
 
-Status: **Not done**. Native graph storage is **Done**; the other child phases
-are pending.
+Status: **Not done** for the complete package scope. Native graph storage and
+traversal are **Done**; the other child phases are pending.
 The nine review corrections are **Done**. They pass the focused Rust checks,
 final shared Rust procedure, and fresh lightweight and paired physical
 incidents at `6beb143d`. The owned qualification VM is removed.
@@ -296,8 +295,8 @@ Keep the code in the existing owners, with small modules and short functions.
 Share validation, row encoding, and reconstruction between reads, retries, and
 migration. Work in the primary checkout. Use Rust or platform tests.
 
-The native implementation is complete and not committed. Result metadata keeps
-the version header and a separate JSON encoding field. Finding and query readers do not
+The native storage baseline is complete and committed as `91afc657`. Result
+metadata keeps the version header and a separate JSON encoding field. Finding and query readers do not
 load the encoding field. Exact JSON reads use that field with the native rows
 and check that the reconstructed snapshot has the same values. Earlier focused
 checks pass 32 native tests, one
@@ -460,8 +459,9 @@ remains unqualified until a separately approved workload and limits are tested.
 
 Status: **Done**. All nine review corrections and the fresh lightweight and
 paired physical incidents pass at `6beb143d`. The owned VM cleanup passes.
-This result covers the completed corrections. The native graph storage
-improvements and new child phases remain **Not done** and require fresh verification.
+This result covers the corrections at `6beb143d`. It does not qualify the later
+storage or traversal changes. Read the storage checklist and 7.5.1 result for
+those changes.
 The retained implementation and qualification record below covers the earlier
 source. The earlier graph and notification source is `dd7e52b5`. The final workspace Rust
 procedure passes at `44368ec5` after the existing authorization assertion

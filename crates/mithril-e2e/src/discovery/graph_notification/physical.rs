@@ -175,6 +175,7 @@ impl GraphNotificationQualification {
             .ok_or("physical graph absent")?;
         assert_eq!(snapshot.input_manifest, finding.revision);
         assert!(snapshot.findings.contains(&finding));
+        super::super::write_json(&self.output.join("graph.json"), &snapshot)?;
         super::super::write_json(
             &self.output.join("observed-graph-input.json"),
             &json!({
@@ -185,12 +186,42 @@ impl GraphNotificationQualification {
                 "accepted_denied_record": denied_record.id,
                 "accepted_allowed_record": allowed_record.id, "evidence_digests": digests,
                 "original_volume_used": true, "pending_evidence_records": 0,
+                "native_traversal_input": Self::traversal_input(&snapshot, &finding, &result_id),
             }),
         )?;
-        Self::check_replay(
-            &Self::replay(&data, &denied_record.id.stream, &snapshot)?,
+        {
+            let replay = Self::replay(&data, &denied_record.id.stream, &snapshot)?;
+            Self::check_replay(&replay, &snapshot)?;
+            super::super::write_json(
+                &self.output.join("replay.json"),
+                &json!({
+                    "source": replay.source, "records": replay.records,
+                    "coverage": replay.coverage, "coverage_keys": replay.coverage_keys,
+                    "facts": replay.facts, "missing_ranges": replay.missing_ranges,
+                }),
+            )?;
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let traversal = runtime.block_on(Self::traverse(
+            data.clone(),
             &snapshot,
-        )?;
+            &finding,
+            &result_id,
+            now,
+        ))?;
+        for field in [
+            "result",
+            "caller",
+            "exact_version_selected",
+            "exact_subject_and_version_joins",
+            "evidence_and_proof_preserved",
+            "required_coverage_preserved",
+            "denied_record_reached",
+        ] {
+            assert_eq!(traversal[field], expected["native_traversal"][field]);
+        }
         let mut notification = Self::notify(&store, data.clone(), &graph, &finding, now)?;
         drop(graph);
         drop(data);
@@ -202,12 +233,21 @@ impl GraphNotificationQualification {
             graph.snapshot_result(tenant, &result_id)?,
             Some(snapshot.clone())
         );
+        assert_eq!(
+            runtime.block_on(Self::traverse(
+                data.clone(),
+                &snapshot,
+                &finding,
+                &result_id,
+                now
+            ))?,
+            traversal
+        );
         Self::resume(&store, &data, &graph, &finding, now, &mut notification)?;
         assert_eq!(
             notification["transitions"],
             expected["notification"]["transitions"]
         );
-        super::super::write_json(&self.output.join("graph.json"), &snapshot)?;
         super::super::write_json(
             &self.output.join("result.json"),
             &json!({
@@ -218,6 +258,7 @@ impl GraphNotificationQualification {
                 "graph_decision": decision, "graph_revision": snapshot.input_manifest,
                 "finding_id": finding.finding_id, "finding_revision": finding.revision,
                 "source_coverage": snapshot.input_manifest.coverage, "notification": notification,
+                "native_traversal": traversal,
                 "accepted_denied_record": denied_record.id, "accepted_allowed_record": allowed_record.id,
                 "evidence_digests": digests,
                 "physical_controls": {"actor": "read_path.py", "policy": "multi_policy_deny.json",

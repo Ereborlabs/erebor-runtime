@@ -2,6 +2,7 @@ use super::*;
 use serde::Deserialize;
 
 mod authority;
+mod window;
 
 #[derive(Deserialize)]
 struct Card {
@@ -21,7 +22,7 @@ struct ReplayQualification {
     now: u64,
 }
 
-pub(super) fn run(now: u64) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
+pub(super) async fn run(now: u64) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
     let fixture = ReplayQualification::new(now)?;
     let cards: Vec<Card> = serde_json::from_slice(include_bytes!(
         "../../../fixtures/discovery/incident-cards-v1.json"
@@ -37,7 +38,11 @@ pub(super) fn run(now: u64) -> std::result::Result<serde_json::Value, Box<dyn St
     let authorization = authority::run(now)?;
     let local = fixture.local_contract()?;
     let nodes = fixture.nodes()?;
-    let density = ReplayQualification::new(now)?.notification_density()?;
+    let density = ReplayQualification::new(now)?
+        .notification_density()
+        .await?;
+    let window = ReplayQualification::new(now)?.mixed_window().await?;
+    let physical_window = ReplayQualification::new(now)?.physical_window().await?;
     Ok(json!({"incident_cards": results, "HF-LOCAL-001": {
         "families": ["exec", "file", "network", "device"],
         "qualification": "RECORDED_GRAPH_REPLAY", "physical_incident_reproduced": false,
@@ -47,13 +52,17 @@ pub(super) fn run(now: u64) -> std::result::Result<serde_json::Value, Box<dyn St
         "legitimate_control_unflagged": true,
     }, "local_contract": local, "HF-XNODE-001": nodes,
         "NOTIFICATION-DENSITY-001": density,
+        "NATIVE-TRAVERSAL-WINDOW-001": window,
+        "NATIVE-TRAVERSAL-PHYSICAL-WINDOW-001": physical_window,
         "HF-011-READ-RESULT-001": reads, "HF-004-RESULT-001": sends,
         "AUTHORIZATION-REPLAY-004": authorization,
         "proof_boundary": "Recorded kernel, Control, read-completion, and remote audit inputs check production package contracts. No provider collector, provider issuance, cross-node physical result, or response execution is qualified."}))
 }
 
 impl ReplayQualification {
-    fn notification_density(self) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
+    async fn notification_density(
+        self,
+    ) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
         let mut sources = Vec::new();
         for first in (0..257).step_by(8) {
             let raw = (first..(first + 8).min(257))
@@ -86,6 +95,19 @@ impl ReplayQualification {
         }
         let findings = graph.current_findings(self.authenticated.tenant_id)?;
         assert_eq!(findings.len(), 257);
+        assert_eq!(sources.len(), 33);
+        let (dense_result_id, first) = findings.first().ok_or("first finding absent")?.clone();
+        let dense_snapshot = graph
+            .snapshot_result(self.authenticated.tenant_id, &dense_result_id)?
+            .ok_or("dense graph result absent")?;
+        let dense_traversal = GraphNotificationQualification::traverse(
+            self.data.clone(),
+            &dense_snapshot,
+            &first,
+            &dense_result_id,
+            self.now,
+        )
+        .await?;
         let grants = GraphNotificationQualification::grants(self.authenticated.tenant_id, self.now);
         let store = ControlStore::open(self.root.path().join("notification-control"))?;
         let authority = Arc::new(ConfiguredNotificationAuthority::new(
@@ -99,7 +121,6 @@ impl ReplayQualification {
         assert_eq!(health.unrouted, 256);
         assert!(!health.routing_available);
         let prefix = router.obligations(&grants[1], self.now)?;
-        let (_, first) = findings.first().ok_or("first finding absent")?.clone();
         let (_, tail) = findings.last().ok_or("tail finding absent")?.clone();
         assert!(prefix.iter().all(|state| {
             state
@@ -123,6 +144,23 @@ impl ReplayQualification {
         let data = Arc::new(AnalysisStore::open(root.path().join("analysis"))?);
         let store = ControlStore::open(root.path().join("notification-control"))?;
         let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone())?;
+        assert_eq!(data.source_page(authenticated.tenant_id, None)?.len(), 33);
+        assert_eq!(graph.current_findings(authenticated.tenant_id)?.len(), 257);
+        assert_eq!(
+            graph.snapshot_result(authenticated.tenant_id, &dense_result_id)?,
+            Some(dense_snapshot.clone())
+        );
+        assert_eq!(
+            GraphNotificationQualification::traverse(
+                data.clone(),
+                &dense_snapshot,
+                &first,
+                &dense_result_id,
+                now,
+            )
+            .await?,
+            dense_traversal
+        );
         let authority = Arc::new(ConfiguredNotificationAuthority::new(
             store.clone(),
             &grants,
@@ -286,6 +324,11 @@ impl ReplayQualification {
             "qualification": "RECORDED_GRAPH_REPLAY",
             "input": "257-denied-effects-before-route-configuration",
             "current_findings": findings.len(),
+            "native_traversal": {
+                "retained_findings": findings.len(), "retained_source_windows": sources.len(),
+                "fresh_query_owner": true, "before_notification_routing": true,
+                "reopen_equal": true, "query": dense_traversal,
+            },
             "persisted_obligations": dense.obligations,
             "result": "PASS", "work_bound": 256, "page_bound": 256,
             "analysis_store_reopened": true, "restart_prefix_unchanged": true,
@@ -1173,9 +1216,11 @@ impl ReplayQualification {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn graph_notification_dense_progress_and_capacity() -> crate::platform::TestResult<()> {
-        super::ReplayQualification::new(1_791_400_000_000_000_000)?.notification_density()?;
+    #[tokio::test]
+    async fn graph_notification_dense_progress_and_capacity() -> crate::platform::TestResult<()> {
+        super::ReplayQualification::new(1_791_400_000_000_000_000)?
+            .notification_density()
+            .await?;
         Ok(())
     }
 }

@@ -31,6 +31,7 @@ use crate::control_fixture::{MtlsFixture, OutagePolicyFixture};
 #[cfg(test)]
 mod physical;
 mod replay;
+mod traversal;
 
 pub struct GraphNotificationQualification {
     output: PathBuf,
@@ -300,7 +301,10 @@ impl GraphNotificationQualification {
         );
         let replay = Self::replay(&data, &source, &snapshot)?;
         Self::check_replay(&replay, &snapshot)?;
-        let acceptance = replay::run(now)?;
+        let reference = Self::finding_ref(&graph, &finding)?;
+        let traversal =
+            Self::traverse(data.clone(), &snapshot, &finding, &reference.result_id, now).await?;
+        let acceptance = replay::run(now).await?;
         drop(connection);
         server.shutdown().await?;
         drop(intake);
@@ -312,6 +316,10 @@ impl GraphNotificationQualification {
         let data = Arc::new(AnalysisStore::open(&data_root)?);
         let graph = GraphAndFindingOwner::new(data.clone(), inputs)?;
         assert_eq!(graph.snapshot(&source)?, Some(snapshot.clone()));
+        assert_eq!(
+            Self::traverse(data.clone(), &snapshot, &finding, &reference.result_id, now).await?,
+            traversal
+        );
         assert_eq!(graph.process(now + 11)?, 0);
         Self::resume(&store, &data, &graph, &finding, now, &mut result)?;
         fs::create_dir(&self.output)?;
@@ -327,6 +335,7 @@ impl GraphNotificationQualification {
                 "finding_revision": finding.revision, "evidence_digests": records.iter().map(|record|
                     crate::DigestV1::of(&record.framed_record).to_string()).collect::<Vec<_>>(),
                 "source_coverage": snapshot.input_manifest.coverage, "notification": result, "acceptance": acceptance,
+                "native_traversal": traversal,
                 "graph_decision": Self::decision(&finding),
                 "transaction_failure_kept_progress": true, "reordered_duplicate_intake": true,
                 "canonical_replay_equal": true, "physical_action_attempted": false,

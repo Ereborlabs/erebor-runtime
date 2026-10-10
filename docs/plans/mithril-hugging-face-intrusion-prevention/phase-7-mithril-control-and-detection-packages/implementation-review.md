@@ -9,6 +9,9 @@ architecture. Use the [phase plan](README.md) for implementation order and
 the segment/metadata and subscription contracts. Source tests below do not qualify that
 target until they run against its implementation.
 
+Read the [native traversal review](phase-7-5-graphs-findings-and-notifications/native-traversal-review.md)
+for the bounded graph request, native read flow, qualification proof, and limits.
+
 ## Intended end state
 
 Accepted evidence produces bounded, replayable behavior profiles and scoped
@@ -5026,9 +5029,8 @@ for the exact lightweight and physical cases that ran.
 
 This section covers the native graph storage changes in the primary checkout.
 The base source is `50e74c654593d5dc4780dfdf1643ea9bbefef704`.
-Review result: **Done** for the seven storage TODOs. The reviewed changes are
-not committed. Current focused storage and query
-checks pass. The existing dense notification case passes with 257 findings
+Review result: **Done** for the seven storage TODOs. The storage baseline is
+committed as `91afc657`. Current focused storage and query checks pass. The existing dense notification case passes with 257 findings
 across 33 source windows. Earlier reads reached a deadline or failed native
 allocation. The current reader separates key selection, version validation,
 and bounded payload reads. The memory limit remains 64 MiB and the deadline
