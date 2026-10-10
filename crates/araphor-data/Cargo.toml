@@ -9,6 +9,7 @@ repository.workspace = true
 test-fixtures = []
 
 [dependencies]
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 crc32c.workspace = true
 duckdb = { workspace = true, features = ["json", "vtab"] }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }

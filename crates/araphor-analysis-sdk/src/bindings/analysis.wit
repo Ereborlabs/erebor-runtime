@@ -1,0 +1,117 @@
+package araphor:analysis@1.0.0;
+
+interface types {
+    record limits {
+        max-batches: u32,
+        max-rows: u64,
+        max-bytes: u64,
+        max-checkpoint-bytes: u64,
+    }
+
+    record evaluation-context {
+        id: string,
+        time-utc-ns: s64,
+        seed: option<u64>,
+        limits: limits,
+    }
+
+    record source-window {
+        source: list<u8>,
+        start-utc-ns: s64,
+        end-utc-ns: s64,
+    }
+
+    record revision {
+        owner: string,
+        id: string,
+        window: option<source-window>,
+    }
+
+    enum coverage-state {
+        complete,
+        gapped,
+        unknown,
+    }
+
+    record coverage {
+        state: coverage-state,
+        limits: list<string>,
+    }
+
+    // Each stream uses the exact Arrow schema in the package descriptor.
+    record dataset {
+        name: string,
+        arrow-ipc: list<u8>,
+    }
+
+    record input {
+        data: dataset,
+        revision: revision,
+        coverage: coverage,
+    }
+
+    record checkpoint {
+        version: u32,
+        datasets: list<dataset>,
+    }
+
+    record evaluation {
+        export-name: string,
+        inputs: list<input>,
+        parameters: option<list<u8>>,
+        context: evaluation-context,
+        checkpoint: option<checkpoint>,
+    }
+
+    // The row number spans all batches in one named dataset.
+    record row-ref {
+        dataset: string,
+        row: u64,
+    }
+
+    record evidence-link {
+        output: row-ref,
+        input: row-ref,
+    }
+
+    record reason-value {
+        output: row-ref,
+        code: string,
+        details: list<u8>,
+    }
+
+    record output {
+        datasets: list<dataset>,
+        evidence: list<evidence-link>,
+        reasons: list<reason-value>,
+        checkpoint: option<checkpoint>,
+    }
+
+    enum error-code {
+        invalid,
+        incompatible,
+        unauthorized,
+        incomplete,
+        failed,
+        limit,
+    }
+
+    record evaluation-error {
+        code: error-code,
+        field: string,
+    }
+}
+
+interface host {
+    cancelled: func() -> bool;
+}
+
+interface analysis {
+    use types.{evaluation, output, evaluation-error};
+    evaluate: func(input: evaluation) -> result<output, evaluation-error>;
+}
+
+world analysis-package {
+    import host;
+    export analysis;
+}
