@@ -2278,8 +2278,10 @@ pub(super) mod tests {
         let intent = trace_intent()?;
         let identity = &intent.bindings[0].identity;
         let state = store.accept_trace(&intent)?;
-        let control = super::super::AnalysisReadControl::default();
-        assert!(store.read_trace(identity, 1, &control)?.frames.is_empty());
+        assert!(store
+            .read_trace(identity, 1, &super::super::AnalysisReadControl::default())?
+            .frames
+            .is_empty());
         let frame = crate::TraceFrameV1 {
             execution_id: identity.execution_id,
             sequence: 1,
@@ -2294,7 +2296,7 @@ pub(super) mod tests {
         let receipt = store.append_trace(identity, &batch, 200)?;
         assert_eq!((receipt.last_sequence, receipt.output_bytes), (1, 8));
         assert_eq!(store.append_trace(identity, &batch, 201)?, receipt);
-        let page = store.read_trace(identity, 1, &control)?;
+        let page = store.read_trace(identity, 1, &super::super::AnalysisReadControl::default())?;
         assert_eq!(page.frames, vec![frame.clone()]);
         assert_eq!(page.positions.len(), 1);
         assert_eq!(page.next_cursor, None);
@@ -2355,14 +2357,14 @@ pub(super) mod tests {
             TraceRecord::read(&[0], &root),
             Err(crate::Error::AnalysisState { .. })
         ));
-        let page = store.read_trace(identity, 2, &control)?;
+        let page = store.read_trace(identity, 2, &super::super::AnalysisReadControl::default())?;
         assert!(page.frames.is_empty());
         assert_eq!(page.terminal, Some(terminal.clone()));
         assert!(page.terminal_position.is_some());
         drop(store);
         let store = AnalysisStore::open(&root)?;
         assert_eq!(store.trace_receipt(identity)?, Some(receipt));
-        let page = store.read_trace(identity, 1, &control)?;
+        let page = store.read_trace(identity, 1, &super::super::AnalysisReadControl::default())?;
         assert_eq!(page.frames, vec![frame]);
         assert_eq!(page.terminal, Some(terminal));
         Ok(())
