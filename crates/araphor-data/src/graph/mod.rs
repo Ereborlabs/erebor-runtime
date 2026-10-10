@@ -13,7 +13,7 @@ mod model;
 mod proof;
 mod read;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod window;
 
 pub use model::*;

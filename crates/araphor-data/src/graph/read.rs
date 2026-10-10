@@ -1,19 +1,12 @@
-use std::collections::BTreeMap;
-
-use snafu::ResultExt as _;
-
 use super::*;
-use crate::{EvidenceIntakeIdentityV1, GraphEncodingSnafu, GraphInvalidSnafu};
+use crate::{EvidenceIntakeIdentityV1, GraphInvalidSnafu};
 
 #[cfg(test)]
 pub(super) mod tests;
 
 impl GraphAndFindingOwner {
     pub fn snapshot(&self, source: &EvidenceIntakeIdentityV1) -> Result<Option<GraphSnapshotV1>> {
-        self.store
-            .processor_result(&Self::scope(source))?
-            .map(|result| GraphSnapshotV1::try_from(result.body.as_slice()))
-            .transpose()
+        self.store.graph_snapshot(source)
     }
 
     pub fn snapshot_result(
@@ -108,101 +101,8 @@ impl GraphAndFindingOwner {
             }
             .build()
         })?;
-        let keys = self.current_finding_keys(tenant, after_finding_id, exact_finding_id, limit)?;
-        self.read_current_findings(tenant, keys, bytes)
-    }
-
-    fn current_finding_keys(
-        &self,
-        tenant: [u8; 16],
-        after_finding_id: Option<&str>,
-        exact_finding_id: Option<&str>,
-        limit: usize,
-    ) -> Result<BTreeMap<String, (u64, String)>> {
-        let mut selected = BTreeMap::<String, (u64, String)>::new();
-        let mut after = None;
-        loop {
-            let page = self
-                .store
-                .graph_snapshots(tenant, None, after.as_deref(), true)?;
-            if page.is_empty() {
-                break;
-            }
-            after = page.last().map(|row| row.0.clone());
-            for (result_id, snapshot, revision) in page {
-                for finding in snapshot.findings {
-                    if after_finding_id.is_some_and(|id| finding.finding_id.as_str() <= id)
-                        || exact_finding_id.is_some_and(|id| finding.finding_id != id)
-                    {
-                        continue;
-                    }
-                    if selected
-                        .get(&finding.finding_id)
-                        .is_some_and(|(previous, _)| *previous >= revision)
-                    {
-                        continue;
-                    }
-                    selected.insert(finding.finding_id, (revision, result_id.clone()));
-                    if selected.len() > limit {
-                        selected.pop_last();
-                    }
-                }
-            }
-        }
-        Ok(selected)
-    }
-
-    fn read_current_findings(
-        &self,
-        tenant: [u8; 16],
-        keys: BTreeMap<String, (u64, String)>,
-        bytes: usize,
-    ) -> Result<Vec<(String, FindingV1)>> {
-        let mut current: Option<(String, GraphSnapshotV1)> = None;
-        let mut budget = crate::discovery::InputByteLimit(bytes.saturating_sub(2));
-        let mut findings = Vec::new();
-        for (finding_id, (_, result_id)) in keys {
-            if current.as_ref().is_none_or(|(id, _)| id != &result_id) {
-                let graph = self
-                    .store
-                    .graph_result(tenant, &result_id)?
-                    .ok_or_else(|| {
-                        GraphInvalidSnafu {
-                            field: "current graph result",
-                        }
-                        .build()
-                    })?;
-                current = Some((result_id.clone(), graph));
-            }
-            let (_, graph) = current.as_mut().ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "current graph result",
-                }
-                .build()
-            })?;
-            let index = graph
-                .findings
-                .iter()
-                .position(|finding| finding.finding_id == finding_id)
-                .ok_or_else(|| {
-                    GraphInvalidSnafu {
-                        field: "current finding reference",
-                    }
-                    .build()
-                })?;
-            let finding = graph.findings.swap_remove(index);
-            if !findings.is_empty() {
-                budget.0 = budget.0.saturating_sub(1);
-            }
-            if let Err(error) = serde_json::to_writer(&mut budget, &(&result_id, &finding)) {
-                if findings.is_empty() {
-                    return Err(error).context(GraphEncodingSnafu);
-                }
-                break;
-            }
-            findings.push((result_id, finding));
-        }
-        Ok(findings)
+        self.store
+            .graph_findings(tenant, after_finding_id, exact_finding_id, limit, bytes)
     }
 
     pub fn finding_result(
@@ -217,15 +117,7 @@ impl GraphAndFindingOwner {
             }
             .fail();
         }
-        Ok(self
-            .store
-            .graph_result(tenant, result_id)?
-            .and_then(|snapshot| {
-                snapshot
-                    .findings
-                    .into_iter()
-                    .find(|finding| finding.finding_id == finding_id)
-            }))
+        self.store.graph_finding(tenant, result_id, finding_id)
     }
 
     pub fn finding(
@@ -235,24 +127,6 @@ impl GraphAndFindingOwner {
         revision: &GraphRevisionV1,
     ) -> Result<Option<FindingV1>> {
         revision.validate(tenant)?;
-        let mut after = None;
-        loop {
-            let page = self
-                .store
-                .graph_snapshots(tenant, None, after.as_deref(), false)?;
-            if page.is_empty() {
-                return Ok(None);
-            }
-            after = page.last().map(|row| row.0.clone());
-            for (_, snapshot, _) in page {
-                if let Some(finding) = snapshot
-                    .findings
-                    .into_iter()
-                    .find(|finding| finding.finding_id == id && &finding.revision == revision)
-                {
-                    return Ok(Some(finding));
-                }
-            }
-        }
+        self.store.graph_revision_finding(tenant, id, revision)
     }
 }

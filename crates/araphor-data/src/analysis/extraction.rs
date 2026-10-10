@@ -18,6 +18,8 @@ use crate::{
     Result, TraceIdentityV1, TraceIntentV1, TraceMeasurementV1, TraceOutputReceiptV1, TraceStateV1,
 };
 
+mod graph;
+
 const MAX_EXTRACT_KEYS: usize = 1024;
 const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
@@ -374,6 +376,14 @@ pub(crate) trait AnalysisProjection {
 
     fn decodes_events(&self) -> bool {
         false
+    }
+
+    fn graph_subjects(&self) -> bool {
+        true
+    }
+
+    fn graph_relationships(&self) -> bool {
+        true
     }
 
     fn project(
@@ -1494,22 +1504,35 @@ impl AnalysisStore {
             }
             for id in &selection.graphs {
                 control.check()?;
-                let (key, revision, length): (Vec<u8>, u64, u64) = snapshot.query_row(
-                    "SELECT stream_key, commit_revision, octet_length(body) FROM analysis_results
-                     WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?",
+                let (key, revision): (Vec<u8>, u64) = snapshot.query_row(
+                    "SELECT stream_key, commit_revision FROM analysis_results
+                     WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
+                        AND stream_key IS NOT NULL",
                     params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, crate::GRAPH_SCHEMA_VERSION, id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 ).context(AnalysisDatabaseSnafu { operation: "read graph result metadata" })?;
                 let source = selection.sources.as_slice().iter().find(|source| source.key() == key)
                     .ok_or_else(|| self.state_error("the graph result source is not selected"))?;
-                output.scan(usize::try_from(length).map_err(|_| self.state_error("the graph result length is invalid"))?)?;
-                let body = self.read_result_from(snapshot, selection.tenant_id, id)?
-                    .ok_or_else(|| self.state_error("the selected graph result is absent"))?;
-                output.charge(body.capacity().saturating_mul(2))?;
-                let graph = crate::GraphSnapshotV1::try_from(body.as_slice())?;
+                let subjects = project.graph_subjects();
+                let edges = project.graph_relationships();
+                let header = self.graph_input(snapshot, selection.tenant_id, id, &mut output, control)?;
+                let mut graph = header.snapshot;
                 if graph.scope.identity != *source { return self.reject("the graph source differs from its index"); }
                 if !selection.permits_graph(&graph) { continue; }
                 let sensitivity = self.graph_sensitivity(snapshot, &graph.input_manifest, control)?;
+                if subjects {
+                    graph.graph.subjects = super::graph_rows::GraphRows::read_subjects(snapshot, id, Some(control))?;
+                    if graph.graph.subjects.len() != header.subject_count {
+                        return self.reject("the selected graph subject count differs");
+                    }
+                }
+                if edges {
+                    graph.graph.edges = super::graph_rows::GraphRows::read_edges(snapshot, id, Some(control))?;
+                    if graph.graph.edges.len() != header.edge_count {
+                        return self.reject("the selected graph relationship count differs");
+                    }
+                }
+                graph.validate()?;
                 output.project(&mut project, AnalysisInputV1::Graph {
                     result_id: id, graph: &graph, commit_revision: revision, sensitivity,
                 }, control, None)?;
@@ -1522,19 +1545,20 @@ impl AnalysisStore {
                 output.charge(context.body.capacity().saturating_mul(2))?;
                 let obligation = crate::NotificationObligationV1::try_from(&context)?;
                 let finding = if let Some(reference) = &obligation.finding {
-                    let header: Option<(Vec<u8>, u64)> = snapshot.query_row(
-                        "SELECT stream_key, octet_length(body) FROM analysis_results
-                         WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?",
-                        params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, crate::GRAPH_SCHEMA_VERSION,
-                            reference.result_id], |row| Ok((row.get(0)?, row.get(1)?)),
-                    ).optional().context(AnalysisDatabaseSnafu { operation: "read notification finding metadata" })?;
-                    if let Some((source_key, length)) = header {
+                    let metadata: Option<Vec<u8>> = snapshot.query_row(
+                        "SELECT stream_key FROM analysis_results
+                         WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
+                            AND stream_key IS NOT NULL",
+                        params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR,
+                            crate::GRAPH_SCHEMA_VERSION, reference.result_id], |row| row.get(0),
+                    ).optional().context(AnalysisDatabaseSnafu {
+                        operation: "read notification graph source",
+                    })?;
+                    if let Some(source_key) = metadata {
                         let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
-                        output.scan(usize::try_from(length).map_err(|_| self.state_error("the notification finding length is invalid"))?)?;
-                        let body = self.read_result_from(snapshot, selection.tenant_id, &reference.result_id)?
-                            .ok_or_else(|| self.state_error("the notification finding result is absent"))?;
-                        output.charge(body.capacity().saturating_mul(2))?;
-                        let mut graph = crate::GraphSnapshotV1::try_from(body.as_slice())?;
+                        let header = self.graph_input(snapshot, selection.tenant_id,
+                            &reference.result_id, &mut output, control)?;
+                        let mut graph = header.snapshot;
                         if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
                         if !selection.permits_graph(&graph) { continue; }
                         graph.findings.iter().position(|finding| finding.finding_id == reference.finding_id)

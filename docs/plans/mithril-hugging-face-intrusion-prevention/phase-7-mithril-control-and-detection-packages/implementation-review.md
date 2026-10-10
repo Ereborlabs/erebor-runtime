@@ -5021,3 +5021,268 @@ not prove a physical connection between those nodes. Hugging Face replay cases
 use recorded inputs and explicit proof limits. They do not reproduce the full
 HDF5, Jinja, token, cloud, or controller environment. Read the current result
 for the exact lightweight and physical cases that ran.
+
+## Native graph storage review
+
+This section covers the native graph storage changes in the primary checkout.
+The base source is `50e74c654593d5dc4780dfdf1643ea9bbefef704`.
+Review result: **Done** for the seven storage TODOs. The reviewed changes are
+not committed. Current focused storage and query
+checks pass. The existing dense notification case passes with 257 findings
+across 33 source windows. Earlier reads reached a deadline or failed native
+allocation. The current reader separates key selection, version validation,
+and bounded payload reads. The memory limit remains 64 MiB and the deadline
+remains one second. The full lightweight case and Clippy pass on the recorded source.
+The earlier physical check passes. The earlier shared Rust check fails the existing
+`control_graph_context_and_result_bounds_keep_required_progress` test with
+`AnalysisReadDeadline`. It reports 378 passed, one failed, and three ignored
+Araphor tests. Later workspace tests do not run. Read `rust-ci-qualified.log`.
+The focused test also reproduces the failure. The unbounded finding read
+measured an unused JSON output limit. It now skips that byte accounting. The
+existing large-context test passes after the correction. Fresh lightweight and
+physical qualification and the final shared Rust procedure now pass. Read the
+final source and qualification records below.
+The earlier source record below covers the preceding results. That source adds
+two local tuple type aliases and a checked test error return after the focused checks.
+Earlier graph and incident receipts do not qualify these changes.
+
+### Intended end state
+
+AnalysisStore stores one graph representation in native subject, relationship,
+and finding rows. Authorized clients select and join those rows through the
+existing query owner. Snapshot and export APIs preserve exact values, order,
+result references, and JSON bytes. Read the
+[storage plan](phase-7-5-graphs-findings-and-notifications/phase-7-5-1-native-graph-storage.md)
+and its [seven TODOs](phase-7-5-graphs-findings-and-notifications/README.md#native-graph-storage-improvement-todos)
+for the required acceptance checks.
+
+### Linked implementation flow
+
+[GraphAndFindingOwner::commit_bounded_window](../../../../crates/araphor-data/src/graph/commit.rs) GraphAndFindingOwner submits a validated graph result.<br>
+-> [GraphRows::encode_body](../../../../crates/araphor-data/src/analysis/graph_rows/mod.rs) AnalysisStore encodes its versioned rows outside the write transaction.<br>
+-> [AnalysisStore::commit_graph](../../../../crates/araphor-data/src/analysis/progress.rs) AnalysisStore commits rows, references, progress, revisions, and quota together.<br>
+-> [AnalysisStore::commit_graph](../../../../crates/araphor-data/src/analysis/progress.rs) An identical retry returns the original receipt.<br>
+-> [AnalysisStore::commit_graph](../../../../crates/araphor-data/src/analysis/progress.rs) A changed retry under the same operation key fails.
+
+[GraphAndFindingOwner::current_findings](../../../../crates/araphor-data/src/graph/read.rs) Caller requests current findings.<br>
+-> [AnalysisStore::graph_findings](../../../../crates/araphor-data/src/analysis/graph/findings.rs) AnalysisStore selects the latest version per source window.<br>
+-> [AnalysisStore::graph_findings](../../../../crates/araphor-data/src/analysis/graph/findings.rs) AnalysisStore selects the latest finding across those windows.<br>
+-> [AnalysisStore::selected_finding_keys](../../../../crates/araphor-data/src/analysis/graph/findings/preflight.rs) The reader captures bounded keys in finding order and closes the key reader.<br>
+-> [AnalysisStore::check_finding_versions](../../../../crates/araphor-data/src/analysis/graph/findings/preflight.rs) The reader checks each selected version's header index and native byte bound, then closes the version readers.<br>
+-> [AnalysisStore::collect_batch](../../../../crates/araphor-data/src/analysis/graph/findings/batches.rs) The reader fetches captured keys in bounded batches from the same snapshot.<br>
+-> [GraphRows::decode_finding](../../../../crates/araphor-data/src/analysis/graph_rows/findings.rs) The reader decodes only the selected finding rows.
+
+[AnalysisStore::extract_mode](../../../../crates/araphor-data/src/analysis/extraction.rs) Caller requests query input.<br>
+-> [AnalysisStore::graph_input](../../../../crates/araphor-data/src/analysis/extraction/graph.rs) The reader checks byte limits and loads the header and complete finding proof.<br>
+-> [AnalysisSelectionV1::permits_graph](../../../../crates/araphor-data/src/analysis/extraction.rs) The reader authorizes the complete selected version before projection.<br>
+-> [InputProjection](../../../../crates/araphor-data/src/query/input.rs) The reader selects the required native row families under cancellation and byte limits.<br>
+-> [AnalysisStore::extract_mode](../../../../crates/araphor-data/src/analysis/extraction.rs) The reader closes durable handles before SQL evaluation.<br>
+-> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) The existing VTab receives detached authorized rows.
+
+[AnalysisStore::migrate_graphs](../../../../crates/araphor-data/src/analysis/graph_migration.rs) Store opens with retained snapshot bodies.<br>
+-> [GraphMigration::stage](../../../../crates/araphor-data/src/analysis/graph_migration/staging.rs) Migration checks the format and available temporary storage.<br>
+-> [GraphMigration::convert](../../../../crates/araphor-data/src/analysis/graph_migration.rs) Migration converts every retained version and verifies reconstruction.<br>
+-> [GraphMigration::install](../../../../crates/araphor-data/src/analysis/graph_migration.rs) AnalysisStore retires old bodies only after the checked conversion commits.<br>
+-> [GraphMigration::install](../../../../crates/araphor-data/src/analysis/graph_migration.rs) A failed conversion preserves the original store.
+
+### Owner and read checks
+
+AnalysisStore owns the three native row tables and their immutable result IDs.
+The shared [GraphRows codec](../../../../crates/araphor-data/src/analysis/graph_rows/mod.rs)
+encodes writes, decodes reads, and reconstructs snapshots for retries and
+migration. The private semantic result header keeps metadata and row counts.
+The header omits subject, relationship, and finding arrays. Native row
+ordinals preserve the original order. The separate `graph_encoding` column
+keeps the noncanonical JSON format tape.
+[GraphRows::read_header](../../../../crates/araphor-data/src/analysis/graph_rows/read.rs)
+does not load the tape for semantic finding and query reads.
+[GraphRows::read_body](../../../../crates/araphor-data/src/analysis/graph_rows/read.rs)
+loads the tape when an exact result read reconstructs the original JSON bytes.
+Semantic query limits do not charge the tape.
+
+Original JSON remains limited to 16 MiB. Canonical JSON can use up to 32 MiB
+because normalization adds null fields for absent optional fields. The header
+uses the same canonical limit. Header validation checks the total manifest
+bytes required by its finding count before finding reconstruction.
+Exact replay checks the source byte bound before copying canonical JSON.
+
+Current finding reads check selected headers, indexes, and native byte charges
+before the payload query starts. The
+[selection owner](../../../../crates/araphor-data/src/analysis/graph/findings/selection.rs)
+selects windows and finding keys once. The key reader closes before version
+validation. Version queries use batches of at most 256 distinct result IDs.
+These queries omit window and finding selection. They emit one header per
+result only if the batch's header, stream, and result ID lengths fit 32 MiB.
+Otherwise, the shared header reader supplies and checks each header. All
+version readers close before payload reads. The
+[batch reader](../../../../crates/araphor-data/src/analysis/graph/findings/batches.rs)
+queries only captured keys. Each batch has at most 256 keys and a 32 MiB charge
+limit. The charge includes each key's complete graph version and key overhead.
+A single key above that limit uses the shared point reader. The payload query
+does not repeat window selection, metadata joins, or charge scans. For a bounded
+read, one JSON page limit selects the prefix across all batches and point reads.
+The read snapshot retains validated headers within a 32 MiB plus 384-byte
+charge limit. Each header charge includes its canonical size and a fixed header
+and result ID allowance. The cache is cleared before its next charge exceeds
+that limit. A later finding reloads its header if that clear removed it.
+Header and native byte checks precede owned finding field allocation. The
+shared header reader bounds the stream key to its existing 195-byte encoding
+limit before allocation. The read deadline remains one second.
+
+[GraphAndFindingOwner::current_findings](../../../../crates/araphor-data/src/graph/read.rs)
+returns all selected findings in one owned vector. This existing API has no
+output count or byte limit. It skips JSON byte accounting. Native row bounds,
+finding validation, and the read deadline still apply.
+[GraphAndFindingOwner::next_current_findings](../../../../crates/araphor-data/src/graph/read.rs)
+limits each page to 256 findings and 16 MiB. Notification routing uses pages.
+
+[AnalysisStore::graph_snapshot](../../../../crates/araphor-data/src/analysis/graph.rs)
+reads the result linked by processor progress. A replacement that does not
+advance progress does not replace that link.
+[GraphAndFindingOwner::finding_result](../../../../crates/araphor-data/src/graph/read.rs)
+reads an exact historical result. A replacement window that omits a finding
+removes that finding from current selection. The historical row remains
+readable by its original result ID.
+
+Query extraction checks the complete manifest and all finding effects before
+it filters graph rows. Graph sensitivity includes all retained manifest
+context. Relationship projection loads subjects to preserve endpoint and
+native-parent validation. A finding-only query does not load subjects or
+relationships. The shared reader checks cancellation during native row reads
+and decoding. The byte preflight runs before row allocation.
+
+Finding and relationship joins use the same tenant, graph result ID, and
+complete subject key. The subject key retains its authority and lifetime.
+The extraction function ends its durable snapshot and releases its reader guard.
+The extraction function returns owned pages. QueryOwner then evaluates SQL in
+a separate temporary DuckDB connection.
+QueryOwner closes the temporary connection and drops query input. The drop
+does not remove durable graph rows.
+
+```mermaid
+sequenceDiagram
+    participant Graph as GraphAndFindingOwner
+    participant Store as AnalysisStore
+    participant DB as DuckDB
+    Graph->>Store: commit_graph(validated result)
+    Store->>Store: Encode header, native rows, and JSON format
+    Store->>DB: Begin result transaction
+    Store->>DB: Write rows, references, progress, revisions, and charges
+    Store->>DB: Commit result transaction
+    Store-->>Graph: Return original or new receipt
+```
+
+[AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs)
+acquires the store lease and creates the durable connections. AnalysisStore
+closes readers before its writer and releases the lease after the writer.
+Store close retains the committed rows. The shared writer changes store state.
+GraphRows has no separate service or durable connection.
+
+[GraphMigration::new](../../../../crates/araphor-data/src/analysis/graph_migration/staging.rs)
+creates one unnamed temporary file during legacy-store open. The staging file
+uses mode `0600`. File close or process exit removes the file. A filesystem
+without `O_TMPFILE` support returns an I/O error before conversion. Migration
+accepts schema version 17 and checks space before each staged write. The install
+transaction adds native tables and the encoding column before row updates.
+Reconstruction, schema, reference, and quota checks precede commit. A failed
+transaction preserves the original bodies and schema.
+
+### Verification route and limits
+
+Earlier focused checks pass 32 `native_` tests, one schema-permission test, and ten
+`query::graph_tests` tests. The source record covers 1,330 files and is
+`/tmp/araphor-native-storage.j8wJmf/source-state.json`, with SHA-256
+`f8ace9ea5500e2812b14b9d6aba7b001c7df7d54e71a4d4337ebb7c1bfb62c66`.
+Read `focused-native-split.log`, `focused-schema-split.log`,
+`focused-query-split.log`, and `dense-split.log` in that directory. The dense
+case passes `graph_notification_dense_progress_and_capacity` in
+`crates/mithril-e2e/src/discovery/graph_notification/replay.rs`.
+This table identifies the Rust tests to read. The final shared Rust procedure
+also runs these tests after the last source edit.
+
+| Contract | Test reading route |
+| --- | --- |
+| Native rows and integrity | [row tests](../../../../crates/araphor-data/src/analysis/graph_rows/tests.rs): `native_rows_integrity`, `native_finding_tenant`, `native_selected_byte_bounds`, and `native_retry_byte_bounds`. Selected reads reject a tenant that differs from the header. Byte checks reject oversized finding fields and stream keys. Retry lookups bound retained metadata before allocation. |
+| SQL payload and direct-read fallback | [selected-read tests](../../../../crates/araphor-data/src/analysis/graph/findings/tests.rs): `native_header_once`, `native_finding_batches`, and `native_finding_fallback`. The tests check one emitted header per result, an exact prefix across batches, all-point and mixed point/batch reads, header reload, and selection after a finding ID. The existing dense notification case checks 257 findings across 33 source windows. |
+| Header and original JSON bounds | [encoding tests](../../../../crates/araphor-data/src/analysis/graph_rows/tests/encoding.rs): `native_header_finding_bound` rejects a damaged header whose finding count exceeds its manifest byte bound. `native_json_optional_boundary` reconstructs an original 16 MiB body when its canonical form exceeds 16 MiB. |
+| Atomic writes, retries, rollback, and replacement | [storage tests](../../../../crates/araphor-data/src/graph/tests/native_storage.rs): `graph_native_commit_retry`, `graph_native_commit_rollback`, `graph_native_encoding_exact`, and `graph_native_replacement_removal`. [Graph owner tests](../../../../crates/araphor-data/src/graph/tests.rs): `control_graph_result_crashes` checks store reopen before and after commit. |
+| Window selection and finding pages | [paging tests](../../../../crates/araphor-data/src/graph/tests/paging.rs): `control_graph_finding_pages`; [query tests](../../../../crates/araphor-data/src/query/graph_tests.rs): `control_graph_query_overlap_keeps_latest_finding_revision`. |
+| Joins and authorized input | [query tests](../../../../crates/araphor-data/src/query/graph_tests.rs): `graph_query_subject_joins`, `control_graph_query_scope_precedes_projection`, `control_graph_query_context_keeps_authority_and_sensitivity`, `control_graph_query_mixed_binding_window_keeps_manifest_private`, and `control_graph_query_limits_and_cancel_remain_explicit`. |
+| Semantic query bytes and exact JSON bytes | [query tests](../../../../crates/araphor-data/src/query/graph_tests.rs): `graph_query_formatting_boundary` commits one finding with 128 KiB of leading JSON whitespace. A query with 64 KiB scan and input limits returns the finding. An exact result read returns all original JSON bytes. |
+| Retained conversion and original bytes | [migration tests](../../../../crates/araphor-data/src/analysis/graph_migration/tests.rs): `native_migration_retains_history`, `native_migration_json_layout`, `native_migration_generic_results`, `native_migration_preserves_failures`, and `native_migration_checks_space`. |
+| Backup, references, and corruption | [recovery tests](../../../../crates/araphor-data/src/analysis/graph_migration/tests/recovery.rs): `native_backup_retains_references` and `native_recovery_rejects_corruption`. |
+
+The earlier full lightweight `graph-notification` case and Clippy pass on that source.
+Read `clippy-final.log`, `lightweight-qualified.log`, and
+`lightweight-qualified/result.json` in the evidence
+directory. The result SHA-256 is
+`3bd1da10c0946b0d480ecfaf8ddcfc711319e3cde71776a75d6f2493c4918a50`.
+The paired physical Rust case passes after that lightweight case. Read
+[graph_notification_incident](../../../../crates/mithril-e2e/src/discovery/graph_notification/physical.rs).
+The test runs on Linux kernel `6.8.0-142-generic` and Kubernetes
+`v1.35.5+k3s1`. The guest image and test binary hashes match that host
+build. Read `physical-provenance.json` and `physical-invocation.json`.
+The test returns zero: one test passes in 201.95 seconds. Read
+`physical-test.log` and `physical/result.json`. The result SHA-256 is
+`efaa9d8e43f378c838cd21f73d494670f0e880f1ee649fe109857d2e5b22f416`.
+
+The protected read returns errno 13 and zero bytes. The benign read returns
+errno 0 and 558 bytes. Canonical replay and Control store reopen pass. Graph
+references and notification transitions remain valid. The decision is
+`COVERAGE_INSUFFICIENT`, with reason `UNEXPECTED_EFFECT`, for `HF-PROC-001`.
+This decision equals the lightweight `initial-health-missing` decision.
+The decision retains missing ancestry, source coverage, and policy provenance
+limits. The finding requires `inspect-denied-effect` at `Critical` severity.
+The physical kernel effect is `PREVENTED`. This proof does not qualify a
+complete Hugging Face incident, physical cross-node joins, provider issuance,
+or performance.
+
+Read `physical/resource-absence.json` and `physical/vm-cleanup.json`.
+The test namespaces, cluster resources, BPF pins, sockets, and fixture paths
+are absent. The owned VM, work directory, and state record are removed.
+The other qualification VM and its state are unchanged. The evidence root
+mode is restored to `0700`.
+The final source record is
+`/tmp/araphor-native-storage.j8wJmf/source-state-complete2.json`. It covers 1,330
+files with SHA-256
+`ea747ca3d8ea338a09b5e515874aa6fffa9134ab29a68489d311dbb354b06479`.
+The unbounded finding API skips unused JSON output byte accounting. Finite
+output limits, native bounds, validation, cancellation, and the one-second
+deadline remain in effect. Read `context-budget-fix.log`,
+`finding-budget-focused.log`, and `clippy-budget-fix.log`. The unchanged
+large-context test, three finding checks, and workspace Clippy pass.
+
+The final shared Rust procedure returns zero after the last covered source edit:
+
+```sh
+rtk proxy env RUST_TEST_THREADS=1 CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh
+```
+
+Formatting, workspace check, strict Clippy, and all workspace tests pass. The
+Araphor Data suite reports 379 passed, zero failed, and three ignored. Read
+`rust-ci-complete2.log`, with SHA-256
+`3e24ef3f8341e606a48adf26ac9b23bc093c14574b8b59f37b3d5047ce802ee2`.
+Read `rust-ci-complete2-receipt.json` for the command, exit code, and source check.
+The final covered source still matches the source record. Ignored tests are not
+counted as passes; the physical case below ran separately.
+
+The fresh full lightweight case passes before its physical pair. Its result is
+`lightweight-complete2/result.json`, with SHA-256
+`000b84e17774832bb9a314b22c3731f85747b29eaea2efcd0e747f8af57e4862`.
+The fresh physical case passes on x86_64, Linux `6.8.0-142-generic`, and K3s
+`v1.35.5+k3s1`. Its result is `physical-complete2/result.json`, with SHA-256
+`608d890301bc5ee4cfa80eee62ade2d5b12f6787682559ee0ba7284bf581c1c7`.
+Read `physical-complete2-invocation.json` and
+`physical-complete2-provenance.json` in the same evidence directory for the
+exact execution and artifact hashes. The protected read returns errno 13 and
+zero bytes; the benign read returns errno 0 and 558 bytes. Canonical replay,
+Control store reopen, graph references, and notification contracts pass.
+The decision is `COVERAGE_INSUFFICIENT`, equal to the lightweight
+`initial-health-missing` decision. One target obligation is acknowledged;
+255 ambient obligations remain. Read `physical-complete2/resource-absence.json`
+and `physical-complete2/vm-cleanup.json`. Owned resources and the VM are removed;
+the other qualification VM is unchanged.
+The full incident, physical cross-node behavior, provider effects, and
+performance remain unqualified.
+Storage verification does not qualify the later SDK, package lifecycle, or
+algorithm execution phases.

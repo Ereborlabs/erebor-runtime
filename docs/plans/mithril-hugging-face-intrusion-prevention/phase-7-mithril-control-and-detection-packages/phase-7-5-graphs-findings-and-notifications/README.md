@@ -38,8 +38,9 @@ Control restarts or a notification sink fails
 ## Approved extension and child phases
 
 The user approved the SDK and execution direction for this plan on 2026-10-09.
-The child phases below are **Not done**. The completed graph and notification
-results remain below; those results do not qualify package execution.
+Native graph storage is **Done**. The other child phases below are **Not done**.
+The completed graph and notification results remain below; those results do not
+qualify package execution.
 
 Use one versioned analysis contract for typed inputs, parameters, named outputs,
 evidence, and checkpoints. Supply a Rust SDK first. Use Wasm components with
@@ -179,7 +180,8 @@ Implement the graph, finding and notification data owners in `crates/araphor-dat
 keep signed provider-neutral authority records in Control. No second service,
 incident graph, source collector, or query database is required.
 
-Status: **Not done**. Native graph storage and the new child phases are pending.
+Status: **Not done**. Native graph storage is **Done**; the other child phases
+are pending.
 The nine review corrections are **Done**. They pass the focused Rust checks,
 final shared Rust procedure, and fresh lightweight and paired physical
 incidents at `6beb143d`. The owned qualification VM is removed.
@@ -238,30 +240,30 @@ procedure must run after the last source or test edit. Performance remains
 
 ## Native graph storage improvement TODOs
 
-Status: **Not done**. [7.5.1](phase-7-5-1-native-graph-storage.md) owns this checklist.
-Current finding reads decode complete graph snapshots.
+Status: **Done**. [7.5.1](phase-7-5-1-native-graph-storage.md) owns this checklist.
+The previous finding reader decoded complete graph snapshots.
 Store native graph rows so the existing owners can select records directly.
 Expose exact join keys through the shared query views for authorized clients,
 including agents. Reuse `GraphAndFindingOwner`, its validation rules, and the
 existing VTab. AnalysisStore remains the durable owner.
 
-- [ ] **1. Store native graph rows.** Reuse the existing result metadata.
+- [x] **1. Store native graph rows.** Reuse the existing result metadata.
   Add versioned subject, relationship, and finding tables keyed by `result_id`.
   Preserve complete identities, lifetimes, evidence, branches, facts, input
   manifests, positions, deadlines, and package checkpoints. Keep one
   authoritative stored graph representation.
-- [ ] **2. Extend the atomic commit.** Update `AnalysisStore::commit_graph` in
+- [x] **2. Extend the atomic commit.** Update `AnalysisStore::commit_graph` in
   `crates/araphor-data/src/analysis/progress.rs`. Commit graph rows, evidence
   and context references, progress, revisions, and quota charges together.
   Keep graph computation outside the transaction. An identical retry must
   return the original receipt. A changed retry must fail.
-- [ ] **3. Replace snapshot scans with native reads.** Update
+- [x] **3. Replace snapshot scans with native reads.** Update
   `crates/araphor-data/src/graph/read.rs` and the AnalysisStore graph readers
   to fetch bounded selected rows. Select the latest version per source window,
   then the latest finding across those windows. A replacement window must stop
   contributing findings that it removed. Preserve the progress-linked
   snapshot and exact historical result reads.
-- [ ] **4. Feed the existing VTab directly.** Update trusted query extraction
+- [x] **4. Feed the existing VTab directly.** Update trusted query extraction
   in `crates/araphor-data/src/analysis/extraction.rs` and the graph projections
   in `crates/araphor-data/src/query/graph.rs` to read the required native rows.
   Expose typed join keys for subjects, relationship endpoints, and finding
@@ -269,18 +271,18 @@ existing VTab. AnalysisStore remains the durable owner.
   Preserve whole-version authorization before row selection, sensitivity
   checks, cancellation, and byte limits. Close durable readers before SQL
   evaluation. Client SQL must receive detached authorized rows.
-- [ ] **5. Reconstruct snapshots for existing APIs.** Build `GraphSnapshotV1`
+- [x] **5. Reconstruct snapshots for existing APIs.** Build `GraphSnapshotV1`
   from stored rows for snapshot, replay, and export requests. Preserve
   deterministic ordering, historical result references, and the existing
   JSON output from generic result reads. Do not retain a second complete
   snapshot body beside the native graph rows.
-- [ ] **6. Update recovery and existing-data handling.** Extend schema
+- [x] **6. Update recovery and existing-data handling.** Extend schema
   validation, quota reconstruction, and backup/restore checks. Convert all
   retained graph versions through a checked schema migration. Preserve result
   IDs, commit revisions, progress, and references. Validate exact reconstruction
   before retiring old bodies. Check temporary disk use. Preserve originals if
   conversion fails.
-- [ ] **7. Verify the complete path.** Add focused Rust tests for snapshot
+- [x] **7. Verify the complete path.** Add focused Rust tests for snapshot
   round trips, exact retries, overlapping windows, typed joins, authorization,
   rollback, reopen, migration, quotas, and backup/restore. Keep notification
   references valid after migration and restore. Reuse the existing lightweight
@@ -291,6 +293,45 @@ existing VTab. AnalysisStore remains the durable owner.
 Keep the code in the existing owners, with small modules and short functions.
 Share validation, row encoding, and reconstruction between reads, retries, and
 migration. Work in the primary checkout. Use Rust or platform tests.
+
+The native implementation is complete and not committed. Result metadata keeps
+the version header and a separate JSON encoding field. Finding and query readers do not
+load the encoding field. Exact JSON reads use that field with the native rows
+and check that the reconstructed snapshot has the same values. Earlier focused
+checks pass 32 native tests, one
+schema-permission test, and ten graph query tests. Read the source record and
+logs in `/tmp/araphor-native-storage.j8wJmf`. The existing dense notification
+case also passes with 257 findings across 33 source windows. Read
+`dense-split.log`. Earlier reads reached a deadline or failed native allocation.
+The current reader separates key selection, version validation, and bounded
+payload reads. The memory limit remains 64 MiB and the deadline remains one
+second. The full lightweight case and Clippy pass on the recorded source. Read
+`lightweight-qualified/result.json`, `lightweight-qualified.log`, and
+`clippy-final.log` in the same evidence directory. The paired physical Rust case
+passes. Read `physical/result.json`, `physical-test.log`, and the resource and VM
+cleanup receipts. The earlier shared Rust procedure fails the existing
+`control_graph_context_and_result_bounds_keep_required_progress` test with
+`AnalysisReadDeadline`. It reports 378 passed, one failed, and three ignored
+Araphor tests. Later workspace tests do not run. Read `rust-ci-qualified.log`.
+The focused test also reproduces the failure. The unbounded finding read
+measured an unused JSON output limit. It now skips that byte accounting. The
+existing large-context test passes after the correction.
+
+Final qualification passes on `source-state-complete2.json`, which covers 1,330
+files with SHA-256
+`ea747ca3d8ea338a09b5e515874aa6fffa9134ab29a68489d311dbb354b06479`.
+The final shared Rust procedure returns zero after the last source edit. It
+passes formatting, workspace check, strict Clippy, and all workspace tests.
+The Araphor Data suite reports 379 passed, zero failed, and three ignored.
+Read `rust-ci-complete2.log`, with SHA-256
+`3e24ef3f8341e606a48adf26ac9b23bc093c14574b8b59f37b3d5047ce802ee2`.
+The full lightweight case passes before its fresh physical pair. Read
+`lightweight-complete2/result.json` and `physical-complete2/result.json` in
+the same evidence directory. The
+[storage result](phase-7-5-1-native-graph-storage.md#result) records their hashes,
+platform, physical effects, matching coverage limits, and cleanup receipts.
+The full incident, physical cross-node behavior, provider effects, and
+performance remain unqualified. SDK and package execution remain pending.
 
 ## Required changes
 

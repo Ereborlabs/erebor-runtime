@@ -215,15 +215,19 @@ impl AnalysisStore {
             return self.reject("the processor result scope is invalid");
         }
         self.read_snapshot(|reader| {
-            let result = reader
+            let mut result = reader
                 .query_row(
-                    "SELECT r.result_id, r.body, r.commit_revision
+                    "SELECT r.result_id,
+                        CASE WHEN r.processor_id = 'graph-findings' AND r.stream_key IS NOT NULL THEN ''::BLOB
+                            WHEN octet_length(r.body) <= ? THEN r.body ELSE ''::BLOB END,
+                        r.commit_revision
                      FROM processor_progress p JOIN analysis_results r
                        ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
                          AND r.processor_id = p.processor_id
                      WHERE p.processor_id = ? AND p.method_version = ?
                        AND p.tenant_id = ? AND p.stream_key = ?",
                     params![
+                        MAX_RESULT_BYTES as u64,
                         scope.processor_id,
                         scope.method_version,
                         scope.identity.tenant_id.as_slice(),
@@ -241,6 +245,13 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "read processor result",
                 })?;
+            if scope.processor_id == crate::GRAPH_PROCESSOR {
+                if let Some(result) = &mut result {
+                    result.body = self
+                        .read_result_from(reader, scope.identity.tenant_id, &result.result_id)?
+                        .ok_or_else(|| self.state_error("the processor graph result is absent"))?;
+                }
+            }
             if result.as_ref().is_some_and(|result| {
                 result.body.is_empty() || result.body.len() > MAX_RESULT_BYTES
             }) {
@@ -263,19 +274,28 @@ impl AnalysisStore {
         if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
             return self.reject("the analysis result identity is invalid");
         }
-        let stored: Option<Vec<u8>> = connection
+        let stored: Option<(bool, Vec<u8>)> = connection
             .query_row(
-                "SELECT body FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
-                params![tenant.as_slice(), result_id],
-                |row| row.get(0),
+                "SELECT processor_id = 'graph-findings' AND stream_key IS NOT NULL,
+                    CASE WHEN processor_id = 'graph-findings' AND stream_key IS NOT NULL THEN ''::BLOB
+                        WHEN octet_length(body) <= ? THEN body ELSE ''::BLOB END
+                FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+                params![MAX_RESULT_BYTES as u64, tenant.as_slice(), result_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
                 operation: "read retained analysis result",
             })?;
-        let Some(body) = stored else {
+        let Some((native, mut body)) = stored else {
             return Ok(None);
         };
+        if native {
+            let header = super::graph_rows::GraphRows::read_header(connection, tenant, result_id)?
+                .ok_or_else(|| self.state_error("the retained graph result is absent"))?;
+            let graph = super::graph_rows::GraphRows::read(connection, result_id, &header)?;
+            body = super::graph_rows::GraphRows::read_body(connection, result_id, &header, &graph)?;
+        }
         if body.is_empty() || body.len() > MAX_RESULT_BYTES {
             return self.reject("the retained analysis result size is invalid");
         }
@@ -481,7 +501,10 @@ impl AnalysisStore {
     }
 
     pub fn commit_result(&self, input: &AnalysisResultCommitV1) -> Result<AnalysisResultReceiptV1> {
-        self.commit_progress(input, None, true, None)
+        if input.scope.processor_id == crate::GRAPH_PROCESSOR {
+            return self.commit_graph(input, true);
+        }
+        self.commit_progress(input, None, true, None, None)
     }
 
     pub(crate) fn commit_graph(
@@ -526,7 +549,7 @@ impl AnalysisStore {
         {
             return self.reject("the graph input manifest, witnesses, or progress differ");
         }
-        self.commit_progress(input, None, advance, None)
+        self.commit_progress(input, None, advance, None, Some(&graph))
     }
 
     pub(crate) fn commit_working(
@@ -538,7 +561,7 @@ impl AnalysisStore {
             return self.reject("the working result owner is invalid");
         }
         let profile = crate::DiscoveryProfileV1::try_from(input.body.as_slice())?;
-        self.commit_progress(input, previous, true, Some(&profile))
+        self.commit_progress(input, previous, true, Some(&profile), None)
     }
 
     pub(crate) fn commit_profile(
@@ -554,7 +577,7 @@ impl AnalysisStore {
         if !profile.sealed {
             return self.reject("the historical profile is not sealed");
         }
-        self.commit_progress(input, None, false, Some(&profile))
+        self.commit_progress(input, None, false, Some(&profile), None)
     }
 
     pub(crate) fn mark_notice(
@@ -602,6 +625,7 @@ impl AnalysisStore {
         previous: Option<u64>,
         advance: bool,
         profile: Option<&crate::DiscoveryProfileV1>,
+        graph: Option<&crate::GraphSnapshotV1>,
     ) -> Result<AnalysisResultReceiptV1> {
         if profile.is_some_and(|profile| {
             profile.scope != input.scope
@@ -611,8 +635,7 @@ impl AnalysisStore {
         }) {
             return self.reject("the profile header or references differ from its commit");
         }
-        let header = if input.scope.processor_id == crate::GRAPH_PROCESSOR {
-            let graph = crate::GraphSnapshotV1::try_from(input.body.as_slice())?;
+        let header = if let Some(graph) = graph {
             if graph.scope != input.scope
                 || graph.input_manifest.context
                     != input
@@ -677,6 +700,12 @@ impl AnalysisStore {
         if request.len() > MAX_RESULT_META_BYTES {
             return self.reject("the analysis result metadata exceeds its byte bound");
         }
+        let rows = graph
+            .map(|graph| super::graph_rows::GraphRows::encode_body(graph, &input.body))
+            .transpose()?;
+        let body = rows
+            .as_ref()
+            .map_or(input.body.as_slice(), |rows| rows.header());
         let key = input.scope.identity.key();
         let mut writer_guard = self.maintenance_writer()?;
         let writer = writer_guard.get_mut()?;
@@ -685,13 +714,21 @@ impl AnalysisStore {
         })?;
         let existing = transaction
             .query_row(
-                "SELECT tenant_id, request_meta, body, commit_revision FROM analysis_results WHERE result_id = ?",
-                params![input.result_id],
+                "SELECT CASE WHEN octet_length(tenant_id) = 16 THEN tenant_id ELSE NULL END,
+                CASE WHEN octet_length(request_meta) <= ? THEN request_meta ELSE NULL END,
+                CASE WHEN processor_id = 'graph-findings' AND stream_key IS NOT NULL THEN ''::BLOB
+                    WHEN octet_length(body) <= ? THEN body ELSE NULL END,
+                commit_revision FROM analysis_results WHERE result_id = ?",
+                params![
+                    MAX_RESULT_META_BYTES as u64,
+                    MAX_RESULT_BYTES as u64,
+                    input.result_id
+                ],
                 |row| {
                     Ok((
-                        row.get::<_, Vec<u8>>(0)?,
-                        row.get::<_, Vec<u8>>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Option<Vec<u8>>>(0)?,
+                        row.get::<_, Option<Vec<u8>>>(1)?,
+                        row.get::<_, Option<Vec<u8>>>(2)?,
                         row.get::<_, u64>(3)?,
                     ))
                 },
@@ -702,8 +739,24 @@ impl AnalysisStore {
             })?;
         let replacing = existing.is_some() && previous.is_some();
         let mut removed_bytes = 0;
-        if let Some((tenant, stored, body, revision)) = existing {
-            if tenant == input.scope.identity.tenant_id && stored == request && body == input.body {
+        if let Some((tenant, stored, retained, revision)) = existing {
+            let (Some(tenant), Some(stored), Some(mut retained)) = (tenant, stored, retained)
+            else {
+                return self.reject("the retained analysis result exceeds its byte bound");
+            };
+            if tenant == input.scope.identity.tenant_id && stored == request && graph.is_some() {
+                retained = self
+                    .read_result_from(
+                        &transaction,
+                        input.scope.identity.tenant_id,
+                        &input.result_id,
+                    )?
+                    .ok_or_else(|| self.state_error("the retry graph result is absent"))?;
+            }
+            if tenant == input.scope.identity.tenant_id
+                && stored == request
+                && retained == input.body
+            {
                 return Ok(AnalysisResultReceiptV1 {
                     commit_revision: revision,
                     consumed_cursor: input.consumed_cursor,
@@ -712,7 +765,7 @@ impl AnalysisStore {
             if tenant != input.scope.identity.tenant_id || previous != Some(revision) {
                 return AnalysisConflictSnafu.fail();
             }
-            let profile = crate::DiscoveryProfileV1::try_from(body.as_slice())?;
+            let profile = crate::DiscoveryProfileV1::try_from(retained.as_slice())?;
             if profile.sealed
                 || profile.scope != input.scope
                 || profile.profile_id != input.result_id
@@ -722,7 +775,7 @@ impl AnalysisStore {
             removed_bytes = (256
                 + input.result_id.len()
                 + input.scope.processor_id.len()
-                + body.len()
+                + retained.len()
                 + stored.len()
                 + ProfileHeader::from(&profile).bytes()) as i64;
             removed_bytes += transaction.query_row(
@@ -865,7 +918,7 @@ impl AnalysisStore {
                  stream_key = ?, method_version = ?, interval_id = ?, profile_revision = ?,
                  facts_revision = ?, coverage_revision = ?, first_cursor = ? WHERE result_id = ?",
                     params![
-                        input.body.as_slice(),
+                        body,
                         request.as_slice(),
                         revision,
                         header.stream_key.as_deref(),
@@ -884,12 +937,15 @@ impl AnalysisStore {
         } else {
             transaction
                 .execute(
-                    "INSERT INTO analysis_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO analysis_results (result_id, tenant_id, processor_id, body,
+                        request_meta, commit_revision, stream_key, method_version, interval_id,
+                        profile_revision, facts_revision, coverage_revision, first_cursor, graph_encoding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         input.result_id,
                         input.scope.identity.tenant_id.as_slice(),
                         input.scope.processor_id,
-                        input.body.as_slice(),
+                        body,
                         request.as_slice(),
                         revision,
                         header.stream_key.as_deref(),
@@ -899,12 +955,19 @@ impl AnalysisStore {
                         header.facts_revision,
                         header.coverage_revision,
                         header.first_cursor,
+                        rows.as_ref().map(|rows| rows.encoding()),
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert analysis result",
                 })?;
         }
+        let row_bytes = if let Some(rows) = &rows {
+            rows.insert(&transaction, &input.result_id)?;
+            rows.bytes(&input.result_id)? + rows.encoding().len() as i64
+        } else {
+            0
+        };
         let mut usage = super::quota::UsageChange {
             bytes: if advance {
                 input.result_id.len() as i64 - progress.as_ref().map_or(0, |row| row.3.len()) as i64
@@ -913,9 +976,10 @@ impl AnalysisStore {
             } + (256
                 + input.result_id.len()
                 + input.scope.processor_id.len()
-                + input.body.len()
+                + body.len()
                 + request.len()
                 + header.bytes()) as i64
+                + row_bytes
                 - removed_bytes,
             results: i64::from(!replacing),
             ..Default::default()
@@ -984,6 +1048,9 @@ impl AnalysisStore {
             })?;
         }
         let mut relations = vec!["analysis_results"];
+        if rows.is_some() {
+            relations.extend(["graph_subjects", "graph_relationships", "graph_findings"]);
+        }
         if advance {
             relations.push("processor_progress");
         }

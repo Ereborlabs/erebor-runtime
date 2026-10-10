@@ -266,7 +266,7 @@ impl AnalysisStore {
         Ok(usage)
     }
 
-    const USAGE_CHARGES: &'static str = "WITH charges AS (
+    const USAGE_CHARGES: &'static str = "
                     SELECT tenant_id, 'segments' AS family,
                         256 + octet_length(stream_key) + committed_end + octet_length(encode(identity_json)) AS bytes FROM segments
                     UNION ALL SELECT tenant_id, 'coverage',
@@ -301,14 +301,32 @@ impl AnalysisStore {
                     UNION ALL SELECT tenant_id, 'trace_receipts',
                         256 + octet_length(stream_key) + octet_length(encode(identity_json))
                         + CASE WHEN terminal IS NULL THEN 16 * 1024
-                            ELSE octet_length(encode(terminal)) END FROM trace_receipts
-                ) SELECT tenant_id, SUM(bytes)::UBIGINT AS logical_bytes,
+                            ELSE octet_length(encode(terminal)) END FROM trace_receipts";
+
+    pub(super) fn usage_projection(native: bool) -> String {
+        let graphs = if native {
+            format!(
+                " UNION ALL SELECT tenant_id, 'graph_rows', bytes FROM ({})
+                UNION ALL SELECT tenant_id, 'graph_encoding', octet_length(graph_encoding)
+                    FROM analysis_results WHERE graph_encoding IS NOT NULL",
+                super::graph_rows::GraphRows::CHARGES
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "WITH charges AS ({}{graphs}) SELECT tenant_id, SUM(bytes)::UBIGINT AS logical_bytes,
                     COUNT(*) FILTER (WHERE family = 'coverage')::UBIGINT AS coverage_count,
                     COUNT(*) FILTER (WHERE family = 'context')::UBIGINT AS context_count,
                     COUNT(*) FILTER (WHERE family = 'results')::UBIGINT AS result_count
-                    FROM charges GROUP BY tenant_id";
+                    FROM charges GROUP BY tenant_id",
+            Self::USAGE_CHARGES
+        )
+    }
 
     pub(super) fn validate_usage(writer: &Connection, root: &std::path::Path) -> Result<()> {
+        let native = Self::read_meta_from(writer, &root.join("analysis.duckdb"))?.schema_version
+            == super::ANALYSIS_SCHEMA_VERSION as u32;
         let invalid: bool = writer
             .query_row(
                 &format!(
@@ -319,7 +337,7 @@ impl AnalysisStore {
                     OR e.coverage_count <> u.coverage_count
                     OR e.context_count <> u.context_count
                     OR e.result_count <> u.result_count)",
-                    Self::USAGE_CHARGES
+                    Self::usage_projection(native)
                 ),
                 [],
                 |row| row.get(0),
@@ -334,7 +352,6 @@ impl AnalysisStore {
     }
 
     fn logical_usage(
-        &self,
         transaction: &Transaction<'_>,
         tenant: [u8; 16],
     ) -> Result<(u64, u64, u64, u64)> {
@@ -360,10 +377,19 @@ impl AnalysisStore {
         tenant: [u8; 16],
         maintenance: bool,
     ) -> Result<()> {
+        Self::check_logical_limits(transaction, self.storage, tenant, maintenance)
+    }
+
+    pub(super) fn check_logical_limits(
+        transaction: &Transaction<'_>,
+        storage: super::StorageLimitsV1,
+        tenant: [u8; 16],
+        maintenance: bool,
+    ) -> Result<()> {
         let (total, scoped, revisions, tenant_revisions) =
-            self.logical_usage(transaction, tenant)?;
-        let global_limit = self.storage.logical_max_bytes;
-        let tenant_limit = self.storage.tenant_max_bytes;
+            Self::logical_usage(transaction, tenant)?;
+        let global_limit = storage.logical_max_bytes;
+        let tenant_limit = storage.tenant_max_bytes;
         let (global_limit, tenant_limit) = if maintenance {
             (global_limit, tenant_limit)
         } else {
@@ -394,7 +420,7 @@ impl AnalysisStore {
         transaction: &Transaction<'_>,
         tenant: [u8; 16],
     ) -> Result<bool> {
-        let (total, scoped, _, _) = self.logical_usage(transaction, tenant)?;
+        let (total, scoped, _, _) = Self::logical_usage(transaction, tenant)?;
         let global_limit = self.storage.logical_max_bytes - self.storage.logical_max_bytes / 4;
         let tenant_limit = self.storage.tenant_max_bytes - self.storage.tenant_max_bytes / 4;
         Ok(total >= global_limit - global_limit / 10 || scoped >= tenant_limit - tenant_limit / 10)
@@ -676,7 +702,7 @@ mod tests {
                 std::fs::metadata(super::super::segments::SegmentRange::path(&root, 1))?.len();
             let mut writer = store.writer()?;
             let transaction = writer.get_mut()?.transaction()?;
-            let usage = store.logical_usage(&transaction, identity.tenant_id)?;
+            let usage = AnalysisStore::logical_usage(&transaction, identity.tenant_id)?;
             assert_eq!(usage.0, usage.1);
             assert_eq!((usage.2, usage.3), (0, 0));
             if let Some(prior) = previous {
@@ -692,7 +718,7 @@ mod tests {
         let mut writer = store.writer()?;
         let transaction = writer.get_mut()?.transaction()?;
         assert_eq!(
-            Some(store.logical_usage(&transaction, identity.tenant_id)?.0),
+            Some(AnalysisStore::logical_usage(&transaction, identity.tenant_id)?.0),
             previous
         );
         Ok(())
@@ -771,9 +797,7 @@ mod tests {
         let current_bytes = {
             let mut writer = store.writer()?;
             let transaction = writer.get_mut()?.transaction()?;
-            store
-                .logical_usage(&transaction, input.scope.identity.tenant_id)?
-                .1
+            AnalysisStore::logical_usage(&transaction, input.scope.identity.tenant_id)?.1
         };
         store.storage.tenant_max_bytes = current_bytes;
         let before = store.meta()?;
@@ -1179,7 +1203,10 @@ mod tests {
         let transaction = writer.get_mut()?.transaction()?;
         UsageChange::from(256).apply(&transaction, &[2; 16])?;
         UsageChange::from(-256).apply(&transaction, &[2; 16])?;
-        assert_eq!(store.logical_usage(&transaction, [2; 16])?, (260, 0, 1, 0));
+        assert_eq!(
+            AnalysisStore::logical_usage(&transaction, [2; 16])?,
+            (260, 0, 1, 0)
+        );
         AnalysisStore::validate_usage(&transaction, &store.root)?;
         transaction.rollback()?;
         Ok(())

@@ -900,6 +900,15 @@ impl crate::analysis::AnalysisProjection for InputProjection<'_> {
         self.needs("events")
     }
 
+    fn graph_subjects(&self) -> bool {
+        self.expands("graph_subjects") || self.expands("relationships")
+    }
+
+    fn graph_relationships(&self) -> bool {
+        self.expands("relationships")
+            || (self.expands("graph_subjects") && !self.selection.binding_ids.is_empty())
+    }
+
     fn project(
         &mut self,
         input: AnalysisInputV1<'_>,

@@ -368,6 +368,44 @@ async fn control_graph_query_context_keeps_authority_and_sensitivity() -> TestRe
 }
 
 #[tokio::test]
+async fn graph_query_subject_joins() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
+    fixture.commit(1, 100, effect(1, true, 10))?;
+    process(&graph)?;
+    let snapshot = graph.snapshot(&fixture.source)?.ok_or("snapshot absent")?;
+    assert!(!snapshot.findings.is_empty() && !snapshot.graph.edges.is_empty());
+    let findings = query(
+        &fixture,
+        scope(&fixture),
+        "SELECT COUNT(*) FROM findings f JOIN graph_subjects s
+         ON f.tenant_id = s.tenant_id AND f.graph_result_id = s.graph_result_id
+            AND f.subject_id = s.subject_id",
+    )
+    .await?;
+    assert_eq!(
+        findings.rows,
+        vec![vec![Value::BigInt(snapshot.findings.len() as i64)]]
+    );
+    let edges = query(
+        &fixture,
+        scope(&fixture),
+        "SELECT COUNT(*) FROM relationships r JOIN graph_subjects source
+         ON r.tenant_id = source.tenant_id AND r.graph_result_id = source.graph_result_id
+            AND r.from_subject_id = source.subject_id
+         JOIN graph_subjects destination
+         ON r.tenant_id = destination.tenant_id AND r.graph_result_id = destination.graph_result_id
+            AND r.to_subject_id = destination.subject_id",
+    )
+    .await?;
+    assert_eq!(
+        edges.rows,
+        vec![vec![Value::BigInt(snapshot.graph.edges.len() as i64)]]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn control_graph_query_overlap_keeps_latest_finding_revision() -> TestResult {
     let fixture = QueryFixture::new()?;
     let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
@@ -481,6 +519,53 @@ async fn control_graph_query_mixed_binding_window_keeps_manifest_private() -> Te
             "{relation}"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_query_formatting_boundary() -> TestResult {
+    let mut fixture = crate::graph::tests::native_storage::CommitFixture::new()
+        .map_err(|error| error.to_string())?;
+    let bytes = 64 * 1024;
+    let canonical = fixture.request.body.clone();
+    assert!(canonical.len() < bytes / 2);
+    fixture.request.body = vec![b' '; bytes * 2];
+    fixture.request.body.extend_from_slice(&canonical);
+    fixture.store.commit_graph(&fixture.request, true)?;
+    let source = &fixture.snapshot.scope.identity;
+    let finding = &fixture.snapshot.findings[0];
+    let mut selected = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
+    selected.binding_ids.push(
+        finding.effects[0]
+            .binding_id
+            .ok_or("finding binding is absent")?,
+    );
+    let owner = Arc::new(QueryOwner::new(
+        fixture.store.clone(),
+        QueryLimits {
+            scan_bytes: bytes,
+            input_bytes: bytes,
+            ..limits()
+        },
+    )?);
+    let result = owner
+        .query_client(
+            plan(selected, "SELECT finding_id FROM findings", false)?,
+            Arc::new(Authority::new(source.tenant_id)),
+            500,
+            Arc::new(AnalysisReadControl::default()),
+        )
+        .await?;
+    assert_eq!(
+        result.rows,
+        vec![vec![Value::Text(finding.finding_id.clone())]]
+    );
+    assert_eq!(
+        fixture
+            .store
+            .read_result(source.tenant_id, &fixture.request.result_id)?,
+        Some(fixture.request.body)
+    );
     Ok(())
 }
 

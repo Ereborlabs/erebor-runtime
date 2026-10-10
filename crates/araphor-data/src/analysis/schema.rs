@@ -4,11 +4,15 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::AnalysisStore;
-use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
+use crate::{
+    AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, GraphInvalidSnafu, JsonSnafu, Result,
+};
 
 const MAX_SOURCES: u64 = 4096;
 
 impl EvidenceIntakeIdentityV1 {
+    pub(crate) const MAX_KEY_BYTES: usize = 67 + crate::MAX_NODE_ID_BYTES;
+
     pub fn exact_key(&self) -> Vec<u8> {
         self.key()
     }
@@ -56,6 +60,19 @@ impl AnalysisStore {
         Self::validate_contexts(writer, root)?;
         Self::validate_traces(writer, root)?;
         Self::validate_trace_receipts(writer, root)?;
+        let graph_limit = if meta.schema_version == super::ANALYSIS_SCHEMA_VERSION as u32 {
+            super::graph_rows::GraphHeader::MAX_BYTES
+        } else {
+            super::MAX_RESULT_BYTES
+        };
+        let oversized: bool = writer.query_row(
+            "SELECT EXISTS(SELECT 1 FROM analysis_results
+            WHERE processor_id = 'graph-findings' AND stream_key IS NOT NULL AND octet_length(body) > ?)",
+            params![graph_limit as u64], |row| row.get(0),
+        ).context(AnalysisDatabaseSnafu { operation: "validate graph header size" })?;
+        if oversized {
+            return Self::reject_path(root, "the stored graph header size is invalid");
+        }
         let checks = [
             ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) NOT BETWEEN 68 AND 195"),
             ("invalid segment identity or state", "SELECT 1 FROM segments e
@@ -89,7 +106,8 @@ impl AnalysisStore {
                 WHERE NOT EXISTS (SELECT 1 FROM replay_floors f WHERE f.tenant_id = x.tenant_id)"),
             ("invalid result body", "SELECT 1 FROM analysis_results WHERE octet_length(tenant_id) <> 16
                 OR result_id = '' OR length(result_id) > 256 OR processor_id = ''
-                OR octet_length(body) = 0 OR octet_length(body) > 16777216
+                OR octet_length(body) = 0 OR (octet_length(body) > 16777216
+                    AND (processor_id <> 'graph-findings' OR stream_key IS NULL))
                 OR octet_length(request_meta) = 0 OR octet_length(request_meta) > 16777216"),
             ("invalid profile header", "SELECT 1 FROM analysis_results
                 WHERE (stream_key IS NULL AND (method_version IS NOT NULL OR interval_id IS NOT NULL
@@ -100,7 +118,8 @@ impl AnalysisStore {
                     OR method_version IS NULL OR method_version = 0
                     OR interval_id IS NULL OR interval_id = '' OR length(interval_id) > 256
                     OR (processor_id = 'discovery' AND (profile_revision IS NULL OR profile_revision = 0))
-                    OR (processor_id = 'graph-findings' AND profile_revision IS NOT NULL)
+                    OR (processor_id = 'graph-findings' AND (profile_revision IS NOT NULL
+                        OR interval_id <> first_cursor::VARCHAR))
                     OR facts_revision IS NULL OR coverage_revision IS NULL OR first_cursor IS NULL))"),
             ("invalid witness reference", "SELECT 1 FROM evidence_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
@@ -198,6 +217,31 @@ impl AnalysisStore {
             return Self::reject_path(root, "the stored revision or pending bound is invalid");
         }
         Self::validate_usage(writer, root)?;
+        if meta.schema_version == super::ANALYSIS_SCHEMA_VERSION as u32 {
+            Self::validate_encoding(writer, root)?;
+            Self::validate_graphs(writer, root)?;
+        }
+        Ok(())
+    }
+
+    fn validate_encoding(writer: &Connection, root: &Path) -> Result<()> {
+        let invalid: bool = writer
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM analysis_results
+                WHERE (processor_id = 'graph-findings' AND stream_key IS NOT NULL
+                    AND graph_encoding IS NULL)
+                OR ((processor_id <> 'graph-findings' OR stream_key IS NULL)
+                    AND graph_encoding IS NOT NULL)
+                OR octet_length(graph_encoding) > ?)",
+                params![super::graph_rows::GraphRows::MAX_ENCODING as u64],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "validate retained graph encoding",
+            })?;
+        if invalid {
+            return Self::reject_path(root, "the stored graph encoding is invalid");
+        }
         Ok(())
     }
 
@@ -509,6 +553,34 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "validate stored schema",
                 })?;
+        }
+        let version: u32 = writer
+            .query_row("SELECT schema_version FROM store_meta", [], |row| {
+                row.get(0)
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read stored schema version",
+            })?;
+        if version == super::ANALYSIS_SCHEMA_VERSION as u32 {
+            let encoding: bool = writer
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'main' AND table_name = 'analysis_results'
+                    AND column_name = 'graph_encoding' AND data_type = 'BLOB'
+                    AND is_nullable = 'YES')",
+                    [],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "validate graph encoding schema",
+                })?;
+            if !encoding {
+                return GraphInvalidSnafu {
+                    field: "graph encoding schema",
+                }
+                .fail();
+            }
+            super::graph_rows::GraphRows::validate_tables(writer)?;
         }
         Ok(())
     }

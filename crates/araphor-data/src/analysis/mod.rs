@@ -25,6 +25,8 @@ mod crash;
 mod dependencies;
 mod extraction;
 mod graph;
+mod graph_migration;
+pub(crate) mod graph_rows;
 mod health;
 mod notification;
 mod progress;
@@ -70,7 +72,8 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 64 * 1024 * 1024;
-const ANALYSIS_SCHEMA_VERSION: i64 = 17;
+const ANALYSIS_SCHEMA_VERSION: i64 = 18;
+const GRAPH_LEGACY_VERSION: u32 = 17;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -281,7 +284,9 @@ impl AnalysisStore {
             .then(|| Self::read_meta_from(&writer, &path))
             .transpose()?;
         if let Some(meta) = &prior {
-            if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
+            if meta.schema_version == GRAPH_LEGACY_VERSION {
+                Self::migrate_graphs(&mut writer, &root, storage)?;
+            } else if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
                 return AnalysisStateSnafu {
                     path,
                     reason: "the analysis schema version is unsupported".to_owned(),
@@ -428,7 +433,8 @@ impl AnalysisStore {
                     profile_revision UBIGINT,
                     facts_revision UBIGINT,
                     coverage_revision UBIGINT,
-                    first_cursor UBIGINT
+                    first_cursor UBIGINT,
+                    graph_encoding BLOB
                 );
                 CREATE TABLE IF NOT EXISTS processor_gaps (
                     processor_id VARCHAR NOT NULL,
@@ -470,6 +476,11 @@ impl AnalysisStore {
                 .execute_batch(Self::TRACE_SCHEMA)
                 .context(AnalysisDatabaseSnafu {
                     operation: "create trace metadata",
+                })?;
+            transaction
+                .execute_batch(graph_rows::GraphRows::SCHEMA)
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create native graph rows",
                 })?;
             let initial_uuid = Uuid::new_v4().hyphenated().to_string();
             transaction
@@ -1117,10 +1128,14 @@ mod tests {
             }
             drop(store);
             let bytes = fs::read(root.join("analysis.duckdb"))?;
+            let expected = if version == GRAPH_LEGACY_VERSION as i64 {
+                "the legacy schema contains native graph tables"
+            } else {
+                "the analysis schema version is unsupported"
+            };
             assert!(matches!(
                 AnalysisStore::open(&root),
-                Err(crate::Error::AnalysisState { reason, .. })
-                    if reason == "the analysis schema version is unsupported"
+                Err(crate::Error::AnalysisState { reason, .. }) if reason == expected
             ));
             assert_eq!(fs::read(root.join("analysis.duckdb"))?, bytes);
         }

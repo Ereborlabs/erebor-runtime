@@ -681,6 +681,14 @@ impl AnalysisStore {
 
     pub(super) fn storage_with_reserve(
         &self,
+        entries: usize,
+        diagnostics: usize,
+    ) -> Result<StorageUsageV1> {
+        Self::storage_at(&self.root, entries, diagnostics)
+    }
+
+    pub(super) fn storage_at(
+        root: &Path,
         mut entries: usize,
         mut diagnostics: usize,
     ) -> Result<StorageUsageV1> {
@@ -691,10 +699,10 @@ impl AnalysisStore {
             .fail();
         }
         let mut usage = StorageUsageV1 {
-            available_bytes: StorageUsageV1::free_bytes(&self.root)?,
+            available_bytes: StorageUsageV1::free_bytes(root)?,
             ..Default::default()
         };
-        let mut pending = vec![self.root.clone()];
+        let mut pending = vec![root.to_path_buf()];
         while let Some(directory) = pending.pop() {
             for entry in fs::read_dir(&directory).context(IoSnafu { path: &directory })? {
                 let entry = entry.context(IoSnafu { path: &directory })?;
@@ -715,7 +723,7 @@ impl AnalysisStore {
                     entries = entries.saturating_add(1);
                 }
                 if entries > MAX_STORAGE_ENTRIES {
-                    return self.reject("the data directory exceeds its entry bound");
+                    return Self::reject_path(root, "the data directory exceeds its entry bound");
                 }
                 if diagnostics > MAX_DIAGNOSTIC_ENTRIES {
                     return StorageCapacitySnafu {
@@ -726,20 +734,36 @@ impl AnalysisStore {
                 if metadata.is_dir() {
                     pending.push(path);
                 } else if !metadata.is_file() {
-                    return self.reject("the data directory contains a non-file entry");
+                    return Self::reject_path(root, "the data directory contains a non-file entry");
                 }
-                let allocated = metadata
-                    .blocks()
-                    .checked_mul(512)
-                    .ok_or_else(|| self.state_error("allocated data bytes overflow"))?;
-                usage.allocated_bytes = usage
-                    .allocated_bytes
-                    .checked_add(allocated)
-                    .ok_or_else(|| self.state_error("allocated data bytes overflow"))?;
+                let allocated = metadata.blocks().checked_mul(512).ok_or_else(|| {
+                    crate::AnalysisStateSnafu {
+                        path: root,
+                        reason: "allocated data bytes overflow",
+                    }
+                    .build()
+                })?;
+                usage.allocated_bytes =
+                    usage
+                        .allocated_bytes
+                        .checked_add(allocated)
+                        .ok_or_else(|| {
+                            crate::AnalysisStateSnafu {
+                                path: root,
+                                reason: "allocated data bytes overflow",
+                            }
+                            .build()
+                        })?;
                 usage.file_bytes = usage
                     .file_bytes
                     .checked_add(metadata.len().max(allocated))
-                    .ok_or_else(|| self.state_error("data file bytes overflow"))?;
+                    .ok_or_else(|| {
+                        crate::AnalysisStateSnafu {
+                            path: root,
+                            reason: "data file bytes overflow",
+                        }
+                        .build()
+                    })?;
             }
         }
         Ok(usage)

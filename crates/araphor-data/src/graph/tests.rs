@@ -9,6 +9,7 @@ use crate::*;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 mod evidence_recovery;
+pub(crate) mod native_storage;
 mod paging;
 mod processing;
 mod source_recovery;

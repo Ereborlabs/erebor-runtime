@@ -6,6 +6,10 @@ use snafu::ResultExt as _;
 use super::*;
 use crate::{AnalysisConflictSnafu, GraphSnapshotV1, GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION};
 
+use super::graph_rows::GraphRows;
+
+mod findings;
+
 impl AnalysisStore {
     pub(crate) fn graph_set_health(
         &self,
@@ -188,6 +192,45 @@ impl AnalysisStore {
         })
     }
 
+    pub(crate) fn graph_snapshot(
+        &self,
+        source: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<GraphSnapshotV1>> {
+        if !source.valid() {
+            return self.reject("the graph snapshot source is invalid");
+        }
+        self.read_snapshot(|snapshot| {
+            let id: Option<String> = snapshot
+                .query_row(
+                    "SELECT r.result_id FROM processor_progress p JOIN analysis_results r
+                   ON r.tenant_id = p.tenant_id AND r.result_id = p.result_id
+                     AND r.processor_id = p.processor_id
+                 WHERE p.processor_id = ? AND p.method_version = ?
+                   AND p.tenant_id = ? AND p.stream_key = ?",
+                    params![
+                        GRAPH_PROCESSOR,
+                        GRAPH_SCHEMA_VERSION,
+                        source.tenant_id.as_slice(),
+                        source.key().as_slice()
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read current graph reference",
+                })?;
+            let Some(id) = id else {
+                return Ok(None);
+            };
+            let header = GraphRows::read_header(snapshot, source.tenant_id, &id)?
+                .ok_or_else(|| self.state_error("the current graph header is absent"))?;
+            if header.snapshot.scope.identity != *source {
+                return self.reject("the current graph source differs from its progress");
+            }
+            GraphRows::read(snapshot, &id, &header).map(Some)
+        })
+    }
+
     pub(crate) fn graph_snapshots(
         &self,
         tenant: [u8; 16],
@@ -200,20 +243,22 @@ impl AnalysisStore {
                 "SELECT result_id, commit_revision FROM (
                     SELECT result_id, commit_revision, stream_key,
                     row_number() OVER (PARTITION BY stream_key, first_cursor ORDER BY commit_revision DESC) AS current_rank
-                    FROM analysis_results WHERE tenant_id = ? AND processor_id = ?
+                    FROM analysis_results WHERE tenant_id = ? AND processor_id = ? AND method_version = ?
+                        AND stream_key IS NOT NULL
                  ) heads WHERE (? IS NULL OR stream_key = ?) AND (? IS NULL OR result_id > ?)
                     AND (NOT ? OR current_rank = 1) ORDER BY result_id LIMIT 1",
             ).context(AnalysisDatabaseSnafu { operation: "prepare committed graph snapshots" })?;
             let key = source.map(EvidenceIntakeIdentityV1::key);
-            let rows = statement.query_map(params![tenant.as_slice(), GRAPH_PROCESSOR, key.as_deref(), key.as_deref(), after, after, current], |row| {
+            let rows = statement.query_map(params![tenant.as_slice(), GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, key.as_deref(), key.as_deref(), after, after, current], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
             }).context(AnalysisDatabaseSnafu { operation: "read committed graph snapshots" })?;
             let references = rows.collect::<std::result::Result<Vec<_>, _>>().context(AnalysisDatabaseSnafu { operation: "decode committed graph references" })?;
             drop(statement);
             let mut values = Vec::new();
             for (id, revision) in references {
-                let body: Vec<u8> = snapshot.query_row("SELECT body FROM analysis_results WHERE tenant_id = ? AND result_id = ?", params![tenant.as_slice(), &id], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "decode committed graph snapshot" })?;
-                let graph = GraphSnapshotV1::try_from(body.as_slice())?;
+                let header = GraphRows::read_header(snapshot, tenant, &id)?
+                    .ok_or_else(|| self.state_error("the committed graph header is absent"))?;
+                let graph = GraphRows::read(snapshot, &id, &header)?;
                 if graph.scope.identity.tenant_id != tenant || source.is_some_and(|source| source != &graph.scope.identity) {
                     return self.reject("the committed graph source differs from its index");
                 }
@@ -232,18 +277,10 @@ impl AnalysisStore {
             return self.reject("the graph result reference is invalid");
         }
         self.read_snapshot(|snapshot| {
-            let stored: Option<(Vec<u8>, u64, Vec<u8>)> = snapshot.query_row(
-                "SELECT stream_key, method_version, body FROM analysis_results WHERE tenant_id = ? AND processor_id = ? AND result_id = ?",
-                params![tenant.as_slice(), GRAPH_PROCESSOR, result_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            ).optional().context(AnalysisDatabaseSnafu { operation: "read immutable graph result" })?;
-            let Some((source_key, method_version, body)) = stored else { return Ok(None); };
-            let graph = GraphSnapshotV1::try_from(body.as_slice())?;
-            if method_version != u64::from(GRAPH_SCHEMA_VERSION) || graph.scope.identity.tenant_id != tenant
-                || graph.scope.identity.key() != source_key || graph.scope.processor_id != GRAPH_PROCESSOR
-                || graph.scope.method_version != method_version {
-                return self.reject("the graph result differs from its index");
-            }
+            let Some(header) = GraphRows::read_header(snapshot, tenant, result_id)? else {
+                return Ok(None);
+            };
+            let graph = GraphRows::read(snapshot, result_id, &header)?;
             Ok(Some(graph))
         })
     }
