@@ -228,7 +228,7 @@ fn authority_proof() -> ProofQualityV1 {
     }
 }
 
-fn credential_input() -> Result<GraphReplayInputV1> {
+pub(super) fn credential_input() -> Result<GraphReplayInputV1> {
     credential_input_from(1)
 }
 

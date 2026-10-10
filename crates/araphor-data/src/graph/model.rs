@@ -374,6 +374,8 @@ pub struct FindingV1 {
 }
 
 impl FindingV1 {
+    pub(super) const PACKAGES: [&'static str; 3] = ["HF-PROC-001", "HF-DW-001", "HF-XNODE-001"];
+
     pub fn validate(&self) -> Result<()> {
         self.subject_id.validate()?;
         self.revision.validate(self.tenant_id)?;
@@ -381,10 +383,7 @@ impl FindingV1 {
             || self.subject_id.tenant_id != self.tenant_id
             || self.finding_id.is_empty()
             || self.finding_id.len() > 4096
-            || !matches!(
-                self.package_id.as_str(),
-                "HF-PROC-001" | "HF-DW-001" | "HF-XNODE-001"
-            )
+            || !Self::PACKAGES.contains(&self.package_id.as_str())
             || self.package_version != 1
             || self.window_start_utc_ns > self.window_end_utc_ns
             || self.evidence.is_empty()

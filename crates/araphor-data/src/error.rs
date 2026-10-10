@@ -6,6 +6,12 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Analysis contract failed: {source}"))]
+    AnalysisContract {
+        source: araphor_analysis_sdk::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Notification {code:?} rejects {field}"))]
     Notification {
         code: crate::NotificationErrorCodeV1,
@@ -222,6 +228,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::AnalysisContract { source, .. } => source.status_code(),
             Self::Notification { code, .. } => match code {
                 crate::NotificationErrorCodeV1::Invalid | crate::NotificationErrorCodeV1::Limit => {
                     StatusCode::InvalidArguments
@@ -269,6 +276,7 @@ impl ErrorExt for Error {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::AnalysisContract { source, .. } => source.retry_hint(),
             Self::AnalysisBusy { .. }
             | Self::StorageCapacity { .. }
             | Self::ProtectedInputCapacity { .. }

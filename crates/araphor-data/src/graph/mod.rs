@@ -4,6 +4,7 @@ use crate::{AnalysisContextVersionV1, AnalysisStore, DiscoveryRecordV1, Result};
 
 mod chunks;
 mod commit;
+mod contract;
 mod coverage;
 mod derive;
 mod expiry;
