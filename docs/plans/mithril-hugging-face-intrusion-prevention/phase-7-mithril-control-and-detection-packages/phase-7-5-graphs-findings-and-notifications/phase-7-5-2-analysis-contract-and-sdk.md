@@ -82,6 +82,13 @@ generation. Build a small SDK fixture without host crates. Verify that inspectio
 does not load executable code into Control. Runtime builds and execution are
 qualified in 7.5.4 and 7.5.5. Run the shared Rust procedure after source changes.
 
+Test detector authoring with two named inputs, exact baseline membership,
+findings, typed reasons, and event evidence. Include zero findings, evidence
+across batches, incomplete baseline coverage, empty baseline revisions, and
+input reordering. Test selected Arrow ranges and parent null masks. Selected
+graph tests must compute from subjects, relationships, and the version manifest;
+assertions must inspect the returned computation.
+
 ## Exclusions and stop point
 
 Add no new query language, compiler service, policy authority, or mandatory
@@ -104,7 +111,7 @@ Analytics at `e33c62506efcb15ae795847484357704b539bcf1`. Read the linked
 host checks, target constraints, and the required later exports. This audit
 does not claim upstream algorithm execution or equivalence.
 
-The final shared Rust procedure passes on `ca8de3ae`, after the last Rust edit:
+The initial shared Rust procedure passes on `ca8de3ae`, after its last Rust edit:
 
 ```sh
 RUST_TEST_THREADS=4 bash .github/scripts/verify-rust-ci.sh
@@ -134,6 +141,52 @@ and current algorithm migration remain **Not done**. Native/Wasm declaration
 syntax does not qualify execution, isolation, or ABI behavior. Upstream ports,
 physical incident prevention, and performance are not qualified here.
 
+### Review corrections
+
+| Item | Result and code |
+| --- | --- |
+| Selected Arrow values | **Done**, `cb936bd`. Finite checks apply list offsets and parent null masks. Physical Arrow validation and allocation bounds remain in place. Required `Null` fields fail recursive schema validation. Five Rust regressions cover these cases. |
+| Graph computation fixture | **Done**, `d00fd54`. The computation consumes subjects, relationships, and the manifest. It joins endpoints within each graph version and returns counts. Assertions check output identities, exact versions, windows, empty replacements, and hop state. A lower row bound rejects before execution. |
+| Detector author workflow | **Done**, `fadacd5`. The sensitive-access example returns findings, typed reasons, and event evidence against an exact baseline. Seven Rust tests cover matches, zero findings, evidence across batches, incomplete and empty baselines, and named input lookup. |
+
+The author interface retains one descriptor, Arrow schemas, a Rust function,
+and ordinary Rust tests. `Evaluation::input` selects inputs by name. Arrow
+errors convert with `?` and retain their source. The examples share these
+operations. This correction adds no dependency, rule language, or algorithm
+trait. The native declaration now requires the return error code to equal
+`response.error.code`; target execution is still outside this result.
+
+Focused verification passes 33 SDK tests and three current host contract tests.
+The standalone `sensitive_access` example returns two findings. The four-thread
+workspace procedure on `2b9fe8c` passes formatting, workspace check, and strict
+Clippy. The data suite reports 393 passed, one failed, and three ignored.
+`native_traversal_large_graph` fails with `AnalysisReadDeadline` at
+`analysis/read.rs:161`; the unchanged case then passes alone in 77.99 seconds.
+The failing stage and the timeout cause remain unproven. Read
+`/tmp/araphor-sdk-fixes-rust-ci-final.log` and
+`/tmp/araphor-sdk-large-graph-isolated.log`.
+
+The final complete workspace procedure **passes** on `2b9fe8c`:
+
+```sh
+RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+```
+
+Qualified platform: Linux x86_64, Rust `1.97.1`. Formatting, workspace check,
+strict Clippy, and the complete test command return zero. The SDK reports 33
+passed; Araphor Data reports 394 passed and three ignored. Mithril E2E reports
+171 passed and 526 ignored. Node reports 282 passed and one ignored. Ignored
+tests supply no qualification. Read `/tmp/araphor-sdk-fixes-rust-ci-serial.log`,
+with SHA-256
+`cfe4bc907b4db440dd490d2455d440a4fc417a10d526429e85477f47014cae1d`.
+
+The serial rerun uses the same source as the four-thread run. No deadline or
+assertion changed between those runs. Commit `2b9fe8c` replaces test unwraps and
+explicit panics with propagated errors and an execution flag. The four-thread
+deadline failure remains recorded above. This serial pass does not qualify
+parallel timing or performance. All review corrections are **Done** within the
+portable contract and authoring scope.
+
 ## End scope and example
 
 Complete when the source inventory covers the contract requirements, the Rust
@@ -146,3 +199,10 @@ event input and subject/count output. Inspection reports those same types. A
 local fixture with three distinct file events returns count `3`; input without
 the required subject identity fails validation. This does not yet run a Wasm
 component or install a detector into Control.
+
+Detector example at completion: `access.detect` compares sensitive-read events
+with an exact baseline. A new subject/resource pair produces a finding with an
+`OUTSIDE_BASELINE` reason and evidence to the observed event. An incomplete
+baseline returns `Incomplete`. The author uses one package descriptor, Arrow
+types, a Rust function, and ordinary Rust tests. Installation and preventive
+action remain outside this scope.
