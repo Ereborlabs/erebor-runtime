@@ -69,6 +69,10 @@ missing source value from an explicit null, declare a separate presence field.
 Lists, fixed-size lists, and structs represent repeated or nested data. Binary
 fields require a declared payload type or encoding when their meaning is not
 raw bytes. Declare such information in Arrow field metadata.
+Use the same metadata for field descriptions and units in inspection output.
+`SourceWindow` records inclusive UTC start and end bounds and the exact source
+identity bytes. The host supplies that selection. A record without source time
+must declare the missing time; the SDK does not generate an event timestamp.
 
 Floating-point values must be finite. Integer and timestamp comparisons are
 exact. `NumericTolerance` declares nonnegative absolute and relative bounds
@@ -140,8 +144,9 @@ invalid, incompatible, unauthorized, incomplete, failed, and limit results.
 An invalid computation returns no fixture report.
 
 `araphor-data` retains identity, sensitivity, authorization, evidence, graph,
-finding, storage, retry, and commit checks. Current HF package descriptors and
-finding reason mappings use the shared SDK validator. Current detector dispatch
+finding, storage, retry, and commit checks. Current HF package descriptors use
+the SDK validator. Reason conversion retains host validation and the declared
+SDK detail schema. Current detector dispatch
 and its fixed reason catalogue remain operational. General installed-package
 result mapping must support new namespaced reasons before detector activation.
 No package descriptor grants policy or physical authority.

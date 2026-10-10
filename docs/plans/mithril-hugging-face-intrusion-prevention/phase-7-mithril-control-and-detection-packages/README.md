@@ -15,8 +15,9 @@ retains researched examples and evidence and authority requirements.
 The [algorithm and detector extension evaluation](algorithm-and-detection-extension-evaluation.md)
 compares runtime choices. The approved [7.5 child phases](phase-7-5-graphs-findings-and-notifications/README.md#approved-extension-and-child-phases)
 select one SDK and package contract, default Wasm execution for compiled code,
-existing SQL, native execution, and optional Python. These additions are
-**Not done**. The new plan does not claim runtime implementation or qualification.
+existing SQL, native execution, and optional Python. The portable contract and
+Rust author SDK are **Done**. Package lifecycle and execution adapters are
+**Not done**. The child results record their implementation and qualification.
 
 ## Intended end state
 

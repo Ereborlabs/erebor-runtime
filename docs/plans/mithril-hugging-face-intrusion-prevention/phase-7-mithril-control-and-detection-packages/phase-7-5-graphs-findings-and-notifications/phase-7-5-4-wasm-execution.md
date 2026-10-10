@@ -39,6 +39,10 @@ Complete the SDK component artifact build and generated bindings in this phase.
 Connect the descriptors from 7.5.2 to the admission owner from 7.5.3. Replace
 fixed graph package dispatch and its ID allowlist only after the built-in
 packages pass migration checks. Existing host validation remains mandatory.
+General package results must retain declared namespaced reason codes and typed
+details. The current eleven-reason enum is a compatibility mapping for existing
+HF findings. Do not require a new host enum variant for each installed detector.
+Preserve historical finding JSON and all host evidence and authority checks.
 
 - Permit only versioned analysis imports. Do not inherit ambient filesystem,
   network, environment, wall-clock, or random access. Supply recorded evaluation

@@ -38,8 +38,9 @@ Control restarts or a notification sink fails
 ## Approved extension and child phases
 
 The user approved the SDK and execution direction for this plan on 2026-10-09.
-Native graph storage, direct large-graph reads, and bounded native DuckDB
-traversal are **Done**. The other child phases below are **Not done**.
+Native graph storage, direct large-graph reads, bounded native DuckDB traversal,
+and the portable analysis contract and Rust SDK are **Done**. Child phases
+7.5.3 through 7.5.9 below are **Not done**.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 
@@ -181,8 +182,10 @@ Implement the graph, finding and notification data owners in `crates/araphor-dat
 keep signed provider-neutral authority records in Control. No second service,
 incident graph, source collector, or query database is required.
 
-Status: **Not done** for the complete package scope. Native graph storage and
-traversal are **Done**; the other child phases are pending.
+Status: **Not done** for the complete package scope. Native graph storage,
+traversal, and the portable analysis contract and Rust SDK are **Done**. The
+[SDK result](phase-7-5-2-analysis-contract-and-sdk.md#result) records its source,
+tests, and limits. Package lifecycle and execution remain pending.
 The nine review corrections are **Done**. They pass the focused Rust checks,
 final shared Rust procedure, and fresh lightweight and paired physical
 incidents at `6beb143d`. The owned qualification VM is removed.
@@ -332,7 +335,9 @@ the same evidence directory. The
 [storage result](phase-7-5-1-native-graph-storage.md#result) records their hashes,
 platform, physical effects, matching coverage limits, and cleanup receipts.
 The full incident, physical cross-node behavior, provider effects, and
-performance remain unqualified. SDK and package execution remain pending.
+performance remain unqualified. SDK authoring was pending on this storage
+source. The [SDK result](phase-7-5-2-analysis-contract-and-sdk.md#result) records
+the later contract implementation. Package execution remains pending.
 
 ## Required changes
 

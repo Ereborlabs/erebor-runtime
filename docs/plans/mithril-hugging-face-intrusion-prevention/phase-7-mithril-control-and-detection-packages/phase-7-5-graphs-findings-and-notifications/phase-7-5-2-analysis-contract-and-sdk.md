@@ -31,7 +31,7 @@ An export returns an invalid schema, reference, or checkpoint
 
 ## Scope and owners
 
-Use a proposed `araphor-analysis-sdk` crate for portable authoring types, binding
+Use the `araphor-analysis-sdk` crate for portable authoring types, binding
 generation, and fixture support. It must not depend on Control, DuckDB, or the
 host store. `araphor-data` retains host validation. Share portable contract checks
 without making SDK use a condition for accepting a valid implementation.
@@ -69,6 +69,11 @@ without making SDK use a condition for accepting a valid implementation.
 Target artifact builds and execution adapters belong to 7.5.4 and 7.5.5. This
 phase proves the portable interface and author tests without package activation.
 
+The [SDK guide](../../../../../crates/araphor-analysis-sdk/README.md) specifies
+the Arrow schemas, precision, ordering, evidence, checkpoint, and bound rules.
+The [source review](analysis-contract-review.md) links each implemented owner
+and identifies the runtime interfaces that remain declarations.
+
 ## Acceptance and verification
 
 Use Rust contract tests for multiple inputs, variable output counts, invalid
@@ -85,7 +90,49 @@ contract and authoring interface before package activation.
 
 ## Result
 
-**Not done.** The SDK, descriptor, and target bindings are planned interfaces.
+**Done** for the portable contract, Rust author SDK, interface declarations,
+and local fixture tests. SDK commit `c85be1d7` adds the shared types, validation,
+build, inspect, test, and `files.count` example. Host commit `412c001b` declares
+the three current HF interfaces and preserves host validation during reason
+conversion. Commit `ca8de3ae` brings test names within repository limits.
+Existing detector dispatch remains operational.
+
+The source requirements audit covers current discovery and HF algorithms,
+Discovery Engine at `0b5b73425c5aec89b803e737b188b2a331d0e218`, and Security
+Analytics at `e33c62506efcb15ae795847484357704b539bcf1`. Read the linked
+[inventory](algorithm-coverage.md) for variants, delegated operations, state,
+host checks, target constraints, and the required later exports. This audit
+does not claim upstream algorithm execution or equivalence.
+
+The final shared Rust procedure passes on `ca8de3ae`, after the last Rust edit:
+
+```sh
+RUST_TEST_THREADS=4 bash .github/scripts/verify-rust-ci.sh
+```
+
+Qualified platform: Linux x86_64, Rust `1.97.1`. Formatting, workspace check,
+strict Clippy, and the complete workspace test command return zero. The SDK
+reports 21 passed, including WIT parsing and C header compilation. Araphor Data
+reports 394 passed and three ignored; this includes the three host contract
+tests. Mithril E2E reports 171 passed and 526 ignored. Ignored tests supply no
+qualification. Read `/tmp/araphor-analysis-rust-ci-bounded.log`, with SHA-256
+`30be5889b9ee299938b03581b6f4d471f04c184d463a27a7e93c6d652d448993`.
+
+The earlier default-concurrency run fails `control_graph_overlap_expiry` with
+`AnalysisReadDeadline` at `analysis/read.rs:161`. That existing case passes
+alone and in the final four-thread run. The timeout cause is unproven. No test
+assertion or production deadline changed. Read
+`/tmp/araphor-analysis-rust-ci-final.log` for the earlier failure.
+
+The standalone `files.count` example returns count `3`. Read
+`/tmp/araphor-files-count-run.log`. Normal SDK dependencies contain no Control,
+DuckDB, or host store. Selected graph relation fixtures retain full identities,
+all selected versions, empty replacements, and traversal boundary state.
+
+Installation, production graph-to-SDK adapters, executable target bindings,
+and current algorithm migration remain **Not done**. Native/Wasm declaration
+syntax does not qualify execution, isolation, or ABI behavior. Upstream ports,
+physical incident prevention, and performance are not qualified here.
 
 ## End scope and example
 
