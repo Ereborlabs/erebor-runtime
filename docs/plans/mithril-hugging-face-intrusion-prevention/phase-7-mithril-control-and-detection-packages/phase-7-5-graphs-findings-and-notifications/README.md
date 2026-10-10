@@ -38,7 +38,9 @@ Control restarts or a notification sink fails
 ## Approved extension and child phases
 
 The user approved the SDK and execution direction for this plan on 2026-10-09.
-Native graph storage is **Done**. The other child phases below are **Not done**.
+The native graph storage baseline is **Done**. Its user-approved large-graph
+and native traversal extension is **Not done**. The other child phases below
+are **Not done**.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 
@@ -51,7 +53,7 @@ bindings. Host owners enforce authorization, limits, validation, and commits.
 
 | Child phase | Deliverable | Entry gate |
 | --- | --- | --- |
-| [7.5.1 Native graph storage](phase-7-5-1-native-graph-storage.md) | Complete the retained native-row TODOs below without a second graph representation. | Existing graph owners and tests. |
+| [7.5.1 Native graph storage and traversal](phase-7-5-1-native-graph-storage.md) | Complete the retained native-row TODOs below, direct large-graph reads, and bounded native DuckDB traversal. | Existing graph owners and tests. |
 | [7.5.2 Analysis contract and SDK](phase-7-5-2-analysis-contract-and-sdk.md) | Complete contract requirements inventory, typed authoring, generated descriptors/interface declarations, and portable fixture tests. | 7.5.1. |
 | [7.5.3 Package lifecycle](phase-7-5-3-package-lifecycle.md) | Local SQL installation, dependency evaluation, atomic state, updates, and CLI/agent inspection. | 7.5.2 and Observability 3. |
 | [7.5.4 Wasm execution and current algorithms](phase-7-5-4-wasm-execution.md) | Embedded Wasmtime and explicit migration of current discovery, context integration, and HF-PROC/HF-DW/HF-XNODE algorithms. | 7.5.3. |
@@ -68,7 +70,7 @@ independently. Both are required for the requested full algorithm scope.
 
 ```mermaid
 flowchart LR
-    A["7.5.1 Storage"] --> B["7.5.2 Contract and SDK"]
+    A["7.5.1 Storage and native traversal"] --> B["7.5.2 Contract and SDK"]
     B --> C["7.5.3 SQL package lifecycle"]
     O["Observability 3"] --> C
     C --> D["7.5.4 Wasm and current migration"]

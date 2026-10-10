@@ -1,13 +1,17 @@
-# Phase 7.5.1: Native Graph Storage
+# Phase 7.5.1: Native Graph Storage And Traversal
 
 Store subjects, relationships, and findings as native rows so authorized reads
-and joins do not decode every graph snapshot. Parent: [7.5](README.md).
+and joins do not decode every graph snapshot. Add bounded large-graph access and
+native DuckDB traversal. Parent: [7.5](README.md).
 
 ## Intended end state
 
 AnalysisStore keeps one authoritative graph representation. Existing snapshot
 and export APIs reconstruct the same values, identities, and ordering. Historical
-finding references and notification obligations remain valid.
+finding references and notification obligations remain valid. An authorized
+caller selects exact seeds and receives bounded native rows across source
+windows. DuckDB executes traversal. Later algorithm and detector packages can
+use this host data path.
 
 ## Implementation flow
 
@@ -28,16 +32,74 @@ Store opens with retained snapshot bodies
   -> migration converts every retained version and verifies reconstruction
   -> AnalysisStore retires old bodies only after the checked conversion commits
   -> a failed conversion preserves the original store
+
+An authorized client submits exact seeds and traversal limits
+  -> QueryOwner validates the request under the existing investigate grant
+  -> AnalysisStore pins current source-window heads or exact retained results
+  -> AnalysisStore checks each complete version before traversal
+  -> DuckDB traverses narrow full subject keys through fixed recursive SQL
+  -> AnalysisStore reads only selected subject and relationship payloads
+  -> AnalysisStore closes the durable snapshot before client SQL runs
+  -> the result records version references, row counts, and the hop boundary
+
+Traversal exceeds a work, row, byte, or time limit
+  -> the read fails with a structured error
+  -> client SQL receives no truncated aggregate input
+  -> the read owner closes handles and releases temporary state
+  -> a retry captures a new read revision
 ```
 
 ## Scope and owners
 
 The [seven storage TODOs](README.md#native-graph-storage-improvement-todos)
-are the complete change checklist. Keep them in that location. AnalysisStore
+remain the storage checklist. The additional traversal TODOs below extend the
+user-approved scope on 2026-10-10. Keep the original checklist in its location. AnalysisStore
 owns encoding, transactions, migration, quotas, and reconstruction.
 `graph/read.rs` owns selected finding reads; query extraction and the existing
 VTab expose detached rows. Share row encoding and reconstruction across these
 paths. Preserve `GraphAndFindingOwner` validation and graph construction.
+
+### Native traversal and large-graph TODOs
+
+- [ ] Define a bounded graph input request and receipt under the graph model
+  owner. Preserve complete seed authority and lifetime. Include direction,
+  edge types, exact historical result IDs or current heads, hop, subject, and
+  relationship limits. Use existing query byte, capacity, and deadline limits.
+- [ ] Check complete versions before traversal. Preserve tenant, source, Node,
+  binding, and sensitivity rules. An excluded replacement cannot restore the
+  old version. Keep one read revision for version selection and native reads.
+- [ ] Execute fixed parameterized recursive DuckDB SQL with `USING KEY`.
+  Exclude visited keys and deduplicate candidates. Keep minimum hop depth.
+  Bound narrow work inputs and output keys before selected proof payload reads.
+- [ ] Add direct native subject and relationship reads. Share row decoding with
+  reconstruction. Add no complete Rust graph, second graph body, or custom
+  graph engine. Use no index unless a query plan proves its use.
+- [ ] Connect graph input to QueryPlan, ClientGrpcOwner, and `araphor query`.
+  Use one JSON file for the CLI input. Return a receipt with exact result IDs,
+  counts, and hop-boundary state. Add no listener or permission.
+- [ ] Qualify at least 16,385 distinct subjects and 32,769 relationships across
+  multiple current source windows. Keep existing per-version limits. Include
+  disconnected records, chains, diamonds, cycles, high fanout, directions,
+  type filters, exact seeds, and hop boundaries.
+- [ ] Verify row and byte limits, cancellation, deadlines, source replacements,
+  historical versions, tenant and lifetime isolation, whole-version grants,
+  retained proof, reopen, and backup/restore with focused Rust tests.
+- [ ] Extend the existing lightweight graph-notification case, then its paired
+  physical Rust case. Run the final shared Rust gate. Update the review guide
+  and results. Commit each completed deliverable in the primary checkout.
+
+The initial graph input supports `graph_subjects`, `relationships`, and catalog
+inspection. It supports joins between the graph datasets. Follow, bookmarks,
+and other datasets are rejected for this request. Existing queries retain their
+current behavior. Client recursion remains outside the admitted SQL subset;
+the graph owner controls native recursion. A zero-hop request reads exact seeds.
+Positive-hop reads retain filtered relationships between reached subjects.
+
+The pinned DuckDB 1.5.5 supports
+[recursive USING KEY queries](https://duckdb.org/docs/current/sql/query_syntax/with).
+This path adds no extension or dependency. Functional large-graph checks have
+no throughput or latency threshold. Performance remains **UNQUALIFIED**; a
+benchmark requires separate workload, runtime, and pass/fail approval.
 
 ## Acceptance and verification
 
@@ -60,8 +122,11 @@ Stop before SDK implementation.
 
 ## Result
 
-**Done.** All seven storage TODOs pass their required checks in the primary
-checkout. SDK, package lifecycle, runtime,
+**Not done** for the expanded scope. Native traversal, direct large-graph
+access, and their qualification are pending.
+
+The storage baseline is **Done**. All seven storage TODOs pass their required
+checks in the primary checkout. Commit: `91afc657`. SDK, package lifecycle, runtime,
 and algorithm migration work remain outside this result.
 
 Historical plan expansion record: the storage checklist is retained from the
@@ -134,7 +199,8 @@ effects, or performance.
 ## End scope and example
 
 Complete when graph writes, selected reads, joins, snapshot reconstruction,
-migration, and backup/restore use the native rows and pass the linked checklist.
+migration, and backup/restore use native rows and the linked storage checklist
+passes. Native traversal and the large-graph TODOs must also pass.
 Existing graph APIs and historical references retain their meaning. Package
 authoring and execution are not added by this storage change.
 
@@ -142,3 +208,11 @@ Example at completion: source-window result `R1` contains finding `F1`; its
 replacement `R2` omits `F1`. The current finding query excludes `F1`. An exact
 historical read of `R1` still returns it, and a notification that references
 `R1` remains readable after migration and restore.
+
+Traversal example at completion: exact seed `S1` occurs in several current
+source windows. An outgoing two-hop request selects `S1`, `S2`, and `S3`, with
+each relationship's result and evidence references. A disconnected retained
+graph is not exported. The receipt reports a boundary if an unseen neighbor
+exists beyond `S3`. A subject-limit overflow fails before SQL can aggregate
+incomplete input. This result does not prove full-incident prevention, physical
+cross-node causality, provider effects, performance, or unlimited graph size.
