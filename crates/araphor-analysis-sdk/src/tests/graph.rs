@@ -7,33 +7,33 @@ use fixture::{SelectedGraph, KEYS, SOURCES, WINDOW_START};
 
 #[test]
 fn graph_keeps_version_manifest() -> TestResult {
-    let graph = SelectedGraph::new();
+    let graph = SelectedGraph::new()?;
     let report = graph
         .package
         .test(&graph.fixture, |input| graph.evaluate(input))?;
     let subjects = &report.output.datasets[0].batches[0];
     assert_eq!(
-        SelectedGraph::column::<StringArray>(subjects, 0)
+        SelectedGraph::column::<StringArray>(subjects, 0)?
             .iter()
             .flatten()
             .collect::<Vec<_>>(),
         ["result.1", "result.1", "result.2", "result.2"]
     );
-    let keys = SelectedGraph::column::<BinaryArray>(subjects, 1);
+    let keys = SelectedGraph::column::<BinaryArray>(subjects, 1)?;
     assert_eq!(
         keys.iter().flatten().collect::<Vec<_>>(),
         [KEYS[0], KEYS[1], KEYS[0], KEYS[2]]
     );
     let relationships = &report.output.datasets[1].batches[0];
     assert_eq!(
-        SelectedGraph::column::<BinaryArray>(relationships, 1)
+        SelectedGraph::column::<BinaryArray>(relationships, 1)?
             .iter()
             .flatten()
             .collect::<Vec<_>>(),
         [KEYS[0], KEYS[0]]
     );
     assert_eq!(
-        SelectedGraph::column::<BinaryArray>(relationships, 2)
+        SelectedGraph::column::<BinaryArray>(relationships, 2)?
             .iter()
             .flatten()
             .collect::<Vec<_>>(),
@@ -41,42 +41,42 @@ fn graph_keeps_version_manifest() -> TestResult {
     );
     let selection = &report.output.datasets[2].batches[0];
     assert_eq!(
-        SelectedGraph::column::<StringArray>(selection, 0)
+        SelectedGraph::column::<StringArray>(selection, 0)?
             .iter()
             .flatten()
             .collect::<Vec<_>>(),
         ["result.1", "result.2", "replacement.empty.3"]
     );
     assert_eq!(
-        SelectedGraph::column::<BinaryArray>(selection, 1)
+        SelectedGraph::column::<BinaryArray>(selection, 1)?
             .iter()
             .flatten()
             .collect::<Vec<_>>(),
         [SOURCES[0], SOURCES[1], SOURCES[0]]
     );
     assert_eq!(
-        SelectedGraph::column::<BooleanArray>(selection, 2)
+        SelectedGraph::column::<BooleanArray>(selection, 2)?
             .values()
             .iter()
             .collect::<Vec<_>>(),
         [true, false, false]
     );
     assert_eq!(
-        SelectedGraph::column::<TimestampNanosecondArray>(selection, 3).value(2),
+        SelectedGraph::column::<TimestampNanosecondArray>(selection, 3)?.value(2),
         WINDOW_START + 10
     );
     assert_eq!(
-        SelectedGraph::column::<TimestampNanosecondArray>(selection, 4).value(2),
+        SelectedGraph::column::<TimestampNanosecondArray>(selection, 4)?.value(2),
         WINDOW_START + 19
     );
     assert_eq!(
-        SelectedGraph::column::<UInt64Array>(selection, 5)
+        SelectedGraph::column::<UInt64Array>(selection, 5)?
             .values()
             .as_ref(),
         [2, 2, 0]
     );
     assert_eq!(
-        SelectedGraph::column::<UInt64Array>(selection, 6)
+        SelectedGraph::column::<UInt64Array>(selection, 6)?
             .values()
             .as_ref(),
         [1, 1, 0]
@@ -84,14 +84,16 @@ fn graph_keeps_version_manifest() -> TestResult {
     assert_eq!(report.output.evidence.len(), 9);
     let mut limited = graph.fixture.clone();
     limited.evaluation.context.limits.max_rows = 8;
+    let mut executed = false;
+    let result = graph.package.test(&limited, |_| {
+        executed = true;
+        Ok(Output::default())
+    });
     assert_eq!(
-        graph
-            .package
-            .test(&limited, |_| panic!("oversized input ran"))
-            .unwrap_err()
-            .code(),
+        result.err().ok_or("oversized input passed")?.code(),
         ErrorCode::Limit
     );
+    assert!(!executed);
     Ok(())
 }
 

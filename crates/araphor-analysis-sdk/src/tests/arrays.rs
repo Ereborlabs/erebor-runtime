@@ -35,8 +35,8 @@ fn sliced_lists_skip_hidden() -> TestResult {
     validate(Arc::new(lists.slice(2, 0)))?;
     for slice in [lists.slice(0, 1), lists.slice(3, 2)] {
         assert_eq!(
-            validate(Arc::new(slice)).unwrap_err().code(),
-            ErrorCode::Invalid
+            validate(Arc::new(slice)).map_err(|error| error.code()),
+            Err(ErrorCode::Invalid)
         );
     }
     Ok(())
@@ -55,8 +55,8 @@ fn struct_masks_nested_list() -> TestResult {
     validate(Arc::new(structure.slice(0, 2)))?;
     validate(Arc::new(structure.slice(1, 1)))?;
     assert_eq!(
-        validate(Arc::new(structure)).unwrap_err().code(),
-        ErrorCode::Invalid
+        validate(Arc::new(structure)).map_err(|error| error.code()),
+        Err(ErrorCode::Invalid)
     );
     Ok(())
 }
@@ -79,8 +79,8 @@ fn fixed_lists_skip_hidden() -> TestResult {
     validate(Arc::new(lists.slice(0, 2)))?;
     validate(Arc::new(lists.slice(1, 1)))?;
     assert_eq!(
-        validate(Arc::new(lists)).unwrap_err().code(),
-        ErrorCode::Invalid
+        validate(Arc::new(lists)).map_err(|error| error.code()),
+        Err(ErrorCode::Invalid)
     );
     Ok(())
 }
@@ -91,15 +91,15 @@ fn floats_check_selected_values() -> TestResult {
         let values = Float64Array::from(vec![Some(invalid), None, Some(1.0)]);
         validate(Arc::new(values.slice(1, 2)))?;
         assert_eq!(
-            validate(Arc::new(values)).unwrap_err().code(),
-            ErrorCode::Invalid
+            validate(Arc::new(values)).map_err(|error| error.code()),
+            Err(ErrorCode::Invalid)
         );
     }
     let values = Float32Array::from(vec![Some(f32::NAN), None, Some(1.0)]);
     validate(Arc::new(values.slice(1, 2)))?;
     assert_eq!(
-        validate(Arc::new(values)).unwrap_err().code(),
-        ErrorCode::Invalid
+        validate(Arc::new(values)).map_err(|error| error.code()),
+        Err(ErrorCode::Invalid)
     );
     Ok(())
 }
@@ -125,8 +125,8 @@ fn null_type_requires_nullable() -> TestResult {
         let mut package = FilesCount::package();
         package.exports[0].inputs[0].schema = Schema::new(vec![field]);
         assert_eq!(
-            package.validate().unwrap_err().code(),
-            ErrorCode::Incompatible
+            package.validate().map_err(|error| error.code()),
+            Err(ErrorCode::Incompatible)
         );
     }
     Ok(())

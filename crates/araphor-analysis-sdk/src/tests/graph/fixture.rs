@@ -105,7 +105,7 @@ impl SelectedGraph {
         ]
     }
 
-    pub(super) fn new() -> Self {
+    pub(super) fn new() -> Result<Self> {
         let package = Self::package();
         let inputs = package.exports[0].inputs.clone();
         let fixture = Fixture {
@@ -116,27 +116,31 @@ impl SelectedGraph {
                 inputs: inputs
                     .into_iter()
                     .zip(Self::columns())
-                    .map(|(port, columns)| Input {
-                        data: Dataset {
-                            name: port.name,
-                            batches: vec![RecordBatch::try_new(Arc::new(port.schema), columns)
-                                .expect("graph fixture schema")],
-                        },
-                        revision: Revision {
-                            owner: "AnalysisStore".into(),
-                            id: "read.revision.7".into(),
-                            window: Some(SourceWindow {
-                                source: b"tenant.1/selected-graph".to_vec(),
-                                start_utc_ns: WINDOW_START,
-                                end_utc_ns: WINDOW_START + 19,
-                            }),
-                        },
-                        coverage: Coverage {
-                            state: CoverageState::Gapped,
-                            limits: vec!["MISSING_SOURCE_INTERVAL".into()],
-                        },
+                    .map(|(port, columns)| {
+                        Ok(Input {
+                            data: Dataset {
+                                name: port.name,
+                                batches: vec![RecordBatch::try_new(
+                                    Arc::new(port.schema),
+                                    columns,
+                                )?],
+                            },
+                            revision: Revision {
+                                owner: "AnalysisStore".into(),
+                                id: "read.revision.7".into(),
+                                window: Some(SourceWindow {
+                                    source: b"tenant.1/selected-graph".to_vec(),
+                                    start_utc_ns: WINDOW_START,
+                                    end_utc_ns: WINDOW_START + 19,
+                                }),
+                            },
+                            coverage: Coverage {
+                                state: CoverageState::Gapped,
+                                limits: vec!["MISSING_SOURCE_INTERVAL".into()],
+                            },
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<_>>()?,
                 parameters: None,
                 context: EvaluationContext {
                     id: "selected.1".into(),
@@ -152,15 +156,15 @@ impl SelectedGraph {
                 checkpoint: None,
             },
         };
-        Self { package, fixture }
+        Ok(Self { package, fixture })
     }
 
-    pub(super) fn column<A: Array + 'static>(batch: &RecordBatch, index: usize) -> &A {
+    pub(super) fn column<A: Array + 'static>(batch: &RecordBatch, index: usize) -> Result<&A> {
         batch
             .column(index)
             .as_any()
             .downcast_ref()
-            .expect("graph column")
+            .ok_or_else(|| Error::contract(ErrorCode::Incompatible, "graph column"))
     }
 
     pub(super) fn evaluate(&self, input: &Evaluation) -> Result<Output> {
@@ -203,14 +207,14 @@ impl SelectedGraph {
 
     fn summary(&self, input: &Evaluation) -> Result<RecordBatch> {
         let subjects = &input.input("subjects")?.data.batches[0];
-        let subject_versions = Self::column::<StringArray>(subjects, 0);
-        let keys = Self::column::<BinaryArray>(subjects, 1);
+        let subject_versions = Self::column::<StringArray>(subjects, 0)?;
+        let keys = Self::column::<BinaryArray>(subjects, 1)?;
         let relationships = &input.input("relationships")?.data.batches[0];
-        let relationship_versions = Self::column::<StringArray>(relationships, 0);
-        let from = Self::column::<BinaryArray>(relationships, 1);
-        let to = Self::column::<BinaryArray>(relationships, 2);
+        let relationship_versions = Self::column::<StringArray>(relationships, 0)?;
+        let from = Self::column::<BinaryArray>(relationships, 1)?;
+        let to = Self::column::<BinaryArray>(relationships, 2)?;
         let selection = &input.input("selection")?.data.batches[0];
-        let versions = Self::column::<StringArray>(selection, 0);
+        let versions = Self::column::<StringArray>(selection, 0)?;
         let mut subject_counts = Vec::new();
         let mut relationship_counts = Vec::new();
         for version in versions.iter().flatten() {
