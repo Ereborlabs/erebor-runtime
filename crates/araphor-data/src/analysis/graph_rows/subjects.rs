@@ -80,7 +80,10 @@ impl SubjectRow {
 }
 
 impl GraphRows {
-    pub(in crate::analysis) fn subject_permission() -> &'static str {
+    pub(in crate::analysis) fn subject_permission(binding_scope: bool) -> &'static str {
+        if !binding_scope {
+            return "TRUE";
+        }
         "EXISTS (
             SELECT 1 FROM graph_findings finding
             WHERE finding.result_id = subject.result_id AND finding.subject_id = seed.subject_id
@@ -120,20 +123,19 @@ impl GraphRows {
                 parameters.extend(Self::subject_fields(key)?);
             }
             parameters.push(Value::Text(result_id.to_owned()));
-            parameters.push(Value::Boolean(binding_scope));
             let columns = SubjectRow::COLUMNS
                 .split(',')
                 .map(|column| format!("subject.{}", column.trim()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let permission = Self::subject_permission();
+            let permission = Self::subject_permission(binding_scope);
             let mut statement = reader
                 .prepare(&format!(
                     "WITH requested(subject_id, tenant_id, subject_kind, authority, identity)
                  AS (VALUES {values})
                  SELECT {columns} FROM graph_subjects subject JOIN requested seed
                  USING (tenant_id, subject_kind, authority, identity)
-                 WHERE subject.result_id = ? AND (NOT ? OR {permission})
+                 WHERE subject.result_id = ? AND ({permission})
                  ORDER BY subject.ordinal"
                 ))
                 .context(AnalysisDatabaseSnafu {

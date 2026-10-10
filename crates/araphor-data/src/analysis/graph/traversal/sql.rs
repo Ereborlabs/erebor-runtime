@@ -50,7 +50,6 @@ impl GraphWalk<'_> {
             }
         };
         values.extend([
-            Value::Boolean(self.binding_scope),
             Value::BigInt(self.request.max_hops as i64),
             Value::BigInt(self.request.max_subjects as i64 + 1),
             Value::BigInt(self.request.max_hops as i64),
@@ -63,7 +62,7 @@ impl GraphWalk<'_> {
             Value::BigInt(self.request.max_relationships as i64),
             Value::BigInt(self.input_bytes.min(i64::MAX as usize) as i64),
         ]);
-        let subject_permission = GraphRows::subject_permission();
+        let subject_permission = GraphRows::subject_permission(self.binding_scope);
         let query = format!(
             "WITH RECURSIVE requested(result_id) AS (VALUES {requested}),
              seeds(subject_id, tenant_id, subject_kind, authority, identity) AS (VALUES {seeds}),
@@ -83,7 +82,7 @@ impl GraphWalk<'_> {
                      WHERE subject.tenant_id = seed.tenant_id
                          AND subject.subject_kind = seed.subject_kind
                          AND subject.authority = seed.authority AND subject.identity = seed.identity
-                         AND (NOT ? OR {subject_permission})
+                         AND ({subject_permission})
                  )
                  UNION ALL (
                      SELECT link.target, (min(frontier.depth) + 1)::UINTEGER
