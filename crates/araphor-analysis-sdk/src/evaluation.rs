@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Limits, RecordBatch};
+use crate::{Error, ErrorCode, Limits, RecordBatch, Result};
 
 #[derive(Clone, Debug)]
 pub struct Dataset {
@@ -63,6 +63,15 @@ pub struct Evaluation {
     pub parameters: Option<RecordBatch>,
     pub context: EvaluationContext,
     pub checkpoint: Option<Checkpoint>,
+}
+
+impl Evaluation {
+    pub fn input(&self, name: &str) -> Result<&Input> {
+        self.inputs
+            .iter()
+            .find(|input| input.data.name == name)
+            .ok_or_else(|| Error::contract(ErrorCode::Incomplete, format!("input {name}")))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
