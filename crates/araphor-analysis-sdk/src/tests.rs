@@ -39,7 +39,7 @@ fn count_fixture_builds() -> TestResult {
 }
 
 #[test]
-fn invalid_input_does_not_execute() -> TestResult {
+fn invalid_input_blocks_execution() -> TestResult {
     let package = FilesCount::package();
     let mut fixture = FilesCount::fixture()?;
     fixture.evaluation.inputs[0].data.batches = vec![RecordBatch::try_new(
@@ -64,7 +64,7 @@ fn invalid_input_does_not_execute() -> TestResult {
 }
 
 #[test]
-fn multiple_batches_keep_all_rows() -> TestResult {
+fn batches_keep_all_rows() -> TestResult {
     let package = FilesCount::package();
     let mut fixture = FilesCount::fixture()?;
     let schema = Arc::new(package.exports[0].inputs[0].schema.clone());

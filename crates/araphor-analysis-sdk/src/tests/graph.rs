@@ -3,7 +3,7 @@ use arrow_array::{BinaryArray, BooleanArray};
 use super::*;
 
 #[test]
-fn selected_graph_keeps_version_manifest() -> TestResult {
+fn graph_keeps_version_manifest() -> TestResult {
     let mut package = FilesCount::package();
     let subjects = Schema::new(vec![
         Field::new("result_id", DataType::Utf8, false),
@@ -88,7 +88,7 @@ fn selected_graph_keeps_version_manifest() -> TestResult {
 }
 
 #[test]
-fn dependency_has_one_input_binding() -> TestResult {
+fn dependency_has_one_binding() -> TestResult {
     let mut package = FilesCount::package();
     let output = package.exports[0].outputs[0].clone();
     package.exports.push(Model::new(

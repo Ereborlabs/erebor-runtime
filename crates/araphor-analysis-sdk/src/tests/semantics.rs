@@ -61,7 +61,7 @@ fn nested_vectors_preserve_precision() -> TestResult {
 }
 
 #[test]
-fn missing_and_null_are_distinct() -> TestResult {
+fn missing_differs_from_null() -> TestResult {
     let mut package = FilesCount::package();
     let schema = Schema::new(vec![
         Field::new("present", DataType::Boolean, false),
@@ -101,7 +101,7 @@ fn missing_and_null_are_distinct() -> TestResult {
 }
 
 #[test]
-fn prior_result_supplies_retained_evidence() -> TestResult {
+fn prior_result_retains_evidence() -> TestResult {
     let mut package = FilesCount::package();
     let mut prior = package.exports[0].outputs[0].clone();
     prior.name = "prior".into();
@@ -167,7 +167,7 @@ fn rejects_nonfinite_parameters() -> TestResult {
 }
 
 #[test]
-fn invalid_output_never_returns_report() -> TestResult {
+fn invalid_output_blocks_report() -> TestResult {
     let package = FilesCount::package();
     let fixture = FilesCount::fixture()?;
     let result = package.test(&fixture, |input| {
