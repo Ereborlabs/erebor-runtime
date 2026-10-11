@@ -462,6 +462,17 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+- [ ] Check installed package references and current authority before an
+  unchanged graph notice returns a cache hit. A normal `process()` call must
+  observe updates, removal, and revocation without a source revision change.
+  Use the existing package lifecycle and graph health owners. Preserve
+  historical results. Keep missing coverage and failures explicit. Add Rust
+  checks for unchanged input, changed activation, removal, and revocation.
+- [ ] Close qualification stores before their temporary root. Drop the completed
+  incident replay fixture before density and window checks. Await graph test
+  server shutdown on failure and retain the original error. Return command
+  failures through the synchronous entry point so Tokio can close. Keep every
+  qualification assertion and the filesystem reserve check unchanged.
 - [ ] Save a successful unchanged graph check in existing per-result notice
   metadata. Use `facts_revision` for the provider notice, as Discovery does.
   Initialize new graph metadata from the captured provider notice. Convert
