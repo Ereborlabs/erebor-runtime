@@ -353,6 +353,26 @@ The proof is `/tmp/araphor-wasm-production-bounds-proof-v23.json`.
 The inline writer follow-up changes all six component artifacts. Repeat the
 four production cases on those final artifacts before closure.
 
+### Current installed detector qualification
+
+The fresh v27 `analysis-packages` case exits zero and records `PASS`.
+A real TLS client installs the built `example-burst` folder without a host
+rebuild. The stored threshold is 3. Four inputs produce three matching evidence
+records, typed reason `example-burst.THRESHOLD`, and checkpoint 4. Task groups
+remain separate. Restart and retry retain the same result.
+
+Current computation and historical replay both reject revoked trust. Retained
+results remain readable. SQL correction and empty replacement pass. Checkpoint
+runs retain values 2, 2, and 1. Failed upgrade, rollback, revocation, removal,
+and historical reads pass.
+
+The result is `/tmp/araphor-current-v27-packages/result.json`.
+Its SHA256 is `6e47925e569f0f4ee169322afe61d43e8c900dcca505d0317afc101aa4e08453`.
+The normal executable has SHA256 `c91c8a8082d0308751a32ae8d367061f6e1cf4a5913a7cb91c72da058822e668`.
+The source manifest is the v27 manifest recorded above. The proof is
+`/tmp/araphor-wasm-production-bounds-proof-v27.json`.
+The context, profile restart, graph notification, and final Rust gates remain.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
