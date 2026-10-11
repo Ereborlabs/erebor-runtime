@@ -553,6 +553,35 @@ changed tracked Rust files. The corpus, incident cards, finding workload, and
 window sizes stay unchanged. This review and the cleanup test do not replace
 the four fresh production cases or the final shared Rust procedure.
 
+### Graph notification reserve failure after the correction
+
+The fresh v30 `graph-notification` case exits one on the unchanged filesystem
+reserve check. It writes no result artifact. The log is
+`/tmp/araphor-current-v30-graph.log`, with SHA256
+`2105e27206040a3ff3668509d7361c3d0d45ed9100424b42a8c742d7a27fdde9`.
+The precise graph operation is not identified. The proof retains this failure
+in `/tmp/araphor-wasm-production-proof-v30.json`. The run uses the same saved
+executable as the three passed production cases and the v31 source record.
+This result does not qualify graph notification.
+
+After failure, no case process, compiler child, recent temporary store, or
+open deleted case file remains. A separate concurrent Cargo build creates
+16,650,489,856 allocated bytes before the failure. The count uses unique
+inodes. This allocation is in another checkout on the same filesystem. No
+file in that checkout is changed or removed for this goal.
+
+Checked removal of debug sections from three inactive generated executables
+recovers 4,179,186,704 bytes. Every loaded ELF section stays equal. The proof is
+`/tmp/araphor-strip-proof-20261011-pre-ci-v31.json`, with SHA256
+`d75d18f2707e6eb3a8cfb3daf6fbece6ad63a1d83c3cb9dad0cb74e0cf69ccd6`.
+The saved production execution copy stays byte-identical.
+
+- [ ] Remove only the unused primary `target/debug/incremental` cache after
+  checking active processes, file handles, and mappings. Keep source,
+  executables, components, logs, and proof. Run graph notification again with
+  the same saved executable, workload, limits, and reserve in a fresh output
+  directory. Then run the final shared Rust procedure on unchanged source.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
