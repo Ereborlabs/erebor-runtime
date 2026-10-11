@@ -90,6 +90,25 @@ impl AnalysisResultCommitV1 {
             &self.context_refs,
         ))
     }
+
+    pub(super) fn request_refs(
+        bytes: &[u8],
+    ) -> std::result::Result<(Vec<AnalysisWitnessV1>, Vec<AnalysisContextRefV1>), serde_json::Error>
+    {
+        type Metadata = (
+            ProcessorScopeV1,
+            u64,
+            u64,
+            u64,
+            u64,
+            String,
+            u64,
+            Vec<AnalysisWitnessV1>,
+            Vec<AnalysisContextRefV1>,
+        );
+        let (_, _, _, _, _, _, _, witnesses, contexts): Metadata = serde_json::from_slice(bytes)?;
+        Ok((witnesses, contexts))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -854,43 +873,7 @@ impl AnalysisStore {
         if input.context_revision != context_revision {
             return self.reject("the result context revision differs from its references");
         }
-        let mut witness_segments = Vec::<u64>::with_capacity(input.witnesses.len());
-        let mut cached = Vec::<super::AnalysisRecordV1>::new();
-        let mut source = None;
-        let mut segment = 0;
-        for witness in &input.witnesses {
-            if source != Some(&witness.identity)
-                || cached
-                    .first()
-                    .is_none_or(|record| witness.cursor < record.cursor)
-                || cached
-                    .last()
-                    .is_none_or(|record| witness.cursor > record.cursor)
-            {
-                let ranges = self
-                    .raw
-                    .lock()
-                    .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
-                    .select_ranges(
-                        &witness.identity,
-                        witness.cursor,
-                        witness.cursor,
-                        revision,
-                        None,
-                        2,
-                    )?;
-                if ranges.len() != 1 {
-                    return self.reject("the result witness is not retained exactly once");
-                }
-                cached = ranges[0].read(&self.root)?;
-                segment = ranges[0].segment_id;
-                source = Some(&witness.identity);
-            }
-            cached
-                .binary_search_by_key(&witness.cursor, |record| record.cursor)
-                .map_err(|_| self.state_error("the result witness is not retained"))?;
-            witness_segments.push(segment);
-        }
+        let witness_segments = self.resolve_witnesses(&input.witnesses, revision)?;
         let revision = Self::read_meta_from(&transaction, &path)?
             .commit_revision
             .checked_add(1)
@@ -984,47 +967,13 @@ impl AnalysisStore {
             results: i64::from(!replacing),
             ..Default::default()
         };
-        for (witness, segment) in input.witnesses.iter().zip(&witness_segments) {
-            transaction
-                .execute(
-                    "INSERT INTO evidence_refs VALUES (?, ?, ?, ?, ?, ?)",
-                    params![
-                        input.result_id,
-                        witness.identity.tenant().as_slice(),
-                        witness.identity.key().as_slice(),
-                        witness.cursor,
-                        witness.expires_utc_ns,
-                        segment,
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert exact witness",
-                })?;
-            usage.bytes += 256 + witness.identity.key().len() as i64 + input.result_id.len() as i64;
-        }
-        for reference in &input.context_refs {
-            transaction
-                .execute(
-                    "INSERT INTO context_refs VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        input.result_id,
-                        reference.key.tenant_id.as_slice(),
-                        reference.key.owner_id,
-                        reference.key.entity_key.as_slice(),
-                        reference.key.lifetime_key.as_slice(),
-                        reference.key.owner_revision,
-                        reference.commit_revision,
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert exact result context",
-                })?;
-            usage.bytes += (256
-                + input.result_id.len()
-                + reference.key.owner_id.len()
-                + reference.key.entity_key.len()
-                + reference.key.lifetime_key.len()) as i64;
-        }
+        usage.bytes += Self::insert_references(
+            &transaction,
+            &input.result_id,
+            &input.witnesses,
+            &witness_segments,
+            &input.context_refs,
+        )?;
         if advance {
             transaction
             .execute(

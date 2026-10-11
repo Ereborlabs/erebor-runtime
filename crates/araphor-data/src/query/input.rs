@@ -1865,7 +1865,12 @@ impl InputRelations {
 
     #[cfg(test)]
     pub(super) fn set_scan_gate(&self, gate: Option<super::adapter::ScanGate>) -> Result<()> {
-        *self.tables[0].scan_gate.lock().map_err(|_| {
+        let table = self
+            .tables
+            .iter()
+            .find(|table| !table.rows.is_empty())
+            .unwrap_or(&self.tables[0]);
+        *table.scan_gate.lock().map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "test scan gate",
             }

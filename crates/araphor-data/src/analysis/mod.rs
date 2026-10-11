@@ -29,6 +29,7 @@ mod graph_migration;
 pub(crate) mod graph_rows;
 mod health;
 mod notification;
+mod packages;
 mod progress;
 mod quota;
 mod raw;
@@ -54,6 +55,7 @@ pub use extraction::{
 };
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub(crate) use notification::NotificationLookup;
+pub(crate) use packages::*;
 pub use progress::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisProcessorResultV1, AnalysisResultCommitV1,
     AnalysisResultReceiptV1, AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
@@ -72,7 +74,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 64 * 1024 * 1024;
-const ANALYSIS_SCHEMA_VERSION: i64 = 18;
+const ANALYSIS_SCHEMA_VERSION: i64 = 19;
 const GRAPH_LEGACY_VERSION: u32 = 17;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
@@ -481,6 +483,11 @@ impl AnalysisStore {
                 .execute_batch(graph_rows::GraphRows::SCHEMA)
                 .context(AnalysisDatabaseSnafu {
                     operation: "create native graph rows",
+                })?;
+            transaction
+                .execute_batch(Self::PACKAGE_SCHEMA)
+                .context(AnalysisDatabaseSnafu {
+                    operation: "create package state",
                 })?;
             let initial_uuid = Uuid::new_v4().hyphenated().to_string();
             transaction

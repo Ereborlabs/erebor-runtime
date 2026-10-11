@@ -28,6 +28,7 @@ mod graph;
 #[cfg(test)]
 pub(crate) mod graph_tests;
 mod input;
+mod model;
 mod notification;
 #[cfg(test)]
 mod owner_tests;
@@ -47,6 +48,10 @@ pub use frame::{
     QUERY_CHECKPOINT_BYTES,
 };
 use input::{InputProjection, InputRelations, InputRow};
+pub use model::{
+    SqlDatasetOutputV1, SqlModelInputRequestV1, SqlModelInputV1, SqlModelOutputV1, SqlModelV1,
+    SqlReasonV1,
+};
 pub use plan::{QueryOperation, QueryPlan, QueryTemplate, QUERY_SCHEMA_VERSION};
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -380,22 +385,7 @@ impl QueryOwner {
         };
         page.extraction.input_bytes = input.allocation_bytes();
         #[cfg(test)]
-        self.input_refs
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .extend(input.references());
-        #[cfg(test)]
-        input.set_scan_gate(
-            self.scan_gate
-                .lock()
-                .map_err(|_| {
-                    crate::QueryInvalidSnafu {
-                        field: "test scan gate",
-                    }
-                    .build()
-                })?
-                .take(),
-        )?;
+        self.test_input(&input)?;
         let sources: Vec<_> = std::mem::take(&mut page.extraction.sources)
             .into_iter()
             .map(QueryCoverage::from)

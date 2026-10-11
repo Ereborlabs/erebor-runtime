@@ -6,6 +6,25 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Package {code:?} rejects {field}"))]
+    Package {
+        code: crate::PackageErrorCodeV1,
+        field: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Package encoding failed: {source}"))]
+    PackageEncoding {
+        source: serde_json::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Package table encoding failed: {source}"))]
+    PackageArrow {
+        source: duckdb::arrow::error::ArrowError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Analysis contract failed: {source}"))]
     AnalysisContract {
         source: araphor_analysis_sdk::Error,
@@ -228,6 +247,19 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::Package { code, .. } => match code {
+                crate::PackageErrorCodeV1::Invalid | crate::PackageErrorCodeV1::Limit => {
+                    StatusCode::InvalidArguments
+                }
+                crate::PackageErrorCodeV1::Denied => StatusCode::PermissionDenied,
+                crate::PackageErrorCodeV1::Conflict => StatusCode::AlreadyExists,
+                crate::PackageErrorCodeV1::Missing => StatusCode::NotFound,
+                crate::PackageErrorCodeV1::Unsupported => StatusCode::Unsupported,
+                crate::PackageErrorCodeV1::Incomplete => StatusCode::Unavailable,
+            },
+            Self::PackageEncoding { .. } | Self::PackageArrow { .. } => {
+                StatusCode::InvalidArguments
+            }
             Self::AnalysisContract { source, .. } => source.status_code(),
             Self::Notification { code, .. } => match code {
                 crate::NotificationErrorCodeV1::Invalid | crate::NotificationErrorCodeV1::Limit => {

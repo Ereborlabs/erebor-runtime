@@ -10,6 +10,40 @@ use crate::{
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+impl QueryOwner {
+    pub(crate) fn set_scan_gate(
+        &self,
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    ) -> Result<()> {
+        *self.scan_gate.lock().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "test scan gate",
+            }
+            .build()
+        })? = Some((entered, release));
+        Ok(())
+    }
+
+    pub(super) fn test_input(&self, input: &InputRelations) -> Result<()> {
+        self.input_refs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .extend(input.references());
+        input.set_scan_gate(
+            self.scan_gate
+                .lock()
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "test scan gate",
+                    }
+                    .build()
+                })?
+                .take(),
+        )
+    }
+}
+
 fn while_held<T: Send>(
     held: QueryResult,
     work: impl FnOnce() -> TestResult<T> + Send,

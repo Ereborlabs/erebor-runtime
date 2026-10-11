@@ -119,6 +119,11 @@ impl<'a> GraphMigration<'a> {
             .context(AnalysisDatabaseSnafu {
                 operation: "add migrated graph encoding",
             })?;
+        transaction
+            .execute_batch(AnalysisStore::PACKAGE_SCHEMA)
+            .context(AnalysisDatabaseSnafu {
+                operation: "create migrated package schema",
+            })?;
         for _ in 0..self.count {
             self.convert(&transaction)?;
         }

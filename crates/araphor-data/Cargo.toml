@@ -11,8 +11,10 @@ test-fixtures = []
 [dependencies]
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
+arrow-ipc = "=58.4.0"
+arrow-json = "=58.4.0"
 crc32c.workspace = true
-duckdb = { workspace = true, features = ["json", "vtab"] }
+duckdb = { workspace = true, features = ["json", "vtab", "appender-arrow"] }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 futures-core = "0.3"

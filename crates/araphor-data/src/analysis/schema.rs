@@ -60,7 +60,7 @@ impl AnalysisStore {
         Self::validate_contexts(writer, root)?;
         Self::validate_traces(writer, root)?;
         Self::validate_trace_receipts(writer, root)?;
-        let graph_limit = if meta.schema_version == super::ANALYSIS_SCHEMA_VERSION as u32 {
+        let graph_limit = if meta.schema_version >= 18 {
             super::graph_rows::GraphHeader::MAX_BYTES
         } else {
             super::MAX_RESULT_BYTES
@@ -216,8 +216,11 @@ impl AnalysisStore {
         if invalid {
             return Self::reject_path(root, "the stored revision or pending bound is invalid");
         }
+        if meta.schema_version >= 19 {
+            Self::validate_packages(writer, root)?;
+        }
         Self::validate_usage(writer, root)?;
-        if meta.schema_version == super::ANALYSIS_SCHEMA_VERSION as u32 {
+        if meta.schema_version >= 18 {
             Self::validate_encoding(writer, root)?;
             Self::validate_graphs(writer, root)?;
         }
@@ -561,7 +564,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read stored schema version",
             })?;
-        if version == super::ANALYSIS_SCHEMA_VERSION as u32 {
+        if version >= 18 {
             let encoding: bool = writer
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM information_schema.columns

@@ -53,6 +53,22 @@ impl QuerySql {
     pub const PARAMETER_BYTES: usize = PARAMETER_BYTES;
 
     pub fn admit(sql: &str, parameters: Vec<Value>, follow: bool) -> Result<Self> {
+        Self::admit_with(sql, parameters, follow, None)
+    }
+
+    pub(super) fn admit_relations(
+        sql: &str,
+        relations: BTreeMap<String, Vec<String>>,
+    ) -> Result<Self> {
+        Self::admit_with(sql, Vec::new(), false, Some(relations))
+    }
+
+    fn admit_with(
+        sql: &str,
+        parameters: Vec<Value>,
+        follow: bool,
+        relations: Option<BTreeMap<String, Vec<String>>>,
+    ) -> Result<Self> {
         if sql.is_empty() || sql.len() > SQL_BYTES {
             return Err(Binder::invalid("SQL length"));
         }
@@ -70,6 +86,7 @@ impl QuerySql {
         };
         Parameters::bind(&mut query, parameters.len())?;
         let mut binder = Binder {
+            relations,
             dependencies: BTreeSet::new(),
             aggregate: false,
             clocks: 0,
@@ -114,6 +131,10 @@ impl QuerySql {
 
     pub fn original(&self) -> &str {
         &self.original
+    }
+
+    pub(crate) fn uses_clock(&self) -> bool {
+        self.clocks != 0
     }
 
     pub fn parameters(&self) -> &[Value] {
@@ -192,6 +213,12 @@ impl QuerySql {
 
     pub fn moving_seconds(&self) -> Option<u32> {
         self.moving
+    }
+
+    pub(super) fn bind_complete(&self, now_ns: u64) -> Result<QueryBinding> {
+        let mut complete = self.clone();
+        complete.operation = QueryOperation::Replace;
+        complete.bind_at(now_ns)
     }
 
     pub fn bind_at(&self, now_ns: u64) -> Result<QueryBinding> {
@@ -303,6 +330,7 @@ impl QuerySql {
 }
 
 struct Binder {
+    relations: Option<BTreeMap<String, Vec<String>>>,
     dependencies: BTreeSet<String>,
     aggregate: bool,
     clocks: usize,
@@ -514,14 +542,18 @@ impl Binder {
             match item {
                 SelectItem::Wildcard(options) => {
                     Self::wildcard(&options)?;
-                    scope.expand(None, &mut projection)?;
+                    scope.expand(None, &mut projection, self.relations.is_some())?;
                 }
                 SelectItem::QualifiedWildcard(
                     SelectItemQualifiedWildcardKind::ObjectName(name),
                     options,
                 ) => {
                     Self::wildcard(&options)?;
-                    scope.expand(Some(&Self::name(&name)?), &mut projection)?;
+                    scope.expand(
+                        Some(&Self::name(&name)?),
+                        &mut projection,
+                        self.relations.is_some(),
+                    )?;
                 }
                 SelectItem::UnnamedExpr(mut expr) => {
                     self.expression(&mut expr, &scope, &[], false, &windows)?;
@@ -582,18 +614,25 @@ impl Binder {
                 let columns = if let Some(columns) = ctes.get(&name) {
                     columns.clone()
                 } else {
-                    let columns = SCHEMAS
-                        .iter()
-                        .find(|schema| {
-                            schema.name == name
-                                && (matches!(schema.readiness, "available" | "conditional")
-                                    || schema.name == "behaviors")
-                        })
-                        .ok_or_else(|| Self::invalid("SQL relation"))?
-                        .columns
-                        .iter()
-                        .map(|field| field.0.to_owned())
-                        .collect();
+                    let columns = if let Some(relations) = &self.relations {
+                        relations
+                            .get(&name)
+                            .cloned()
+                            .ok_or_else(|| Self::invalid("SQL relation"))?
+                    } else {
+                        SCHEMAS
+                            .iter()
+                            .find(|schema| {
+                                schema.name == name
+                                    && (matches!(schema.readiness, "available" | "conditional")
+                                        || schema.name == "behaviors")
+                            })
+                            .ok_or_else(|| Self::invalid("SQL relation"))?
+                            .columns
+                            .iter()
+                            .map(|field| field.0.to_owned())
+                            .collect()
+                    };
                     self.dependencies.insert(name.clone());
                     columns
                 };
@@ -758,17 +797,27 @@ impl Scope {
         }
     }
 
-    fn expand(&self, target: Option<&str>, projection: &mut Vec<SelectItem>) -> Result<()> {
+    fn expand(
+        &self,
+        target: Option<&str>,
+        projection: &mut Vec<SelectItem>,
+        model: bool,
+    ) -> Result<()> {
         let mut found = false;
         for (relation, columns) in &self.0 {
             if target.is_none_or(|name| name == relation) {
                 found = true;
-                projection.extend(columns.iter().map(|column| {
-                    SelectItem::UnnamedExpr(Expr::CompoundIdentifier(vec![
-                        Ident::with_quote('"', relation),
-                        Ident::with_quote('"', column),
-                    ]))
-                }));
+                projection.extend(
+                    columns
+                        .iter()
+                        .filter(|column| !model || column.as_str() != "__row_index")
+                        .map(|column| {
+                            SelectItem::UnnamedExpr(Expr::CompoundIdentifier(vec![
+                                Ident::with_quote('"', relation),
+                                Ident::with_quote('"', column),
+                            ]))
+                        }),
+                );
             }
         }
         if !found {

@@ -107,6 +107,20 @@ impl QueryPlan {
         })
     }
 
+    pub(super) fn model(selection: AnalysisSelectionV1, sql: QuerySql) -> Result<Self> {
+        if !selection.valid() || sql.follow() {
+            return crate::QueryInvalidSnafu {
+                field: "model input scope",
+            }
+            .fail();
+        }
+        Ok(Self {
+            scope: QueryScope::Trusted(Arc::new(selection)),
+            template: QueryTemplate::Client(sql),
+            graph_traversal: None,
+        })
+    }
+
     pub fn client(grant: QueryGrant, sql: QuerySql) -> Result<Self> {
         grant.validate()?;
         if !grant.selection.results.is_empty() {

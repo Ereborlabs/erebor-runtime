@@ -10,6 +10,7 @@ mod error;
 mod evidence;
 mod graph;
 mod notification;
+mod package;
 mod query;
 mod trace;
 mod workload;
@@ -26,12 +27,14 @@ pub use evidence::{
 };
 pub use graph::*;
 pub use notification::*;
+pub use package::*;
 pub use query::{
     Column, GraphAnalysisInputsV1, QueryAuthorization, QueryBinding, QueryCheckpoint, QueryClock,
     QueryColumn, QueryCoverage, QueryCoverageRows, QueryCoverageState, QueryErrorCode, QueryFrame,
     QueryGrant, QueryHealth, QueryLimits, QueryMetadata, QueryOperation, QueryOwner, QueryPayload,
     QueryPlan, QueryResult, QuerySql, QueryStream, QueryTemplate, QueryTerminalReason,
-    SystemQueryClock, QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
+    SqlDatasetOutputV1, SqlModelInputRequestV1, SqlModelInputV1, SqlModelOutputV1, SqlModelV1,
+    SqlReasonV1, SystemQueryClock, QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
 };
 pub use trace::{
     TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,

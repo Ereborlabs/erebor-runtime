@@ -43,7 +43,7 @@ impl Default for AnalysisExtractLimits {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Selection<T> {
     All,
     Exact(Vec<T>),
@@ -77,7 +77,8 @@ impl<T> Selection<T> {
 }
 
 /// Input selection after tenant authorization. An empty exact list selects no events.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnalysisSelectionV1 {
     pub tenant_id: [u8; 16],
     pub sources: Selection<EvidenceIntakeIdentityV1>,

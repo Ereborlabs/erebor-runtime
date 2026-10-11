@@ -34,30 +34,7 @@ impl QueryEvaluation {
         control: &AnalysisReadControl,
         #[cfg(test)] native_failed: Option<&std::sync::atomic::AtomicBool>,
     ) -> Result<EvaluationResult> {
-        let mut config = Config::default()
-            .with("temp_directory", "")
-            .and_then(|config| config.enable_external_access(false))
-            .and_then(|config| config.enable_autoload_extension(false))
-            .and_then(|config| config.threads(1))
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "configure query evaluation",
-            })?;
-        for (name, value) in [
-            ("autoinstall_known_extensions", "false"),
-            ("allow_unsigned_extensions", "false"),
-            ("memory_limit", "64MiB"),
-        ] {
-            config = config
-                .with(name, value)
-                .context(crate::AnalysisDatabaseSnafu {
-                    operation: "bound query evaluation",
-                })?;
-        }
-        let connection = Connection::open_in_memory_with_flags(config).context(
-            crate::AnalysisDatabaseSnafu {
-                operation: "open query evaluation",
-            },
-        )?;
+        let connection = Self::connection()?;
         control.query_run(&connection, || {
             input.register(&connection)?;
             let sql = format!(
@@ -190,6 +167,30 @@ impl QueryEvaluation {
                 .fail();
             }
             Ok(output)
+        })
+    }
+    pub(super) fn connection() -> Result<Connection> {
+        let mut config = Config::default()
+            .with("temp_directory", "")
+            .and_then(|config| config.enable_external_access(false))
+            .and_then(|config| config.enable_autoload_extension(false))
+            .and_then(|config| config.threads(1))
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "configure query evaluation",
+            })?;
+        for (name, value) in [
+            ("autoinstall_known_extensions", "false"),
+            ("allow_unsigned_extensions", "false"),
+            ("memory_limit", "64MiB"),
+        ] {
+            config = config
+                .with(name, value)
+                .context(crate::AnalysisDatabaseSnafu {
+                    operation: "bound query evaluation",
+                })?;
+        }
+        Connection::open_in_memory_with_flags(config).context(crate::AnalysisDatabaseSnafu {
+            operation: "open query evaluation",
         })
     }
 }
