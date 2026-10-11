@@ -159,6 +159,10 @@ source windows, limits, and traversal boundary state. Graph identities retain
 their complete qualified encoding. The SDK requires neither a full
 `GraphSnapshotV1` nor an independent graph identity model. The host selects and
 authorizes these rows through its existing native storage and traversal owners.
+The production `QueryOwner::graph_inputs` API returns these datasets and a held
+input reservation. Keep that returned owner alive during evaluation. This API
+accepts an authorized host selection; it is not a client authorization endpoint.
+The native manifest retains source cursor ranges without inferring UTC time.
 
 ## Execution and host boundaries
 
@@ -174,9 +178,10 @@ invalid, incompatible, unauthorized, incomplete, failed, and limit results.
 An invalid computation returns no fixture report.
 
 `araphor-data` retains identity, sensitivity, authorization, evidence, graph,
-finding, storage, retry, and commit checks. Current HF package descriptors use
-the SDK validator. Reason conversion retains host validation and the declared
-SDK detail schema. Current detector dispatch
-and its fixed reason catalogue remain operational. General installed-package
+finding, storage, retry, and commit checks. Its production discovery and HF
+detector owners call [shared built-in computations](../araphor-analysis-builtins/README.md)
+through the SDK contract. The same computations run in local SDK fixtures.
+Reason conversion retains host validation and the declared SDK detail schema.
+The fixed reason catalogue remains operational. General installed-package
 result mapping must support new namespaced reasons before detector activation.
 No package descriptor grants policy or physical authority.

@@ -16,9 +16,10 @@ The [algorithm and detector extension evaluation](algorithm-and-detection-extens
 compares runtime choices. The approved [7.5 child phases](phase-7-5-graphs-findings-and-notifications/README.md#approved-extension-and-child-phases)
 select one SDK and package contract, default Wasm execution for compiled code,
 existing SQL, native execution, and optional Python. The portable contract and
-Rust author SDK are **Done**. Current-algorithm conversion, package lifecycle,
-and execution adapters are **Not done**. The child results record their
-implementation and qualification.
+Rust author SDK and current-algorithm conversion are **Done**. Read the
+[migration acceptance record](phase-7-5-graphs-findings-and-notifications/phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
+Package lifecycle and installed execution adapters are **Not done**. The child
+results record their implementation and qualification.
 
 ## Intended end state
 

@@ -2,7 +2,9 @@
 
 Track the algorithms that must run through the SDK and package system. This
 inventory supports [7.5](README.md); the linked child phases own implementation.
-Review date: 2026-10-09. Implementation of these migrations and ports: **Not done**.
+Review date: 2026-10-10. Current SDK computation, production adapters, and
+migration verification are **Done**. Upstream ports and installed package
+execution remain **Not done**.
 
 ## Source boundaries
 
@@ -30,8 +32,9 @@ exports, execution constraints, and expected differences:
 - [Security Analytics records](security-contract-inventory.md) cover the complete
   tracked source tree, delegated computations, and all 2,326 rule files.
 
-These records establish interface requirements. They do not prove computation
-parity or installed-package execution. Keep exact source symbols, fields,
+The source audits establish interface requirements. The current Araphor record
+also maps shared computation, host adapters, and migration tests. These records
+do not prove installed-package execution. Keep exact source symbols, fields,
 schemas, state, dependencies, exports, targets, differences, and test results
 with each later port. Check the full source tree and reachable delegated
 operations when the pinned source changes.
@@ -48,16 +51,37 @@ the phase. A scope reduction needs an explicit recorded decision.
 ## Current Araphor algorithms
 
 All rows belong to 7.5.2 for SDK conversion, production adapters, and equivalence
-through trusted Rust calls. That migration is **Not done**. Installed Wasm
-execution and dispatch replacement belong to 7.5.4 and are also **Not done**.
+through trusted Rust calls. Shared code, adapters, and migration verification
+are **Done**. Installed Wasm execution and dispatch replacement belong to 7.5.4
+and remain **Not done**.
 For AR-04, migration means integration with the shared host selector through the
 SDK input contract. Authorization and trusted selection stay in that host owner.
 
+Use the [current implementation map](current-contract-inventory.md#current-implementation-map)
+for the source and test links for each row. AR-01 through AR-03 call
+[`Discovery::evaluate`](../../../../../crates/araphor-analysis-builtins/src/discovery/mod.rs)
+from the [host discovery adapters](../../../../../crates/araphor-data/src/discovery/sdk/mod.rs).
+AR-05 through AR-07 call
+[`Detector::evaluate`](../../../../../crates/araphor-analysis-builtins/src/graph/mod.rs)
+from the [host graph adapter](../../../../../crates/araphor-data/src/graph/derive/adapter/mod.rs).
+AR-04 uses [`DiscoveryOwner::context_input`](../../../../../crates/araphor-data/src/discovery/sdk/context.rs)
+after the existing trusted selector. The host retains complete original records
+and validates references from normalized SDK rows. This conversion adds no
+package authority or external executable loading.
+
+Seven captured baseline tests pass with the expected results from `2e49839a`
+unchanged. They compare 24 outputs across these algorithm families. Production
+replay and the final shared Rust procedure pass on `53f7674`. Read the
+[acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
+Native graph input tests also compute from selected subjects,
+relationships, and version manifests through
+[`QueryOwner::graph_inputs`](../../../../../crates/araphor-data/src/query/analysis.rs).
+
 | ID | Behavior and source | Migration boundary |
 | --- | --- | --- |
-| AR-01 | [DiscoveryOwner::derive_recorded](../../../../../crates/araphor-data/src/discovery/derive.rs): exact atoms, counts, evidence samples, unresolved and excluded records, coverage and lifecycle accounting. | Reuse computation as a package model; keep source and result validation in the host. |
-| AR-02 | [BehaviorSnapshotV1::merge and display_groups](../../../../../crates/araphor-data/src/discovery/derive.rs). | Preserve exact merge behavior, deterministic groups, and input references. |
-| AR-03 | [BehaviorSnapshotV1::compare](../../../../../crates/araphor-data/src/discovery/derive.rs): baseline differences, forbidden groups, outcome and identity changes. | Keep baseline review authority in the host; return typed comparison datasets. |
+| AR-01 | [DiscoveryOwner::derive_recorded](../../../../../crates/araphor-data/src/discovery/sdk/atoms.rs): exact atoms, counts, evidence samples, unresolved and excluded records, coverage and lifecycle accounting. | Reuse computation as a package model; keep source and result validation in the host. |
+| AR-02 | [BehaviorSnapshotV1::merge and display_groups](../../../../../crates/araphor-data/src/discovery/sdk/snapshot.rs). | Preserve exact merge behavior, deterministic groups, and input references. |
+| AR-03 | [BehaviorSnapshotV1::compare](../../../../../crates/araphor-data/src/discovery/sdk/compare.rs): baseline differences, forbidden groups, outcome and identity changes. | Keep baseline review authority in the host; return typed comparison datasets. |
 | AR-04 | [DiscoveryOwner::select_context](../../../../../crates/araphor-data/src/discovery/context.rs): time cutoff, selection order, conflicts, omissions, and missing facts. | Reuse the host selector as the SDK context input. Packages cannot override permissions, trust, or history cutoff. |
 | AR-05 | [HF-PROC-001](../../../../../crates/araphor-data/src/graph/derive.rs): native process/file analysis and context-only classifications. | Preserve qualified effects, relationships, findings, limits, and evidence. |
 | AR-06 | [HF-DW-001](../../../../../crates/araphor-data/src/graph/derive.rs): credential and local-channel joins. | Preserve exact identity requirements, contextual branches, and missing proof. |

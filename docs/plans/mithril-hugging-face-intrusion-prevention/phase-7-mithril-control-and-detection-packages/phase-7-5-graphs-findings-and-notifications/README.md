@@ -39,9 +39,10 @@ Control restarts or a notification sink fails
 
 The user approved the SDK and execution direction for this plan on 2026-10-09.
 Native graph storage, direct large-graph reads, bounded native DuckDB traversal,
-and the portable analysis contract and Rust SDK are **Done**. Child phases
-7.5.3 through 7.5.9 below are **Not done**. The added current-algorithm migration
-in 7.5.2 is **Not done** and must pass before 7.5.3.
+and the portable analysis contract and Rust SDK are **Done**. The current
+algorithm migration in 7.5.2 is also **Done**; read its
+[acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
+Child phases 7.5.3 through 7.5.9 below are **Not done**.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 
@@ -174,8 +175,9 @@ New implementation phases remain **Not done**.
 
 **Done** for the approved plan change on 2026-10-10. The 7.5.2 follow-up now owns
 all seven current algorithm items, production adapters, and equivalence through
-trusted Rust calls. Its completed portable SDK result remains unchanged. The
-extended phase is **Not done**. Phase 7.5.3 requires that follow-up; 7.5.4 owns
+trusted Rust calls. Its completed portable SDK result remains unchanged. At
+that plan-only source, the extended phase was **Not done**. Phase 7.5.3 requires
+that follow-up; 7.5.4 owns
 installed Wasm execution, runtime equivalence, and replacement of built-in
 dispatch. The inventories, verification tables, and qualification plan use the
 same boundaries.
@@ -184,6 +186,16 @@ Checks pass for 11 changed Markdown files, 199 local links and anchors, code
 fences, and exact preservation of all seven moved checklist items. Independent
 review found no scope or status conflict. `git diff --check` passes. This update
 changes plans and supporting records only. No Rust or runtime test ran.
+
+### Current algorithm migration result
+
+**Done** on `53f7674`. Commit `2e49839a` captures the original outputs. Commit
+`2892f27` moves the current computations into the independent SDK computation
+crate and connects production owners. Commit `53f7674` supplies bounded native
+graph inputs. All seven migration items, the three required production cases,
+and the final shared Rust procedure pass. Read the
+[source and verification record](phase-7-5-2-analysis-contract-and-sdk.md#current-algorithm-migration-result).
+Installed package execution and upstream ports remain **Not done**.
 
 ## Entry gate and owners
 
@@ -202,10 +214,11 @@ keep signed provider-neutral authority records in Control. No second service,
 incident graph, source collector, or query database is required.
 
 Status: **Not done** for the complete package scope. Native graph storage,
-traversal, and the portable analysis contract and Rust SDK are **Done**. The
-[SDK result](phase-7-5-2-analysis-contract-and-sdk.md#portable-sdk-result) records
-its source, tests, and limits. The current-algorithm follow-up in 7.5.2, package
-lifecycle, and installed execution remain pending.
+traversal, the portable analysis contract, Rust SDK, and current-algorithm
+conversion are **Done**. The
+[SDK and migration result](phase-7-5-2-analysis-contract-and-sdk.md#result) records
+the source, tests, and limits. Package lifecycle and installed execution remain
+pending.
 The nine review corrections are **Done**. They pass the focused Rust checks,
 final shared Rust procedure, and fresh lightweight and paired physical
 incidents at `6beb143d`. The owned qualification VM is removed.

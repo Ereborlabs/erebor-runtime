@@ -10,17 +10,67 @@ through installed packages.
 ## Source and result
 
 The computation baseline is `1b08236077223bb1e9b32ae36df78778a674c4cf`.
-The audit also checks the current checkout at `9948327a`. Native graph storage
+The source audit also checked `9948327a`. Native graph storage
 and traversal changed after the baseline. The computation entry points below
-retain their owners and meaning. The audit reads each entry point, its helpers,
-its model validation, and its tests. It does not run a package or replace dispatch.
+retain their owners and meaning. That audit read each entry point, its helpers,
+its model validation, and its tests. It did not run a package or replace dispatch.
+The variant table below preserves that baseline audit. The current source map
+in the next section records the SDK conversion.
 
-**Done:** identify the contract requirements and migration boundaries.
-**Not done:** SDK computation conversion, production equivalence, and installed
-package execution. Every row below belongs to the 7.5.2 migration follow-up for
-shared Rust computation. The default Wasm binding follows in 7.5.4 and the
-qualified native binding in 7.5.5.
-The host context selector remains a host operation.
+**Done:** the contract requirements, migration boundaries, shared Rust
+computation, production adapters, and migration verification. The seven captured
+baseline tests pass without changes to their expected results. The final
+production and workspace checks pass on `53f7674`; read the
+[acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
+Installed package execution remains **Not done**.
+The default Wasm binding follows in 7.5.4 and the qualified native binding in
+7.5.5. The host context selector remains a host operation.
+
+## Current implementation map
+
+The [shared computation crate](../../../../../crates/araphor-analysis-builtins/src/lib.rs)
+depends on the portable SDK. It has no dependency on DuckDB, Control, or the
+host store. Production adapters and portable fixtures call the same computation
+functions. The host adapters validate the source types before normalization and
+validate domain results after computation.
+
+| ID | Shared computation | Production adapter | Migration tests |
+|---|---|---|---|
+| AR-01 | [`Discovery::atoms`](../../../../../crates/araphor-analysis-builtins/src/discovery/atoms.rs) and [range accounting](../../../../../crates/araphor-analysis-builtins/src/discovery/ranges.rs). | [`DiscoveryOwner::derive_recorded`](../../../../../crates/araphor-data/src/discovery/sdk/atoms.rs) validates input, builds exact identity references, and reconstructs the recorded result. | [Captured atoms result](../../../../../crates/araphor-data/src/discovery/derive/tests/baseline.rs), [portable derivation](../../../../../crates/araphor-analysis-builtins/src/discovery/tests.rs), and [duplicate context and revision cases](../../../../../crates/araphor-data/src/discovery/sdk/atoms/tests.rs). |
+| AR-02 | [`Discovery::merge`](../../../../../crates/araphor-analysis-builtins/src/discovery/merge.rs), [range merge](../../../../../crates/araphor-analysis-builtins/src/discovery/ranges.rs), and [`Discovery::groups`](../../../../../crates/araphor-analysis-builtins/src/discovery/groups.rs). | [`BehaviorSnapshotV1::merge` and `display_groups`](../../../../../crates/araphor-data/src/discovery/sdk/snapshot.rs) preserve typed key order and retained references. | [Captured merge and groups](../../../../../crates/araphor-data/src/discovery/derive/tests/baseline.rs) and [existing page, lifecycle, and corpus tests](../../../../../crates/araphor-data/src/discovery/derive.rs). |
+| AR-03 | [`Discovery::compare`](../../../../../crates/araphor-analysis-builtins/src/discovery/compare.rs). | [`BehaviorSnapshotV1::compare`](../../../../../crates/araphor-data/src/discovery/sdk/compare.rs) retains baseline validation and maps result references to the original rows. | [Captured comparison](../../../../../crates/araphor-data/src/discovery/derive/tests/baseline.rs) and [reviewed changes and corpus tests](../../../../../crates/araphor-data/src/discovery/derive.rs). |
+| AR-04 | No portable selector. [`DiscoveryOwner::select_context`](../../../../../crates/araphor-data/src/discovery/context.rs) remains the trusted host selector. | [`DiscoveryOwner::context_input`](../../../../../crates/araphor-data/src/discovery/sdk/context.rs) exports the selected packet with exact revision, cutoff window, and omissions. The reverse conversion checks packet metadata. | [Captured context packet](../../../../../crates/araphor-data/src/discovery/context/tests/baseline.rs) and [SDK packet, metadata, and version tests](../../../../../crates/araphor-data/src/discovery/context/tests/sdk.rs). |
+| AR-05 | [`Detector::Process`](../../../../../crates/araphor-analysis-builtins/src/graph/process.rs) computes native joins, process findings, and context classifications. | [Graph adapter](../../../../../crates/araphor-data/src/graph/derive/adapter/mod.rs) supplies qualified observations and facts. [Output assembly](../../../../../crates/araphor-data/src/graph/derive/adapter/output.rs) retains host proof and identities. | [Captured native results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs) and [portable process, context, replay, and reference cases](../../../../../crates/araphor-analysis-builtins/src/graph/tests.rs). |
+| AR-06 | [`Detector::Credentials`](../../../../../crates/araphor-analysis-builtins/src/graph/credential/mod.rs) and [channel and authority joins](../../../../../crates/araphor-analysis-builtins/src/graph/credential/join.rs). | [Credential normalization](../../../../../crates/araphor-data/src/graph/derive/adapter/credential.rs), [authority qualification](../../../../../crates/araphor-data/src/graph/derive/adapter/authority.rs), and shared graph output assembly. | [Captured credential results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs), [portable exact and missing-proof cases](../../../../../crates/araphor-analysis-builtins/src/graph/tests.rs), and the existing credential tests below. |
+| AR-07 | [`Detector::Kubernetes`](../../../../../crates/araphor-analysis-builtins/src/graph/kubernetes.rs) computes the current request-to-admission states. | [Fact normalization](../../../../../crates/araphor-data/src/graph/derive/adapter/facts.rs) and shared graph output assembly. | [Captured Kubernetes results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs), [portable missing-proof case](../../../../../crates/araphor-analysis-builtins/src/graph/tests.rs), and the existing partial-stage test below. |
+
+The discovery exports use [`Discovery::evaluate`](../../../../../crates/araphor-analysis-builtins/src/discovery/mod.rs).
+The graph exports use [`Detector::evaluate`](../../../../../crates/araphor-analysis-builtins/src/graph/mod.rs).
+Both validate the SDK evaluation and complete output. Graph dispatch constructs
+one evaluation and shares it across the three detectors. Historical finding
+reason code conversion remains in the [host contract](../../../../../crates/araphor-data/src/graph/contract.rs).
+The output adapter requires one matching SDK reason per finding candidate and
+the same evidence references in candidate rows and SDK evidence links.
+Its [contract tests](../../../../../crates/araphor-data/src/graph/derive/adapter/tests.rs)
+reject missing or mismatched reasons, evidence differences, and invalid source
+references.
+Graph checkpoint output records the state from a complete bounded replay;
+a prior checkpoint does not replace the retained input needed for that replay.
+
+[`QueryOwner::graph_inputs`](../../../../../crates/araphor-data/src/query/analysis.rs)
+supplies selected native subjects, relationships, and one manifest row per
+authorized graph version. It reuses native traversal and closes the durable
+reader before SDK computation. The [production adapter tests](../../../../../crates/araphor-data/src/query/analysis/tests.rs)
+run a [typed SDK join](../../../../../crates/araphor-data/src/query/analysis/tests/computation.rs)
+and check empty replacements, historical access, scope, sensitivity, limits,
+and cancellation. The caller must keep the returned owner alive while it uses
+the Arrow inputs, including cloned buffers.
+
+The expected results were captured before computation changes in `2e49839a`.
+Seven tests compare 24 recorded outputs for atoms, merge, groups, comparison,
+context, native findings, credential findings, and Kubernetes stages. Their
+pass is evidence for these fixed cases. It does not replace the full existing
+test suite, production replay, or the final workspace gate.
 
 ## Inputs and outputs
 
@@ -28,6 +78,22 @@ Use exact field names and types from the linked source models. Do not copy
 their Rust types into the SDK. A host adapter supplies typed relations or a
 bounded binary field with its owner, type, and encoding in schema metadata.
 The host decodes and validates that field before it accepts a domain result.
+The table below states the information that the complete host and computation
+path must preserve. It does not require a copy of every source field in each
+SDK input. The host retains original records, context, facts, and identities.
+Adapters pass the fields needed by each algorithm, qualified host facts, and
+exact row or identity references. They resolve output references against those
+originals. Discovery also carries exact original record bytes for duplicate
+conflict checks. Graph computation does not copy unused source bodies.
+
+[`Rows`](../../../../../crates/araphor-analysis-builtins/src/rows.rs) encodes each
+normalized row as a bounded Binary value. Schema metadata contains its stable
+type ID, `serde-json-v1` encoding, and generated JSON Schema. Native graph
+inputs instead use typed Arrow columns and bounded encoded owner identities.
+Input revision digests bind the complete host input to each evaluation. Discovery
+snapshots carry exact cursor ranges in coverage rows; they do not contain a
+single UTC source window. Those exports use no SDK window, an evaluation time
+of zero, and coarse Unknown coverage. Exact range states remain in the datasets.
 
 | Dataset | Required information |
 |---|---|
@@ -95,10 +161,10 @@ several exports need the same operation.
 
 Graph test symbols and fixtures are under [graph tests](../../../../../crates/araphor-data/src/graph/tests.rs)
 and [processing tests](../../../../../crates/araphor-data/src/graph/tests/processing.rs).
-The 7.5.2 migration must extend these test mappings and run production owners
-through the shared SDK computation. Phase 7.5.4 must then run those checks
-through the installed production path. The current tests do not prove either
-migration result.
+The implementation map above adds the SDK conversion paths and test mappings.
+The complete migration verification passes. Phase 7.5.4 must then run
+those checks through the installed production path. Direct Rust tests do not
+prove installed execution.
 
 ## Shared operations that remain host-owned
 

@@ -101,21 +101,21 @@ The [source inventory](algorithm-coverage.md#current-araphor-algorithms) and
 [contract records](current-contract-inventory.md) give each source entry point,
 variant, export, and host boundary:
 
-- [ ] `AR-01`: exact behavior-atom derivation, counts, evidence samples, and
+- [x] `AR-01`: exact behavior-atom derivation, counts, evidence samples, and
   unresolved, excluded, coverage, and lifecycle accounting.
-- [ ] `AR-02`: behavior snapshot merge and deterministic display grouping.
-- [ ] `AR-03`: reviewed-baseline comparison for added and removed behavior,
+- [x] `AR-02`: behavior snapshot merge and deterministic display grouping.
+- [x] `AR-03`: reviewed-baseline comparison for added and removed behavior,
   count, outcome and identity changes, new resources, forbidden groups, coverage,
   and lifecycle changes.
-- [ ] `AR-04`: context selection and its cutoff, ordering, conflict, omission,
+- [x] `AR-04`: context selection and its cutoff, ordering, conflict, omission,
   and missing-fact behavior through the SDK input contract. Authorization and
   trusted context selection remain shared host operations.
-- [ ] `AR-05`: `HF-PROC-001` process and file findings, qualified relationships,
+- [x] `AR-05`: `HF-PROC-001` process and file findings, qualified relationships,
   effect interpretation, and contextual outside-authority, in-memory, and
   unobservable-payload classifications.
-- [ ] `AR-06`: `HF-DW-001` credential and local-channel correlation, including
+- [x] `AR-06`: `HF-DW-001` credential and local-channel correlation, including
   contextual-only results and missing-proof outcomes.
-- [ ] `AR-07`: the implemented `HF-XNODE-001` request, audit, object, scheduling,
+- [x] `AR-07`: the implemented `HF-XNODE-001` request, audit, object, scheduling,
   and remote-admission state handling. Preserve its unqualified cross-node
   causality result; migration adds no new physical proof.
 
@@ -175,10 +175,11 @@ work. Do not add a temporary plugin runtime to complete this migration.
 
 ## Result
 
-**Not done** for the extended phase. All seven algorithm migration items and
-their production adapters and equivalence checks remain to be implemented.
-The portable SDK result below remains **Done**. Its earlier checks do not prove
-the added migration scope or satisfy the entry gate for 7.5.3.
+**Done** for the complete phase. All seven current algorithm items use shared
+SDK computation or the shared host context selector through production adapters.
+The captured results, production qualification, and final shared Rust procedure
+pass. The earlier portable SDK result remains **Done**. Read the
+[migration result](#current-algorithm-migration-result) for source and proof.
 
 ### Portable SDK result
 
@@ -221,9 +222,10 @@ The standalone `files.count` example returns count `3`. Read
 DuckDB, or host store. Selected graph relation fixtures retain full identities,
 all selected versions, empty replacements, and traversal boundary state.
 
-Installation, production graph-to-SDK adapters, executable target bindings,
-and current algorithm migration remain **Not done**. Native/Wasm declaration
-syntax does not qualify execution, isolation, or ABI behavior. Upstream ports,
+At that source, installation, production graph-to-SDK adapters, executable
+target bindings, and current algorithm migration remained **Not done**.
+Native/Wasm declaration syntax does not qualify execution, isolation, or ABI
+behavior. Upstream ports,
 physical incident prevention, and performance are not qualified here.
 
 ### Review corrections
@@ -271,6 +273,126 @@ explicit panics with propagated errors and an execution flag. The four-thread
 deadline failure remains recorded above. This serial pass does not qualify
 parallel timing or performance. All review corrections are **Done** within the
 portable contract and authoring scope.
+
+### Current algorithm migration result
+
+**Done** for AR-01 through AR-07, production adapters, and equivalence through
+trusted Rust calls. The final shared Rust procedure and all three required
+production qualification cases pass on `53f7674`.
+
+Baseline commit: `2e49839a` captures the original results before computation
+changes. Seven Rust tests compare 24 outputs. The expected JSON files remain
+unchanged. Computation commit: `2892f27`. Native graph adapter commit: `53f7674`.
+
+The new `araphor-analysis-builtins` crate contains the shared discovery and HF
+computations. It depends on the portable SDK and has no Control, DuckDB, or host
+store dependency. Production owners call this code through validated SDK
+evaluations. Portable fixtures call the same code. The replaced host computation
+is removed. Host owners retain authorization, proof, identity construction,
+domain result validation, graph assembly, atomic commits, and notifications.
+
+| Item | Shared computation and production owner | Captured and semantic checks |
+| --- | --- | --- |
+| AR-01 | `discovery/atoms.rs` and `discovery/ranges.rs` in the shared crate. `DiscoveryOwner::derive_recorded` in `araphor-data/src/discovery/sdk/atoms.rs` supplies normalized rows and reconstructs the recorded result. | `discovery_atoms_baseline` checks the original and missing-context results. Existing replay, conflicting-input, distinct-key, missing-generation, disposition, lifecycle, and corpus tests remain in `discovery/derive.rs`. Portable `sdk_derivation_fixture`, `sdk_conflicting_record`, and `sdk_bounded_derivation` test the same computation. Host `duplicate_context_projection` and `discovery_exact_revision` check repeated records and content-bound revisions. |
+| AR-02 | Shared `discovery/merge.rs`, `ranges.rs`, and `groups.rs`. `BehaviorSnapshotV1::merge` and `display_groups` in `discovery/sdk/snapshot.rs` retain domain ordering and exact references. | `discovery_merge_baseline` checks the merged snapshot and groups. `discovery_derivation_page_merge`, `discovery_derivation_lifecycle_schema`, and `discovery_derivation_corpus_parity` check page boundaries, lifecycle state, and corpus results. |
+| AR-03 | Shared `discovery/compare.rs`. `BehaviorSnapshotV1::compare` in `discovery/sdk/compare.rs` retains reviewed-baseline validation and reconstructs comparison rows. | `discovery_compare_baseline` checks count, outcome, and identity changes. `discovery_comparison_reviewed_changes` and corpus parity check additions, removals, resources, forbidden groups, coverage, and lifecycle changes. |
+| AR-04 | `DiscoveryOwner::select_context` remains the trusted host selector in `discovery/context.rs`. `context_input` in `discovery/sdk/context.rs` supplies its selected packet through the SDK input contract. | `discovery_context_baseline` checks initial, later, conflicting, missing, and denied context. Existing context tests cover cutoff, order, history, sensitivity, omissions, and quotas. `context_sdk_packet`, `context_sdk_metadata`, and `context_sdk_version` check conversion and reject inconsistent metadata or an unsupported selector version. The existing roundtrip calls the supported API through `mithril-e2e/src/discovery/roundtrip/context.rs`. |
+| AR-05 | Shared `graph/process.rs`. `GraphAndFindingOwner::derive` in `araphor-data/src/graph/derive.rs` calls the SDK export. `graph/derive/adapter` supplies qualified input and assembles checked domain output. | `graph_native_baseline` checks protected, gapped, and missing-lifetime results. Existing `control_graph_denial_and_missing_lifetime`, `control_graph_accepted_physical_results_keep_stage_semantics`, and `control_graph_native_parent_is_exact_and_local` retain the host semantics. Portable `process_replay_checkpoint`, `process_context_classifications`, and `fact_reference_is_exact` check shared computation, state, and references. |
+| AR-06 | Shared `graph/credential/mod.rs` and `graph/credential/join.rs`. Host `graph/derive/adapter/credential.rs` and `authority.rs` normalize retained source and qualified authority facts. | `graph_credential_baseline` checks direct, contextual, and missing-proof results. Existing read/channel/provider, same-operation contradiction, credential conflict, mmap, shared-principal, and window-boundary tests retain the identity and physical-stage distinctions. Portable `credential_exact_and_missing` checks the shared computation. |
+| AR-07 | Shared `graph/kubernetes.rs`. Host `graph/derive/adapter/facts.rs` supplies qualified stage facts; the shared graph output adapter reconstructs results. | `graph_kubernetes_baseline` checks six request-to-admission stages. `control_graph_kubernetes_preserves_partial_stages` and portable `kubernetes_retains_missing_proof` retain incomplete stages and unqualified cross-node causality. |
+
+Full source links and the variant inventory are in
+[the current implementation map](current-contract-inventory.md#current-implementation-map).
+The seven baseline tests are in `discovery/derive/tests/baseline.rs`,
+`discovery/context/tests/baseline.rs`, and `graph/tests/baseline.rs` under
+`araphor-data/src`. Portable tests are in the shared crate's
+`discovery/tests.rs` and `graph/tests.rs`.
+
+The graph output adapter requires one matching formal SDK reason per finding,
+equal typed details, and equal evidence references. Its tests
+`candidate_reason_matches_contract`, `candidate_requires_host_validation`,
+`candidate_reason_is_exact`, and `candidate_evidence_is_exact` reject invalid
+output before the owner accepts a result. Existing graph tests retain byte-identical replay,
+late input, expiry, restart, failed commit, recovery, and checkpoint behavior.
+
+`QueryOwner::graph_inputs` in `araphor-data/src/query/analysis.rs` supplies native
+subjects, relationships, and one manifest row per selected graph version. It
+uses the existing native traversal and whole-version checks. It retains empty
+replacement versions, exact result identities, sensitivity, cancellation, scan
+bounds, and the traversal receipt. Durable readers close before computation.
+The returned owner holds the reservation while consumers use its Arrow buffers.
+The five `graph_sdk_*` tests in `query/analysis/tests.rs` run the typed join in
+`query/analysis/tests/computation.rs`. They check computation results, historical
+access, empty replacements, authorization scope, sensitivity, bounds, and
+cancellation. The SQL display limit does not truncate these inputs.
+
+The context roundtrip calls `context_input` with its retained qualified record
+and binding. It checks exact selected identities, method, cutoff, the SDK row,
+and missing source-health evidence. A cutoff before receipt removes the record,
+records its omission, changes the exact revision, and reports missing qualified
+subject evidence. This is a supported host API integration; no existing live
+context-selector caller was replaced.
+
+### Migration verification
+
+The focused checks below pass. The final shared Rust procedure covers all Rust
+source, tests, and Cargo changes in `53f7674`.
+
+| Check | Result and evidence |
+| --- | --- |
+| Discovery host regressions | **Done:** 42 passed, zero failed or ignored. Includes the four discovery/context baseline tests and the new context, duplicate, and revision tests. Log: `/tmp/araphor-sdk-migration-discovery.log`. |
+| Graph host regressions | **Done:** 44 passed, zero failed or ignored. Includes the three graph baseline tests, recovery, replay, and native traversal regressions. Log: `/tmp/araphor-sdk-migration-graph.log`. This filter does not include `graph::derive::adapter::tests`. |
+| Portable computations and output adapter tests | **Done:** 12 portable tests pass in `/tmp/araphor-builtins-final.log`; four output adapter tests pass in `/tmp/araphor-sdk-output-final.log`. |
+| Native graph SDK inputs and SQL regressions | **Done:** 141 query tests pass, including all five `graph_sdk_*` tests. Log: `/tmp/araphor-sdk-migration-query.log`. |
+| `context-roundtrip` | **Done:** `PASS`, lightweight qualification. Artifact: `/tmp/araphor-sdk-migration-context-final/result.json`. |
+| `profile-restart` | **Done:** `PASS`, lightweight qualification. Artifact: `/tmp/araphor-sdk-migration-profile/result.json`. |
+| `graph-notification` | **Done:** `PASS`, lightweight qualification. Artifact: `/tmp/araphor-sdk-migration-notification-final/result.json`. Canonical replay and transaction failure checks pass; cross-node causality remains unqualified. |
+| Final shared Rust procedure | **Done:** formatting, workspace check, strict Clippy, and the complete workspace test command return zero on `53f7674`. Command: `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`. Log: `/tmp/araphor-sdk-migration-rust-ci.log`. |
+
+Qualified platform: Linux x86_64, Rust `1.97.1`. Final suite counts: shared
+computation 12 passed; SDK 33 passed; Araphor Data 415 passed and three ignored;
+Control 182 passed and one ignored; Mithril E2E 171 passed and 526 ignored; Node
+282 passed and one ignored. There are no failed tests. Ignored tests supply no
+qualification. Serial tests do not qualify parallel timing or performance.
+The complete log SHA-256 is
+`c975f1ec1cf29ec6b978a6346bf28fc5e414affefdc6922038fa690e6aaa172a`.
+
+The three production cases use the executable built from `53f7674`:
+
+```sh
+cargo run -p mithril-e2e --bin mithril_discovery_test -- --case profile-restart --output-directory /tmp/araphor-sdk-migration-profile
+target/debug/mithril_discovery_test --case context-roundtrip --output-directory /tmp/araphor-sdk-migration-context-final
+target/debug/mithril_discovery_test --case graph-notification --output-directory /tmp/araphor-sdk-migration-notification-final
+```
+
+Result artifact SHA-256 values, in that order:
+
+```text
+de1610ad088e675e76d77fc2a23fd66f117b3f0bca3daeb55fbd1c53fc3a599d
+2bce4ec8831d151a9f4bd2caa3cec501e771292b1224ee7db6adda5880aba0e9
+81c920c590f8bb48a87e7166418c3f5b81d1374203e0489b4574a9eb05c9c983
+```
+
+The first workspace test build stopped with `No space left on device` after
+formatting, workspace check, and strict Clippy passed. Its log is
+`/tmp/araphor-sdk-migration-rust-ci-space.log`. The concurrent
+`graph-notification` case stopped at the filesystem reserve check; its log is
+`/tmp/araphor-sdk-migration-notification.log`. Old generated build artifacts
+were removed. Both checks were restarted on the same source. No source, deadline,
+or assertion changed for the retry.
+
+These checks qualify trusted native computation and its host integration.
+Installation, installed dispatch, Wasm execution, the external native runtime,
+isolation, upstream algorithm ports, new physical incident prevention, and
+performance remain outside this result. Existing cross-node causality remains
+unqualified. The migration grants no response authority.
+
+Discovery inputs retain exact cursor ranges in coverage rows. They can contain
+several streams and have no single UTC source window. Their SDK window is absent,
+evaluation time is zero, and aggregate coverage is Unknown. The computations use
+the detailed coverage rows. The context packet separately retains its exact UTC
+window and cutoff. Invocation revisions bind complete original inputs through
+streamed hashing.
 
 ## End scope and example
 
