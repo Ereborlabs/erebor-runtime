@@ -463,6 +463,7 @@ impl AnalysisStore {
 
     fn validate_bundle(manifest: &AnalysisBackupManifestV1, root: &Path) -> Result<()> {
         if (manifest.schema_version != super::GRAPH_LEGACY_VERSION
+            && manifest.schema_version != super::GRAPH_NOTICE_LEGACY_VERSION
             && manifest.schema_version != ANALYSIS_SCHEMA_VERSION as u32)
             || Uuid::parse_str(&manifest.store_uuid).is_err()
             || manifest.database_bytes == 0

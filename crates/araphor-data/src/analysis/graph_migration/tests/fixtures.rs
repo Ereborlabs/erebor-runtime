@@ -1,6 +1,27 @@
 use super::*;
 
 impl AnalysisStore {
+    pub(super) fn legacy_notice_fixture(&self) -> Result<()> {
+        let mut writer = self.writer()?;
+        let transaction = writer
+            .get_mut()?
+            .transaction()
+            .context(AnalysisDatabaseSnafu {
+                operation: "begin legacy notice fixture",
+            })?;
+        transaction.execute_batch(
+            "UPDATE analysis_results AS result SET facts_revision = (
+                SELECT COALESCE(MAX(reference.commit_revision), 0) FROM context_refs AS reference
+                WHERE reference.ref_id = result.result_id AND reference.tenant_id = result.tenant_id)
+            WHERE processor_id = 'graph-findings' AND stream_key IS NOT NULL;
+            UPDATE store_meta SET schema_version = 19;",
+        ).context(AnalysisDatabaseSnafu { operation: "set legacy notice metadata" })?;
+        Self::validate_state(&transaction, &self.root)?;
+        transaction.commit().context(AnalysisDatabaseSnafu {
+            operation: "commit legacy notice fixture",
+        })
+    }
+
     pub(super) fn legacy_graph_fixture(&self) -> Result<()> {
         let mut writer = self.writer()?;
         let transaction = writer

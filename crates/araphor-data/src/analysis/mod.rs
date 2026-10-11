@@ -74,8 +74,9 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
-const ANALYSIS_SCHEMA_VERSION: i64 = 19;
+const ANALYSIS_SCHEMA_VERSION: i64 = 20;
 const GRAPH_LEGACY_VERSION: u32 = 17;
+const GRAPH_NOTICE_LEGACY_VERSION: u32 = 19;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -289,6 +290,8 @@ impl AnalysisStore {
         if let Some(meta) = &prior {
             if meta.schema_version == GRAPH_LEGACY_VERSION {
                 Self::migrate_graphs(&mut writer, &root, storage)?;
+            } else if meta.schema_version == GRAPH_NOTICE_LEGACY_VERSION {
+                Self::migrate_graph_notices(&mut writer, &root)?;
             } else if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
                 return AnalysisStateSnafu {
                     path,
@@ -1125,9 +1128,10 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in
-            (0..=ANALYSIS_SCHEMA_VERSION + 1).filter(|version| *version != ANALYSIS_SCHEMA_VERSION)
-        {
+        for version in (0..=ANALYSIS_SCHEMA_VERSION + 1).filter(|version| {
+            *version != ANALYSIS_SCHEMA_VERSION
+                && *version != i64::from(GRAPH_NOTICE_LEGACY_VERSION)
+        }) {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {

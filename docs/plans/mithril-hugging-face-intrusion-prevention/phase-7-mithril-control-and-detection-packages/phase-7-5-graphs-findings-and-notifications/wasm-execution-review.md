@@ -339,6 +339,37 @@ The graph commit retains and validates its exact package provenance sidecar.
 The visible input manifest excludes only this sidecar key. The sidecar remains
 in the atomic context references and artifact collection inputs.
 
+[GraphAndFindingOwner::commit_window](../../../../../crates/araphor-data/src/graph/window.rs)
+checks retained-input expiry before it reuses a completed graph check.
+The provider notice and coverage revision must match the saved per-result
+metadata. [installed_current](../../../../../crates/araphor-data/src/graph/installed.rs)
+then compares all compatible installed references and checks current permission.
+Update, removal, a new compatible export, or revocation cannot use this shortcut.
+
+When a changed notice produces the same graph,
+[commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)
+checks current commit authority and saves the captured notice through
+[mark_graph_notice](../../../../../crates/araphor-data/src/analysis/progress/notices.rs).
+The guarded update applies only to the same retained window head and immutable
+commit revision. It changes no result body, receipt, quota, progress, or deadline.
+A provider change during the check remains pending for the next pass.
+Discovery uses the same metadata update owner and keeps its monotone notice rule.
+The [notice tests](../../../../../crates/araphor-data/src/graph/tests/notices.rs)
+use the production graph owner and installed components.
+The [authority tests](../../../../../crates/araphor-data/src/graph/tests/installed/current/authority.rs)
+check both an unchanged notice and a changed notice without changed facts.
+
+[Graph notice migration](../../../../../crates/araphor-data/src/analysis/graph_migration/notices.rs)
+converts schema 19 to schema 20 in one transaction. It initializes each retained
+graph notice from its checked native header. The schema 17 conversion uses the
+same header field. Both paths retain immutable records and validate stored state.
+The [migration tests](../../../../../crates/araphor-data/src/analysis/graph_migration/tests/notices.rs)
+check retained versions, package references, reopen, restore, quota, retry, and
+unchanged originals after rejection. The focused notice checks and the exact
+installed lifecycle check pass. The full current group and final shared Rust
+procedure remain required. See the [correction record](phase-7-5-4-wasm-execution.md#completed-graph-check-reuse)
+for source hashes and failed attempts.
+
 The generic package commit retains result, checkpoint, input references,
 progress, and quota together. Domain adapters use their existing graph or
 discovery commit. Identical retries return the original receipt.

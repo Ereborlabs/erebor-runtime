@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use snafu::ResultExt as _;
 
 use super::*;
@@ -26,23 +28,59 @@ impl GraphAndFindingOwner {
         execution: &InstalledAnalysis,
         snapshot: &GraphSnapshotV1,
     ) -> Result<Vec<InstalledRefV1>> {
-        let descriptors = execution.descriptors(snapshot.scope.identity.tenant_id)?;
+        Ok(
+            Self::compatible_refs(execution, snapshot.scope.identity.tenant_id)?
+                .into_iter()
+                .filter(|reference| {
+                    snapshot
+                        .packages
+                        .iter()
+                        .any(|package| package.package_id == reference.package_id)
+                })
+                .collect(),
+        )
+    }
+
+    fn compatible_refs(
+        execution: &InstalledAnalysis,
+        tenant: [u8; 16],
+    ) -> Result<Vec<InstalledRefV1>> {
+        let descriptors = execution.descriptors(tenant)?;
         Ok(execution
             .refs()?
             .into_iter()
             .filter(|reference| {
-                snapshot
-                    .packages
-                    .iter()
-                    .any(|package| package.package_id == reference.package_id)
-                    && descriptors.iter().any(|package| {
-                        package.id == reference.package_id
-                            && package.exports.iter().any(|model| {
-                                model.name == reference.export && Self::supports_analysis(model)
-                            })
-                    })
+                descriptors.iter().any(|package| {
+                    package.id == reference.package_id
+                        && package.exports.iter().any(|model| {
+                            model.name == reference.export && Self::supports_analysis(model)
+                        })
+                })
             })
             .collect())
+    }
+
+    pub(super) fn installed_current(
+        &self,
+        result_id: &str,
+        snapshot: &GraphSnapshotV1,
+    ) -> Result<bool> {
+        let tenant = snapshot.scope.identity.tenant_id;
+        let execution = self.execution.snapshot(tenant)?;
+        let references = Self::compatible_refs(&execution, tenant)?;
+        if self.installed_refs(tenant, result_id)?.as_ref() != Some(&references) {
+            return Ok(false);
+        }
+        execution.authorize(tenant, &Self::package_revisions(&references), || Ok(true))
+    }
+
+    pub(super) fn package_revisions(references: &[InstalledRefV1]) -> Vec<(String, String)> {
+        references
+            .iter()
+            .map(|reference| (reference.package_id.clone(), reference.revision.clone()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub(super) fn package_context(

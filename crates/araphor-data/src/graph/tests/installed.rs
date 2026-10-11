@@ -1,5 +1,7 @@
 use super::*;
 
+mod current;
+
 fn grant() -> PackageGrantV1 {
     PackageGrantV1 {
         principal: "fixture".into(),

@@ -26,6 +26,7 @@ mod bounded;
 mod evidence_recovery;
 mod installed;
 pub(crate) mod native_storage;
+mod notices;
 mod paging;
 mod processing;
 mod source_recovery;

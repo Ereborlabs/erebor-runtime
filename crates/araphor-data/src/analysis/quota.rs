@@ -328,7 +328,7 @@ impl AnalysisStore {
 
     pub(super) fn validate_usage(writer: &Connection, root: &std::path::Path) -> Result<()> {
         let native = Self::read_meta_from(writer, &root.join("analysis.duckdb"))?.schema_version
-            == super::ANALYSIS_SCHEMA_VERSION as u32;
+            >= super::GRAPH_NOTICE_LEGACY_VERSION;
         let invalid: bool = writer
             .query_row(
                 &format!(

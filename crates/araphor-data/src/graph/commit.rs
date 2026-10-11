@@ -52,7 +52,17 @@ impl GraphAndFindingOwner {
             }
             _ => false,
         };
-        if unchanged {
+        let revisions = Self::package_revisions(&installed);
+        if let Some((id, previous, revision)) = previous.filter(|_| unchanged) {
+            execution.authorize(input.source.tenant_id, &revisions, || {
+                self.store.mark_graph_notice(
+                    &previous.scope,
+                    id,
+                    *revision,
+                    notice,
+                    status.receipt.coverage_revision,
+                )
+            })?;
             return Ok(Some(false));
         }
         snapshot.previous_result_id = previous.as_ref().map(|row| row.0.clone());
@@ -61,12 +71,6 @@ impl GraphAndFindingOwner {
         if body.len() > GRAPH_WINDOW_BYTES.min(crate::analysis::MAX_RESULT_BYTES) {
             return Ok(None);
         }
-        let revisions = installed
-            .iter()
-            .map(|reference| (reference.package_id.clone(), reference.revision.clone()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
         execution.authorize(input.source.tenant_id, &revisions, || {
             self.commit_snapshot(
                 snapshot,

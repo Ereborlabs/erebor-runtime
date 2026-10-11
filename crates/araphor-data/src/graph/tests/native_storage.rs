@@ -9,6 +9,36 @@ pub(crate) struct CommitFixture {
 }
 
 impl CommitFixture {
+    pub(crate) fn next_window(&self) -> TestResult<(GraphSnapshotV1, AnalysisResultCommitV1)> {
+        let observation = record(2, &wire(2, DeniedBeforeEffect, 2, 2, [21; 16]))?;
+        accept(&self.store, std::slice::from_ref(&observation))?;
+        coverage(&self.store, 2, 2, "HEALTHY")?;
+        let mut input = input(vec![observation]);
+        input.coverage[0].coverage_revision = 2;
+        input.coverage_keys[0].report_revision = 2;
+        input.coverage_keys[0].interval_revision = 2;
+        let execution = execution()?;
+        let mut snapshot = GraphAndFindingOwner::derive(&input, &execution)?;
+        snapshot.witness_deadline_utc_ns = self.snapshot.witness_deadline_utc_ns;
+        let request = AnalysisResultCommitV1 {
+            scope: snapshot.scope.clone(),
+            expected_cursor: 1,
+            consumed_cursor: 2,
+            coverage_revision: 2,
+            context_revision: 0,
+            result_id: "graph:notice-second-window".into(),
+            body: serde_json::to_vec(&snapshot)?,
+            created_utc_ns: 11,
+            witnesses: vec![AnalysisWitnessV1 {
+                identity: source().into(),
+                cursor: 2,
+                expires_utc_ns: snapshot.witness_deadline_utc_ns,
+            }],
+            context_refs: vec![],
+        };
+        Ok((snapshot, request))
+    }
+
     pub(crate) fn add_packages(&mut self) -> TestResult<Vec<InstalledRefV1>> {
         self.owner.execution =
             InstalledAnalysis::testing(Some(self.store.clone()), source().tenant_id)?;

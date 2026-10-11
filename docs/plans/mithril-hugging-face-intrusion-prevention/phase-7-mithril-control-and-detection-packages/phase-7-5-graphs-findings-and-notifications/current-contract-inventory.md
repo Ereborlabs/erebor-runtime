@@ -87,8 +87,10 @@ path must preserve. It does not require a copy of every source field in each
 SDK input. The host retains original records, context, facts, and identities.
 Adapters pass the fields needed by each algorithm, qualified host facts, and
 exact row or identity references. They resolve output references against those
-originals. Discovery also carries exact original record bytes for duplicate
-conflict checks. Graph computation does not copy unused source bodies.
+originals. The [discovery adapter](../../../../../crates/araphor-data/src/discovery/sdk/atoms.rs)
+passes a digest of each complete original record for duplicate conflict checks.
+The host validates the result against the original records. Graph computation
+does not copy unused source bodies.
 
 [`Rows`](../../../../../crates/araphor-analysis-builtins/src/rows.rs) encodes each
 normalized row as a bounded Binary value. Schema metadata contains its stable

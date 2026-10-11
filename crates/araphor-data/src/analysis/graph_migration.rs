@@ -16,6 +16,7 @@ const STAGED_LIMIT: usize =
     4 * (GraphHeader::MAX_BYTES + GraphRows::MAX_ENCODING + GraphRows::MAX_CANONICAL_BYTES) + 4096;
 const SPILL_RESERVE: u64 = 128 * 1024 * 1024;
 
+mod notices;
 mod staging;
 
 type LegacyGraph = (String, Vec<u8>, Vec<u8>);
@@ -68,10 +69,12 @@ impl<'a> GraphMigration<'a> {
         }
         transaction
             .execute(
-                "UPDATE analysis_results SET body = ?, graph_encoding = ? WHERE result_id = ?",
+                "UPDATE analysis_results SET body = ?, graph_encoding = ?, facts_revision = ?
+                    WHERE result_id = ?",
                 params![
                     staged.rows.header(),
                     staged.rows.encoding(),
+                    header.snapshot.context_notice_revision,
                     staged.result_id
                 ],
             )

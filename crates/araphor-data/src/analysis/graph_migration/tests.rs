@@ -10,6 +10,7 @@ use crate::{
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+mod notices;
 mod recovery;
 
 mod fixtures;

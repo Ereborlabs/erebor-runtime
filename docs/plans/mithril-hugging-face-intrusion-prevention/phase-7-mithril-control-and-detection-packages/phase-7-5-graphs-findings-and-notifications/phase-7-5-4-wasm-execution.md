@@ -428,6 +428,49 @@ package case. The proof records both profile artifact hashes in
 `/tmp/araphor-wasm-production-bounds-proof-v27.json`.
 Graph notification and the final Rust procedure remain required.
 
+### Completed graph check reuse
+
+**Done for the production correction.** An unchanged graph check saves the
+captured provider notice in existing per-result metadata. A repeated notice
+does not execute the algorithms again. Current package references, activation,
+permission, and trust are checked before reuse. Expiry and forced refresh keep
+their existing paths. Update, a new compatible export, removal, and revocation
+are observed without a provider notice change.
+
+Schema 20 initializes new graph notices from the captured provider token.
+The checked schema 19 migration converts all retained native graph headers in
+one transaction. Schema 17 conversion initializes the same field. Result
+bodies, rows, request metadata, evidence, receipts, quota, progress, history,
+and notification deadlines stay unchanged. Discovery keeps its existing
+monotone notice rule through the shared metadata update owner.
+
+The v30 serial group has 13 passes and one failed new health expectation in
+423.06 seconds. Its log is `/tmp/araphor-wasm-graph-notice-focused-v30.log`,
+with SHA256 `f24808fb2f4b51c10f6790c63cc6f196afa043890eb55393a0376421f4999ae7`.
+The corrected lifecycle test passes alone in 130.16 seconds on v31. Its log is
+`/tmp/araphor-wasm-graph-notice-installed-v31.log`, with SHA256
+`f05fdd67d33fc3c4842fd5833816575eb896010c7513a27671afef48e01872bf`.
+The checks cover unchanged and later notices, relevant facts, expiry, separate
+windows, commit denial, retry, reopen, migration, restore, and corrupt-header
+rejection. The full current group has not been run. Final CI remains required.
+
+Earlier attempts remain recorded. The v28 build fails on a missing test import.
+Its retry builds successfully. The v29 group has 11 passes and three failed new
+expectations. Restore must increment the recovery epoch. A non-advancing graph
+refresh retains the progress result pointer. The v30 health expectation must
+use the current read revision. The corrected tests compare every metadata and
+health field exactly. They retain every existing workload and assertion.
+Five test names are shortened with byte-identical bodies.
+
+The final source manifest is
+`/tmp/araphor-wasm-source-manifest-production-v31.json`, with SHA256
+`12f6f8e821a5fe2aeb18fe727b3f6d9a65202492a75d7f9bb4a79237841823e7`.
+The proof is `/tmp/araphor-wasm-graph-notice-qualification-proof-v31.json`.
+The test-only change proof is `/tmp/araphor-wasm-graph-notice-name-proof-v31.json`.
+Production source is byte-identical to v30. A normal build on v31 returns the
+same executable bytes as the saved v30 execution copy. All four production
+cases use that copy. Their proof is `/tmp/araphor-wasm-production-proof-v30.json`.
+
 ### Installed detector and package lifecycle qualification
 
 The fresh v30 `analysis-packages` case exits zero and records `PASS`.
@@ -525,7 +568,7 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
-- [ ] Check installed package references and current authority before an
+- [x] Check installed package references and current authority before an
   unchanged graph notice returns a cache hit. A normal `process()` call must
   observe updates, removal, and revocation without a source revision change.
   Use the existing package lifecycle and graph health owners. Preserve
@@ -536,7 +579,7 @@ authorization owner, notification path, or algorithm implementation.
   server shutdown on failure and retain the original error. Return command
   failures through the synchronous entry point so Tokio can close. Keep every
   qualification assertion and the filesystem reserve check unchanged.
-- [ ] Save a successful unchanged graph check in existing per-result notice
+- [x] Save a successful unchanged graph check in existing per-result notice
   metadata. Use `facts_revision` for the provider notice, as Discovery does.
   Initialize new graph metadata from the captured provider notice. Convert
   every retained graph version through a checked schema migration. Validate

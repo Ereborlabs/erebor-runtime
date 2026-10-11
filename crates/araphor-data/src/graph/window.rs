@@ -31,21 +31,15 @@ impl GraphAndFindingOwner {
         )? {
             return Ok(changed);
         }
-        if !advance
-            && !force
-            && heads.get(&first).is_some_and(|(_, snapshot, _)| {
-                snapshot.context_notice_revision == notice
-                    && snapshot
-                        .input_manifest
-                        .coverage
-                        .iter()
-                        .map(|key| key.report_revision)
-                        .max()
-                        .unwrap_or(0)
-                        == status.receipt.coverage_revision
-            })
-        {
-            return Ok(false);
+        if !advance && !force {
+            if let Some((id, snapshot, revision)) = heads.get(&first) {
+                if self.store.graph_notice(&snapshot.scope, id, *revision)?
+                    == Some((notice, status.receipt.coverage_revision))
+                    && self.installed_current(id, snapshot)?
+                {
+                    return Ok(false);
+                }
+            }
         }
         self.commit_retained_window(&status, &heads, first, last, consumed, advance, now, notice)
     }

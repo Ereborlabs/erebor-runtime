@@ -8,6 +8,8 @@ use crate::{
     EvidenceIntakeIdentityV1, JsonSnafu, Result,
 };
 
+mod notices;
+
 pub(crate) const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESULT_META_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_RESULT_REFS: usize = 8_192;
@@ -599,45 +601,6 @@ impl AnalysisStore {
         self.commit_progress(input, None, false, Some(&profile), None)
     }
 
-    pub(crate) fn mark_notice(
-        &self,
-        profile: &crate::DiscoveryProfileV1,
-        revision: u64,
-        facts: u64,
-        coverage: u64,
-    ) -> Result<()> {
-        profile.validate()?;
-        let mut writer_guard = self.writer()?;
-        let writer = writer_guard.get_mut()?;
-        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin discovery notice",
-        })?;
-        let changed = transaction
-            .execute(
-                "UPDATE analysis_results SET facts_revision = GREATEST(facts_revision, ?),
-                coverage_revision = GREATEST(coverage_revision, ?)
-             WHERE result_id = ? AND tenant_id = ? AND processor_id = ?
-                AND stream_key = ? AND method_version = ? AND commit_revision = ?",
-                params![
-                    facts,
-                    coverage,
-                    profile.profile_id,
-                    profile.scope.identity.tenant_id.as_slice(),
-                    profile.scope.processor_id,
-                    profile.scope.identity.key().as_slice(),
-                    profile.scope.method_version,
-                    revision
-                ],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "acknowledge unavailable profile input",
-            })?;
-        if changed != 1 {
-            return AnalysisConflictSnafu.fail();
-        }
-        self.commit_metadata(transaction, "commit discovery notice")
-    }
-
     fn commit_progress(
         &self,
         input: &AnalysisResultCommitV1,
@@ -673,7 +636,7 @@ impl AnalysisStore {
                 method_version: Some(input.scope.method_version),
                 interval_id: Some(graph.first_cursor.to_string()),
                 profile_revision: None,
-                facts_revision: Some(input.context_revision),
+                facts_revision: Some(graph.context_notice_revision),
                 coverage_revision: Some(input.coverage_revision),
                 first_cursor: Some(graph.first_cursor),
             }
