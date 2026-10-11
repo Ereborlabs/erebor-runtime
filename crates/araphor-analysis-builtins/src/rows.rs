@@ -134,6 +134,7 @@ struct RowBuffer<'a> {
 }
 
 impl Write for RowBuffer<'_> {
+    #[inline]
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let Some(remaining) = self.remaining.checked_sub(bytes.len()) else {
             self.limited = true;
@@ -144,6 +145,7 @@ impl Write for RowBuffer<'_> {
         Ok(count)
     }
 
+    #[inline]
     fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.write(bytes).map(|_| ())
     }

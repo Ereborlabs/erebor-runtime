@@ -831,5 +831,102 @@
         "exit_code": 0
       }
     ]
+  },
+  "inline_writer_correction": {
+    "created_utc": "2026-10-11T19:21:15.905802+00:00",
+    "seed": "araphor-analysis-v1",
+    "target": "wasm32-unknown-unknown",
+    "builder_sha256": "245fd07aad036ebe8ed7a8f83773bda9e72f25e444d6b35c4caf491ce0f326b2",
+    "shared_test_passed": 13,
+    "checks": [
+      {
+        "name": "discovery",
+        "core_bytes": 3441130,
+        "core_sha256": "8c5c2d1cb4a457834aa2f73fe2771c047d6852171a1a7b02ac90ee1038f0d969",
+        "component_bytes": 2596892,
+        "component_sha256": "c0c682d6d5a4879fe99eaa67bb435f0cd7a5adf8341ffab6afa4f53c7a3baf45",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/discovery.wasm",
+        "copies": [
+          "/tmp/araphor-inline-v24-components-a/discovery.wasm",
+          "/tmp/araphor-inline-v24-components-b/discovery.wasm"
+        ],
+        "unchanged_from_v23": false
+      },
+      {
+        "name": "process",
+        "core_bytes": 3326234,
+        "core_sha256": "d94ed95660c2e60892689ef374ce4812ba7bf9b9323462f6ddeb9bb56a11458e",
+        "component_bytes": 2502749,
+        "component_sha256": "5b1ca8cd84691ac8f615f57c6ce9cdd53a0e69ad4e5d457ebfc7548f8e2b645d",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/process.wasm",
+        "copies": [
+          "/tmp/araphor-inline-v24-components-a/process.wasm",
+          "/tmp/araphor-inline-v24-components-b/process.wasm"
+        ],
+        "unchanged_from_v23": false
+      },
+      {
+        "name": "credentials",
+        "core_bytes": 3326270,
+        "core_sha256": "261e12872091392628007e9ad710a5610da18f7c2ff03d49adde09a468e67410",
+        "component_bytes": 2502749,
+        "component_sha256": "252dfd17e1287da423db5348612265da691e275067ae721976f19996992203b9",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/credentials.wasm",
+        "copies": [
+          "/tmp/araphor-inline-v24-components-a/credentials.wasm",
+          "/tmp/araphor-inline-v24-components-b/credentials.wasm"
+        ],
+        "unchanged_from_v23": false
+      },
+      {
+        "name": "kubernetes",
+        "core_bytes": 3326261,
+        "core_sha256": "18175b546441aaffa81c9b364ca08e4202c1157c097f4aaee129a7e68f926f4c",
+        "component_bytes": 2502749,
+        "component_sha256": "40e242bf0537eac819930cfe73728e0e9adfc3a9e90f9ae714ecb82b4fe84493",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/kubernetes.wasm",
+        "copies": [
+          "/tmp/araphor-inline-v24-components-a/kubernetes.wasm",
+          "/tmp/araphor-inline-v24-components-b/kubernetes.wasm"
+        ],
+        "unchanged_from_v23": false
+      },
+      {
+        "name": "detector",
+        "core_bytes": 3089623,
+        "core_sha256": "09ed45a270fdee9fe79835b3810b339a0cedd65f2ed6e683e859db96f93791b9",
+        "component_bytes": 2307165,
+        "component_sha256": "2c89dd2d16e93037514eade6d12f13fc4e6c341a8253be5246c000b398a61b7d",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-detector-example/artifacts/detector.wasm",
+        "copies": [
+          "/tmp/araphor-inline-v24-components-a/detector.wasm",
+          "/tmp/araphor-inline-v24-components-b/detector.wasm"
+        ],
+        "unchanged_from_v23": false
+      },
+      {
+        "name": "runtime",
+        "core_bytes": 2906180,
+        "core_sha256": "3dbcfd2b35b70dbdef638f465dce692348ffcc1549088afccc36b4aad8bbcdad",
+        "component_bytes": 2155491,
+        "component_sha256": "300395108925624bed1a6b5c9254f7849993230fd21504aef1c36d0bad068517",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-sdk/tests/artifacts/runtime.wasm",
+        "copies": [
+          "/tmp/araphor-inline-v24-components-a/runtime.wasm",
+          "/tmp/araphor-inline-v24-components-b/runtime.wasm"
+        ],
+        "unchanged_from_v23": false
+      }
+    ],
+    "build_logs": [
+      "/tmp/araphor-inline-guest-build-v24.log",
+      "/tmp/araphor-inline-guest-repro-v24.log"
+    ]
   }
 }

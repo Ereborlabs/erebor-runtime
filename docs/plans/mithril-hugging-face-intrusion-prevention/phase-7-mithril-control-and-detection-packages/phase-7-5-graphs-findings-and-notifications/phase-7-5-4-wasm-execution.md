@@ -268,6 +268,17 @@ The proof is `/tmp/araphor-wasm-production-bounds-proof-v23.json`.
 Graph splitting remains open. This correction does not change production
 limits or close the dispatch ordering breach.
 
+The v24 writer annotations pass all 13 shared tests. Two independent builds
+produce equal bytes for all six components. The normal qualification binary
+builds without warnings. The original graph group has one pass and one failure
+after 231.77 seconds. Evidence recovery passes. The split still exhausts fuel
+after relationship encoding. The proof is
+`/tmp/araphor-wasm-production-bounds-proof-v24.json`.
+The source manifest has SHA256
+`a061f6d599c9bc95d91f50806bea0ab843f65076e64af0f69c4ec79bd702064d`.
+The checked writer bodies and production limits stay unchanged. Graph
+splitting remains open.
+
 ### Installed detector production proof
 
 The fresh v23 `analysis-packages` case exits zero and records `PASS`.
