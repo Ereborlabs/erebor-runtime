@@ -30,7 +30,7 @@ enum LeaseKind {
     Output,
 }
 
-pub(super) struct QueryLease {
+pub(crate) struct QueryLease {
     budget: Arc<QueryBudget>,
     tenant: [u8; 16],
     kind: LeaseKind,
@@ -227,7 +227,15 @@ impl QueryLease {
     }
 
     /// Release input and evaluation capacity. Keep output capacity until drop.
-    pub(super) fn output(mut self, bytes: usize) -> Result<Self> {
+    pub(super) fn output(self, bytes: usize) -> Result<Self> {
+        self.finish_output(bytes, false)
+    }
+
+    pub(super) fn retained_output(self, bytes: usize) -> Result<Self> {
+        self.finish_output(bytes, true)
+    }
+
+    fn finish_output(mut self, bytes: usize, retain_input: bool) -> Result<Self> {
         if matches!(self.kind, LeaseKind::Stream) || bytes > self.bytes {
             return crate::QueryLimitSnafu {
                 resource: "query output bytes",
@@ -249,8 +257,10 @@ impl QueryLease {
                 }
             }
             self.kind = LeaseKind::Output;
-            usage.input_bytes -= self.input_bytes;
-            self.input_bytes = 0;
+            if !retain_input {
+                usage.input_bytes -= self.input_bytes;
+                self.input_bytes = 0;
+            }
         }
         usage.output_bytes -= self.bytes - bytes;
         self.bytes = bytes;
@@ -480,6 +490,30 @@ mod tests {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         assert_eq!(usage.output_bytes, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_retains_input_charge() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            input_capacity: 10,
+            output_bytes: 10,
+            output_capacity: 20,
+            ..Default::default()
+        });
+        let retained = budget.evaluate([1; 16])?.retained_output(3)?;
+        assert!(budget.evaluate([2; 16]).is_err());
+        drop(retained);
+        drop(budget.evaluate([2; 16])?);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            (usage.evaluations, usage.input_bytes, usage.output_bytes),
+            (0, 0, 0)
+        );
         Ok(())
     }
 }

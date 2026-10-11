@@ -101,7 +101,7 @@ async fn missing_dependency_target_status() -> TestResult {
         .artifacts
         .remove(0);
     upstream.descriptor.id = "test.upstream".into();
-    upstream.implementations = vec![PackageImplementationV1::Wasm {
+    upstream.implementations = vec![PackageImplementationV1::Native {
         export: "count".into(),
         artifact: vec![0, 97, 115, 109],
     }];

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use araphor_analysis_sdk as sdk;
@@ -15,9 +15,12 @@ use crate::{
 pub(in crate::package) type TestResult<T = ()> =
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+type CommitObserver = Box<dyn FnMut() -> Result<()> + Send>;
+
 pub(in crate::package) struct Authority {
     revision: AtomicU64,
     changes: watch::Sender<u64>,
+    pub after_commit: Mutex<Option<CommitObserver>>,
 }
 
 impl Authority {
@@ -49,7 +52,16 @@ impl PackageAuthorization for Authority {
     ) -> Result<()> {
         self.check(grant, action)?;
         self.admit(grant, bundle)?;
-        operation()
+        operation()?;
+        if let Some(observer) = self
+            .after_commit
+            .lock()
+            .map_err(|_| PackageErrorCodeV1::Incomplete.error("fixture commit observer"))?
+            .as_mut()
+        {
+            observer()?;
+        }
+        Ok(())
     }
 
     fn changes(&self) -> watch::Receiver<u64> {
@@ -72,6 +84,7 @@ impl Fixture {
         let authority = Arc::new(Authority {
             revision: AtomicU64::new(1),
             changes: watch::channel(1).0,
+            after_commit: Mutex::new(None),
         });
         let owner = Self::owner(store.clone(), authority.clone())?;
         Ok(Self {
@@ -101,9 +114,9 @@ impl Fixture {
                 ..Default::default()
             },
         )?);
-        Ok(Arc::new(AnalysisPackageOwner::new(
-            store, query, authority,
-        )?))
+        let mut owner = AnalysisPackageOwner::new(store, query, authority)?;
+        owner.prepare_test_code()?;
+        Ok(Arc::new(owner))
     }
 
     pub fn reopen(self) -> TestResult<Self> {

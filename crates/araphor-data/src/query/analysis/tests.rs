@@ -3,6 +3,7 @@ use crate::graph::tests::native_storage::CommitFixture;
 use crate::QueryLimits;
 use sdk::arrow_array::{BinaryArray, BooleanArray, StringArray, UInt64Array};
 
+mod component;
 mod computation;
 mod fixture;
 

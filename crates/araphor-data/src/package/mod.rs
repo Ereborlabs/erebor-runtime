@@ -5,20 +5,25 @@ use crate::{AnalysisStore, QueryOwner};
 mod admission;
 mod bundle;
 mod evaluation;
+mod execution;
 mod fixtures;
 mod freshness;
 mod inputs;
 mod inspect;
+mod installed;
 mod lifecycle;
 mod model;
 mod output;
 mod owner;
 mod removal;
+mod required;
 mod status;
 mod supervision;
+pub(super) mod wasm;
 mod wire;
 
 pub use bundle::*;
+pub use installed::{InstalledAnalysis, InstalledEvaluation, InstalledRefV1};
 pub use model::*;
 pub use wire::*;
 
@@ -27,7 +32,8 @@ pub struct AnalysisPackageOwner {
     query: Arc<QueryOwner>,
     authority: Arc<dyn PackageAuthorization>,
     operations: Arc<tokio::sync::Semaphore>,
-    lifecycle: std::sync::Mutex<()>,
+    lifecycle: Arc<std::sync::Mutex<()>>,
+    wasm: wasm::WasmExecution,
 }
 
 #[cfg(test)]

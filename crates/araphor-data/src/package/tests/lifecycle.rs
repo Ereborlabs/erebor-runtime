@@ -20,7 +20,7 @@ async fn package_historical_scope() -> TestResult {
         .await?;
     fixture.grant.selection = AnalysisSelectionV1::new([1; 16], Vec::new());
     let mut narrow = bundle("2", "SELECT 3::UBIGINT AS count");
-    narrow.artifacts[0].implementations = vec![crate::package::PackageImplementationV1::Wasm {
+    narrow.artifacts[0].implementations = vec![crate::package::PackageImplementationV1::Native {
         export: "count".into(),
         artifact: vec![0, 97, 115, 109],
     }];

@@ -123,7 +123,7 @@ async fn removal_releases_unused_artifacts() -> TestResult {
     let dependency = bundle("v1", "SELECT 1::UBIGINT AS count");
     let mut package = consumer("test.consumer", &dependency);
     for artifact in &mut package.artifacts {
-        artifact.implementations = vec![PackageImplementationV1::Wasm {
+        artifact.implementations = vec![PackageImplementationV1::Native {
             export: "count".into(),
             artifact: vec![0],
         }];

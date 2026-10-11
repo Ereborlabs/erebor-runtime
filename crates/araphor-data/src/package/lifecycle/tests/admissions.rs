@@ -57,7 +57,7 @@ async fn startup_releases_unreferenced_admissions() -> TestResult {
     let mut inactive = bundle("1", "SELECT 0::UBIGINT AS count");
     inactive.root.package_id = "test.inactive".into();
     inactive.artifacts[0].descriptor.id = inactive.root.package_id.clone();
-    inactive.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
+    inactive.artifacts[0].implementations = vec![PackageImplementationV1::Native {
         export: "count".into(),
         artifact: vec![0],
     }];

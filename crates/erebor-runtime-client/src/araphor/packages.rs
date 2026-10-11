@@ -7,7 +7,9 @@ impl AraphorClient {
     ) -> AraphorResult<wire::PackageOperationReply> {
         let mut request = self.request(operation)?;
         request.set_timeout(Duration::from_secs(300));
-        self.service()
+        AraphorClientServiceClient::new(self.channel.clone())
+            .max_decoding_message_size(erebor_runtime_ipc::transport::MAX_PACKAGE_GRPC_BYTES)
+            .max_encoding_message_size(erebor_runtime_ipc::transport::MAX_PACKAGE_GRPC_BYTES)
             .package_operation(request)
             .await
             .map(tonic::Response::into_inner)

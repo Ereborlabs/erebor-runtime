@@ -42,7 +42,29 @@ pub struct SqlModelOutputV1 {
     _lease: QueryLease,
 }
 
+impl SqlModelOutputV1 {
+    pub(crate) fn into_parts(self) -> (sdk::Output, QueryLease) {
+        (self.output, self._lease)
+    }
+}
+
 impl QueryOwner {
+    pub(crate) fn check_analysis_input(&self, evaluation: &sdk::Evaluation) -> Result<()> {
+        if evaluation.allocated_bytes() > self.limits.input_bytes {
+            return crate::QueryLimitSnafu {
+                resource: "analysis input memory",
+                limit: self.limits.input_bytes,
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn component_limits(&self, mut limits: sdk::Limits) -> sdk::Limits {
+        limits.max_bytes = limits.max_bytes.min(self.limits.input_bytes as u64);
+        crate::package::wasm::WasmExecution::limits(limits)
+    }
+
     pub fn admit_model(model: &sdk::Model, program: &SqlModelV1) -> Result<()> {
         program.admit(model).map(|_| ())
     }
@@ -55,6 +77,40 @@ impl QueryOwner {
         evaluation: &sdk::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<SqlModelOutputV1> {
+        let model = package
+            .exports
+            .iter()
+            .find(|model| model.name == evaluation.export)
+            .ok_or_else(|| {
+                crate::QueryInvalidSnafu {
+                    field: "model export",
+                }
+                .build()
+            })?;
+        let admitted = program.admit(model)?;
+        self.evaluate_analysis(tenant, package, evaluation, control, |control, host| {
+            let connection = QueryEvaluation::connection()?;
+            let mut executor =
+                execute::ModelExecution::new(&connection, control, evaluation, host)?;
+            let output = control.query_run(&connection, || {
+                executor.register(model)?;
+                executor.evaluate(model, program, admitted)
+            })?;
+            let bytes = executor.bytes();
+            drop(connection);
+            Ok((output, bytes))
+        })
+    }
+
+    pub(crate) fn evaluate_analysis(
+        &self,
+        tenant: [u8; 16],
+        package: &sdk::Package,
+        evaluation: &sdk::Evaluation,
+        control: &AnalysisReadControl,
+        execute: impl FnOnce(&AnalysisReadControl, &super::QueryLimits) -> Result<(sdk::Output, usize)>,
+    ) -> Result<SqlModelOutputV1> {
+        self.check_analysis_input(evaluation)?;
         package
             .validate_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
@@ -68,7 +124,6 @@ impl QueryOwner {
                 }
                 .build()
             })?;
-        let admitted = program.admit(model)?;
         let requested =
             evaluation
                 .context
@@ -82,24 +137,18 @@ impl QueryOwner {
         let capacity = (requested as usize).min(self.limits.output_capacity);
         let lease = self.budget.model(tenant, capacity)?;
         let control = control.within(self.limits.evaluate_timeout)?;
-        let connection = QueryEvaluation::connection()?;
         let host = super::QueryLimits {
             output_capacity: capacity,
             ..self.limits.clone()
         };
-        let mut executor = execute::ModelExecution::new(&connection, &control, evaluation, &host)?;
-        let output = control.query_run(&connection, || {
-            executor.register(model)?;
-            executor.evaluate(model, program, admitted)
-        })?;
+        let (output, bytes) = execute(&control, &host)?;
         package
             .validate_output(evaluation, &output)
             .context(crate::AnalysisContractSnafu)?;
-        let bytes = executor.bytes();
-        drop(connection);
+        control.check()?;
         Ok(SqlModelOutputV1 {
             output,
-            _lease: lease.output(bytes)?,
+            _lease: lease.retained_output(bytes)?,
         })
     }
 }

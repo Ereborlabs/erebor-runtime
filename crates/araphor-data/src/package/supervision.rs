@@ -47,14 +47,34 @@ impl AnalysisPackageOwner {
                 let owner = self.clone();
                 let check = self.check(&context.grant, Action::Run).and_then(|()| {
                     let bundle = self.load_bundle(active.key.tenant_id, &context.root)?;
-                    self.authority.admit(&context.grant, &bundle)
+                    self.authority.admit(&context.grant, &bundle)?;
+                    Ok(bundle)
                 });
-                if let Err(error) = check {
-                    self.failed(&active, &error)?;
-                    if error.status_code() == StatusCode::PermissionDenied {
-                        self.store
-                            .suspend_package(&active.key, active.generation, || Ok(()))?;
+                let bundle = match check {
+                    Ok(bundle) => bundle,
+                    Err(error) => {
+                        self.failed(&active, &error)?;
+                        if error.status_code() == StatusCode::PermissionDenied {
+                            let _lifecycle = self
+                                .lifecycle
+                                .lock()
+                                .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
+                            self.store.suspend_package(
+                                &active.key,
+                                active.generation,
+                                || Ok(()),
+                            )?;
+                        }
+                        continue;
                     }
+                };
+                if bundle
+                    .artifact(&super::PackageRefV1 {
+                        package_id: active.key.package_id.clone(),
+                        revision: active.revision.clone(),
+                    })?
+                    .prepared(&active.key.export)
+                {
                     continue;
                 }
                 let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(30))?);
@@ -79,13 +99,26 @@ impl AnalysisPackageOwner {
 
     pub(super) fn failed(&self, active: &PackageActivationV1, error: &crate::Error) -> Result<()> {
         let mut context: InstalledContext = Self::decode(&active.metadata)?;
-        let code = match error.status_code() {
-            StatusCode::PermissionDenied => Code::Denied,
-            StatusCode::Unsupported => Code::Unsupported,
-            StatusCode::NotFound => Code::Missing,
-            StatusCode::Unavailable => Code::Incomplete,
-            StatusCode::AlreadyExists => Code::Conflict,
-            _ => Code::Invalid,
+        let code = match error {
+            crate::Error::Package { code, .. } | crate::Error::PackageWasm { code, .. } => *code,
+            crate::Error::QueryLimit { .. } | crate::Error::AnalysisInputTooLarge { .. } => {
+                Code::Limit
+            }
+            crate::Error::AnalysisContract { source, .. }
+                if source.code() == araphor_analysis_sdk::ErrorCode::Limit =>
+            {
+                Code::Limit
+            }
+            _ => match error.status_code() {
+                StatusCode::PermissionDenied => Code::Denied,
+                StatusCode::Unsupported => Code::Unsupported,
+                StatusCode::NotFound => Code::Missing,
+                StatusCode::Unavailable | StatusCode::Cancelled | StatusCode::DeadlineExceeded => {
+                    Code::Incomplete
+                }
+                StatusCode::AlreadyExists => Code::Conflict,
+                _ => Code::Invalid,
+            },
         };
         context.readiness = PackageReadinessV1::Failed {
             code,

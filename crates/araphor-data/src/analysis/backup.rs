@@ -541,7 +541,7 @@ impl AnalysisStore {
             .and_then(|config| config.access_mode(AccessMode::ReadOnly))
             .and_then(|config| config.enable_autoload_extension(false))
             .and_then(|config| config.enable_external_access(false))
-            .and_then(|config| config.max_memory("64MiB"))
+            .and_then(|config| config.max_memory(&format!("{}B", super::NATIVE_MEMORY_BYTES)))
             .and_then(|config| config.threads(2))
             .context(AnalysisDatabaseSnafu {
                 operation: "bound backup validation",

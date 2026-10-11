@@ -48,6 +48,13 @@ impl AnalysisStore {
         if current.as_ref().map(|value| value.generation) != expected {
             return AnalysisConflictSnafu.fail();
         }
+        let artifact = Self::package_from(
+            &transaction,
+            input.key.tenant_id,
+            &input.key.package_id,
+            &input.revision,
+        )?
+        .ok_or_else(|| crate::PackageErrorCodeV1::Missing.error("activation artifact"))?;
         if let Some(current) = &current {
             if prepared.is_none()
                 && current.active == input.active
@@ -76,18 +83,13 @@ impl AnalysisStore {
                 }
             }
             if current.active && current.revision != input.revision && prepared.is_none() {
-                return self.reject("a package upgrade requires a prepared result and checkpoint");
+                let artifact: crate::PackageArtifactV1 = serde_json::from_slice(&artifact.artifact)
+                    .context(crate::PackageEncodingSnafu)?;
+                if !input.active || !artifact.prepared(&input.key.export) {
+                    return self
+                        .reject("a package upgrade requires a prepared result and checkpoint");
+                }
             }
-        }
-        if Self::package_from(
-            &transaction,
-            input.key.tenant_id,
-            &input.key.package_id,
-            &input.revision,
-        )?
-        .is_none()
-        {
-            return self.reject("the package activation revision is absent");
         }
         if prepared.is_some_and(|value| {
             current

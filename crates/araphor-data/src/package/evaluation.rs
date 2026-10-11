@@ -15,10 +15,18 @@ mod preparation;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ResultContext {
+    #[serde(default = "ResultContext::sql_target")]
+    pub target: String,
     pub context: sdk::EvaluationContext,
     pub inputs: Vec<sdk::Revision>,
     pub input_coverage: Vec<sdk::Coverage>,
     pub coverage: sdk::Coverage,
+}
+
+impl ResultContext {
+    fn sql_target() -> String {
+        "sql".into()
+    }
 }
 
 pub(super) struct PackageRun<'a> {
@@ -79,6 +87,10 @@ impl AnalysisPackageOwner {
                 }
             }
             if saved.grant != *grant {
+                let _lifecycle = self
+                    .lifecycle
+                    .lock()
+                    .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
                 saved.grant = grant.clone();
                 active = self.authorize_commit(grant, Action::Run, &bundle, || {
                     self.store.renew_package(

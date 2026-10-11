@@ -73,7 +73,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-pub(crate) const NATIVE_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
 const ANALYSIS_SCHEMA_VERSION: i64 = 19;
 const GRAPH_LEGACY_VERSION: u32 = 17;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
@@ -107,6 +107,7 @@ pub struct AnalysisStore {
     raw_pending: AtomicBool,
     read_slots: Arc<tokio::sync::Semaphore>,
     read_next: AtomicUsize,
+    pub(crate) package_lifecycle: Arc<Mutex<()>>,
     pub(crate) discovery_owners: AtomicUsize,
     pub(crate) notification_owner: AtomicBool,
     pub(crate) graph_owner: AtomicBool,
@@ -528,6 +529,7 @@ impl AnalysisStore {
             readers,
             read_slots: Arc::new(tokio::sync::Semaphore::new(16)),
             read_next: AtomicUsize::new(0),
+            package_lifecycle: Arc::new(Mutex::new(())),
             discovery_owners: AtomicUsize::new(0),
             maintenance: RwLock::new(()),
             revision,

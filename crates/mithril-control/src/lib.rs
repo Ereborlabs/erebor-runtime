@@ -53,3 +53,10 @@ pub use store::{
     startup_absence_proof_digest, ControlContextOwner, ControlStore, ControlStoreHealthV1,
 };
 pub use trust::*;
+
+#[cfg(test)]
+#[test]
+#[ignore]
+fn araphor_component_compiler() -> araphor_data::Result<()> {
+    araphor_data::AnalysisPackageOwner::run_compiler_worker()
+}

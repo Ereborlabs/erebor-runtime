@@ -2,7 +2,7 @@ use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
 use crate::analysis::{PackageActivationV1, PackageCommitV1};
-use crate::{AnalysisReadControl, QueryOwner, Result, SqlModelV1};
+use crate::{AnalysisReadControl, QueryOwner, Result};
 
 use super::ResultContext;
 use crate::package::inputs::{InputRequest, ModelInputs};
@@ -17,7 +17,6 @@ struct ModelRun<'a> {
     context: &'a InstalledContext,
     artifact: &'a PackageArtifactV1,
     model: &'a sdk::Model,
-    program: &'a SqlModelV1,
     clocked: bool,
     id: &'a str,
 }
@@ -81,17 +80,20 @@ impl AnalysisPackageOwner {
             },
             control,
         )?;
-        let metadata = ResultContext::new(id, now, run.model, &inputs);
+        let mut metadata = ResultContext::new(id, now, run.model, &inputs);
+        metadata.target = run
+            .artifact
+            .implementation(&run.model.name)?
+            .target()
+            .into();
+        if metadata.target == "wasm" {
+            metadata.context.limits = self.query.component_limits(metadata.context.limits);
+        }
         let Some(evaluation) = run.evaluation(self, &inputs, &metadata, rebuild, automatic)? else {
             return Ok(None);
         };
-        let evaluated = self.query.evaluate_model(
-            active.key.tenant_id,
-            &run.artifact.descriptor,
-            run.program,
-            &evaluation,
-            control,
-        )?;
+        let evaluated =
+            self.evaluate_artifact(active.key.tenant_id, run.artifact, &evaluation, control)?;
         run.commit(inputs, metadata, &evaluated.output, automatic)
             .map(Some)
     }
@@ -127,16 +129,13 @@ impl<'a> ModelRun<'a> {
             .iter()
             .find(|model| model.name == active.key.export)
             .ok_or_else(|| Code::Missing.error("active export"))?;
-        let (_, program) = artifact
-            .sql(&model.name)
-            .ok_or_else(|| Code::Unsupported.error("model target"))?;
+        let clocked = artifact.uses_clock(model)?;
         Ok(Self {
             active,
             context,
             artifact,
             model,
-            program,
-            clocked: program.uses_clock(model)?,
+            clocked,
             id,
         })
     }
@@ -268,6 +267,7 @@ impl ResultContext {
             .map(|input| input.coverage.clone())
             .collect();
         Self {
+            target: "sql".into(),
             context: sdk::EvaluationContext {
                 id: id.into(),
                 time_utc_ns: now as i64,

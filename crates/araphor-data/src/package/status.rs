@@ -21,7 +21,7 @@ impl PackageExportStatusV1 {
             targets: artifact
                 .implementations
                 .iter()
-                .filter(|target| target.export() == model.name)
+                .filter(|target| target.implements(&model.name))
                 .map(|target| target.target().into())
                 .collect(),
             readiness,
@@ -51,6 +51,7 @@ impl TryFrom<&PackageResultV1> for PackageReceiptV1 {
     fn try_from(result: &PackageResultV1) -> crate::Result<Self> {
         let metadata: ResultContext = AnalysisPackageOwner::decode(&result.metadata)?;
         Ok(Self {
+            target: metadata.target,
             result_id: result.result_id.clone(),
             commit_revision: result.commit_revision,
             input_revisions: metadata.inputs,

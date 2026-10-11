@@ -418,13 +418,39 @@ mod tests {
         assert_eq!(
             settings,
             (
-                "64.0 MiB".into(),
+                "128.0 MiB".into(),
                 "16.0 MiB".into(),
                 "128.0 MiB".into(),
                 2,
                 0,
                 "0 bytes".into(),
             )
+        );
+        drop(reader_guard);
+        let writer = store.maintenance_writer()?;
+        let connection = writer.get()?;
+        connection.execute_batch("CREATE TEMP TABLE native_limit (payload BLOB)")?;
+        let control =
+            super::super::AnalysisReadControl::with_timeout(std::time::Duration::from_secs(10))?;
+        let result = control.query_run(connection, || {
+            Ok(connection.execute(
+                "INSERT INTO native_limit SELECT CAST(repeat('x', ?) AS BLOB)",
+                [(crate::analysis::NATIVE_MEMORY_BYTES + 1) as i64],
+            ))
+        })?;
+        assert!(
+            matches!(
+                &result,
+                Err(duckdb::Error::DuckDBFailure(_, Some(message)))
+                    if message.starts_with("Out of Memory Error:")
+            ),
+            "{result:?}"
+        );
+        assert_eq!(
+            connection.query_row("SELECT COUNT(*) FROM native_limit", [], |row| {
+                row.get::<_, u64>(0)
+            })?,
+            0
         );
         Ok(())
     }

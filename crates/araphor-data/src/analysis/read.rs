@@ -518,7 +518,7 @@ mod tests {
             lifetime_key: vec![1],
             owner_revision: 0,
         };
-        let reads: [&dyn Fn() -> Result<()>; 7] = [
+        let reads: [&dyn Fn() -> Result<()>; 8] = [
             &|| store.meta().map(|_| ()),
             &|| store.source_status(&identity).map(|_| ()),
             &|| store.context_version(&context).map(|_| ()),
@@ -526,6 +526,7 @@ mod tests {
             &|| store.recovery_gaps(&identity, 0).map(|_| ()),
             &|| store.processor_health(&processor).map(|_| ()),
             &|| store.processor_retirement(&processor).map(|_| ()),
+            &|| store.graph_snapshot(&identity).map(|_| ()),
         ];
         let before = store.meta()?;
         for read in reads {

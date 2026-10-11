@@ -43,3 +43,50 @@ fn model_clock_dependencies() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn model_output_deadline() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let owner = fixture.owner(QueryLimits {
+        evaluate_timeout: Duration::from_millis(100),
+        ..Default::default()
+    })?;
+    let rows = port("rows", "count");
+    let model = sdk::Model::new("count", Vec::new(), vec![rows.clone()]);
+    let evaluation = sdk::Evaluation {
+        export: model.name.clone(),
+        parameters: None,
+        inputs: Vec::new(),
+        context: sdk::EvaluationContext {
+            id: "deadline".into(),
+            time_utc_ns: 100,
+            seed: None,
+            limits: model.limits,
+        },
+        checkpoint: None,
+    };
+    let package = sdk::Package::new("deadline", "1", vec![model]);
+    let output = sdk::Output {
+        datasets: vec![sdk::Dataset {
+            name: rows.name.clone(),
+            batches: vec![batch(&rows, vec![1])?],
+        }],
+        ..Default::default()
+    };
+    let bytes = output.allocated_bytes();
+    let caller = control()?;
+    let result = owner.evaluate_analysis([1; 16], &package, &evaluation, &caller, |local, _| {
+        std::thread::sleep(local.remaining()? + Duration::from_millis(1));
+        Ok((output.clone(), bytes))
+    });
+    assert!(matches!(
+        result,
+        Err(crate::Error::AnalysisReadDeadline { .. })
+    ));
+    caller.check()?;
+    let result = owner.evaluate_analysis([1; 16], &package, &evaluation, &caller, |_, _| {
+        Ok((output, bytes))
+    })?;
+    assert_eq!(result.output.datasets[0].batches[0].num_rows(), 1);
+    Ok(())
+}

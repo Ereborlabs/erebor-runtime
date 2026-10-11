@@ -107,3 +107,21 @@ panic = "deny"
 todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"
+
+[profile.dev.package.wasmtime]
+opt-level = 2
+
+[profile.dev.package.wasmtime-environ]
+opt-level = 2
+
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 2
+
+[profile.dev.package.cranelift-codegen]
+opt-level = 2
+
+[profile.dev.package.cranelift-frontend]
+opt-level = 2
+
+[profile.dev.package.wasmparser]
+opt-level = 2

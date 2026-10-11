@@ -84,11 +84,7 @@ impl AnalysisPackageOwner {
         } else {
             now
         };
-        let clocked = artifact
-            .sql(&model.name)
-            .map(|(_, program)| program.uses_clock(model))
-            .transpose()?
-            .unwrap_or(false);
+        let clocked = artifact.uses_clock(model)?;
         let clock_changed = Self::clock_changed(clocked, saved.context.time_utc_ns, now);
         let inputs = self.inputs(
             super::inputs::InputRequest {

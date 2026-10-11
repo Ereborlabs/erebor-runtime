@@ -47,9 +47,6 @@ impl AnalysisPackageOwner {
                     .iter()
                     .find(|model| model.name == fixture.export)
                     .ok_or_else(|| Code::Invalid.error("fixture export"))?;
-                let (_, program) = artifact
-                    .sql(&model.name)
-                    .ok_or_else(|| Code::Unsupported.error("fixture target"))?;
                 let mut inputs = Vec::new();
                 for input in &fixture.inputs {
                     let port = model
@@ -80,10 +77,9 @@ impl AnalysisPackageOwner {
                 control.check()?;
                 self.check(grant, Action::Test)?;
                 self.authority.admit(grant, &bundle)?;
-                let output = self.query.evaluate_model(
+                let output = self.evaluate_artifact(
                     grant.selection.tenant_id,
-                    &artifact.descriptor,
-                    program,
+                    artifact,
                     &evaluation,
                     control,
                 )?;

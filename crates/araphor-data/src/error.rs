@@ -25,6 +25,15 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Package Wasm {operation} failed: {source}"))]
+    PackageWasm {
+        code: crate::PackageErrorCodeV1,
+        operation: &'static str,
+        #[snafu(source(from(wasmtime::Error, wasmtime::Error::into_boxed_dyn_error)))]
+        source: Box<dyn std::error::Error + Send + Sync>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Analysis contract failed: {source}"))]
     AnalysisContract {
         source: araphor_analysis_sdk::Error,
@@ -247,7 +256,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::Package { code, .. } => match code {
+            Self::Package { code, .. } | Self::PackageWasm { code, .. } => match code {
                 crate::PackageErrorCodeV1::Invalid | crate::PackageErrorCodeV1::Limit => {
                     StatusCode::InvalidArguments
                 }

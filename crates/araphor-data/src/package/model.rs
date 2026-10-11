@@ -57,6 +57,18 @@ pub trait PackageAuthorization: Send + Sync + 'static {
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()>;
     fn changes(&self) -> watch::Receiver<u64>;
+
+    fn commit_many(
+        &self,
+        grants: &[(&PackageGrantV1, &PackageBundleV1)],
+        action: PackageActionV1,
+        operation: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        let [(grant, bundle)] = grants else {
+            return Err(PackageErrorCodeV1::Unsupported.error("atomic package authority set"));
+        };
+        self.commit(grant, action, bundle, operation)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -163,6 +175,7 @@ pub enum PackageReadinessV1 {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageReceiptV1 {
+    pub target: String,
     pub result_id: String,
     pub commit_revision: u64,
     pub input_revisions: Vec<sdk::Revision>,

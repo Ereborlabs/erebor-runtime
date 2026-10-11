@@ -12,7 +12,7 @@ use crate::{IoSnafu, PackageEncodingSnafu, Result, SqlModelV1};
 
 use super::{PackageErrorCodeV1 as Code, PackageFixtureV1};
 
-pub const MAX_PACKAGE_BYTES: usize = 3 * 1024 * 1024;
+pub const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -29,7 +29,7 @@ pub struct PackageBundleV1 {
     pub artifacts: Vec<PackageArtifactV1>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageArtifactV1 {
     pub descriptor: sdk::Package,
@@ -38,7 +38,14 @@ pub struct PackageArtifactV1 {
     pub fixtures: Vec<PackageFixtureV1>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Serialize)]
+pub(super) struct ArtifactEncoding<'a> {
+    pub(super) descriptor: Box<serde_json::value::RawValue>,
+    implementations: &'a [PackageImplementationV1],
+    fixtures: &'a [PackageFixtureV1],
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "target", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageImplementationV1 {
     Sql {
@@ -47,7 +54,9 @@ pub enum PackageImplementationV1 {
         program: SqlModelV1,
     },
     Wasm {
-        export: String,
+        exports: Vec<String>,
+        #[serde(default)]
+        inputs: Option<BTreeMap<String, String>>,
         artifact: Vec<u8>,
     },
     Native {
@@ -61,13 +70,25 @@ pub enum PackageImplementationV1 {
 }
 
 impl PackageImplementationV1 {
-    pub fn export(&self) -> &str {
+    pub(crate) fn bindings(&self) -> Option<&BTreeMap<String, String>> {
         match self {
-            Self::Sql { export, .. }
-            | Self::Wasm { export, .. }
-            | Self::Native { export, .. }
-            | Self::Python { export, .. } => export,
+            Self::Sql { inputs, .. } => Some(inputs),
+            Self::Wasm { inputs, .. } => inputs.as_ref(),
+            Self::Native { .. } | Self::Python { .. } => None,
         }
+    }
+
+    pub fn exports(&self) -> &[String] {
+        match self {
+            Self::Wasm { exports, .. } => exports,
+            Self::Sql { export, .. }
+            | Self::Native { export, .. }
+            | Self::Python { export, .. } => std::slice::from_ref(export),
+        }
+    }
+
+    pub fn implements(&self, export: &str) -> bool {
+        self.exports().iter().any(|name| name == export)
     }
 
     pub fn target(&self) -> &'static str {
@@ -81,6 +102,48 @@ impl PackageImplementationV1 {
 }
 
 impl PackageArtifactV1 {
+    fn has_component(&self) -> bool {
+        self.implementations
+            .iter()
+            .any(|implementation| matches!(implementation, PackageImplementationV1::Wasm { .. }))
+    }
+
+    pub(super) fn encoding(&self, canonical: bool) -> Result<ArtifactEncoding<'_>> {
+        let descriptor = if canonical || self.has_component() {
+            self.descriptor
+                .interfaces()
+                .context(crate::AnalysisContractSnafu)?
+                .descriptor_json
+        } else {
+            serde_json::to_string(&self.descriptor).context(PackageEncodingSnafu)?
+        };
+        Ok(ArtifactEncoding {
+            descriptor: serde_json::value::RawValue::from_string(descriptor)
+                .context(PackageEncodingSnafu)?,
+            implementations: &self.implementations,
+            fixtures: &self.fixtures,
+        })
+    }
+
+    pub(crate) fn implementation(&self, export: &str) -> Result<&PackageImplementationV1> {
+        self.implementations
+            .iter()
+            .find(|entry| entry.implements(export) && entry.target() == "wasm")
+            .or_else(|| {
+                self.implementations
+                    .iter()
+                    .find(|entry| entry.implements(export) && entry.target() == "sql")
+            })
+            .ok_or_else(|| Code::Unsupported.error("model target"))
+    }
+
+    pub(crate) fn prepared(&self, export: &str) -> bool {
+        matches!(
+            self.implementation(export),
+            Ok(PackageImplementationV1::Wasm { inputs: None, .. })
+        )
+    }
+
     pub fn reference(&self) -> PackageRefV1 {
         PackageRefV1 {
             package_id: self.descriptor.id.clone(),
@@ -88,17 +151,12 @@ impl PackageArtifactV1 {
         }
     }
 
-    pub(crate) fn sql(&self, export: &str) -> Option<(&BTreeMap<String, String>, &SqlModelV1)> {
-        self.implementations
-            .iter()
-            .find_map(|implementation| match implementation {
-                PackageImplementationV1::Sql {
-                    export: name,
-                    inputs,
-                    program,
-                } if name == export => Some((inputs, program)),
-                _ => None,
-            })
+    pub(crate) fn uses_clock(&self, model: &sdk::Model) -> Result<bool> {
+        match self.implementation(&model.name)? {
+            PackageImplementationV1::Sql { program, .. } => program.uses_clock(model),
+            PackageImplementationV1::Wasm { .. } => Ok(true),
+            _ => Err(Code::Unsupported.error("model target")),
+        }
     }
 }
 
@@ -138,13 +196,18 @@ impl PackageBundleV1 {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>> {
+        let canonical = self.artifacts.iter().any(PackageArtifactV1::has_component);
         let mut artifacts: Vec<_> = self.artifacts.iter().collect();
         artifacts.sort_by_key(|artifact| artifact.reference());
+        let artifacts = artifacts
+            .into_iter()
+            .map(|artifact| artifact.encoding(canonical))
+            .collect::<Result<Vec<_>>>()?;
         #[derive(Serialize)]
         struct Ordered<'a> {
             schema_version: u32,
             root: &'a PackageRefV1,
-            artifacts: Vec<&'a PackageArtifactV1>,
+            artifacts: Vec<ArtifactEncoding<'a>>,
         }
         let mut bytes = super::wire::PackageBuffer::new(MAX_PACKAGE_BYTES as u64);
         serde_json::to_writer(

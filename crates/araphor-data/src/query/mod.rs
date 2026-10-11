@@ -16,6 +16,7 @@ mod authorization;
 #[cfg(test)]
 mod authorization_tests;
 mod budget;
+pub(crate) use budget::QueryLease;
 #[cfg(test)]
 mod client_tests;
 mod discovery;
@@ -40,7 +41,7 @@ pub use admission::{QueryBinding, QuerySql};
 pub use analysis::GraphAnalysisInputsV1;
 use authorization::QuerySession;
 pub use authorization::{QueryAuthorization, QueryGrant};
-use budget::{QueryBudget, QueryLease};
+use budget::QueryBudget;
 pub use follow::{QueryClock, QueryStream, SystemQueryClock};
 pub use frame::{
     QueryCheckpoint, QueryColumn, QueryCoverage, QueryCoverageRows, QueryCoverageState,
@@ -54,7 +55,7 @@ pub use model::{
 };
 pub use plan::{QueryOperation, QueryPlan, QueryTemplate, QUERY_SCHEMA_VERSION};
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QueryLimits {
     pub scan_bytes: usize,

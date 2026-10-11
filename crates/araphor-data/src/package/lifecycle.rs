@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use crate::analysis::{PackageActivationV1, PackageKeyV1, PackageRevisionRefV1, PackageRevisionV1};
-use crate::{AnalysisReadControl, QueryOwner, QuerySql, Result};
+use crate::analysis::{PackageActivationV1, PackageKeyV1};
+use crate::{AnalysisReadControl, Result};
 
 use super::admission::ModelRef;
 use super::owner::InstalledContext;
@@ -9,12 +9,12 @@ use super::owner::InstalledContext;
 mod tests;
 
 mod activation;
+mod revisions;
 use activation::ModelActivation;
 
 use super::{
     AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageBundleV1,
-    PackageErrorCodeV1 as Code, PackageGrantV1, PackageReadinessV1, PackageRefV1,
-    PackageResponseV1,
+    PackageErrorCodeV1 as Code, PackageGrantV1, PackageReadinessV1, PackageResponseV1,
 };
 
 impl AnalysisPackageOwner {
@@ -37,14 +37,7 @@ impl AnalysisPackageOwner {
         self.authority.admit(grant, bundle)?;
         bundle.validate()?;
         for artifact in &bundle.artifacts {
-            for model in &artifact.descriptor.exports {
-                if let Some((inputs, program)) = artifact.sql(&model.name) {
-                    QueryOwner::admit_model(model, program)?;
-                    for sql in inputs.values() {
-                        QuerySql::admit(sql, Vec::new(), false)?;
-                    }
-                }
-            }
+            self.admit_artifact(artifact, control)?;
         }
         Self::check_parameters(bundle, parameters.as_ref())?;
         let activations = self.model_activations(grant, scope, bundle, &parameters, upgrade)?;
@@ -68,7 +61,7 @@ impl AnalysisPackageOwner {
         let records = bundle
             .artifacts
             .iter()
-            .map(|artifact| Self::revision(grant, artifact))
+            .map(|artifact| self.install_revision(grant, artifact))
             .collect::<Result<Vec<_>>>()?;
         self.authorize_commit(grant, action, bundle, || {
             self.store.install_package(&records, || control.check())
@@ -129,21 +122,29 @@ impl AnalysisPackageOwner {
                 return Err(Code::Unsupported.error("upgrade target"));
             }
             active.checkpoint_revision = previous.as_ref().map_or(0, |old| old.checkpoint_revision);
-            let evaluated = self.prepare(
-                &active,
-                &format!(
-                    "upgrade:{}:{}",
-                    previous.as_ref().map_or(0, |old| old.generation),
-                    active.revision
-                ),
-                true,
-                control,
-            )?;
+            let artifact = bundle.artifact(&super::PackageRefV1 {
+                package_id: active.key.package_id.clone(),
+                revision: active.revision.clone(),
+            })?;
+            let evaluated = if artifact.prepared(&active.key.export) {
+                None
+            } else {
+                Some(self.prepare(
+                    &active,
+                    &format!(
+                        "upgrade:{}:{}",
+                        previous.as_ref().map_or(0, |old| old.generation),
+                        active.revision
+                    ),
+                    true,
+                    control,
+                )?)
+            };
             self.authorize_commit(grant, action, bundle, || {
                 self.store.activate_package(
                     &active,
                     previous.as_ref().map(|old| old.generation),
-                    Some(&evaluated),
+                    evaluated.as_ref(),
                     || control.check(),
                 )
             })?;
@@ -170,6 +171,14 @@ impl AnalysisPackageOwner {
         active: &PackageActivationV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {
+        let artifact = bundle
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.descriptor.id == active.key.package_id)
+            .ok_or_else(|| Code::Missing.error("active artifact"))?;
+        if artifact.prepared(&active.key.export) {
+            return Ok(());
+        }
         if let Err(error) = self.evaluate_active(
             active,
             &format!("install:{}", active.generation),
@@ -200,94 +209,47 @@ impl AnalysisPackageOwner {
         Ok(())
     }
 
-    fn revision(grant: &PackageGrantV1, artifact: &PackageArtifactV1) -> Result<PackageRevisionV1> {
-        let dependencies: BTreeSet<_> = artifact
-            .descriptor
-            .dependencies
-            .iter()
-            .filter(|dependency| dependency.package != artifact.descriptor.id)
-            .map(|dependency| (dependency.package.clone(), dependency.revision.clone()))
-            .collect();
-        Ok(PackageRevisionV1 {
-            tenant_id: grant.selection.tenant_id,
-            package_id: artifact.descriptor.id.clone(),
-            revision: artifact.descriptor.revision.clone(),
-            descriptor: Self::encode(&artifact.descriptor)?,
-            artifact: Self::encode(artifact)?,
-            dependencies: dependencies
-                .into_iter()
-                .map(|(package_id, revision)| PackageRevisionRefV1 {
-                    package_id,
-                    revision,
-                })
-                .collect(),
-        })
-    }
-
-    pub(super) fn load_bundle(
-        &self,
-        tenant: [u8; 16],
-        root: &PackageRefV1,
-    ) -> Result<PackageBundleV1> {
-        let mut pending = vec![root.clone()];
-        let mut seen = BTreeSet::new();
-        let mut artifacts = Vec::new();
-        while let Some(reference) = pending.pop() {
-            if !seen.insert(reference.clone()) {
-                continue;
-            }
-            if seen.len() > 64 {
-                return Err(Code::Limit.error("dependency closure"));
-            }
-            let record = self
-                .store
-                .package_revision(tenant, &reference.package_id, &reference.revision)?
-                .ok_or_else(|| Code::Missing.error("installed artifact"))?;
-            pending.extend(
-                record
-                    .dependencies
-                    .into_iter()
-                    .map(|dependency| PackageRefV1 {
-                        package_id: dependency.package_id,
-                        revision: dependency.revision,
-                    }),
-            );
-            artifacts.push(Self::decode::<PackageArtifactV1>(&record.artifact)?);
-        }
-        artifacts.sort_by_key(PackageArtifactV1::reference);
-        let bundle = PackageBundleV1 {
-            schema_version: 1,
-            root: root.clone(),
-            artifacts,
-        };
-        bundle.validate()?;
-        Ok(bundle)
-    }
-
     pub(super) fn readiness(artifact: &PackageArtifactV1, export: &str) -> PackageReadinessV1 {
         let model = artifact
             .descriptor
             .exports
             .iter()
             .find(|model| model.name == export);
-        if model.is_some_and(|model| {
+        let prepared = artifact.prepared(export);
+        let domain_output = model.is_some_and(|model| {
             model
                 .outputs
                 .iter()
                 .any(|port| port.kind != araphor_analysis_sdk::OutputKind::Table)
-        }) {
+        });
+        if prepared
+            && domain_output
+            && model.is_some_and(|model| {
+                !crate::GraphAndFindingOwner::supports_analysis(model)
+                    && !(artifact.descriptor.id
+                        == araphor_analysis_builtins::discovery::Discovery::package().id
+                        && araphor_analysis_builtins::discovery::Discovery::package()
+                            .exports
+                            .contains(model))
+            })
+        {
+            return PackageReadinessV1::Unsupported {
+                target: "host input/output adapter".into(),
+            };
+        }
+        if !prepared && domain_output {
             return PackageReadinessV1::Unsupported {
                 target: "domain output adapter".into(),
             };
         }
-        if artifact.sql(export).is_some() {
+        if artifact.implementation(export).is_ok() {
             PackageReadinessV1::Ready
         } else {
             PackageReadinessV1::Unsupported {
                 target: artifact
                     .implementations
                     .iter()
-                    .filter(|implementation| implementation.export() == export)
+                    .filter(|implementation| implementation.implements(export))
                     .map(|implementation| implementation.target())
                     .collect::<Vec<_>>()
                     .join(","),

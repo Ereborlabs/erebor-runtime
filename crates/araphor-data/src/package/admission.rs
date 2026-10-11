@@ -197,25 +197,34 @@ impl PackageArtifactV1 {
         }
         let mut implementations = BTreeSet::new();
         for implementation in &self.implementations {
-            if !self
-                .descriptor
-                .exports
-                .iter()
-                .any(|model| model.name == implementation.export())
-                || !implementations.insert((implementation.export(), implementation.target()))
-            {
-                return Err(Code::Invalid.error("implementation export or target"));
+            if implementation.exports().is_empty() || implementation.exports().len() > 256 {
+                return Err(Code::Invalid.error("implementation export count"));
+            }
+            for export in implementation.exports() {
+                if !self
+                    .descriptor
+                    .exports
+                    .iter()
+                    .any(|model| model.name == *export)
+                    || !implementations.insert((export, implementation.target()))
+                {
+                    return Err(Code::Invalid.error("implementation export or target"));
+                }
             }
         }
         for model in &self.descriptor.exports {
             if !self
                 .implementations
                 .iter()
-                .any(|implementation| implementation.export() == model.name)
+                .any(|implementation| implementation.implements(&model.name))
             {
                 return Err(Code::Missing.error("export implementation"));
             }
-            let Some((sources, _)) = self.sql(&model.name) else {
+            let Some(sources) = self
+                .implementation(&model.name)
+                .ok()
+                .and_then(|entry| entry.bindings())
+            else {
                 continue;
             };
             let dependencies: BTreeSet<_> = self

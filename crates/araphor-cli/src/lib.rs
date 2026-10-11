@@ -12,6 +12,13 @@ pub fn run() {
     exit_on_error(cli.execute());
 }
 
+#[cfg(test)]
+#[test]
+#[ignore]
+fn araphor_component_compiler() -> araphor_data::Result<()> {
+    araphor_data::AnalysisPackageOwner::run_compiler_worker()
+}
+
 fn exit_on_error(result: Result<(), error::CliError>) {
     if let Err(error) = result {
         let status_code = error.status_code();

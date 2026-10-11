@@ -39,13 +39,20 @@ impl AnalysisPackageOwner {
         query: Arc<QueryOwner>,
         authority: Arc<dyn PackageAuthorization>,
     ) -> Result<Self> {
-        store.collect_package_admissions()?;
+        {
+            let _lifecycle = store
+                .package_lifecycle
+                .lock()
+                .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
+            store.collect_package_admissions()?;
+        }
         Ok(Self {
+            lifecycle: store.package_lifecycle.clone(),
             store,
             query,
             authority,
             operations: Arc::new(tokio::sync::Semaphore::new(4)),
-            lifecycle: std::sync::Mutex::new(()),
+            wasm: super::wasm::WasmExecution::new()?,
         })
     }
 
@@ -87,7 +94,7 @@ impl AnalysisPackageOwner {
         }
     }
 
-    fn execute_sync(
+    pub(crate) fn execute_sync(
         &self,
         grant: PackageGrantV1,
         request: PackageRequestV1,
@@ -222,7 +229,7 @@ impl AnalysisPackageOwner {
     }
 
     pub(super) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
-        let mut bytes = super::wire::PackageBuffer::new(16 * 1024 * 1024);
+        let mut bytes = super::wire::PackageBuffer::new(crate::analysis::MAX_PACKAGE_BYTES as u64);
         serde_json::to_writer(&mut bytes, value).context(PackageEncodingSnafu)?;
         Ok(bytes.finish())
     }

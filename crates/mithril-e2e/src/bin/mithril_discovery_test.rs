@@ -65,8 +65,18 @@ impl Cli {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if araphor_data::AnalysisPackageOwner::run_worker_if_requested()? {
+        return Ok(());
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run());
+    Ok(())
+}
+
+async fn run() {
     let cli = Cli::parse();
     if let Err(error) = cli.validate() {
         error.exit();
@@ -157,6 +167,13 @@ async fn main() {
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+#[ignore]
+fn araphor_component_compiler() -> araphor_data::Result<()> {
+    araphor_data::AnalysisPackageOwner::run_compiler_worker()
 }
 
 #[cfg(test)]

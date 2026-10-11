@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-test-fixtures = []
+test-fixtures = ["dep:tempfile"]
 
 [dependencies]
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
@@ -20,7 +20,7 @@ erebor-runtime-error = { path = "../erebor-runtime-error" }
 futures-core = "0.3"
 minicbor.workspace = true
 prost.workspace = true
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,8 +28,11 @@ sha2.workspace = true
 snafu.workspace = true
 sqlparser.workspace = true
 time.workspace = true
+tempfile = { version = "3.23.0", optional = true }
 tokio.workspace = true
 uuid.workspace = true
+wasmtime = { version = "=49.0.2", default-features = false, features = ["component-model", "runtime", "cranelift", "std"] }
+wasmparser = "=0.258.3"
 
 [build-dependencies]
 prost-build.workspace = true
@@ -37,6 +40,7 @@ prost-build.workspace = true
 [dev-dependencies]
 futures-util.workspace = true
 tempfile = "3.23.0"
+wat = "=1.258.3"
 
 [lints]
 workspace = true

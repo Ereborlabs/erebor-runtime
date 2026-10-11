@@ -45,9 +45,10 @@ impl AnalysisPackageOwner {
             now,
             action,
         } = request;
-        let (sources, _) = artifact
-            .sql(&model.name)
-            .ok_or_else(|| Code::Unsupported.error("model target"))?;
+        let sources = artifact
+            .implementation(&model.name)?
+            .bindings()
+            .ok_or_else(|| Code::Missing.error("host-prepared inputs"))?;
         let mut selected = ModelInputs {
             inputs: Vec::new(),
             dependencies: Vec::new(),

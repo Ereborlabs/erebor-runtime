@@ -13,8 +13,16 @@ struct Cli {
     config: PathBuf,
 }
 
+fn main() -> araphor_data::Result<()> {
+    if araphor_data::AnalysisPackageOwner::run_worker_if_requested()? {
+        return Ok(());
+    }
+    start();
+    Ok(())
+}
+
 #[tokio::main]
-async fn main() {
+async fn start() {
     if let Err(error) = init_stderr_logging() {
         eprintln!("Mithril Control logging initialization failed: {error}");
         std::process::exit(1);

@@ -5,6 +5,14 @@ use super::{FindingReasonV1, FindingV1, GraphAndFindingOwner};
 use crate::{AnalysisContractSnafu, GraphEncodingSnafu, GraphInvalidSnafu, Result};
 
 impl GraphAndFindingOwner {
+    pub fn supports_analysis(model: &sdk::Model) -> bool {
+        let expected = araphor_analysis_builtins::graph::Detector::Process.descriptor();
+        let expected = &expected.exports[0];
+        model.inputs == expected.inputs
+            && model.outputs == expected.outputs
+            && model.checkpoint == expected.checkpoint
+    }
+
     pub fn analysis_package(package_id: &str) -> Result<sdk::Package> {
         Self::contract_id(package_id)?;
         let package = araphor_analysis_builtins::graph::Detector::from_id(package_id)

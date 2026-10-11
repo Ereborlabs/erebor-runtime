@@ -54,3 +54,10 @@ pub use runner::{
     BenchmarkModeV1, CapabilityProbeBundleV1, KernelQualificationBundleV1,
     KernelQualificationRunner, OpenBenchmarkBundleV1, PhysicalCapabilityProbeBundleV1,
 };
+
+#[cfg(test)]
+#[test]
+#[ignore]
+fn araphor_component_compiler() -> araphor_data::Result<()> {
+    araphor_data::AnalysisPackageOwner::run_compiler_worker()
+}
