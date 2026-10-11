@@ -74,9 +74,10 @@ after the existing trusted selector. The host retains complete original records
 and validates references from normalized SDK rows. This execution change gives
 packages no additional authority.
 
-Seven captured baseline tests pass with the expected results from `2e49839a`
-unchanged. They compare 24 outputs across these algorithm families. Production
-replay and the final shared Rust procedure pass on `53f7674`. Read the
+The prior Rust migration passed seven captured baseline tests with unchanged
+expected results from `2e49839a`. Those tests compared 24 outputs across these
+algorithm families. Production replay and the final shared Rust procedure passed
+on `53f7674`. These results do not qualify the current installed execution. Read the
 [acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
 Native graph input tests also compute from selected subjects,
 relationships, and version manifests through
