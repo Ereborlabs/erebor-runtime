@@ -569,6 +569,10 @@ open deleted case file remains. A separate concurrent Cargo build creates
 16,650,489,856 allocated bytes before the failure. The count uses unique
 inodes. This allocation is in another checkout on the same filesystem. No
 file in that checkout is changed or removed for this goal.
+The allocation proof is `/tmp/araphor-wasm-capacity-correlation-v31.json`, with
+SHA256 `05da30409d5f2fb3368506b15c19172dbf537536e125639141c0f71ea1f55e67`.
+It is a retained-file correlation. It is not a complete filesystem ledger and
+does not identify the exact failing graph caller.
 
 Checked removal of debug sections from three inactive generated executables
 recovers 4,179,186,704 bytes. Every loaded ELF section stays equal. The proof is
@@ -794,15 +798,17 @@ checked correction scopes remain subject to final workspace verification.
   control, and use installed computation for each part and its merge. Check
   the largest normal and replay cases, display groups, and comparison at the
   production limits. Commit no intermediate page result.
-- [ ] Remove the larger unit-test data and fuel allowances. Verify the complete
-  current-algorithm corpus and resource failures with the same 32 MiB and
+- [x] Remove the larger unit-test data and fuel allowances.
+- [ ] Verify the complete current-algorithm corpus and resource failures with
+  the same 32 MiB and
   100-million fuel limits as production. Keep resource failures explicit and
   atomic. Run the four production cases before the final shared Rust procedure.
-- [ ] Recover filesystem space after the v12 test link failure. Remove debug
+- [x] Recover filesystem space after the v12 test link failure. Remove debug
   sections only from inactive generated executables. Check every loaded
   section before and after cleanup. Keep source, native archives, component
-  artifacts, logs, and proof files. Retry the final Rust procedure on the same
-  source and record its result.
+  artifacts, logs, and proof files.
+- [ ] Retry the final Rust procedure on the current source and record its result.
+  The retained v12 retry exits 130. It is not a complete verification pass.
 - [x] Prove two successful Wasm computations overlap through one installed
   owner. Use the shipped discovery `groups` component and two authorized
   tenants. Extend only the existing test guest-entry signal with a release
@@ -897,21 +903,24 @@ checked correction scopes remain subject to final workspace verification.
 - [x] State each execution failure path in the review flow. The generic package
   scheduler records typed readiness and stale results. Domain adapters return
   errors to their existing owner failure and coverage paths.
-- [ ] Remove the unused error conversion in Control configuration. Run the
-  final Clippy check with warnings denied.
-- [ ] Recover filesystem capacity after workspace test linking fills the disk.
+- [x] Remove the unused error conversion in Control configuration.
+- [ ] Run the final Clippy check with warnings denied.
+- [x] Recover filesystem capacity after workspace test linking fills the disk.
   Remove debug sections from inactive generated executables. Verify that all
   loaded sections stay equal. Preserve source, native archives, logs, proof
-  data, and the production qualification executable. Rerun the shared Rust
-  procedure and the affected restart and graph cases.
+  data, and the production qualification executable.
+- [ ] Rerun the shared Rust procedure and the affected restart and graph cases.
 - [ ] Diagnose the graph qualification read deadline. Record the failed stage,
   read operation, and last completed source cursor. Keep all corpus cases,
   graph state assertions, production deadlines, and resource limits. Remove
   temporary diagnostics before the final qualification.
-- [ ] Use a private Snafu context for the temporary qualification deadline
+- **Superseded diagnostic:** Use a private Snafu context for the temporary qualification deadline
   diagnostic. Retain the original Data error as its source. Show only the
   operation, requested source ID, elapsed time, and original deadline location.
   Add no dependency. Remove the context after the cause is known.
+  The context was added and then removed. The retained diagnostic does not
+  identify the earlier deadline cause. Current qualification uses ordinary
+  error propagation and retains every production assertion and limit.
 - [x] Install the required discovery exports for both known tenants in the
   current-profile query test. The test adds a foreign tenant record, and the
   discovery worker processes all retained tenants. Keep the query grant on the
@@ -955,7 +964,7 @@ checked correction scopes remain subject to final workspace verification.
 - [x] Compile in a fresh host worker with OS memory and CPU limits. Kill and
   reap the worker on cancellation or deadline. Accept compiled code only from
   this worker. Keep the compiler permit until the worker exits.
-- [ ] Measure the source and compiled image charges for each required component.
+- [x] Measure the source and compiled image charges for each required component.
   Set a finite cache byte limit that retains all four required components.
   Keep tests for byte and entry eviction. Retain the runtime test component
   in the shared test cache only when all five charges fit this limit.
@@ -1228,7 +1237,10 @@ reserve. It does not identify the earlier read deadline. Its log is
 `bd78181bd02ff2edf00c93ad0431262aeb3e03144904162adcf47db745dd5a51`.
 Its result is in
 `/tmp/araphor-wasm-qualification-20261011-sol-v9/e2e-qualification-proof.json`.
-The production limit change and final production qualification remain open.
+At that time, the proposed production limit change and final production
+qualification remained open. The later unchanged-limit correction supersedes
+the proposed increase. Production limits remain 32 MiB and 100 million fuel
+units. Current final qualification remains required.
 
 ### Data adapter correction TODOs
 
@@ -1236,6 +1248,8 @@ The production limit change and final production qualification remain open.
   A production package revision read fails at the previous 64 MiB cap. Keep a
   finite cap, verify its rejection boundary, and rerun graph and SQL lifecycle
   qualification. Check reader release and repeated bundle reads before a fix.
+  The 128 MiB implementation and focused checks are complete in the next items.
+  Current graph qualification and final workspace verification remain required.
 - [x] Set the native database memory limit to 128 MiB. Use the same constant for
   backup validation. Keep the graph window limit at 4 MiB. Check the native
   settings and resource rejection. Verify installed package reads and restore.
@@ -1244,7 +1258,7 @@ The production limit change and final production qualification remain open.
   rejection test. The pinned DuckDB binding does not retain the native error
   type in `Connection::execute`. Do not compare its unused error-code variant.
   Pass the SQL repetition length as `BIGINT`.
-- [ ] Permit trusted host-prepared exports with declared Table outputs through
+- [x] Permit trusted host-prepared exports with declared Table outputs through
   `InstalledAnalysis`. Keep graph and discovery output checks on their domain
   adapters. Verify typed native graph input and the AR-04 context packet.
 - [x] Keep the validated graph package provenance reference in the atomic
@@ -1252,7 +1266,7 @@ The production limit change and final production qualification remain open.
   Verify a production graph commit and the bounded header reference read.
 - [x] Validate the installed package references in native context records before collection and during recovery. Check the typed reference fields, tenant scope, names, generation, export, revision, root, and retained dependency closure. Permit a source record without these references only for the previous discovery format. Reject malformed new references. Verify reopen and backup restore.
 - [x] Read graph package references from the bounded native header. Do not read graph rows to obtain the source key. Verify that the reference read does not reconstruct rows.
-- [ ] Use a finite 60-second outer deadline for host component calls. Permit compilation after reopen with an empty code cache. Keep the compiler and guest execution limits separate. Verify replay with a new production package owner.
+- [x] Use a finite 60-second outer deadline for host component calls. Permit compilation after reopen with an empty code cache. Keep the compiler and guest execution limits separate. Verify replay with a new production package owner.
 - [x] Check each distinct saved grant at domain commit, including different grants for the same package root. Verify that removal of the second grant prevents the commit callback.
 - [x] Share the package lifecycle lock between owners that use the same store. Verify that a second owner cannot change an activation while a domain commit holds that lock.
 - [x] Hold the shared lifecycle lock during owner construction and package admission collection. Verify that a second owner cannot collect a package row before the first owner completes activation.
