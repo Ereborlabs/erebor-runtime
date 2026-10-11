@@ -4,7 +4,11 @@ use super::*;
 fn control_notification_stronger_revision_delivers_without_deadline_reset() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     let mut route = policy("primary");
     route.retry_limit = 1;
@@ -67,7 +71,11 @@ fn control_notification_stronger_revision_delivers_without_deadline_reset() -> T
 fn control_notification_new_revision_can_receive_human_ack_with_original_deadline() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     commit_finding(&store, finding(1, FindingSeverityV1::Warning), 1)?;

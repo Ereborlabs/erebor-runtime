@@ -210,26 +210,38 @@ impl PackageAuthorization for ClientAuth {
         bundle: &PackageBundleV1,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
-        let digest = bundle.digest()?;
-        let state = self
-            .package_state(grant, action)
-            .map_err(Self::package_denied)?;
-        if action != PackageActionV1::Remove
-            && !state
-                .package_trust
-                .contains(&(grant.selection.tenant_id, digest))
-        {
-            return Err(araphor_data::Error::QueryDenied {
-                location: snafu::Location::default(),
-            });
-        }
-        let result = operation();
-        drop(state);
-        result
+        self.commit_many(&[(grant, bundle)], action, operation)
     }
 
     fn changes(&self) -> watch::Receiver<u64> {
         self.changes.subscribe()
+    }
+
+    fn commit_many(
+        &self,
+        grants: &[(&PackageGrantV1, &PackageBundleV1)],
+        action: PackageActionV1,
+        operation: &mut dyn FnMut() -> araphor_data::Result<()>,
+    ) -> araphor_data::Result<()> {
+        let state = self.state().map_err(Self::package_denied)?;
+        let now = Self::now().map_err(Self::package_denied)?;
+        for (grant, bundle) in grants {
+            state
+                .check_package(grant, action, now)
+                .map_err(Self::package_denied)?;
+            if action != PackageActionV1::Remove
+                && !state
+                    .package_trust
+                    .contains(&(grant.selection.tenant_id, bundle.digest()?))
+            {
+                return Err(araphor_data::Error::QueryDenied {
+                    location: snafu::Location::default(),
+                });
+            }
+        }
+        let result = operation();
+        drop(state);
+        result
     }
 }
 

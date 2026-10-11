@@ -5,7 +5,7 @@ use super::{Adapter, Result};
 use crate::*;
 
 impl BehaviorSnapshotV1 {
-    pub fn merge(&self, next: &Self) -> Result<Self> {
+    pub fn merge(&self, next: &Self, execution: &crate::InstalledAnalysis) -> Result<Self> {
         self.validate()?;
         next.validate()?;
         let adapter = Adapter::new(
@@ -46,6 +46,8 @@ impl BehaviorSnapshotV1 {
                 .collect()
         })?;
         let output = Adapter::run(
+            execution,
+            self.tenant_id,
             "merge",
             vec![
                 Adapter::dataset("snapshots", &metadata)?,
@@ -57,17 +59,22 @@ impl BehaviorSnapshotV1 {
             ],
             Adapter::revision(&(self, next))?,
         )?;
-        Ok(adapter
+        let snapshot = adapter
             .snapshot(
-                &output,
+                &output.output,
                 self.tenant_id,
                 self.source_revision.clone(),
                 self.proof_kind,
             )?
-            .snapshot)
+            .snapshot;
+        Adapter::validate_merge(self, next, &snapshot)?;
+        Ok(snapshot)
     }
 
-    pub fn display_groups(&self) -> Result<Vec<BehaviorDisplayGroupV1>> {
+    pub fn display_groups(
+        &self,
+        execution: &crate::InstalledAnalysis,
+    ) -> Result<Vec<BehaviorDisplayGroupV1>> {
         self.validate()?;
         let adapter = Adapter::new(Adapter::references(self));
         let atoms = self
@@ -89,6 +96,8 @@ impl BehaviorSnapshotV1 {
             .map(Adapter::coverage)
             .collect::<Result<Vec<_>>>()?;
         let output = Adapter::run(
+            execution,
+            self.tenant_id,
             "groups",
             vec![
                 Adapter::dataset("atoms", &atoms)?,
@@ -96,7 +105,7 @@ impl BehaviorSnapshotV1 {
             ],
             Adapter::revision(self)?,
         )?;
-        let mut groups = Adapter::output::<builtin::Group>(&output, "groups")?
+        let mut groups = Adapter::output::<builtin::Group>(&output.output, "groups")?
             .into_iter()
             .map(|row| {
                 Ok(BehaviorDisplayGroupV1 {
@@ -127,6 +136,7 @@ impl BehaviorSnapshotV1 {
             })
             .collect::<Result<Vec<_>>>()?;
         groups.sort_by(|left, right| left.key.cmp(&right.key));
+        Adapter::validate_groups(self, &groups)?;
         Ok(groups)
     }
 }

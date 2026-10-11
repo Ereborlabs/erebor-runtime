@@ -44,7 +44,12 @@ fn discovery_profile_commit_crashes() -> std::result::Result<(), Box<dyn std::er
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
         let store = Arc::new(AnalysisStore::open(PathBuf::from(root))?);
         let sealed = std::env::var("ARAPHOR_DISCOVERY_SEALED")? == "true";
-        let owner = DiscoveryOwner::new(store.clone(), Arc::new(MissingContext), config(sealed))?;
+        let owner = DiscoveryOwner::new(
+            store.clone(),
+            Arc::new(MissingContext),
+            config(sealed),
+            crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
+        )?;
         assert_eq!(owner.process(10)?, 1);
         store.crash_at("profile.returned");
         return Err("the requested discovery crash did not occur".into());
@@ -78,8 +83,12 @@ fn discovery_profile_commit_crashes() -> std::result::Result<(), Box<dyn std::er
                 .status()?;
             assert_eq!(status.code(), Some(73), "{point}, sealed={sealed}");
             let store = Arc::new(AnalysisStore::open(&root)?);
-            let owner =
-                DiscoveryOwner::new(store.clone(), Arc::new(MissingContext), config(sealed))?;
+            let owner = DiscoveryOwner::new(
+                store.clone(),
+                Arc::new(MissingContext),
+                config(sealed),
+                crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
+            )?;
             let recovered = owner.profile(&record.id.stream)?;
             let committed = point != "result.before";
             assert_eq!(recovered.is_some(), committed, "{point}, sealed={sealed}");
@@ -114,7 +123,12 @@ fn discovery_profile_commit_crashes() -> std::result::Result<(), Box<dyn std::er
             drop(owner);
             drop(store);
             let store = Arc::new(AnalysisStore::open(&root)?);
-            let owner = DiscoveryOwner::new(store, Arc::new(MissingContext), config(sealed))?;
+            let owner = DiscoveryOwner::new(
+                store.clone(),
+                Arc::new(MissingContext),
+                config(sealed),
+                crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
+            )?;
             assert_eq!(owner.profile(&record.id.stream)?, Some(profile));
             assert_eq!(owner.process(13)?, 0);
         }

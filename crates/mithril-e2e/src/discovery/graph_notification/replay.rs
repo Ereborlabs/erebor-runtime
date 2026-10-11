@@ -18,6 +18,7 @@ struct ReplayQualification {
     intake: EvidenceIntakeOwner,
     data: Arc<AnalysisStore>,
     inputs: Arc<GraphInputs>,
+    execution: InstalledAnalysis,
     authenticated: AuthenticatedEvidenceNodeV1,
     now: u64,
 }
@@ -82,7 +83,11 @@ impl ReplayQualification {
                 false,
             )?);
         }
-        let graph = GraphAndFindingOwner::new(self.data.clone(), self.inputs.clone())?;
+        let graph = GraphAndFindingOwner::new(
+            self.data.clone(),
+            self.inputs.clone(),
+            self.execution.clone(),
+        )?;
         for _ in 0..512 {
             graph.process(self.now)?;
             let mut complete = true;
@@ -136,14 +141,20 @@ impl ReplayQualification {
             intake,
             data,
             inputs,
+            execution,
             authenticated,
             now,
         } = self;
         drop(intake);
+        drop(execution);
         drop(data);
         let data = Arc::new(AnalysisStore::open(root.path().join("analysis"))?);
         let store = ControlStore::open(root.path().join("notification-control"))?;
-        let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone())?;
+        let graph = GraphAndFindingOwner::new(
+            data.clone(),
+            inputs.clone(),
+            InstalledAnalysis::testing(Some(data.clone()), authenticated.tenant_id)?,
+        )?;
         assert_eq!(data.source_page(authenticated.tenant_id, None)?.len(), 33);
         assert_eq!(graph.current_findings(authenticated.tenant_id)?.len(), 257);
         assert_eq!(
@@ -214,7 +225,11 @@ impl ReplayQualification {
         drop(store);
         let data = Arc::new(AnalysisStore::open(root.path().join("analysis"))?);
         let store = ControlStore::open(root.path().join("notification-control"))?;
-        let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone())?;
+        let graph = GraphAndFindingOwner::new(
+            data.clone(),
+            inputs.clone(),
+            InstalledAnalysis::testing(Some(data.clone()), authenticated.tenant_id)?,
+        )?;
         GraphNotificationQualification::resume(&store, &data, &graph, &first, now, &mut lifecycle)?;
         assert_eq!(lifecycle["final_health"]["obligations"], 257);
         assert_eq!(lifecycle["final_health"]["unrouted"], 256);
@@ -348,6 +363,10 @@ impl ReplayQualification {
         let root = tempfile::tempdir()?;
         let store = ControlStore::open(root.path().join("control"))?;
         let data = Arc::new(AnalysisStore::open(root.path().join("analysis"))?);
+        let execution = InstalledAnalysis::testing_tenants(
+            Some(data.clone()),
+            &[EvidenceIdV1::new(1, 2).to_be_bytes(), [201; 16]],
+        )?;
         let intake = EvidenceIntakeOwner::new(
             store,
             data.clone(),
@@ -358,6 +377,7 @@ impl ReplayQualification {
             intake,
             data,
             inputs: Arc::new(GraphInputs::default()),
+            execution,
             now,
             authenticated: AuthenticatedEvidenceNodeV1 {
                 tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
@@ -443,7 +463,11 @@ impl ReplayQualification {
         &self,
         source: &EvidenceIntakeIdentityV1,
     ) -> std::result::Result<GraphSnapshotV1, Box<dyn StdError>> {
-        let graph = GraphAndFindingOwner::new(self.data.clone(), self.inputs.clone())?;
+        let graph = GraphAndFindingOwner::new(
+            self.data.clone(),
+            self.inputs.clone(),
+            self.execution.clone(),
+        )?;
         for _ in 0..32 {
             graph.process(self.now)?;
             if let Some(snapshot) = graph.snapshot(source)? {
@@ -589,7 +613,7 @@ impl ReplayQualification {
         gap.coverage[0].gap_reasons = vec!["RING_LOSS".into()];
         gap.coverage_keys[0].state = DiscoveryCoverageStateV1::Gapped;
         gap.coverage_keys[0].gap_reasons = vec!["RING_LOSS".into()];
-        let gapped = GraphAndFindingOwner::derive(&gap)?;
+        let gapped = GraphAndFindingOwner::derive(&gap, &self.execution)?;
         assert!(gapped
             .findings
             .iter()
@@ -600,7 +624,7 @@ impl ReplayQualification {
         reversed.facts.reverse();
         assert_eq!(
             gapped.findings,
-            GraphAndFindingOwner::derive(&reversed)?.findings
+            GraphAndFindingOwner::derive(&reversed, &self.execution)?.findings
         );
         let late = self.late_card(&source, native)?;
         let mut device = GraphNotificationQualification::native(1, true);
@@ -636,7 +660,11 @@ impl ReplayQualification {
     ) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
         let record = self.record(source, 1)?;
         self.policy(&record)?;
-        let graph = GraphAndFindingOwner::new(self.data.clone(), self.inputs.clone())?;
+        let graph = GraphAndFindingOwner::new(
+            self.data.clone(),
+            self.inputs.clone(),
+            self.execution.clone(),
+        )?;
         assert!(graph.refresh(source, self.now + 300_000_000_000)?);
         let late = self.result_snapshot(&graph, source, &original.package_id)?;
         let finding = late
@@ -754,7 +782,7 @@ impl ReplayQualification {
         let mut mixed = GraphNotificationQualification::replay(&self.data, &local, &first)?;
         mixed.records.push(self.record(&remote, 1)?);
         assert!(matches!(
-            GraphAndFindingOwner::derive(&mixed),
+            GraphAndFindingOwner::derive(&mixed, &self.execution),
             Err(Error::GraphInvalid {
                 field: "replay record identity",
                 ..
@@ -781,7 +809,11 @@ impl ReplayQualification {
             "cross-node-scheduled",
             1,
         )?;
-        let graph = GraphAndFindingOwner::new(self.data.clone(), self.inputs.clone())?;
+        let graph = GraphAndFindingOwner::new(
+            self.data.clone(),
+            self.inputs.clone(),
+            self.execution.clone(),
+        )?;
         assert!(graph.refresh(&local, self.now + 1)?);
         let partial = self.result_snapshot(&graph, &local, "HF-XNODE-001")?;
         let finding = partial
@@ -977,7 +1009,11 @@ impl ReplayQualification {
                 "late-authority",
                 1,
             )?;
-            let graph = GraphAndFindingOwner::new(self.data.clone(), self.inputs.clone())?;
+            let graph = GraphAndFindingOwner::new(
+                self.data.clone(),
+                self.inputs.clone(),
+                self.execution.clone(),
+            )?;
             assert!(graph.refresh(&source, self.now + 300_000_000_000)?);
             let snapshot = self.result_snapshot(&graph, &source, "HF-DW-001")?;
             assert_ne!(snapshot.input_manifest, earlier.input_manifest);
@@ -1034,14 +1070,14 @@ impl ReplayQualification {
                     }
                     if name == "other-admission" {
                         assert!(matches!(
-                            GraphAndFindingOwner::derive(&borrowed),
+                            GraphAndFindingOwner::derive(&borrowed, &self.execution),
                             Err(Error::GraphInvalid {
                                 field: "credential read completion",
                                 ..
                             })
                         ));
                     } else {
-                        let unbound = GraphAndFindingOwner::derive(&borrowed)?;
+                        let unbound = GraphAndFindingOwner::derive(&borrowed, &self.execution)?;
                         assert!(unbound
                             .findings
                             .iter()
@@ -1072,7 +1108,7 @@ impl ReplayQualification {
                 .into_iter()
                 .chain(self.inputs.facts(&network)?)
                 .collect();
-            let contradiction = GraphAndFindingOwner::derive(&contradicted)?;
+            let contradiction = GraphAndFindingOwner::derive(&contradicted, &self.execution)?;
             assert!(contradiction
                 .findings
                 .iter()

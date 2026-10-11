@@ -13,6 +13,7 @@ impl GraphDerivation<'_> {
         package: &str,
         edge: algorithm::Relationship,
     ) -> Result<()> {
+        self.validate_edge(&edge)?;
         let record = self.selected_record(edge.record)?.clone();
         let wire = record.decode()?;
         let task = self.task(&record, &wire);

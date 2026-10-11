@@ -20,10 +20,11 @@ fn duplicate_context_projection() -> TestResult {
     input.contexts[0].image_digest = text.clone();
     input.contexts[0].configuration_digest = text.clone();
     input.contexts[0].static_key.object_selector = text;
-    let single = DiscoveryOwner::derive_recorded(&input)?;
+    let execution = crate::InstalledAnalysis::testing(None, input.tenant_id)?;
+    let single = DiscoveryOwner::derive_recorded(&input, &execution)?;
     let record = input.records[0].clone();
     input.records.extend(std::iter::repeat_n(record, 1023));
-    let repeated = DiscoveryOwner::derive_recorded(&input)?;
+    let repeated = DiscoveryOwner::derive_recorded(&input, &execution)?;
     assert_eq!(repeated.snapshot, single.snapshot);
     assert_eq!(repeated.duplicate_deliveries, 1023);
     let adapter = Adapter::new(input.records.iter().map(|record| &record.id));
@@ -40,5 +41,76 @@ fn discovery_exact_revision() -> TestResult {
     input.contexts[0].image_digest.push_str("-replacement");
     assert_eq!(input.source_revision, source);
     assert_ne!(Adapter::revision(&input)?, first);
+    Ok(())
+}
+
+#[test]
+fn recorded_rejects_host_changes() -> TestResult {
+    let input = input()?;
+    let execution = crate::InstalledAnalysis::testing(None, input.tenant_id)?;
+    let result = DiscoveryOwner::derive_recorded(&input, &execution)?;
+    let mut identity = result.clone();
+    identity.snapshot.atoms[0]
+        .key
+        .subject_revision
+        .push_str("-invented");
+    let mut physical = result.clone();
+    let key = &mut physical.snapshot.atoms[0].key;
+    (
+        key.physical_result,
+        key.effect.decision,
+        key.effect.kernel_result,
+    ) = match key.physical_result {
+        DiscoveryPhysicalResultV1::Prevented => (DiscoveryPhysicalResultV1::Unknown, 0, 0),
+        DiscoveryPhysicalResultV1::Unknown => (DiscoveryPhysicalResultV1::Prevented, 1, -13),
+    };
+    let mut lifecycle = result.clone();
+    lifecycle.snapshot.lifecycle[0].state = DiscoveryLifecycleStateV1::Recorded {
+        records: result.snapshot.atoms[0].evidence_sample.clone(),
+    };
+    for candidate in [identity, physical, lifecycle] {
+        candidate.snapshot.validate()?;
+        assert!(Adapter::validate_recorded(&input, &candidate).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn recorded_rejects_coverage_upgrade() -> TestResult {
+    let mut input = input()?;
+    input.coverage[0].state = DiscoveryCoverageStateV1::Unknown;
+    let execution = crate::InstalledAnalysis::testing(None, input.tenant_id)?;
+    let mut result = DiscoveryOwner::derive_recorded(&input, &execution)?;
+    let unknown = result
+        .snapshot
+        .coverage
+        .iter_mut()
+        .find(|range| range.state == DiscoveryCoverageStateV1::Unknown)
+        .ok_or("unknown range")?;
+    unknown.state = DiscoveryCoverageStateV1::Healthy;
+    unknown.gap_reasons.clear();
+    result.snapshot.validate()?;
+    assert!(matches!(
+        Adapter::validate_recorded(&input, &result),
+        Err(crate::Error::DiscoveryInvalid {
+            field: "analysis coverage proof",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn merge_groups_preserve_attribution() -> TestResult {
+    let input = input()?;
+    let execution = crate::InstalledAnalysis::testing(None, input.tenant_id)?;
+    let snapshot = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
+    let mut candidate = snapshot.clone();
+    candidate.atoms[0].key.image_digest.push_str("-invented");
+    candidate.validate()?;
+    assert!(Adapter::validate_merge(&snapshot, &snapshot, &candidate).is_err());
+    let mut groups = snapshot.display_groups(&execution)?;
+    groups[0].key.image_digest.push_str("-invented");
+    assert!(Adapter::validate_groups(&snapshot, &groups).is_err());
     Ok(())
 }

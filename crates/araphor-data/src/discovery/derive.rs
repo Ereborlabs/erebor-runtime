@@ -172,11 +172,24 @@ mod tests {
 
     type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-    pub(super) fn input() -> TestResult<DiscoveryInputManifestV1> {
+    fn execution() -> TestResult<std::sync::MutexGuard<'static, crate::InstalledAnalysis>> {
+        static EXECUTION: std::sync::LazyLock<
+            crate::Result<std::sync::Mutex<crate::InstalledAnalysis>>,
+        > = std::sync::LazyLock::new(|| {
+            crate::InstalledAnalysis::testing(None, input()?.tenant_id).map(std::sync::Mutex::new)
+        });
+        match EXECUTION.as_ref() {
+            Ok(execution) => execution
+                .lock()
+                .map_err(|_| "installed fixture lock poisoned".into()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub(super) fn input() -> crate::Result<DiscoveryInputManifestV1> {
         DiscoveryInputManifestV1::try_from(
             include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
         )
-        .map_err(Into::into)
     }
 
     fn edit_record(
@@ -191,8 +204,9 @@ mod tests {
 
     #[test]
     fn discovery_derivation_replay_counts() -> TestResult<()> {
+        let execution = execution()?;
         let original = input()?;
-        let result = DiscoveryOwner::derive_recorded(&original)?;
+        let result = DiscoveryOwner::derive_recorded(&original, &execution)?;
         assert_eq!(result.duplicate_deliveries, 1);
         assert_eq!(result.snapshot.accepted_records, 3);
         assert_eq!(result.snapshot.included_records, 2);
@@ -238,12 +252,12 @@ mod tests {
         permuted.records.reverse();
         permuted.contexts.reverse();
         assert_eq!(
-            DiscoveryOwner::derive_recorded(&permuted)?.snapshot,
+            DiscoveryOwner::derive_recorded(&permuted, &execution)?.snapshot,
             result.snapshot
         );
         permuted.records.extend(original.records);
         assert_eq!(
-            DiscoveryOwner::derive_recorded(&permuted)?.snapshot,
+            DiscoveryOwner::derive_recorded(&permuted, &execution)?.snapshot,
             result.snapshot
         );
         let encoded = serde_json::to_vec(&permuted)?;
@@ -256,10 +270,11 @@ mod tests {
 
     #[test]
     fn discovery_derivation_conflicting_input() -> TestResult<()> {
+        let execution = execution()?;
         let mut changed = input()?;
         edit_record(&mut changed.records[3], |wire| wire.kernel_result = 0)?;
         assert!(matches!(
-            DiscoveryOwner::derive_recorded(&changed),
+            DiscoveryOwner::derive_recorded(&changed, &execution),
             Err(crate::Error::DiscoveryConflict {
                 kind: "record bytes",
                 ..
@@ -273,7 +288,7 @@ mod tests {
             .ok_or("context absent")?
             .state_id = 2;
         assert!(matches!(
-            DiscoveryOwner::derive_recorded(&changed),
+            DiscoveryOwner::derive_recorded(&changed, &execution),
             Err(crate::Error::DiscoveryConflict {
                 kind: "context values",
                 ..
@@ -281,7 +296,7 @@ mod tests {
         ));
         changed = input()?;
         changed.contexts[0].record_id.stream.node_id = "another-node".into();
-        assert!(DiscoveryOwner::derive_recorded(&changed).is_err());
+        assert!(DiscoveryOwner::derive_recorded(&changed, &execution).is_err());
         changed = input()?;
         changed.records[0].id.stream.tenant_id = [9; 16];
         assert!(changed.validate().is_err());
@@ -290,6 +305,7 @@ mod tests {
 
     #[test]
     fn discovery_derivation_distinct_keys() -> TestResult<()> {
+        let execution = execution()?;
         for change in 0..6 {
             let mut changed = input()?;
             match change {
@@ -306,7 +322,7 @@ mod tests {
                 _ => changed.contexts[1].entry_instance_id[15] += 1,
             }
             assert_eq!(
-                DiscoveryOwner::derive_recorded(&changed)?
+                DiscoveryOwner::derive_recorded(&changed, &execution)?
                     .snapshot
                     .atoms
                     .len(),
@@ -319,7 +335,7 @@ mod tests {
             wire.decision = 0;
             wire.kernel_result = -5;
         })?;
-        let result = DiscoveryOwner::derive_recorded(&changed)?;
+        let result = DiscoveryOwner::derive_recorded(&changed, &execution)?;
         assert!(result
             .snapshot
             .atoms
@@ -329,14 +345,15 @@ mod tests {
         changed = input()?;
         changed.proof_kind = DiscoveryProofKindV1::RecordedInput;
         assert_ne!(
-            DiscoveryOwner::derive_recorded(&changed)?.snapshot,
-            DiscoveryOwner::derive_recorded(&input()?)?.snapshot
+            DiscoveryOwner::derive_recorded(&changed, &execution)?.snapshot,
+            DiscoveryOwner::derive_recorded(&input()?, &execution)?.snapshot
         );
         Ok(())
     }
 
     #[test]
     fn discovery_derivation_missing_generation() -> TestResult<()> {
+        let execution = execution()?;
         let mut input = input()?;
         input.records.truncate(1);
         input.contexts.truncate(1);
@@ -355,7 +372,7 @@ mod tests {
             });
         })?;
         input.records[0].decode()?;
-        let snapshot = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+        let snapshot = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
         assert_eq!(snapshot.unresolved_records, 1);
         assert_eq!(snapshot.included_records, 0);
         assert_eq!(
@@ -367,7 +384,7 @@ mod tests {
             wire.profile_generation_ref_id = Some(7);
             wire.decision_context = None;
         })?;
-        let snapshot = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+        let snapshot = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
         assert_eq!(snapshot.unresolved_records, 1);
         assert_eq!(snapshot.unresolved[0].reason, "MISSING_DECISION_CONTEXT");
         Ok(())
@@ -375,12 +392,13 @@ mod tests {
 
     #[test]
     fn discovery_derivation_disposition_accounting() -> TestResult<()> {
+        let execution = execution()?;
         let mut changed = input()?;
         changed.exclusions.push(DiscoveryUnresolvedV1 {
             record_id: changed.records[1].id.clone(),
             reason: "DECLARED_FILTER".into(),
         });
-        let result = DiscoveryOwner::derive_recorded(&changed)?;
+        let result = DiscoveryOwner::derive_recorded(&changed, &execution)?;
         assert_eq!(result.snapshot.included_records, 1);
         assert_eq!(result.snapshot.excluded_records, 1);
         assert_eq!(result.snapshot.unresolved_records, 1);
@@ -390,7 +408,7 @@ mod tests {
         changed
             .records
             .retain(|record| record.id.durable_cursor != 3);
-        let result = DiscoveryOwner::derive_recorded(&changed)?;
+        let result = DiscoveryOwner::derive_recorded(&changed, &execution)?;
         assert_eq!(
             result.snapshot.coverage[0].state,
             DiscoveryCoverageStateV1::Gapped
@@ -407,8 +425,9 @@ mod tests {
 
     #[test]
     fn discovery_derivation_page_merge() -> TestResult<()> {
+        let execution = execution()?;
         let input = input()?;
-        let complete = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+        let complete = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
         let mut first = input.clone();
         first.records.retain(|record| record.id.durable_cursor == 1);
         first
@@ -425,20 +444,21 @@ mod tests {
             .retain(|context| context.record_id.durable_cursor != 1);
         second.coverage[0].first_cursor = 2;
         second.coverage[0].expected_records = 2;
-        let first = DiscoveryOwner::derive_recorded(&first)?.snapshot;
-        let second = DiscoveryOwner::derive_recorded(&second)?.snapshot;
-        assert_eq!(first.merge(&second)?, complete);
-        assert_eq!(second.merge(&first)?, complete);
-        assert_eq!(complete.merge(&complete)?, complete);
-        assert!(complete.merge(&first).is_err());
+        let first = DiscoveryOwner::derive_recorded(&first, &execution)?.snapshot;
+        let second = DiscoveryOwner::derive_recorded(&second, &execution)?.snapshot;
+        assert_eq!(first.merge(&second, &execution)?, complete);
+        assert_eq!(second.merge(&first, &execution)?, complete);
+        assert_eq!(complete.merge(&complete, &execution)?, complete);
+        assert!(complete.merge(&first, &execution).is_err());
         assert!(!serde_json::to_string(&complete)?.contains("wire_record"));
         Ok(())
     }
 
     #[test]
     fn discovery_derivation_lifecycle_schema() -> TestResult<()> {
+        let execution = execution()?;
         let mut input = input()?;
-        let missing = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+        let missing = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
         assert_eq!(missing.lifecycle.len(), 9);
         assert!(missing
             .lifecycle
@@ -458,7 +478,7 @@ mod tests {
                 },
             },
         ];
-        let snapshot = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+        let snapshot = DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot;
         assert!(matches!(
             snapshot.lifecycle[0].state,
             DiscoveryLifecycleStateV1::Recorded { .. }
@@ -479,8 +499,9 @@ mod tests {
 
     #[test]
     fn discovery_comparison_reviewed_changes() -> TestResult<()> {
+        let execution = execution()?;
         let original = input()?;
-        let snapshot = DiscoveryOwner::derive_recorded(&original)?.snapshot;
+        let snapshot = DiscoveryOwner::derive_recorded(&original, &execution)?.snapshot;
         let baseline = DiscoveryReviewedBaselineV1 {
             reviewer: "operator".into(),
             reviewed_utc_ns: 3000,
@@ -495,16 +516,16 @@ mod tests {
             .contexts
             .retain(|context| context.record_id.durable_cursor != 2);
         changed.coverage[0].expected_records = 2;
-        let repeated = DiscoveryOwner::derive_recorded(&changed)?.snapshot;
-        let comparison = repeated.compare(&baseline)?;
+        let repeated = DiscoveryOwner::derive_recorded(&changed, &execution)?.snapshot;
+        let comparison = repeated.compare(&baseline, &execution)?;
         assert!(comparison.added.is_empty());
         assert_eq!(comparison.changed_counts.len(), 1);
         assert_eq!(comparison.forbidden_groups.len(), 1);
         let mut changed = original.clone();
         edit_record(&mut changed.records[1], |wire| wire.kernel_result = -1)?;
-        let comparison = DiscoveryOwner::derive_recorded(&changed)?
+        let comparison = DiscoveryOwner::derive_recorded(&changed, &execution)?
             .snapshot
-            .compare(&baseline)?;
+            .compare(&baseline, &execution)?;
         assert_eq!(comparison.added.len(), 1);
         assert_eq!(comparison.changed_results.len(), 1);
         changed
@@ -514,21 +535,21 @@ mod tests {
             .contexts
             .retain(|context| context.record_id.durable_cursor != 1);
         changed.coverage[0].expected_records = 2;
-        let comparison = DiscoveryOwner::derive_recorded(&changed)?
+        let comparison = DiscoveryOwner::derive_recorded(&changed, &execution)?
             .snapshot
-            .compare(&baseline)?;
+            .compare(&baseline, &execution)?;
         assert_eq!(comparison.changed_results.len(), 1);
         let mut changed = original;
         changed.contexts[0].image_digest = "replacement-image".into();
         changed.contexts[1].image_digest = "replacement-image".into();
-        let comparison = DiscoveryOwner::derive_recorded(&changed)?
+        let comparison = DiscoveryOwner::derive_recorded(&changed, &execution)?
             .snapshot
-            .compare(&baseline)?;
+            .compare(&baseline, &execution)?;
         assert_eq!(comparison.changed_identities.len(), 1);
         assert_eq!(baseline.snapshot, snapshot);
         let mut unreviewed = baseline;
         unreviewed.reviewer.clear();
-        assert!(snapshot.compare(&unreviewed).is_err());
+        assert!(snapshot.compare(&unreviewed, &execution).is_err());
         Ok(())
     }
 
@@ -688,6 +709,7 @@ mod tests {
 
     #[test]
     fn discovery_derivation_corpus_parity() -> TestResult<()> {
+        let execution = execution()?;
         let corpus: Corpus = serde_json::from_slice(include_bytes!(
             "../../../mithril-e2e/fixtures/discovery/pilot.json"
         ))?;
@@ -699,7 +721,9 @@ mod tests {
                 &case,
                 corpus.splits.get(&case.partition).ok_or("split absent")?,
             )?;
-            let result = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+            let result = DiscoveryOwner::derive_recorded(&input, &execution)
+                .map_err(|error| format!("{} normal: {error:?}", case.id))?
+                .snapshot;
             assert_eq!(
                 result.accepted_records, case.expected.accepted,
                 "{}",
@@ -737,7 +761,8 @@ mod tests {
             input.records.reverse();
             input.contexts.reverse();
             input.records.extend(input.records.clone());
-            let replay = DiscoveryOwner::derive_recorded(&input)?;
+            let replay = DiscoveryOwner::derive_recorded(&input, &execution)
+                .map_err(|error| format!("{} replay: {error:?}", case.id))?;
             assert_eq!(replay.duplicate_deliveries, case.expected.accepted);
             assert_eq!(replay.snapshot, result, "{}", case.id);
         }

@@ -58,6 +58,10 @@ async fn run() -> mithril_control::Result<()> {
     if let Some(error) = discovery_error {
         warn!("discovery startup failed", error = %error);
     }
+    let client = match client {
+        Some(config) => Some(ClientListener::load(config, control.clone()).await?),
+        None => None,
+    };
     let (discovery_cancel, discovery_stop) = tokio::sync::watch::channel(false);
     let discovery_task = discovery.map(|owner| {
         tokio::spawn(async move {
@@ -113,8 +117,7 @@ async fn run() -> mithril_control::Result<()> {
             control_shutdown.notified().await;
         });
         let client_result = async move {
-            ClientListener::load(client, control)
-                .await?
+            client
                 .serve(async move {
                     client_shutdown.notified().await;
                 })

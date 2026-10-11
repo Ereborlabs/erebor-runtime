@@ -239,6 +239,8 @@ impl DiscoveryOwner {
     }
 
     fn process_source(&self, source: EvidenceIntakeIdentityV1, now: u64) -> Result<usize> {
+        let execution = self.execution.snapshot(source.tenant_id)?;
+        let installed = Self::analysis_refs(&execution)?;
         let scope = ProcessorScopeV1 {
             processor_id: DISCOVERY_PROCESSOR.into(),
             method_version: DISCOVERY_SCHEMA_VERSION as u64,
@@ -285,7 +287,12 @@ impl DiscoveryOwner {
             .build()
         })?;
         let expected = health.consumed_cursor.max(health.resume_floor);
-        let continuing = previous.as_ref().is_some_and(|profile| !profile.sealed);
+        let continuing = match previous.as_ref() {
+            Some(profile) if !profile.sealed => {
+                self.installed_refs(profile)?.as_ref() == Some(&installed)
+            }
+            _ => false,
+        };
         let mut profile = if continuing {
             previous.ok_or_else(|| {
                 crate::DiscoveryInvalidSnafu {
@@ -309,17 +316,20 @@ impl DiscoveryOwner {
                 input_bytes: 0,
                 incomplete: health.incomplete,
                 gaps: Vec::new(),
-                snapshot: Self::derive_recorded(&DiscoveryInputManifestV1 {
-                    schema_version: DISCOVERY_SCHEMA_VERSION,
-                    tenant_id: source.tenant_id,
-                    source_revision: "live-v1".into(),
-                    proof_kind: DiscoveryProofKindV1::ObservedRuntime,
-                    coverage: Vec::new(),
-                    contexts: Vec::new(),
-                    records: Vec::new(),
-                    exclusions: Vec::new(),
-                    lifecycle: Vec::new(),
-                })?
+                snapshot: Self::derive_recorded(
+                    &DiscoveryInputManifestV1 {
+                        schema_version: DISCOVERY_SCHEMA_VERSION,
+                        tenant_id: source.tenant_id,
+                        source_revision: "live-v1".into(),
+                        proof_kind: DiscoveryProofKindV1::ObservedRuntime,
+                        coverage: Vec::new(),
+                        contexts: Vec::new(),
+                        records: Vec::new(),
+                        exclusions: Vec::new(),
+                        lifecycle: Vec::new(),
+                    },
+                    &execution,
+                )?
                 .snapshot,
                 context_refs: Vec::new(),
             }
@@ -397,7 +407,7 @@ impl DiscoveryOwner {
                 exclusions: Vec::new(),
                 lifecycle: Vec::new(),
             };
-            let admitted = self.bound_page(&profile, &status, &input, &facts, now)?;
+            let admitted = self.bound_page(&profile, &status, &input, &facts, now, &execution)?;
             bounded |= admitted < input.records.len();
             if admitted > 0 {
                 input.records.truncate(admitted);
@@ -409,8 +419,8 @@ impl DiscoveryOwner {
                     .contexts
                     .retain(|context| context.record_id.durable_cursor <= consumed);
                 input.coverage = Self::coverage(&status, &input.records)?;
-                let next = Self::derive_recorded(&input)?.snapshot;
-                profile.snapshot = profile.snapshot.merge(&next)?;
+                let next = Self::derive_recorded(&input, &execution)?.snapshot;
+                profile.snapshot = profile.snapshot.merge(&next, &execution)?;
                 bytes = Self::input_size(&input)?;
                 add(&mut profile.input_bytes, bytes)?;
                 let mut distinct = BTreeSet::new();
@@ -444,7 +454,8 @@ impl DiscoveryOwner {
         if consumed == expected && gaps.is_empty() && (!profile.sealed || !continuing) {
             return Ok(0);
         }
-        let health_context = self.source_context(&status, &profile, health.consumed_cursor, now)?;
+        let health_context =
+            self.source_context(&status, &profile, health.consumed_cursor, now, &installed)?;
         profile
             .context_refs
             .retain(|reference| reference.key.owner_id != "discovery-source-v1");
@@ -482,28 +493,34 @@ impl DiscoveryOwner {
             })
             .collect();
         profile.validate()?;
-        self.store.commit_working(
-            &AnalysisResultCommitV1 {
-                scope,
-                expected_cursor: expected,
-                consumed_cursor: consumed,
-                coverage_revision: status.receipt.coverage_revision,
-                context_revision: profile
-                    .context_refs
-                    .iter()
-                    .map(|reference| reference.commit_revision)
-                    .max()
-                    .unwrap_or(0),
-                result_id: profile.profile_id.clone(),
-                body: serde_json::to_vec(&profile).context(DiscoveryEncodingSnafu)?,
-                created_utc_ns: now,
-                witnesses,
-                context_refs: profile.context_refs.clone(),
-            },
-            if continuing {
-                head.map(|head| head.commit_revision)
-            } else {
-                None
+        execution.authorize(
+            source.tenant_id,
+            &Self::package_revisions(&installed),
+            || {
+                self.store.commit_working(
+                    &AnalysisResultCommitV1 {
+                        scope,
+                        expected_cursor: expected,
+                        consumed_cursor: consumed,
+                        coverage_revision: status.receipt.coverage_revision,
+                        context_revision: profile
+                            .context_refs
+                            .iter()
+                            .map(|reference| reference.commit_revision)
+                            .max()
+                            .unwrap_or(0),
+                        result_id: profile.profile_id.clone(),
+                        body: serde_json::to_vec(&profile).context(DiscoveryEncodingSnafu)?,
+                        created_utc_ns: now,
+                        witnesses,
+                        context_refs: profile.context_refs.clone(),
+                    },
+                    if continuing {
+                        head.map(|head| head.commit_revision)
+                    } else {
+                        None
+                    },
+                )
             },
         )?;
         Ok(usize::try_from(consumed - expected).unwrap_or(usize::MAX))
@@ -532,6 +549,7 @@ impl DiscoveryOwner {
         input: &DiscoveryInputManifestV1,
         facts: &BTreeMap<DiscoveryRecordIdV1, AnalysisContextVersionV1>,
         now: u64,
+        execution: &crate::InstalledAnalysis,
     ) -> Result<usize> {
         let mut count = input.records.len();
         loop {
@@ -548,7 +566,7 @@ impl DiscoveryOwner {
                 coverage: Self::coverage(status, &input.records[..count])?,
                 ..input.clone()
             };
-            let snapshot = Self::derive_recorded(&candidate)?.snapshot;
+            let snapshot = Self::derive_recorded(&candidate, execution)?.snapshot;
             let atom_count = profile
                 .snapshot
                 .atoms
@@ -566,7 +584,7 @@ impl DiscoveryOwner {
                 continue;
             }
             let mut next = profile.clone();
-            next.snapshot = profile.snapshot.merge(&snapshot)?;
+            next.snapshot = profile.snapshot.merge(&snapshot, execution)?;
             add(&mut next.input_bytes, Self::input_size(&candidate)?)?;
             next.updated_utc_ns = now;
             next.revision = next.revision.saturating_add(1);
@@ -630,11 +648,12 @@ impl DiscoveryOwner {
         facts: &BTreeMap<DiscoveryRecordIdV1, AnalysisContextVersionV1>,
         frozen: usize,
         now: u64,
+        execution: &crate::InstalledAnalysis,
     ) -> Result<Option<BehaviorSnapshotV1>> {
         let mut count = input.contexts.len() - frozen;
         loop {
             input.contexts.truncate(frozen + count);
-            let snapshot = match Self::derive_recorded(input) {
+            let snapshot = match Self::derive_recorded(input, execution) {
                 Ok(result) => Some(result.snapshot),
                 Err(crate::Error::DiscoveryInvalid {
                     field: "atom count",
@@ -838,9 +857,20 @@ impl DiscoveryOwner {
         now: u64,
     ) -> Result<bool> {
         let source = profile.scope.identity.clone();
+        let execution = self.execution.snapshot(source.tenant_id)?;
+        let installed = Self::analysis_refs(&execution)?;
         let Some(status) = self.store.source_status(&source)? else {
             return Ok(false);
         };
+        if self.installed_refs(&profile)?.as_ref() != Some(&installed) {
+            self.store.mark_notice(
+                &profile,
+                revision,
+                self.provider.revision(&source)?,
+                status.receipt.coverage_revision,
+            )?;
+            return Ok(false);
+        }
         let Some(mut input) = self.replay_input(&profile)? else {
             self.store.mark_notice(
                 &profile,
@@ -931,7 +961,8 @@ impl DiscoveryOwner {
             }
         }
         let facts_revision = self.provider.revision(&source)?;
-        let Some(snapshot) = self.bound_refresh(&profile, &mut input, &facts, frozen_count, now)?
+        let Some(snapshot) =
+            self.bound_refresh(&profile, &mut input, &facts, frozen_count, now, &execution)?
         else {
             self.store.mark_notice(
                 &profile,
@@ -991,6 +1022,7 @@ impl DiscoveryOwner {
             &profile,
             health.consumed_cursor,
             now,
+            &installed,
         )?);
         profile
             .context_refs
@@ -1037,12 +1069,19 @@ impl DiscoveryOwner {
                 .collect(),
             context_refs: profile.context_refs.clone(),
         };
-        if publish {
-            self.store.commit_working(&commit, prior)?;
-        } else {
-            require(profile.sealed, "historical profile state")?;
-            self.store.commit_profile(&commit)?;
-        }
+        execution.authorize(
+            source.tenant_id,
+            &Self::package_revisions(&installed),
+            || {
+                if publish {
+                    self.store.commit_working(&commit, prior)?;
+                } else {
+                    require(profile.sealed, "historical profile state")?;
+                    self.store.commit_profile(&commit)?;
+                }
+                Ok(())
+            },
+        )?;
         Ok(true)
     }
 
@@ -1052,6 +1091,7 @@ impl DiscoveryOwner {
         profile: &DiscoveryProfileV1,
         consumed: u64,
         now: u64,
+        installed: &[crate::InstalledRefV1],
     ) -> Result<AnalysisContextRefV1> {
         let unknown = profile
             .snapshot
@@ -1086,6 +1126,7 @@ impl DiscoveryOwner {
                 "coverage_revision": status.receipt.coverage_revision,
                 "unknown": unknown, "gapped": gapped,
                 "interval_id": profile.interval_id,
+                "installed_packages": installed,
             }))
             .context(DiscoveryEncodingSnafu)?,
         };
@@ -1198,7 +1239,12 @@ mod tests {
         }
 
         fn owner(&self, config: DiscoveryConfigV1) -> Result<DiscoveryOwner> {
-            DiscoveryOwner::new(self.store.clone(), Arc::new(MissingContext), config)
+            DiscoveryOwner::new(
+                self.store.clone(),
+                Arc::new(MissingContext),
+                config,
+                crate::InstalledAnalysis::testing(Some(self.store.clone()), self.source.tenant_id)?,
+            )
         }
     }
 
@@ -1236,13 +1282,80 @@ mod tests {
         let store = Arc::new(crate::AnalysisStore::open(
             directory.path().join("analysis"),
         )?);
-        let owner =
-            DiscoveryOwner::new(store.clone(), Arc::new(MissingContext), Default::default())?;
+        let owner = DiscoveryOwner::new(
+            store.clone(),
+            Arc::new(MissingContext),
+            Default::default(),
+            crate::InstalledAnalysis::testing(Some(store.clone()), source.tenant_id)?,
+        )?;
         assert_eq!(owner.profile(&source)?, Some(second.clone()));
         assert_eq!(owner.process(13)?, 0);
         assert_eq!(owner.profile(&source)?, Some(second));
         assert!(!directory.path().join("discovery-index.sqlite").exists());
         assert!(!directory.path().join("discovery").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_activation_starts_interval() -> TestResult {
+        let fixture = DiscoveryFixture::new(Default::default())?;
+        fixture.accept(1)?;
+        let owner = fixture.owner(Default::default())?;
+        assert_eq!(owner.process(10)?, 1);
+        let first = owner.profile(&fixture.source)?.ok_or("first profile")?;
+        let refs = owner
+            .installed_refs(&first)?
+            .ok_or("first installed refs")?;
+        let mut bundle = crate::AnalysisPackageOwner::required_bundles()
+            .into_iter()
+            .find(|bundle| bundle.root.package_id == DISCOVERY_PROCESSOR)
+            .ok_or("discovery bundle")?;
+        bundle.root.revision = "2".into();
+        bundle.artifacts[0].descriptor.revision = "2".into();
+        let grant = crate::PackageGrantV1 {
+            principal: "fixture".into(),
+            revision: 1,
+            selection: crate::AnalysisSelectionV1::tenant(fixture.source.tenant_id),
+            expires_utc_ns: None,
+            authorization_id: None,
+        };
+        owner
+            .execution
+            .testing_owner()
+            .execute(
+                grant,
+                crate::PackageRequestV1::Update {
+                    scope_id: crate::AnalysisPackageOwner::DOMAIN_SCOPE.into(),
+                    bundle,
+                },
+                Arc::new(crate::AnalysisReadControl::with_timeout(
+                    std::time::Duration::from_secs(30),
+                )?),
+            )
+            .await?;
+        assert!(!owner.refresh(&fixture.source, 11)?);
+        assert_eq!(owner.profile(&fixture.source)?, Some(first.clone()));
+        fixture.accept(2)?;
+        assert_eq!(owner.process(12)?, 1);
+        let next = owner.profile(&fixture.source)?.ok_or("next profile")?;
+        assert_ne!(next.profile_id, first.profile_id);
+        assert_ne!(next.interval_id, first.interval_id);
+        assert_eq!(next.snapshot.accepted_records, 1);
+        assert_eq!(next.snapshot.coverage[0].first_cursor, 2);
+        let next_refs = owner.installed_refs(&next)?.ok_or("next installed refs")?;
+        assert!(next_refs.iter().all(|reference| reference.revision == "2"));
+        assert_ne!(refs, next_refs);
+        assert_eq!(owner.installed_refs(&first)?, Some(refs));
+        assert_eq!(
+            owner.replay(&first)?,
+            crate::DiscoveryReplayV1::Available(Box::new(first.snapshot.clone()))
+        );
+        assert_eq!(
+            fixture
+                .store
+                .read_result(fixture.source.tenant_id, &first.profile_id)?,
+            Some(serde_json::to_vec(&first)?)
+        );
         Ok(())
     }
 
@@ -1370,7 +1483,7 @@ mod tests {
         input.coverage[0].expected_records = 2;
         input.exclusions.clear();
         input.lifecycle.clear();
-        let original = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+        let original = DiscoveryOwner::derive_recorded(&input, &owner.execution)?.snapshot;
         assert_eq!(original.accepted_records, 2);
         assert_eq!(original.included_records, 1);
         assert_eq!(original.unresolved_records, 1);
@@ -1425,7 +1538,14 @@ mod tests {
         let frozen = input.contexts.clone();
         input.contexts.push(late.clone());
         let bounded = owner
-            .bound_refresh(&profile, &mut input, &facts, frozen.len(), 2)?
+            .bound_refresh(
+                &profile,
+                &mut input,
+                &facts,
+                frozen.len(),
+                2,
+                &owner.execution,
+            )?
             .ok_or("bounded snapshot absent")?;
         assert_eq!(bounded, original);
         assert_eq!(input.records, records);
@@ -1443,7 +1563,14 @@ mod tests {
         profile.validate()?;
         input.contexts.push(late.clone());
         let bounded = owner
-            .bound_refresh(&profile, &mut input, &facts, frozen.len(), 2)?
+            .bound_refresh(
+                &profile,
+                &mut input,
+                &facts,
+                frozen.len(),
+                2,
+                &owner.execution,
+            )?
             .ok_or("ref-bounded snapshot absent")?;
         assert_eq!(bounded, original);
         assert_eq!(input.records, records);
@@ -1451,7 +1578,14 @@ mod tests {
         profile.context_refs.truncate(1);
         input.contexts.push(late);
         let admitted = owner
-            .bound_refresh(&profile, &mut input, &facts, frozen.len(), 2)?
+            .bound_refresh(
+                &profile,
+                &mut input,
+                &facts,
+                frozen.len(),
+                2,
+                &owner.execution,
+            )?
             .ok_or("admitted snapshot absent")?;
         assert_eq!(admitted.accepted_records, 2);
         assert_eq!(admitted.included_records, 2);

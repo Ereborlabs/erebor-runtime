@@ -6,7 +6,10 @@ use super::{Adapter, Result};
 use crate::*;
 
 impl DiscoveryOwner {
-    pub fn derive_recorded(input: &DiscoveryInputManifestV1) -> Result<DiscoveryRecordedResultV1> {
+    pub fn derive_recorded(
+        input: &DiscoveryInputManifestV1,
+        execution: &crate::InstalledAnalysis,
+    ) -> Result<DiscoveryRecordedResultV1> {
         input.validate()?;
         let adapter = Adapter::new(
             input
@@ -45,6 +48,8 @@ impl DiscoveryOwner {
             .map(|row| adapter.disposition(row))
             .collect::<Result<Vec<_>>>()?;
         let output = Adapter::run(
+            execution,
+            input.tenant_id,
             "atoms",
             vec![
                 Adapter::dataset("records", &records)?,
@@ -59,12 +64,14 @@ impl DiscoveryOwner {
             ],
             Adapter::revision(input)?,
         )?;
-        adapter.snapshot(
-            &output,
+        let result = adapter.snapshot(
+            &output.output,
             input.tenant_id,
             input.source_revision.clone(),
             input.proof_kind,
-        )
+        )?;
+        Adapter::validate_recorded(input, &result)?;
+        Ok(result)
     }
 }
 
@@ -149,7 +156,7 @@ impl Adapter {
             },
         })
     }
-    fn atom_key(
+    pub(super) fn atom_key(
         record: &DiscoveryRecordV1,
         context: &DiscoveryContextBindingV1,
         proof: DiscoveryProofKindV1,

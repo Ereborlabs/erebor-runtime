@@ -19,11 +19,16 @@ struct GraphDerivation<'a> {
     branches: Vec<GraphBranchV1>,
     findings: BTreeMap<String, FindingV1>,
     facts: Vec<GraphFactV1>,
-    states: [GraphPackageStateV1; 3],
+    packages: Vec<(araphor_analysis_sdk::Package, GraphPackageStateV1)>,
+    output_bytes: usize,
 }
 
 impl GraphAndFindingOwner {
-    pub fn derive(input: &GraphReplayInputV1) -> Result<GraphSnapshotV1> {
+    pub fn derive(
+        input: &GraphReplayInputV1,
+        execution: &crate::InstalledAnalysis,
+    ) -> Result<GraphSnapshotV1> {
+        let execution = execution.snapshot(input.source.tenant_id)?;
         let mut records = BTreeMap::new();
         for record in &input.records {
             if records
@@ -38,6 +43,9 @@ impl GraphAndFindingOwner {
         }
         let mut facts = BTreeMap::new();
         for fact in &input.facts {
+            if fact.key.owner_id == "graph-packages-v1" {
+                continue;
+            }
             if facts
                 .insert(fact.key.clone(), fact.clone())
                 .is_some_and(|previous| previous != *fact)
@@ -66,13 +74,42 @@ impl GraphAndFindingOwner {
             missing_ranges: gaps,
         };
         let mut owner = GraphDerivation::new(&input)?;
-        let evaluation = owner.evaluation()?;
-        for detector in [
-            araphor_analysis_builtins::graph::Detector::Process,
-            araphor_analysis_builtins::graph::Detector::Credentials,
-            araphor_analysis_builtins::graph::Detector::Kubernetes,
-        ] {
-            owner.evaluate(detector, &evaluation)?;
+        let mut packages = execution.descriptors(input.source.tenant_id)?;
+        if FindingV1::PACKAGES.iter().any(|id| {
+            !packages.iter().any(|package| {
+                package.id == *id && package.exports.iter().any(Self::supports_analysis)
+            })
+        }) {
+            return GraphInvalidSnafu {
+                field: "required installed graph package",
+            }
+            .fail();
+        }
+        packages.sort_by_key(|package| {
+            (
+                FindingV1::PACKAGES
+                    .iter()
+                    .position(|id| *id == package.id)
+                    .unwrap_or(3),
+                package.id.clone(),
+            )
+        });
+        for package in packages {
+            let models = package
+                .exports
+                .iter()
+                .filter(|model| Self::supports_analysis(model))
+                .collect::<Vec<_>>();
+            if models.len() > 1 {
+                return GraphInvalidSnafu {
+                    field: "multiple graph exports",
+                }
+                .fail();
+            }
+            if let Some(model) = models.first() {
+                let evaluation = owner.evaluation_for(model)?;
+                owner.evaluate(&execution, &package, &evaluation)?;
+            }
         }
         owner.finish()
     }
@@ -104,11 +141,8 @@ impl<'a> GraphDerivation<'a> {
             branches: Vec::new(),
             findings: BTreeMap::new(),
             facts,
-            states: [
-                GraphPackageStateV1::Waiting,
-                GraphPackageStateV1::Waiting,
-                GraphPackageStateV1::KubernetesProofMissing,
-            ],
+            packages: Vec::new(),
+            output_bytes: 0,
         })
     }
 }

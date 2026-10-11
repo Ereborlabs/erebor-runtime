@@ -111,7 +111,14 @@ impl GraphAndFindingOwner {
             })?;
             facts.push(fact);
         }
-        let references = self.commit_contexts(&facts)?;
+        let next_result_id = format!("graph:{}", uuid::Uuid::new_v4());
+        let mut references = self.commit_contexts(&facts)?;
+        if let Some(installed) =
+            self.installed_refs(previous.scope.identity.tenant_id, result_id)?
+        {
+            references.push(self.package_context(&snapshot, &next_result_id, &installed)?);
+            references.sort_by(|left, right| left.key.cmp(&right.key));
+        }
         self.store.commit_graph(
             &AnalysisResultCommitV1 {
                 scope: snapshot.scope.clone(),
@@ -123,7 +130,7 @@ impl GraphAndFindingOwner {
                     .map(|reference| reference.commit_revision)
                     .max()
                     .unwrap_or(0),
-                result_id: format!("graph:{}", uuid::Uuid::new_v4()),
+                result_id: next_result_id,
                 body: serde_json::to_vec(&snapshot).context(GraphEncodingSnafu)?,
                 created_utc_ns: now,
                 witnesses: vec![],

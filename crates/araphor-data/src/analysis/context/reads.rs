@@ -106,7 +106,11 @@ impl AnalysisStore {
                 operation: "read context version",
             })?;
         stored
-            .map(|stored| Self::decode_context_row(root, key.clone(), stored))
+            .map(|stored| {
+                let result = Self::decode_context_row(root, key.clone(), stored)?;
+                Self::validate_context_packages(connection, root, &result.0)?;
+                Ok(result)
+            })
             .transpose()
     }
 

@@ -14,6 +14,7 @@ mod compare;
 mod context;
 mod project;
 mod snapshot;
+mod validation;
 
 struct Adapter {
     identities: BTreeMap<DiscoveryRecordIdV1, u64>,
@@ -100,7 +101,13 @@ impl Adapter {
         .context(AnalysisContractSnafu)
     }
 
-    fn run(export: &str, datasets: Vec<sdk::Dataset>, revision: String) -> Result<sdk::Output> {
+    fn run(
+        execution: &crate::InstalledAnalysis,
+        tenant: [u8; 16],
+        export: &str,
+        datasets: Vec<sdk::Dataset>,
+        revision: String,
+    ) -> Result<crate::InstalledEvaluation> {
         let input = sdk::Evaluation {
             export: export.into(),
             inputs: datasets
@@ -127,7 +134,17 @@ impl Adapter {
             },
             checkpoint: None,
         };
-        builtin::Discovery::evaluate(&input).map_err(Self::error)
+        execution
+            .evaluate(
+                tenant,
+                &builtin::Discovery::package().id,
+                &input,
+                &crate::AnalysisReadControl::with_timeout(std::time::Duration::from_secs(60))?,
+            )
+            .map_err(|error| match error {
+                crate::Error::AnalysisContract { source, .. } => Self::error(source),
+                error => error,
+            })
     }
 
     fn error(source: sdk::Error) -> crate::Error {

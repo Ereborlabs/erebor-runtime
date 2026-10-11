@@ -2,22 +2,23 @@ use super::*;
 
 #[test]
 fn graph_native_baseline() -> TestResult {
+    let execution = execution()?;
     let mut denied = wire(1, DeniedBeforeEffect, 2, 2, [20; 16]);
     let original = input(vec![record(1, &denied)?]);
-    let protected = GraphAndFindingOwner::derive(&original)?;
+    let protected = GraphAndFindingOwner::derive(&original, &execution)?;
     let mut gapped = original;
     gapped.coverage[0].state = DiscoveryCoverageStateV1::Gapped;
     gapped.coverage[0].gap_reasons.push("GAP".into());
     gapped.coverage_keys[0].state = DiscoveryCoverageStateV1::Gapped;
     gapped.coverage_keys[0].gap_reasons.push("GAP".into());
-    let gapped = GraphAndFindingOwner::derive(&gapped)?;
+    let gapped = GraphAndFindingOwner::derive(&gapped, &execution)?;
     denied.task_cookie = 0;
     denied
         .decision_context
         .as_mut()
         .ok_or("context")?
         .process_instance_id = vec![0; 16];
-    let missing = GraphAndFindingOwner::derive(&input(vec![record(1, &denied)?]))?;
+    let missing = GraphAndFindingOwner::derive(&input(vec![record(1, &denied)?]), &execution)?;
     let actual = serde_json::json!({"protected": protected, "gapped": gapped, "missing": missing});
     assert_eq!(
         actual,
@@ -28,8 +29,9 @@ fn graph_native_baseline() -> TestResult {
 
 #[test]
 fn graph_credential_baseline() -> TestResult {
+    let execution = execution()?;
     let mut input = credential_input()?;
-    let direct = GraphAndFindingOwner::derive(&input)?;
+    let direct = GraphAndFindingOwner::derive(&input, &execution)?;
     let mut use_fact = GraphFactV1::try_from(&input.facts[5])?;
     if let GraphFactValueV1::AuthorityUse {
         process_instance_id,
@@ -45,9 +47,9 @@ fn graph_credential_baseline() -> TestResult {
         *socket_object_id = None;
     }
     input.facts[5].body = serde_json::to_vec(&use_fact)?;
-    let contextual = GraphAndFindingOwner::derive(&input)?;
+    let contextual = GraphAndFindingOwner::derive(&input, &execution)?;
     input.facts.remove(5);
-    let missing = GraphAndFindingOwner::derive(&input)?;
+    let missing = GraphAndFindingOwner::derive(&input, &execution)?;
     let actual =
         serde_json::json!({"direct": direct, "contextual": contextual, "missing": missing});
     assert_eq!(
@@ -59,6 +61,7 @@ fn graph_credential_baseline() -> TestResult {
 
 #[test]
 fn graph_kubernetes_baseline() -> TestResult {
+    let execution = execution()?;
     let mut input = input(vec![record(
         1,
         &wire(1, UnknownAfterPreEffect, 3, 13, [20; 16]),
@@ -101,7 +104,7 @@ fn graph_kubernetes_baseline() -> TestResult {
             1,
             GraphFactValueV1::Kubernetes(stage.clone()),
         )?];
-        outputs.push(GraphAndFindingOwner::derive(&input)?);
+        outputs.push(GraphAndFindingOwner::derive(&input, &execution)?);
     }
     let actual = serde_json::to_value(outputs)?;
     assert_eq!(

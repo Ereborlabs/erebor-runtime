@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn graph_refs_use_header() -> TestResult {
+    let mut fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let refs = fixture.add_packages()?;
+    let tenant = fixture.snapshot.scope.identity.tenant_id;
+    fixture.store.commit_graph(&fixture.request, true)?;
+    fixture.store.writer_access()?.get_mut()?.execute(
+        "UPDATE graph_subjects SET subject_kind = repeat('X', length(subject_kind))
+         WHERE result_id = ?",
+        params![fixture.request.result_id],
+    )?;
+    assert!(fixture
+        .owner
+        .snapshot_result(tenant, &fixture.request.result_id)
+        .is_err());
+    assert_eq!(
+        fixture
+            .owner
+            .installed_refs(tenant, &fixture.request.result_id)?,
+        Some(refs)
+    );
+    assert!(fixture
+        .store
+        .graph_source([0; 16], &fixture.request.result_id)
+        .is_err());
+    assert!(fixture.store.graph_source(tenant, "").is_err());
+    assert!(fixture.store.graph_source(tenant, "missing")?.is_none());
+    assert!(fixture
+        .owner
+        .installed_refs([2; 16], &fixture.request.result_id)?
+        .is_none());
+    Ok(())
+}
+
+#[test]
 fn native_header_batch_bounds() -> TestResult {
     let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
     let receipt = fixture.store.commit_graph(&fixture.request, true)?;

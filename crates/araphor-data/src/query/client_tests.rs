@@ -668,6 +668,10 @@ fn discovery_owner(fixture: &ClientFixture, records: usize) -> Result<crate::Dis
             interval_records: records,
             ..Default::default()
         },
+        crate::InstalledAnalysis::testing(
+            Some(fixture.data.store.clone()),
+            fixture.data.source.tenant_id,
+        )?,
     )
 }
 
@@ -681,7 +685,20 @@ fn discovery_record() -> Result<EvidenceRecord> {
 #[tokio::test]
 async fn discovery_query_current_profiles() -> TestResult {
     let fixture = ClientFixture::local()?;
-    let discovery = discovery_owner(&fixture, 3)?;
+    let mut foreign = fixture.data.source.clone();
+    foreign.tenant_id = [9; 16];
+    let discovery = crate::DiscoveryOwner::new(
+        fixture.data.store.clone(),
+        Arc::new(DiscoveryUnavailable::default()),
+        crate::DiscoveryConfigV1 {
+            interval_records: 3,
+            ..Default::default()
+        },
+        crate::InstalledAnalysis::testing_tenants(
+            Some(fixture.data.store.clone()),
+            &[fixture.data.source.tenant_id, foreign.tenant_id],
+        )?,
+    )?;
     let plan = fixture.plan(
         "SELECT profile_id,profile_revision,accepted_records,unresolved_records,profile_state FROM behaviors WHERE kind='profile' ORDER BY profile_id",
         vec![], false,
@@ -717,8 +734,6 @@ async fn discovery_query_current_profiles() -> TestResult {
         ]
     );
     drop(result);
-    let mut foreign = fixture.data.source.clone();
-    foreign.tenant_id = [9; 16];
     fixture
         .data
         .commit_as(&foreign, 0, 1, 2002, discovery_record()?)?;
@@ -926,6 +941,10 @@ async fn discovery_query_sealed_revision() -> TestResult {
             interval_records: 1,
             ..Default::default()
         },
+        crate::InstalledAnalysis::testing(
+            Some(fixture.data.store.clone()),
+            fixture.data.source.tenant_id,
+        )?,
     )?;
     let mut record = discovery_record()?;
     record.decision_context = Some(crate::EvidenceDecisionContext {

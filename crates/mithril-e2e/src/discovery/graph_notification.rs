@@ -179,6 +179,7 @@ impl GraphNotificationQualification {
             Arc::new(Clock(UNIX_EPOCH + Duration::from_nanos(now))),
         )?;
         let control = tls.control_from_intake(intake.clone(), 1)?;
+        let execution = control.installed_analysis()?;
         let server = tls.start(control).await?;
         let boot = [7; 16];
         let wal = EffectObservationStore::durable(
@@ -277,7 +278,7 @@ impl GraphNotificationQualification {
         };
         intake.receive_coverage(&authenticated, &report)?;
         let inputs = Arc::new(GraphInputs::default());
-        let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone())?;
+        let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone(), execution)?;
         assert!(!data.discovery_enabled());
         data.set_commit_hook(AnalysisCommitStage::BeforeResultCommit, || {
             Err(Error::AnalysisConflict {
@@ -314,7 +315,15 @@ impl GraphNotificationQualification {
         drop(store);
         let store = ControlStore::open(&root)?;
         let data = Arc::new(AnalysisStore::open(&data_root)?);
-        let graph = GraphAndFindingOwner::new(data.clone(), inputs)?;
+        let control = tls.control_from_intake(
+            EvidenceIntakeOwner::new(
+                store.clone(),
+                data.clone(),
+                Arc::new(Clock(UNIX_EPOCH + Duration::from_nanos(now))),
+            )?,
+            1,
+        )?;
+        let graph = GraphAndFindingOwner::new(data.clone(), inputs, control.installed_analysis()?)?;
         assert_eq!(graph.snapshot(&source)?, Some(snapshot.clone()));
         assert_eq!(
             Self::traverse(data.clone(), &snapshot, &finding, &reference.result_id, now).await?,
@@ -523,12 +532,13 @@ impl GraphNotificationQualification {
         input: &GraphReplayInputV1,
         snapshot: &GraphSnapshotV1,
     ) -> std::result::Result<(), Box<dyn StdError>> {
+        let execution = InstalledAnalysis::testing(None, input.source.tenant_id)?;
         let mut reordered = input.clone();
         reordered.records.reverse();
         reordered.records.extend(input.records.clone());
         reordered.facts.reverse();
         reordered.facts.extend(input.facts.clone());
-        let replay = GraphAndFindingOwner::derive(&reordered)?;
+        let replay = GraphAndFindingOwner::derive(&reordered, &execution)?;
         assert_eq!(replay.graph, snapshot.graph);
         assert_eq!(replay.findings, snapshot.findings);
         assert_eq!(
@@ -537,12 +547,12 @@ impl GraphNotificationQualification {
         );
         let mut foreign = input.clone();
         foreign.source.tenant_id = [99; 16];
-        assert!(GraphAndFindingOwner::derive(&foreign).is_err());
+        assert!(GraphAndFindingOwner::derive(&foreign, &execution).is_err());
         let mut conflict = input.clone();
         let mut changed = conflict.records[0].clone();
         changed.original_kernel_sequence = Some(999);
         conflict.records.push(changed);
-        assert!(GraphAndFindingOwner::derive(&conflict).is_err());
+        assert!(GraphAndFindingOwner::derive(&conflict, &execution).is_err());
         Ok(())
     }
 

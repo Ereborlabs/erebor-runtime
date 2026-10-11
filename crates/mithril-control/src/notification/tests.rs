@@ -163,7 +163,8 @@ fn finding_graph(
             frame_ends: vec![length],
         },
     )?;
-    let graph = GraphAndFindingOwner::new(data, Arc::new(Context))?;
+    let installed = araphor_data::InstalledAnalysis::testing(Some(data.clone()), [1; 16])?;
+    let graph = GraphAndFindingOwner::new(data, Arc::new(Context), installed)?;
     assert_eq!(graph.process(20)?, 1);
     assert_eq!(graph.current_findings([1; 16])?.len(), 1);
     Ok(graph)

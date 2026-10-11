@@ -269,6 +269,20 @@ impl AnalysisStore {
         })
     }
 
+    pub(crate) fn graph_source(
+        &self,
+        tenant: [u8; 16],
+        result_id: &str,
+    ) -> Result<Option<EvidenceIntakeIdentityV1>> {
+        if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
+            return self.reject("the graph result reference is invalid");
+        }
+        self.read_snapshot(|snapshot| {
+            Ok(GraphRows::read_header(snapshot, tenant, result_id)?
+                .map(|header| header.snapshot.scope.identity))
+        })
+    }
+
     pub(crate) fn graph_result(
         &self,
         tenant: [u8; 16],

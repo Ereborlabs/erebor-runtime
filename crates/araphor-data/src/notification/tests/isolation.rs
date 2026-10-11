@@ -4,7 +4,11 @@ use super::*;
 fn control_notification_capacity_isolation() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;

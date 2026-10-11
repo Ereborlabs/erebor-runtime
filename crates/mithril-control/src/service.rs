@@ -140,9 +140,12 @@ enum PendingAdministrativeResponse {
 
 const ADMINISTRATIVE_NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+mod packages;
+
 #[derive(Clone)]
 /// Terminates authenticated node RPCs and delegates durable changes to domain owners.
 pub struct ControlPlane {
+    packages: Arc<Mutex<Option<Arc<packages::ControlPackages>>>>,
     allowed_nodes: Arc<BTreeMap<String, AllowedNodeIdentity>>,
     trust: crate::TrustBundleOwner,
     state: Arc<Mutex<ControlState>>,
@@ -177,6 +180,7 @@ impl ControlPlane {
         self.graph = Some(Arc::new(araphor_data::GraphAndFindingOwner::new(
             data,
             Arc::new(store),
+            self.installed_analysis()?,
         )?));
         Ok(self)
     }
@@ -430,6 +434,7 @@ impl ControlPlane {
             trust: crate::TrustBundleOwner::static_generation(trust),
             state: Arc::new(Mutex::new(ControlState::default())),
             evidence: None,
+            packages: Arc::new(Mutex::new(None)),
             graph: None,
             policy_store: None,
             policy_rollout: None,
@@ -497,6 +502,7 @@ impl ControlPlane {
             trust,
             state: Arc::new(Mutex::new(ControlState::default())),
             evidence,
+            packages: Arc::new(Mutex::new(None)),
             graph: None,
             policy_store: Some(store),
             policy_rollout: None,

@@ -4,7 +4,11 @@ use super::*;
 fn control_notification_unrouted_health_and_context_compare_are_explicit() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;
     assert_eq!(router.route(&graph, 100)?, 1);
@@ -25,7 +29,11 @@ fn control_notification_unrouted_health_and_context_compare_are_explicit() -> Te
 fn control_notification_full_window_keeps_exact_revision_in_immutable_graph_result() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     let finding = finding(256, FindingSeverityV1::High);
@@ -64,7 +72,11 @@ fn control_notification_full_window_keeps_exact_revision_in_immutable_graph_resu
 fn control_notification_hidden_pages_advance_without_disclosure() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     let human = grant(NotificationPrincipalV1::Human);
     let mut approved = policy("primary");

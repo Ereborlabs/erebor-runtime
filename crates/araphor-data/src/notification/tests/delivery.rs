@@ -4,7 +4,11 @@ use super::*;
 fn control_notification_failure_acceptance_does_not_acknowledge_overdue_obligation() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;
@@ -68,7 +72,11 @@ fn control_notification_restart_reuses_pending_attempt_and_original_deadline() -
     let key;
     {
         let store = Arc::new(AnalysisStore::open(&path)?);
-        let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+        let graph = GraphAndFindingOwner::new(
+            store.clone(),
+            Arc::new(Context),
+            crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+        )?;
         let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
         configure(&router)?;
         commit_finding(&store, finding(1, FindingSeverityV1::High), 1)?;
@@ -90,7 +98,11 @@ fn control_notification_restart_reuses_pending_attempt_and_original_deadline() -
         router.save(&mut state)?;
     }
     let store = Arc::new(AnalysisStore::open(&path)?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     let mut updated = policy("primary");
@@ -126,7 +138,11 @@ fn control_notification_route_change_keeps_deadline_floors_and_bounded_retry_evi
 {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     commit_finding(&store, finding(1, FindingSeverityV1::Warning), 1)?;
@@ -200,7 +216,11 @@ fn control_notification_route_change_keeps_deadline_floors_and_bounded_retry_evi
 fn control_notification_disclosure_denial_keeps_failure_and_authorized_escalation() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     router.configure(
         &grant(NotificationPrincipalV1::Human),

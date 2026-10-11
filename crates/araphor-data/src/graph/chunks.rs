@@ -62,13 +62,13 @@ impl GraphAndFindingOwner {
         let mut context_count = 0;
         for record in records {
             let count = by_record.get(&record.id).map_or(0, Vec::len);
-            if count > 256 {
+            if count > 255 {
                 return GraphInvalidSnafu {
                     field: "one observation context bound",
                 }
                 .fail();
             }
-            if !chunk.is_empty() && context_count + count > 256 {
+            if !chunk.is_empty() && context_count + count > 255 {
                 chunks.push_back(std::mem::take(&mut chunk));
                 context_count = 0;
             }

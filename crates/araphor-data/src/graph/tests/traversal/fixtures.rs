@@ -45,6 +45,7 @@ impl TraversalFixture {
     }
 
     fn commit_window(&mut self, window: u64, large: bool) -> TestResult {
+        let execution = execution()?;
         let cursor = window + 1;
         let first = window * 1024;
         let mut event = wire(cursor, DeniedBeforeEffect, 2, 2, [20; 16]);
@@ -60,7 +61,7 @@ impl TraversalFixture {
         replay.coverage[0].coverage_revision = cursor;
         replay.coverage_keys[0].report_revision = cursor;
         replay.coverage_keys[0].interval_revision = cursor;
-        let mut snapshot = GraphAndFindingOwner::derive(&replay)?;
+        let mut snapshot = GraphAndFindingOwner::derive(&replay, &execution)?;
         snapshot.witness_deadline_utc_ns = 10 + cursor + GRAPH_WITNESS_TTL_NS;
         snapshot.graph.subjects = Self::subjects(window, large);
         snapshot.graph.edges = Self::edges(&snapshot, window, large);

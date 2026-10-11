@@ -995,6 +995,7 @@ mod tests {
             store.clone(),
             Arc::new(Unavailable),
             DiscoveryConfigV1::default(),
+            crate::InstalledAnalysis::testing(Some(store.clone()), request.access.tenant_id)?,
         )?;
         let reference = owner.import_context(&request.access, &first)?;
         assert_eq!(owner.import_context(&request.access, &first)?, reference);

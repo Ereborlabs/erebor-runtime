@@ -5,7 +5,11 @@ fn control_notification_approved_concern_stays_unconfirmed_and_requires_human_re
 {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     let mut agent = grant(NotificationPrincipalV1::Agent);

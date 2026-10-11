@@ -18,7 +18,11 @@ impl GraphContextProvider for SelectiveFailure {
 fn control_graph_source_recovery() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
-    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(SelectiveFailure))?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(SelectiveFailure),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let observation = record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?;
     accept(&store, std::slice::from_ref(&observation))?;
     let mut other = source();

@@ -2,6 +2,7 @@ use std::{fs, path::Path};
 
 use araphor_data::{
     DiscoveryInputManifestV1, DiscoveryOwner, DiscoveryPhysicalResultV1, DiscoveryProofKindV1,
+    InstalledAnalysis,
 };
 use mithril_control::{
     DiscoveryPreviewOwner, PolicyDocumentV1, SimulatedDispositionV1, SimulatedPhysicalResultV1,
@@ -33,7 +34,8 @@ pub use storage_contract::run as run_discovery_storage_contract;
 pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let input_bytes = include_bytes!("../fixtures/discovery/manifest.json");
     let input = DiscoveryInputManifestV1::try_from(input_bytes.as_slice()).context(DataSnafu)?;
-    let result = DiscoveryOwner::derive_recorded(&input).context(DataSnafu)?;
+    let execution = InstalledAnalysis::testing(None, input.tenant_id).context(DataSnafu)?;
+    let result = DiscoveryOwner::derive_recorded(&input, &execution).context(DataSnafu)?;
     let snapshot = &result.snapshot;
     ensure!(
         snapshot.proof_kind == DiscoveryProofKindV1::Synthetic
@@ -55,7 +57,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     replay.contexts.reverse();
     replay.records.extend(input.records.clone());
     ensure!(
-        DiscoveryOwner::derive_recorded(&replay)
+        DiscoveryOwner::derive_recorded(&replay, &execution)
             .context(DataSnafu)?
             .snapshot
             == *snapshot,
@@ -67,7 +69,8 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let policy_bytes = include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml");
     let policy =
         PolicyDocumentV1::parse(Path::new("policy-v1.yaml"), policy_bytes).context(PolicySnafu)?;
-    let preview = DiscoveryPreviewOwner::simulate_recorded(&input, &policy).context(PolicySnafu)?;
+    let preview = DiscoveryPreviewOwner::simulate_recorded(&input, &policy, &execution)
+        .context(PolicySnafu)?;
     ensure!(
         preview.simulations.len() == 1
             && preview.simulations[0].disposition == SimulatedDispositionV1::WouldDeny

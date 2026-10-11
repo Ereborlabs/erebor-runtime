@@ -307,6 +307,7 @@ mod tests {
         let input = DiscoveryInputManifestV1::try_from(
             include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
         )?;
+        let execution = crate::InstalledAnalysis::testing(None, input.tenant_id)?;
         let profile = DiscoveryProfileV1 {
             schema_version: DISCOVERY_SCHEMA_VERSION,
             scope: ProcessorScopeV1 {
@@ -329,7 +330,7 @@ mod tests {
                 .sum(),
             incomplete: true,
             gaps: Vec::new(),
-            snapshot: DiscoveryOwner::derive_recorded(&input)?.snapshot,
+            snapshot: DiscoveryOwner::derive_recorded(&input, &execution)?.snapshot,
             context_refs: Vec::new(),
         };
         profile.validate()?;
@@ -438,7 +439,11 @@ mod tests {
         input.coverage.clear();
         input.exclusions.clear();
         input.lifecycle.clear();
-        profile.snapshot = DiscoveryOwner::derive_recorded(&input)?.snapshot;
+        profile.snapshot = DiscoveryOwner::derive_recorded(
+            &input,
+            &crate::InstalledAnalysis::testing(None, input.tenant_id)?,
+        )?
+        .snapshot;
         profile.input_bytes = 0;
         assert!(profile.snapshot.atoms.is_empty());
         for sealed in [false, true] {

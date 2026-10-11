@@ -9,6 +9,29 @@ pub(crate) struct CommitFixture {
 }
 
 impl CommitFixture {
+    pub(crate) fn add_packages(&mut self) -> TestResult<Vec<InstalledRefV1>> {
+        self.owner.execution =
+            InstalledAnalysis::testing(Some(self.store.clone()), source().tenant_id)?;
+        let execution = self.owner.execution.snapshot(source().tenant_id)?;
+        let refs = GraphAndFindingOwner::analysis_refs(&execution, &self.snapshot)?;
+        self.request.context_refs.push(self.owner.package_context(
+            &self.snapshot,
+            &self.request.result_id,
+            &refs,
+        )?);
+        self.request
+            .context_refs
+            .sort_by(|left, right| left.key.cmp(&right.key));
+        self.request.context_revision = self
+            .request
+            .context_refs
+            .iter()
+            .map(|reference| reference.commit_revision)
+            .max()
+            .unwrap_or(0);
+        Ok(refs)
+    }
+
     pub(crate) fn add_findings(&mut self, count: usize) -> TestResult {
         for index in 0..count {
             let mut finding = self.snapshot.findings[0].clone();
@@ -23,13 +46,18 @@ impl CommitFixture {
     }
 
     pub(crate) fn new() -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        let execution = execution()?;
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
-        let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
+        let owner = GraphAndFindingOwner::new(
+            store.clone(),
+            Arc::new(Inputs::default()),
+            execution.clone(),
+        )?;
         let observation = record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?;
         accept(&store, std::slice::from_ref(&observation))?;
         coverage(&store, 1, 1, "HEALTHY")?;
-        let mut snapshot = GraphAndFindingOwner::derive(&input(vec![observation]))?;
+        let mut snapshot = GraphAndFindingOwner::derive(&input(vec![observation]), &execution)?;
         snapshot.witness_deadline_utc_ns = 10 + GRAPH_WITNESS_TTL_NS;
         let request = AnalysisResultCommitV1 {
             scope: snapshot.scope.clone(),
@@ -109,7 +137,11 @@ fn graph_native_commit_retry() -> TestResult {
     drop(owner);
     drop(store);
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
-    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Inputs::default()),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     assert_eq!(store.commit_graph(&request, true)?, receipt);
     assert_eq!(
         owner.snapshot_result(source().tenant_id, &request.result_id)?,

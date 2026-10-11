@@ -1,8 +1,9 @@
 # Built-in analysis algorithms
 
 This crate contains the current discovery and graph computations. Production
-owners in `araphor-data` and local SDK fixtures call the same Rust code. The crate
-depends on the analysis SDK. It has no Control, DuckDB, or host-store dependency.
+owners in `araphor-data` execute installed Wasm components built from this code.
+Local SDK fixtures call the same computation directly. The crate depends on the
+analysis SDK. It has no Control, DuckDB, or host-store dependency.
 
 `discovery::Discovery::package()` declares four exports: `atoms`, `merge`,
 `groups`, and `compare`. `graph::Detector::descriptor()` declares `detect` for
@@ -34,5 +35,7 @@ cargo test -p araphor-analysis-builtins --lib
 ```
 
 The production adapters and captured output checks are in `araphor-data`.
-These direct calls execute trusted built-in code. Package installation, Wasm
-execution, and native worker isolation are separate work.
+The `components/` crates export this computation through the generated SDK
+bindings. Production package execution has no direct-computation fallback.
+See the [component guide](../araphor-detector-example/README.md)
+for artifact build and installation. Native execution remains later work.

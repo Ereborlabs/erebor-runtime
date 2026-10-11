@@ -62,64 +62,77 @@ impl GraphDerivation<'_> {
             })?
             .id
             .durable_cursor;
-        let packages = [
-            (
-                "HF-PROC-001",
-                vec!["exact-task-entry-role", "kernel-effect", "source-coverage"],
-            ),
-            (
-                "HF-DW-001",
-                vec![
-                    "reviewed-credential",
-                    "exact-local-channel",
-                    "authoritative-operation",
-                    "source-coverage",
-                ],
-            ),
-            (
-                "HF-XNODE-001",
-                vec![
-                    "carried-request-proof",
-                    "Kubernetes-audit",
-                    "object-owner-scheduler",
-                    "remote-runtime-admission",
-                ],
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, (id, inputs))| GraphPackageCheckpointV1 {
-            package_id: id.into(),
-            package_version: 1,
-            required_inputs: inputs.into_iter().map(str::to_owned).collect(),
-            state: self.states[index],
-            maximum_lateness_ns: GRAPH_WITNESS_TTL_NS,
-            retention_ttl_ns: GRAPH_WITNESS_TTL_NS,
-            clock_uncertainty_ns: None,
-            late_action: "append-exact-revision-or-report-expired-input".into(),
-            window_ns: GRAPH_WINDOW_NS,
-            window_records: GRAPH_WINDOW_RECORDS,
-            window_bytes: GRAPH_WINDOW_BYTES,
-            coverage_predicate:
-                "complete-required-source-intervals-and-qualified-operation-results".into(),
-            replay_contract_id: format!("{id}/v1"),
-            result_states: vec![
-                FindingStateV1::Provisional,
-                FindingStateV1::Confirmed,
-                FindingStateV1::Superseded,
-                FindingStateV1::Retracted,
-                FindingStateV1::CoverageInsufficient,
-            ],
-            accepted_cursor_watermark: last,
-            observed_boottime_watermark_ns: self
-                .input
-                .records
-                .iter()
-                .filter_map(|record| record.decode().ok().map(|wire| wire.observed_boottime_ns))
-                .max()
-                .unwrap_or(0),
-        })
-        .collect();
+        let packages = self
+            .packages
+            .iter()
+            .map(|(package, state)| {
+                let id = package.id.as_str();
+                let inputs: Vec<String> = match id {
+                    "HF-PROC-001" => {
+                        vec!["exact-task-entry-role", "kernel-effect", "source-coverage"]
+                    }
+                    "HF-DW-001" => vec![
+                        "reviewed-credential",
+                        "exact-local-channel",
+                        "authoritative-operation",
+                        "source-coverage",
+                    ],
+                    "HF-XNODE-001" => vec![
+                        "carried-request-proof",
+                        "Kubernetes-audit",
+                        "object-owner-scheduler",
+                        "remote-runtime-admission",
+                    ],
+                    _ => Vec::new(),
+                }
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+                let inputs = if inputs.is_empty() {
+                    package
+                        .exports
+                        .iter()
+                        .find(|model| GraphAndFindingOwner::supports_analysis(model))
+                        .map(|model| model.inputs.iter().map(|port| port.name.clone()).collect())
+                        .unwrap_or_default()
+                } else {
+                    inputs
+                };
+                GraphPackageCheckpointV1 {
+                    package_id: id.into(),
+                    package_version: 1,
+                    required_inputs: inputs,
+                    state: state.clone(),
+                    maximum_lateness_ns: GRAPH_WITNESS_TTL_NS,
+                    retention_ttl_ns: GRAPH_WITNESS_TTL_NS,
+                    clock_uncertainty_ns: None,
+                    late_action: "append-exact-revision-or-report-expired-input".into(),
+                    window_ns: GRAPH_WINDOW_NS,
+                    window_records: GRAPH_WINDOW_RECORDS,
+                    window_bytes: GRAPH_WINDOW_BYTES,
+                    coverage_predicate:
+                        "complete-required-source-intervals-and-qualified-operation-results".into(),
+                    replay_contract_id: format!("{id}/v{}", package.revision),
+                    result_states: vec![
+                        FindingStateV1::Provisional,
+                        FindingStateV1::Confirmed,
+                        FindingStateV1::Superseded,
+                        FindingStateV1::Retracted,
+                        FindingStateV1::CoverageInsufficient,
+                    ],
+                    accepted_cursor_watermark: last,
+                    observed_boottime_watermark_ns: self
+                        .input
+                        .records
+                        .iter()
+                        .filter_map(|record| {
+                            record.decode().ok().map(|wire| wire.observed_boottime_ns)
+                        })
+                        .max()
+                        .unwrap_or(0),
+                }
+            })
+            .collect();
         let snapshot = GraphSnapshotV1 {
             schema_version: GRAPH_SCHEMA_VERSION,
             scope: ProcessorScopeV1 {

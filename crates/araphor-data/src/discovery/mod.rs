@@ -6,6 +6,7 @@ use crate::{AnalysisStore, Result};
 
 mod context;
 mod derive;
+mod installed;
 mod live;
 mod model;
 mod replay;
@@ -64,6 +65,7 @@ pub trait DiscoveryContextProvider: Send + Sync {
 
 pub struct DiscoveryOwner {
     store: Arc<AnalysisStore>,
+    execution: crate::InstalledAnalysis,
     provider: Arc<dyn DiscoveryContextProvider>,
     config: DiscoveryConfigV1,
     operation: Mutex<Option<crate::EvidenceIntakeIdentityV1>>,
@@ -74,6 +76,7 @@ impl DiscoveryOwner {
         store: Arc<AnalysisStore>,
         provider: Arc<dyn DiscoveryContextProvider>,
         config: DiscoveryConfigV1,
+        execution: crate::InstalledAnalysis,
     ) -> Result<Self> {
         model::require(config.valid(), "configuration")?;
         store
@@ -81,6 +84,7 @@ impl DiscoveryOwner {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         Ok(Self {
             store,
+            execution,
             provider,
             config,
             operation: Mutex::new(None),

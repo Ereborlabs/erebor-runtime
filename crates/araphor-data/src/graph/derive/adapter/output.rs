@@ -3,15 +3,37 @@ use super::*;
 impl GraphDerivation<'_> {
     pub(super) fn apply_output(
         &mut self,
-        detector: algorithm::Detector,
+        package: &sdk::Package,
         evaluation: &sdk::Evaluation,
         output: &sdk::Output,
     ) -> Result<()> {
-        let package = detector.descriptor();
         package
             .validate_output(evaluation, output)
             .context(AnalysisContractSnafu)?;
-        let model = &package.exports[0];
+        self.output_bytes = output
+            .datasets
+            .iter()
+            .flat_map(|data| &data.batches)
+            .chain(output.reasons.iter().map(|reason| &reason.details))
+            .fold(self.output_bytes, |total, batch| {
+                total.saturating_add(batch.get_array_memory_size())
+            });
+        if self.output_bytes > GRAPH_WINDOW_BYTES {
+            return GraphInvalidSnafu {
+                field: "graph output bytes",
+            }
+            .fail();
+        }
+        let model = package
+            .exports
+            .iter()
+            .find(|model| model.name == evaluation.export)
+            .ok_or_else(|| {
+                GraphInvalidSnafu {
+                    field: "graph export",
+                }
+                .build()
+            })?;
         let dataset = |name: &str| {
             output
                 .datasets
@@ -40,7 +62,7 @@ impl GraphDerivation<'_> {
         )
         .context(AnalysisContractSnafu)?;
         for edge in edges {
-            self.selected_edge(detector.id(), edge)?;
+            self.selected_edge(&package.id, edge)?;
         }
         let findings: Vec<algorithm::Finding> = Rows::decode(
             &model.outputs[2],
@@ -50,18 +72,19 @@ impl GraphDerivation<'_> {
         .context(AnalysisContractSnafu)?;
         Self::finding_evidence(&findings, &output.evidence)?;
         let reasons = Self::finding_reasons(
-            detector.id(),
-            &model.outputs[2],
+            &package.id,
+            model,
             &findings,
             &output.reasons,
             evaluation.context.limits,
         )?;
         for (finding, reason) in findings.into_iter().zip(reasons) {
+            self.validate_finding(&finding)?;
             let record = self.selected_record(finding.record)?.clone();
             let subject = self.selected_subject(finding.record, finding.context)?;
             let evidence = self.selected_evidence(&finding.evidence)?;
             self.finding(
-                detector.id(),
+                &package.id,
                 &record,
                 subject,
                 reason,
@@ -98,14 +121,27 @@ impl GraphDerivation<'_> {
             }
             .fail();
         }
-        let index = match detector {
-            algorithm::Detector::Process => 0,
-            algorithm::Detector::Credentials => 1,
-            algorithm::Detector::Kubernetes => 2,
-        };
-        self.states[index] =
-            serde_json::from_value(serde_json::Value::String(states[0].value.clone()))
-                .context(GraphEncodingSnafu)?;
+        let state = serde_json::from_value(serde_json::Value::String(states[0].value.clone()))
+            .context(GraphEncodingSnafu)?;
+        if let GraphPackageStateV1::Declared(value) = &state {
+            if value.is_empty() || value.len() > 128 {
+                return GraphInvalidSnafu {
+                    field: "graph declared checkpoint state",
+                }
+                .fail();
+            }
+        }
+        self.packages.push((package.clone(), state));
+        if self.subjects.len() > 2048
+            || self.edges.len() > 4096
+            || self.findings.len() > 1024
+            || self.packages.len() > 64
+        {
+            return GraphInvalidSnafu {
+                field: "graph output rows",
+            }
+            .fail();
+        }
         Ok(())
     }
 
@@ -144,7 +180,7 @@ impl GraphDerivation<'_> {
 
     fn finding_reasons(
         package: &str,
-        port: &sdk::Port,
+        model: &sdk::Model,
         findings: &[algorithm::Finding],
         values: &[sdk::ReasonValue],
         limits: sdk::Limits,
@@ -155,6 +191,7 @@ impl GraphDerivation<'_> {
             }
             .build()
         };
+        let port = &model.outputs[2];
         let mut reasons = BTreeMap::new();
         for reason in values {
             if reason.output.dataset != port.name
@@ -171,21 +208,34 @@ impl GraphDerivation<'_> {
             .enumerate()
             .map(|(row, finding)| {
                 let reason = reasons.get(&(row as u64)).ok_or_else(invalid)?;
-                let details: Vec<algorithm::Finding> = Rows::decode(
-                    port,
-                    &sdk::Dataset {
-                        name: port.name.clone(),
-                        batches: vec![reason.details.clone()],
-                    },
-                    limits,
-                )
-                .context(AnalysisContractSnafu)?;
-                if reason.code != format!("{package}.{}", finding.reason)
-                    || details.as_slice() != std::slice::from_ref(finding)
-                {
+                if reason.code != format!("{package}.{}", finding.reason) {
                     return Err(invalid());
                 }
-                FindingReasonV1::from_analysis_code(package, &reason.code)
+                let legacy = FindingV1::PACKAGES
+                    .contains(&package)
+                    .then(|| FindingReasonV1::from_analysis_code(package, &reason.code).ok())
+                    .flatten();
+                if let Some(legacy) =
+                    legacy.filter(|_| reason.details.schema().as_ref() == &port.schema)
+                {
+                    let details: Vec<algorithm::Finding> = Rows::decode(
+                        port,
+                        &sdk::Dataset {
+                            name: port.name.clone(),
+                            batches: vec![reason.details.clone()],
+                        },
+                        limits,
+                    )
+                    .context(AnalysisContractSnafu)?;
+                    if details.as_slice() != std::slice::from_ref(finding) {
+                        return Err(invalid());
+                    }
+                    Ok(legacy)
+                } else {
+                    Ok(FindingReasonV1::Declared(
+                        DeclaredFindingReasonV1::from_value(reason, limits)?,
+                    ))
+                }
             })
             .collect()
     }

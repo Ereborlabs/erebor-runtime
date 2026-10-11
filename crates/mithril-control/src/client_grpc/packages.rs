@@ -21,13 +21,14 @@ impl ClientGrpcOwner {
         if request.get_ref().definition_json.len() > MAX_PACKAGE_BYTES + 64 * 1024 {
             return Err(Self::package_limit("request bytes"));
         }
+        let access = self.authenticate(&request, false).await?;
         let operation: PackageRequestV1 =
             serde_json::from_slice(&request.get_ref().definition_json)
                 .map_err(|_| Status::invalid_argument("The package request is invalid."))?;
         let action = operation.action();
-        let access = self
-            .authenticate(&request, action != PackageActionV1::Inspect)
-            .await?;
+        if action != PackageActionV1::Inspect {
+            self.authenticate(&request, true).await?;
+        }
         let selection = self.select(request.into_inner().selection, access.tenant_id())?;
         let grant = access
             .package_grant(selection, action)

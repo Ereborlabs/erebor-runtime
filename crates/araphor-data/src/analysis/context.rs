@@ -4,6 +4,7 @@ use super::AnalysisStore;
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, Result};
 
 mod pages;
+mod provenance;
 mod reads;
 #[cfg(test)]
 mod tests;

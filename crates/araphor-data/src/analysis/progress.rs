@@ -655,11 +655,14 @@ impl AnalysisStore {
             return self.reject("the profile header or references differ from its commit");
         }
         let header = if let Some(graph) = graph {
+            let package_key =
+                crate::GraphAndFindingOwner::package_key(&graph.scope.identity, &input.result_id);
             if graph.scope != input.scope
                 || graph.input_manifest.context
                     != input
                         .context_refs
                         .iter()
+                        .filter(|reference| reference.key != package_key)
                         .map(|reference| reference.key.clone())
                         .collect::<Vec<_>>()
             {

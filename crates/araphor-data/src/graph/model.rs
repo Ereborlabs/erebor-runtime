@@ -456,7 +456,7 @@ pub struct GraphVersionV1 {
     pub facts: Vec<GraphFactV1>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GraphPackageStateV1 {
     Waiting,
@@ -473,6 +473,8 @@ pub enum GraphPackageStateV1 {
     KubernetesObject,
     KubernetesScheduled,
     RemoteAdmission,
+    #[serde(untagged)]
+    Declared(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -552,7 +554,15 @@ impl GraphSnapshotV1 {
                 .findings
                 .windows(2)
                 .any(|pair| pair[0].finding_id >= pair[1].finding_id)
-            || self.packages.len() != 3
+            || self.packages.is_empty()
+            || self.packages.len() > 64
+            || self
+                .packages
+                .iter()
+                .map(|package| &package.package_id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != self.packages.len()
             || self.input_manifest.evidence.iter().any(|id| {
                 id.stream != self.scope.identity
                     || !(self.first_cursor..=self.last_cursor).contains(&id.durable_cursor)
@@ -599,9 +609,28 @@ impl GraphSnapshotV1 {
                 .fail();
             }
         }
+        for package in &self.packages {
+            if package.package_id.is_empty()
+                || package.package_id.len() > 128
+                || package.package_version != 1
+                || !package
+                    .replay_contract_id
+                    .starts_with(&format!("{}/v", package.package_id))
+                || package.replay_contract_id.len() > 512
+                || matches!(&package.state, GraphPackageStateV1::Declared(value) if value.is_empty() || value.len() > 128)
+            {
+                return GraphInvalidSnafu {
+                    field: "graph package checkpoint",
+                }
+                .fail();
+            }
+        }
         for finding in &self.findings {
             finding.validate()?;
-            if finding.revision != self.input_manifest
+            if !self.packages.iter().any(|package| {
+                package.package_id == finding.package_id
+                    && package.package_version == finding.package_version
+            }) || finding.revision != self.input_manifest
                 || finding.tenant_id != self.scope.identity.tenant_id
             {
                 return GraphInvalidSnafu {

@@ -198,7 +198,7 @@ fn commit_finding(store: &AnalysisStore, finding: FindingV1, cursor: u64) -> Res
         window_records: 256,
         window_bytes: crate::GRAPH_WINDOW_BYTES,
         coverage_predicate: "covered".into(),
-        replay_contract_id: "replay-v1".into(),
+        replay_contract_id: format!("{id}/v1"),
         result_states: vec![FindingStateV1::Confirmed],
         accepted_cursor_watermark: cursor,
         observed_boottime_watermark_ns: cursor,

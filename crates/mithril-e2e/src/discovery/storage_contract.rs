@@ -2,7 +2,7 @@ use std::{error::Error as StdError, fs, path::Path};
 
 use araphor_data::{
     AnalysisStore, DiscoveryInputManifestV1, DiscoveryOwner, EvidenceStoreOutcomeV1,
-    ValidatedCoverageV1, ValidatedEvidenceBatchV1,
+    InstalledAnalysis, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
 };
 use mithril_control::ControlStore;
 use snafu::ensure;
@@ -12,7 +12,8 @@ use crate::error::InvalidInputSnafu;
 pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
     let fixture = include_bytes!("../../fixtures/discovery/manifest.json");
     let input = DiscoveryInputManifestV1::try_from(fixture.as_slice())?;
-    let derived = DiscoveryOwner::derive_recorded(&input)?;
+    let execution = InstalledAnalysis::testing(None, input.tenant_id)?;
+    let derived = DiscoveryOwner::derive_recorded(&input, &execution)?;
     let coverage = input.coverage.first().ok_or("coverage fixture is absent")?;
     let identity = coverage.stream.clone();
     ensure!(

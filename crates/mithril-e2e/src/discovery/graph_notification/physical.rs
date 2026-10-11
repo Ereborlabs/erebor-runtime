@@ -117,7 +117,11 @@ impl GraphNotificationQualification {
             })
             .collect::<TestResult<Vec<_>>>()?;
         let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
-        let graph = GraphAndFindingOwner::new(data.clone(), Arc::new(store.clone()))?;
+        let graph = GraphAndFindingOwner::new(
+            data.clone(),
+            Arc::new(store.clone()),
+            InstalledAnalysis::testing(Some(data.clone()), tenant)?,
+        )?;
         let mut consumed = false;
         for _ in 0..1024 {
             graph.process(now)?;
@@ -228,7 +232,11 @@ impl GraphNotificationQualification {
         drop(store);
         let store = ControlStore::open(&store_root)?;
         let data = Arc::new(AnalysisStore::open(&data_root)?);
-        let graph = GraphAndFindingOwner::new(data.clone(), Arc::new(store.clone()))?;
+        let graph = GraphAndFindingOwner::new(
+            data.clone(),
+            Arc::new(store.clone()),
+            InstalledAnalysis::testing(Some(data.clone()), tenant)?,
+        )?;
         assert_eq!(
             graph.snapshot_result(tenant, &result_id)?,
             Some(snapshot.clone())

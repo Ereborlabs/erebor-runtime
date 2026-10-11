@@ -12,7 +12,11 @@ fn control_graph_expiry_process() -> TestResult {
             },
             Default::default(),
         )?);
-        let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
+        let owner = GraphAndFindingOwner::new(
+            store.clone(),
+            Arc::new(Inputs::default()),
+            crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+        )?;
         accept(
             &store,
             &[record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?],
@@ -61,7 +65,11 @@ fn control_graph_refresh_recovery() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
     let provider = Arc::new(FailingInputs(std::sync::atomic::AtomicBool::new(false)));
-    let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        provider.clone(),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     accept(
         &store,
         &[record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?],

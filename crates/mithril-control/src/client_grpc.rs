@@ -55,13 +55,11 @@ impl ClientGrpcOwner {
         let data = control
             .analysis_store()
             .map(|store| {
-                let query = Arc::new(QueryOwner::new(store.clone(), config.query)?);
-                let packages = Arc::new(AnalysisPackageOwner::new(
-                    store.clone(),
-                    query.clone(),
-                    auth.clone(),
-                )?);
-                Ok::<_, araphor_data::Error>(ClientData {
+                let runtime = control.analysis_packages(Some(config.query))?;
+                runtime.bind_client(auth.clone())?;
+                let query = runtime.query.clone();
+                let packages = runtime.owner.clone();
+                Ok::<_, crate::Error>(ClientData {
                     store,
                     query,
                     packages,

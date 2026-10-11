@@ -59,7 +59,11 @@ async fn native_traversal_reopen_and_restore() -> TestResult {
     drop(store);
     let root = directory.path().join("analysis");
     let store = Arc::new(AnalysisStore::open(&root)?);
-    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Inputs::default()),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let fixture = TraversalFixture {
         native: native_storage::CommitFixture {
             directory,
@@ -82,7 +86,14 @@ async fn native_traversal_reopen_and_restore() -> TestResult {
         &backup,
         &fixture.native.directory.path().join("restored"),
     )?);
-    let _owner = GraphAndFindingOwner::new(restored.clone(), Arc::new(Inputs::default()))?;
+    let saved = fixture.native.store.package_revisions(source().tenant_id)?;
+    assert_eq!(saved.len(), 4);
+    assert_eq!(restored.package_revisions(source().tenant_id)?, saved);
+    let _owner = GraphAndFindingOwner::new(
+        restored.clone(),
+        Arc::new(Inputs::default()),
+        crate::InstalledAnalysis::testing(Some(restored.clone()), source().tenant_id)?,
+    )?;
     let plan = QueryPlan::client_graph(
         QueryGrant {
             principal: "traversal-test".into(),

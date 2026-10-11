@@ -41,7 +41,11 @@ impl DiscoveryOwner {
         let Some(input) = self.replay_input(profile)? else {
             return Ok(unavailable("FROZEN_INPUT_UNAVAILABLE"));
         };
-        let mut snapshot = Self::derive_recorded(&input)?.snapshot;
+        let Some(installed) = self.installed_refs(profile)? else {
+            return Ok(unavailable("FROZEN_PACKAGES_UNAVAILABLE"));
+        };
+        let execution = self.execution.pin_at(input.tenant_id, &installed)?;
+        let mut snapshot = Self::derive_recorded(&input, &execution)?.snapshot;
         if !snapshot
             .unresolved
             .iter()
@@ -456,6 +460,7 @@ mod tests {
                     witness_age_ns: 1,
                     ..Default::default()
                 },
+                crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
             )?;
             assert_eq!(owner.process(10)?, 3);
             let profile = owner
@@ -571,8 +576,15 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            let owner =
-                DiscoveryOwner::new(fixture.store.clone(), fixture.provider.clone(), config)?;
+            let owner = DiscoveryOwner::new(
+                fixture.store.clone(),
+                fixture.provider.clone(),
+                config,
+                crate::InstalledAnalysis::testing(
+                    Some(fixture.store.clone()),
+                    fixture.profile.scope.identity.tenant_id,
+                )?,
+            )?;
             assert!(matches!(
                 owner.replay(&fixture.profile)?,
                 DiscoveryReplayV1::Unavailable { .. }
@@ -585,6 +597,10 @@ mod tests {
                 input_bytes: bytes,
                 ..Default::default()
             },
+            crate::InstalledAnalysis::testing(
+                Some(fixture.store.clone()),
+                fixture.profile.scope.identity.tenant_id,
+            )?,
         )?;
         assert!(matches!(
             owner.replay(&fixture.profile)?,
@@ -613,6 +629,80 @@ mod tests {
             Some(fixture.profile)
         );
         assert_eq!(fixture.provider.calls.load(Ordering::SeqCst), calls);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_replay_retains_revision() -> TestResult {
+        let fixture = ReplayFixture::new()?;
+        let tenant = fixture.profile.scope.identity.tenant_id;
+        let refs = fixture
+            .owner
+            .installed_refs(&fixture.profile)?
+            .ok_or("installed refs")?;
+        assert_eq!(refs.len(), 4);
+        let execution = fixture.owner.execution.clone();
+        let grant = crate::PackageGrantV1 {
+            principal: "fixture".into(),
+            revision: 1,
+            selection: crate::AnalysisSelectionV1::tenant(tenant),
+            expires_utc_ns: None,
+            authorization_id: None,
+        };
+        let mut bundle = crate::AnalysisPackageOwner::required_bundles()
+            .into_iter()
+            .find(|bundle| bundle.root.package_id == DISCOVERY_PROCESSOR)
+            .ok_or("discovery bundle")?;
+        bundle.root.revision = "2".into();
+        bundle.artifacts[0].descriptor.revision = "2".into();
+        let packages = execution.testing_owner();
+        packages
+            .execute(
+                grant.clone(),
+                crate::PackageRequestV1::Update {
+                    scope_id: crate::AnalysisPackageOwner::DOMAIN_SCOPE.into(),
+                    bundle,
+                },
+                Arc::new(crate::AnalysisReadControl::with_timeout(
+                    std::time::Duration::from_secs(30),
+                )?),
+            )
+            .await?;
+        assert!(execution
+            .snapshot(tenant)?
+            .refs()?
+            .iter()
+            .filter(|reference| reference.package_id == DISCOVERY_PROCESSOR)
+            .all(|reference| reference.revision == "2"));
+        assert_eq!(
+            fixture.owner.installed_refs(&fixture.profile)?,
+            Some(refs.clone())
+        );
+        assert_eq!(
+            fixture.owner.replay(&fixture.profile)?,
+            DiscoveryReplayV1::Available(Box::new(fixture.profile.snapshot.clone()))
+        );
+        let historical = execution.pin_at(tenant, &refs)?;
+        assert!(historical
+            .authorize(tenant, &historical.revisions(), || Ok(()))
+            .is_err());
+        packages
+            .execute(
+                grant,
+                crate::PackageRequestV1::Remove {
+                    scope_id: crate::AnalysisPackageOwner::DOMAIN_SCOPE.into(),
+                    package_id: DISCOVERY_PROCESSOR.into(),
+                },
+                Arc::new(crate::AnalysisReadControl::with_timeout(
+                    std::time::Duration::from_secs(30),
+                )?),
+            )
+            .await?;
+        assert!(fixture.owner.replay(&fixture.profile).is_err());
+        assert_eq!(
+            fixture.owner.profile(&fixture.profile.scope.identity)?,
+            Some(fixture.profile)
+        );
         Ok(())
     }
 }

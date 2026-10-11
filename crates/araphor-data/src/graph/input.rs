@@ -170,6 +170,9 @@ impl GraphAndFindingOwner {
         }
         for record in records {
             for fact in self.provider.facts(record)? {
+                if fact.key.owner_id == "graph-packages-v1" {
+                    continue;
+                }
                 if facts
                     .insert(fact.key.clone(), fact.clone())
                     .is_some_and(|previous| previous != fact)

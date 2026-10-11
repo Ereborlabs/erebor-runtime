@@ -23,7 +23,11 @@ fn control_graph_evidence_recovery() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
     let provider = Arc::new(RecoveryInputs::default());
-    let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        provider.clone(),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let records = (1..=257)
         .map(|cursor| record(cursor, &wire(cursor, DeniedBeforeEffect, 2, 2, [20; 16])))
         .collect::<Result<Vec<_>>>()?;

@@ -203,7 +203,14 @@ async fn control_graph_query_disabled_owner_is_explicit() -> TestResult {
 #[tokio::test]
 async fn control_graph_query_scope_precedes_projection() -> TestResult {
     let fixture = QueryFixture::new()?;
-    let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
+    let graph = GraphAndFindingOwner::new(
+        fixture.store.clone(),
+        Arc::new(Context(vec![])),
+        crate::InstalledAnalysis::testing_tenants(
+            Some(fixture.store.clone()),
+            &[fixture.source.tenant_id, [2; 16]],
+        )?,
+    )?;
     fixture.commit(1, 100, effect(1, true, 10))?;
     let mut other = fixture.source.clone();
     other.node_id = "other-node".into();
@@ -334,6 +341,7 @@ async fn control_graph_query_context_keeps_authority_and_sensitivity() -> TestRe
     let graph = GraphAndFindingOwner::new(
         fixture.store.clone(),
         Arc::new(Context(vec![context.clone()])),
+        crate::InstalledAnalysis::testing(Some(fixture.store.clone()), fixture.source.tenant_id)?,
     )?;
     fixture.commit(1, 100, effect(1, true, 10))?;
     process(&graph)?;
@@ -370,7 +378,11 @@ async fn control_graph_query_context_keeps_authority_and_sensitivity() -> TestRe
 #[tokio::test]
 async fn graph_query_subject_joins() -> TestResult {
     let fixture = QueryFixture::new()?;
-    let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
+    let graph = GraphAndFindingOwner::new(
+        fixture.store.clone(),
+        Arc::new(Context(vec![])),
+        crate::InstalledAnalysis::testing(Some(fixture.store.clone()), fixture.source.tenant_id)?,
+    )?;
     fixture.commit(1, 100, effect(1, true, 10))?;
     process(&graph)?;
     let snapshot = graph.snapshot(&fixture.source)?.ok_or("snapshot absent")?;
@@ -408,7 +420,11 @@ async fn graph_query_subject_joins() -> TestResult {
 #[tokio::test]
 async fn control_graph_query_overlap_keeps_latest_finding_revision() -> TestResult {
     let fixture = QueryFixture::new()?;
-    let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
+    let graph = GraphAndFindingOwner::new(
+        fixture.store.clone(),
+        Arc::new(Context(vec![])),
+        crate::InstalledAnalysis::testing(Some(fixture.store.clone()), fixture.source.tenant_id)?,
+    )?;
     let mut frames = Vec::new();
     let mut ends = Vec::new();
     for cursor in 1..=257 {
@@ -494,7 +510,11 @@ async fn control_graph_query_overlap_keeps_latest_finding_revision() -> TestResu
 #[tokio::test]
 async fn control_graph_query_mixed_binding_window_keeps_manifest_private() -> TestResult {
     let fixture = QueryFixture::new()?;
-    let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
+    let graph = GraphAndFindingOwner::new(
+        fixture.store.clone(),
+        Arc::new(Context(vec![])),
+        crate::InstalledAnalysis::testing(Some(fixture.store.clone()), fixture.source.tenant_id)?,
+    )?;
     fixture.commit(1, 100, effect(1, true, 10))?;
     fixture.commit(2, 100, effect(2, true, 11))?;
     process(&graph)?;
@@ -572,7 +592,11 @@ async fn graph_query_formatting_boundary() -> TestResult {
 #[tokio::test]
 async fn control_graph_query_limits_and_cancel_remain_explicit() -> TestResult {
     let fixture = QueryFixture::new()?;
-    let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
+    let graph = GraphAndFindingOwner::new(
+        fixture.store.clone(),
+        Arc::new(Context(vec![])),
+        crate::InstalledAnalysis::testing(Some(fixture.store.clone()), fixture.source.tenant_id)?,
+    )?;
     for cursor in 1..=3 {
         fixture.commit(cursor, 100, effect(cursor, true, 10))?;
     }
@@ -690,7 +714,11 @@ async fn control_graph_query_limits_and_cancel_remain_explicit() -> TestResult {
 #[tokio::test]
 async fn control_graph_query_follow_uses_committed_results() -> TestResult {
     let fixture = QueryFixture::new()?;
-    let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
+    let graph = GraphAndFindingOwner::new(
+        fixture.store.clone(),
+        Arc::new(Context(vec![])),
+        crate::InstalledAnalysis::testing(Some(fixture.store.clone()), fixture.source.tenant_id)?,
+    )?;
     fixture.commit(1, 100, effect(1, true, 10))?;
     process(&graph)?;
     let owner = Arc::new(fixture.owner(limits())?);
@@ -772,7 +800,11 @@ impl NotificationSink for Sink {
 #[tokio::test]
 async fn control_graph_query_notifications_use_current_exact_refs() -> TestResult {
     let fixture = QueryFixture::new()?;
-    let graph = GraphAndFindingOwner::new(fixture.store.clone(), Arc::new(Context(vec![])))?;
+    let graph = GraphAndFindingOwner::new(
+        fixture.store.clone(),
+        Arc::new(Context(vec![])),
+        crate::InstalledAnalysis::testing(Some(fixture.store.clone()), fixture.source.tenant_id)?,
+    )?;
     fixture.commit(1, 100, effect(1, true, 10))?;
     process(&graph)?;
     let router = NotificationRouter::new(fixture.store.clone(), Arc::new(NotificationAuthority))?;

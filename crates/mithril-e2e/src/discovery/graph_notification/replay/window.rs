@@ -66,7 +66,11 @@ impl ReplayQualification {
             .filter(|record| record.reason == EffectObservationReasonV1::ExactPolicyDeny as u8)
             .count();
         let source = self.accept_node(input.source, raw, &self.authenticated, false)?;
-        let graph = GraphAndFindingOwner::new(self.data.clone(), self.inputs.clone())?;
+        let graph = GraphAndFindingOwner::new(
+            self.data.clone(),
+            self.inputs.clone(),
+            self.execution.clone(),
+        )?;
         let mut snapshot = None;
         for _ in 0..32 {
             graph.process(self.now)?;
@@ -154,13 +158,19 @@ impl ReplayQualification {
             intake,
             data,
             inputs,
+            execution,
             authenticated,
             now,
         } = self;
         drop(intake);
+        drop(execution);
         drop(data);
         let data = Arc::new(AnalysisStore::open(root.path().join("analysis"))?);
-        let graph = GraphAndFindingOwner::new(data.clone(), inputs)?;
+        let graph = GraphAndFindingOwner::new(
+            data.clone(),
+            inputs,
+            InstalledAnalysis::testing(Some(data.clone()), authenticated.tenant_id)?,
+        )?;
         assert_eq!(
             graph.snapshot_result(authenticated.tenant_id, result_id)?,
             Some(snapshot.clone())

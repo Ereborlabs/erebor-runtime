@@ -11,7 +11,11 @@ fn control_graph_overlap_expiry() -> TestResult {
         },
         Default::default(),
     )?);
-    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Inputs::default()),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let records = (1..=383)
         .map(|cursor| record(cursor, &wire(cursor, DeniedBeforeEffect, 2, 2, [20; 16])))
         .collect::<Result<Vec<_>>>()?;

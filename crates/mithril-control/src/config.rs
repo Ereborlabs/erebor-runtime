@@ -117,30 +117,41 @@ impl ControlConfig {
         let store = ControlStore::open(store_directory)?;
         let (mut control, data_error, discovery, discovery_error) = match self.open_analysis() {
             Ok(data) => {
+                let control = ControlPlane::from_intake(
+                    self.allowed_nodes,
+                    self.trust.clone(),
+                    EvidenceIntakeOwner::new(store.clone(), data.clone(), clock)?,
+                )?;
+                if self.discovery.is_some()
+                    || self.graph_enabled
+                    || self
+                        .client
+                        .as_ref()
+                        .is_some_and(|client| client.investigation.is_some())
+                {
+                    control.analysis_packages(
+                        self.client
+                            .as_ref()
+                            .and_then(|client| client.investigation.as_ref())
+                            .map(|config| config.query.clone()),
+                    )?;
+                }
                 let (discovery, discovery_error) = match self
                     .discovery
-                    .map(|config| {
-                        araphor_data::DiscoveryOwner::new(
+                    .map(|config| -> Result<_> {
+                        Ok(araphor_data::DiscoveryOwner::new(
                             data.clone(),
                             Arc::new(store.clone()),
                             config,
-                        )
+                            control.installed_analysis()?,
+                        )?)
                     })
                     .transpose()
                 {
                     Ok(owner) => (owner.map(Arc::new), None),
-                    Err(source) => (None, Some(source.into())),
+                    Err(source) => (None, Some(source)),
                 };
-                (
-                    ControlPlane::from_intake(
-                        self.allowed_nodes,
-                        self.trust.clone(),
-                        EvidenceIntakeOwner::new(store.clone(), data, clock)?,
-                    )?,
-                    None,
-                    discovery,
-                    discovery_error,
-                )
+                (control, None, discovery, discovery_error)
             }
             Err(error) => (
                 ControlPlane::without_intake(

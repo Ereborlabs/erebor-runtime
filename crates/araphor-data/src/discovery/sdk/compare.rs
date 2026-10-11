@@ -4,9 +4,14 @@ use super::{Adapter, Result};
 use crate::*;
 
 impl BehaviorSnapshotV1 {
-    pub fn compare(&self, baseline: &DiscoveryReviewedBaselineV1) -> Result<DiscoveryComparisonV1> {
+    pub fn compare(
+        &self,
+        baseline: &DiscoveryReviewedBaselineV1,
+        execution: &crate::InstalledAnalysis,
+    ) -> Result<DiscoveryComparisonV1> {
         self.validate()?;
         baseline.snapshot.validate()?;
+        let execution = execution.snapshot(self.tenant_id)?;
         crate::discovery::model::require(
             !baseline.reviewer.is_empty()
                 && baseline.reviewer.len() <= 256
@@ -18,8 +23,8 @@ impl BehaviorSnapshotV1 {
             self.tenant_id == baseline.snapshot.tenant_id,
             "baseline tenant",
         )?;
-        let current = self.display_groups()?;
-        let previous = baseline.snapshot.display_groups()?;
+        let current = self.display_groups(&execution)?;
+        let previous = baseline.snapshot.display_groups(&execution)?;
         let mut groups = Vec::new();
         for (side, values) in [&current, &previous].into_iter().enumerate() {
             for group in values {
@@ -53,6 +58,8 @@ impl BehaviorSnapshotV1 {
             .map(Adapter::json)
             .collect::<Result<Vec<_>>>()?;
         let output = Adapter::run(
+            &execution,
+            self.tenant_id,
             "compare",
             vec![
                 Adapter::dataset("groups", &groups)?,
@@ -62,9 +69,14 @@ impl BehaviorSnapshotV1 {
             ],
             Adapter::revision(&(self, baseline))?,
         )?;
-        let mut rows = Adapter::output::<builtin::Comparison>(&output, "comparison")?;
+        let mut rows = Adapter::output::<builtin::Comparison>(&output.output, "comparison")?;
         crate::discovery::model::require(rows.len() == 1, "analysis comparison")?;
         let result = rows.remove(0);
+        crate::discovery::model::require(
+            (self.coverage == baseline.snapshot.coverage || result.coverage_changed)
+                && (self.lifecycle == baseline.snapshot.lifecycle || result.lifecycle_changed),
+            "analysis comparison proof",
+        )?;
         Ok(DiscoveryComparisonV1 {
             added: Adapter::groups_at(&current, result.added)?,
             removed: Adapter::groups_at(&previous, result.removed)?,

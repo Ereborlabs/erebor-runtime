@@ -357,6 +357,7 @@ mod tests {
                 interval_records: 1,
                 ..Default::default()
             },
+            crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
         )?;
         owner.process(10)?;
         let profile = owner.profile(&record.id.stream)?.ok_or("profile absent")?;

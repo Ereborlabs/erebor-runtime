@@ -51,6 +51,7 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin context version",
         })?;
+        Self::validate_context_packages(&transaction, &self.root, input)?;
         let sensitivity: &'static str = input.sensitivity.into();
         if let Some(reference) = self.context_retry(&transaction, input, intern)? {
             return Ok(reference);

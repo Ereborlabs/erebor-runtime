@@ -102,6 +102,11 @@ impl DiscoveryQualificationRunner {
         let store = ControlStore::open(&root)?;
         let control = tls.control_with_store(store.clone(), 1)?;
         let data = control.analysis_store().ok_or("the data owner is absent")?;
+        let execution = if case == RoundtripCase::ProfileRestart {
+            Some(control.installed_analysis()?)
+        } else {
+            None
+        };
         let server = tls.start(control).await?;
         let boot = EvidenceIdV1::from([7; 16]);
         let source = EvidenceIdV1::new(3, 4);
@@ -329,8 +334,12 @@ impl DiscoveryQualificationRunner {
                 available: AtomicBool::new(false),
                 calls: AtomicUsize::new(0),
             });
-            let owner =
-                araphor_data::DiscoveryOwner::new(data.clone(), provider.clone(), profile_config)?;
+            let owner = araphor_data::DiscoveryOwner::new(
+                data.clone(),
+                provider.clone(),
+                profile_config,
+                execution.ok_or("installed discovery handle is absent")?,
+            )?;
             ensure!(
                 owner.process(now)? == 1,
                 InvalidInputSnafu {
@@ -441,6 +450,10 @@ impl DiscoveryQualificationRunner {
                 recovered.clone(),
                 provider.clone(),
                 profile_config,
+                araphor_data::InstalledAnalysis::testing(
+                    Some(recovered.clone()),
+                    stream.tenant_id,
+                )?,
             )?;
             ensure!(
                 owner.profile(&stream)? == Some(profile.clone())

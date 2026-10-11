@@ -11,11 +11,15 @@ mod facts;
 mod output;
 #[cfg(test)]
 mod tests;
+mod validation;
 
 impl GraphDerivation<'_> {
+    #[cfg(test)]
     pub(super) fn evaluation(&self) -> Result<sdk::Evaluation> {
-        let package = algorithm::Detector::Process.descriptor();
-        let model = &package.exports[0];
+        self.evaluation_for(&algorithm::Detector::Process.descriptor().exports[0])
+    }
+
+    pub(super) fn evaluation_for(&self, model: &sdk::Model) -> Result<sdk::Evaluation> {
         let records = self
             .input
             .records
@@ -93,7 +97,7 @@ impl GraphDerivation<'_> {
             .collect::<sdk::Result<Vec<_>>>()
             .context(AnalysisContractSnafu)?;
         let evaluation = sdk::Evaluation {
-            export: "detect".into(),
+            export: model.name.clone(),
             inputs,
             parameters: None,
             context: sdk::EvaluationContext {
@@ -109,13 +113,23 @@ impl GraphDerivation<'_> {
 
     pub(super) fn evaluate(
         &mut self,
-        detector: algorithm::Detector,
+        execution: &crate::InstalledAnalysis,
+        package: &sdk::Package,
         evaluation: &sdk::Evaluation,
     ) -> Result<()> {
-        let output = detector
-            .evaluate(evaluation)
-            .context(AnalysisContractSnafu)?;
-        self.apply_output(detector, evaluation, &output)
+        let result = execution.evaluate(
+            self.input.source.tenant_id,
+            &package.id,
+            evaluation,
+            &crate::AnalysisReadControl::with_timeout(std::time::Duration::from_secs(60))?,
+        )?;
+        if result.descriptor != *package || result.revision != package.revision {
+            return GraphInvalidSnafu {
+                field: "graph package revision",
+            }
+            .fail();
+        }
+        self.apply_output(&result.descriptor, &result.evaluation, &result.output)
     }
 
     fn observation(&self, record: &DiscoveryRecordV1) -> Result<algorithm::Observation> {

@@ -63,6 +63,7 @@ impl AnalysisStore {
                     operation: "decode context head page",
                 })?;
                 let (version, _) = Self::decode_context_row(&self.root, key, stored)?;
+                Self::validate_context_packages(reader, &self.root, &version)?;
                 let next_bytes = bytes
                     .checked_add(std::mem::size_of::<AnalysisContextVersionV1>())
                     .and_then(|bytes| bytes.checked_add(version.key.owner_id.len()))

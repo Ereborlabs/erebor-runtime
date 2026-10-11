@@ -9,6 +9,7 @@ mod coverage;
 mod derive;
 mod expiry;
 mod input;
+mod installed;
 mod live;
 mod model;
 mod proof;
@@ -39,15 +40,21 @@ pub trait GraphContextProvider: Send + Sync {
 
 pub struct GraphAndFindingOwner {
     store: Arc<AnalysisStore>,
+    execution: crate::InstalledAnalysis,
     provider: Arc<dyn GraphContextProvider>,
     operation: Mutex<Option<crate::EvidenceIntakeIdentityV1>>,
 }
 
 impl GraphAndFindingOwner {
-    pub fn new(store: Arc<AnalysisStore>, provider: Arc<dyn GraphContextProvider>) -> Result<Self> {
+    pub fn new(
+        store: Arc<AnalysisStore>,
+        provider: Arc<dyn GraphContextProvider>,
+        execution: crate::InstalledAnalysis,
+    ) -> Result<Self> {
         store.enable_graph_owner()?;
         let owner = Self {
             store,
+            execution,
             provider,
             operation: Mutex::new(None),
         };

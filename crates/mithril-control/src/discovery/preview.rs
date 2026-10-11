@@ -22,8 +22,9 @@ impl DiscoveryPreviewOwner {
     pub fn simulate_recorded(
         input: &DiscoveryInputManifestV1,
         candidate: &PolicyDocumentV1,
+        execution: &araphor_data::InstalledAnalysis,
     ) -> Result<DiscoveryStaticPreviewV1> {
-        let derived = DiscoveryOwner::derive_recorded(input)?;
+        let derived = DiscoveryOwner::derive_recorded(input, execution)?;
         let compiled = PolicyCompiler.compile(candidate)?;
         let keys: BTreeSet<_> = derived
             .snapshot
@@ -83,13 +84,20 @@ mod tests {
         .map_err(Into::into)
     }
 
+    fn execution() -> TestResult<araphor_data::InstalledAnalysis> {
+        Ok(araphor_data::InstalledAnalysis::testing(
+            None,
+            input()?.tenant_id,
+        )?)
+    }
+
     #[test]
     fn discovery_preview_native_compiler() -> TestResult<()> {
         let policy = PolicyDocumentV1::parse(
             std::path::Path::new("policy-v1.yaml"),
             include_bytes!("../../tests/fixtures/policy-v1.yaml"),
         )?;
-        let preview = DiscoveryPreviewOwner::simulate_recorded(&input()?, &policy)?;
+        let preview = DiscoveryPreviewOwner::simulate_recorded(&input()?, &policy, &execution()?)?;
         assert_eq!(preview.simulations.len(), 1);
         assert_eq!(preview.snapshot.unresolved_records, 1);
         assert_eq!(
@@ -123,7 +131,7 @@ mod tests {
             record.wire_record = Vec::<u8>::try_from(&wire)?;
         }
         assert!(matches!(
-            DiscoveryPreviewOwner::simulate_recorded(&input, &policy),
+            DiscoveryPreviewOwner::simulate_recorded(&input, &policy, &execution()?),
             Err(crate::Error::Discovery {
                 code: "STATIC_FAMILY_UNSUPPORTED",
                 ..
@@ -163,7 +171,7 @@ mod tests {
         for context in &mut input.contexts {
             context.static_key = araphor_data::DiscoveryPolicyKeyV1::try_from(&key.key)?;
         }
-        let preview = DiscoveryPreviewOwner::simulate_recorded(&input, &policy)?;
+        let preview = DiscoveryPreviewOwner::simulate_recorded(&input, &policy, &execution()?)?;
         assert_eq!(preview.source_policy_digest, compiled.source_policy_digest);
         assert_eq!(preview.simulations.len(), 1);
         assert_eq!(

@@ -4,7 +4,11 @@ use super::*;
 fn control_notification_stale_ack() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     commit_finding(&store, finding(1, FindingSeverityV1::Warning), 1)?;
@@ -37,7 +41,11 @@ fn control_notification_stale_ack() -> TestResult {
 fn control_notification_escalation_update() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     let human = grant(NotificationPrincipalV1::Human);
     router.configure(&human, policy("primary"), 10)?;
@@ -84,7 +92,11 @@ fn control_notification_legacy_attempts() -> TestResult {
     let first;
     {
         let store = Arc::new(AnalysisStore::open(&path)?);
-        let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+        let graph = GraphAndFindingOwner::new(
+            store.clone(),
+            Arc::new(Context),
+            crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+        )?;
         let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
         configure(&router)?;
         let human = grant(NotificationPrincipalV1::Human);
@@ -126,7 +138,11 @@ fn control_notification_legacy_attempts() -> TestResult {
         assert_eq!(sink.calls.lock().map_err(|_| "sink lock")?.len(), 50);
     }
     let store = Arc::new(AnalysisStore::open(&path)?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store, Arc::new(Authority))?;
     let human = grant(NotificationPrincipalV1::Human);
     let current = router.obligations(&human, 151)?.remove(0);
@@ -143,7 +159,11 @@ fn control_notification_legacy_attempts() -> TestResult {
 fn control_notification_pending_subject() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     commit_finding(&store, finding(1, FindingSeverityV1::Warning), 1)?;
@@ -196,7 +216,11 @@ fn control_notification_pending_subject() -> TestResult {
 fn control_notification_pending_escalation() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(dir.path().join("data"))?);
-    let graph = GraphAndFindingOwner::new(store.clone(), Arc::new(Context))?;
+    let graph = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Context),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let router = NotificationRouter::new(store.clone(), Arc::new(Authority))?;
     configure(&router)?;
     commit_finding(&store, finding(1, FindingSeverityV1::Warning), 1)?;

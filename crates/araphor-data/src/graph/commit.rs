@@ -24,16 +24,35 @@ impl GraphAndFindingOwner {
         input: GraphReplayInputV1,
         previous: Option<&WindowHead>,
     ) -> Result<Option<bool>> {
-        let mut snapshot = Self::derive(&input)?;
+        if input.facts.len() > 255 {
+            return Ok(None);
+        }
+        let execution = self.execution.snapshot(input.source.tenant_id)?;
+        let mut snapshot = match Self::derive(&input, &execution) {
+            Ok(snapshot) => snapshot,
+            Err(crate::Error::GraphInvalid {
+                field: "graph output bytes",
+                ..
+            }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
         snapshot.first_cursor = first;
         snapshot.input_positions = positions;
         snapshot.context_notice_revision = notice;
         snapshot.witness_deadline_utc_ns = deadline;
-        if previous.as_ref().is_some_and(|(_, previous, _)| {
-            previous.input_manifest == snapshot.input_manifest
-                && previous.graph == snapshot.graph
-                && previous.findings == snapshot.findings
-        }) {
+        let installed = Self::analysis_refs(&execution, &snapshot)?;
+        let unchanged = match previous {
+            Some((id, previous, _))
+                if previous.input_manifest == snapshot.input_manifest
+                    && previous.graph == snapshot.graph
+                    && previous.findings == snapshot.findings
+                    && previous.packages == snapshot.packages =>
+            {
+                self.installed_refs(input.source.tenant_id, id)?.as_ref() == Some(&installed)
+            }
+            _ => false,
+        };
+        if unchanged {
             return Ok(Some(false));
         }
         snapshot.previous_result_id = previous.as_ref().map(|row| row.0.clone());
@@ -42,7 +61,24 @@ impl GraphAndFindingOwner {
         if body.len() > GRAPH_WINDOW_BYTES.min(crate::analysis::MAX_RESULT_BYTES) {
             return Ok(None);
         }
-        self.commit_snapshot(snapshot, body, &input.facts, status, consumed, advance, now)?;
+        let revisions = installed
+            .iter()
+            .map(|reference| (reference.package_id.clone(), reference.revision.clone()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        execution.authorize(input.source.tenant_id, &revisions, || {
+            self.commit_snapshot(
+                snapshot,
+                body,
+                &input.facts,
+                status,
+                consumed,
+                advance,
+                now,
+                &installed,
+            )
+        })?;
         Ok(Some(true))
     }
 
@@ -56,8 +92,12 @@ impl GraphAndFindingOwner {
         consumed: u64,
         advance: bool,
         now: u64,
+        installed: &[crate::InstalledRefV1],
     ) -> Result<()> {
-        let references = self.commit_contexts(facts)?;
+        let result_id = format!("graph:{}", uuid::Uuid::new_v4());
+        let mut references = self.commit_contexts(facts)?;
+        references.push(self.package_context(&snapshot, &result_id, installed)?);
+        references.sort_by(|left, right| left.key.cmp(&right.key));
         let expires = snapshot.witness_deadline_utc_ns;
         let witness_ids: BTreeSet<_> = snapshot.input_manifest.evidence.iter().cloned().collect();
         let witnesses = witness_ids
@@ -82,7 +122,7 @@ impl GraphAndFindingOwner {
                 .map(|reference| reference.commit_revision)
                 .max()
                 .unwrap_or(0),
-            result_id: format!("graph:{}", uuid::Uuid::new_v4()),
+            result_id,
             body,
             created_utc_ns: now,
             witnesses,

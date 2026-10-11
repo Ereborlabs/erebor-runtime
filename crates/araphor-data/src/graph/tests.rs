@@ -6,10 +6,25 @@ use EffectPhysicalResultV1::{DeniedBeforeEffect, UnknownAfterPreEffect};
 use super::*;
 use crate::*;
 
-type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub(crate) fn execution() -> TestResult<std::sync::MutexGuard<'static, crate::InstalledAnalysis>> {
+    static EXECUTION: std::sync::LazyLock<crate::Result<Mutex<crate::InstalledAnalysis>>> =
+        std::sync::LazyLock::new(|| {
+            crate::InstalledAnalysis::testing(None, source().tenant_id).map(Mutex::new)
+        });
+    match EXECUTION.as_ref() {
+        Ok(execution) => execution
+            .lock()
+            .map_err(|_| "installed fixture lock poisoned".into()),
+        Err(error) => Err(error.into()),
+    }
+}
 
 mod baseline;
+mod bounded;
 mod evidence_recovery;
+mod installed;
 pub(crate) mod native_storage;
 mod paging;
 mod processing;
@@ -357,9 +372,14 @@ fn control_graph_subject_lifetime_does_not_use_collector_epoch() {
 
 #[test]
 fn control_graph_accepted_physical_results_keep_stage_semantics() -> TestResult {
+    let execution = execution()?;
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
-    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs(Mutex::new(vec![]))))?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Inputs(Mutex::new(vec![]))),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let stages = [
         (DeniedBeforeEffect, 2, 2),
         (EffectPhysicalResultV1::PacketDroppedAfterRewrite, 3, 13),
@@ -422,7 +442,7 @@ fn control_graph_accepted_physical_results_keep_stage_semantics() -> TestResult 
     let mut unknown = wire(4, UnknownAfterPreEffect, 2, 2, [20; 16]);
     unknown.kernel_result = -13;
     assert!(
-        GraphAndFindingOwner::derive(&input(vec![record(4, &unknown)?]))?
+        GraphAndFindingOwner::derive(&input(vec![record(4, &unknown)?]), &execution)?
             .findings
             .is_empty()
     );
@@ -431,7 +451,7 @@ fn control_graph_accepted_physical_results_keep_stage_semantics() -> TestResult 
     read.decision = DeniedBeforeEffect as u32;
     read.kernel_result = -13;
     denied_read.records[0] = record(1, &read)?;
-    assert!(GraphAndFindingOwner::derive(&denied_read)?
+    assert!(GraphAndFindingOwner::derive(&denied_read, &execution)?
         .findings
         .iter()
         .all(|finding| {
@@ -443,7 +463,7 @@ fn control_graph_accepted_physical_results_keep_stage_semantics() -> TestResult 
         wire.decision = EffectPhysicalResultV1::PacketDroppedAfterRewrite as u32;
         record.wire_record = Vec::<u8>::try_from(&wire)?;
     }
-    assert!(GraphAndFindingOwner::derive(&dropped_channel)?
+    assert!(GraphAndFindingOwner::derive(&dropped_channel, &execution)?
         .findings
         .iter()
         .all(|finding| {
@@ -454,8 +474,9 @@ fn control_graph_accepted_physical_results_keep_stage_semantics() -> TestResult 
 
 #[test]
 fn control_graph_denial_and_missing_lifetime() -> TestResult {
+    let execution = execution()?;
     let mut denied = wire(1, DeniedBeforeEffect, 2, 2, [20; 16]);
-    let graph = GraphAndFindingOwner::derive(&input(vec![record(1, &denied)?]))?;
+    let graph = GraphAndFindingOwner::derive(&input(vec![record(1, &denied)?]), &execution)?;
     assert_eq!(graph.findings[0].state, FindingStateV1::Confirmed);
     assert_eq!(
         graph.findings[0].effects[0].physical_result,
@@ -475,7 +496,7 @@ fn control_graph_denial_and_missing_lifetime() -> TestResult {
         .as_mut()
         .ok_or("context")?
         .process_instance_id = vec![0; 16];
-    let graph = GraphAndFindingOwner::derive(&input(vec![record(1, &denied)?]))?;
+    let graph = GraphAndFindingOwner::derive(&input(vec![record(1, &denied)?]), &execution)?;
     assert_eq!(
         graph.findings[0].state,
         FindingStateV1::CoverageInsufficient
@@ -496,6 +517,7 @@ fn control_graph_denial_and_missing_lifetime() -> TestResult {
 
 #[test]
 fn control_graph_native_parent_is_exact_and_local() -> TestResult {
+    let execution = execution()?;
     let mut input = input(vec![record(
         1,
         &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]),
@@ -519,7 +541,7 @@ fn control_graph_native_parent_is_exact_and_local() -> TestResult {
             proof_quality: ProofQualityV1::kernel_decision(TemporalCoverageV1::Complete),
         },
     )?);
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     assert!(graph
         .graph
         .edges
@@ -539,7 +561,7 @@ fn control_graph_native_parent_is_exact_and_local() -> TestResult {
             proof_quality: ProofQualityV1::kernel_decision(TemporalCoverageV1::Complete),
         },
     )?];
-    assert!(GraphAndFindingOwner::derive(&input)?
+    assert!(GraphAndFindingOwner::derive(&input, &execution)?
         .graph
         .edges
         .iter()
@@ -565,15 +587,16 @@ fn control_graph_native_parent_is_exact_and_local() -> TestResult {
 
 #[test]
 fn control_graph_replay_is_byte_identical_including_revision() -> TestResult {
+    let execution = execution()?;
     let input = credential_input()?;
-    let expected = GraphAndFindingOwner::derive(&input)?;
+    let expected = GraphAndFindingOwner::derive(&input, &execution)?;
     let mut reordered = input.clone();
     reordered.records.reverse();
     reordered.records.push(input.records[0].clone());
     reordered.facts.reverse();
     reordered.facts.push(input.facts[0].clone());
     reordered.coverage_keys.reverse();
-    let replayed = GraphAndFindingOwner::derive(&reordered)?;
+    let replayed = GraphAndFindingOwner::derive(&reordered, &execution)?;
     assert_eq!(
         serde_json::to_vec(&expected.graph)?,
         serde_json::to_vec(&replayed.graph)?
@@ -596,6 +619,7 @@ fn control_graph_replay_is_byte_identical_including_revision() -> TestResult {
 
 #[test]
 fn control_graph_read_channel_and_provider_results_stay_separate() -> TestResult {
+    let execution = execution()?;
     for result in [0_i64, -5, 1] {
         let mut input = credential_input()?;
         let mut read = GraphFactV1::try_from(&input.facts[3])?;
@@ -608,7 +632,7 @@ fn control_graph_read_channel_and_provider_results_stay_separate() -> TestResult
             completion.byte_count = u64::try_from(result).unwrap_or(0);
         }
         input.facts[3].body = serde_json::to_vec(&read)?;
-        let graph = GraphAndFindingOwner::derive(&input)?;
+        let graph = GraphAndFindingOwner::derive(&input, &execution)?;
         let finding = graph
             .findings
             .iter()
@@ -634,7 +658,7 @@ fn control_graph_read_channel_and_provider_results_stay_separate() -> TestResult
         denied.decision = 2;
         denied.kernel_result = -13;
         input.records[cursor - 1] = record(cursor as u64, &denied)?;
-        let graph = GraphAndFindingOwner::derive(&input)?;
+        let graph = GraphAndFindingOwner::derive(&input, &execution)?;
         assert_eq!(
             graph
                 .findings
@@ -650,6 +674,7 @@ fn control_graph_read_channel_and_provider_results_stay_separate() -> TestResult
 
 #[test]
 fn control_graph_contradictions_require_same_operation() -> TestResult {
+    let execution = execution()?;
     let mut input = credential_input()?;
     let mut denied = GraphFactV1::try_from(&input.facts[5])?;
     if let GraphFactValueV1::AuthorityUse {
@@ -664,7 +689,7 @@ fn control_graph_contradictions_require_same_operation() -> TestResult {
     input
         .facts
         .push(fact(&input.records[2], 30, denied.value.clone())?);
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     assert!(graph
         .findings
         .iter()
@@ -674,7 +699,7 @@ fn control_graph_contradictions_require_same_operation() -> TestResult {
     }
     input.facts.pop();
     input.facts.push(fact(&input.records[2], 30, denied.value)?);
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     assert_eq!(
         graph
             .findings
@@ -687,13 +712,14 @@ fn control_graph_contradictions_require_same_operation() -> TestResult {
     input.facts.reverse();
     assert_eq!(
         serde_json::to_vec(&graph.findings)?,
-        serde_json::to_vec(&GraphAndFindingOwner::derive(&input)?.findings)?
+        serde_json::to_vec(&GraphAndFindingOwner::derive(&input, &execution)?.findings)?
     );
     Ok(())
 }
 
 #[test]
 fn control_graph_credential_versions_cannot_overwrite_conflict() -> TestResult {
+    let execution = execution()?;
     let mut input = credential_input()?;
     let mut zero = GraphFactV1::try_from(&input.facts[3])?;
     if let GraphFactValueV1::Credential {
@@ -705,7 +731,7 @@ fn control_graph_credential_versions_cannot_overwrite_conflict() -> TestResult {
         completion.byte_count = 0;
     }
     input.facts.push(fact(&input.records[0], 30, zero.value)?);
-    let expected = GraphAndFindingOwner::derive(&input)?;
+    let expected = GraphAndFindingOwner::derive(&input, &execution)?;
     assert_eq!(
         expected
             .findings
@@ -718,13 +744,14 @@ fn control_graph_credential_versions_cannot_overwrite_conflict() -> TestResult {
     input.facts.reverse();
     assert_eq!(
         serde_json::to_vec(&expected.findings)?,
-        serde_json::to_vec(&GraphAndFindingOwner::derive(&input)?.findings)?
+        serde_json::to_vec(&GraphAndFindingOwner::derive(&input, &execution)?.findings)?
     );
     Ok(())
 }
 
 #[test]
 fn control_graph_kubernetes_preserves_partial_stages() -> TestResult {
+    let execution = execution()?;
     let mut input = input(vec![record(
         1,
         &wire(1, UnknownAfterPreEffect, 3, 13, [20; 16]),
@@ -747,7 +774,7 @@ fn control_graph_kubernetes_preserves_partial_stages() -> TestResult {
         1,
         GraphFactValueV1::Kubernetes(stage.clone()),
     )?);
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     assert_eq!(
         graph.packages[2].state,
         GraphPackageStateV1::KubernetesScheduled
@@ -864,7 +891,11 @@ fn control_graph_required_registration_precedes_intake_without_discovery() -> Te
         },
         Default::default(),
     )?);
-    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Inputs::default()),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     assert!(!store.discovery_enabled());
     accept(
         &store,
@@ -918,7 +949,11 @@ fn control_graph_new_source_registration_preserves_pending_other_source() -> Tes
         },
         Default::default(),
     )?);
-    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Inputs::default()),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let observation = record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?;
     accept(&store, std::slice::from_ref(&observation))?;
     let mut other = source();
@@ -966,7 +1001,11 @@ fn control_graph_committed_revision_retry_late_expiry_and_restart() -> TestResul
         Default::default(),
     )?);
     let provider = Arc::new(Inputs::default());
-    let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        provider.clone(),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let observation = record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?;
     accept(&store, std::slice::from_ref(&observation))?;
     owner.process(10)?;
@@ -1042,7 +1081,11 @@ fn control_graph_committed_revision_retry_late_expiry_and_restart() -> TestResul
     drop(owner);
     drop(store);
     let store = Arc::new(AnalysisStore::open(path)?);
-    let owner = GraphAndFindingOwner::new(store, provider)?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        provider,
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     assert_eq!(
         owner.finding(source().tenant_id, &original.finding_id, &original.revision)?,
         Some(original)
@@ -1052,6 +1095,7 @@ fn control_graph_committed_revision_retry_late_expiry_and_restart() -> TestResul
 
 #[test]
 fn control_graph_provenance_requires_retained_exact_acknowledgement() -> TestResult {
+    let execution = execution()?;
     let input = credential_input()?;
     let mut missing = input.clone();
     missing.facts.retain(|fact| {
@@ -1060,7 +1104,7 @@ fn control_graph_provenance_requires_retained_exact_acknowledgement() -> TestRes
             Ok(GraphFactValueV1::Activation(_))
         )
     });
-    assert!(GraphAndFindingOwner::derive(&missing).is_err());
+    assert!(GraphAndFindingOwner::derive(&missing, &execution).is_err());
     let mut foreign = input.clone();
     let mut policy = GraphFactV1::try_from(&foreign.facts[0])?;
     if let GraphFactValueV1::Policy(policy) = &mut policy.value {
@@ -1071,7 +1115,7 @@ fn control_graph_provenance_requires_retained_exact_acknowledgement() -> TestRes
             .tenant_id = [99; 16];
     }
     foreign.facts[0].body = serde_json::to_vec(&policy)?;
-    assert!(GraphAndFindingOwner::derive(&foreign).is_err());
+    assert!(GraphAndFindingOwner::derive(&foreign, &execution).is_err());
     let mut wrong_generation = input;
     let activation = wrong_generation
         .facts
@@ -1088,12 +1132,13 @@ fn control_graph_provenance_requires_retained_exact_acknowledgement() -> TestRes
         activation.profile_generation_ref_id = Some(2);
     }
     activation.body = serde_json::to_vec(&body)?;
-    assert!(GraphAndFindingOwner::derive(&wrong_generation).is_err());
+    assert!(GraphAndFindingOwner::derive(&wrong_generation, &execution).is_err());
     Ok(())
 }
 
 #[test]
 fn control_graph_transition_history_does_not_replace_exact_generation() -> TestResult {
+    let execution = execution()?;
     let mut input = credential_input()?;
     let mut previous = GraphFactV1::try_from(&input.facts[0])?;
     let mut acknowledgement = activation(&input.records[0])?;
@@ -1130,7 +1175,7 @@ fn control_graph_transition_history_does_not_replace_exact_generation() -> TestR
     }
     acknowledgement.body = serde_json::to_vec(&body)?;
     input.facts.push(acknowledgement);
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     let finding = graph
         .findings
         .iter()
@@ -1155,7 +1200,7 @@ fn control_graph_transition_history_does_not_replace_exact_generation() -> TestR
     input
         .facts
         .extend([fact(&input.records[0], 31, previous.value)?, stale]);
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     assert_eq!(
         graph
             .findings
@@ -1168,13 +1213,14 @@ fn control_graph_transition_history_does_not_replace_exact_generation() -> TestR
     input.facts.reverse();
     assert_eq!(
         serde_json::to_vec(&graph.findings)?,
-        serde_json::to_vec(&GraphAndFindingOwner::derive(&input)?.findings)?
+        serde_json::to_vec(&GraphAndFindingOwner::derive(&input, &execution)?.findings)?
     );
     Ok(())
 }
 
 #[test]
 fn control_graph_mmap_and_other_operation_cannot_borrow_read_bytes() -> TestResult {
+    let execution = execution()?;
     let mut input = credential_input()?;
     let mut read = GraphFactV1::try_from(&input.facts[3])?;
     if let GraphFactValueV1::Credential {
@@ -1185,7 +1231,7 @@ fn control_graph_mmap_and_other_operation_cannot_borrow_read_bytes() -> TestResu
         completion.path = GraphReadPathV1::Mmap;
     }
     input.facts[3].body = serde_json::to_vec(&read)?;
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     assert_eq!(
         graph
             .findings
@@ -1204,12 +1250,13 @@ fn control_graph_mmap_and_other_operation_cannot_borrow_read_bytes() -> TestResu
         completion.admission_record = input.records[1].id.clone();
     }
     input.facts[3].body = serde_json::to_vec(&read)?;
-    assert!(GraphAndFindingOwner::derive(&input).is_err());
+    assert!(GraphAndFindingOwner::derive(&input, &execution).is_err());
     Ok(())
 }
 
 #[test]
 fn control_graph_shared_principal_is_contextual_only() -> TestResult {
+    let execution = execution()?;
     let mut input = credential_input()?;
     let mut use_fact = GraphFactV1::try_from(&input.facts[5])?;
     if let GraphFactValueV1::AuthorityUse {
@@ -1226,7 +1273,7 @@ fn control_graph_shared_principal_is_contextual_only() -> TestResult {
         *socket_object_id = None;
     }
     input.facts[5].body = serde_json::to_vec(&use_fact)?;
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     let finding = graph
         .findings
         .iter()
@@ -1248,7 +1295,7 @@ fn control_graph_shared_principal_is_contextual_only() -> TestResult {
     }
     input.facts[5].body = serde_json::to_vec(&use_fact)?;
     assert_eq!(
-        GraphAndFindingOwner::derive(&input)?
+        GraphAndFindingOwner::derive(&input, &execution)?
             .findings
             .iter()
             .find(|finding| finding.package_id == "HF-DW-001")
@@ -1261,9 +1308,10 @@ fn control_graph_shared_principal_is_contextual_only() -> TestResult {
 
 #[test]
 fn control_graph_finding_preserves_restricted_context_sensitivity() -> TestResult {
+    let execution = execution()?;
     let mut input = credential_input()?;
     input.facts[3].sensitivity = ContextSensitivityV1::HostRestricted;
-    let graph = GraphAndFindingOwner::derive(&input)?;
+    let graph = GraphAndFindingOwner::derive(&input, &execution)?;
     assert!(graph
         .findings
         .iter()
@@ -1277,7 +1325,11 @@ fn control_graph_window_boundary_preserves_credential_join() -> TestResult {
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
     let input = credential_input_from(256)?;
     let provider = Arc::new(Inputs(Mutex::new(input.facts)));
-    let owner = GraphAndFindingOwner::new(store.clone(), provider)?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        provider,
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     let mut records = (1..256)
         .map(|cursor| record(cursor, &wire(cursor, UnknownAfterPreEffect, 2, 2, [30; 16])))
         .collect::<Result<Vec<_>>>()?;
@@ -1337,7 +1389,11 @@ fn control_graph_window_boundary_preserves_credential_join() -> TestResult {
 fn control_graph_many_coverage_revisions_preserve_frozen_input() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
-    let owner = GraphAndFindingOwner::new(store.clone(), Arc::new(Inputs::default()))?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        Arc::new(Inputs::default()),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     accept(
         &store,
         &[record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?],
@@ -1385,7 +1441,11 @@ fn control_graph_required_failure_is_unhealthy_and_recovers() -> TestResult {
     let directory = tempfile::tempdir()?;
     let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
     let provider = Arc::new(FailingInputs(std::sync::atomic::AtomicBool::new(true)));
-    let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        provider.clone(),
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     accept(
         &store,
         &[record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?],
@@ -1461,7 +1521,11 @@ fn control_graph_context_and_result_bounds_keep_required_progress() -> TestResul
         }
     }
     let provider = Arc::new(Inputs(Mutex::new(facts)));
-    let owner = GraphAndFindingOwner::new(store.clone(), provider)?;
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        provider,
+        crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
     for batch in records.chunks(128) {
         accept(&store, batch)?;
     }
@@ -1506,7 +1570,11 @@ fn control_graph_result_crashes() -> TestResult {
     let provider = Arc::new(Inputs(Mutex::new(input.facts.clone())));
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
         let store = Arc::new(AnalysisStore::open(std::path::PathBuf::from(root))?);
-        let owner = GraphAndFindingOwner::new(store, provider)?;
+        let owner = GraphAndFindingOwner::new(
+            store.clone(),
+            provider,
+            crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+        )?;
         owner.process(10)?;
         return Err("the graph result crash did not occur".into());
     }
@@ -1515,7 +1583,11 @@ fn control_graph_result_crashes() -> TestResult {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("analysis");
         let store = Arc::new(AnalysisStore::open(&path)?);
-        let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
+        let owner = GraphAndFindingOwner::new(
+            store.clone(),
+            provider.clone(),
+            crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+        )?;
         accept(&store, &input.records)?;
         coverage(&store, 3, 1, "HEALTHY")?;
         for fact in &input.facts {
@@ -1531,9 +1603,16 @@ fn control_graph_result_crashes() -> TestResult {
             .status()?;
         assert_eq!(status.code(), Some(73), "{boundary}");
         let store = Arc::new(AnalysisStore::open(&path)?);
-        let owner = GraphAndFindingOwner::new(store.clone(), provider.clone())?;
+        let owner = GraphAndFindingOwner::new(
+            store.clone(),
+            provider.clone(),
+            crate::InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+        )?;
         let committed = boundary == "result.after";
-        assert_eq!(store.meta()?.commit_revision, before + u64::from(committed));
+        assert_eq!(
+            store.meta()?.commit_revision,
+            before + 1 + u64::from(committed)
+        );
         assert_eq!(
             store
                 .processor_health(&GraphAndFindingOwner::scope(&source()))?
