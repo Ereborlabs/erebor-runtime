@@ -428,6 +428,29 @@ package case. The proof records both profile artifact hashes in
 `/tmp/araphor-wasm-production-bounds-proof-v27.json`.
 Graph notification and the final Rust procedure remain required.
 
+### Installed detector and package lifecycle qualification
+
+The fresh v30 `analysis-packages` case exits zero and records `PASS`.
+It installs `example-burst` from a built folder through the real TLS client.
+The stored threshold is 3. Four input records produce three matching evidence
+records, checkpoint 4, and reason `example-burst.THRESHOLD`. The case checks
+restart, identical retry, trust revocation, and retained history. No host
+rebuild occurs. The SQL dependency cases retain correction, empty replacement,
+checkpoint counts 2, 2, and 1, upgrade failure, rollback, and removal checks.
+
+The result is `/tmp/araphor-current-v30-packages/result.json`, with SHA256
+`a65a9c74fa8943fd462e40a0de96294e3c9276582e113549aeaf25f709c3c3ac`.
+The source manifest is `/tmp/araphor-wasm-source-manifest-production-v30.json`,
+with SHA256 `0948f6c8fd457929958f62d7b4612d0f61af715a35a0eb918d81848c6fa1b40d`.
+The normal executable is copied without a byte change to
+`/tmp/araphor-current-v30-bin/mithril_discovery_test`. Both have SHA256
+`2bce7ffca52037ea28d6b974f38a9d16fad443ed76d63de2968568ba8f96eca2`.
+The build log is `/tmp/araphor-wasm-production-e2e-build-v30.log`, with SHA256
+`c19a318df29ce4871608587ab87bc513106eba06da310791258790aca07fd4e4`.
+The proof is `/tmp/araphor-wasm-production-proof-v30.json`.
+The case adds no physical-prevention or performance result.
+The final shared Rust procedure remains required.
+
 ### Qualification cleanup correction
 
 **Done for the cleanup correction.** The graph qualification closes its stores
