@@ -4,6 +4,7 @@ use clap::{CommandFactory as _, Parser, ValueEnum};
 
 #[derive(Clone, PartialEq, ValueEnum)]
 enum Case {
+    AnalysisPackages,
     OfflineExact,
     StorageContract,
     EvidenceRestart,
@@ -71,6 +72,11 @@ async fn main() {
         error.exit();
     }
     let result = match cli.case {
+        Case::AnalysisPackages => {
+            mithril_e2e::AnalysisPackageQualification::new(cli.output_directory)
+                .run()
+                .await
+        }
         Case::GraphNotification => {
             mithril_e2e::GraphNotificationQualification::new(cli.output_directory)
                 .run()

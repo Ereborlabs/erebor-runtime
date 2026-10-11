@@ -30,8 +30,9 @@ pub use capability::{CompileRecordV1, PlatformProbeV1};
 pub use closure::ClosureLedgerV1;
 pub use digest::DigestV1;
 pub use discovery::{
-    run_discovery_offline, run_discovery_storage_contract, DataStoreQualification,
-    DiscoveryQualificationRunner, GraphNotificationQualification, QueryFollowQualification,
+    run_discovery_offline, run_discovery_storage_contract, AnalysisPackageQualification,
+    DataStoreQualification, DiscoveryQualificationRunner, GraphNotificationQualification,
+    QueryFollowQualification,
 };
 pub use effect::{
     run_effect_child, EffectHealthV1, EffectPhysicalProbeBundleV1, EffectTestRunner,

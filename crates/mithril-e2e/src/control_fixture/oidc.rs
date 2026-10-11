@@ -140,6 +140,8 @@ impl OidcFixture {
         ca: PathBuf,
     ) -> ClientAuthConfig {
         ClientAuthConfig {
+            package_managers: Vec::new(),
+            package_trust: Vec::new(),
             origin: origin.into(),
             oidc: OidcConfig {
                 issuer_url: self.issuer.clone(),
