@@ -67,6 +67,19 @@ impl QueryBudget {
         )
     }
 
+    pub(super) fn component(
+        self: &Arc<Self>,
+        tenant: [u8; 16],
+        bytes: usize,
+        input_bytes: usize,
+    ) -> Result<QueryLease> {
+        self.reserve(tenant, LeaseKind::Evaluation, bytes, input_bytes)
+    }
+
+    pub(super) fn retained_input(self: &Arc<Self>, bytes: usize) -> Result<QueryLease> {
+        self.reserve([0; 16], LeaseKind::Output, 0, bytes)
+    }
+
     pub(super) async fn wait(self: &Arc<Self>, tenant: [u8; 16]) -> Result<QueryLease> {
         loop {
             let changed = self.changed.notified();
@@ -177,6 +190,26 @@ impl QueryBudget {
 }
 
 impl QueryLease {
+    pub(super) fn shrink_input(&mut self, bytes: usize) -> Result<()> {
+        if matches!(self.kind, LeaseKind::Stream) || bytes > self.input_bytes {
+            return crate::QueryLimitSnafu {
+                resource: "query input bytes",
+                limit: self.input_bytes,
+            }
+            .fail();
+        }
+        let mut usage = self
+            .budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        usage.input_bytes -= self.input_bytes - bytes;
+        self.input_bytes = bytes;
+        drop(usage);
+        self.budget.changed.notify_waiters();
+        Ok(())
+    }
+
     pub(super) fn input(mut self, bytes: usize) -> Result<Self> {
         if !matches!(self.kind, LeaseKind::Evaluation) || bytes > self.input_bytes {
             return crate::QueryLimitSnafu {
@@ -514,6 +547,120 @@ mod tests {
             (usage.evaluations, usage.input_bytes, usage.output_bytes),
             (0, 0, 0)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn retained_input_keeps_slots() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            input_capacity: 20,
+            output_bytes: 10,
+            output_capacity: 20,
+            ..Default::default()
+        });
+        let retained = Arc::new(budget.retained_input(7)?);
+        let shared = retained.clone();
+        let first = budget.component([1; 16], 10, 6)?;
+        let second = budget.component([2; 16], 10, 7)?;
+        let stream = budget.stream([1; 16])?;
+        assert!(matches!(
+            budget.retained_input(1),
+            Err(crate::Error::AnalysisBusy {
+                resource: "query input capacity",
+                ..
+            })
+        ));
+        drop(first);
+        drop(second);
+        drop(stream);
+        drop(retained);
+        assert!(budget.retained_input(14).is_err());
+        drop(shared);
+        drop(budget.retained_input(20)?);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            (
+                usage.evaluations,
+                usage.streams,
+                usage.input_bytes,
+                usage.output_bytes
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(usage.tenants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn component_charge_shrinks() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            input_capacity: 12,
+            output_bytes: 10,
+            output_capacity: 20,
+            ..Default::default()
+        });
+        let source = budget.retained_input(2)?;
+        let mut component = budget.component([1; 16], 10, 6)?;
+        component.shrink_input(3)?;
+        let rest = budget.retained_input(7)?;
+        assert!(component.shrink_input(4).is_err());
+        assert!(budget.retained_input(1).is_err());
+        let output = component.retained_output(4)?;
+        drop(rest);
+        let next = budget.component([1; 16], 10, 7)?;
+        assert!(budget.retained_input(1).is_err());
+        drop(next);
+        drop(output);
+        drop(source);
+        drop(budget.retained_input(12)?);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            (usage.evaluations, usage.input_bytes, usage.output_bytes),
+            (0, 0, 0)
+        );
+        assert!(usage.tenants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn component_reservation_rejects_growth() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            input_capacity: 12,
+            output_bytes: 10,
+            output_capacity: 20,
+            ..Default::default()
+        });
+        assert!(budget.component([1; 16], 10, 13).is_err());
+        assert!(budget.component([1; 16], 21, 1).is_err());
+        let mut stream = budget.stream([1; 16])?;
+        assert!(stream.shrink_input(0).is_err());
+        drop(stream);
+        let component = budget.component([1; 16], 10, 12)?;
+        assert!(component.retained_output(11).is_err());
+        drop(budget.retained_input(12)?);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            (
+                usage.evaluations,
+                usage.streams,
+                usage.input_bytes,
+                usage.output_bytes
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(usage.tenants.is_empty());
         Ok(())
     }
 }

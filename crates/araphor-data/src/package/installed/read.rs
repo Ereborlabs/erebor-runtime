@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
@@ -8,6 +8,7 @@ use crate::Result;
 
 use super::super::owner::InstalledContext;
 use super::super::{AnalysisPackageOwner, PackageActionV1 as Action, PackageErrorCodeV1 as Code};
+use super::snapshot::InstalledSnapshot;
 use super::InstalledAnalysis;
 
 impl InstalledAnalysis {
@@ -15,7 +16,7 @@ impl InstalledAnalysis {
         if self.tenant.is_some_and(|value| value != tenant) {
             return Err(Code::Denied.error("installed snapshot tenant"));
         }
-        if self.pins.is_some() {
+        if self.snapshot.is_some() {
             return Ok(self.clone());
         }
         let _lifecycle = self
@@ -24,6 +25,8 @@ impl InstalledAnalysis {
             .lock()
             .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
         let mut pins = Vec::new();
+        let mut bundles = Vec::<Arc<super::snapshot::InstalledBundle>>::new();
+        let mut roots = BTreeSet::new();
         for active in self
             .owner
             .store
@@ -33,8 +36,18 @@ impl InstalledAnalysis {
                 continue;
             }
             let context: InstalledContext = AnalysisPackageOwner::decode(&active.metadata)?;
-            let bundle = self.owner.load_bundle(tenant, &context.root)?;
+            let bundle = if let Some(bundle) = bundles
+                .iter()
+                .find(|bundle| bundle.value.root == context.root)
+            {
+                bundle.clone()
+            } else {
+                let bundle = self.bundle(tenant, &context.root)?;
+                bundles.push(bundle.clone());
+                bundle
+            };
             let Some(artifact) = bundle
+                .value
                 .artifacts
                 .iter()
                 .find(|artifact| artifact.descriptor.id == active.key.package_id)
@@ -45,39 +58,40 @@ impl InstalledAnalysis {
                 continue;
             }
             self.owner.check(&context.grant, Action::Run)?;
-            self.owner.authority.admit(&context.grant, &bundle)?;
+            self.owner.authority.admit(&context.grant, &bundle.value)?;
+            roots.insert(context.root);
             pins.push(active);
         }
+        bundles.retain(|bundle| roots.contains(&bundle.value.root));
         let mut snapshot = self.clone();
         snapshot.tenant = Some(tenant);
-        snapshot.pins = Some(Arc::new(pins));
+        snapshot.snapshot = Some(InstalledSnapshot::new(&self.owner.query, pins, bundles)?);
         Ok(snapshot)
     }
 
     pub fn descriptors(&self, tenant: [u8; 16]) -> Result<Vec<sdk::Package>> {
         let snapshot = self.snapshot(tenant)?;
         let mut descriptors = BTreeMap::new();
-        for active in snapshot.pins.as_deref().into_iter().flatten() {
+        for active in snapshot.pins() {
             if descriptors.contains_key(&active.key.package_id) {
                 continue;
             }
             let context: InstalledContext = AnalysisPackageOwner::decode(&active.metadata)?;
-            let bundle = self.owner.load_bundle(tenant, &context.root)?;
+            let bundle = snapshot.bundle(tenant, &context.root)?;
             let artifact = bundle
+                .value
                 .artifacts
-                .into_iter()
+                .iter()
                 .find(|artifact| {
                     artifact.descriptor.id == active.key.package_id
                         && artifact.descriptor.revision == active.revision
                 })
                 .ok_or_else(|| Code::Missing.error("installed descriptor"))?;
-            let mut descriptor = artifact.descriptor;
+            let mut descriptor = artifact.descriptor.clone();
             descriptor.exports.retain(|model| {
                 snapshot
-                    .pins
-                    .as_deref()
-                    .into_iter()
-                    .flatten()
+                    .pins()
+                    .iter()
                     .any(|pin| pin.key.package_id == descriptor.id && pin.key.export == model.name)
             });
             descriptors.insert(descriptor.id.clone(), descriptor);
@@ -86,10 +100,8 @@ impl InstalledAnalysis {
     }
 
     pub fn revisions(&self) -> Vec<(String, String)> {
-        self.pins
-            .as_deref()
-            .into_iter()
-            .flatten()
+        self.pins()
+            .iter()
             .map(|pin| (pin.key.package_id.clone(), pin.revision.clone()))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -105,8 +117,10 @@ impl InstalledAnalysis {
         if self.tenant.is_some_and(|value| value != tenant) {
             return Err(Code::Denied.error("installed snapshot tenant"));
         }
-        let active = if let Some(pins) = &self.pins {
-            pins.iter()
+        let active = if let Some(snapshot) = &self.snapshot {
+            snapshot
+                .pins
+                .iter()
                 .find(|pin| pin.key.package_id == package && pin.key.export == export)
                 .cloned()
         } else {

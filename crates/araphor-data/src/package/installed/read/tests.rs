@@ -13,6 +13,8 @@ use crate::{AnalysisReadControl, QueryLimits, QueryOwner};
 
 use super::*;
 
+mod retained;
+
 struct SelectionAuthority {
     base: Arc<Authority>,
     expected: PackageBundleV1,
@@ -105,6 +107,39 @@ fn component() -> PackageBundleV1 {
     }
 }
 
+fn evaluation(selected: &PackageBundleV1) -> sdk::Result<sdk::Evaluation> {
+    let model = &selected.artifacts[0].descriptor.exports[0];
+    Ok(sdk::Evaluation {
+        export: model.name.clone(),
+        inputs: vec![sdk::Input {
+            data: sdk::Dataset {
+                name: "input".into(),
+                batches: vec![sdk::RecordBatch::try_new(
+                    Arc::new(model.inputs[0].schema.clone()),
+                    vec![Arc::new(UInt64Array::from(vec![7]))],
+                )?],
+            },
+            revision: sdk::Revision {
+                owner: "fixture".into(),
+                id: "selected".into(),
+                window: None,
+            },
+            coverage: sdk::Coverage {
+                state: sdk::CoverageState::Complete,
+                limits: Vec::new(),
+            },
+        }],
+        parameters: None,
+        context: sdk::EvaluationContext {
+            id: "selected".into(),
+            time_utc_ns: 0,
+            seed: None,
+            limits: model.limits,
+        },
+        checkpoint: None,
+    })
+}
+
 #[test]
 fn exact_export_checks_bundle() -> TestResult {
     let fixture = Fixture::new()?;
@@ -152,36 +187,7 @@ fn exact_export_checks_bundle() -> TestResult {
     let mut owner = AnalysisPackageOwner::new(fixture.store.clone(), query, authority.clone())?;
     owner.prepare_test_code()?;
     let execution = InstalledAnalysis::new(Arc::new(owner), "test")?;
-    let model = &selected.artifacts[0].descriptor.exports[0];
-    let evaluation = sdk::Evaluation {
-        export: model.name.clone(),
-        inputs: vec![sdk::Input {
-            data: sdk::Dataset {
-                name: "input".into(),
-                batches: vec![sdk::RecordBatch::try_new(
-                    Arc::new(model.inputs[0].schema.clone()),
-                    vec![Arc::new(UInt64Array::from(vec![7]))],
-                )?],
-            },
-            revision: sdk::Revision {
-                owner: "fixture".into(),
-                id: "selected".into(),
-                window: None,
-            },
-            coverage: sdk::Coverage {
-                state: sdk::CoverageState::Complete,
-                limits: Vec::new(),
-            },
-        }],
-        parameters: None,
-        context: sdk::EvaluationContext {
-            id: "selected".into(),
-            time_utc_ns: 0,
-            seed: None,
-            limits: model.limits,
-        },
-        checkpoint: None,
-    };
+    let evaluation = evaluation(&selected)?;
     let result = execution.evaluate([1; 16], &selected.root.package_id, &evaluation, &control)?;
     assert_eq!(result.descriptor, selected.artifacts[0].descriptor);
     assert_eq!(result.revision, selected.root.revision);

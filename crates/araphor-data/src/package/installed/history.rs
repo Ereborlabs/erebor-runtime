@@ -5,15 +5,18 @@ use crate::Result;
 
 use super::super::owner::InstalledContext;
 use super::super::{AnalysisPackageOwner, PackageActionV1 as Action, PackageErrorCodeV1 as Code};
+use super::snapshot::{InstalledBundle, InstalledSnapshot};
 use super::{InstalledAnalysis, InstalledRefV1};
 
 impl InstalledAnalysis {
     pub fn refs(&self) -> Result<Vec<InstalledRefV1>> {
-        let pins = self
-            .pins
+        let snapshot = self
+            .snapshot
             .as_ref()
             .ok_or_else(|| Code::Invalid.error("unpinned installed references"))?;
-        pins.iter()
+        snapshot
+            .pins
+            .iter()
             .map(|pin| {
                 let context: InstalledContext = AnalysisPackageOwner::decode(&pin.metadata)?;
                 Ok(InstalledRefV1 {
@@ -32,8 +35,11 @@ impl InstalledAnalysis {
         if references.is_empty() || references.len() > crate::analysis::MAX_PACKAGE_ROWS {
             return Err(Code::Invalid.error("historical installed references"));
         }
-        let current = self.snapshot(tenant)?;
+        let mut current = self.clone();
+        current.snapshot = None;
+        let current = current.snapshot(tenant)?;
         let mut pins = Vec::new();
+        let mut bundles = Vec::<Arc<InstalledBundle>>::new();
         let mut seen = BTreeSet::new();
         for reference in references {
             if reference.generation == 0 || !seen.insert((&reference.package_id, &reference.export))
@@ -52,9 +58,26 @@ impl InstalledAnalysis {
             let mut pin = current.active(tenant, &reference.package_id, &reference.export)?;
             let mut context: InstalledContext = AnalysisPackageOwner::decode(&pin.metadata)?;
             self.owner.check(&context.grant, Action::Run)?;
-            let bundle = self.owner.load_bundle(tenant, &reference.root)?;
-            self.owner.authority.admit(&context.grant, &bundle)?;
+            let bundle = if let Some(bundle) = bundles
+                .iter()
+                .chain(
+                    current
+                        .snapshot
+                        .iter()
+                        .flat_map(|snapshot| &snapshot.bundles),
+                )
+                .find(|bundle| bundle.value.root == reference.root)
+            {
+                bundle.clone()
+            } else {
+                InstalledBundle::new(
+                    &self.owner.query,
+                    self.owner.load_bundle(tenant, &reference.root)?,
+                )?
+            };
+            self.owner.authority.admit(&context.grant, &bundle.value)?;
             let artifact = bundle
+                .value
                 .artifacts
                 .iter()
                 .find(|artifact| {
@@ -82,10 +105,16 @@ impl InstalledAnalysis {
             pin.revision = reference.revision.clone();
             pin.generation = reference.generation;
             pin.metadata = AnalysisPackageOwner::encode(&context)?;
+            if !bundles
+                .iter()
+                .any(|entry| entry.value.root == reference.root)
+            {
+                bundles.push(bundle);
+            }
             pins.push(pin);
         }
         let mut historical = current;
-        historical.pins = Some(Arc::new(pins));
+        historical.snapshot = Some(InstalledSnapshot::new(&self.owner.query, pins, bundles)?);
         historical.historical = true;
         Ok(historical)
     }

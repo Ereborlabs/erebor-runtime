@@ -188,12 +188,24 @@ The SDK suite has 51 passes. The build proof records equal bytes from two
 independent builds of all six components under `memory_accounting_correction`.
 The current production owner qualification remains open.
 
-[QueryOwner::evaluate_analysis](../../../../../crates/araphor-data/src/query/model.rs)
-charges host input and output memory. The retained evaluation keeps its input
-charge until the domain adapter releases the result.
+[QueryOwner::evaluate_component](../../../../../crates/araphor-data/src/query/model/component.rs)
+reserves input, IPC, and schema-message scratch before encoding. It includes
+declared schemas when an input has no batches. The owner encodes once, reduces
+the charge to retained input and wire capacities, and moves the wire into
+`WasmExecution::evaluate_encoded`. After invocation, it retains the input and
+output charges until the domain adapter releases the result. SQL keeps its
+existing reservation through `QueryOwner::evaluate_analysis`.
 The shared evaluator checks its local query deadline after output validation.
 An expired output cannot return as a retained result.
 Extraction closes durable readers before computation.
+
+[InstalledSnapshot](../../../../../crates/araphor-data/src/package/installed/snapshot.rs)
+holds one validated bundle per root in shared Arc ownership. Bundle capacities
+and snapshot pins hold retained-input leases. `InstalledEvaluation` also holds
+a lease for its copied descriptor and revision. The last owner releases each
+charge. Each evaluation checks its grant and current trust before and after
+computation. Commit authorization checks current activation metadata,
+generation, revision, and grants. Cached bundle bytes do not cache permission.
 Native graph extraction and seeded traversal retain their existing byte limits
 and whole-version permission checks.
 
@@ -250,6 +262,7 @@ Artifact collection retains these saved roots.
 
 [InstalledAnalysis::pin_at](../../../../../crates/araphor-data/src/package/installed/history.rs)
 replays retained code and parameters under current permission and trust.
+It reads current activations even when the caller holds an old snapshot.
 A historical handle cannot commit.
 [GraphAndFindingOwner::installed_refs](../../../../../crates/araphor-data/src/graph/installed.rs)
 reads the bounded native header to obtain the source identity.
@@ -305,9 +318,10 @@ Package JSON requests and replies allow an additional 64 KiB.
 The package transport permits an additional 128 KiB for protocol framing.
 The [code cache](../../../../../crates/araphor-data/src/package/wasm/cache.rs)
 has an 80 MiB byte limit and a 16-entry limit.
-On the qualified Linux x86-64 build, the four required components charge
+On the earlier qualified Linux x86-64 build, the four required components charge
 61,237,517 bytes in total. The SDK runtime fixture raises this total to
 74,374,204 bytes. Each charge includes source bytes and mapped image bytes.
+These figures predate the current SDK and graph schema corrections.
 Eviction can require a later bounded compilation.
 This cache charge excludes engine metadata, allocator overhead, active images
 after eviction, and Arrow buffers. Query accounting and evaluation limits bound

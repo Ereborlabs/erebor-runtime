@@ -8,6 +8,7 @@ use super::{budget::QueryLease, evaluation::QueryEvaluation, QueryOwner, QuerySq
 use crate::{AnalysisReadControl, Result};
 
 mod arrays;
+mod component;
 mod datasets;
 mod execute;
 mod guards;
@@ -49,6 +50,10 @@ impl SqlModelOutputV1 {
 }
 
 impl QueryOwner {
+    pub(crate) fn retain_analysis_input(&self, bytes: usize) -> Result<QueryLease> {
+        self.budget.retained_input(bytes)
+    }
+
     pub(crate) fn check_analysis_input(&self, evaluation: &sdk::Evaluation) -> Result<()> {
         if evaluation.allocated_bytes() > self.limits.input_bytes {
             return crate::QueryLimitSnafu {
@@ -110,6 +115,27 @@ impl QueryOwner {
         control: &AnalysisReadControl,
         execute: impl FnOnce(&AnalysisReadControl, &super::QueryLimits) -> Result<(sdk::Output, usize)>,
     ) -> Result<SqlModelOutputV1> {
+        self.evaluate_model_reserved(
+            package,
+            evaluation,
+            control,
+            |capacity| self.budget.model(tenant, capacity),
+            |control, host, _lease| execute(control, host),
+        )
+    }
+
+    fn evaluate_model_reserved(
+        &self,
+        package: &sdk::Package,
+        evaluation: &sdk::Evaluation,
+        control: &AnalysisReadControl,
+        reserve: impl FnOnce(usize) -> Result<QueryLease>,
+        execute: impl FnOnce(
+            &AnalysisReadControl,
+            &super::QueryLimits,
+            &mut QueryLease,
+        ) -> Result<(sdk::Output, usize)>,
+    ) -> Result<SqlModelOutputV1> {
         self.check_analysis_input(evaluation)?;
         package
             .validate_evaluation(evaluation)
@@ -135,13 +161,13 @@ impl QueryOwner {
                     0
                 });
         let capacity = (requested as usize).min(self.limits.output_capacity);
-        let lease = self.budget.model(tenant, capacity)?;
+        let mut lease = reserve(capacity)?;
         let control = control.within(self.limits.evaluate_timeout)?;
         let host = super::QueryLimits {
             output_capacity: capacity,
             ..self.limits.clone()
         };
-        let (output, bytes) = execute(&control, &host)?;
+        let (output, bytes) = execute(&control, &host, &mut lease)?;
         package
             .validate_output(evaluation, &output)
             .context(crate::AnalysisContractSnafu)?;

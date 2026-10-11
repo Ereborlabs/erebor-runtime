@@ -120,7 +120,7 @@ Evaluation fails or its grant expires
   -> the package owner records incomplete coverage without reporting a negative
 ```
 
-`AnalysisPackageOwner` is a proposed owner in `araphor-data`, embedded with the
+`AnalysisPackageOwner` is implemented in `araphor-data`, embedded with the
 existing owners. It adds no service or database. Control retains grant and trust
 decisions. Package installation cannot attach probes, change policy, or execute
 a response. Existing bpftrace collection remains available without this work.

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use araphor_analysis_sdk as sdk;
 
 use crate::{AnalysisReadControl, Result, SqlModelOutputV1};
@@ -27,17 +29,29 @@ impl AnalysisPackageOwner {
                 artifact: bytes, ..
             } => {
                 self.wasm.admit(bytes, control)?;
-                let mut bounded = evaluation.clone();
-                bounded.context.limits = self.query.component_limits(evaluation.context.limits);
-                self.query.evaluate_analysis(
+                let limits = super::wasm::WasmExecution::limits(
+                    self.query.component_limits(evaluation.context.limits),
+                );
+                let bounded = if limits == evaluation.context.limits {
+                    Cow::Borrowed(evaluation)
+                } else {
+                    let mut bounded = evaluation.clone();
+                    bounded.context.limits = limits;
+                    Cow::Owned(bounded)
+                };
+                self.query.evaluate_component(
                     tenant,
                     &artifact.descriptor,
                     &bounded,
                     control,
-                    |control, _limits| {
-                        let output =
-                            self.wasm
-                                .evaluate(&artifact.descriptor, &bounded, bytes, control)?;
+                    |control, _limits, input| {
+                        let output = self.wasm.evaluate_encoded(
+                            &artifact.descriptor,
+                            &bounded,
+                            bytes,
+                            input,
+                            control,
+                        )?;
                         let bytes = output.allocated_bytes();
                         Ok((output, bytes))
                     },

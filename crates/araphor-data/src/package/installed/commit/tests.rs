@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::package::tests::{Authority, Fixture, TestResult};
-use crate::package::{PackageAuthorization, PackageGrantV1, PackageRequestV1};
+use crate::package::{PackageAuthorization, PackageBundleV1, PackageGrantV1, PackageRequestV1};
 use crate::{AnalysisReadControl, QueryLimits, QueryOwner};
 
 use super::*;

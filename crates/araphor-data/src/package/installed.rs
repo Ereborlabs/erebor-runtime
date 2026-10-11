@@ -3,7 +3,6 @@ use std::sync::Arc;
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
-use crate::analysis::PackageActivationV1;
 use crate::{AnalysisReadControl, Result};
 
 use super::owner::InstalledContext;
@@ -14,6 +13,9 @@ mod control;
 mod history;
 mod provenance;
 mod read;
+mod snapshot;
+
+use snapshot::InstalledSnapshot;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -31,7 +33,7 @@ pub struct InstalledAnalysis {
     pub(super) owner: Arc<AnalysisPackageOwner>,
     scope: String,
     tenant: Option<[u8; 16]>,
-    pins: Option<Arc<Vec<PackageActivationV1>>>,
+    snapshot: Option<Arc<InstalledSnapshot>>,
     historical: bool,
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) _directory: Option<Arc<tempfile::TempDir>>,
@@ -43,6 +45,7 @@ pub struct InstalledEvaluation {
     pub evaluation: sdk::Evaluation,
     pub output: sdk::Output,
     _lease: crate::query::QueryLease,
+    _metadata: crate::query::QueryLease,
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
@@ -53,7 +56,7 @@ impl InstalledAnalysis {
             owner,
             scope: scope.into(),
             tenant: None,
-            pins: None,
+            snapshot: None,
             historical: false,
             #[cfg(any(test, feature = "test-fixtures"))]
             _directory: None,
@@ -81,9 +84,10 @@ impl InstalledAnalysis {
         if context.grant.selection != crate::AnalysisSelectionV1::tenant(tenant) {
             return Err(Code::Denied.error("host-prepared input scope"));
         }
-        let bundle = self.owner.load_bundle(tenant, &context.root)?;
-        self.owner.authority.admit(&context.grant, &bundle)?;
+        let bundle = self.bundle(tenant, &context.root)?;
+        self.owner.authority.admit(&context.grant, &bundle.value)?;
         let artifact = bundle
+            .value
             .artifacts
             .iter()
             .find(|artifact| {
@@ -117,15 +121,22 @@ impl InstalledAnalysis {
             .owner
             .evaluate_artifact(tenant, artifact, &effective, &control);
         self.owner.check(&context.grant, Action::Run)?;
-        self.owner.authority.admit(&context.grant, &bundle)?;
+        self.owner.authority.admit(&context.grant, &bundle.value)?;
         control.check()?;
         let (output, lease) = result?.into_parts();
+        let bytes = artifact
+            .descriptor
+            .allocated_bytes()
+            .checked_add(active.revision.capacity())
+            .ok_or_else(|| Code::Limit.error("installed result memory"))?;
+        let metadata = self.owner.query.retain_analysis_input(bytes)?;
         Ok(InstalledEvaluation {
             descriptor: artifact.descriptor.clone(),
             revision: active.revision,
             evaluation: effective,
             output,
             _lease: lease,
+            _metadata: metadata,
             _permit: permit,
         })
     }

@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicUsize, Arc, Mutex};
+use std::{
+    borrow::Cow,
+    sync::{atomic::AtomicUsize, Arc, Mutex},
+};
 
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
@@ -99,11 +102,34 @@ impl WasmExecution {
         self.compiled(bytes, control).map(|_| ())
     }
 
+    #[cfg(test)]
     pub(crate) fn evaluate(
         &self,
         descriptor: &sdk::Package,
         evaluation: &sdk::Evaluation,
         bytes: &[u8],
+        control: &AnalysisReadControl,
+    ) -> Result<sdk::Output> {
+        self.evaluate_input(descriptor, evaluation, bytes, None, control)
+    }
+
+    pub(crate) fn evaluate_encoded(
+        &self,
+        descriptor: &sdk::Package,
+        evaluation: &sdk::Evaluation,
+        bytes: &[u8],
+        input: sdk::wire::Evaluation,
+        control: &AnalysisReadControl,
+    ) -> Result<sdk::Output> {
+        self.evaluate_input(descriptor, evaluation, bytes, Some(input), control)
+    }
+
+    fn evaluate_input(
+        &self,
+        descriptor: &sdk::Package,
+        evaluation: &sdk::Evaluation,
+        bytes: &[u8],
+        input: Option<sdk::wire::Evaluation>,
         control: &AnalysisReadControl,
     ) -> Result<sdk::Output> {
         control.check()?;
@@ -112,10 +138,18 @@ impl WasmExecution {
         descriptor
             .validate_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
-        let mut evaluation = evaluation.clone();
-        evaluation.context.limits = Self::limits(evaluation.context.limits);
-        let input = sdk::wire::Evaluation::encode(descriptor, &evaluation)
-            .context(crate::AnalysisContractSnafu)?;
+        let evaluation = if Self::limits(evaluation.context.limits) == evaluation.context.limits {
+            Cow::Borrowed(evaluation)
+        } else {
+            let mut evaluation = evaluation.clone();
+            evaluation.context.limits = Self::limits(evaluation.context.limits);
+            Cow::Owned(evaluation)
+        };
+        let input = match input {
+            Some(input) => input,
+            None => sdk::wire::Evaluation::encode(descriptor, &evaluation)
+                .context(crate::AnalysisContractSnafu)?,
+        };
         control.check()?;
         let output = self.invoke(&component, input.into(), control)?;
         let decoded = sdk::wire::Output::from(output)

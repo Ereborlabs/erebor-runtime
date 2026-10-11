@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::Result;
 
 use super::super::owner::InstalledContext;
 use super::super::{
-    AnalysisPackageOwner, PackageActionV1 as Action, PackageBundleV1, PackageErrorCodeV1 as Code,
-    PackageGrantV1,
+    AnalysisPackageOwner, PackageActionV1 as Action, PackageErrorCodeV1 as Code, PackageGrantV1,
 };
+use super::snapshot::InstalledBundle;
 use super::InstalledAnalysis;
 
 impl InstalledAnalysis {
@@ -26,12 +27,10 @@ impl InstalledAnalysis {
             .lock()
             .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
         let expected: BTreeSet<_> = expected.iter().collect();
-        let mut grants = Vec::<(PackageGrantV1, PackageBundleV1)>::new();
+        let mut grants = Vec::<(PackageGrantV1, Arc<InstalledBundle>)>::new();
         for pin in snapshot
-            .pins
-            .as_deref()
-            .into_iter()
-            .flatten()
+            .pins()
+            .iter()
             .filter(|pin| expected.contains(&(pin.key.package_id.clone(), pin.revision.clone())))
         {
             let current = self
@@ -49,9 +48,9 @@ impl InstalledAnalysis {
             let context: InstalledContext = AnalysisPackageOwner::decode(&current.metadata)?;
             if !grants
                 .iter()
-                .any(|(grant, bundle)| grant == &context.grant && bundle.root == context.root)
+                .any(|(grant, bundle)| grant == &context.grant && bundle.value.root == context.root)
             {
-                let bundle = self.owner.load_bundle(tenant, &context.root)?;
+                let bundle = snapshot.bundle(tenant, &context.root)?;
                 grants.push((context.grant, bundle));
             }
         }
@@ -63,7 +62,7 @@ impl InstalledAnalysis {
         let mut result = None;
         let grants: Vec<_> = grants
             .iter()
-            .map(|(grant, bundle)| (grant, bundle))
+            .map(|(grant, bundle)| (grant, &bundle.value))
             .collect();
         self.owner
             .authority

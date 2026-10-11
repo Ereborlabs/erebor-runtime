@@ -181,6 +181,30 @@ equal core and component bytes for all six guest artifacts. The proof is in
 Production owner memory qualification and the final Rust procedure remain
 required.
 
+### Retained-memory correction proof
+
+The v16 focused tests have 51 passes and no failures. The allocation and
+reader-free reuse group has 23 passes. The lifecycle, runtime, and native graph
+group has 28 passes. Its four ignored entries are compiler subprocess helpers;
+the parent OS-limit and child-cleanup tests pass. The source manifest has
+SHA256 `4cd8e0a57edb9aca24e867f9eea35e826781ded9d2a042e584e4a961fb2c2c46`.
+The proof is `/tmp/araphor-wasm-production-bounds-proof-v16.json`.
+
+Pinned runs retain one validated immutable bundle per root. Query leases
+charge bundle, pin, returned descriptor, revision, input, wire, and schema
+scratch allocations. The owner encodes each component input once. Each call
+still checks current permission and trust. Historical repinning reads the
+current activation. Tests check update and removal through an old handle,
+quota rejection, last-owner release, cancellation, failure, and guest overlap.
+The shared query capacity and production component limits do not change.
+
+The normal v16 qualification binary builds. It reports one warning for the
+direct evaluation wrapper, which has only unit-test callers. The v17 source
+adds `cfg(test)` to that wrapper. Strict Data Clippy passes with all targets
+and features. Its log is `/tmp/araphor-wasm-data-correction-clippy-v17.log`.
+The full corpus, graph recovery, four fresh production cases, and final shared
+Rust procedure remain required. This focused proof does not close those gates.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
@@ -215,12 +239,15 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+- [x] Compile the direct Wasm evaluation wrapper only for unit tests. All
+  production callers use the charged, encoded-input path. Check every caller
+  and the normal build warning before this change. Run strict Clippy.
 - [ ] Reuse the validated immutable bundle during a pinned installed run.
   Charge retained bundle memory to the existing shared query budget. Keep
   tenant and version checks, fresh authority checks before and after each
   evaluation, cancellation, lifecycle fences, and the 60-second deadline.
   Rerun the largest normal and replay corpus cases.
-- [ ] Count retained descriptor, implementation, fixture, and input allocations.
+- [x] Count retained descriptor, implementation, fixture, and input allocations.
   Share SDK schema accounting. Reserve component wire work before encoding.
   Encode each input once, then pass its owned bytes to Wasm execution. Reduce
   the reservation to actual input and wire allocations before invocation.
@@ -228,6 +255,18 @@ authorization owner, notification path, or algorithm implementation.
   capacity, the 64 MiB input check, and SQL reservations unchanged. Verify
   reader-free reuse, root deduplication, last-clone release, historical replay,
   revocation, removal commit fences, and overlapping real guests.
+- [x] Charge the descriptor and revision retained by `InstalledEvaluation`
+  before cloning them. Use the existing retained-input lease. Release that
+  charge when the result drops. Check quota rejection and result release.
+- [x] Give the shared model evaluator a name that differs from the existing
+  asynchronous query evaluator. Compile the current owner tests.
+  Use workspace formatting for the new allocation modules.
+- [x] Reserve Arrow schema-message scratch from descriptor capacities before
+  encoding. Include inputs with no batches and large declared metadata. Check
+  small allowances and retained lease release. Keep IPC and capacity unchanged.
+- [x] Make historical repinning check the current activation and grant even
+  when its caller holds an old snapshot. Test update and removal through that
+  old handle. Keep historical computation read-only.
 - [ ] Construct the graph reason-details schema once per evaluation. Reuse it
   for every finding. Keep reason rows, evidence, output schemas, full source
   windows, SDK bindings, and production limits unchanged. Rebuild components
@@ -280,13 +319,15 @@ authorization owner, notification path, or algorithm implementation.
 - [x] Add the native graph snapshot read to `analysis_metadata_read_deadlines`.
   Keep typed expiry, all 16 released read slots, unchanged metadata, and fresh
   read recovery.
-- [ ] Set the new component runtime data limit to 64 MiB and fuel limit to
+- Superseded proposal: set the component runtime data limit to 64 MiB and fuel limit to
   8 billion after the full corpus diagnostic. The 42 normal and replay calls
   pass with at most 6,741,078,368 fuel units. The previous draft limits reject
   the retained large cases. Keep guest memory at 256 MiB, guest time at five
   seconds, lifting at 32 MiB, and all lower query and descriptor limits.
   Remove test-only allowances and diagnostic output. Verify the same limits
   in production and tests. This measurement is not a performance result.
+  Automatic approval review rejects this proposal. The current correction
+  keeps 32 MiB and 100 million fuel units in production and tests.
 - [ ] Map the pinned Wasmtime output lifting fuel error to `Limit`. The runtime
   error type is private. Match its exact root error text. Keep the 32 MiB
   lifting limit. Require the existing 40 MiB output test to reach this error,
