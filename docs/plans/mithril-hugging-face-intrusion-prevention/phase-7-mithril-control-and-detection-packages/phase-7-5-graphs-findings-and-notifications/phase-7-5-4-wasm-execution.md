@@ -388,6 +388,18 @@ The case uses the same normal executable and v27 source manifest as the
 package case. The proof is `/tmp/araphor-wasm-production-bounds-proof-v27.json`.
 The profile restart, graph notification, and final Rust gates remain.
 
+### Current graph notification failure
+
+The fresh v27 `graph-notification` case exits one. Its terminal error is
+`Analysis storage reached its filesystem reserve limit`. The case writes no
+result artifact. The log is `/tmp/araphor-current-v27-graph.log`.
+Its SHA256 is `bd78181bd02ff2edf00c93ad0431262aeb3e03144904162adcf47db745dd5a51`. The run uses the recorded v27 source
+manifest and normal executable. This failure does not qualify graph
+notification. The elapsed time does not identify the failing source or
+operation. Source review finds a separate repeated-check defect: an unchanged
+graph check does not save the provider notice. Production Control and the test
+provider both use a global notice. The correction remains required.
+
 ### Current profile restart qualification
 
 The fresh v27 `profile-restart` case exits zero and records `PASS`.
@@ -437,6 +449,16 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+- [ ] Save a successful unchanged graph check in existing per-result notice
+  metadata. Use `facts_revision` for the provider notice, as Discovery does.
+  Initialize new graph metadata from the captured provider notice. Convert
+  every retained graph version through a checked schema migration. Validate
+  prior native-format quota and backup records during conversion. Keep result
+  bodies, native rows, request metadata, evidence references, IDs, receipts,
+  processor progress, and notification deadlines unchanged. Save the notice
+  inside the installed authorization fence. Check unrelated and relevant
+  changes, multiple windows, revocation, retries, reopen, migration, and restore
+  in Rust. Repeat current qualification after the last Rust edit.
 - [x] Permit the existing graph unit test to call the raw authority join.
   Limit the method visibility to `crate::graph`. Keep its body and public API
   unchanged. Check the exact raw join before canonical edge publication.
