@@ -123,6 +123,8 @@ FixedSizeBinary, List, FixedSizeList, and Struct. Fixed-size lengths are from
 1 through 65,536. Schema nesting is at most 16 levels with at most 1,024 fields.
 Encoding and decoding copy buffers. The wire bounds apply to encoded bytes
 and decoded Arrow storage. They do not claim a zero-copy interface.
+Decoding copies each batch into owned Arrow storage. It checks the copy size
+before allocation, including temporary validity buffers for nested null data.
 
 ## Data and result rules
 

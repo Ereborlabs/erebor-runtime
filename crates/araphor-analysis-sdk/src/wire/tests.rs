@@ -7,6 +7,8 @@ use super::Dataset;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+mod buffers;
+
 #[test]
 fn ipc_preflights_schema_allocation() -> TestResult {
     let stream = |schema: &Schema| -> TestResultWithBytes {

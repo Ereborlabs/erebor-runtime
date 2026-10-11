@@ -1,7 +1,9 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 
+use arrow_array::{make_array, RecordBatchOptions};
 use arrow_buffer::Buffer;
+use arrow_data::transform::MutableArrayData;
 use arrow_ipc::{reader::StreamDecoder, writer::StreamWriter};
 
 use crate::{Error, ErrorCode, Limits, Model, Package, RecordBatch, Result, Schema};
@@ -65,12 +67,16 @@ impl Dataset {
             }))
             .map_err(|_| Error::contract(ErrorCode::Invalid, "arrow stream"))??;
             let Some(batch) = decoded else { continue };
+            if schema.is_some_and(|expected| expected != batch.schema().as_ref()) {
+                return Err(Error::contract(ErrorCode::Invalid, "dataset schema"));
+            }
             rows = rows.saturating_add(batch.num_rows() as u64);
+            if rows > limits.max_rows || batches.len() >= limits.max_batches as usize {
+                return Err(Error::contract(ErrorCode::Limit, "decoded dataset"));
+            }
+            let batch = Self::owned_batch(&batch, limits.max_bytes.saturating_sub(bytes))?;
             bytes = bytes.saturating_add(batch.get_array_memory_size() as u64);
-            if rows > limits.max_rows
-                || bytes > limits.max_bytes
-                || batches.len() >= limits.max_batches as usize
-            {
+            if bytes > limits.max_bytes {
                 return Err(Error::contract(ErrorCode::Limit, "decoded dataset"));
             }
             batches.push(batch);
@@ -89,6 +95,40 @@ impl Dataset {
             name: name.into(),
             batches,
         })
+    }
+
+    fn owned_batch(batch: &RecordBatch, limit: u64) -> Result<RecordBatch> {
+        let arrays = batch
+            .columns()
+            .iter()
+            .map(|array| array.to_data())
+            .collect::<Vec<_>>();
+        let mut pending = arrays.iter().collect::<Vec<_>>();
+        let mut bytes = 0_u64;
+        while let Some(array) = pending.pop() {
+            for buffer in array.buffers() {
+                bytes = bytes.saturating_add(buffer.len() as u64);
+            }
+            // A nullable parent can require a temporary child validity buffer.
+            bytes = bytes.saturating_add((array.len() as u64).div_ceil(8));
+            if bytes > limit {
+                return Err(Error::contract(ErrorCode::Limit, "decoded dataset"));
+            }
+            pending.extend(array.child_data());
+        }
+        let mut columns = Vec::with_capacity(arrays.len());
+        for array in &arrays {
+            array.validate_full()?;
+            // Zero capacity avoids excess allocation for empty list children.
+            let mut owned = MutableArrayData::new(vec![array], false, 0);
+            owned.extend(0, 0, array.len());
+            columns.push(make_array(owned.freeze()));
+        }
+        Ok(RecordBatch::try_new_with_options(
+            batch.schema(),
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+        )?)
     }
 }
 

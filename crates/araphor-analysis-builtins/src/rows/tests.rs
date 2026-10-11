@@ -110,6 +110,38 @@ fn declared_row_limits() -> sdk::Result<()> {
 }
 
 #[test]
+fn rows_fit_payload_bound() -> sdk::Result<()> {
+    let port = Rows::port::<String>("strings", "test.string.v1");
+    let values = vec!["\\\"".repeat(257); 3];
+    let bounds = sdk::Limits {
+        max_bytes: 4096,
+        ..sdk::Limits::default()
+    };
+    let data = Rows::encode(&port, &values, bounds)?;
+    assert_eq!(Rows::decode::<String>(&port, &data, bounds)?, values);
+    assert!(data.batches[0].get_array_memory_size() as u64 <= bounds.max_bytes);
+    let small = sdk::Limits {
+        max_bytes: 1024,
+        ..bounds
+    };
+    assert!(matches!(
+        Rows::encode(&port, &values, small),
+        Err(sdk::Error::Contract {
+            code: sdk::ErrorCode::Limit,
+            ..
+        })
+    ));
+    assert!(matches!(
+        Rows::decode::<String>(&port, &data, small),
+        Err(sdk::Error::Contract {
+            code: sdk::ErrorCode::Limit,
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
 fn row_byte_limit() -> std::io::Result<()> {
     let mut remaining = 3;
     let mut buffer = RowBuffer {

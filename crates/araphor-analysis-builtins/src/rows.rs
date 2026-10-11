@@ -58,7 +58,8 @@ impl Rows {
             }
             builder.append_value(&buffer.bytes);
         }
-        let array = builder.finish();
+        let mut array = builder.finish();
+        array.shrink_to_fit();
         if array.get_array_memory_size() as u64 > bounds.max_bytes {
             return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes"));
         }
