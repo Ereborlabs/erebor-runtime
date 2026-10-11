@@ -373,6 +373,21 @@ The source manifest is the v27 manifest recorded above. The proof is
 `/tmp/araphor-wasm-production-bounds-proof-v27.json`.
 The context, profile restart, graph notification, and final Rust gates remain.
 
+### Current installed context qualification
+
+The fresh v27 `context-roundtrip` case exits zero and records `PASS`.
+Signed context resolves at durable cursor 1. The installed component returns
+exact selected identities, revision, and coverage. Cutoff 3000 selects one
+record. Cutoff 1999 selects no record and retains one omission. Host selection
+and authorization remain unchanged. Missing provenance and health coverage
+remain explicit.
+
+The result is `/tmp/araphor-current-v27-context/result.json`.
+Its SHA256 is `312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
+The case uses the same normal executable and v27 source manifest as the
+package case. The proof is `/tmp/araphor-wasm-production-bounds-proof-v27.json`.
+The profile restart, graph notification, and final Rust gates remain.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
@@ -724,7 +739,7 @@ checked correction scopes remain subject to final workspace verification.
   the resource limit error before the host checks the analysis exports.
 - [x] Retain package artifacts referenced by saved domain context. Replay with
   saved parameters and current permission. Reject historical commits.
-- [ ] Pass the host-selected AR-04 context dataset through an installed
+- [x] Pass the host-selected AR-04 context dataset through an installed
   component. Verify exact identities, cutoff, revision, coverage, and omissions
   in `context-roundtrip`. Keep selection and permission on the host.
 - [x] Transfer multiple input batches, including an empty batch, through a
