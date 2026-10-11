@@ -18,6 +18,7 @@ use tonic::{
 use uuid::Uuid;
 
 mod error;
+mod packages;
 pub use error::AraphorError;
 pub type AraphorResult<T> = std::result::Result<T, AraphorError>;
 
@@ -127,8 +128,7 @@ impl AraphorClient {
             .map_err(|_| AraphorProfile::invalid("TLS endpoint"))?
             .tls_config(tls)
             .map_err(Self::connection)?
-            .connect_timeout(RPC_TIMEOUT)
-            .timeout(RPC_TIMEOUT);
+            .connect_timeout(RPC_TIMEOUT);
         let channel = endpoint.connect().await.map_err(Self::connection)?;
         Ok(Self { profile, channel })
     }
@@ -137,9 +137,9 @@ impl AraphorClient {
         &self,
         query: wire::QueryRequest,
     ) -> AraphorResult<Streaming<wire::QueryFrame>> {
-        self.service()
-            .query(self.request(query)?)
+        tokio::time::timeout(RPC_TIMEOUT, self.service().query(self.request(query)?))
             .await
+            .map_err(|_| Self::rpc_error(tonic::Status::deadline_exceeded("Query did not start.")))?
             .map(tonic::Response::into_inner)
             .map_err(Self::rpc_error)
     }
@@ -184,11 +184,14 @@ impl AraphorClient {
         &self,
         request: wire::WatchTraceRequest,
     ) -> AraphorResult<Streaming<wire::TraceFrame>> {
-        self.service()
-            .watch_trace(self.request(request)?)
-            .await
-            .map(tonic::Response::into_inner)
-            .map_err(Self::rpc_error)
+        tokio::time::timeout(
+            RPC_TIMEOUT,
+            self.service().watch_trace(self.request(request)?),
+        )
+        .await
+        .map_err(|_| Self::rpc_error(tonic::Status::deadline_exceeded("Trace did not start.")))?
+        .map(tonic::Response::into_inner)
+        .map_err(Self::rpc_error)
     }
 
     pub async fn cancel_trace(
@@ -245,6 +248,7 @@ impl AraphorClient {
 
     pub fn rpc_error(source: tonic::Status) -> AraphorError {
         AraphorError::Rpc {
+            detail: String::new(),
             source: Box::new(source),
             location: snafu::Location::default(),
         }

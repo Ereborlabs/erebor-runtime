@@ -7,6 +7,13 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
 pub(crate) enum AraphorCommandError {
+    #[snafu(display("{source}"))]
+    Package {
+        #[snafu(source(from(araphor_data::Error, Box::new)))]
+        source: Box<araphor_data::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Araphor command is invalid: {field}"))]
     Invalid {
         field: &'static str,
@@ -77,6 +84,11 @@ impl AraphorCommandError {
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
             Self::Invalid { .. } => 2,
+            Self::Package { source, .. } => match source.status_code() {
+                StatusCode::InvalidArguments => 2,
+                StatusCode::PermissionDenied | StatusCode::PolicyDenied => 3,
+                _ => 5,
+            },
             Self::Partial { .. } | Self::Uncertain { .. } | Self::OutputDeadline { .. } => 4,
             Self::Output { source, .. } if source.kind() == io::ErrorKind::BrokenPipe => 4,
             Self::Interrupted { .. } => 130,
@@ -95,6 +107,7 @@ impl ErrorExt for AraphorCommandError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Invalid { .. } => StatusCode::InvalidArguments,
+            Self::Package { source, .. } => source.status_code(),
             Self::Protocol { .. } => StatusCode::IllegalState,
             Self::Input { .. } | Self::Output { .. } => StatusCode::External,
             Self::Client { source, .. } => source.status_code(),

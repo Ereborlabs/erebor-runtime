@@ -8,6 +8,7 @@ use tokio::time::Instant;
 mod args;
 pub(crate) mod error;
 mod output;
+mod packages;
 
 use args::Prepared;
 pub(crate) use args::{AraphorCommand, ConnectionArgs};
@@ -38,6 +39,11 @@ impl<'a> AraphorCommandOwner<'a> {
 
     async fn run(&self) -> Result<()> {
         let prepared = self.command.prepare()?;
+        if let Prepared::PackageDigest(digest) = prepared {
+            return Output::new(self.args.output, false)
+                .write(format!("{digest}\n").as_bytes())
+                .await;
+        }
         let follow = matches!(&prepared, Prepared::Sql { request } if request.follow);
         let profile = self.args.connection()?;
         let mut signal: Interrupt = Box::pin(tokio::signal::ctrl_c());
@@ -54,6 +60,8 @@ impl<'a> AraphorCommandOwner<'a> {
         match prepared {
             Prepared::Sql { request } => run.sql(request).await,
             Prepared::Trace { request, trace_id } => run.trace(request, trace_id).await,
+            Prepared::Package(request) => run.package(request).await,
+            Prepared::PackageDigest(_) => unreachable!("local digest is handled before connection"),
         }
     }
 }

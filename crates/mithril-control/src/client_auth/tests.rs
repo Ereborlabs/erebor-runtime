@@ -23,6 +23,8 @@ fn config() -> ClientAuthConfig {
             subject: "alice".into(),
             tenant_id: Uuid::from_bytes([1; 16]).to_string(),
         }],
+        package_managers: Vec::new(),
+        package_trust: Vec::new(),
         session_seconds: 60,
     }
 }
@@ -327,6 +329,7 @@ fn client_auth_expiry_capacity() -> std::result::Result<(), Box<dyn std::error::
         state.sessions.insert(
             format!("{index:064x}"),
             BrowserSession {
+                authorization_id: Uuid::new_v4().to_string(),
                 subject: "alice".into(),
                 csrf: ClientAuth::secret(),
                 expires_ns,

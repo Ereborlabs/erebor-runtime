@@ -8,6 +8,16 @@ service AraphorClientService {
   rpc GetTrace(GetTraceRequest) returns (TraceDetail);
   rpc WatchTrace(WatchTraceRequest) returns (stream TraceFrame);
   rpc CancelTrace(CancelTraceRequest) returns (CancelTraceReceipt);
+  rpc PackageOperation(PackageOperationRequest) returns (PackageOperationReply);
+}
+
+message PackageOperationRequest {
+  bytes definition_json = 1;
+  InputSelection selection = 2;
+}
+
+message PackageOperationReply {
+  bytes result_json = 1;
 }
 
 service AraphorAdministrativeService {

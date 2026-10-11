@@ -25,6 +25,9 @@ use crate::error::{
 };
 use crate::{Error, Result};
 
+mod packages;
+pub use packages::PackageTrustPinV1;
+
 const MAX_ENTRIES: usize = 4096;
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
 const LOGIN_SECONDS: u64 = 300;
@@ -69,6 +72,10 @@ pub struct ClientAuthConfig {
     pub oidc: OidcConfig,
     pub service: Option<ServiceAuthConfig>,
     pub investigators: Vec<InvestigateGrant>,
+    #[serde(default)]
+    pub package_managers: Vec<InvestigateGrant>,
+    #[serde(default)]
+    pub package_trust: Vec<PackageTrustPinV1>,
     pub session_seconds: u64,
 }
 
@@ -125,6 +132,8 @@ pub struct ClientAccess {
 struct ClientState {
     revision: u64,
     grants: BTreeMap<(String, [u8; 16]), u64>,
+    package_managers: BTreeMap<(String, [u8; 16]), u64>,
+    package_trust: std::collections::BTreeSet<([u8; 16], String)>,
     flows: BTreeMap<String, LoginFlow>,
     sessions: BTreeMap<String, BrowserSession>,
 }
@@ -137,6 +146,7 @@ struct LoginFlow {
 
 struct BrowserSession {
     subject: String,
+    authorization_id: String,
     csrf: String,
     expires_ns: u64,
 }
@@ -331,6 +341,8 @@ impl ClientAuthConfig {
             }
         );
         ClientState::grants(&self.investigators)?;
+        ClientState::grants(&self.package_managers)?;
+        PackageTrustPinV1::validate(&self.package_trust)?;
         if let Some(service) = &self.service {
             ensure!(
                 Self::https(&service.introspection_url)
@@ -377,6 +389,8 @@ impl ClientAuth {
         let redirect = RedirectUrl::new(format!("{}/oidc/session", config.origin))
             .map_err(|source| OidcOwner::failure("parse client redirect", false, source))?;
         let grants = ClientState::grants(&config.investigators)?;
+        let package_managers = ClientState::grants(&config.package_managers)?;
+        let package_trust = PackageTrustPinV1::validate(&config.package_trust)?;
         Ok(Self {
             oidc,
             origin: config.origin,
@@ -386,6 +400,8 @@ impl ClientAuth {
             state: Mutex::new(ClientState {
                 revision: 1,
                 grants,
+                package_managers,
+                package_trust,
                 flows: BTreeMap::new(),
                 sessions: BTreeMap::new(),
             }),
@@ -763,6 +779,7 @@ impl ClientAuth {
             token.clone(),
             BrowserSession {
                 subject: identity.subject,
+                authorization_id: Uuid::new_v4().to_string(),
                 csrf: csrf.clone(),
                 expires_ns,
             },

@@ -26,8 +26,9 @@ pub enum AraphorError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Araphor RPC failed with {}", source.code()))]
+    #[snafu(display("Araphor RPC failed with {}{detail}", source.code()))]
     Rpc {
+        detail: String,
         #[snafu(source(from(tonic::Status, Box::new)))]
         source: Box<tonic::Status>,
         #[snafu(implicit)]

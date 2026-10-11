@@ -19,6 +19,8 @@ pub(super) struct Output {
     stdout: tokio::io::Stdout,
 }
 
+mod packages;
+
 #[derive(Serialize)]
 struct Record<'a, T> {
     kind: &'static str,

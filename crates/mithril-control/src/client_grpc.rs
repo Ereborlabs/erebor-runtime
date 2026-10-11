@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use araphor_data::{AnalysisStore, QueryLimits, QueryOwner};
+use araphor_data::{AnalysisPackageOwner, AnalysisStore, QueryLimits, QueryOwner};
 use erebor_runtime_error::StatusCode;
 use erebor_runtime_ipc::araphor as proto;
 use futures_util::{Stream, StreamExt as _};
@@ -13,6 +13,7 @@ use tonic::{Request, Response, Status};
 
 use crate::{ClientAccess, ClientAuth, ControlPlane};
 
+mod packages;
 mod query;
 mod selection;
 mod trace;
@@ -40,6 +41,7 @@ pub struct ClientGrpcOwner {
 struct ClientData {
     store: Arc<AnalysisStore>,
     query: Arc<QueryOwner>,
+    packages: Arc<AnalysisPackageOwner>,
     output_timeout: Duration,
 }
 
@@ -53,9 +55,16 @@ impl ClientGrpcOwner {
         let data = control
             .analysis_store()
             .map(|store| {
-                QueryOwner::new(store.clone(), config.query).map(|query| ClientData {
+                let query = Arc::new(QueryOwner::new(store.clone(), config.query)?);
+                let packages = Arc::new(AnalysisPackageOwner::new(
+                    store.clone(),
+                    query.clone(),
+                    auth.clone(),
+                )?);
+                Ok::<_, araphor_data::Error>(ClientData {
                     store,
-                    query: Arc::new(query),
+                    query,
+                    packages,
                     output_timeout,
                 })
             })
@@ -65,6 +74,10 @@ impl ClientGrpcOwner {
             auth,
             data,
         })
+    }
+
+    pub fn package_owner(&self) -> Option<Arc<AnalysisPackageOwner>> {
+        self.data.as_ref().map(|data| data.packages.clone())
     }
 
     fn data(&self) -> Result<&ClientData, Status> {
@@ -172,6 +185,13 @@ impl ClientGrpcOwner {
 impl proto::araphor_client_service_server::AraphorClientService for ClientGrpcOwner {
     type QueryStream = ClientStream<proto::QueryFrame>;
     type WatchTraceStream = ClientStream<proto::TraceFrame>;
+
+    async fn package_operation(
+        &self,
+        request: Request<proto::PackageOperationRequest>,
+    ) -> Result<Response<proto::PackageOperationReply>, Status> {
+        self.package_request(request).await.map(Response::new)
+    }
 
     async fn query(
         &self,

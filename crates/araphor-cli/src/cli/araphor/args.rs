@@ -30,6 +30,8 @@ pub(crate) struct ConnectionArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AraphorCommand {
+    /// Install, inspect, and run local analysis packages.
+    Package(super::packages::PackageArgs),
     /// List query relations, recipe source, or retained policy targets.
     Catalog(CatalogArgs),
     /// Evaluate one SQL statement, or follow its committed results.
@@ -94,7 +96,7 @@ pub(crate) struct TraceArgs {
 }
 
 #[derive(Debug, Args)]
-struct SelectionArgs {
+pub(super) struct SelectionArgs {
     #[arg(long)]
     target: Option<String>,
     #[arg(long)]
@@ -130,6 +132,8 @@ impl FromStr for Span {
 }
 
 pub(super) enum Prepared {
+    Package(wire::PackageOperationRequest),
+    PackageDigest(String),
     Sql {
         request: wire::QueryRequest,
     },
@@ -142,6 +146,7 @@ pub(super) enum Prepared {
 impl AraphorCommand {
     pub(super) fn prepare(&self) -> Result<Prepared> {
         match self {
+            AraphorCommand::Package(args) => args.prepare(),
             AraphorCommand::Catalog(args) => args.prepare(),
             AraphorCommand::Sql(args) => {
                 ensure!(
@@ -239,6 +244,7 @@ impl AraphorCommand {
 impl fmt::Display for AraphorCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::Package(_) => "package",
             Self::Catalog(_) => "catalog",
             Self::Sql(_) => "sql",
             Self::Trace(_) => "trace",
@@ -312,7 +318,7 @@ impl CatalogArgs {
 }
 
 impl SelectionArgs {
-    fn selected(&self) -> bool {
+    pub(super) fn selected(&self) -> bool {
         self.target.is_some()
             || self.cluster.is_some()
             || self.container.is_some()

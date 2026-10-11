@@ -32,7 +32,7 @@ pub use araphor_observability::{
 pub use authority::*;
 pub use client_auth::{
     ClientAccess, ClientAuth, ClientAuthConfig, ClientLogin, ClientSession, InvestigateGrant,
-    OidcConfig, OidcOwner, ServiceAuthConfig,
+    OidcConfig, OidcOwner, PackageTrustPinV1, ServiceAuthConfig,
 };
 pub use client_grpc::{ClientGrpcConfig, ClientGrpcOwner, ClientStream};
 pub use client_listener::{ClientListener, ClientListenerConfig};

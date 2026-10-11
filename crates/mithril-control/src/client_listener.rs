@@ -43,6 +43,7 @@ pub struct ClientListenerConfig {
 pub struct ClientListener {
     config: ClientListenerConfig,
     router: Router,
+    packages: Option<Arc<araphor_data::AnalysisPackageOwner>>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +107,9 @@ impl ClientListener {
             }
         );
         let mut rpc = Router::new();
+        let packages = investigation
+            .as_ref()
+            .and_then(ClientGrpcOwner::package_owner);
         if let Some(owner) = investigation {
             let service = GrpcWebLayer::new()
                 .layer(AraphorClientServiceServer::new(owner))
@@ -116,6 +120,7 @@ impl ClientListener {
                 "GetTrace",
                 "WatchTrace",
                 "CancelTrace",
+                "PackageOperation",
             ] {
                 rpc = rpc.route_service(
                     &format!("/erebor.mithril.control.v1.AraphorClientService/{name}"),
@@ -164,6 +169,7 @@ impl ClientListener {
         Ok(Self {
             config,
             router: router.layer(middleware::from_fn(Self::headers)),
+            packages,
         })
     }
 
@@ -180,8 +186,21 @@ impl ClientListener {
         .map_err(|source| Self::failure("load client TLS", source))?;
         let handle = axum_server::Handle::new();
         let stop = handle.clone();
+        let (package_stop, receiver) = tokio::sync::watch::channel(false);
+        let packages = self.packages.map(|owner| {
+            let listener = handle.clone();
+            tokio::spawn(async move {
+                let result = owner.serve(receiver).await;
+                if result.is_err() {
+                    listener.graceful_shutdown(Some(Duration::from_secs(5)));
+                }
+                result
+            })
+        });
+        let package_signal = package_stop.clone();
         let task = tokio::spawn(async move {
             shutdown.await;
+            package_signal.send_replace(true);
             stop.graceful_shutdown(Some(Duration::from_secs(5)));
         });
         let result = axum_server::bind_rustls(self.config.listen, tls)
@@ -190,6 +209,11 @@ impl ClientListener {
             .await
             .map_err(|source| Self::failure("serve clients", source));
         task.abort();
+        package_stop.send_replace(true);
+        if let Some(task) = packages {
+            task.await
+                .map_err(|source| Self::failure("join package worker", source))??;
+        }
         result
     }
 
