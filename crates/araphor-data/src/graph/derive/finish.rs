@@ -159,6 +159,50 @@ impl GraphDerivation<'_> {
             witness_deadline_utc_ns: 0,
         };
         snapshot.validate()?;
+        WindowBytes::check(&snapshot)?;
         Ok(snapshot)
+    }
+}
+
+struct WindowBytes {
+    remaining: usize,
+    exceeded: bool,
+}
+
+impl WindowBytes {
+    fn check(snapshot: &GraphSnapshotV1) -> Result<()> {
+        let mut writer = Self {
+            remaining: GRAPH_WINDOW_BYTES,
+            exceeded: false,
+        };
+        if let Err(source) = serde_json::to_writer(&mut writer, snapshot) {
+            if writer.exceeded {
+                return GraphInvalidSnafu {
+                    field: "graph output bytes",
+                }
+                .fail();
+            }
+            return Err(source).context(GraphEncodingSnafu);
+        }
+        Ok(())
+    }
+}
+
+impl std::io::Write for WindowBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let Some(remaining) = self.remaining.checked_sub(bytes.len()) else {
+            self.exceeded = true;
+            return Err(std::io::Error::other("graph output bytes"));
+        };
+        self.remaining = remaining;
+        Ok(bytes.len())
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write(bytes).map(|_| ())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }

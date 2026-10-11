@@ -225,16 +225,32 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
         records[1].network = network;
         records[2].network = network;
         let fixture = fixture(detector, &records, &facts)?;
-        let (findings, output) = findings(detector, &fixture)?;
-        let edges: Vec<Relationship> = Rows::decode(
-            &model.outputs[1],
-            &output.datasets[1],
+        package.validate_evaluation(&fixture.evaluation)?;
+        let mut manifests: Vec<Manifest> = Rows::decode(
+            &model.inputs[2],
+            &fixture.evaluation.inputs[2].data,
             fixture.evaluation.context.limits,
         )?;
-        assert_eq!(findings.len(), 1);
-        assert_eq!(edges.len(), 3);
+        let mut computation = Computation {
+            records: records.clone(),
+            facts: facts.clone(),
+            manifest: manifests.pop().ok_or("graph manifest")?,
+            subjects: Vec::new(),
+            edges: Vec::new(),
+            findings: Vec::new(),
+            state: State {
+                value: "WAITING".into(),
+            },
+        };
+        computation.credentials()?;
+        assert_eq!(computation.findings.len(), 1);
+        assert_eq!(computation.edges.len(), 3);
         assert_eq!(
-            edges.iter().map(|edge| edge.fact).collect::<Vec<_>>(),
+            computation
+                .edges
+                .iter()
+                .map(|edge| edge.fact)
+                .collect::<Vec<_>>(),
             [Some(3), Some(5), Some(2)]
         );
         let (reason, evidence, prefix) = if network {
@@ -246,7 +262,7 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
         } else {
             ("CONTEXTUAL_CREDENTIAL_PIVOT", vec![0, 3, 3, 4], 1)
         };
-        for (index, edge) in edges.iter().enumerate() {
+        for (index, edge) in computation.edges.iter().enumerate() {
             assert_eq!(edge.record, 0);
             assert!(matches!(edge.kind, EdgeKind::Authority));
             assert!(matches!(
@@ -255,21 +271,83 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
             ));
             assert_eq!(edge.evidence, evidence[..prefix + index + 1]);
         }
-        assert_eq!(findings[0].reason, reason);
-        assert_eq!(findings[0].confirmed, network);
-        assert_eq!(findings[0].evidence, evidence);
-        assert_eq!(
-            output
-                .evidence
-                .iter()
-                .map(|link| link.input.row)
-                .collect::<Vec<_>>(),
-            if network {
-                vec![0, 1, 2, 3, 4]
-            } else {
-                vec![0, 3, 4]
-            }
-        );
+        assert_eq!(computation.findings[0].reason, reason);
+        assert_eq!(computation.findings[0].confirmed, network);
+        assert_eq!(computation.findings[0].evidence, evidence);
+        authority_publication(computation, &fixture)?;
     }
+    Ok(())
+}
+
+fn authority_publication(computation: Computation, fixture: &sdk::Fixture) -> TestResult {
+    let package = Detector::Credentials.descriptor();
+    let model = &package.exports[0];
+    let bounds = fixture.evaluation.context.limits;
+    let mut expected_edges = computation.edges.clone();
+    for edge in &mut expected_edges {
+        edge.evidence = edge
+            .evidence
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    }
+    let mut expected_finding = computation.findings[0].clone();
+    expected_finding.evidence = expected_finding
+        .evidence
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let expected_state = computation.state.value.clone();
+    let output = computation.output(&package, bounds)?;
+    package.validate_output(&fixture.evaluation, &output)?;
+    let edges: Vec<Relationship> = Rows::decode(&model.outputs[1], &output.datasets[1], bounds)?;
+    assert_eq!(
+        serde_json::to_value(edges)?,
+        serde_json::to_value(expected_edges)?
+    );
+    let findings: Vec<Finding> = Rows::decode(&model.outputs[2], &output.datasets[2], bounds)?;
+    assert_eq!(findings, [expected_finding]);
+    assert_eq!(output.reasons.len(), 1);
+    assert_eq!(
+        output.reasons[0].code,
+        format!("{}.{}", package.id, findings[0].reason)
+    );
+    let details: Vec<Finding> = Rows::decode(
+        &model.outputs[2],
+        &sdk::Dataset {
+            name: model.outputs[2].name.clone(),
+            batches: vec![output.reasons[0].details.clone()],
+        },
+        bounds,
+    )?;
+    assert_eq!(details, findings);
+    assert_eq!(
+        output
+            .evidence
+            .iter()
+            .map(|link| link.input.row)
+            .collect::<Vec<_>>(),
+        findings[0].evidence
+    );
+    assert!(output.evidence.iter().all(|link| {
+        link.output.dataset == "findings" && link.output.row == 0 && link.input.dataset == "records"
+    }));
+    let checkpoint = output.checkpoint.ok_or("checkpoint")?;
+    assert_eq!(checkpoint.version, 1);
+    let states: Vec<State> = Rows::decode(
+        &model
+            .checkpoint
+            .as_ref()
+            .ok_or("checkpoint descriptor")?
+            .datasets[0],
+        &checkpoint.datasets[0],
+        bounds,
+    )?;
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].value, expected_state);
     Ok(())
 }

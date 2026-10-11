@@ -130,7 +130,7 @@ close a verification gate. The phase remains **Not done**.
 
 | Deliverable | Source and commit | Remaining proof |
 | --- | --- | --- |
-| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The current SDK suite has 51 passes. The shared computation suite has 13 passes. The build proof records equal component bytes from both builds. |
+| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The current SDK suite has 51 passes. The v25 shared suite has 14 passes. The build proof records equal component bytes from both builds. |
 | 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Final artifacts and workspace verification remain required. |
 | 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | A fresh production finding-to-notification case has no pass. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at production limits, including all normal/replay cases and rare groups/comparison. Later artifacts require new qualification. Graph splitting and the fresh context transport case remain open. |
@@ -287,7 +287,29 @@ artifacts. The build proof records `buffered_writer_correction`.
 The source manifest has SHA256
 `291e3b98b1c73def6ab87891ee57152577299096f77e4215e85f0e76efae6033`.
 Production limits and the original graph split test stay unchanged.
-Installed runtime qualification remains pending.
+The original v25 graph group has one pass and one failure after 217.46
+seconds. Evidence recovery passes. Graph output encoding still exhausts fuel.
+The proof is `/tmp/araphor-wasm-production-bounds-proof-v25.json`.
+Installed runtime qualification remains open.
+
+### Canonical evidence publication proof
+
+The v26 shared computation suite has 14 passes. Both independent builds
+produce the same six component artifacts. Canonical candidate evidence,
+matching reason details, evidence links, and checkpoints pass the shared tests.
+Raw authority join assertions remain in the test. The host retains the same
+sorted evidence sets. The derived graph checks its actual JSON byte count
+without an output buffer. The final commit check remains after metadata.
+
+The original graph group has one pass and one failure after 251.72 seconds.
+Evidence recovery passes. The split case exhausts fuel in `quicksort<u64>`
+from `Computation::output`, before row encoding. The core function names
+identify frames 506, 505, 330, and 329. The failure remains open.
+The log has SHA256 `d366e261b6820a39db707bf985471e587d8fd5a9008eb46916b8f39183b25e58`.
+The source manifest has SHA256 `8d0970966cc612bd0c6d39f4d46c908a770220d384d658dba58c3838cd4f4e40`.
+The proof is `/tmp/araphor-wasm-production-bounds-proof-v26.json`.
+The build proof records all six artifacts under `canonical_evidence_correction`.
+This result does not qualify graph splitting or the four production cases.
 
 ### Installed detector production proof
 
@@ -342,6 +364,31 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+- [ ] Canonicalize the common credential edge evidence prefix once before
+  relationship copies. The v26 core exhausts fuel in `quicksort<u64>` from
+  `Computation::output`. Keep raw authority joins and finding evidence intact.
+  Sort and remove duplicates from one separate edge prefix before the matched
+  fact loop. Append each same fact record to both prefixes in the same order.
+  Copy only the small edge prefix. Keep final publication checks, fact order,
+  first representatives, direct-proof OR, branches, and checkpoints unchanged.
+  Test raw joins, edge prefixes, final candidate rows, and retained finding JSON.
+  Keep the original dense graph test and every production limit. Reproduce all
+  six components before the original test and fresh production qualification.
+- [ ] Publish canonical evidence sets from the shared computation output.
+  The host already sorts and removes duplicate evidence from every retained
+  edge and finding. Keep the raw join, authority representatives, edge order,
+  fact references, proof, coverage, and checkpoint unchanged. Sort and remove
+  duplicates before candidate rows, matching reason details, and evidence links
+  are encoded. Retain raw join assertions before publication. Test canonical
+  rows and exact details. Add no type, schema, dependency, or alternate algorithm.
+- [ ] Check the derived graph JSON against the existing 4 MiB window limit.
+  Use a checked byte-count writer without an output allocation. Stop counting
+  at the limit and return the exact `graph output bytes` error. Keep historical
+  stored reads unchanged. Keep the commit size check after position metadata
+  is added. Canonical candidate evidence changes the earlier transport count;
+  this check must bound the actual graph returned by derivation. Keep the
+  original 256 records, 67 facts, split assertion, rollback, cursor progress,
+  finding evidence, and all production component limits. Run that complete case.
 Checked entries below record their correction scope. The v16 memory group
 has 23 passes. The v16 lifecycle, runtime, and native graph group has 28
 passes. These tests prove lifting error recovery, exact export selection,

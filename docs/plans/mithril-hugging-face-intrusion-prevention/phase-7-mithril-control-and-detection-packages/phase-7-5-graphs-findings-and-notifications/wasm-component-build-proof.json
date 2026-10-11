@@ -1025,5 +1025,102 @@
       "/tmp/araphor-buffered-guest-build-v25.log",
       "/tmp/araphor-buffered-guest-repro-v25.log"
     ]
+  },
+  "canonical_evidence_correction": {
+    "created_utc": "2026-10-11T20:00:48.240776+00:00",
+    "seed": "araphor-analysis-v1",
+    "target": "wasm32-unknown-unknown",
+    "builder_sha256": "245fd07aad036ebe8ed7a8f83773bda9e72f25e444d6b35c4caf491ce0f326b2",
+    "shared_test_passed": 14,
+    "checks": [
+      {
+        "name": "discovery",
+        "core_bytes": 3467057,
+        "core_sha256": "1e6e3313c00a9392c9730fa4d6078f89acd68ebee48253b71fb5178ff2f5cf84",
+        "component_bytes": 2621709,
+        "component_sha256": "01e4932f5744ebe6d5be145352832e7beeb0c90d36f6f605d53ab64215383102",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/discovery.wasm",
+        "copies": [
+          "/tmp/araphor-canonical-v26-components-a/discovery.wasm",
+          "/tmp/araphor-canonical-v26-components-b/discovery.wasm"
+        ],
+        "unchanged_from_v25": false
+      },
+      {
+        "name": "process",
+        "core_bytes": 3346236,
+        "core_sha256": "89e3b53db03708ef2b43b7ff255eea5464a4c1fc6d9063b0cc291c0ed89bb13c",
+        "component_bytes": 2523031,
+        "component_sha256": "09364bd4c19b51b887cd88094f127c7736f9508e0092d2e0c626e3f1c619113f",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/process.wasm",
+        "copies": [
+          "/tmp/araphor-canonical-v26-components-a/process.wasm",
+          "/tmp/araphor-canonical-v26-components-b/process.wasm"
+        ],
+        "unchanged_from_v25": false
+      },
+      {
+        "name": "credentials",
+        "core_bytes": 3346272,
+        "core_sha256": "214a096cb4c911771908a8397f030054572688fe5e6745c0082fbbcd54502108",
+        "component_bytes": 2523031,
+        "component_sha256": "143ad2fe2dbd002bc6ac6dd42ec62bfa51259493c06184469fb0f89fadd34512",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/credentials.wasm",
+        "copies": [
+          "/tmp/araphor-canonical-v26-components-a/credentials.wasm",
+          "/tmp/araphor-canonical-v26-components-b/credentials.wasm"
+        ],
+        "unchanged_from_v25": false
+      },
+      {
+        "name": "kubernetes",
+        "core_bytes": 3346263,
+        "core_sha256": "3e189227382075fda7acd5947cb943b03c86c9fd90717345c0eb0ab72ec69994",
+        "component_bytes": 2523031,
+        "component_sha256": "793f71d168018951844b8a2e36163f209544d21f4bc5778b1e5cc4d24dda7585",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/kubernetes.wasm",
+        "copies": [
+          "/tmp/araphor-canonical-v26-components-a/kubernetes.wasm",
+          "/tmp/araphor-canonical-v26-components-b/kubernetes.wasm"
+        ],
+        "unchanged_from_v25": false
+      },
+      {
+        "name": "detector",
+        "core_bytes": 3110719,
+        "core_sha256": "2cd4f7093b62450137ab5a70ebc611212d27e61c7e2251ebfa5b41bbcc04dd5d",
+        "component_bytes": 2328893,
+        "component_sha256": "b75fbb3b3168b9afe94b04206d9dadf975b9be3a8107545a48ed72329256aa1c",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-detector-example/artifacts/detector.wasm",
+        "copies": [
+          "/tmp/araphor-canonical-v26-components-a/detector.wasm",
+          "/tmp/araphor-canonical-v26-components-b/detector.wasm"
+        ],
+        "unchanged_from_v25": false
+      },
+      {
+        "name": "runtime",
+        "core_bytes": 2907476,
+        "core_sha256": "ecb50472707b4be7e8d1d3a2a6f97f219611b19c2d6e1a969598099320493d7d",
+        "component_bytes": 2156752,
+        "component_sha256": "0673767afbfe2a8ed5696ec09cdb6c24973ac6e45e9ffba51b1fc9c764523107",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-sdk/tests/artifacts/runtime.wasm",
+        "copies": [
+          "/tmp/araphor-canonical-v26-components-a/runtime.wasm",
+          "/tmp/araphor-canonical-v26-components-b/runtime.wasm"
+        ],
+        "unchanged_from_v25": false
+      }
+    ],
+    "build_logs": [
+      "/tmp/araphor-canonical-guest-build-v26.log",
+      "/tmp/araphor-canonical-guest-repro-v26.log"
+    ]
   }
 }

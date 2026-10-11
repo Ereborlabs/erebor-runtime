@@ -145,7 +145,19 @@ impl Detector {
 }
 
 impl Computation {
-    fn output(self, package: &sdk::Package, limits: sdk::Limits) -> sdk::Result<sdk::Output> {
+    pub(super) fn output(
+        mut self,
+        package: &sdk::Package,
+        limits: sdk::Limits,
+    ) -> sdk::Result<sdk::Output> {
+        for evidence in self.edges.iter_mut().map(|edge| &mut edge.evidence).chain(
+            self.findings
+                .iter_mut()
+                .map(|finding| &mut finding.evidence),
+        ) {
+            evidence.sort_unstable();
+            evidence.dedup();
+        }
         let model = &package.exports[0];
         let mut output = sdk::Output {
             datasets: vec![
@@ -161,9 +173,7 @@ impl Computation {
                 dataset: "findings".into(),
                 row: row as u64,
             };
-            let evidence: std::collections::BTreeSet<_> =
-                finding.evidence.iter().copied().collect();
-            for row in evidence {
+            for &row in &finding.evidence {
                 output.evidence.push(sdk::EvidenceLink {
                     output: reference.clone(),
                     input: sdk::RowRef {
