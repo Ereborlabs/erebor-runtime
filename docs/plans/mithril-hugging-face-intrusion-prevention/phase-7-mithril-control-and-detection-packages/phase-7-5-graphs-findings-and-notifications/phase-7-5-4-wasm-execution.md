@@ -268,6 +268,25 @@ The proof is `/tmp/araphor-wasm-production-bounds-proof-v23.json`.
 Graph splitting remains open. This correction does not change production
 limits or close the dispatch ordering breach.
 
+### Installed detector production proof
+
+The fresh v23 `analysis-packages` case exits zero and records `PASS`.
+The operator installs the built Rust detector folder through the real TLS
+client. No host rebuild occurs. The detector uses threshold 3 and four input
+records. The detector retains three matching evidence records, reason
+`example-burst.THRESHOLD`, and checkpoint 4. Restart and retry preserve the
+result. Three trust-removal checks pass. SQL correction, empty replacement,
+checkpoint recovery, failed upgrade, rollback, revocation, and removal also pass.
+
+The result is `/tmp/araphor-current-v23-packages/result.json`.
+Its SHA256 is
+`99d3a173014da78bc6230eb5a15976940ebc62df6bb859927b895c1a1306332a`.
+The v23 source manifest is recorded above. The normal executable has SHA256
+`90ccc1432ad45155b3022ffec0c815d951bf54e58572d346076188622855ce87`.
+The proof is `/tmp/araphor-wasm-production-bounds-proof-v23.json`.
+The inline writer follow-up changes all six component artifacts. Repeat the
+four production cases on those final artifacts before closure.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
@@ -302,6 +321,11 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+- [ ] Inline the checked row writer methods with the standard Rust writer
+  annotation. The v23 core retains one generic call for each JSON evidence
+  number and comma. Keep both method bodies, byte checks, JSON, evidence,
+  fixtures, and production limits unchanged. Run shared tests, reproduce all
+  six components twice, and rerun the original production-limit split test.
 - [ ] Serialize JSON rows through the existing Arrow binary builder writer.
   The v22 graph split exhausts fuel during aggregate value-buffer growth.
   Remove the temporary row vector and its complete-row copy. Keep checked
