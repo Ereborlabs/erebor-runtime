@@ -238,7 +238,7 @@ impl InputRow {
             Self::json(&finding.required_coverage_interval_ids)?,
             Self::json(&finding.policy_provenance)?,
             Self::json(&finding.effects)?,
-            Self::label(&finding.reason)?,
+            Value::Text(finding.reason.label()?),
             Self::label(&finding.severity)?,
             Value::Text(<&str>::from(finding.sensitivity).into()),
             finding

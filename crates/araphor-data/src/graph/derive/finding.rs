@@ -101,7 +101,6 @@ impl GraphDerivation<'_> {
             required_coverage_interval_ids: coverage.into_iter().collect(),
             policy_provenance: provenance,
             effects,
-            reason,
             severity: if matches!(
                 reason,
                 FindingReasonV1::UnexpectedEffect | FindingReasonV1::CredentialPivot
@@ -134,6 +133,7 @@ impl GraphDerivation<'_> {
                 .into(),
             ),
             limits,
+            reason,
         };
         finding.validate()?;
         if let Some(previous) = self.findings.get(&finding_id) {

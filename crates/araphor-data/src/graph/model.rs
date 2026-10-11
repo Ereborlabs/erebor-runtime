@@ -283,7 +283,7 @@ impl PolicyObservationProvenanceV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FindingReasonV1 {
     UnexpectedEffect,
@@ -297,6 +297,16 @@ pub enum FindingReasonV1 {
     OutsideAuthority,
     InMemoryOnly,
     PayloadUnobservable,
+    #[serde(untagged)]
+    Declared(DeclaredFindingReasonV1),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredFindingReasonV1 {
+    pub code: String,
+    pub schema: araphor_analysis_sdk::Schema,
+    pub ipc: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -379,11 +389,13 @@ impl FindingV1 {
     pub fn validate(&self) -> Result<()> {
         self.subject_id.validate()?;
         self.revision.validate(self.tenant_id)?;
+        self.reason.validate(&self.package_id)?;
         if self.tenant_id == [0; 16]
             || self.subject_id.tenant_id != self.tenant_id
             || self.finding_id.is_empty()
             || self.finding_id.len() > 4096
-            || !Self::PACKAGES.contains(&self.package_id.as_str())
+            || self.package_id.is_empty()
+            || self.package_id.len() > 128
             || self.package_version != 1
             || self.window_start_utc_ns > self.window_end_utc_ns
             || self.evidence.is_empty()

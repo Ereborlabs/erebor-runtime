@@ -110,3 +110,42 @@ fn reason_codes_are_reversible() -> TestResult {
         .is_err());
     Ok(())
 }
+
+#[test]
+fn declared_reason_preserves_typed_details() -> TestResult {
+    use duckdb::arrow::array::UInt64Array;
+    use std::sync::Arc;
+
+    let schema = sdk::Schema::new(vec![sdk::Field::new("count", sdk::DataType::UInt64, false)]);
+    let details =
+        sdk::RecordBatch::try_new(Arc::new(schema), vec![Arc::new(UInt64Array::from(vec![3]))])?;
+    let value = sdk::ReasonValue {
+        output: sdk::RowRef {
+            dataset: "findings".into(),
+            row: 0,
+        },
+        code: "example-detector.THRESHOLD".into(),
+        details,
+    };
+    let reason = FindingReasonV1::Declared(DeclaredFindingReasonV1::from_value(
+        &value,
+        sdk::Limits::default(),
+    )?);
+    reason.validate("example-detector")?;
+    assert_eq!(reason.label()?, value.code);
+    assert_eq!(FindingReasonV1::restore(&reason.storage()?)?, reason);
+    assert_eq!(
+        serde_json::from_value::<FindingReasonV1>(serde_json::to_value(&reason)?)?,
+        reason
+    );
+    assert!(reason.validate("another-detector").is_err());
+    assert_eq!(
+        serde_json::to_value(FindingReasonV1::UnexpectedEffect)?,
+        "UNEXPECTED_EFFECT"
+    );
+    assert_eq!(
+        FindingReasonV1::restore("UNEXPECTED_EFFECT")?,
+        FindingReasonV1::UnexpectedEffect
+    );
+    Ok(())
+}

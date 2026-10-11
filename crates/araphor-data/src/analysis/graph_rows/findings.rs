@@ -50,7 +50,7 @@ impl FindingRow {
             coverage: GraphRows::json(&finding.required_coverage_interval_ids)?,
             provenance: GraphRows::json(&finding.policy_provenance)?,
             effects: GraphRows::json(&finding.effects)?,
-            reason: GraphRows::label(&finding.reason)?,
+            reason: finding.reason.storage()?,
             severity: GraphRows::label(&finding.severity)?,
             sensitivity: <&str>::from(finding.sensitivity).to_owned(),
             action: finding.required_action.clone(),
@@ -151,7 +151,7 @@ impl FindingRow {
             required_coverage_interval_ids: GraphRows::decode(&self.coverage)?,
             policy_provenance: GraphRows::decode(&self.provenance)?,
             effects: GraphRows::decode(&self.effects)?,
-            reason: GraphRows::parse(&self.reason)?,
+            reason: crate::FindingReasonV1::restore(&self.reason)?,
             severity: GraphRows::parse(&self.severity)?,
             sensitivity: ContextSensitivityV1::try_from(self.sensitivity.as_str()).map_err(
                 |_| {
