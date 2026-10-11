@@ -2,6 +2,7 @@ use super::*;
 
 mod encoding;
 mod headers;
+mod packages;
 mod schema;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;

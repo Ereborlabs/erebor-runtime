@@ -2623,8 +2623,9 @@ mod tests {
         selection.contexts = Selection::Exact(vec![context.key.clone()]);
         selection.results.push("late".into());
         let before = store.meta()?;
+        let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
         let mut calls = 0;
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+        let output = store.extract(&selection, &control, |input| {
             let AnalysisInputV1::Event { record, .. } = input else {
                 return store.reject("late metadata entered snapshot");
             };
@@ -2651,7 +2652,7 @@ mod tests {
         assert_eq!(output.sources[0].receipt.contiguous_cursor, 1);
         assert_eq!(output.missing_contexts, vec![context.key]);
         assert_eq!(output.missing_results, vec!["late"]);
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+        let output = store.extract(&selection, &control, |input| {
             Ok(Some(match input {
                 AnalysisInputV1::Event { record, .. } => vec![record.cursor as u8],
                 AnalysisInputV1::Context(context) => context.body.clone(),
@@ -2676,7 +2677,7 @@ mod tests {
         assert_eq!(output.pages[1].rows[0].as_ref(), &[42]);
         assert_eq!(output.pages[2].rows[0].as_ref(), &[43]);
         selection.received_from = Bound::Included(100);
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+        let output = store.extract(&selection, &control, |input| {
             Ok(Some(match input {
                 AnalysisInputV1::Context(context) => context.body.clone(),
                 AnalysisInputV1::Result { body, .. } => body.to_vec(),

@@ -1,0 +1,171 @@
+use std::collections::BTreeMap;
+
+use araphor_analysis_sdk as sdk;
+
+use super::{Fixture, TestResult};
+use crate::package::*;
+
+mod checkpoint;
+mod flow;
+mod interruption;
+mod lifecycle;
+mod metadata;
+
+#[test]
+fn oversized_input_precedes_compilation() -> TestResult {
+    let fixture = Fixture::new()?;
+    let query = std::sync::Arc::new(crate::QueryOwner::new(
+        fixture.store.clone(),
+        crate::QueryLimits {
+            input_bytes: 1024,
+            ..Default::default()
+        },
+    )?);
+    let owner = std::sync::Arc::new(AnalysisPackageOwner::new(
+        fixture.store.clone(),
+        query,
+        fixture.authority.clone(),
+    )?);
+    let mut package = component("1");
+    let artifact = &mut package.artifacts[0];
+    let PackageImplementationV1::Wasm {
+        artifact: bytes, ..
+    } = &mut artifact.implementations[0]
+    else {
+        return Err("Wasm fixture absent".into());
+    };
+    *bytes = b"invalid component".to_vec();
+    let model = &artifact.descriptor.exports[0];
+    let evaluation = sdk::Evaluation {
+        export: model.name.clone(),
+        inputs: Vec::new(),
+        checkpoint: None,
+        parameters: crate::QueryOwner::model_parameters(
+            &model.parameters,
+            Some(&serde_json::json!({"mode": "x".repeat(4096), "amount": 7})),
+        )?,
+        context: sdk::EvaluationContext {
+            id: "memory".into(),
+            time_utc_ns: 0,
+            seed: None,
+            limits: model.limits,
+        },
+    };
+    let control = crate::AnalysisReadControl::default();
+    assert!(matches!(
+        owner.evaluate_artifact([1; 16], artifact, &evaluation, &control),
+        Err(crate::Error::QueryLimit {
+            resource: "analysis input memory",
+            ..
+        })
+    ));
+    let installed = InstalledAnalysis::new(owner, "test")?;
+    assert!(matches!(
+        installed.evaluate([1; 16], "runtime-fixture", &evaluation, &control),
+        Err(crate::Error::QueryLimit {
+            resource: "analysis input memory",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+fn component(revision: &str) -> PackageBundleV1 {
+    let mut model = sdk::Model::new(
+        "evaluate",
+        Vec::new(),
+        vec![sdk::Port::new(
+            "data",
+            sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]),
+        )],
+    );
+    model.parameters = sdk::Schema::new(vec![
+        sdk::Field::new("mode", sdk::DataType::Utf8, false),
+        sdk::Field::new("amount", sdk::DataType::UInt64, false),
+    ]);
+    let descriptor = sdk::Package::new("runtime-fixture", revision, vec![model]);
+    PackageBundleV1 {
+        schema_version: 1,
+        root: PackageRefV1 {
+            package_id: descriptor.id.clone(),
+            revision: revision.into(),
+        },
+        artifacts: vec![PackageArtifactV1 {
+            descriptor,
+            implementations: vec![PackageImplementationV1::Wasm {
+                exports: vec!["evaluate".into()],
+                inputs: Some(BTreeMap::new()),
+                artifact: include_bytes!(
+                    "../../../../araphor-analysis-sdk/tests/artifacts/runtime.wasm"
+                )
+                .to_vec(),
+            }],
+            fixtures: Vec::new(),
+        }],
+    }
+}
+
+fn parameters(mode: &str) -> serde_json::Value {
+    serde_json::json!({"runtime-fixture": {"evaluate": {"mode": mode, "amount": 7}}})
+}
+
+fn evaluate(id: &str) -> PackageRequestV1 {
+    PackageRequestV1::Run {
+        scope_id: "test".into(),
+        package_id: "runtime-fixture".into(),
+        export: Some("evaluate".into()),
+        evaluation_id: id.into(),
+        parameters: None,
+    }
+}
+
+fn assert_receipt(actual: &PackageReceiptV1, expected: &PackageReceiptV1) -> TestResult {
+    let mut actual = actual.clone();
+    // Clock refresh can change the stale flag of a retained result.
+    actual.stale = expected.stale;
+    assert_eq!(
+        serde_json::to_value(actual)?,
+        serde_json::to_value(expected)?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn wasm_failure_retains_state() -> TestResult {
+    for (mode, code) in [
+        ("trap", PackageErrorCodeV1::Incomplete),
+        ("hostcalls", PackageErrorCodeV1::Limit),
+        ("limit", PackageErrorCodeV1::Limit),
+        ("invalid-evidence", PackageErrorCodeV1::Invalid),
+    ] {
+        let fixture = Fixture::new()?;
+        let mut package = component("1");
+        package.artifacts[0]
+            .implementations
+            .push(PackageImplementationV1::Sql {
+                export: "evaluate".into(),
+                inputs: BTreeMap::new(),
+                program: crate::SqlModelV1 {
+                    outputs: BTreeMap::from([("data".into(), "SELECT 7::UBIGINT AS value".into())]),
+                    ..Default::default()
+                },
+            });
+        assert!(fixture
+            .install(package, Some(parameters(mode)))
+            .await
+            .is_err());
+        let inspected = fixture
+            .execute(PackageRequestV1::Inspect {
+                scope_id: "test".into(),
+                package_id: "runtime-fixture".into(),
+            })
+            .await?;
+        assert!(inspected.exports[0].results.is_empty());
+        assert!(
+            matches!(inspected.exports[0].readiness, PackageReadinessV1::Failed { code: failed, .. } if failed == code)
+        );
+        let fixture = fixture.reopen()?;
+        assert!(fixture.execute(evaluate("retry-trap")).await.is_err());
+    }
+    Ok(())
+}

@@ -4,6 +4,7 @@ use snafu::ResultExt as _;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+mod context;
 mod crash;
 mod evidence;
 mod lifecycle;
