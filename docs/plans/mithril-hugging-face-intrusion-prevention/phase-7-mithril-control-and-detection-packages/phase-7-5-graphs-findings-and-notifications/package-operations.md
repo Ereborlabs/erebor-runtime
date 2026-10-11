@@ -3,7 +3,7 @@
 Use these operations with the existing authenticated
 [Araphor client](../../../araphor-observability/phase-3-cli-api-and-console.md).
 The CLI and agents call the same package owner. Read the
-[implementation limits](package-lifecycle-review.md#limits-and-review-points)
+[implementation limits](wasm-execution-review.md#limits-and-proof)
 before selecting an input scope.
 
 Use a fresh schema 19 analysis store for this development version. An existing
@@ -14,9 +14,22 @@ updating a deployment.
 ## Built package
 
 A built package is one JSON file. A directory supplies the same file as
-`package.json`. The file contains the SDK descriptor, SQL implementations,
-fixtures, and every locked dependency artifact. Installation works offline.
-The installer does not compile code, run hooks, or download dependencies.
+`package.json`. The file contains the SDK descriptor, SQL implementations or
+Wasm components, fixtures, and every locked dependency artifact. The complete
+file has a 32 MiB limit. Installation works offline. The installer does not run
+an author compiler, hooks, or dependency downloads. The package owner compiles
+admitted Wasm components in its bounded host compiler process.
+
+The [compiled detector example](../../../../../crates/araphor-detector-example/README.md)
+supplies a built folder with a component, declarations, and the complete
+manifest. Install that detector in scope `analysis`. The graph owner supplies
+its authorized inputs and validates its findings and checkpoint. The operator
+does not need a Rust compiler.
+
+Wasm qualification is **Not done**. Production permits 32 MiB of data and
+100 million fuel units. The current corpus proof uses larger test-only limits.
+Read the [open production gates](phase-7-5-4-wasm-execution.md#goal-deliverable-review)
+before using this implementation.
 
 The [two-model fixture](../../../../../crates/mithril-e2e/src/discovery/packages/bundle.rs)
 is a complete example of the format through its Rust constructors. Its root is
@@ -124,9 +137,11 @@ make a broad historical result readable under a narrow grant.
 ## Update, rollback, test, and remove
 
 Pin the new built bundle before an update. Keep the old pin when rollback must
-remain available. Each export switches only after its prepared result and
-checkpoint pass validation. Atomicity applies to each export, not the entire
-dependency graph.
+remain available. A SQL or source-bound Wasm export switches after its prepared
+result and checkpoint pass validation. A host-prepared export switches after
+component and adapter admission. Its next domain result uses the new exact
+package references. Atomicity applies to each export, not the entire dependency
+graph.
 
 ```sh
 araphor --profile ./operator.json package --scope demo update ./denials-v2
@@ -135,12 +150,13 @@ araphor --profile ./operator.json package --scope demo test denials.repeated
 araphor --profile ./operator.json package --scope demo remove denials.repeated
 ```
 
-`test` runs declared fixtures through the admitted SQL evaluator. A bundle with
+`test` runs declared fixtures through the admitted evaluator. A bundle with
 no fixtures returns an empty test list. Fixture success does not prove physical
 prevention. Removal retains referenced history and dependencies used by other
 installations. Expired or revoked authority stops execution. Reinstall under a
 current grant to establish a new execution lifetime.
 
-The current executable target is SQL with table outputs. Wasm, native, Python,
-and domain output adapters remain inactive with an explicit status. OCI
-distribution is later work. No package operation activates kernel policy.
+SQL and source-bound Wasm exports support table outputs. Installed discovery
+and graph components use the existing host adapters. An unsupported adapter
+returns an explicit status. Native execution, Python execution, and OCI
+distribution are later work. No package operation activates kernel policy.

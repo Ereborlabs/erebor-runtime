@@ -19,20 +19,21 @@ in the next section records the SDK conversion.
 
 **Done:** the contract requirements, migration boundaries, shared Rust
 computation, production adapters, and migration verification. The seven captured
-baseline tests pass without changes to their expected results. The final
-production and workspace checks pass on `53f7674`; read the
+baseline tests passed without changes to their expected results. The prior
+production and workspace checks passed on `53f7674`; read the
 [acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
-Installed package execution remains **Not done**.
-The default Wasm binding follows in 7.5.4 and the qualified native binding in
-7.5.5. The host context selector remains a host operation.
+Installed Wasm adapters are implemented. Their final qualification remains
+**Not done**. The qualified native binding remains later work in 7.5.5.
+The host context selector remains a host operation.
 
 ## Current implementation map
 
 The [shared computation crate](../../../../../crates/araphor-analysis-builtins/src/lib.rs)
 depends on the portable SDK. It has no dependency on DuckDB, Control, or the
-host store. Production adapters and portable fixtures call the same computation
-functions. The host adapters validate the source types before normalization and
-validate domain results after computation.
+host store. The components and portable fixtures call the same computation
+functions. Production adapters invoke the installed component evaluator.
+The host adapters validate source types before normalization and validate
+domain results after computation.
 
 | ID | Shared computation | Production adapter | Migration tests |
 |---|---|---|---|
@@ -44,11 +45,14 @@ validate domain results after computation.
 | AR-06 | [`Detector::Credentials`](../../../../../crates/araphor-analysis-builtins/src/graph/credential/mod.rs) and [channel and authority joins](../../../../../crates/araphor-analysis-builtins/src/graph/credential/join.rs). | [Credential normalization](../../../../../crates/araphor-data/src/graph/derive/adapter/credential.rs), [authority qualification](../../../../../crates/araphor-data/src/graph/derive/adapter/authority.rs), and shared graph output assembly. | [Captured credential results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs), [portable exact and missing-proof cases](../../../../../crates/araphor-analysis-builtins/src/graph/tests.rs), and the existing credential tests below. |
 | AR-07 | [`Detector::Kubernetes`](../../../../../crates/araphor-analysis-builtins/src/graph/kubernetes.rs) computes the current request-to-admission states. | [Fact normalization](../../../../../crates/araphor-data/src/graph/derive/adapter/facts.rs) and shared graph output assembly. | [Captured Kubernetes results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs), [portable missing-proof case](../../../../../crates/araphor-analysis-builtins/src/graph/tests.rs), and the existing partial-stage test below. |
 
-The discovery exports use [`Discovery::evaluate`](../../../../../crates/araphor-analysis-builtins/src/discovery/mod.rs).
-The graph exports use [`Detector::evaluate`](../../../../../crates/araphor-analysis-builtins/src/graph/mod.rs).
-Both validate the SDK evaluation and complete output. Graph dispatch constructs
-one evaluation and shares it across the three detectors. Historical finding
-reason code conversion remains in the [host contract](../../../../../crates/araphor-data/src/graph/contract.rs).
+The discovery components call [`Discovery::evaluate`](../../../../../crates/araphor-analysis-builtins/src/discovery/mod.rs).
+The graph components call [`Detector::evaluate`](../../../../../crates/araphor-analysis-builtins/src/graph/mod.rs).
+Both validate the SDK evaluation and complete output. The graph adapter builds
+an evaluation for each supported installed export. It uses the saved effective
+parameters to validate the result.
+[`FindingReasonV1`](../../../../../crates/araphor-data/src/graph/model.rs)
+retains the declared reason code, detail schema, and IPC details. The host maps
+the historical eleven reasons to legacy JSON only when the code and schema match.
 The output adapter requires one matching SDK reason per finding candidate and
 the same evidence references in candidate rows and SDK evidence links.
 Its [contract tests](../../../../../crates/araphor-data/src/graph/derive/adapter/tests.rs)
@@ -162,8 +166,10 @@ several exports need the same operation.
 Graph test symbols and fixtures are under [graph tests](../../../../../crates/araphor-data/src/graph/tests.rs)
 and [processing tests](../../../../../crates/araphor-data/src/graph/tests/processing.rs).
 The implementation map above adds the SDK conversion paths and test mappings.
-The complete migration verification passes. Phase 7.5.4 must then run
-those checks through the installed production path. Direct Rust tests do not
+The prior SDK migration checks passed through shared Rust computation.
+The current discovery and graph fixtures install required components through
+`InstalledAnalysis::testing`. Their installed execution results and the final
+workspace checks remain under qualification. Direct Rust tests alone do not
 prove installed execution.
 
 ## Shared operations that remain host-owned

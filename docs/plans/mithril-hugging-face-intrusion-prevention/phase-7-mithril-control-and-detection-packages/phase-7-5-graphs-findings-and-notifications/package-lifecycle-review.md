@@ -4,6 +4,10 @@ This guide follows the local SQL package implementation for
 [Package Lifecycle](phase-7-5-3-package-lifecycle.md). Use the linked source to
 review admission, execution, retained results, and removal.
 
+This record retains the SQL qualification state. The current component path
+extends the same owners. See the [Wasm review](wasm-execution-review.md) for
+installed discovery and detection, host compilation, and current limits.
+
 ## Intended end state
 
 An authorized operator or agent installs a built package without a compiler or

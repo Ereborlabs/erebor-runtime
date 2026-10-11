@@ -2,9 +2,10 @@
 
 Track the algorithms that must run through the SDK and package system. This
 inventory supports [7.5](README.md); the linked child phases own implementation.
-Review date: 2026-10-10. Current SDK computation, production adapters, and
-migration verification are **Done**. Upstream ports and installed package
-execution remain **Not done**.
+Review date: 2026-10-11. SDK computation, production adapters, and direct Rust
+migration verification are **Done**. Installed Wasm adapters and dispatch
+replacement are implemented. Their final qualification is **Not done**.
+Upstream ports remain **Not done**.
 
 ## Source boundaries
 
@@ -50,24 +51,28 @@ the phase. A scope reduction needs an explicit recorded decision.
 
 ## Current Araphor algorithms
 
-All rows belong to 7.5.2 for SDK conversion, production adapters, and equivalence
-through trusted Rust calls. Shared code, adapters, and migration verification
-are **Done**. Installed Wasm execution and dispatch replacement belong to 7.5.4
-and remain **Not done**.
+SDK conversion, production adapters, and equivalence through direct Rust calls
+were qualified in 7.5.2. That result is **Done**. The current production adapters
+use installed components. Installed equivalence and dispatch replacement belong
+to 7.5.4; their qualification remains **Not done**.
 For AR-04, migration means integration with the shared host selector through the
 SDK input contract. Authorization and trusted selection stay in that host owner.
 
 Use the [current implementation map](current-contract-inventory.md#current-implementation-map)
 for the source and test links for each row. AR-01 through AR-03 call
-[`Discovery::evaluate`](../../../../../crates/araphor-analysis-builtins/src/discovery/mod.rs)
+[`InstalledAnalysis::evaluate`](../../../../../crates/araphor-data/src/package/installed.rs)
 from the [host discovery adapters](../../../../../crates/araphor-data/src/discovery/sdk/mod.rs).
 AR-05 through AR-07 call
-[`Detector::evaluate`](../../../../../crates/araphor-analysis-builtins/src/graph/mod.rs)
+the same installed evaluator
 from the [host graph adapter](../../../../../crates/araphor-data/src/graph/derive/adapter/mod.rs).
+The components call the shared
+[`Discovery::evaluate`](../../../../../crates/araphor-analysis-builtins/src/discovery/mod.rs)
+and [`Detector::evaluate`](../../../../../crates/araphor-analysis-builtins/src/graph/mod.rs)
+functions.
 AR-04 uses [`DiscoveryOwner::context_input`](../../../../../crates/araphor-data/src/discovery/sdk/context.rs)
 after the existing trusted selector. The host retains complete original records
-and validates references from normalized SDK rows. This conversion adds no
-package authority or external executable loading.
+and validates references from normalized SDK rows. This execution change gives
+packages no additional authority.
 
 Seven captured baseline tests pass with the expected results from `2e49839a`
 unchanged. They compare 24 outputs across these algorithm families. Production

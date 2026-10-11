@@ -5288,3 +5288,10 @@ The full incident, physical cross-node behavior, provider effects, and
 performance remain unqualified.
 Storage verification does not qualify the later SDK, package lifecycle, or
 algorithm execution phases.
+
+## Installed component storage limit
+
+The native graph record above covers its recorded source and 64 MiB target.
+The later Wasm implementation uses a shared 128 MiB native store and backup
+validation limit. Graph windows stay at 4 MiB. Read the [current component
+review](phase-7-5-graphs-findings-and-notifications/wasm-execution-review.md).

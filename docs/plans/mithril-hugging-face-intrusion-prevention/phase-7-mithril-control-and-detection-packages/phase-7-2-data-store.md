@@ -4099,3 +4099,10 @@ test remains a recorded failure. This gate does not qualify the 160-MiB native
 target against the 256-MiB process limit. The memory-budget decision remains
 pending. Full-capacity gRPC, remaining load and physical qualification, and
 old-writer retirement remain open. The phase remains **Not done**.
+
+## Installed component storage update
+
+The later Wasm implementation sets the native buffer target to 128 MiB. Backup
+validation uses the same limit. This change does not qualify process RSS or
+replace the capacity results above. Read the [current storage limits and
+proof](phase-7-5-graphs-findings-and-notifications/wasm-execution-review.md).

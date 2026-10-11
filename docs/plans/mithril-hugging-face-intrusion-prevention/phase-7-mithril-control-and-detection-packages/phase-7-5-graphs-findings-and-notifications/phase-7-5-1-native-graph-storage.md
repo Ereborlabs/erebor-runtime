@@ -395,3 +395,9 @@ graph is not exported. The receipt reports a boundary if an unseen neighbor
 exists beyond `S3`. A subject-limit overflow fails before SQL can aggregate
 incomplete input. This result does not prove full-incident prevention, physical
 cross-node causality, provider effects, performance, or unlimited graph size.
+
+## Later component storage update
+
+The 64 MiB results above cover the native graph baseline. The later Wasm
+implementation uses a 128 MiB native store and backup validation limit. Graph
+windows stay at 4 MiB. Read the [current component review](wasm-execution-review.md).

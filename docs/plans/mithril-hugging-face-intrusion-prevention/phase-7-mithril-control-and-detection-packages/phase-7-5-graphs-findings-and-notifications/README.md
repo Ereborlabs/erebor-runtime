@@ -44,7 +44,8 @@ algorithm migration in 7.5.2 is also **Done**; read its
 [acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
 The local SQL package lifecycle in 7.5.3 is **Done**; read its
 [acceptance record](phase-7-5-3-package-lifecycle.md#verification-record).
-Child phases 7.5.4 through 7.5.9 below are **Not done**.
+The installed Wasm adapters in 7.5.4 are implemented. Their final qualification
+is **Not done**. Child phases 7.5.5 through 7.5.9 remain **Not done**.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 
@@ -332,6 +333,11 @@ existing VTab. AnalysisStore remains the durable owner.
 Keep the code in the existing owners, with small modules and short functions.
 Share validation, row encoding, and reconstruction between reads, retries, and
 migration. Work in the primary checkout. Use Rust or platform tests.
+
+The 64 MiB native storage record below covers the earlier baseline. The later
+Wasm implementation uses a shared 128 MiB native store and backup validation
+limit. Graph windows stay at 4 MiB. Read the [current component
+review](wasm-execution-review.md).
 
 The native storage baseline is complete and committed as `91afc657`. Result
 metadata keeps the version header and a separate JSON encoding field. Finding and query readers do not
