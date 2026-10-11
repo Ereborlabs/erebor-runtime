@@ -148,6 +148,9 @@ the production limits support the same inputs. Automatic approval review
 rejects the proposed production limit increase. Explicit user approval is
 pending. Keep this gate open and remove the test-only allowances only after
 the approved correction passes the same production and test checks.
+The production dispatch has already changed. The required complete production
+equivalence gate did not pass before that change. Source review and test-only
+corpus parity do not close this requirement.
 
 ### Implementation TODOs
 
