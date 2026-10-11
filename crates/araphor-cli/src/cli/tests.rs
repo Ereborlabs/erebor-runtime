@@ -493,6 +493,7 @@ fn shared_command_tree() {
             "catalog",
             "daemon",
             "filesystem",
+            "package",
             "policy",
             "policyset",
             "run",
@@ -512,6 +513,7 @@ fn transport_options_are_separate() -> Result<(), Box<dyn std::error::Error>> {
     for command in [
         vec!["sql", "SELECT 1"],
         vec!["catalog"],
+        vec!["package", "--scope", "production", "inspect"],
         vec![
             "trace",
             "--recipe",
@@ -527,7 +529,7 @@ fn transport_options_are_separate() -> Result<(), Box<dyn std::error::Error>> {
         let cli = Cli::try_parse_from(args)?;
         assert!(
             matches!(cli.validate_route(), Err(error) if error.exit_code() == 2),
-            "query or trace cannot select a daemon socket"
+            "Control commands cannot select a daemon socket"
         );
         let args: Vec<_> = ["araphor", "--profile", "client.json", "--output", "jsonl"]
             .into_iter()

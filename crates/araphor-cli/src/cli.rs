@@ -115,7 +115,7 @@ impl Cli {
             }
             Command::Investigate(_) => return Ok(()),
             _ if self.connection.selected() => {
-                "profile, endpoint and output apply only to catalog, sql and trace"
+                "profile, endpoint and output apply only to catalog, sql, trace and package"
             }
             _ => return Ok(()),
         };
