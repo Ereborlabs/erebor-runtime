@@ -272,12 +272,22 @@ The v24 writer annotations pass all 13 shared tests. Two independent builds
 produce equal bytes for all six components. The normal qualification binary
 builds without warnings. The original graph group has one pass and one failure
 after 231.77 seconds. Evidence recovery passes. The split still exhausts fuel
-after relationship encoding. The proof is
+during graph output encoding. The proof is
 `/tmp/araphor-wasm-production-bounds-proof-v24.json`.
 The source manifest has SHA256
 `a061f6d599c9bc95d91f50806bea0ab843f65076e64af0f69c4ec79bd702064d`.
 The checked writer bodies and production limits stay unchanged. Graph
 splitting remains open.
+
+The v25 encoder uses the standard Rust `BufWriter` with at most 8 KiB of
+scratch per row. The shared suite has 14 passes. Exact-byte tests cross
+multiple flush boundaries. A serializer error retains byte-limit precedence.
+Two independent builds produce equal core and component bytes for all six
+artifacts. The build proof records `buffered_writer_correction`.
+The source manifest has SHA256
+`291e3b98b1c73def6ab87891ee57152577299096f77e4215e85f0e76efae6033`.
+Production limits and the original graph split test stay unchanged.
+Installed runtime qualification remains pending.
 
 ### Installed detector production proof
 
@@ -350,11 +360,26 @@ The v23 production package case proves the corrected replacement wait and
 detector grant. These historical results do not close final-artifact or final
 workspace qualification. The complete implementation gates remain open.
 
+The v16 commit tests prove distinct grant checks, shared-store lifecycle
+exclusion, construction exclusion, renewal, and suspension. The earlier
+native graph tests prove the 128 MiB database limit, atomic package references,
+header-only reference reads, context retention and closure, and backup restore.
+The earlier adapter tests reject authority and coverage upgrades. The v23
+installed detector case proves stored nondefault graph parameters. These
+checked correction scopes remain subject to final workspace verification.
+
 - [ ] Inline the checked row writer methods with the standard Rust writer
   annotation. The v23 core retains one generic call for each JSON evidence
   number and comma. Keep both method bodies, byte checks, JSON, evidence,
   fixtures, and production limits unchanged. Run shared tests, reproduce all
   six components twice, and rerun the original production-limit split test.
+- [ ] Buffer JSON through the standard Rust `BufWriter` before the checked
+  Arrow row writer. Use at most 8 KiB of scratch per row. Flush before the
+  non-null row offset. Flush after a serializer error to retain byte-limit
+  precedence. Keep schemas, typed fields, JSON bytes, evidence positions,
+  partial-result rejection, and all production limits unchanged. Test large
+  rows across flush boundaries and serializer failure with a byte limit.
+  Reproduce all six components and rerun the unchanged graph split test.
 - [ ] Serialize JSON rows through the existing Arrow binary builder writer.
   The v22 graph split exhausts fuel during aggregate value-buffer growth.
   Remove the temporary row vector and its complete-row copy. Keep checked
@@ -879,39 +904,39 @@ The production limit change and final production qualification remain open.
   A production package revision read fails at the previous 64 MiB cap. Keep a
   finite cap, verify its rejection boundary, and rerun graph and SQL lifecycle
   qualification. Check reader release and repeated bundle reads before a fix.
-- [ ] Set the native database memory limit to 128 MiB. Use the same constant for
+- [x] Set the native database memory limit to 128 MiB. Use the same constant for
   backup validation. Keep the graph window limit at 4 MiB. Check the native
   settings and resource rejection. Verify installed package reads and restore.
   This setting limits native database buffers. It does not limit process RSS.
-- [ ] Match the native allocation failure and its reported reason in the
+- [x] Match the native allocation failure and its reported reason in the
   rejection test. The pinned DuckDB binding does not retain the native error
   type in `Connection::execute`. Do not compare its unused error-code variant.
   Pass the SQL repetition length as `BIGINT`.
 - [ ] Permit trusted host-prepared exports with declared Table outputs through
   `InstalledAnalysis`. Keep graph and discovery output checks on their domain
   adapters. Verify typed native graph input and the AR-04 context packet.
-- [ ] Keep the validated graph package provenance reference in the atomic
+- [x] Keep the validated graph package provenance reference in the atomic
   result commit. Exclude this sidecar from the visible input manifest check.
   Verify a production graph commit and the bounded header reference read.
-- [ ] Validate the installed package references in native context records before collection and during recovery. Check the typed reference fields, tenant scope, names, generation, export, revision, root, and retained dependency closure. Permit a source record without these references only for the previous discovery format. Reject malformed new references. Verify reopen and backup restore.
-- [ ] Read graph package references from the bounded native header. Do not read graph rows to obtain the source key. Verify that the reference read does not reconstruct rows.
+- [x] Validate the installed package references in native context records before collection and during recovery. Check the typed reference fields, tenant scope, names, generation, export, revision, root, and retained dependency closure. Permit a source record without these references only for the previous discovery format. Reject malformed new references. Verify reopen and backup restore.
+- [x] Read graph package references from the bounded native header. Do not read graph rows to obtain the source key. Verify that the reference read does not reconstruct rows.
 - [ ] Use a finite 60-second outer deadline for host component calls. Permit compilation after reopen with an empty code cache. Keep the compiler and guest execution limits separate. Verify replay with a new production package owner.
-- [ ] Check each distinct saved grant at domain commit, including different grants for the same package root. Verify that removal of the second grant prevents the commit callback.
-- [ ] Share the package lifecycle lock between owners that use the same store. Verify that a second owner cannot change an activation while a domain commit holds that lock.
-- [ ] Hold the shared lifecycle lock during owner construction and package admission collection. Verify that a second owner cannot collect a package row before the first owner completes activation.
-- [ ] Keep previous-schema graph fixtures free of package rows. Use an isolated installed execution handle for native storage tests. Install packages in the tested store when the test checks retained package context.
-- [ ] Hold the shared lifecycle lock for Run grant renewal and supervisor
+- [x] Check each distinct saved grant at domain commit, including different grants for the same package root. Verify that removal of the second grant prevents the commit callback.
+- [x] Share the package lifecycle lock between owners that use the same store. Verify that a second owner cannot change an activation while a domain commit holds that lock.
+- [x] Hold the shared lifecycle lock during owner construction and package admission collection. Verify that a second owner cannot collect a package row before the first owner completes activation.
+- [x] Keep previous-schema graph fixtures free of package rows. Use an isolated installed execution handle for native storage tests. Install packages in the tested store when the test checks retained package context.
+- [x] Hold the shared lifecycle lock for Run grant renewal and supervisor
   suspension. Release this lock before guest execution. Verify that neither
   operation changes an activation during a domain commit. Use the normal
   30-second fixture control for these concurrency tests.
 
-- [ ] Validate graph output with the saved effective package parameters.
-- [ ] Retain exact installed exports, revisions, activation generations, and
+- [x] Validate graph output with the saved effective package parameters.
+- [x] Retain exact installed exports, revisions, activation generations, and
   configured parameters in discovery and graph context. Use these references
   for historical replay. Do not combine different references in one profile.
-- [ ] Keep causal proof, confirmation, and coverage validation on the host.
+- [x] Keep causal proof, confirmation, and coverage validation on the host.
   Reject a package result that increases these claims without qualified input.
-- [ ] Change former unsupported-Wasm fixture cases to the unsupported Native
+- [x] Change former unsupported-Wasm fixture cases to the unsupported Native
   target. Use real components for Wasm execution tests.
 
 ## End scope and example

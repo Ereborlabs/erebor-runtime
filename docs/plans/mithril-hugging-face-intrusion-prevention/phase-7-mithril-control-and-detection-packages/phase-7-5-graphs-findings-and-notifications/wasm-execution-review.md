@@ -190,16 +190,24 @@ The SDK suite has 51 passes. The build proof records equal bytes from two
 independent builds of all six components under `memory_accounting_correction`.
 The current production owner qualification remains open.
 
-[Rows](../../../../../crates/araphor-analysis-builtins/src/rows.rs) writes JSON
-fragments directly into the Arrow binary builder. Each write checks the
-remaining byte budget first. Arrow completes each successful row with an
-empty append. The method creates no temporary row vector or complete-row copy. The
+[Rows](../../../../../crates/araphor-analysis-builtins/src/rows.rs) buffers JSON
+with the standard Rust `BufWriter`. The buffer uses at most 8 KiB per row.
+The checked row writer sends each complete fragment to the Arrow binary
+builder. Each Arrow write checks the remaining byte budget first. The encoder
+flushes after serialization, including a serializer error. The encoder checks
+the result before Arrow completes a non-null row with an empty append.
+No complete-row vector or complete-row copy is created. The
 [writer test](../../../../../crates/araphor-analysis-builtins/src/rows/tests.rs)
 checks empty writes, complete writes, and rejection without a partial write.
-The shared computation suite has 13 passes. The build proof records equal
-bytes from two builds of all six components under `direct_builder_correction`.
-The original graph split assertion and production fuel limit remain unchanged.
-Installed runtime qualification of this correction remains open.
+The large escaped-string test compares exact JSON bytes across flush
+boundaries. The serializer-error test retains byte-limit error precedence
+and checks a successful next call. The current shared suite has 14 passes.
+The earlier build proof records six equal component pairs under
+`direct_builder_correction` and `inline_writer_correction`.
+The `buffered_writer_correction` record has 14 native passes and six equal
+component pairs from two builds. The original graph split assertion and
+production fuel limit remain unchanged. Installed runtime qualification
+remains open.
 
 [Computation::authorities](../../../../../crates/araphor-analysis-builtins/src/graph/credential/join.rs)
 indexes each qualified fact identity by its position in one vector. The first

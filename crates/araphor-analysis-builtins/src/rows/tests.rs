@@ -112,14 +112,26 @@ fn declared_row_limits() -> sdk::Result<()> {
 #[test]
 fn rows_fit_payload_bound() -> sdk::Result<()> {
     let port = Rows::port::<String>("strings", "test.string.v1");
-    let values = vec!["\\\"".repeat(257); 3];
+    let values = vec!["\\\"".repeat(8193); 3];
     let bounds = sdk::Limits {
-        max_bytes: 4096,
+        max_bytes: 128 * 1024,
         ..sdk::Limits::default()
     };
     let data = Rows::encode(&port, &values, bounds)?;
     assert_eq!(Rows::decode::<String>(&port, &data, bounds)?, values);
     assert!(data.batches[0].get_array_memory_size() as u64 <= bounds.max_bytes);
+    let rows = data.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "row type"))?;
+    for (index, value) in values.iter().enumerate() {
+        let expected = serde_json::to_vec(value).map_err(|source| sdk::Error::Encoding {
+            source,
+            location: snafu::location!(),
+        })?;
+        assert_eq!(rows.value(index), expected);
+    }
     let small = sdk::Limits {
         max_bytes: 1024,
         ..bounds
@@ -138,6 +150,42 @@ fn rows_fit_payload_bound() -> sdk::Result<()> {
             ..
         })
     ));
+    Ok(())
+}
+
+struct FailedString<'a>(&'a str);
+
+impl Serialize for FailedString<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0)?;
+        Err(serde::ser::Error::custom("test serialization failure"))
+    }
+}
+
+#[test]
+fn row_error_precedence() -> sdk::Result<()> {
+    let port = Rows::port::<String>("strings", "test.string.v1");
+    let value = "\\".repeat(20);
+    let values = [FailedString(&value)];
+    let normal = sdk::Limits::default();
+    assert!(matches!(
+        Rows::encode(&port, &values, normal),
+        Err(sdk::Error::Encoding { .. })
+    ));
+    let small = sdk::Limits {
+        max_bytes: 32,
+        ..normal
+    };
+    assert!(matches!(
+        Rows::encode(&port, &values, small),
+        Err(sdk::Error::Contract {
+            code: sdk::ErrorCode::Limit,
+            ..
+        })
+    ));
+    let expected = ["complete".to_owned()];
+    let data = Rows::encode(&port, &expected, normal)?;
+    assert_eq!(Rows::decode::<String>(&port, &data, normal)?, expected);
     Ok(())
 }
 

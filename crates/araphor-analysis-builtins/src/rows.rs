@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
@@ -46,7 +46,12 @@ impl Rows {
                 remaining: &mut remaining,
                 limited: false,
             };
-            if let Err(source) = serde_json::to_writer(&mut buffer, value) {
+            let result = {
+                let mut writer = BufWriter::with_capacity(8192.min(*buffer.remaining), &mut buffer);
+                let serialized = serde_json::to_writer(&mut writer, value);
+                serialized.and(writer.flush().map_err(serde_json::Error::io))
+            };
+            if let Err(source) = result {
                 return Err(if buffer.limited {
                     sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes")
                 } else {
