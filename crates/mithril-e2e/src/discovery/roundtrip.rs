@@ -24,6 +24,8 @@ use crate::{
     error::InvalidInputSnafu,
 };
 
+mod context;
+
 pub struct DiscoveryQualificationRunner {
     output: PathBuf,
 }
@@ -304,6 +306,7 @@ impl DiscoveryQualificationRunner {
                     reason: "the signed policy key or provenance differs",
                 }
             );
+            context::check(&joined, &context.binding)?;
         }
         let receipt = data
             .source_receipt(&stream)?

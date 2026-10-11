@@ -3,6 +3,17 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{CanonicalEncodingSnafu, Result};
 
+pub(crate) struct InputRevision;
+
+impl InputRevision {
+    pub(crate) fn of(value: &impl Serialize) -> serde_json::Result<String> {
+        let mut hash = Sha256::new();
+        hash.update(b"ARAPHOR-ANALYSIS-INPUT-V1\0");
+        serde_json::to_writer(&mut hash, value)?;
+        Ok(format!("{:x}", hash.finalize()))
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct DiscoveryDigestV1(pub [u8; 32]);
@@ -29,7 +40,23 @@ impl DiscoveryDigestV1 {
 
 #[cfg(test)]
 mod tests {
-    use super::DiscoveryDigestV1;
+    use super::{DiscoveryDigestV1, InputRevision};
+
+    #[test]
+    fn input_revision_exactness() -> serde_json::Result<()> {
+        let value = (u64::MAX, i64::MIN, [0_u8, 255]);
+        let first = InputRevision::of(&value)?;
+        assert_eq!(first, InputRevision::of(&value)?);
+        assert_ne!(
+            first,
+            InputRevision::of(&(u64::MAX - 1, i64::MIN, [0_u8, 255]))?
+        );
+        assert_ne!(
+            first,
+            InputRevision::of(&(u64::MAX, i64::MIN, [0_u8, 254]))?
+        );
+        Ok(())
+    }
 
     #[test]
     fn digest_preserves_canonical_domain() -> crate::Result<()> {

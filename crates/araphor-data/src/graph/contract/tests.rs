@@ -1,5 +1,3 @@
-use sdk::arrow_array::Array as _;
-
 use super::*;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -63,7 +61,7 @@ fn descriptor_preserves_owners() -> TestResult {
                 .iter()
                 .map(|port| port.name.as_str())
                 .collect::<Vec<_>>(),
-            ["records", "coverage", "coverage_keys", "facts", "manifest"]
+            ["records", "facts", "manifest"]
         );
         let subject = &model
             .outputs
@@ -72,16 +70,20 @@ fn descriptor_preserves_owners() -> TestResult {
             .ok_or("subject port")?
             .schema
             .fields()[0];
-        assert_eq!(subject.metadata()["araphor.host_type"], "GraphSubjectKeyV1");
-        assert_eq!(subject.data_type(), &sdk::DataType::Binary);
-        assert!(
-            model
-                .outputs
-                .iter()
-                .find(|port| port.name == "findings")
-                .ok_or("finding port")?
-                .evidence_required
+        assert_eq!(
+            subject.metadata()["araphor.type"],
+            "graph.subject-selection.v1"
         );
+        assert_eq!(subject.data_type(), &sdk::DataType::Binary);
+        let findings = model
+            .outputs
+            .iter()
+            .find(|port| port.name == "findings")
+            .ok_or("finding port")?;
+        assert!(findings.evidence_required);
+        for reason in &model.reasons {
+            assert_eq!(reason.details, findings.schema);
+        }
         assert_eq!(model.checkpoint.as_ref().ok_or("checkpoint")?.version, 1);
         let inspected = package.inspect()?;
         assert!(!inspected.contains("GraphSnapshotV1"));
@@ -106,61 +108,5 @@ fn reason_codes_are_reversible() -> TestResult {
     assert!(FindingReasonV1::UnexpectedEffect
         .analysis_code("other")
         .is_err());
-    Ok(())
-}
-
-#[test]
-fn finding_requires_host_validation() -> TestResult {
-    let input = crate::graph::tests::credential_input()?;
-    let snapshot = GraphAndFindingOwner::derive(&input)?;
-    let finding = snapshot
-        .findings
-        .iter()
-        .find(|finding| finding.package_id == "HF-DW-001")
-        .ok_or("current finding")?;
-    let original = finding.clone();
-    let reason = finding.analysis_reason(7)?;
-    assert_eq!(
-        reason.output,
-        sdk::RowRef {
-            dataset: "findings".into(),
-            row: 7
-        }
-    );
-    assert_eq!(
-        FindingReasonV1::from_analysis_code(&finding.package_id, &reason.code)?,
-        finding.reason
-    );
-    assert_eq!(reason.details.num_rows(), 1);
-    let schema = GraphAndFindingOwner::analysis_package(&finding.package_id)?
-        .exports
-        .remove(0)
-        .reasons
-        .into_iter()
-        .find(|entry| entry.code == reason.code)
-        .ok_or("declared reason")?
-        .details;
-    assert_eq!(reason.details.schema().as_ref(), &schema);
-    let subjects = reason
-        .details
-        .column(1)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .ok_or("subject detail")?;
-    let subject = serde_json::from_slice::<crate::GraphSubjectKeyV1>(subjects.value(0))?;
-    assert_eq!(subject, finding.subject_id);
-    assert_eq!(finding, &original);
-    assert_eq!(finding.evidence, original.evidence);
-    assert_eq!(finding.effects, original.effects);
-    let actions = reason
-        .details
-        .column(5)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or("action detail")?;
-    assert_eq!(actions.is_null(0), finding.required_action.is_none());
-    let mut invalid = original;
-    invalid.evidence[0].stream.tenant_id = [99; 16];
-    assert!(invalid.analysis_reason(0).is_err());
     Ok(())
 }

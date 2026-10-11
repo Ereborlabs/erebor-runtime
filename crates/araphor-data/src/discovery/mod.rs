@@ -9,6 +9,7 @@ mod derive;
 mod live;
 mod model;
 mod replay;
+mod sdk;
 
 pub use context::*;
 pub use live::DiscoveryProfileV1;
