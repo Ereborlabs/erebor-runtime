@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use crate::{Coverage, Dependency, Model, Package, Port, Reason, Revision, Schema, wire};
+use crate::{wire, Coverage, Dependency, Model, Package, Port, Reason, Revision, Schema};
 
 impl Package {
     pub fn allocated_bytes(&self) -> usize {

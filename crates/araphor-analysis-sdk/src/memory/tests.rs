@@ -3,9 +3,9 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::{
-    CheckpointSpec, Coverage, CoverageState, DataType, Dependency, Evaluation, EvaluationContext,
-    Field, Input, Limits, Model, Package, Port, Reason, RecordBatch, Revision, Schema,
-    SourceWindow, wire,
+    wire, CheckpointSpec, Coverage, CoverageState, DataType, Dependency, Evaluation,
+    EvaluationContext, Field, Input, Limits, Model, Package, Port, Reason, RecordBatch, Revision,
+    Schema, SourceWindow,
 };
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -200,13 +200,11 @@ fn wire_reserves_are_charged() -> TestResult {
             >= initial + 7296 + 4 * size_of::<wire::Input>() + 4 * size_of::<wire::Dataset>()
     );
     assert!(evaluation.inputs[0].data.arrow_ipc.is_empty());
-    assert!(
-        evaluation
-            .parameters
-            .as_ref()
-            .ok_or("parameters missing")?
-            .is_empty()
-    );
+    assert!(evaluation
+        .parameters
+        .as_ref()
+        .ok_or("parameters missing")?
+        .is_empty());
     Ok(())
 }
 

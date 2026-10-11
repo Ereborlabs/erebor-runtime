@@ -291,5 +291,111 @@
       "/tmp/araphor-memory-guest-build-v14.log": "73d1569f21b1713b84123ace21bbf284e672ffc33bae8bf49486e395112f3bfe",
       "/tmp/araphor-memory-guest-repro-v14.log": "44b1710fb3cc9da72e85bd1fd374eda6145c477b2fcd5c3243d4b8ddfeddd32b"
     }
+  },
+  "workspace_format_correction": {
+    "created_utc": "2026-10-11T17:41:53.403996+00:00",
+    "seed": "araphor-analysis-v1",
+    "target": "wasm32-unknown-unknown",
+    "checks": [
+      {
+        "name": "discovery",
+        "core_bytes": 3457254,
+        "core_sha256": "7fa0976fffc2ab25d3e9f7fe205dd5faa0c8443ee162de2c56f2c2fbfccec92b",
+        "component_bytes": 2613639,
+        "component_sha256": "989ba15c55a39efa7c76f14752687907d5aea38a7ebf5bf4d9b9b940829df697",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/discovery.wasm",
+        "copies": [
+          "/tmp/araphor-format-v16-components-a/discovery.wasm",
+          "/tmp/araphor-format-v16-components-b/discovery.wasm"
+        ]
+      },
+      {
+        "name": "process",
+        "core_bytes": 3341860,
+        "core_sha256": "defc93f1ab89dc1de87d40653a096b1beb617fdc85d2753ba4cdba5ab18e9d2d",
+        "component_bytes": 2519898,
+        "component_sha256": "b0f4fa2eeddf0ec14d1f937f72cc0b2666b3f0727dd4cb9498297155f24b14d4",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/process.wasm",
+        "copies": [
+          "/tmp/araphor-format-v16-components-a/process.wasm",
+          "/tmp/araphor-format-v16-components-b/process.wasm"
+        ]
+      },
+      {
+        "name": "credentials",
+        "core_bytes": 3341896,
+        "core_sha256": "c355ea3072dfc40c50872d8573960681b23eb3c5ab898c5441e0fb9bed18ba9b",
+        "component_bytes": 2519898,
+        "component_sha256": "70d2a25301830f619bd9d71bed6189b9b3ff1e629a7832c5d1090a5c1f38b2e5",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/credentials.wasm",
+        "copies": [
+          "/tmp/araphor-format-v16-components-a/credentials.wasm",
+          "/tmp/araphor-format-v16-components-b/credentials.wasm"
+        ]
+      },
+      {
+        "name": "kubernetes",
+        "core_bytes": 3341887,
+        "core_sha256": "8cd043a60a620b34a3b4e4043ff40805ce2b40db13cabb4c130c63a21107b41a",
+        "component_bytes": 2519898,
+        "component_sha256": "7399aa63a9157efb12a35282fcba94a403f2b840c9d910efd3f65fa4179986eb",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/kubernetes.wasm",
+        "copies": [
+          "/tmp/araphor-format-v16-components-a/kubernetes.wasm",
+          "/tmp/araphor-format-v16-components-b/kubernetes.wasm"
+        ]
+      },
+      {
+        "name": "detector",
+        "core_bytes": 3104881,
+        "core_sha256": "5e898720a90fb8f82ea68990a6f4f38f5cd937b0c5c58dfa5ef3c43414695a93",
+        "component_bytes": 2324567,
+        "component_sha256": "35f23cde00176b5b9abe7e54183ceb77bef2ce458a8a415336a774fcf031dabb",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-detector-example/artifacts/detector.wasm",
+        "copies": [
+          "/tmp/araphor-format-v16-components-a/detector.wasm",
+          "/tmp/araphor-format-v16-components-b/detector.wasm"
+        ]
+      },
+      {
+        "name": "runtime",
+        "core_bytes": 2907574,
+        "core_sha256": "7d31d69b89d3ed37fd534fc37f12e926eb44b0ed9550938699d4dd926310cb2f",
+        "component_bytes": 2156703,
+        "component_sha256": "3505e02d77095230043a4b7429dae10b91386e29c11ba64e0cc7b7b8ef2f8e8f",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-sdk/tests/artifacts/runtime.wasm",
+        "copies": [
+          "/tmp/araphor-format-v16-components-a/runtime.wasm",
+          "/tmp/araphor-format-v16-components-b/runtime.wasm"
+        ]
+      }
+    ],
+    "build_logs": [
+      "/tmp/araphor-format-guest-build-v16.log",
+      "/tmp/araphor-format-guest-repro-v16.log"
+    ],
+    "sdk_tests": {
+      "log": "/tmp/araphor-sdk-format-v16.log",
+      "log_sha256": "a67999b6673ecf2390321dbaa0e5e06ba5fa89d950aa193bf52b0f7c81511d7e",
+      "exit_code": 0,
+      "passed": 51
+    },
+    "source_sha256": {
+      "crates/araphor-analysis-sdk/src/memory.rs": "60ae9483fb9e0fa0fac604d374aa159ef0e2459c57d970f5eb2824c6719365ac",
+      "crates/araphor-analysis-sdk/src/memory/tests.rs": "caebe1fd2a3f2b5ebb859a4b286af901b75c57bdeb2dbea7669a2f6a9371de1b",
+      "crates/araphor-analysis-sdk/src/evaluation.rs": "62172dfa57606903508aa90cfb9f46aba83851f1c1171e236e305ace27a93bc3",
+      "crates/araphor-analysis-sdk/src/lib.rs": "c75fb572449d396d162ff4f0ba494d6c852daa710a2f24533c44dbd938edd671"
+    },
+    "scope": "Workspace formatting of SDK allocation modules. Current host owner qualification remains open.",
+    "build_logs_sha256": {
+      "/tmp/araphor-format-guest-build-v16.log": "32452f5b8d8aa0d8ca9d6a75c31f6dbe666a8981c35f03a0ffd1e3385e5a5e33",
+      "/tmp/araphor-format-guest-repro-v16.log": "5e998eab51aeaa467a5c1c1a22ba688af5f9deb3b9ee79235a40ca5309e681ff"
+    }
   }
 }
