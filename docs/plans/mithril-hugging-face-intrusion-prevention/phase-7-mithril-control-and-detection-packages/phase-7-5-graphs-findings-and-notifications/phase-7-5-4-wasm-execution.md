@@ -510,6 +510,25 @@ This pass covers installed transport with host-owned selection. It does not
 qualify a new selection algorithm or physical prevention. Profile restart,
 graph notification, and the final shared Rust procedure remain required.
 
+### Installed profile restart qualification
+
+The fresh v30 `profile-restart` case exits zero and records `PASS`.
+Signed context, live profile persistence, late context, deterministic profiles,
+immutable sealed revision, and replay without provider calls pass.
+The installed context packet retains the same identity, revision, coverage,
+selected record, and explicit omission as the context case.
+
+The result is `/tmp/araphor-current-v30-profile/result.json`, with SHA256
+`3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
+The profile artifacts are in the same directory. Their SHA256 values are
+`fcd5aa9bd9c5d3139ae284b8fde8d4776f1f82f262505f9b27cd88d9e3de7be1`
+for `profile.json` and
+`e55d4994a36753377a65e1a04332948ef16605d11ec757deaec9921dc515a7e4`
+for `profile-unresolved.json`. The case uses the same saved normal executable.
+The v31 normal build produces identical executable bytes after test-only
+corrections. The proof is `/tmp/araphor-wasm-production-proof-v30.json`.
+Graph notification and the final shared Rust procedure remain required.
+
 ### Qualification cleanup correction
 
 **Done for the cleanup correction.** The graph qualification closes its stores
