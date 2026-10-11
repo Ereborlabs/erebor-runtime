@@ -8,7 +8,8 @@ impl Computation {
         bytes: bool,
         evidence: &mut Vec<u64>,
     ) -> sdk::Result<Vec<(usize, bool)>> {
-        let mut matched = Vec::new();
+        let mut qualified: Vec<(usize, bool)> = Vec::new();
+        let mut positions = BTreeMap::new();
         for (row, channel) in self.records.iter().enumerate() {
             if channel.lifetime != record.lifetime
                 || !self.bounded(record, channel)
@@ -34,7 +35,6 @@ impl Computation {
                 {
                     continue;
                 }
-                let carried = self.carried(row as u64, channel, authority);
                 let direct = bytes
                     && local
                     && socket
@@ -44,12 +44,17 @@ impl Computation {
                             && completion.lease.is_some()
                             && completion.principal.as_ref() == Some(&authority.principal)
                     })
-                    && carried
                     && channel.admitted
                     && channel.complete
-                    && authority.direct;
+                    && authority.direct
+                    && self.carried(row as u64, channel, authority);
                 evidence.push(row as u64);
-                matched.push((index, direct));
+                let position = *positions.entry(fact.identity).or_insert_with(|| {
+                    let position = qualified.len();
+                    qualified.push((index, false));
+                    position
+                });
+                qualified[position].1 |= direct;
             }
         }
         for (index, fact) in self.facts.iter().enumerate() {
@@ -59,22 +64,10 @@ impl Computation {
             if authority.outside
                 && Self::contextual(record, credential, authority)
                 && self.bounded(record, self.record(fact.record)?)
-                && !matched
-                    .iter()
-                    .any(|(prior, _)| self.facts[*prior].identity == fact.identity)
+                && !positions.contains_key(&fact.identity)
             {
-                matched.push((index, false));
-            }
-        }
-        let mut qualified: Vec<(usize, bool)> = Vec::new();
-        for (index, direct) in matched {
-            if let Some((_, existing)) = qualified
-                .iter_mut()
-                .find(|(prior, _)| self.facts[*prior].identity == self.facts[index].identity)
-            {
-                *existing |= direct;
-            } else {
-                qualified.push((index, direct));
+                positions.insert(fact.identity, qualified.len());
+                qualified.push((index, false));
             }
         }
         qualified.sort_by_key(|(index, _)| self.facts[*index].record);

@@ -20,8 +20,10 @@ Restart and identical retry preserve the committed result.
   -> [AnalysisPackageOwner::install](../../../../../crates/araphor-data/src/package/lifecycle.rs) the package owner records target compatibility before activation
 
 [AnalysisPackageOwner::evaluate_artifact](../../../../../crates/araphor-data/src/package/execution.rs) The scheduler invokes an admitted export
+  -> [QueryOwner::evaluate_component](../../../../../crates/araphor-data/src/query/model/component.rs) the host reserves input and schema scratch before it encodes the input
+  -> [WasmExecution::evaluate_encoded](../../../../../crates/araphor-data/src/package/wasm.rs) the execution owner receives the owned wire input
   -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the host creates an evaluation instance with explicit limits and authorized inputs
-  -> [wire::Evaluation::encode](../../../../../crates/araphor-analysis-sdk/src/wire/evaluation.rs) generated WIT bindings transfer bounded batches and the prior checkpoint
+  -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) generated WIT bindings transfer bounded batches and the prior checkpoint
   -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the component returns declared outputs, evidence references, and next checkpoint
   -> [Package::validate_output](../../../../../crates/araphor-analysis-sdk/src/validation.rs) host validation passes the complete result to the existing commit path
   -> [EvaluationPermit](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the execution owner releases the instance and temporary buffers
@@ -187,6 +189,29 @@ check unused capacity, nested metadata, all schema positions, and wire growth.
 The SDK suite has 51 passes. The build proof records equal bytes from two
 independent builds of all six components under `memory_accounting_correction`.
 The current production owner qualification remains open.
+
+[Rows](../../../../../crates/araphor-analysis-builtins/src/rows.rs) writes JSON
+fragments directly into the Arrow binary builder. Each write checks the
+remaining byte budget first. Arrow completes each successful row with an
+empty append. The method creates no temporary row vector or complete-row copy. The
+[writer test](../../../../../crates/araphor-analysis-builtins/src/rows/tests.rs)
+checks empty writes, complete writes, and rejection without a partial write.
+The shared computation suite has 13 passes. The build proof records equal
+bytes from two builds of all six components under `direct_builder_correction`.
+The original graph split assertion and production fuel limit remain unchanged.
+Installed runtime qualification of this correction remains open.
+
+[Computation::authorities](../../../../../crates/araphor-analysis-builtins/src/graph/credential/join.rs)
+indexes each qualified fact identity by its position in one vector. The first
+fact remains the representative. Duplicate matches update its direct-proof
+flag with OR. Stable record sorting keeps equal-record encounter order. Every
+channel evidence append remains in its original position. The
+[credential test](../../../../../crates/araphor-analysis-builtins/src/graph/tests.rs)
+checks repeated identities, direct-proof changes, tied records, contextual
+fallback, and the exact raw evidence. The `authority_index_correction` build
+record has six equal component pairs and 13 native test passes. The later
+`direct_builder_correction` record applies the writer change. These proofs do
+not replace installed execution at production limits.
 
 [QueryOwner::evaluate_component](../../../../../crates/araphor-data/src/query/model/component.rs)
 reserves input, IPC, and schema-message scratch before encoding. It includes
@@ -361,7 +386,7 @@ and revokes trust.
 | AR-04: context integration | [Context round trip](../../../../../crates/mithril-e2e/src/discovery/roundtrip/context.rs) and [installed context component](../../../../../crates/mithril-e2e/src/discovery/roundtrip/context/component.rs) | Host permission, cutoff, selected records, and omissions |
 | AR-05: HF-PROC-001 | [Graph captured results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs) | Exact identities, parent facts, and native evidence |
 | AR-06: HF-DW-001 | [Graph captured results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs) | Credential identity, evidence, confirmation, and coverage |
-| AR-07: HF-XNODE-001 | [Graph captured results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs) | Qualified direct cause and current Kubernetes proof limits |
+| AR-07: HF-XNODE-001 | [Graph captured results](../../../../../crates/araphor-data/src/graph/tests/baseline.rs) | Cross-node causality remains unqualified; retain current Kubernetes proof limits |
 
 The captured-result tests use installed components from the shared algorithm
 source. AR-04 sends the host-selected packet through a real component. The
@@ -395,11 +420,13 @@ Review these boundary tests with the algorithm cases:
   reject a wrong result key or corrupt sidecar before commit. A valid commit
   and retry retain the same visible graph and package references.
 - [Graph output splitting](../../../../../crates/araphor-data/src/graph/tests/bounded.rs)
-  uses installed components with 256 records and 67 facts. The whole window
-  returns the exact host aggregate byte error without a metadata change or
-  partial finding commit. Normal processing splits the window, consumes all
-  256 records, and retains 255 native findings and one contextual credential
-  finding with exact evidence. Every stored result stays within 4 MiB.
+  uses installed components with 256 records and 67 facts. The test requires
+  the exact whole-window aggregate byte error, unchanged metadata, and no
+  partial finding commit. The test requires split processing to consume all
+  256 records and retain 255 native findings and one contextual credential
+  finding with exact evidence. Each stored result must stay within 4 MiB.
+  The v23 run exhausts guest fuel before the aggregate error. Evidence recovery
+  passes. Current production-limit graph splitting remains open.
 - [Domain commit fences](../../../../../crates/araphor-data/src/package/installed/commit/tests/changes.rs)
   verify that Run renewal and supervisor suspension cannot change an activation
   during the commit callback.
@@ -411,17 +438,18 @@ Review these boundary tests with the algorithm cases:
 
 ## Production qualification
 
-Build the normal qualification binary after the shared Rust procedure ends.
+Build the normal qualification binary for the current source. Run all four
+cases before the final shared Rust procedure.
 Run each case in a separate output directory that does not yet exist. Use the
 same binary for all four cases. Keep it unchanged while its compiler children
 run.
 
 ```sh
 cargo build --locked -p mithril-e2e --bin mithril_discovery_test
-target/debug/mithril_discovery_test --case analysis-packages --output-directory /tmp/araphor-current-v12-packages
-target/debug/mithril_discovery_test --case context-roundtrip --output-directory /tmp/araphor-current-v12-context
-target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-current-v12-profile
-target/debug/mithril_discovery_test --case graph-notification --output-directory /tmp/araphor-current-v12-graph
+target/debug/mithril_discovery_test --case analysis-packages --output-directory /tmp/araphor-current-v23-packages
+target/debug/mithril_discovery_test --case context-roundtrip --output-directory /tmp/araphor-current-v23-context
+target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-current-v23-profile
+target/debug/mithril_discovery_test --case graph-notification --output-directory /tmp/araphor-current-v23-graph
 ```
 
 Require exit code 0 and a `result.json` with schema version 1, the exact case
@@ -490,8 +518,9 @@ No timeout or terminal test failure causes the stop. No CI descendant remains
 after the stop. The log SHA256 is
 `5a870fce9d077ac6fe0c9f6ad04bbf4545720d2dc2ae5e7b688d3d1bfb1c15c4`.
 Formatting, workspace checking, and strict Clippy pass on v12. Workspace tests
-remain incomplete. Current source requires the bounded-input correction,
-all four fresh production cases, and a new final shared Rust procedure.
+remain incomplete. The bounded-input correction is implemented and committed.
+Current source still requires all four fresh production cases and a new final
+shared Rust procedure.
 
 ## Bounded discovery input correction
 
@@ -502,12 +531,21 @@ projection. Coverage pieces have adjacent cursor bounds. Their expected
 counts stay within each piece width and sum to the original count. Empty
 ranges, explicit gaps, lifecycle references, and evidence samples remain.
 
+`derive_recorded` uses 128 complete identities per internal page. The
+129-identity fixture crosses this boundary and compares whole and paged output.
 `derive_recorded` pins installed execution once and uses the original input
 revision and one finite control. Each page and its rolling merge use installed
 components. Page evaluation leases drop before the next call. The method
 validates the final result against the complete input and commits no page.
 The opaque record-comparison string uses the existing full-record digest.
 Host validation still compares complete records for duplicate conflicts.
+
+The v20 discovery group passes all 28 tests at production limits. It includes
+all 21 normal and duplicate replay cases. The
+[rare-case helper](../../../../../crates/araphor-data/src/discovery/derive/tests/corpus.rs)
+checks exact groups and all eleven comparison fields against a 64-record
+baseline. Its proof is `/tmp/araphor-wasm-production-bounds-proof-v20.json`.
+Later component rebuilds require new qualification.
 
 Production and tests now both use 32 MiB of data and 100 million fuel units.
 Source `v13` has SHA256

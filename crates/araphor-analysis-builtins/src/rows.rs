@@ -42,7 +42,7 @@ impl Rows {
             .min(i32::MAX as usize);
         for value in values {
             let mut buffer = RowBuffer {
-                bytes: Vec::new(),
+                builder: &mut builder,
                 remaining: &mut remaining,
                 limited: false,
             };
@@ -56,7 +56,7 @@ impl Rows {
                     }
                 });
             }
-            builder.append_value(&buffer.bytes);
+            buffer.builder.append_value(b"");
         }
         let mut array = builder.finish();
         array.shrink_to_fit();
@@ -128,7 +128,7 @@ impl Rows {
 }
 
 struct RowBuffer<'a> {
-    bytes: Vec<u8>,
+    builder: &'a mut BinaryBuilder,
     remaining: &'a mut usize,
     limited: bool,
 }
@@ -139,9 +139,13 @@ impl Write for RowBuffer<'_> {
             self.limited = true;
             return Err(std::io::Error::other("row bytes exceed the limit"));
         };
-        self.bytes.extend_from_slice(bytes);
+        let count = self.builder.write(bytes)?;
         *self.remaining = remaining;
-        Ok(bytes.len())
+        Ok(count)
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write(bytes).map(|_| ())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {

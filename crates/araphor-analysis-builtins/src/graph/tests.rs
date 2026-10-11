@@ -169,6 +169,7 @@ fn credential_exact_and_missing() -> TestResult {
     assert!(rows[0].confirmed);
     assert_eq!(rows[0].evidence, [0, 1, 2]);
     assert_eq!(output.evidence.len(), 3);
+    authority_identity_order(&complete, &facts)?;
     let mut missing = complete;
     let model = detector.descriptor();
     missing.evaluation.inputs[1].data = Rows::encode(
@@ -179,5 +180,96 @@ fn credential_exact_and_missing() -> TestResult {
     let (rows, _) = findings(detector, &missing)?;
     assert_eq!(rows[0].reason, "MISSING_AUTHORITY_PROOF");
     assert!(!rows[0].confirmed);
+    Ok(())
+}
+
+fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResult {
+    let detector = Detector::Credentials;
+    let package = detector.descriptor();
+    let model = &package.exports[0];
+    let records: Vec<Observation> = Rows::decode(
+        &model.inputs[0],
+        &complete.evaluation.inputs[0].data,
+        complete.evaluation.context.limits,
+    )?;
+    let mut blocked = records[1].clone();
+    blocked.admitted = false;
+    let mut records = vec![
+        records[0].clone(),
+        blocked,
+        records[1].clone(),
+        records[2].clone(),
+        records[2].clone(),
+        records[2].clone(),
+    ];
+    let mut carried = facts[1].clone();
+    carried.record = 2;
+    let mut first = facts[2].clone();
+    first.identity = 50;
+    first.record = 4;
+    let FactValue::Authority(authority) = &mut first.value else {
+        return Err("authority fixture".into());
+    };
+    authority.direct = false;
+    let mut earlier = facts[2].clone();
+    earlier.identity = 90;
+    earlier.record = 3;
+    let mut duplicate = facts[2].clone();
+    duplicate.identity = 50;
+    duplicate.record = 5;
+    let mut later = facts[2].clone();
+    later.identity = 1;
+    later.record = 3;
+    let facts = vec![facts[0].clone(), carried, first, earlier, duplicate, later];
+    for network in [true, false] {
+        records[1].network = network;
+        records[2].network = network;
+        let fixture = fixture(detector, &records, &facts)?;
+        let (findings, output) = findings(detector, &fixture)?;
+        let edges: Vec<Relationship> = Rows::decode(
+            &model.outputs[1],
+            &output.datasets[1],
+            fixture.evaluation.context.limits,
+        )?;
+        assert_eq!(findings.len(), 1);
+        assert_eq!(edges.len(), 3);
+        assert_eq!(
+            edges.iter().map(|edge| edge.fact).collect::<Vec<_>>(),
+            [Some(3), Some(5), Some(2)]
+        );
+        let (reason, evidence, prefix) = if network {
+            (
+                "CREDENTIAL_PIVOT",
+                vec![0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4],
+                9,
+            )
+        } else {
+            ("CONTEXTUAL_CREDENTIAL_PIVOT", vec![0, 3, 3, 4], 1)
+        };
+        for (index, edge) in edges.iter().enumerate() {
+            assert_eq!(edge.record, 0);
+            assert!(matches!(edge.kind, EdgeKind::Authority));
+            assert!(matches!(
+                (network, edge.cause),
+                (true, Cause::Direct) | (false, Cause::Contextual)
+            ));
+            assert_eq!(edge.evidence, evidence[..prefix + index + 1]);
+        }
+        assert_eq!(findings[0].reason, reason);
+        assert_eq!(findings[0].confirmed, network);
+        assert_eq!(findings[0].evidence, evidence);
+        assert_eq!(
+            output
+                .evidence
+                .iter()
+                .map(|link| link.input.row)
+                .collect::<Vec<_>>(),
+            if network {
+                vec![0, 1, 2, 3, 4]
+            } else {
+                vec![0, 3, 4]
+            }
+        );
+    }
     Ok(())
 }

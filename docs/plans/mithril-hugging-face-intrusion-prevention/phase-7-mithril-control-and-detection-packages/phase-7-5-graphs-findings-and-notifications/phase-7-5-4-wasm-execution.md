@@ -22,6 +22,8 @@ Package admission selects a component artifact
   -> the package owner records target compatibility before activation
 
 The scheduler invokes an admitted export
+  -> the host reserves input and schema scratch before it encodes the input
+  -> the execution owner receives the owned wire input
   -> the host creates an evaluation instance with explicit limits and authorized inputs
   -> generated WIT bindings transfer bounded batches and the prior checkpoint
   -> the component returns declared outputs, evidence references, and next checkpoint
@@ -129,9 +131,9 @@ close a verification gate. The phase remains **Not done**.
 | Deliverable | Source and commit | Remaining proof |
 | --- | --- | --- |
 | 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The current SDK suite has 51 passes. The shared computation suite has 13 passes. The build proof records equal component bytes from both builds. |
-| 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | The v12 workspace test run is interrupted before the required correction. Current source uses production data and fuel limits in unit tests; new qualification remains required. |
+| 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Final artifacts and workspace verification remain required. |
 | 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | A fresh production finding-to-notification case has no pass. |
-| 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | Corpus output parity passes with test-only limits. Production parity and the fresh context transport case remain open. |
+| 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at production limits, including all normal/replay cases and rare groups/comparison. Later artifacts require new qualification. Graph splitting and the fresh context transport case remain open. |
 | 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. The final workspace result and fresh production restart case remain open. |
 | 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | Run all four fresh production cases, finish the final Rust procedure, and record the final review and result. |
 
@@ -244,6 +246,28 @@ graph index correction rebuilds all six components. Those artifacts require
 new qualification. Graph splitting, four production cases, and final shared
 Rust verification remain open.
 
+### Shared graph encoding correction proof
+
+The v23 shared computation tests have 13 passes. The credential identity index
+preserves first representatives, direct-proof OR, equal-record order, and raw
+evidence positions. The row encoder writes JSON directly to the existing
+Arrow binary builder. The encoder retains the same byte checks and JSON.
+Two independent builds produce equal core and component bytes for all six
+artifacts. The build proof retains both corrections.
+
+The original production-limit graph group has one pass and one failure.
+Evidence recovery passes. The unchanged output split test exhausts guest fuel
+during `Rows::encode<Relationship>`. The run takes 225.50 seconds and exits
+101. The log is `/tmp/araphor-wasm-graph-recovery-and-split-production-v23.log`.
+Its SHA256 is
+`a07311c8e0c15dd8a3fadd7b6f6ab3858f24b7778b9c517296e71dd8e6847de3`.
+The v23 source manifest has SHA256
+`661b0e5e1e83d61c9bcba11a18bfe6818cbb7baf70420323318da35f26efbb4c`.
+The normal production qualification binary builds without warnings.
+The proof is `/tmp/araphor-wasm-production-bounds-proof-v23.json`.
+Graph splitting remains open. This correction does not change production
+limits or close the dispatch ordering breach.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
@@ -278,6 +302,13 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+- [ ] Serialize JSON rows through the existing Arrow binary builder writer.
+  The v22 graph split exhausts fuel during aggregate value-buffer growth.
+  Remove the temporary row vector and its complete-row copy. Keep checked
+  byte accounting before writes, empty-row completion, row order, JSON bytes,
+  final array checks, and error behavior. Reuse Arrow `Write`. Test complete,
+  empty, and rejected writes. Build all six components twice and rerun the
+  original split assertion at production limits. Add no maximum-size reserve.
 - [ ] Index qualified credential authority identities during the existing scan.
   The v21 assertion proves exhausted guest fuel while relationship evidence is
   encoded. Remove repeated linear identity scans before encoding. Preserve the

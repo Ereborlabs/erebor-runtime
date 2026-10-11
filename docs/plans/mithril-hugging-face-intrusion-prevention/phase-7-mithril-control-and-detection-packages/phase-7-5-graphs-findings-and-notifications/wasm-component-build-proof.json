@@ -397,5 +397,439 @@
       "/tmp/araphor-format-guest-build-v16.log": "32452f5b8d8aa0d8ca9d6a75c31f6dbe666a8981c35f03a0ffd1e3385e5a5e33",
       "/tmp/araphor-format-guest-repro-v16.log": "5e998eab51aeaa467a5c1c1a22ba688af5f9deb3b9ee79235a40ca5309e681ff"
     }
+  },
+  "complete_write_correction": {
+    "created_utc": "2026-10-11T18:11:25.760154+00:00",
+    "seed": "araphor-analysis-v1",
+    "target": "wasm32-unknown-unknown",
+    "builder_sha256": "245fd07aad036ebe8ed7a8f83773bda9e72f25e444d6b35c4caf491ce0f326b2",
+    "shared_test_passed": 13,
+    "checks": [
+      {
+        "name": "discovery",
+        "core_bytes": 3457921,
+        "core_sha256": "ae29c70940104fbce0a202e9b33ab3ae36a608d6f154daccbecc6f2c64553737",
+        "component_bytes": 2614417,
+        "component_sha256": "397b2dd622aa6a188fa64c497babd5eacb6dd092d664fe2ca274fc579f7acfcb",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/discovery.wasm",
+        "copies": [
+          "/tmp/araphor-write-v18-components-a/discovery.wasm",
+          "/tmp/araphor-write-v18-components-b/discovery.wasm"
+        ]
+      },
+      {
+        "name": "process",
+        "core_bytes": 3342119,
+        "core_sha256": "6c4239e91b27d4fb3d5dedef274d3e061fe4dcd181d2904036a6791ebc607b0d",
+        "component_bytes": 2520271,
+        "component_sha256": "126d6a24b3aa05f1135ef798a9f92ce5e38df8998f829ec9a2e4f6dab847ba96",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/process.wasm",
+        "copies": [
+          "/tmp/araphor-write-v18-components-a/process.wasm",
+          "/tmp/araphor-write-v18-components-b/process.wasm"
+        ]
+      },
+      {
+        "name": "credentials",
+        "core_bytes": 3342155,
+        "core_sha256": "5d62889f75c34f6b37f314ab5c594d7fcb9a9c5d377dcfbaed79de583354726c",
+        "component_bytes": 2520271,
+        "component_sha256": "713a7dc841a5cea92bf36682af9829189cdec36d659a1d782601e6fb33de55b5",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/credentials.wasm",
+        "copies": [
+          "/tmp/araphor-write-v18-components-a/credentials.wasm",
+          "/tmp/araphor-write-v18-components-b/credentials.wasm"
+        ]
+      },
+      {
+        "name": "kubernetes",
+        "core_bytes": 3342146,
+        "core_sha256": "4c858934f198a487c55896436e9db44ec856a0c204fa64694cdfa5a2c784010f",
+        "component_bytes": 2520271,
+        "component_sha256": "d495606e64f024f78bf21dadc7da015f83fa18961a7b69b13fcf09d6b5efb288",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/kubernetes.wasm",
+        "copies": [
+          "/tmp/araphor-write-v18-components-a/kubernetes.wasm",
+          "/tmp/araphor-write-v18-components-b/kubernetes.wasm"
+        ]
+      },
+      {
+        "name": "detector",
+        "core_bytes": 3104533,
+        "core_sha256": "0113e130811e936b8b4fd1f1043b9b9608f50b4808891d69687a0118d8c73de9",
+        "component_bytes": 2324261,
+        "component_sha256": "5ded0113c3a043081dc0e8603e46ed28b272a0f14b65ae4516de8cff463f2d92",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-detector-example/artifacts/detector.wasm",
+        "copies": [
+          "/tmp/araphor-write-v18-components-a/detector.wasm",
+          "/tmp/araphor-write-v18-components-b/detector.wasm"
+        ]
+      },
+      {
+        "name": "runtime",
+        "core_bytes": 2907574,
+        "core_sha256": "7d31d69b89d3ed37fd534fc37f12e926eb44b0ed9550938699d4dd926310cb2f",
+        "component_bytes": 2156703,
+        "component_sha256": "3505e02d77095230043a4b7429dae10b91386e29c11ba64e0cc7b7b8ef2f8e8f",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-sdk/tests/artifacts/runtime.wasm",
+        "copies": [
+          "/tmp/araphor-write-v18-components-a/runtime.wasm",
+          "/tmp/araphor-write-v18-components-b/runtime.wasm"
+        ]
+      }
+    ],
+    "logs": [
+      {
+        "path": "/tmp/araphor-wasm-write-correction-shared-v18.log",
+        "sha256": "4bfe267f586787c5c850242697d6dda8cc1853976118807b2346807d8b5217cf",
+        "exit_code": 0
+      },
+      {
+        "path": "/tmp/araphor-write-guest-build-v18.log",
+        "sha256": "36f1765401de495dfea127110a23e5dd23693c2a7e25b9639e98b0e85587bcd6",
+        "exit_code": 0
+      },
+      {
+        "path": "/tmp/araphor-write-guest-repro-v18.log",
+        "sha256": "9c7e3c3b5f9247a1cd3481520a1b5f1202554d93f216bee519a6c6d5788e407a",
+        "exit_code": 0
+      }
+    ]
+  },
+  "direct_proof_correction": {
+    "created_utc": "2026-10-11T18:23:17.828730+00:00",
+    "seed": "araphor-analysis-v1",
+    "target": "wasm32-unknown-unknown",
+    "builder_sha256": "245fd07aad036ebe8ed7a8f83773bda9e72f25e444d6b35c4caf491ce0f326b2",
+    "shared_test_passed": 13,
+    "checks": [
+      {
+        "name": "discovery",
+        "core_bytes": 3457916,
+        "core_sha256": "1975ad29db93ccc9319a20411d7edf9e99cde73c1b4a3c8d5bf4ad6bb967006c",
+        "component_bytes": 2614417,
+        "component_sha256": "397b2dd622aa6a188fa64c497babd5eacb6dd092d664fe2ca274fc579f7acfcb",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/discovery.wasm",
+        "copies": [
+          "/tmp/araphor-direct-v19-components-a/discovery.wasm",
+          "/tmp/araphor-direct-v19-components-b/discovery.wasm"
+        ],
+        "unchanged_from_v18": true
+      },
+      {
+        "name": "process",
+        "core_bytes": 3342264,
+        "core_sha256": "b7c836fbae9499874194797d870c79023f499efaef4e090f2f37ee0ea8d48437",
+        "component_bytes": 2520314,
+        "component_sha256": "784d119b5295907ccc60e144be58e06b8f08bfc00c6efc8918cebd2f5354e3af",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/process.wasm",
+        "copies": [
+          "/tmp/araphor-direct-v19-components-a/process.wasm",
+          "/tmp/araphor-direct-v19-components-b/process.wasm"
+        ],
+        "unchanged_from_v18": false
+      },
+      {
+        "name": "credentials",
+        "core_bytes": 3342300,
+        "core_sha256": "c3fa6dda0be61295d9a5502ece6cfb195a0a38e7f69471cee743ee0273bea429",
+        "component_bytes": 2520314,
+        "component_sha256": "b9acce2fac479b0731f60012ce82c96517cf0c154bc38886265c491f7749a7b4",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/credentials.wasm",
+        "copies": [
+          "/tmp/araphor-direct-v19-components-a/credentials.wasm",
+          "/tmp/araphor-direct-v19-components-b/credentials.wasm"
+        ],
+        "unchanged_from_v18": false
+      },
+      {
+        "name": "kubernetes",
+        "core_bytes": 3342291,
+        "core_sha256": "a4d9175b695c041726367ded765e2357d80e5f623c3863423ee3c338de63a4f2",
+        "component_bytes": 2520314,
+        "component_sha256": "9c72de687f1c1b2ebd9a3c74a563f279c3b7c4f8dd7d2972c7d0ece9f3149a10",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/kubernetes.wasm",
+        "copies": [
+          "/tmp/araphor-direct-v19-components-a/kubernetes.wasm",
+          "/tmp/araphor-direct-v19-components-b/kubernetes.wasm"
+        ],
+        "unchanged_from_v18": false
+      },
+      {
+        "name": "detector",
+        "core_bytes": 3104532,
+        "core_sha256": "06d82a50b830811dc0b58202428b82c3e156648991fb4ece2f7a46726f4daf12",
+        "component_bytes": 2324261,
+        "component_sha256": "5ded0113c3a043081dc0e8603e46ed28b272a0f14b65ae4516de8cff463f2d92",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-detector-example/artifacts/detector.wasm",
+        "copies": [
+          "/tmp/araphor-direct-v19-components-a/detector.wasm",
+          "/tmp/araphor-direct-v19-components-b/detector.wasm"
+        ],
+        "unchanged_from_v18": true
+      },
+      {
+        "name": "runtime",
+        "core_bytes": 2907573,
+        "core_sha256": "e3135a28f3e045e7b92aefb2e9d7d575258ddebdf8bdfcd47cbe0471a1d9a01a",
+        "component_bytes": 2156703,
+        "component_sha256": "3505e02d77095230043a4b7429dae10b91386e29c11ba64e0cc7b7b8ef2f8e8f",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-sdk/tests/artifacts/runtime.wasm",
+        "copies": [
+          "/tmp/araphor-direct-v19-components-a/runtime.wasm",
+          "/tmp/araphor-direct-v19-components-b/runtime.wasm"
+        ],
+        "unchanged_from_v18": true
+      }
+    ],
+    "logs": [
+      {
+        "path": "/tmp/araphor-wasm-direct-check-shared-v19.log",
+        "sha256": "6b99cc4e086e122ebca3e6981543d4286831ac960289b02ab3f959308b71ba01",
+        "exit_code": 0
+      },
+      {
+        "path": "/tmp/araphor-direct-guest-build-v19.log",
+        "sha256": "538ba4f4d9895dc6dc71de122db1faa519a5be2c07f84343f76af2f15d6c2011",
+        "exit_code": 0
+      },
+      {
+        "path": "/tmp/araphor-direct-guest-repro-v19.log",
+        "sha256": "71ec300fea75e50c8288066c856542ad35d564e677bbd563f7e69dea686e5628",
+        "exit_code": 0
+      }
+    ]
+  },
+  "authority_index_correction": {
+    "created_utc": "2026-10-11T18:56:03.674463+00:00",
+    "seed": "araphor-analysis-v1",
+    "target": "wasm32-unknown-unknown",
+    "builder_sha256": "245fd07aad036ebe8ed7a8f83773bda9e72f25e444d6b35c4caf491ce0f326b2",
+    "shared_test_passed": 13,
+    "checks": [
+      {
+        "name": "discovery",
+        "core_bytes": 3460716,
+        "core_sha256": "b053885d0afae834ea1deb58a965e6b7c5aec679d7e0d06f75862f0253622095",
+        "component_bytes": 2618029,
+        "component_sha256": "b5db576f3619422f8bae8475092b9b060e88d273643d6afffb13a0aa49d4c7ac",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/discovery.wasm",
+        "copies": [
+          "/tmp/araphor-index-v22-components-a/discovery.wasm",
+          "/tmp/araphor-index-v22-components-b/discovery.wasm"
+        ],
+        "unchanged_from_v19": false
+      },
+      {
+        "name": "process",
+        "core_bytes": 3347082,
+        "core_sha256": "e7339e5e1bc95a42e20301553002ac6358f04cc785820612c56a9b665ea768e6",
+        "component_bytes": 2524886,
+        "component_sha256": "7c4e373ec1d7a2faab75bf989b50f58228b9b59a88259e94fac553f5d6fc1e76",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/process.wasm",
+        "copies": [
+          "/tmp/araphor-index-v22-components-a/process.wasm",
+          "/tmp/araphor-index-v22-components-b/process.wasm"
+        ],
+        "unchanged_from_v19": false
+      },
+      {
+        "name": "credentials",
+        "core_bytes": 3347118,
+        "core_sha256": "17929b9b6fd3b5f705798b85ac92c00113d6f99ee7b234a4de814eefd8294a24",
+        "component_bytes": 2524886,
+        "component_sha256": "40e927bd2669259cf82e7afb98241b30f0d4a1511d2d1a0228bfe93480cfb41e",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/credentials.wasm",
+        "copies": [
+          "/tmp/araphor-index-v22-components-a/credentials.wasm",
+          "/tmp/araphor-index-v22-components-b/credentials.wasm"
+        ],
+        "unchanged_from_v19": false
+      },
+      {
+        "name": "kubernetes",
+        "core_bytes": 3347109,
+        "core_sha256": "ebe81b246921059abd3cd9665162354d626ea1c01190e9eeaada6d846599aebe",
+        "component_bytes": 2524886,
+        "component_sha256": "39c37c05e7699b4ac23f6a7a335a3b414fdd76a15dd0fa56cef36af082742b60",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/kubernetes.wasm",
+        "copies": [
+          "/tmp/araphor-index-v22-components-a/kubernetes.wasm",
+          "/tmp/araphor-index-v22-components-b/kubernetes.wasm"
+        ],
+        "unchanged_from_v19": false
+      },
+      {
+        "name": "detector",
+        "core_bytes": 3104605,
+        "core_sha256": "49a88f3f9e3d4326f282350789e5d2bc76140ce3a927db922c2fdcdc70016854",
+        "component_bytes": 2324325,
+        "component_sha256": "b348f0e0d0d3de7d8b8c19817e8b0d6ee5bce10c1880911f794626caca68bd55",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-detector-example/artifacts/detector.wasm",
+        "copies": [
+          "/tmp/araphor-index-v22-components-a/detector.wasm",
+          "/tmp/araphor-index-v22-components-b/detector.wasm"
+        ],
+        "unchanged_from_v19": false
+      },
+      {
+        "name": "runtime",
+        "core_bytes": 2907643,
+        "core_sha256": "3a36e9929d56749fc74725d352247d13f819c462ccaf61047ccebf787142f6e8",
+        "component_bytes": 2156767,
+        "component_sha256": "83a80a70cd8b63fc443ac1efd0823ba2ec74d4b39c87a03b36d3be36c0c101c3",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-sdk/tests/artifacts/runtime.wasm",
+        "copies": [
+          "/tmp/araphor-index-v22-components-a/runtime.wasm",
+          "/tmp/araphor-index-v22-components-b/runtime.wasm"
+        ],
+        "unchanged_from_v19": false
+      }
+    ],
+    "logs": [
+      {
+        "path": "/tmp/araphor-wasm-index-shared-v22.log",
+        "sha256": "62d38bb9a1ab2bfc922a4cb2493fc6f50abe4287d7a3132023df839a68cb39b7",
+        "exit_code": 0
+      },
+      {
+        "path": "/tmp/araphor-index-guest-build-v22.log",
+        "sha256": "4f41ca81cf2c1a78ec8fd42a2f50a7ba9fe6d9f9e1ceeb986122cbc5b962eecd",
+        "exit_code": 0
+      },
+      {
+        "path": "/tmp/araphor-index-guest-repro-v22.log",
+        "sha256": "44f8e6bbc74f84311ecf68cf67ece8462e1c5353664542845d834b32d2f8e8a3",
+        "exit_code": 0
+      }
+    ]
+  },
+  "direct_builder_correction": {
+    "created_utc": "2026-10-11T19:07:32.829781+00:00",
+    "seed": "araphor-analysis-v1",
+    "target": "wasm32-unknown-unknown",
+    "builder_sha256": "245fd07aad036ebe8ed7a8f83773bda9e72f25e444d6b35c4caf491ce0f326b2",
+    "shared_test_passed": 13,
+    "checks": [
+      {
+        "name": "discovery",
+        "core_bytes": 3460042,
+        "core_sha256": "5707a641718ff0bd5ba6aa2f4f1ae3f9f2bd597dcb04a60268c4a3792d577945",
+        "component_bytes": 2617380,
+        "component_sha256": "7663df94ad8ae961460ee8e131eba5a50541452d88e611864263fe68786c1565",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/discovery.wasm",
+        "copies": [
+          "/tmp/araphor-builder-v23-components-a/discovery.wasm",
+          "/tmp/araphor-builder-v23-components-b/discovery.wasm"
+        ],
+        "unchanged_from_v22": false
+      },
+      {
+        "name": "process",
+        "core_bytes": 3346643,
+        "core_sha256": "04e24d98a213c73e2ab4e139c3658a1c0c3c4ce008cff62f43724e707e9f8e12",
+        "component_bytes": 2524477,
+        "component_sha256": "a193390f512fc82f0e9c67e55c0061738e41e2f2d19c3103a04c85a577c2a63b",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/process.wasm",
+        "copies": [
+          "/tmp/araphor-builder-v23-components-a/process.wasm",
+          "/tmp/araphor-builder-v23-components-b/process.wasm"
+        ],
+        "unchanged_from_v22": false
+      },
+      {
+        "name": "credentials",
+        "core_bytes": 3346679,
+        "core_sha256": "7d5c7073688fcbcc5b4d6946be55b7f5f3fcae73850624e6212813be479dd955",
+        "component_bytes": 2524477,
+        "component_sha256": "275b78eb17aa1a60e4fae50f5bbe266ce93bdbbe8fd179dc9cba8c3405ce6893",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/credentials.wasm",
+        "copies": [
+          "/tmp/araphor-builder-v23-components-a/credentials.wasm",
+          "/tmp/araphor-builder-v23-components-b/credentials.wasm"
+        ],
+        "unchanged_from_v22": false
+      },
+      {
+        "name": "kubernetes",
+        "core_bytes": 3346670,
+        "core_sha256": "489aede5663326778b24dc092d394ab668c66a79e168ab15cb44941939649572",
+        "component_bytes": 2524477,
+        "component_sha256": "e7ab91b1b0fb07b59f22604dce0324ef6cdfcecd27ae33b73555f97182016046",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-builtins/artifacts/kubernetes.wasm",
+        "copies": [
+          "/tmp/araphor-builder-v23-components-a/kubernetes.wasm",
+          "/tmp/araphor-builder-v23-components-b/kubernetes.wasm"
+        ],
+        "unchanged_from_v22": false
+      },
+      {
+        "name": "detector",
+        "core_bytes": 3104200,
+        "core_sha256": "9d09c356b4f4b1c8cbc3b6162eb4356808de099d818529cd4b301264339fffef",
+        "component_bytes": 2323944,
+        "component_sha256": "c42c2e81499b3be49f98699ce11e20fbf0cea1d5918a2119537ee190bdacb28d",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-detector-example/artifacts/detector.wasm",
+        "copies": [
+          "/tmp/araphor-builder-v23-components-a/detector.wasm",
+          "/tmp/araphor-builder-v23-components-b/detector.wasm"
+        ],
+        "unchanged_from_v22": false
+      },
+      {
+        "name": "runtime",
+        "core_bytes": 2907643,
+        "core_sha256": "038b51f4e88d5d15b57d302d28cb1272f150c693499b41a40d567b9de3bfbedd",
+        "component_bytes": 2156767,
+        "component_sha256": "bfca36b962c676b6ba51cc843fc1a1964c766b71c2470fda4c2c3a234721bcdc",
+        "independent_build_equal": true,
+        "artifact": "crates/araphor-analysis-sdk/tests/artifacts/runtime.wasm",
+        "copies": [
+          "/tmp/araphor-builder-v23-components-a/runtime.wasm",
+          "/tmp/araphor-builder-v23-components-b/runtime.wasm"
+        ],
+        "unchanged_from_v22": false
+      }
+    ],
+    "logs": [
+      {
+        "path": "/tmp/araphor-wasm-direct-builder-shared-v23.log",
+        "sha256": "9f2afff9054562f5a306a5b1d76b9e405dc3ef7699eb2478d4b3aa41009641ba",
+        "exit_code": 0
+      },
+      {
+        "path": "/tmp/araphor-builder-guest-build-v23.log",
+        "sha256": "e9b0521144df81d3669aa4cb30b69581641732dc117bc5aebb67d82dc6c1dbdd",
+        "exit_code": 0
+      },
+      {
+        "path": "/tmp/araphor-builder-guest-repro-v23.log",
+        "sha256": "4e39b1759cb35abe442aaa070e2deec924c3dbdeed17105173ab7fe94e0ccea1",
+        "exit_code": 0
+      }
+    ]
   }
 }

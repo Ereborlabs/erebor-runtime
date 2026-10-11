@@ -143,15 +143,30 @@ fn rows_fit_payload_bound() -> sdk::Result<()> {
 
 #[test]
 fn row_byte_limit() -> std::io::Result<()> {
-    let mut remaining = 3;
+    let mut remaining = 5;
+    let mut builder = BinaryBuilder::new();
     let mut buffer = RowBuffer {
-        bytes: Vec::new(),
+        builder: &mut builder,
         remaining: &mut remaining,
         limited: false,
     };
+    buffer.write_all(b"")?;
+    assert!(buffer.builder.values_slice().is_empty());
+    assert_eq!(*buffer.remaining, 5);
+    assert!(!buffer.limited);
     buffer.write_all(b"abc")?;
-    assert!(buffer.write_all(b"d").is_err());
-    assert_eq!(buffer.bytes, b"abc");
+    assert_eq!(buffer.builder.values_slice(), b"abc");
+    assert_eq!(*buffer.remaining, 2);
+    assert!(!buffer.limited);
+    buffer.write_all(b"")?;
+    assert_eq!(*buffer.remaining, 2);
+    assert!(buffer.write_all(b"def").is_err());
+    assert_eq!(buffer.builder.values_slice(), b"abc");
+    assert_eq!(*buffer.remaining, 2);
     assert!(buffer.limited);
+    buffer.builder.append_value(b"");
+    let rows = buffer.builder.finish();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.value(0), b"abc");
     Ok(())
 }

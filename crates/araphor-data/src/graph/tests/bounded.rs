@@ -30,7 +30,17 @@ fn output_bytes_split() -> TestResult {
                 ..
             })
         ),
-        "{error:?}"
+        "{error:?}; root: {}",
+        match &error {
+            Some(Error::PackageWasm { source, .. }) => {
+                let mut root: &dyn std::error::Error = source.as_ref();
+                while let Some(next) = root.source() {
+                    root = next;
+                }
+                root.to_string()
+            }
+            _ => String::new(),
+        }
     );
     assert_eq!(store.meta()?, before);
     assert!(owner.current_findings(source().tenant_id)?.is_empty());
