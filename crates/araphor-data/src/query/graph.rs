@@ -180,7 +180,18 @@ pub(super) const POLICY: InputSchema = InputSchema {
 };
 
 impl InputRow {
-    fn graph_base(
+    pub(super) fn graph_base(
+        graph: &GraphSnapshotV1,
+        result_id: &str,
+        commit_revision: u64,
+        sensitivity: crate::ContextSensitivityV1,
+    ) -> Result<Self> {
+        let mut row = Self::graph_identity(graph, result_id, commit_revision, sensitivity)?;
+        row.0.insert(4, Self::json(&graph.input_manifest)?);
+        Ok(row)
+    }
+
+    fn graph_identity(
         graph: &GraphSnapshotV1,
         result_id: &str,
         commit_revision: u64,
@@ -191,7 +202,6 @@ impl InputRow {
             Self::json(&graph.scope.identity)?,
             Value::Text(result_id.into()),
             Value::UBigInt(commit_revision),
-            Self::json(&graph.input_manifest)?,
             Value::Text(<&str>::from(sensitivity).into()),
         ]))
     }
@@ -284,7 +294,11 @@ impl InputProjection<'_> {
                 if let Some(row) = &base {
                     return Ok(InputRow(row.0.clone()));
                 }
-                let row = InputRow::graph_base(graph, result_id, revision, sensitivity)?;
+                let row = if self.graph_inputs {
+                    InputRow::graph_identity(graph, result_id, revision, sensitivity)?
+                } else {
+                    InputRow::graph_base(graph, result_id, revision, sensitivity)?
+                };
                 sink.charge(row.allocation_bytes()?)?;
                 let copy = InputRow(row.0.clone());
                 base = Some(row);

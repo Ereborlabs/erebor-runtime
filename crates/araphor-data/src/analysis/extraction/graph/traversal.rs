@@ -50,7 +50,7 @@ impl AnalysisStore {
                 control,
                 !selection.binding_ids.is_empty(),
             )?;
-            if selected.is_empty() && !edges.contains_key(id) {
+            if selected.is_empty() && !edges.contains_key(id) && !project.graph_headers() {
                 continue;
             }
             let header =

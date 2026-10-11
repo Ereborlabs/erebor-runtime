@@ -821,6 +821,7 @@ pub(super) struct InputProjection<'a> {
     pub(super) selection: &'a crate::AnalysisSelectionV1,
     now_utc_ns: u64,
     recipes: Vec<RecipeInput>,
+    pub(super) graph_inputs: bool,
 }
 
 struct RecipeInput {
@@ -839,6 +840,14 @@ impl<'a> InputProjection<'a> {
             selection,
             now_utc_ns,
             recipes: Vec::new(),
+            graph_inputs: false,
+        }
+    }
+
+    pub(super) fn graph(selection: &'a crate::AnalysisSelectionV1) -> Self {
+        Self {
+            graph_inputs: true,
+            ..Self::new(&QueryTemplate::Catalog, selection, 0)
         }
     }
 
@@ -847,7 +856,8 @@ impl<'a> InputProjection<'a> {
     }
 
     pub(super) fn expands(&self, relation: &str) -> bool {
-        matches!(self.template, QueryTemplate::Client(sql) if sql.dependencies().contains(relation))
+        (self.graph_inputs && matches!(relation, "graph_subjects" | "relationships"))
+            || matches!(self.template, QueryTemplate::Client(sql) if sql.dependencies().contains(relation))
     }
 
     fn emit(

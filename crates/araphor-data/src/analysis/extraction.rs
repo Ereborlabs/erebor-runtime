@@ -399,6 +399,10 @@ pub(crate) trait AnalysisProjection {
         true
     }
 
+    fn graph_headers(&self) -> bool {
+        false
+    }
+
     fn project(
         &mut self,
         input: AnalysisInputV1<'_>,

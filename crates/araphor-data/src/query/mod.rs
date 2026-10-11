@@ -11,6 +11,7 @@ use crate::{
 
 mod adapter;
 mod admission;
+mod analysis;
 mod authorization;
 #[cfg(test)]
 mod authorization_tests;
@@ -35,6 +36,7 @@ mod plan;
 mod tests;
 
 pub use admission::{QueryBinding, QuerySql};
+pub use analysis::GraphAnalysisInputsV1;
 use authorization::QuerySession;
 pub use authorization::{QueryAuthorization, QueryGrant};
 use budget::{QueryBudget, QueryLease};
