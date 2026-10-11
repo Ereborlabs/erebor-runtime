@@ -358,11 +358,17 @@ The [notice tests](../../../../../crates/araphor-data/src/graph/tests/notices.rs
 use the production graph owner and installed components.
 The [authority tests](../../../../../crates/araphor-data/src/graph/tests/installed/current/authority.rs)
 check both an unchanged notice and a changed notice without changed facts.
+The [activation tests](../../../../../crates/araphor-data/src/graph/tests/installed/current.rs)
+check updates, added compatible exports, removal, history, and exact health.
+The [metadata tests](../../../../../crates/araphor-data/src/analysis/progress/notices/tests.rs)
+check separate windows, old-head rejection, immutable metadata, and retry.
 
 [Graph notice migration](../../../../../crates/araphor-data/src/analysis/graph_migration/notices.rs)
 converts schema 19 to schema 20 in one transaction. It initializes each retained
 graph notice from its checked native header. The schema 17 conversion uses the
 same header field. Both paths retain immutable records and validate stored state.
+The [schema owner](../../../../../crates/araphor-data/src/analysis/mod.rs)
+selects the checked conversion for each supported version.
 The [migration tests](../../../../../crates/araphor-data/src/analysis/graph_migration/tests/notices.rs)
 check retained versions, package references, reopen, restore, quota, retry, and
 unchanged originals after rejection. The focused notice checks and the exact
@@ -519,11 +525,13 @@ same binary for all four cases. Keep it unchanged while its compiler children
 run.
 
 ```sh
-cargo build --locked -p mithril-e2e --bin mithril_discovery_test
-target/debug/mithril_discovery_test --case analysis-packages --output-directory /tmp/araphor-current-v27-packages
-target/debug/mithril_discovery_test --case context-roundtrip --output-directory /tmp/araphor-current-v27-context
-target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-current-v27-profile
-target/debug/mithril_discovery_test --case graph-notification --output-directory /tmp/araphor-current-v27-graph
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo build --locked -p mithril-e2e --bin mithril_discovery_test
+qualification_root=$(mktemp -d /tmp/araphor-qualification.XXXXXX)
+cp target/debug/mithril_discovery_test "$qualification_root/mithril_discovery_test"
+"$qualification_root/mithril_discovery_test" --case analysis-packages --output-directory "$qualification_root/analysis-packages"
+"$qualification_root/mithril_discovery_test" --case context-roundtrip --output-directory "$qualification_root/context-roundtrip"
+"$qualification_root/mithril_discovery_test" --case profile-restart --output-directory "$qualification_root/profile-restart"
+"$qualification_root/mithril_discovery_test" --case graph-notification --output-directory "$qualification_root/graph-notification"
 ```
 
 Require exit code 0 and a `result.json` with schema version 1, the exact case
@@ -539,6 +547,15 @@ files. These cases use production data and fuel limits.
 
 The commands above are required checks. They do not record a pass.
 
+The [qualification server owner](../../../../../crates/mithril-e2e/src/discovery/graph_notification.rs)
+awaits shutdown on success or failure and retains the original error.
+Its expired-certificate test requires both stores to reopen after failure.
+The [replay fixture](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay.rs)
+closes owners before its temporary root and releases the completed incident
+fixture before independent density and window checks. The
+[command entry point](../../../../../crates/mithril-e2e/src/bin/mithril_discovery_test.rs)
+returns an error after Tokio shutdown. Existing assertions and workloads remain.
+
 ## Verification record
 
 **Not done.** This guide describes the implementation under qualification.
@@ -548,9 +565,23 @@ The [build proof](wasm-component-build-proof.json) records independent component
 build hashes. This work adds no new BPF program or ABI, physical-prevention
 qualification, native target, OCI distribution, or performance result.
 
-This guide covers the v27 working tree after `7141a444`. Canonical evidence
-publication, the derived JSON byte check, and the common edge prefix are
-implemented. Current installed runtime qualification remains open.
+This guide covers frozen source v31 after `d8528992`. Its 1,576-file source
+manifest is `/tmp/araphor-wasm-source-manifest-production-v31.json`, with SHA256
+`12f6f8e821a5fe2aeb18fe727b3f6d9a65202492a75d7f9bb4a79237841823e7`.
+Canonical evidence publication, the derived JSON byte check, and the common
+edge prefix are implemented. The v27 graph group has five passes at production
+limits. These are historical checks; final current-source CI remains required.
+
+Three fresh production cases pass with the saved normal executable:
+`analysis-packages`, `context-roundtrip`, and `profile-restart`.
+The executable is `/tmp/araphor-current-v30-bin/mithril_discovery_test`, with
+SHA256 `2bce7ffca52037ea28d6b974f38a9d16fad443ed76d63de2968568ba8f96eca2`.
+Production source is unchanged between v30 and v31. The v31 normal build
+produces the same executable bytes after test-only corrections.
+The graph case exits one on the unchanged filesystem reserve and writes no
+result. Its same-binary retry uses `/tmp/araphor-current-v31-graph-retry`.
+The proof is `/tmp/araphor-wasm-production-proof-v30.json`. Graph qualification
+and the final shared Rust procedure remain required.
 
 The retained v23 graph group has one pass and one failure. Evidence recovery
 passes. The split test exhausts guest fuel in graph output encoding. The log is
@@ -561,7 +592,8 @@ The retained v26 graph group has one pass and one failure after 251.72
 seconds. Evidence recovery passes. The split case exhausts guest fuel in
 `quicksort<u64>` from `Computation::output`, before row encoding. The proof is
 `/tmp/araphor-wasm-production-bounds-proof-v26.json`.
-The v27 prefix correction still requires current runtime qualification.
+The later v27 graph checks pass. The current graph production case and final
+workspace procedure remain required.
 
 The focused correction run `v10` passed all six tests in 602.21 seconds.
 The log is `/tmp/araphor-wasm-fixture-and-graph-tests-v10.log`.
