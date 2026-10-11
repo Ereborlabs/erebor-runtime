@@ -42,7 +42,9 @@ Native graph storage, direct large-graph reads, bounded native DuckDB traversal,
 and the portable analysis contract and Rust SDK are **Done**. The current
 algorithm migration in 7.5.2 is also **Done**; read its
 [acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
-Child phases 7.5.3 through 7.5.9 below are **Not done**.
+The local SQL package lifecycle in 7.5.3 is **Done**; read its
+[acceptance record](phase-7-5-3-package-lifecycle.md#verification-record).
+Child phases 7.5.4 through 7.5.9 below are **Not done**.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 
