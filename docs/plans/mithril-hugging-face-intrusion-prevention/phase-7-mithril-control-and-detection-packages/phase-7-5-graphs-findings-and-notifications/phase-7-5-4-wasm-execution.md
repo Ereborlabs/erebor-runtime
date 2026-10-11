@@ -400,6 +400,19 @@ operation. Source review finds a separate repeated-check defect: an unchanged
 graph check does not save the provider notice. Production Control and the test
 provider both use a global notice. The correction remains required.
 
+### Filesystem recovery before the notice correction
+
+The cleanup removes debug sections from 53 inactive generated executables
+in the primary target and the component build target. The cleanup saves
+11,073,656,576 bytes. Every loaded ELF section has the same type, flags,
+address, size, and bytes before and after cleanup. The cleanup preserves
+source, archives, component artifacts, logs, and proof. The proof is
+`/tmp/araphor-strip-proof-20261011-notice-v28-prebuild.json`.
+Its SHA256 is `6660adcef9647835192fadbf7803b03feaa3e2d345d470c82445804f726bf1c7`.
+The v27 normal executable now has a different whole-file hash. Its loaded
+sections remain equal. The completed v27 runs retain their original hashes.
+Current source still requires a new build and all final qualification.
+
 ### Current profile restart qualification
 
 The fresh v27 `profile-restart` case exits zero and records `PASS`.
