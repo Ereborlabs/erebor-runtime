@@ -155,8 +155,7 @@ impl Computation {
                 .iter_mut()
                 .map(|finding| &mut finding.evidence),
         ) {
-            evidence.sort_unstable();
-            evidence.dedup();
+            Self::canonical(evidence);
         }
         let model = &package.exports[0];
         let mut output = sdk::Output {
@@ -203,5 +202,10 @@ impl Computation {
             )?],
         });
         Ok(output)
+    }
+
+    pub(super) fn canonical(evidence: &mut Vec<u64>) {
+        evidence.sort_unstable();
+        evidence.dedup();
     }
 }

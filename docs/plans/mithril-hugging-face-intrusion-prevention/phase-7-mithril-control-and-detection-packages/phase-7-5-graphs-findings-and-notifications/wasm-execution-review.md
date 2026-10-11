@@ -201,7 +201,7 @@ No complete-row vector or complete-row copy is created. The
 checks empty writes, complete writes, and rejection without a partial write.
 The large escaped-string test compares exact JSON bytes across flush
 boundaries. The serializer-error test retains byte-limit error precedence
-and checks a successful next call. The current shared suite has 14 passes.
+and checks a successful next call. The v25 shared suite has 14 passes.
 The earlier build proof records six equal component pairs under
 `direct_builder_correction` and `inline_writer_correction`.
 The `buffered_writer_correction` record has 14 native passes and six equal
@@ -220,6 +220,25 @@ fallback, and the exact raw evidence. The `authority_index_correction` build
 record has six equal component pairs and 13 native test passes. The later
 `direct_builder_correction` record applies the writer change. These proofs do
 not replace installed execution at production limits.
+
+[Computation::credential](../../../../../crates/araphor-analysis-builtins/src/graph/credential/mod.rs)
+copies raw join evidence once into a separate edge prefix. The shared
+canonicalization helper sorts this prefix and removes duplicates before the
+matched-fact loop. Each loop step adds the same fact record to the raw finding
+sequence and the edge prefix. Each relationship copies the separate edge
+prefix. Raw authority matches and the finding sequence stay unchanged. Final
+publication still canonicalizes every edge and finding. The dense case has
+66 relationships.
+
+[Computation::output](../../../../../crates/araphor-analysis-builtins/src/graph/contract.rs)
+publishes sorted evidence sets for edges and findings. Raw joins finish before
+publication. The method sorts and removes duplicate row references before it
+encodes candidate rows, matching reason details, and SDK evidence links.
+Authority representatives, edge order, fact references, proof, coverage, and
+checkpoint state stay unchanged. The
+[publication test](../../../../../crates/araphor-analysis-builtins/src/graph/tests.rs)
+keeps the raw join assertions and checks canonical rows, exact reason details,
+evidence links, and checkpoint state.
 
 [QueryOwner::evaluate_component](../../../../../crates/araphor-data/src/query/model/component.rs)
 reserves input, IPC, and schema-message scratch before encoding. It includes
@@ -259,17 +278,33 @@ A package cannot increase authority or proof through an output claim.
 [GraphDerivation::apply_output](../../../../../crates/araphor-data/src/graph/derive/adapter/output.rs)
 adds Arrow dataset and reason bytes across the selected packages.
 The aggregate limit is 4 MiB.
+[WindowBytes::check](../../../../../crates/araphor-data/src/graph/derive/finish.rs)
+counts the serialized graph snapshot after host validation. The checked writer
+creates no output buffer. It stops above the existing 4 MiB JSON limit and
+returns `GraphInvalid` with field `graph output bytes`. Historical stored reads
+do not use this derivation check.
 [GraphAndFindingOwner::commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)
 selects the existing
 [window split](../../../../../crates/araphor-data/src/graph/chunks.rs)
 only for `GraphInvalid` with field `graph output bytes`.
 The rejected window commits no output. Every other error returns to the caller.
+The commit owner adds position metadata and keeps its final serialized-byte
+check before commit.
 
 [FindingReasonV1](../../../../../crates/araphor-data/src/graph/model.rs)
 stores declared reason codes with their schema and IPC details.
 The host maps the historical eleven reason codes to legacy JSON only when the
 declared detail schema also matches. A new detector requires no host enum entry.
 Existing notification routes and human deadlines remain host-owned.
+Host graph assembly already sorts retained evidence and removes duplicates.
+Canonical publication preserves that historical finding JSON.
+Generic package `Run` results retain SDK candidate and reason-detail IPC through
+[PackageOutputV1::encode](../../../../../crates/araphor-data/src/package/output.rs).
+The candidate and reason-detail IPC bytes change when publication removes
+duplicate references or changes their order. Generic results do not use the legacy graph
+reason mapping. An identical saved
+[Run retry](../../../../../crates/araphor-data/src/package/evaluation.rs)
+returns its original receipt before it prepares a new computation.
 
 ## Commit and recovery
 
@@ -454,10 +489,10 @@ run.
 
 ```sh
 cargo build --locked -p mithril-e2e --bin mithril_discovery_test
-target/debug/mithril_discovery_test --case analysis-packages --output-directory /tmp/araphor-current-v23-packages
-target/debug/mithril_discovery_test --case context-roundtrip --output-directory /tmp/araphor-current-v23-context
-target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-current-v23-profile
-target/debug/mithril_discovery_test --case graph-notification --output-directory /tmp/araphor-current-v23-graph
+target/debug/mithril_discovery_test --case analysis-packages --output-directory /tmp/araphor-current-v27-packages
+target/debug/mithril_discovery_test --case context-roundtrip --output-directory /tmp/araphor-current-v27-context
+target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-current-v27-profile
+target/debug/mithril_discovery_test --case graph-notification --output-directory /tmp/araphor-current-v27-graph
 ```
 
 Require exit code 0 and a `result.json` with schema version 1, the exact case
@@ -481,6 +516,21 @@ state, commands, counts, and evidence after the required checks pass.
 The [build proof](wasm-component-build-proof.json) records independent component
 build hashes. This work adds no new BPF program or ABI, physical-prevention
 qualification, native target, OCI distribution, or performance result.
+
+This guide covers the v27 working tree after `7141a444`. Canonical evidence
+publication, the derived JSON byte check, and the common edge prefix are
+implemented. Current installed runtime qualification remains open.
+
+The retained v23 graph group has one pass and one failure. Evidence recovery
+passes. The split test exhausts guest fuel in graph output encoding. The log is
+`/tmp/araphor-wasm-graph-recovery-and-split-production-v23.log`.
+This run is historical evidence. It does not qualify the current changes.
+
+The retained v26 graph group has one pass and one failure after 251.72
+seconds. Evidence recovery passes. The split case exhausts guest fuel in
+`quicksort<u64>` from `Computation::output`, before row encoding. The proof is
+`/tmp/araphor-wasm-production-bounds-proof-v26.json`.
+The v27 prefix correction still requires current runtime qualification.
 
 The focused correction run `v10` passed all six tests in 602.21 seconds.
 The log is `/tmp/araphor-wasm-fixture-and-graph-tests-v10.log`.
@@ -569,7 +619,7 @@ The graph correction changes `Computation::output` in
 `araphor-analysis-builtins/src/graph/contract.rs`. It constructs one
 reason-details port before the finding loop and reuses it. Finding values,
 reason codes, evidence links, schemas, and checkpoint state stay equal.
-The shared computation suite has 13 passes. Two independent builds produce
-equal bytes for all four required components. See `graph_schema_correction`
+The graph schema correction passed 13 shared tests. Two independent builds
+produce equal bytes for all four required components. See `graph_schema_correction`
 in [the build proof](wasm-component-build-proof.json). These checks do not
 replace current production-limit graph recovery and output-byte qualification.

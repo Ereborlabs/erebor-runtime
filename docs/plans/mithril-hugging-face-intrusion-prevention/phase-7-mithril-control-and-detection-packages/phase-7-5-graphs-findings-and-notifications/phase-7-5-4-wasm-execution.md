@@ -130,7 +130,7 @@ close a verification gate. The phase remains **Not done**.
 
 | Deliverable | Source and commit | Remaining proof |
 | --- | --- | --- |
-| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The current SDK suite has 51 passes. The v25 shared suite has 14 passes. The build proof records equal component bytes from both builds. |
+| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The current SDK suite has 51 passes. The v27 shared suite has 14 passes. The build proof records equal component bytes from both builds. |
 | 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Final artifacts and workspace verification remain required. |
 | 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | A fresh production finding-to-notification case has no pass. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at production limits, including all normal/replay cases and rare groups/comparison. Later artifacts require new qualification. Graph splitting and the fresh context transport case remain open. |
@@ -311,6 +311,29 @@ The proof is `/tmp/araphor-wasm-production-bounds-proof-v26.json`.
 The build proof records all six artifacts under `canonical_evidence_correction`.
 This result does not qualify graph splitting or the four production cases.
 
+### Common credential prefix proof
+
+The v27 shared computation suite has 14 passes. Both independent builds
+produce the same six components. The shared publisher canonicalizes one
+credential edge prefix before the relationship copies. Raw authority and
+finding evidence sequences remain unchanged. The unit test checks exact raw
+joins and independently constructs the prior edge evidence sets.
+
+The current graph group has five passes and no failure in 401.27 seconds.
+The native, credential, and Kubernetes baselines retain exact historical JSON.
+Evidence recovery passes. The unchanged 256-record, 67-fact split test returns
+`GraphInvalid` with field `graph output bytes`. Rejection changes no metadata.
+The owner advances through cursor 256 and retains 255 native findings and one
+contextual credential finding. Every stored body fits 4 MiB. The credential
+finding retains its exact prefix evidence. Production data and fuel limits
+remain 32 MiB and 100 million units.
+
+The log has SHA256 `1cd18fdcefcbc4045e3f31abc441244647aa4ef29153a36d75e9d97937d44e66`.
+The source manifest has SHA256 `0fca39d0a0edc293e0900c3b7ba4d1f699ac2ef208c1ac67b42d4287ef72899d`.
+The proof is `/tmp/araphor-wasm-production-bounds-proof-v27.json`.
+The build proof records all six components under `edge_prefix_correction`.
+The four fresh production cases and final Rust procedure remain required.
+
 ### Installed detector production proof
 
 The fresh v23 `analysis-packages` case exits zero and records `PASS`.
@@ -364,7 +387,10 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
-- [ ] Canonicalize the common credential edge evidence prefix once before
+- [x] Permit the existing graph unit test to call the raw authority join.
+  Limit the method visibility to `crate::graph`. Keep its body and public API
+  unchanged. Check the exact raw join before canonical edge publication.
+- [x] Canonicalize the common credential edge evidence prefix once before
   relationship copies. The v26 core exhausts fuel in `quicksort<u64>` from
   `Computation::output`. Keep raw authority joins and finding evidence intact.
   Sort and remove duplicates from one separate edge prefix before the matched
@@ -374,14 +400,14 @@ authorization owner, notification path, or algorithm implementation.
   Test raw joins, edge prefixes, final candidate rows, and retained finding JSON.
   Keep the original dense graph test and every production limit. Reproduce all
   six components before the original test and fresh production qualification.
-- [ ] Publish canonical evidence sets from the shared computation output.
+- [x] Publish canonical evidence sets from the shared computation output.
   The host already sorts and removes duplicate evidence from every retained
   edge and finding. Keep the raw join, authority representatives, edge order,
   fact references, proof, coverage, and checkpoint unchanged. Sort and remove
   duplicates before candidate rows, matching reason details, and evidence links
   are encoded. Retain raw join assertions before publication. Test canonical
   rows and exact details. Add no type, schema, dependency, or alternate algorithm.
-- [ ] Check the derived graph JSON against the existing 4 MiB window limit.
+- [x] Check the derived graph JSON against the existing 4 MiB window limit.
   Use a checked byte-count writer without an output allocation. Stop counting
   at the limit and return the exact `graph output bytes` error. Keep historical
   stored reads unchanged. Keep the commit size check after position metadata
@@ -415,26 +441,26 @@ The earlier adapter tests reject authority and coverage upgrades. The v23
 installed detector case proves stored nondefault graph parameters. These
 checked correction scopes remain subject to final workspace verification.
 
-- [ ] Inline the checked row writer methods with the standard Rust writer
+- [x] Inline the checked row writer methods with the standard Rust writer
   annotation. The v23 core retains one generic call for each JSON evidence
   number and comma. Keep both method bodies, byte checks, JSON, evidence,
   fixtures, and production limits unchanged. Run shared tests, reproduce all
   six components twice, and rerun the original production-limit split test.
-- [ ] Buffer JSON through the standard Rust `BufWriter` before the checked
+- [x] Buffer JSON through the standard Rust `BufWriter` before the checked
   Arrow row writer. Use at most 8 KiB of scratch per row. Flush before the
   non-null row offset. Flush after a serializer error to retain byte-limit
   precedence. Keep schemas, typed fields, JSON bytes, evidence positions,
   partial-result rejection, and all production limits unchanged. Test large
   rows across flush boundaries and serializer failure with a byte limit.
   Reproduce all six components and rerun the unchanged graph split test.
-- [ ] Serialize JSON rows through the existing Arrow binary builder writer.
+- [x] Serialize JSON rows through the existing Arrow binary builder writer.
   The v22 graph split exhausts fuel during aggregate value-buffer growth.
   Remove the temporary row vector and its complete-row copy. Keep checked
   byte accounting before writes, empty-row completion, row order, JSON bytes,
   final array checks, and error behavior. Reuse Arrow `Write`. Test complete,
   empty, and rejected writes. Build all six components twice and rerun the
   original split assertion at production limits. Add no maximum-size reserve.
-- [ ] Index qualified credential authority identities during the existing scan.
+- [x] Index qualified credential authority identities during the existing scan.
   The v21 assertion proves exhausted guest fuel while relationship evidence is
   encoded. Remove repeated linear identity scans before encoding. Preserve the
   first fact representative, direct-proof OR, equal-record order, and every raw
@@ -450,12 +476,12 @@ checked correction scopes remain subject to final workspace verification.
   duplicate groups, coverage, validation, 60-second outer deadline, and every
   guest limit unchanged. Move the page-equivalence fixture across the new
   boundary. Verify whole and paged output, then run all normal and replay cases.
-- [ ] Check direct-proof conditions before scanning carried channel facts.
+- [x] Check direct-proof conditions before scanning carried channel facts.
   Evaluate the existing pure `carried` check last. Keep every direct result,
   evidence value and order, relationship, finding, and checkpoint unchanged.
   Use the existing exact and missing credential tests. Rebuild twice and run
   the unchanged graph split assertion with 100 million fuel units.
-- [ ] Implement `RowBuffer::write_all` with one call to its existing complete
+- [x] Implement `RowBuffer::write_all` with one call to its existing complete
   write operation. Preserve every JSON byte, checked byte charge, and error.
   Test complete writes and byte rejection. Build each component twice and
   compare bytes. Rerun the original graph split test at production limits.
@@ -492,7 +518,7 @@ checked correction scopes remain subject to final workspace verification.
 - [x] Make historical repinning check the current activation and grant even
   when its caller holds an old snapshot. Test update and removal through that
   old handle. Keep historical computation read-only.
-- [ ] Construct the graph reason-details schema once per evaluation. Reuse it
+- [x] Construct the graph reason-details schema once per evaluation. Reuse it
   for every finding. Keep reason rows, evidence, output schemas, full source
   windows, SDK bindings, and production limits unchanged. Rebuild components
   twice and compare their bytes. Rerun graph evidence recovery and output-byte
@@ -631,7 +657,7 @@ checked correction scopes remain subject to final workspace verification.
   current-profile query test. The test adds a foreign tenant record, and the
   discovery worker processes all retained tenants. Keep the query grant on the
   primary source and preserve every profile and isolation assertion.
-- [ ] Split a graph window when valid component outputs exceed the aggregate
+- [x] Split a graph window when valid component outputs exceed the aggregate
   graph byte limit. Match only `GraphInvalid` with field `graph output bytes`.
   Preserve every other error. Use the installed credential component with
   256 records and 67 facts to prove the exact whole-window error, unchanged

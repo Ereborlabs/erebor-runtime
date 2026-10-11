@@ -1,7 +1,7 @@
 use super::*;
 
 impl Computation {
-    pub(super) fn authorities(
+    pub(in crate::graph) fn authorities(
         &self,
         record: &Observation,
         credential: &Credential,

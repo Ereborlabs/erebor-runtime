@@ -242,6 +242,27 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
                 value: "WAITING".into(),
             },
         };
+        let (reason, evidence, prefix) = if network {
+            (
+                "CREDENTIAL_PIVOT",
+                vec![0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4],
+                9,
+            )
+        } else {
+            ("CONTEXTUAL_CREDENTIAL_PIVOT", vec![0, 3, 3, 4], 1)
+        };
+        let FactValue::Credential(credential) = &computation.facts[0].value else {
+            return Err("credential fixture".into());
+        };
+        let mut joined_evidence = vec![0];
+        let matched = computation.authorities(
+            &computation.records[0],
+            credential,
+            true,
+            &mut joined_evidence,
+        )?;
+        assert_eq!(matched, [(3, network), (5, network), (2, network)]);
+        assert_eq!(joined_evidence, evidence[..prefix]);
         computation.credentials()?;
         assert_eq!(computation.findings.len(), 1);
         assert_eq!(computation.edges.len(), 3);
@@ -253,15 +274,26 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
                 .collect::<Vec<_>>(),
             [Some(3), Some(5), Some(2)]
         );
-        let (reason, evidence, prefix) = if network {
-            (
-                "CREDENTIAL_PIVOT",
-                vec![0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4],
-                9,
-            )
-        } else {
-            ("CONTEXTUAL_CREDENTIAL_PIVOT", vec![0, 3, 3, 4], 1)
-        };
+        let expected_edges: Vec<_> = [3, 5, 2]
+            .into_iter()
+            .enumerate()
+            .map(|(index, fact)| Relationship {
+                record: 0,
+                fact: Some(fact),
+                kind: EdgeKind::Authority,
+                cause: if network {
+                    Cause::Direct
+                } else {
+                    Cause::Contextual
+                },
+                evidence: evidence[..prefix + index + 1]
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+            })
+            .collect();
         for (index, edge) in computation.edges.iter().enumerate() {
             assert_eq!(edge.record, 0);
             assert!(matches!(edge.kind, EdgeKind::Authority));
@@ -269,30 +301,28 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
                 (network, edge.cause),
                 (true, Cause::Direct) | (false, Cause::Contextual)
             ));
-            assert_eq!(edge.evidence, evidence[..prefix + index + 1]);
+            let actual: std::collections::BTreeSet<_> = edge.evidence.iter().copied().collect();
+            assert_eq!(
+                actual.into_iter().collect::<Vec<_>>(),
+                expected_edges[index].evidence
+            );
         }
         assert_eq!(computation.findings[0].reason, reason);
         assert_eq!(computation.findings[0].confirmed, network);
         assert_eq!(computation.findings[0].evidence, evidence);
-        authority_publication(computation, &fixture)?;
+        authority_publication(computation, &fixture, expected_edges)?;
     }
     Ok(())
 }
 
-fn authority_publication(computation: Computation, fixture: &sdk::Fixture) -> TestResult {
+fn authority_publication(
+    computation: Computation,
+    fixture: &sdk::Fixture,
+    expected_edges: Vec<Relationship>,
+) -> TestResult {
     let package = Detector::Credentials.descriptor();
     let model = &package.exports[0];
     let bounds = fixture.evaluation.context.limits;
-    let mut expected_edges = computation.edges.clone();
-    for edge in &mut expected_edges {
-        edge.evidence = edge
-            .evidence
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-    }
     let mut expected_finding = computation.findings[0].clone();
     expected_finding.evidence = expected_finding
         .evidence

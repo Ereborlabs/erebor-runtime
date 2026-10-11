@@ -138,8 +138,12 @@ impl Computation {
                 .map(str::to_owned),
             );
         }
+        let mut edge_evidence = evidence.clone();
+        Self::canonical(&mut edge_evidence);
         for (index, exact) in matched {
-            evidence.push(self.facts[index].record);
+            let fact_record = self.facts[index].record;
+            evidence.push(fact_record);
+            edge_evidence.push(fact_record);
             self.edge(
                 row,
                 Some(index as u64),
@@ -151,7 +155,7 @@ impl Computation {
                 } else {
                     Cause::Contextual
                 },
-                evidence.clone(),
+                edge_evidence.clone(),
             );
         }
         self.finding(
