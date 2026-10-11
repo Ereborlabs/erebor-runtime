@@ -513,7 +513,7 @@ fn transport_options_are_separate() -> Result<(), Box<dyn std::error::Error>> {
     for command in [
         vec!["sql", "SELECT 1"],
         vec!["catalog"],
-        vec!["package", "--scope", "production", "inspect"],
+        vec!["package", "--scope", "production", "inspect", "denials"],
         vec![
             "trace",
             "--recipe",
