@@ -165,6 +165,7 @@ impl BehaviorSnapshotV1 {
 #[cfg(test)]
 mod tests {
     mod baseline;
+    mod corpus;
 
     use serde::Deserialize;
 
@@ -765,6 +766,9 @@ mod tests {
                 .map_err(|error| format!("{} replay: {error:?}", case.id))?;
             assert_eq!(replay.duplicate_deliveries, case.expected.accepted);
             assert_eq!(replay.snapshot, result, "{}", case.id);
+            if case.id == "rare-forbidden" {
+                corpus::rare_exports(&input, &result, &replay.snapshot, &execution)?;
+            }
         }
         Ok(())
     }

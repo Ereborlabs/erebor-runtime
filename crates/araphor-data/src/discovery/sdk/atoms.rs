@@ -11,7 +11,7 @@ impl DiscoveryOwner {
         execution: &crate::InstalledAnalysis,
     ) -> Result<DiscoveryRecordedResultV1> {
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(60))?;
-        let mut pages = RecordedPages::new(input, 64, &control)?;
+        let mut pages = RecordedPages::new(input, 128, &control)?;
         let execution = execution.snapshot(input.tenant_id)?;
         let revision = Adapter::revision(input)?;
         control.check()?;

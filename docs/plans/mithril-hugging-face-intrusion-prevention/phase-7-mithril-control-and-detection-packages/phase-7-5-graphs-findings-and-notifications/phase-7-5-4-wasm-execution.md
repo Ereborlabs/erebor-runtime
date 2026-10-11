@@ -205,6 +205,45 @@ and features. Its log is `/tmp/araphor-wasm-data-correction-clippy-v17.log`.
 The full corpus, graph recovery, four fresh production cases, and final shared
 Rust procedure remain required. This focused proof does not close those gates.
 
+The v16 graph evidence-recovery test passes. The output-byte split test fails
+with `PackageWasm::Limit` while JSON encodes relationship evidence. The exact
+core-module frames select `Rows::encode<Relationship>` and the default
+`RowBuffer::write_all` retry loop. The run has one pass and one failure.
+Its log is `/tmp/araphor-wasm-graph-recovery-and-split-production-v16.log`.
+This result does not qualify graph splitting at production limits.
+
+The v18 discovery run has 27 passes and one failure. The largest
+`rare-forbidden normal` call still reaches its 60-second outer deadline.
+Its source uses 64 identities per page. The original graph split test also
+still returns `PackageWasm::Limit`; evidence recovery passes. The direct row
+writer is not sufficient for either failed gate. The proof is
+`/tmp/araphor-wasm-production-bounds-proof-v18.json`.
+The follow-up moves the pure carried-proof scan after its eligibility checks
+and uses 128 identities per discovery page. Guest limits and outer deadlines
+stay unchanged. The current source still requires fresh qualification.
+
+### Discovery production-bound proof
+
+The v20 discovery group has 28 passes and no failures. All 21 corpus cases
+pass in normal and duplicate replay. The rare case also passes exact display
+groups and all eleven baseline comparison fields. The 129-identity boundary
+test passes separately. Both paths use 128 complete identities per internal
+page, 32 MiB data, 100 million fuel units, and one 60-second outer deadline.
+The source manifest has SHA256
+`98343fea9235304f135e9b9c22e02f4e4f5f6c260a59e92f92ab27c79a9f236e`.
+The log is `/tmp/araphor-wasm-discovery-equivalence-production-v20-retry.log`.
+Its SHA256 is
+`419938338318c9a7d0dfa97f14e3088e3002933ce9043110cabe8c788c1dfd47`.
+The proof is `/tmp/araphor-wasm-production-bounds-proof-v20.json`.
+
+The first copied test executable had an incorrect path. Its compiler child
+used the application argument and exited before computation. That run has
+eleven passes and seventeen failures. The retry uses the required test path
+and the same executable bytes. The proof retains both results. The later
+graph index correction rebuilds all six components. Those artifacts require
+new qualification. Graph splitting, four production cases, and final shared
+Rust verification remain open.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
@@ -239,10 +278,40 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+- [ ] Index qualified credential authority identities during the existing scan.
+  The v21 assertion proves exhausted guest fuel while relationship evidence is
+  encoded. Remove repeated linear identity scans before encoding. Preserve the
+  first fact representative, direct-proof OR, equal-record order, and every raw
+  evidence value and position. Test duplicate identities, direct-proof changes,
+  ties, and contextual fallback. Keep the original 256 records, 67 facts,
+  4 MiB split assertion, and 100-million-fuel limit. Build components twice.
+- [x] Include the deepest Wasmtime error in the unchanged graph split assertion.
+  The v20 run still returns `PackageWasm::Limit` during relationship evidence
+  encoding. Record the exact resource cause before the next correction. Keep
+  production code, limits, records, facts, and the expected host error unchanged.
+- [x] Reduce the number of installed calls for the largest discovery window.
+  Use 128 complete identity groups per internal page. Keep the source window,
+  duplicate groups, coverage, validation, 60-second outer deadline, and every
+  guest limit unchanged. Move the page-equivalence fixture across the new
+  boundary. Verify whole and paged output, then run all normal and replay cases.
+- [ ] Check direct-proof conditions before scanning carried channel facts.
+  Evaluate the existing pure `carried` check last. Keep every direct result,
+  evidence value and order, relationship, finding, and checkpoint unchanged.
+  Use the existing exact and missing credential tests. Rebuild twice and run
+  the unchanged graph split assertion with 100 million fuel units.
+- [ ] Implement `RowBuffer::write_all` with one call to its existing complete
+  write operation. Preserve every JSON byte, checked byte charge, and error.
+  Test complete writes and byte rejection. Build each component twice and
+  compare bytes. Rerun the original graph split test at production limits.
+- [x] Extend the existing `rare-forbidden` corpus case with installed group
+  and comparison checks for normal and duplicate replay. Reuse its snapshots
+  and a 64-record prefix baseline. Check exact counts, members, samples,
+  coverage, denial, and forbidden groups. Add no second algorithm or larger
+  limits. Run the complete corpus before closure.
 - [x] Compile the direct Wasm evaluation wrapper only for unit tests. All
   production callers use the charged, encoded-input path. Check every caller
   and the normal build warning before this change. Run strict Clippy.
-- [ ] Reuse the validated immutable bundle during a pinned installed run.
+- [x] Reuse the validated immutable bundle during a pinned installed run.
   Charge retained bundle memory to the existing shared query budget. Keep
   tenant and version checks, fresh authority checks before and after each
   evaluation, cancellation, lifecycle fences, and the 60-second deadline.
@@ -272,10 +341,10 @@ authorization owner, notification path, or algorithm implementation.
   windows, SDK bindings, and production limits unchanged. Rebuild components
   twice and compare their bytes. Rerun graph evidence recovery and output-byte
   splitting at production limits.
-- [ ] Use the existing full-record digest for the opaque duplicate comparison
+- [x] Use the existing full-record digest for the opaque duplicate comparison
   string. Keep the original input revision and full-record conflict validation.
   Check the 1,024-delivery identity at the production fuel limit.
-- [ ] Bound internal discovery calls without changing the outer source window.
+- [x] Bound internal discovery calls without changing the outer source window.
   Keep all deliveries of one identity together. Reject orphan context and
   exclusion rows. Partition coverage into adjacent pieces with the same total
   expected count and complete cursor bounds. Keep each expected count within
@@ -486,8 +555,9 @@ component in one cache. Tests check retention, byte eviction, and entry eviction
 | Kubernetes | 2,519,874 | 12,639,856 | 15,159,730 |
 | SDK runtime | 2,156,767 | 10,979,920 | 13,136,687 |
 
-The `fixture_cache_charges_fit` test recorded these figures for the current
-artifacts on Linux x86-64. The test kept all five entries below the 80 MiB and
+The `fixture_cache_charges_fit` test recorded these figures for the earlier
+artifacts on Linux x86-64. They predate the SDK and graph schema corrections.
+The test kept all five entries below the 80 MiB and
 16-entry limits. These figures are memory accounting evidence, not a
 performance result. The fixture helper rejects a seed set when any source
 digest is absent after admission.
@@ -510,8 +580,9 @@ These files are local evidence. This measurement is not a performance result.
 
 Production still uses the draft limits of 32 MiB data and 100 million fuel
 units. Automatic approval review rejects the proposed production limit change.
-Explicit user approval is pending. The final shared Rust procedure and final
-production qualification do not yet cover the proposed limits.
+The unchanged-limit correction supersedes this proposal. Production and tests
+now use 32 MiB and 100 million fuel units. The final shared Rust procedure and
+production qualification remain required at these limits.
 
 The cache, exact export, and installed history tests pass in
 `/tmp/araphor-wasm-full-corpus-calibration-v6.log`.

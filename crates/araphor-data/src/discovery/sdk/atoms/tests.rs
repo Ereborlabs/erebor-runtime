@@ -38,14 +38,14 @@ fn recorded_pages_match() -> TestResult {
     let mut input = input()?;
     let record = input.records[0].clone();
     let context = input.contexts[0].clone();
-    input.records = (1..=65)
+    input.records = (1..=129)
         .map(|cursor| {
             let mut record = record.clone();
             record.id.durable_cursor = cursor;
             record
         })
         .collect();
-    input.contexts = input.records[..64]
+    input.contexts = input.records[..128]
         .iter()
         .map(|record| {
             let mut context = context.clone();
@@ -53,16 +53,16 @@ fn recorded_pages_match() -> TestResult {
             context
         })
         .collect();
-    input.coverage[0].last_cursor = 65;
-    input.coverage[0].expected_records = 65;
+    input.coverage[0].last_cursor = 129;
+    input.coverage[0].expected_records = 129;
     input.exclusions = vec![DiscoveryUnresolvedV1 {
-        record_id: input.records[63].id.clone(),
+        record_id: input.records[127].id.clone(),
         reason: "EXPLICIT_EXCLUSION".into(),
     }];
     input.lifecycle = vec![DiscoveryLifecycleEntryV1 {
         case: DiscoveryLifecycleCaseV1::Startup,
         state: DiscoveryLifecycleStateV1::Recorded {
-            records: vec![input.records[0].id.clone(), input.records[64].id.clone()],
+            records: vec![input.records[0].id.clone(), input.records[128].id.clone()],
         },
     }];
     input.records.extend(input.records.clone());
@@ -74,9 +74,9 @@ fn recorded_pages_match() -> TestResult {
         DiscoveryOwner::derive_page(&input, &execution, &Adapter::revision(&input)?, &control)?;
     let paged = DiscoveryOwner::derive_recorded(&input, &execution)?;
     assert_eq!(paged, whole);
-    assert_eq!(paged.duplicate_deliveries, 65);
-    assert_eq!(paged.snapshot.accepted_records, 65);
-    assert_eq!(paged.snapshot.included_records, 63);
+    assert_eq!(paged.duplicate_deliveries, 129);
+    assert_eq!(paged.snapshot.accepted_records, 129);
+    assert_eq!(paged.snapshot.included_records, 127);
     assert_eq!(paged.snapshot.excluded_records, 1);
     assert_eq!(paged.snapshot.unresolved_records, 1);
     assert_eq!(paged.snapshot.coverage, input.coverage);
