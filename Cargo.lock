@@ -4124,6 +4124,7 @@ dependencies = [
 name = "mithril-e2e"
 version = "0.1.0"
 dependencies = [
+ "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "araphor-component-build",
  "araphor-data",

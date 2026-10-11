@@ -272,6 +272,7 @@ impl DiscoveryQualificationRunner {
             wire_record: wire.framed_records.to_vec(),
         };
         let pin = store.discovery_context(&joined)?;
+        let mut component_context = None;
         if let Some(workload) = expected_workload {
             let araphor_data::DiscoveryContextJoinV1::Available(context) = &pin else {
                 return Err("the signed context was not resolved".into());
@@ -311,7 +312,8 @@ impl DiscoveryQualificationRunner {
                     reason: "the signed policy key or provenance differs",
                 }
             );
-            context::check(&joined, &context.binding)?;
+            component_context =
+                Some(context::check(data.clone(), &joined, &context.binding).await?);
         }
         let receipt = data
             .source_receipt(&stream)?
@@ -514,6 +516,13 @@ impl DiscoveryQualificationRunner {
                 "frozen-replay-no-provider",
             ]);
         }
+        if component_context.is_some() {
+            checks.extend([
+                "installed-context-component",
+                "exact-context-metadata",
+                "context-cutoff-omissions",
+            ]);
+        }
         super::write_json(
             &self.output.join("result.json"),
             &serde_json::json!({
@@ -532,6 +541,7 @@ impl DiscoveryQualificationRunner {
                 "late_context_resolved": profile.is_some(),
                 "original_kernel_sequence": context.original_kernel_sequence,
                 "decision_context": context,
+                "component_context": component_context,
                 "asserted_contracts": checks,
             }),
         )?;

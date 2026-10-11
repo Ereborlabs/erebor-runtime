@@ -13,6 +13,7 @@ use crate::control_fixture::{oidc::OidcFixture, MtlsFixture};
 
 mod bundle;
 mod fixture;
+mod wasm;
 
 use bundle::Denials;
 use fixture::Fixture;
@@ -40,6 +41,11 @@ impl AnalysisPackageQualification {
             Some([1; 16]),
             tls.files.ca.clone(),
         );
+        config
+            .service
+            .as_mut()
+            .ok_or("the qualification service configuration is absent")?
+            .max_age_seconds = 300;
         config.package_managers = config.investigators.clone();
         let managers = config.package_managers.clone();
         let bundles = [
@@ -47,8 +53,12 @@ impl AnalysisPackageQualification {
             Denials::bundle("bad", 3, true),
             Denials::bundle("2", 2, false),
         ];
+        let wasm_bundle = wasm::bundle();
+        let required = araphor_data::AnalysisPackageOwner::required_bundles();
         config.package_trust = bundles
             .iter()
+            .chain(std::iter::once(&wasm_bundle))
+            .chain(required.iter())
             .map(|bundle| {
                 Ok(PackageTrustPinV1 {
                     tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
@@ -58,6 +68,14 @@ impl AnalysisPackageQualification {
             .collect::<araphor_data::Result<_>>()?;
         let auth = Arc::new(ClientAuth::load(&config).await?);
         let root = tls.path().join("package-control");
+        let wasm = wasm::run(
+            &tls.path().join("wasm-control"),
+            &tls,
+            auth.clone(),
+            &wasm_bundle,
+            &config,
+        )
+        .await?;
         let first = self.initial(&root, auth.clone(), &bundles[0]).await?;
         let original = Self::result_id(&first)?;
         // The token fixture sets expiry in whole seconds.
@@ -80,9 +98,10 @@ impl AnalysisPackageQualification {
             &self.output.join("result.json"),
             &json!({
                 "schema_version":1,"case":"analysis-packages","result":"PASS","mode":"LIGHTWEIGHT",
-                "production_owners":["ClientAuth","ClientGrpcOwner","AnalysisPackageOwner","QueryOwner","AnalysisStore"],
+                "production_owners":["AraphorClient","ClientAuth","ClientListener","ClientGrpcOwner","AnalysisPackageOwner","QueryOwner","AnalysisStore","EffectObservationStore","EvidenceIntakeOwner","GraphAndFindingOwner"],
                 "offline_directory_digest":bundles[0].digest()?,"original_result":original,
                 "initial":first,"corrected":corrected,"empty":empty,
+                "installed_wasm_detector":wasm,
                 "restart_retry_receipt_equal":true,"credential_renewal_advances_activation":true,"stale_source_visible":true,"automatic_source_replacement":true,
                 "checkpoint_runs":{"initial":2,"restart_retry":2,"corrected":1},
                 "failed_upgrade_preserved_active":true,

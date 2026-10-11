@@ -1,16 +1,19 @@
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use araphor_data::{
-    AnalysisContextKeyV1, ContextSensitivityV1, DiscoveryContextAccessV1,
+    AnalysisContextKeyV1, AnalysisStore, ContextSensitivityV1, DiscoveryContextAccessV1,
     DiscoveryContextBindingV1, DiscoveryContextEvidenceV1, DiscoveryContextRequestV1,
     DiscoveryContextViewV1, DiscoveryMethodV1, DiscoveryOwner, DiscoveryProofKindV1,
     DiscoveryRecordV1,
 };
 
-pub(super) fn check(
+mod component;
+
+pub(super) async fn check(
+    store: Arc<AnalysisStore>,
     record: &DiscoveryRecordV1,
     binding: &DiscoveryContextBindingV1,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<serde_json::Value, Box<dyn Error>> {
     let subject = AnalysisContextKeyV1 {
         tenant_id: record.id.stream.tenant_id,
         owner_id: "discovery".into(),
@@ -47,6 +50,13 @@ pub(super) fn check(
     };
     let input = DiscoveryOwner::context_input(&request, &[])?;
     let selected = DiscoveryContextViewV1::try_from(&input)?;
+    let component = component::ContextComponent::install(store, record.id.stream.tenant_id).await?;
+    let transported = component.evaluate(&input)?;
+    if serde_json::to_value(DiscoveryContextViewV1::try_from(&transported)?)?
+        != serde_json::to_value(&selected)?
+    {
+        return Err("the installed component changed selected context identities".into());
+    }
     if selected.records != request.records
         || selected.access != request.access
         || selected.method != request.method
@@ -67,6 +77,12 @@ pub(super) fn check(
     request.cutoff_utc_ns = 1999;
     let cutoff = DiscoveryOwner::context_input(&request, &[])?;
     let selected = DiscoveryContextViewV1::try_from(&cutoff)?;
+    let transported = component.evaluate(&cutoff)?;
+    if serde_json::to_value(DiscoveryContextViewV1::try_from(&transported)?)?
+        != serde_json::to_value(&selected)?
+    {
+        return Err("the installed component changed context cutoff or omissions".into());
+    }
     if !selected.records.is_empty()
         || selected.omissions.get("EVIDENCE_OUTSIDE_WINDOW_OR_UNDATED") != Some(&1)
         || cutoff.revision.id == input.revision.id
@@ -78,5 +94,18 @@ pub(super) fn check(
     {
         return Err("the SDK context input lost its cutoff or omissions".into());
     }
-    Ok(())
+    Ok(serde_json::json!({
+        "installed_component":true,
+        "selected_record_count":1,
+        "excluded_record_count":0,
+        "initial_cutoff_utc_ns":3000,
+        "excluded_cutoff_utc_ns":1999,
+        "selected_revision":input.revision,
+        "excluded_revision":cutoff.revision,
+        "selected_coverage":input.coverage,
+        "excluded_coverage":cutoff.coverage,
+        "omission_count":1,
+        "identities_equal":true,
+        "revision_and_coverage_equal":true,
+    }))
 }
