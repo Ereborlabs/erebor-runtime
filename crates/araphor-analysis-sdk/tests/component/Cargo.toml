@@ -10,6 +10,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 araphor-analysis-sdk = { path = "../..", features = ["guest"] }
+araphor-analysis-builtins = { path = "../../../araphor-analysis-builtins" }
+serde_json.workspace = true
 
 [lints]
 workspace = true
