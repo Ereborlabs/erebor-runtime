@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use araphor_analysis_builtins::discovery as builtin;
 
-use super::{Adapter, Result};
+use super::{pages::RecordedPages, Adapter, Result};
 use crate::*;
 
 impl DiscoveryOwner {
@@ -10,6 +10,43 @@ impl DiscoveryOwner {
         input: &DiscoveryInputManifestV1,
         execution: &crate::InstalledAnalysis,
     ) -> Result<DiscoveryRecordedResultV1> {
+        let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(60))?;
+        let mut pages = RecordedPages::new(input, 64, &control)?;
+        let execution = execution.snapshot(input.tenant_id)?;
+        let revision = Adapter::revision(input)?;
+        control.check()?;
+        let mut result = {
+            let first = pages.next().ok_or_else(|| {
+                DiscoveryInvalidSnafu {
+                    field: "recorded pages",
+                }
+                .build()
+            })??;
+            Self::derive_page(&first, &execution, &revision, &control)?
+        };
+        for page in pages {
+            let next = Self::derive_page(&page?, &execution, &revision, &control)?;
+            crate::discovery::model::add(
+                &mut result.duplicate_deliveries,
+                next.duplicate_deliveries,
+            )?;
+            result.snapshot =
+                result
+                    .snapshot
+                    .merge_control(&next.snapshot, &execution, &revision, &control)?;
+        }
+        Adapter::validate_recorded(input, &result)?;
+        control.check()?;
+        Ok(result)
+    }
+
+    fn derive_page(
+        input: &DiscoveryInputManifestV1,
+        execution: &crate::InstalledAnalysis,
+        revision: &str,
+        control: &AnalysisReadControl,
+    ) -> Result<DiscoveryRecordedResultV1> {
+        control.check()?;
         input.validate()?;
         let adapter = Adapter::new(
             input
@@ -47,7 +84,7 @@ impl DiscoveryOwner {
             .iter()
             .map(|row| adapter.disposition(row))
             .collect::<Result<Vec<_>>>()?;
-        let output = Adapter::run(
+        let output = Adapter::run_control(
             execution,
             input.tenant_id,
             "atoms",
@@ -62,7 +99,8 @@ impl DiscoveryOwner {
                     &[input.proof_kind == DiscoveryProofKindV1::ObservedRuntime],
                 )?,
             ],
-            Adapter::revision(input)?,
+            revision.into(),
+            control,
         )?;
         let result = adapter.snapshot(
             &output.output,
@@ -71,6 +109,7 @@ impl DiscoveryOwner {
             input.proof_kind,
         )?;
         Adapter::validate_recorded(input, &result)?;
+        control.check()?;
         Ok(result)
     }
 }
@@ -99,7 +138,7 @@ impl Adapter {
             })?;
         Ok(builtin::Record {
             id: self.identity(&record.id)?,
-            bytes: Self::json(record)?,
+            bytes: Self::revision(record)?,
             cursor: record.id.durable_cursor,
             range: range as u64,
             temporal: wire.temporal_coverage,

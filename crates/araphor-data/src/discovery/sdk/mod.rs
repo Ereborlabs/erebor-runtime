@@ -12,6 +12,7 @@ use crate::{AnalysisContractSnafu, DiscoveryEncodingSnafu, Result};
 mod atoms;
 mod compare;
 mod context;
+mod pages;
 mod project;
 mod snapshot;
 mod validation;
@@ -108,6 +109,25 @@ impl Adapter {
         datasets: Vec<sdk::Dataset>,
         revision: String,
     ) -> Result<crate::InstalledEvaluation> {
+        Self::run_control(
+            execution,
+            tenant,
+            export,
+            datasets,
+            revision,
+            &crate::AnalysisReadControl::with_timeout(std::time::Duration::from_secs(60))?,
+        )
+    }
+
+    fn run_control(
+        execution: &crate::InstalledAnalysis,
+        tenant: [u8; 16],
+        export: &str,
+        datasets: Vec<sdk::Dataset>,
+        revision: String,
+        control: &crate::AnalysisReadControl,
+    ) -> Result<crate::InstalledEvaluation> {
+        control.check()?;
         let input = sdk::Evaluation {
             export: export.into(),
             inputs: datasets
@@ -135,12 +155,7 @@ impl Adapter {
             checkpoint: None,
         };
         execution
-            .evaluate(
-                tenant,
-                &builtin::Discovery::package().id,
-                &input,
-                &crate::AnalysisReadControl::with_timeout(std::time::Duration::from_secs(60))?,
-            )
+            .evaluate(tenant, &builtin::Discovery::package().id, &input, control)
             .map_err(|error| match error {
                 crate::Error::AnalysisContract { source, .. } => Self::error(source),
                 error => error,

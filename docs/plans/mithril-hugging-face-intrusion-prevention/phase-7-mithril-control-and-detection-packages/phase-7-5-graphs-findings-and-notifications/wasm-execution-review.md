@@ -284,10 +284,10 @@ This fuel is not a measure of total host resident memory.
 The component path caps data at 32 MiB, checkpoint data at 16 MiB,
 1,024 batches, and one million rows. Lower descriptor and query limits apply.
 
-Unit tests currently use temporary allowances of 64 MiB for data and
-8 billion fuel units. Production retains the 32 MiB data limit and
-100 million fuel units. The production increase is not approved.
-Final production qualification remains pending.
+Earlier unit tests used temporary allowances of 64 MiB for data and
+8 billion fuel units. Current source removes these allowances. Production and
+unit tests use the same 32 MiB data limit and 100 million fuel units. Current
+source qualification at these limits remains pending.
 
 The local package file has a 32 MiB bound.
 Package JSON requests and replies allow an additional 64 KiB.
@@ -359,7 +359,7 @@ Review these boundary tests with the algorithm cases:
   evaluation IDs, group keys, and sample identities. It checks member indexes
   `[0, 1]` and aggregate counts 5 and 18. Each output has no checkpoint,
   evidence, or reason. The focused overlap test and the existing cancellation
-  test pass on the current source. Final qualification remains pending.
+  test pass on the v12 source. Final qualification remains pending.
 - [Multiple input batches](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/batches.rs)
   includes an empty batch and verifies the computed total.
 - [Checkpoint recovery](../../../../../crates/araphor-data/src/package/tests/wasm/checkpoint.rs)
@@ -456,8 +456,40 @@ The cleanup saved 17,862,496,480 bytes. Every loaded section stayed equal.
 The cleanup proof and log paths are
 `/tmp/araphor-strip-proof-20261011-ci-v12.json` and
 `/tmp/araphor-strip-ci-v12.log`.
-The retry uses the same source and is running. Its log and result paths are
+The retry uses the same v12 source. Its log and result paths are
 `/tmp/araphor-wasm-rust-ci-final-v12-retry.log` and
 `/tmp/araphor-wasm-rust-ci-final-v12-retry-result.json`.
-No final pass is recorded while the retry runs.
-The full shared Rust procedure and all four production cases remain pending.
+The run receives a controlled SIGINT and exits 130 before the required
+production-bound discovery correction starts. It is live when interrupted.
+No timeout or terminal test failure causes the stop. No CI descendant remains
+after the stop. The log SHA256 is
+`5a870fce9d077ac6fe0c9f6ad04bbf4545720d2dc2ae5e7b688d3d1bfb1c15c4`.
+Formatting, workspace checking, and strict Clippy pass on v12. Workspace tests
+remain incomplete. Current source requires the bounded-input correction,
+all four fresh production cases, and a new final shared Rust procedure.
+
+## Bounded discovery input correction
+
+Read `discovery/sdk/pages.rs`, then `discovery/sdk/atoms.rs` and
+`discovery/sdk/snapshot.rs`. `RecordedPages` keeps all deliveries of a full
+record identity together. It rejects orphan context and exclusion rows before
+projection. Coverage pieces have adjacent cursor bounds. Their expected
+counts stay within each piece width and sum to the original count. Empty
+ranges, explicit gaps, lifecycle references, and evidence samples remain.
+
+`derive_recorded` pins installed execution once and uses the original input
+revision and one finite control. Each page and its rolling merge use installed
+components. Page evaluation leases drop before the next call. The method
+validates the final result against the complete input and commits no page.
+The opaque record-comparison string uses the existing full-record digest.
+Host validation still compares complete records for duplicate conflicts.
+
+Production and tests now both use 32 MiB of data and 100 million fuel units.
+Source `v13` has SHA256
+`8c34f38f69015fb184c8d8660e81e7882340ac0f9dbea0109ff58a15e389f42a`.
+The ten planner tests and both real-component correction tests pass. Their
+proof is `/tmp/araphor-wasm-production-bounds-proof-v13.json`. The complete
+corpus fails at the shared 60-second deadline on `rare-forbidden normal`.
+The graph evidence-recovery test fails with `PackageWasm::Limit` in
+`/tmp/araphor-wasm-graph-recovery-production-v13.log`. Fresh production
+qualification and final Rust CI remain required.

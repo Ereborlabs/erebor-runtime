@@ -18,10 +18,7 @@ mod execution;
 mod fixtures;
 
 const MAX_LIFT_BYTES: usize = 32 * 1024 * 1024;
-#[cfg(not(test))]
 const MAX_DATA_BYTES: u64 = 32 * 1024 * 1024;
-#[cfg(test)]
-const MAX_DATA_BYTES: u64 = 64 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests;

@@ -129,28 +129,40 @@ close a verification gate. The phase remains **Not done**.
 | Deliverable | Source and commit | Remaining proof |
 | --- | --- | --- |
 | 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The current SDK suite has 45 passes. The shared computation suite has 13 passes. The build proof records equal component bytes from both builds. |
-| 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Final workspace tests are running. Production data and fuel limits differ from the corpus test limits. |
+| 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | The v12 workspace test run is interrupted before the required correction. Current source uses production data and fuel limits in unit tests; new qualification remains required. |
 | 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | A fresh production finding-to-notification case has no pass. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | Corpus output parity passes with test-only limits. Production parity and the fresh context transport case remain open. |
 | 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. The final workspace result and fresh production restart case remain open. |
 | 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | Run all four fresh production cases, finish the final Rust procedure, and record the final review and result. |
 
-The current Rust source is committed through `8f150fd4`. Its 1,558 source file
-hashes remain equal to the v12 manifest after the commits. Formatting,
-workspace check, strict Clippy, and test linking pass. Workspace tests have
-no terminal result. The production cases `analysis-packages`,
-`context-roundtrip`, `profile-restart`, and `graph-notification` still require
-fresh results on this source.
+The Rust source before the bounded-input correction is committed through
+`8f150fd4`. Its 1,558 source file hashes equal the v12 manifest. Formatting,
+workspace check, strict Clippy, and test linking pass on that source. The
+workspace test run is interrupted with exit code 130 before the required
+correction starts. No terminal test failure is recorded. The correction,
+four fresh production cases, and a new final shared Rust procedure remain
+required.
 
-The corpus test permits 64 MiB of data and 8 billion fuel units. Production
-permits 32 MiB and 100 million fuel units. The test result does not prove that
-the production limits support the same inputs. Automatic approval review
-rejects the proposed production limit increase. Explicit user approval is
-pending. Keep this gate open and remove the test-only allowances only after
-the approved correction passes the same production and test checks.
+The retained corpus run used 64 MiB of data and 8 billion fuel units.
+Production permits 32 MiB and 100 million fuel units. That test result does
+not prove production equivalence. Automatic approval review rejects the
+proposed production limit increase. The current correction keeps production
+limits unchanged and removes the larger unit-test allowances. Qualify the
+bounded-input correction with the same limits in both paths. Keep this gate
+open until the required checks pass.
 The production dispatch has already changed. The required complete production
 equivalence gate did not pass before that change. Source review and test-only
 corpus parity do not close this requirement.
+
+The bounded-input correction builds on source `v13`. Its 1,560-file manifest
+has SHA256 `8c34f38f69015fb184c8d8660e81e7882340ac0f9dbea0109ff58a15e389f42a`.
+The ten page-planner tests, the 1,024-delivery duplicate test, and the real
+component page-equivalence test pass with production data and fuel limits.
+The complete corpus exits 101. `rare-forbidden normal` reaches the shared
+60-second deadline. The graph evidence-recovery test also exits 101 with
+`PackageWasm::Limit`. These results do not close production equivalence.
+The proof is `/tmp/araphor-wasm-production-bounds-proof-v13.json`.
+The graph log is `/tmp/araphor-wasm-graph-recovery-production-v13.log`.
 
 ### Implementation TODOs
 
@@ -186,14 +198,32 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
-- [ ] Check whether bounded internal discovery calls can remove the production
-  limit mismatch. The retained corpus has 10,001 normal deliveries and 20,002
-  replay deliveries in `rare-forbidden`. Only these two calls exceed the
-  100-million fuel limit. Keep the outer source window, duplicate accounting,
-  coverage, samples, and frozen replay equal. Use installed computation for
-  each part and its merge. Check the merge, display groups, and comparison at
-  the same production limits before selecting this correction. Keep the live
-  CI source unchanged until the current procedure ends.
+- [ ] Reuse the validated immutable bundle during a pinned installed run.
+  Charge retained bundle memory to the existing shared query budget. Keep
+  tenant and version checks, fresh authority checks before and after each
+  evaluation, cancellation, lifecycle fences, and the 60-second deadline.
+  Rerun the largest normal and replay corpus cases.
+- [ ] Construct the graph reason-details schema once per evaluation. Reuse it
+  for every finding. Keep reason rows, evidence, output schemas, full source
+  windows, SDK bindings, and production limits unchanged. Rebuild components
+  twice and compare their bytes. Rerun graph evidence recovery and output-byte
+  splitting at production limits.
+- [ ] Use the existing full-record digest for the opaque duplicate comparison
+  string. Keep the original input revision and full-record conflict validation.
+  Check the 1,024-delivery identity at the production fuel limit.
+- [ ] Bound internal discovery calls without changing the outer source window.
+  Keep all deliveries of one identity together. Reject orphan context and
+  exclusion rows. Partition coverage into adjacent pieces with the same total
+  expected count and complete cursor bounds. Keep each expected count within
+  its piece width. Preserve sparse-input gaps, lifecycle references, samples,
+  and frozen replay. Pin installed execution once, use one finite outer
+  control, and use installed computation for each part and its merge. Check
+  the largest normal and replay cases, display groups, and comparison at the
+  production limits. Commit no intermediate page result.
+- [ ] Remove the larger unit-test data and fuel allowances. Verify the complete
+  current-algorithm corpus and resource failures with the same 32 MiB and
+  100-million fuel limits as production. Keep resource failures explicit and
+  atomic. Run the four production cases before the final shared Rust procedure.
 - [ ] Recover filesystem space after the v12 test link failure. Remove debug
   sections only from inactive generated executables. Check every loaded
   section before and after cleanup. Keep source, native archives, component
@@ -600,14 +630,19 @@ archives, component artifacts, logs, and proof files stay intact. Its proof is
 `/tmp/araphor-strip-proof-20261011-ci-v12.json`. The source check finds no change.
 The same final Rust command starts again. Its log and result are
 `/tmp/araphor-wasm-rust-ci-final-v12-retry.log` and
-`/tmp/araphor-wasm-rust-ci-final-v12-retry-result.json`. No final pass is recorded
-while it runs. Production limits remain 32 MiB data and 100 million fuel.
+`/tmp/araphor-wasm-rust-ci-final-v12-retry-result.json`. No final pass is recorded.
+Production limits remain 32 MiB data and 100 million fuel.
 
 The retry passes formatting, workspace check, strict Clippy, and test linking.
 The workspace tests start. Checked removal of debug sections from nine more
 inactive generated executables recovers 10,809,909,456 bytes. All loaded sections
 stay equal. Its proof is `/tmp/araphor-strip-proof-20261011-ci-v12-retry.json`.
-The terminal result remains open while the suite runs.
+The live run receives a controlled SIGINT before the required production-bound
+discovery correction starts. It exits 130 and leaves no CI descendant. No
+timeout or terminal test failure causes the stop. Workspace tests remain
+incomplete. The log SHA-256 is
+`5a870fce9d077ac6fe0c9f6ad04bbf4545720d2dc2ae5e7b688d3d1bfb1c15c4`.
+A new final procedure is required after the last correction.
 
 The v9 graph diagnostic exits 1 when AnalysisStore reaches its filesystem
 reserve. It does not identify the earlier read deadline. Its log is

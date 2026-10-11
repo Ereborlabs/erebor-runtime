@@ -8,6 +8,23 @@ impl BehaviorSnapshotV1 {
     pub fn merge(&self, next: &Self, execution: &crate::InstalledAnalysis) -> Result<Self> {
         self.validate()?;
         next.validate()?;
+        self.merge_control(
+            next,
+            execution,
+            &Adapter::revision(&(self, next))?,
+            &AnalysisReadControl::with_timeout(std::time::Duration::from_secs(60))?,
+        )
+    }
+
+    // Both callers validate the snapshots before this call.
+    pub(super) fn merge_control(
+        &self,
+        next: &Self,
+        execution: &crate::InstalledAnalysis,
+        revision: &str,
+        control: &AnalysisReadControl,
+    ) -> Result<Self> {
+        control.check()?;
         let adapter = Adapter::new(
             Adapter::references(self)
                 .into_iter()
@@ -45,7 +62,7 @@ impl BehaviorSnapshotV1 {
                 .map(|row| adapter.lifecycle(row))
                 .collect()
         })?;
-        let output = Adapter::run(
+        let output = Adapter::run_control(
             execution,
             self.tenant_id,
             "merge",
@@ -57,7 +74,8 @@ impl BehaviorSnapshotV1 {
                 Adapter::dataset("excluded", &excluded)?,
                 Adapter::dataset("lifecycle", &lifecycle)?,
             ],
-            Adapter::revision(&(self, next))?,
+            revision.into(),
+            control,
         )?;
         let snapshot = adapter
             .snapshot(
@@ -68,6 +86,7 @@ impl BehaviorSnapshotV1 {
             )?
             .snapshot;
         Adapter::validate_merge(self, next, &snapshot)?;
+        control.check()?;
         Ok(snapshot)
     }
 

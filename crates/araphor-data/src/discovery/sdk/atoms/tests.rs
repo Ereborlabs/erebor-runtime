@@ -34,6 +34,65 @@ fn duplicate_context_projection() -> TestResult {
 }
 
 #[test]
+fn recorded_pages_match() -> TestResult {
+    let mut input = input()?;
+    let record = input.records[0].clone();
+    let context = input.contexts[0].clone();
+    input.records = (1..=65)
+        .map(|cursor| {
+            let mut record = record.clone();
+            record.id.durable_cursor = cursor;
+            record
+        })
+        .collect();
+    input.contexts = input.records[..64]
+        .iter()
+        .map(|record| {
+            let mut context = context.clone();
+            context.record_id = record.id.clone();
+            context
+        })
+        .collect();
+    input.coverage[0].last_cursor = 65;
+    input.coverage[0].expected_records = 65;
+    input.exclusions = vec![DiscoveryUnresolvedV1 {
+        record_id: input.records[63].id.clone(),
+        reason: "EXPLICIT_EXCLUSION".into(),
+    }];
+    input.lifecycle = vec![DiscoveryLifecycleEntryV1 {
+        case: DiscoveryLifecycleCaseV1::Startup,
+        state: DiscoveryLifecycleStateV1::Recorded {
+            records: vec![input.records[0].id.clone(), input.records[64].id.clone()],
+        },
+    }];
+    input.records.extend(input.records.clone());
+    input.records.reverse();
+    input.contexts.reverse();
+    let execution = crate::InstalledAnalysis::testing(None, input.tenant_id)?;
+    let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(60))?;
+    let whole =
+        DiscoveryOwner::derive_page(&input, &execution, &Adapter::revision(&input)?, &control)?;
+    let paged = DiscoveryOwner::derive_recorded(&input, &execution)?;
+    assert_eq!(paged, whole);
+    assert_eq!(paged.duplicate_deliveries, 65);
+    assert_eq!(paged.snapshot.accepted_records, 65);
+    assert_eq!(paged.snapshot.included_records, 63);
+    assert_eq!(paged.snapshot.excluded_records, 1);
+    assert_eq!(paged.snapshot.unresolved_records, 1);
+    assert_eq!(paged.snapshot.coverage, input.coverage);
+    assert_eq!(
+        paged.snapshot.atoms[0]
+            .evidence_sample
+            .iter()
+            .map(|id| id.durable_cursor)
+            .collect::<Vec<_>>(),
+        (1..=8).collect::<Vec<_>>()
+    );
+    assert_eq!(paged.snapshot.lifecycle[0], input.lifecycle[0]);
+    Ok(())
+}
+
+#[test]
 fn discovery_exact_revision() -> TestResult {
     let mut input = input()?;
     let first = Adapter::revision(&input)?;

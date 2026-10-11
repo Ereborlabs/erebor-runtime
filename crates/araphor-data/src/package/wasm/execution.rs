@@ -17,10 +17,7 @@ use super::{
 
 const MAX_EVALUATIONS: usize = 4;
 const MAX_HOST_CALLS: usize = 4096;
-#[cfg(not(test))]
 const MAX_FUEL: u64 = 100_000_000;
-#[cfg(test)]
-const MAX_FUEL: u64 = 8_000_000_000;
 
 #[cfg(test)]
 pub(super) struct GuestEntry {
