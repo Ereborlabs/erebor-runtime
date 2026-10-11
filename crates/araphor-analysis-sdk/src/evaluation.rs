@@ -77,23 +77,9 @@ impl Evaluation {
                     .saturating_mul(std::mem::size_of::<Input>()),
             );
         for input in &self.inputs {
-            bytes = bytes
-                .saturating_add(input.data.memory())
-                .saturating_add(input.revision.owner.capacity())
-                .saturating_add(input.revision.id.capacity())
-                .saturating_add(
-                    input
-                        .coverage
-                        .limits
-                        .capacity()
-                        .saturating_mul(std::mem::size_of::<String>()),
-                );
-            if let Some(window) = &input.revision.window {
-                bytes = bytes.saturating_add(window.source.capacity());
-            }
-            for limit in &input.coverage.limits {
-                bytes = bytes.saturating_add(limit.capacity());
-            }
+            bytes = bytes.saturating_add(input.data.memory()).saturating_add(
+                crate::memory::Memory::input_metadata(&input.revision, &input.coverage),
+            );
         }
         if let Some(parameters) = &self.parameters {
             bytes = bytes.saturating_add(Dataset::batch_allocation(parameters));
@@ -202,8 +188,7 @@ impl Dataset {
     }
 
     fn batch_allocation(batch: &RecordBatch) -> usize {
-        let schema = batch.schema_ref();
-        let mut bytes = batch
+        batch
             .get_array_memory_size()
             .saturating_add(
                 batch
@@ -211,18 +196,7 @@ impl Dataset {
                     .saturating_mul(std::mem::size_of::<arrow_array::ArrayRef>()),
             )
             .saturating_add(std::mem::size_of::<crate::Schema>())
-            .saturating_add(schema.fields().size())
-            .saturating_add(
-                schema
-                    .metadata()
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<(String, String)>()),
-            );
-        for (key, value) in schema.metadata() {
-            bytes = bytes
-                .saturating_add(key.capacity())
-                .saturating_add(value.capacity());
-        }
-        bytes
+            .saturating_add(std::mem::size_of::<[usize; 2]>())
+            .saturating_add(crate::memory::Memory::schema_heap(batch.schema_ref()))
     }
 }

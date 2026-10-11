@@ -128,7 +128,7 @@ close a verification gate. The phase remains **Not done**.
 
 | Deliverable | Source and commit | Remaining proof |
 | --- | --- | --- |
-| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The current SDK suite has 45 passes. The shared computation suite has 13 passes. The build proof records equal component bytes from both builds. |
+| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The current SDK suite has 51 passes. The shared computation suite has 13 passes. The build proof records equal component bytes from both builds. |
 | 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | The v12 workspace test run is interrupted before the required correction. Current source uses production data and fuel limits in unit tests; new qualification remains required. |
 | 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | A fresh production finding-to-notification case has no pass. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | Corpus output parity passes with test-only limits. Production parity and the fresh context transport case remain open. |
@@ -172,6 +172,15 @@ and checkpoint. The correction proof is in
 `wasm-component-build-proof.json`, under `graph_schema_correction`.
 Current production-limit graph qualification remains required.
 
+The SDK allocation correction is implemented. Descriptor, schema, and wire
+charges include reserved capacities and retained metadata. Typed inputs and
+wire inputs use the same metadata calculation. Six new tests check allocation
+charges; the complete SDK suite has 51 passes. Two independent builds produce
+equal core and component bytes for all six guest artifacts. The proof is in
+`wasm-component-build-proof.json`, under `memory_accounting_correction`.
+Production owner memory qualification and the final Rust procedure remain
+required.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
@@ -211,6 +220,14 @@ authorization owner, notification path, or algorithm implementation.
   tenant and version checks, fresh authority checks before and after each
   evaluation, cancellation, lifecycle fences, and the 60-second deadline.
   Rerun the largest normal and replay corpus cases.
+- [ ] Count retained descriptor, implementation, fixture, and input allocations.
+  Share SDK schema accounting. Reserve component wire work before encoding.
+  Encode each input once, then pass its owned bytes to Wasm execution. Reduce
+  the reservation to actual input and wire allocations before invocation.
+  Retain the charge until the result drops. Keep the shared 128 MiB input
+  capacity, the 64 MiB input check, and SQL reservations unchanged. Verify
+  reader-free reuse, root deduplication, last-clone release, historical replay,
+  revocation, removal commit fences, and overlapping real guests.
 - [ ] Construct the graph reason-details schema once per evaluation. Reuse it
   for every finding. Keep reason rows, evidence, output schemas, full source
   windows, SDK bindings, and production limits unchanged. Rebuild components

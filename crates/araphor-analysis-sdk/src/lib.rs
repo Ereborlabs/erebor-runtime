@@ -3,6 +3,7 @@ mod descriptor;
 mod error;
 mod evaluation;
 mod fixture;
+mod memory;
 mod model;
 mod validation;
 pub mod wire;

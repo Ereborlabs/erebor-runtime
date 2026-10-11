@@ -177,6 +177,17 @@ The [SDK reference](../../../../../crates/araphor-analysis-sdk/README.md)
 lists supported Arrow types. Encoding and decoding make bounded copies.
 This implementation does not claim zero-copy exchange.
 
+[Package::allocated_bytes](../../../../../crates/araphor-analysis-sdk/src/memory.rs)
+counts descriptor capacities, port schemas, reasons, and checkpoints.
+`wire::Evaluation::allocated_bytes` counts retained IPC capacities and metadata.
+Typed inputs and wire inputs share one revision and coverage calculation.
+Schema charges include nested fields, Arc headers, and metadata capacity.
+The [allocation tests](../../../../../crates/araphor-analysis-sdk/src/memory/tests.rs)
+check unused capacity, nested metadata, all schema positions, and wire growth.
+The SDK suite has 51 passes. The build proof records equal bytes from two
+independent builds of all six components under `memory_accounting_correction`.
+The current production owner qualification remains open.
+
 [QueryOwner::evaluate_analysis](../../../../../crates/araphor-data/src/query/model.rs)
 charges host input and output memory. The retained evaluation keeps its input
 charge until the domain adapter releases the result.
