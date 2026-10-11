@@ -451,6 +451,22 @@ The proof is `/tmp/araphor-wasm-production-proof-v30.json`.
 The case adds no physical-prevention or performance result.
 The final shared Rust procedure remains required.
 
+### Installed context transport qualification
+
+The fresh v30 `context-roundtrip` case exits zero and records `PASS`.
+The Node WAL, TLS intake, retained frame, context, and data restart checks pass.
+The installed context component returns the same identity, revision, and
+coverage as the host selector. Cutoff 3000 selects one record. Cutoff 1999
+selects no record and retains one explicit omission.
+
+The result is `/tmp/araphor-current-v30-context/result.json`, with SHA256
+`312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
+The case uses the same normal executable and source manifest as the v30 package
+case. The proof is `/tmp/araphor-wasm-production-proof-v30.json`.
+This pass covers installed transport with host-owned selection. It does not
+qualify a new selection algorithm or physical prevention. Profile restart,
+graph notification, and the final shared Rust procedure remain required.
+
 ### Qualification cleanup correction
 
 **Done for the cleanup correction.** The graph qualification closes its stores
