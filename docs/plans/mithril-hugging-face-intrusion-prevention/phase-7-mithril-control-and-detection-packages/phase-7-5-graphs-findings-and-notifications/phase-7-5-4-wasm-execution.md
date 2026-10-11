@@ -332,6 +332,24 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+Checked entries below record their correction scope. The v16 memory group
+has 23 passes. The v16 lifecycle, runtime, and native graph group has 28
+passes. These tests prove lifting error recovery, exact export selection,
+input preflight, typed readiness, canonical and mixed-bundle digests,
+compiler OS limits and cleanup, batch transfer, checkpoint retry, native
+traversal inputs, and invalid evidence rejection. The committed owners are
+`a6f870a3`, `fcd587ae`, and `2a89eefc`. The logs are
+`/tmp/araphor-wasm-memory-and-reuse-v16.log` and
+`/tmp/araphor-wasm-lifecycle-and-runtime-v16.log`.
+
+The v20 discovery group proves all retained corpus cases and the corrected
+context and forged-result cases. Earlier graph history and activation tests
+pass in the interrupted v12 run. The retained diagnostic logs record the
+IPC and fuel measurements. No temporary allowance remains in the runtime.
+The v23 production package case proves the corrected replacement wait and
+detector grant. These historical results do not close final-artifact or final
+workspace qualification. The complete implementation gates remain open.
+
 - [ ] Inline the checked row writer methods with the standard Rust writer
   annotation. The v23 core retains one generic call for each JSON evidence
   number and comma. Keep both method bodies, byte checks, JSON, evidence,
@@ -463,31 +481,31 @@ authorization owner, notification path, or algorithm implementation.
   in production and tests. This measurement is not a performance result.
   Automatic approval review rejects this proposal. The current correction
   keeps 32 MiB and 100 million fuel units in production and tests.
-- [ ] Map the pinned Wasmtime output lifting fuel error to `Limit`. The runtime
+- [x] Map the pinned Wasmtime output lifting fuel error to `Limit`. The runtime
   error type is private. Match its exact root error text. Keep the 32 MiB
   lifting limit. Require the existing 40 MiB output test to reach this error,
   return `Limit`, and permit the next evaluation.
-- [ ] Select the exact active package export for an unpinned evaluation under
+- [x] Select the exact active package export for an unpinned evaluation under
   the shared lifecycle lock. Keep explicit snapshots and historical pins equal.
   Keep the selected grant, complete dependency bundle, and execution checks.
   Verify that an unrelated revoked package does not prevent this evaluation.
   Require selected revocation to fail and a non-prepared target to return the
   existing unsupported-target error.
-- [ ] Diagnose the discovery activation interval failure in the full Rust
+- [x] Diagnose the discovery activation interval failure in the full Rust
   procedure. Keep the saved-profile, new-interval, and historical replay checks.
   Correct the owner or test fixture from the reproduced error.
-- [ ] Give discovery revision update and removal tests an explicit finite
+- [x] Give discovery revision update and removal tests an explicit finite
   30-second operation control. The default read control expires after one
   second. Keep production deadlines and all revision and replay checks.
-- [ ] Give graph installed-history update and removal tests an explicit finite
+- [x] Give graph installed-history update and removal tests an explicit finite
   30-second operation control. Keep the historical package, witness expiry,
   restart, and removal checks. Keep production deadlines.
-- [ ] Check graph installed-history progress through cursor 3 with the existing
+- [x] Check graph installed-history progress through cursor 3 with the existing
   bounded `process_to` test helper. `process` returns the count of changed
   source windows. Keep all three input records and all history and expiry checks.
-- [ ] Diagnose the discovery corpus parity failure in the full Rust procedure.
+- [x] Diagnose the discovery corpus parity failure in the full Rust procedure.
   Preserve every corpus case and correct the reproduced failure.
-- [ ] Add a temporary test diagnostic at the discovery adapter evaluation
+- [x] Add a temporary test diagnostic at the discovery adapter evaluation
   boundary. Measure dataset IPC bytes, array capacity, binary values, offsets,
   and schema bytes near the 32 MiB input limit. Keep all 21 corpus cases and
   both delivery counts. Record the cause, then remove the diagnostic.
@@ -501,25 +519,25 @@ authorization owner, notification path, or algorithm implementation.
   of a batch with no columns. Bound buffer and validity storage before the
   copy. Test a large binary dataset at a tight byte limit and require smaller
   limits to fail.
-- [ ] Diagnose duplicate context projection and host-change rejection failures
+- [x] Diagnose duplicate context projection and host-change rejection failures
   in the full Rust procedure. Keep exact identity and evidence validation.
-- [ ] Record the Wasm trap cause and remaining fuel in a focused test
+- [x] Record the Wasm trap cause and remaining fuel in a focused test
   diagnostic. Remove the diagnostic before final Rust verification.
-- [ ] Measure fuel in the existing duplicate, corpus, and graph recovery
+- [x] Measure fuel in the existing duplicate, corpus, and graph recovery
   tests. Use a temporary test-only fuel allowance if a failed call cannot
   report its full fuel cost. Keep production fuel, guest deadline,
   cancellation, and memory limits unchanged. Remove the diagnostic before
   final Rust verification. Use the results to select a reviewed correction.
-- [ ] Share component data, row, batch, and checkpoint limits under the Wasm
+- [x] Share component data, row, batch, and checkpoint limits under the Wasm
   execution owner. Measure the full corpus with a temporary test-only 64 MiB
   data limit. Keep the production data limit unchanged during the diagnostic.
   Keep the separate 32 MiB guest-to-host lifting limit, configured query input
   limit, memory reservations, guest deadline, and cancellation checks.
-- [ ] Make the forged physical-result candidate structurally valid in the
+- [x] Make the forged physical-result candidate structurally valid in the
   host-change test. Change its decision and kernel result to match the forged
   physical result. Require host validation to reject it against retained wire
   evidence. Keep the identity and lifecycle attack cases.
-- [ ] State each execution failure path in the review flow. The generic package
+- [x] State each execution failure path in the review flow. The generic package
   scheduler records typed readiness and stale results. Domain adapters return
   errors to their existing owner failure and coverage paths.
 - [ ] Remove the unused error conversion in Control configuration. Run the
@@ -541,7 +559,7 @@ authorization owner, notification path, or algorithm implementation.
   current-profile query test. The test adds a foreign tenant record, and the
   discovery worker processes all retained tenants. Keep the query grant on the
   primary source and preserve every profile and isolation assertion.
-- [x] Split a graph window when valid component outputs exceed the aggregate
+- [ ] Split a graph window when valid component outputs exceed the aggregate
   graph byte limit. Match only `GraphInvalid` with field `graph output bytes`.
   Preserve every other error. Use the installed credential component with
   256 records and 67 facts to prove the exact whole-window error, unchanged
@@ -550,56 +568,56 @@ authorization owner, notification path, or algorithm implementation.
   Share the existing immutable receipt comparison with the checkpoint test.
   Keep the commit observation, value, clock, retry, reopen, rollback, and removal
   checks.
-- [ ] Diagnose the SQL automatic replacement timeout after the installed
+- [x] Diagnose the SQL automatic replacement timeout after the installed
   detector case. Keep the original failure decision during the diagnostic.
   Fix the cause and rerun the production qualification.
-- [ ] Reuse the admitted bundle in each supervisor iteration. Remove the second
+- [x] Reuse the admitted bundle in each supervisor iteration. Remove the second
   full artifact read. Keep the grant and admission checks. Set the qualification
   wait to 120 seconds after the diagnostic shows completion at approximately
   40 seconds. Keep the production scheduler and result assertions unchanged.
-- [ ] Check the local query deadline after output validation. Reject an expired
+- [x] Check the local query deadline after output validation. Reject an expired
   result and release its memory lease. Verify that the caller deadline can
   remain valid while the shorter query deadline rejects the result.
-- [ ] Reject host input allocation above the query limit before an installed
+- [x] Reject host input allocation above the query limit before an installed
   call clones input or starts compilation. Use one shared query input check.
-- [ ] Preserve typed component and SDK limit errors in package readiness.
+- [x] Preserve typed component and SDK limit errors in package readiness.
   Record interrupted evaluation as incomplete. Verify no result or fallback.
-- [ ] Use canonical descriptor JSON for component package digests. Arrow metadata
+- [x] Use canonical descriptor JSON for component package digests. Arrow metadata
   maps must produce the same digest after read, install, restart, and replay.
   Preserve the existing SQL package encoding and its trust pins.
   Share this encoding with immutable component revision writes. An identical
   installation must not fail because an Arrow metadata map changes key order.
-- [ ] Canonicalize all descriptors in a mixed SQL/component bundle. Keep the
+- [x] Canonicalize all descriptors in a mixed SQL/component bundle. Keep the
   previous standalone SQL encoding. Reuse an existing immutable SQL revision
   only when its decoded descriptor, artifact, and dependencies are unchanged.
   Verify mixed-bundle digest, installation retry, reopen, and changed code.
-- [ ] Share one component across its declared exports. Raise the bounded package
+- [x] Share one component across its declared exports. Raise the bounded package
   and transport limits to hold the compiled artifact. Use no install hook.
-- [ ] Account for Arrow schema memory. Reject compressed IPC before decoding.
+- [x] Account for Arrow schema memory. Reject compressed IPC before decoding.
   Keep host input charges until the adapter releases its evaluation.
-- [ ] Compile in a fresh host worker with OS memory and CPU limits. Kill and
+- [x] Compile in a fresh host worker with OS memory and CPU limits. Kill and
   reap the worker on cancellation or deadline. Accept compiled code only from
   this worker. Keep the compiler permit until the worker exits.
 - [ ] Measure the source and compiled image charges for each required component.
   Set a finite cache byte limit that retains all four required components.
   Keep tests for byte and entry eviction. Retain the runtime test component
   in the shared test cache only when all five charges fit this limit.
-- [ ] Prove initial memory rejection with an instantiated core module. Require
+- [x] Prove initial memory rejection with an instantiated core module. Require
   the resource limit error before the host checks the analysis exports.
-- [ ] Retain package artifacts referenced by saved domain context. Replay with
+- [x] Retain package artifacts referenced by saved domain context. Replay with
   saved parameters and current permission. Reject historical commits.
 - [ ] Pass the host-selected AR-04 context dataset through an installed
   component. Verify exact identities, cutoff, revision, coverage, and omissions
   in `context-roundtrip`. Keep selection and permission on the host.
-- [ ] Transfer multiple input batches, including an empty batch, through a
+- [x] Transfer multiple input batches, including an empty batch, through a
   real component. Verify computation across all batches.
-- [ ] Supply a prior checkpoint to a real stateful component. Verify next
+- [x] Supply a prior checkpoint to a real stateful component. Verify next
   state, restart, and identical retry through the production package lifecycle.
-- [ ] Supply bounded native graph input and traversal output to an installed
+- [x] Supply bounded native graph input and traversal output to an installed
   component. Verify the selected versions and rows without snapshot conversion.
-- [ ] Reject an invalid evidence row from a real guest. Preserve a guest SDK
+- [x] Reject an invalid evidence row from a real guest. Preserve a guest SDK
   limit error in installed readiness. Verify that neither failure commits output.
-- [ ] Use a finite 300-second service grant in the installed detector
+- [x] Use a finite 300-second service grant in the installed detector
   qualification. Its 60-second fixture grant expired during cold component
   compilation. Keep production grant expiry checks unchanged. Verify install,
   processing, cold reopen, retry, and trust removal with the new fixture grant.
