@@ -69,18 +69,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if araphor_data::AnalysisPackageOwner::run_worker_if_requested()? {
         return Ok(());
     }
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(run());
-    Ok(())
-}
-
-async fn run() {
     let cli = Cli::parse();
     if let Err(error) = cli.validate() {
         error.exit();
     }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli))?;
+    Ok(())
+}
+
+async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let result = match cli.case {
         Case::AnalysisPackages => {
             mithril_e2e::AnalysisPackageQualification::new(cli.output_directory)
@@ -158,15 +158,9 @@ async fn run() {
                 .await
         }
     };
-    match result {
-        Ok(()) => {
-            println!("Araphor discovery check passed; see result.json for its proof boundary")
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-    }
+    result?;
+    println!("Araphor discovery check passed; see result.json for its proof boundary");
+    Ok(())
 }
 
 #[cfg(test)]

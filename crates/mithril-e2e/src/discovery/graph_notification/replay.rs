@@ -14,13 +14,13 @@ struct Card {
 }
 
 struct ReplayQualification {
-    root: tempfile::TempDir,
     intake: EvidenceIntakeOwner,
     data: Arc<AnalysisStore>,
     inputs: Arc<GraphInputs>,
     execution: InstalledAnalysis,
     authenticated: AuthenticatedEvidenceNodeV1,
     now: u64,
+    root: tempfile::TempDir,
 }
 
 pub(super) async fn run(now: u64) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
@@ -39,6 +39,7 @@ pub(super) async fn run(now: u64) -> std::result::Result<serde_json::Value, Box<
     let authorization = authority::run(now)?;
     let local = fixture.local_contract()?;
     let nodes = fixture.nodes()?;
+    drop(fixture);
     let density = ReplayQualification::new(now)?
         .notification_density()
         .await?;
@@ -373,7 +374,6 @@ impl ReplayQualification {
             Arc::new(Clock(UNIX_EPOCH + Duration::from_nanos(now))),
         )?;
         Ok(Self {
-            root,
             intake,
             data,
             inputs: Arc::new(GraphInputs::default()),
@@ -385,6 +385,7 @@ impl ReplayQualification {
                 node_boot_id: [7; 16],
                 label_epoch: 1,
             },
+            root,
         })
     }
 

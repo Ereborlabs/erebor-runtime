@@ -428,6 +428,30 @@ package case. The proof records both profile artifact hashes in
 `/tmp/araphor-wasm-production-bounds-proof-v27.json`.
 Graph notification and the final Rust procedure remain required.
 
+### Qualification cleanup correction
+
+**Done for the cleanup correction.** The graph qualification closes its stores
+before the temporary root. It releases the completed replay fixture before the
+density and window cases. On failure, it awaits the Control server shutdown and
+retains the original error. The command returns failure after Tokio shutdown.
+The test workload, assertions, and execution limits stay unchanged.
+
+The Rust test `discovery::graph_notification::tests::graph_error_releases_stores`
+passes. It uses an expired Node certificate with the production Control path.
+It requires the original transport or RPC error, reopens both stores, checks
+that no output exists, and checks temporary root removal. The command is
+`CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 cargo test -p mithril-e2e --lib discovery::graph_notification::tests::graph_error_releases_stores -- --exact --nocapture`.
+It exits zero with one pass in 67.84 seconds. Its log is
+`/tmp/araphor-wasm-cleanup-test-v29.log`, with SHA256
+`a96db716feb4d1155973265070aa09e35f0ab1361bc9a29070614d7493e9340a`.
+The source manifest is `/tmp/araphor-wasm-source-manifest-production-v29.json`,
+with SHA256 `b832e5e15328458d8fe8c4f9a1713785f906904f8a95528979875cf0c1d9c7f1`.
+
+An independent source review retains all 737 previous assertion calls in the
+changed tracked Rust files. The corpus, incident cards, finding workload, and
+window sizes stay unchanged. This review and the cleanup test do not replace
+the four fresh production cases or the final shared Rust procedure.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
@@ -468,7 +492,7 @@ authorization owner, notification path, or algorithm implementation.
   Use the existing package lifecycle and graph health owners. Preserve
   historical results. Keep missing coverage and failures explicit. Add Rust
   checks for unchanged input, changed activation, removal, and revocation.
-- [ ] Close qualification stores before their temporary root. Drop the completed
+- [x] Close qualification stores before their temporary root. Drop the completed
   incident replay fixture before density and window checks. Await graph test
   server shutdown on failure and retain the original error. Return command
   failures through the synchronous entry point so Tokio can close. Keep every

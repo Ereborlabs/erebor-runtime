@@ -26,7 +26,7 @@ use mithril_node::{
 use serde_json::json;
 use zerocopy::IntoBytes as _;
 
-use crate::control_fixture::{MtlsFixture, OutagePolicyFixture};
+use crate::control_fixture::{ControlServerFixture, MtlsFixture, OutagePolicyFixture};
 
 #[cfg(test)]
 mod physical;
@@ -168,6 +168,24 @@ impl GraphNotificationQualification {
             return Err("the qualification output already exists".into());
         }
         let tls = MtlsFixture::new(false)?;
+        self.run_tls(&tls).await
+    }
+
+    async fn run_tls(&self, tls: &MtlsFixture) -> std::result::Result<(), Box<dyn StdError>> {
+        let mut server = None;
+        let result = self.run_server(tls, &mut server).await;
+        let shutdown = match server.take() {
+            Some(server) => server.shutdown().await,
+            None => Ok(()),
+        };
+        result.and(shutdown)
+    }
+
+    async fn run_server(
+        &self,
+        tls: &MtlsFixture,
+        server: &mut Option<ControlServerFixture>,
+    ) -> std::result::Result<(), Box<dyn StdError>> {
         let root = tls.path().join("control-store");
         let data_root = tls.path().join("analysis");
         let store = ControlStore::open(&root)?;
@@ -180,7 +198,7 @@ impl GraphNotificationQualification {
         )?;
         let control = tls.control_from_intake(intake.clone(), 1)?;
         let execution = control.installed_analysis()?;
-        let server = tls.start(control).await?;
+        *server = Some(tls.start(control).await?);
         let boot = [7; 16];
         let wal = EffectObservationStore::durable(
             8,
@@ -205,7 +223,11 @@ impl GraphNotificationQualification {
         let mut trust = TrustCache::load(&tls.path().join("trust"))?;
         let mut registration = OutagePolicyFixture::registration(boot, false);
         registration.effect_prevention_claims_enabled = false;
-        let connector = tls.connector(&server, "node-a", boot);
+        let connector = tls.connector(
+            server.as_ref().ok_or("the Control server is absent")?,
+            "node-a",
+            boot,
+        );
         let mut connection = connector
             .connect(registration.clone(), false, &mut trust)
             .await?;
@@ -307,7 +329,11 @@ impl GraphNotificationQualification {
             Self::traverse(data.clone(), &snapshot, &finding, &reference.result_id, now).await?;
         let acceptance = replay::run(now).await?;
         drop(connection);
-        server.shutdown().await?;
+        server
+            .take()
+            .ok_or("the Control server is absent")?
+            .shutdown()
+            .await?;
         drop(intake);
         let mut result = Self::notify(&store, data.clone(), &graph, &finding, now)?;
         drop(graph);
@@ -909,6 +935,37 @@ impl GraphNotificationQualification {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn graph_error_releases_stores() -> crate::platform::TestResult<()> {
+        let tls = super::MtlsFixture::new(true)?;
+        let root = tls.path().to_path_buf();
+        let runner = super::GraphNotificationQualification::new(root.join("proof"));
+        let error = runner
+            .run_tls(&tls)
+            .await
+            .err()
+            .ok_or("the expired Node certificate was accepted")?;
+        assert!(
+            matches!(
+                error.downcast_ref::<mithril_node::Error>(),
+                Some(
+                    mithril_node::Error::ControlTransport { .. }
+                        | mithril_node::Error::ControlRpc { .. }
+                )
+            ),
+            "{error}"
+        );
+        let control =
+            crate::control_fixture::reopen_control_store(&root.join("control-store")).await?;
+        let data = super::AnalysisStore::open(root.join("analysis"))?;
+        assert!(!runner.output.exists());
+        drop(data);
+        drop(control);
+        drop(tls);
+        assert!(!root.exists());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn graph_notification_roundtrip() -> crate::platform::TestResult<()> {
         let directory = tempfile::tempdir()?;
