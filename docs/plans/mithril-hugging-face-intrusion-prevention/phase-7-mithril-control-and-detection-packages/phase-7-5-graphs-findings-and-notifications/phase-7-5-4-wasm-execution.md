@@ -388,6 +388,21 @@ The case uses the same normal executable and v27 source manifest as the
 package case. The proof is `/tmp/araphor-wasm-production-bounds-proof-v27.json`.
 The profile restart, graph notification, and final Rust gates remain.
 
+### Current profile restart qualification
+
+The fresh v27 `profile-restart` case exits zero and records `PASS`.
+The production owner persists the live profile and resolves late context.
+Frozen replay remains deterministic after restart without the prior context
+provider. The case retains `profile.json` and `profile-unresolved.json`.
+This case makes no physical profile or prevention claim.
+
+The result is `/tmp/araphor-current-v27-profile/result.json`.
+Its SHA256 is `3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
+The case uses the same normal executable and v27 source manifest as the
+package case. The proof records both profile artifact hashes in
+`/tmp/araphor-wasm-production-bounds-proof-v27.json`.
+Graph notification and the final Rust procedure remain required.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
