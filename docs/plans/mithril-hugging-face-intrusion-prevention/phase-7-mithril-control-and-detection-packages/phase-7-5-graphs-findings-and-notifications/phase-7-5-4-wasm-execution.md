@@ -576,11 +576,20 @@ recovers 4,179,186,704 bytes. Every loaded ELF section stays equal. The proof is
 `d75d18f2707e6eb3a8cfb3daf6fbece6ad63a1d83c3cb9dad0cb74e0cf69ccd6`.
 The saved production execution copy stays byte-identical.
 
-- [ ] Remove only the unused primary `target/debug/incremental` cache after
+- [x] Remove only the unused primary `target/debug/incremental` cache after
   checking active processes, file handles, and mappings. Keep source,
-  executables, components, logs, and proof. Run graph notification again with
-  the same saved executable, workload, limits, and reserve in a fresh output
-  directory. Then run the final shared Rust procedure on unchanged source.
+  executables, components, logs, and proof.
+- [ ] Run graph notification again with the same saved executable, workload,
+  limits, and reserve in a fresh output directory. Then run the final shared
+  Rust procedure on unchanged source.
+
+The primary incremental cache has no symlinks or active process references.
+Removal recovers 5,256,327,168 allocated bytes from 1,417 generated files.
+The saved execution copy has the same SHA256 after removal. The proof is
+`/tmp/araphor-incremental-cache-recovery-v31.json`, with SHA256
+`60705e0e43d6f45303d4dc6fb2f6baf74d8d7f5fb52d1021e43706682b3d2c8b`.
+All 1,576 current source hashes still match the v31 manifest. The retry uses
+`/tmp/araphor-current-v31-graph-retry` as its fresh output directory.
 
 ### Implementation TODOs
 
