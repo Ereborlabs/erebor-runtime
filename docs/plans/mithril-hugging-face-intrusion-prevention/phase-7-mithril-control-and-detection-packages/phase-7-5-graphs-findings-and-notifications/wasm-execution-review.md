@@ -493,3 +493,12 @@ corpus fails at the shared 60-second deadline on `rare-forbidden normal`.
 The graph evidence-recovery test fails with `PackageWasm::Limit` in
 `/tmp/araphor-wasm-graph-recovery-production-v13.log`. Fresh production
 qualification and final Rust CI remain required.
+
+The graph correction changes `Computation::output` in
+`araphor-analysis-builtins/src/graph/contract.rs`. It constructs one
+reason-details port before the finding loop and reuses it. Finding values,
+reason codes, evidence links, schemas, and checkpoint state stay equal.
+The shared computation suite has 13 passes. Two independent builds produce
+equal bytes for all four required components. See `graph_schema_correction`
+in [the build proof](wasm-component-build-proof.json). These checks do not
+replace current production-limit graph recovery and output-byte qualification.

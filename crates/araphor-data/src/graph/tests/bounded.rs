@@ -21,13 +21,17 @@ fn output_bytes_split() -> TestResult {
     }
     coverage(&store, 256, 1, "HEALTHY")?;
     let before = store.meta()?;
-    assert!(matches!(
-        GraphAndFindingOwner::derive(&input, &execution),
-        Err(Error::GraphInvalid {
-            field: "graph output bytes",
-            ..
-        })
-    ));
+    let error = GraphAndFindingOwner::derive(&input, &execution).err();
+    assert!(
+        matches!(
+            &error,
+            Some(Error::GraphInvalid {
+                field: "graph output bytes",
+                ..
+            })
+        ),
+        "{error:?}"
+    );
     assert_eq!(store.meta()?, before);
     assert!(owner.current_findings(source().tenant_id)?.is_empty());
 

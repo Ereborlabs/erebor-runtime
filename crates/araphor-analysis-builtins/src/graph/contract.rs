@@ -155,6 +155,7 @@ impl Computation {
             ],
             ..Default::default()
         };
+        let details_port = Rows::port::<Finding>("details", "graph.finding-candidate.v1");
         for (row, finding) in self.findings.iter().enumerate() {
             let reference = sdk::RowRef {
                 dataset: "findings".into(),
@@ -171,13 +172,9 @@ impl Computation {
                     },
                 });
             }
-            let details = Rows::encode(
-                &Rows::port::<Finding>("details", "graph.finding-candidate.v1"),
-                std::slice::from_ref(finding),
-                limits,
-            )?
-            .batches
-            .remove(0);
+            let details = Rows::encode(&details_port, std::slice::from_ref(finding), limits)?
+                .batches
+                .remove(0);
             output.reasons.push(sdk::ReasonValue {
                 output: reference,
                 code: format!("{}.{}", package.id, finding.reason),

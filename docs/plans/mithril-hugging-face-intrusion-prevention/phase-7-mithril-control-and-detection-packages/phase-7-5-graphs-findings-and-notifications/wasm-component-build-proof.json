@@ -108,5 +108,80 @@
   ],
   "component_pack_command": "rtk proxy /tmp/araphor-wasm-build/debug/araphor-component-build <core.wasm> <component.wasm>",
   "author_folder_command": "rtk proxy /tmp/araphor-wasm-build/debug/examples/build_package /tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_detector_example.wasm /tmp/araphor-burst-package-v5",
-  "artifact_refresh_result": "PASS"
+  "artifact_refresh_result": "PASS",
+  "graph_schema_correction": {
+    "created_utc": "2026-10-11T16:50:57.156224+00:00",
+    "seed": "araphor-analysis-v1",
+    "target": "wasm32-unknown-unknown",
+    "checks": [
+      {
+        "name": "discovery",
+        "core_bytes": 3457240,
+        "core_sha256": "9f92761848bca9c32c22c74fae0710e0b013b9b063bca559db144705ee9e8f57",
+        "component_bytes": 2613639,
+        "component_sha256": "b7df65bc6c4901767d07e02b397f80b1bcf88d2299eeb9a6ee8b56a41eb7ba08",
+        "independent_build_equal": true,
+        "destinations": [
+          "/tmp/araphor-graph-schema-v14-components-a/discovery.wasm",
+          "/tmp/araphor-graph-schema-v14-components-b/discovery.wasm"
+        ]
+      },
+      {
+        "name": "process",
+        "core_bytes": 3341846,
+        "core_sha256": "d0d1f134e363c8625fb6dc72db90c309a139ec84e84b7a40d684b4073acf544e",
+        "component_bytes": 2519898,
+        "component_sha256": "c8b76cfc6ee42d5031e0d8d89a038efb5ce5c44990fdf823ce1502ed9d9f6065",
+        "independent_build_equal": true,
+        "destinations": [
+          "/tmp/araphor-graph-schema-v14-components-a/process.wasm",
+          "/tmp/araphor-graph-schema-v14-components-b/process.wasm"
+        ]
+      },
+      {
+        "name": "credentials",
+        "core_bytes": 3341882,
+        "core_sha256": "f408402f1d8f4f8aa8dd99b65acafc48047c1cd2eab46f51aec5c94801e46335",
+        "component_bytes": 2519898,
+        "component_sha256": "413f991fb3511235959a7cc3979fe907b5ecb1786b8c6e03f3cd640411557d42",
+        "independent_build_equal": true,
+        "destinations": [
+          "/tmp/araphor-graph-schema-v14-components-a/credentials.wasm",
+          "/tmp/araphor-graph-schema-v14-components-b/credentials.wasm"
+        ]
+      },
+      {
+        "name": "kubernetes",
+        "core_bytes": 3341873,
+        "core_sha256": "829be69e712000f539eb7820e0bd94f3b127b6a25183cae67f117b5310724403",
+        "component_bytes": 2519898,
+        "component_sha256": "3b860fb64179a58e0fca42bf7e7616f53e5b2b6a1b4c6eb1b1374f6456f43f82",
+        "independent_build_equal": true,
+        "destinations": [
+          "/tmp/araphor-graph-schema-v14-components-a/kubernetes.wasm",
+          "/tmp/araphor-graph-schema-v14-components-b/kubernetes.wasm"
+        ]
+      }
+    ],
+    "build_logs": [
+      "/tmp/araphor-graph-schema-build-v14.log",
+      "/tmp/araphor-graph-schema-repro-v14.log"
+    ],
+    "scope": "Build one graph reason-details schema per evaluation. This proof records reproducible builds and shared computation tests. Current production-limit graph qualification remains open.",
+    "source": {
+      "path": "crates/araphor-analysis-builtins/src/graph/contract.rs",
+      "sha256": "04121c94eaae434a0ef959b49ad00581d614527f3656c5194df8885d5eb47cf6"
+    },
+    "shared_tests": {
+      "command": "rtk proxy env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --locked -p araphor-analysis-builtins --lib",
+      "exit_code": 0,
+      "passed": 13,
+      "log": "/tmp/araphor-graph-schema-unit-v14.log",
+      "log_sha256": "6c692e47355b79b844198d4ee98dad94c231b6b4399798fe0bf00d289f7611ba"
+    },
+    "build_log_sha256": {
+      "/tmp/araphor-graph-schema-build-v14.log": "795fd6c7976d6272553d4fcfcef65188fd8cdb7a7cdfbfbf8f9324cbdc019caf",
+      "/tmp/araphor-graph-schema-repro-v14.log": "944997599a97354d2ce96f7fc5beed69ea605849012f2148060cfb0cdc711a3f"
+    }
+  }
 }

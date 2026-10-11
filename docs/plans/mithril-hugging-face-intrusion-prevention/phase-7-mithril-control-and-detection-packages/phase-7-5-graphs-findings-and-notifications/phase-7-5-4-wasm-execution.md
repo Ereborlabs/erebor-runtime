@@ -164,6 +164,14 @@ The complete corpus exits 101. `rare-forbidden normal` reaches the shared
 The proof is `/tmp/araphor-wasm-production-bounds-proof-v13.json`.
 The graph log is `/tmp/araphor-wasm-graph-recovery-production-v13.log`.
 
+The graph schema correction is implemented. Shared computation tests have
+13 passes. Two independent builds produce equal core and component bytes
+for all four required components. The correction constructs the reason-details
+port once per evaluation. It preserves the finding rows, reasons, evidence,
+and checkpoint. The correction proof is in
+`wasm-component-build-proof.json`, under `graph_schema_correction`.
+Current production-limit graph qualification remains required.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
