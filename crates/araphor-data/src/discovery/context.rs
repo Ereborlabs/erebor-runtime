@@ -610,6 +610,8 @@ fn refresh_missing(view: &mut DiscoveryContextViewV1) {
 
 #[cfg(test)]
 mod tests {
+    mod baseline;
+
     use std::sync::Arc;
 
     use super::*;

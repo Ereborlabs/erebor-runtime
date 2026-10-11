@@ -729,6 +729,8 @@ fn merge_coverage(mut input: Vec<DiscoveryCoverageV1>) -> Result<Vec<DiscoveryCo
 
 #[cfg(test)]
 mod tests {
+    mod baseline;
+
     use serde::Deserialize;
 
     use super::*;
