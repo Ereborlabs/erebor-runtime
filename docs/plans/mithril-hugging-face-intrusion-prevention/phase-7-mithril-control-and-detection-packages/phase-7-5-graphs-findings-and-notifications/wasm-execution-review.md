@@ -384,6 +384,34 @@ Review these boundary tests with the algorithm cases:
   rejects a result after the local deadline while the caller deadline remains
   valid. The next call can obtain the released memory lease.
 
+## Production qualification
+
+Build the normal qualification binary after the shared Rust procedure ends.
+Run each case in a separate output directory that does not yet exist. Use the
+same binary for all four cases. Keep it unchanged while its compiler children
+run.
+
+```sh
+cargo build --locked -p mithril-e2e --bin mithril_discovery_test
+target/debug/mithril_discovery_test --case analysis-packages --output-directory /tmp/araphor-current-v12-packages
+target/debug/mithril_discovery_test --case context-roundtrip --output-directory /tmp/araphor-current-v12-context
+target/debug/mithril_discovery_test --case profile-restart --output-directory /tmp/araphor-current-v12-profile
+target/debug/mithril_discovery_test --case graph-notification --output-directory /tmp/araphor-current-v12-graph
+```
+
+Require exit code 0 and a `result.json` with schema version 1, the exact case
+name, and result `PASS`. Retain the source and binary hashes, logs, and output
+files. These cases use production data and fuel limits.
+
+| Case | Required proof |
+| --- | --- |
+| `analysis-packages` | Install the SDK detector over TLS from its built folder. Check restart, retry, trust revocation, threshold 3, four input records, three matching evidence records, reason `example-burst.THRESHOLD`, and no host rebuild. Check the package checkpoint counts 2, 2, and 1. |
+| `context-roundtrip` | Check signed context, cursor 1, and the installed context component. The returned identity, revision, and coverage must match. Check one selected record, no excluded record, and one omission. |
+| `profile-restart` | Check the context fields above, live profile, late context, deterministic profile, immutable sealed revision, and frozen replay without provider calls. Retain `profile.json` and `profile-unresolved.json`. |
+| `graph-notification` | Check acknowledgements `[null, null, 2, 2]`, cursors `[0, 0, 2, 2]`, failed transaction, duplicate intake, and equal replay. Check the original notification deadline and human receipt. Check 12 incident cards, 257 findings and obligations, and native windows of 64 and 185 records with equal results after reopen. Retain `graph.json`. |
+
+The commands above are required checks. They do not record a pass.
+
 ## Verification record
 
 **Not done.** This guide describes the implementation under qualification.

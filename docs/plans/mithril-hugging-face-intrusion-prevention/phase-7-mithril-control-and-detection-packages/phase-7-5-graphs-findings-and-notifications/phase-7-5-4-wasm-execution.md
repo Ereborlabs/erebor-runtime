@@ -186,6 +186,14 @@ authorization owner, notification path, or algorithm implementation.
 
 ### Execution correction TODOs
 
+- [ ] Check whether bounded internal discovery calls can remove the production
+  limit mismatch. The retained corpus has 10,001 normal deliveries and 20,002
+  replay deliveries in `rare-forbidden`. Only these two calls exceed the
+  100-million fuel limit. Keep the outer source window, duplicate accounting,
+  coverage, samples, and frozen replay equal. Use installed computation for
+  each part and its merge. Check the merge, display groups, and comparison at
+  the same production limits before selecting this correction. Keep the live
+  CI source unchanged until the current procedure ends.
 - [ ] Recover filesystem space after the v12 test link failure. Remove debug
   sections only from inactive generated executables. Check every loaded
   section before and after cleanup. Keep source, native archives, component
