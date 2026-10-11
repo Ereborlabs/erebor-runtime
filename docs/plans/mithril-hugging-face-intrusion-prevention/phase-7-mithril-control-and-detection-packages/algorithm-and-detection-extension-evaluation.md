@@ -12,9 +12,12 @@ comparisons and examples; the child plans own implementation scope. The
 [security package design](extensible-security-packages-design.md) retains its
 evidence and authority rules.
 
-Current Araphor algorithms migrate in 7.5.4. Full upstream algorithm development
-belongs to 7.5.8 for Discovery Engine and 7.5.9 for Security Analytics. The
-[source inventory](phase-7-5-graphs-findings-and-notifications/algorithm-coverage.md)
+Current Araphor algorithms move to the SDK contract in the 7.5.2 follow-up.
+Existing production owners call the shared Rust computation directly and must
+produce equivalent results. Phase 7.5.4 runs that same computation as installed
+Wasm packages and replaces the built-in dispatch after runtime checks pass.
+Full upstream algorithm development belongs to 7.5.8 for Discovery Engine and
+7.5.9 for Security Analytics. The [source inventory](phase-7-5-graphs-findings-and-notifications/algorithm-coverage.md)
 defines their pinned scope and completion rules. The examples below are not a
 complete upstream algorithm catalogue or proof of compatibility.
 

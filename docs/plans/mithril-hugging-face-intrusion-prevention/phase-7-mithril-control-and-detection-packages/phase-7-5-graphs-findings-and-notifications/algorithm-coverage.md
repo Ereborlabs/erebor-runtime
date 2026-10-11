@@ -8,7 +8,7 @@ Review date: 2026-10-09. Implementation of these migrations and ports: **Not don
 
 | Source | Local revision examined | Development owner |
 | --- | --- | --- |
-| Current Araphor | `1b08236077223bb1e9b32ae36df78778a674c4cf` | [7.5.4 migration](phase-7-5-4-wasm-execution.md#current-algorithm-migration) |
+| Current Araphor | `1b08236077223bb1e9b32ae36df78778a674c4cf` | [7.5.2 SDK migration](phase-7-5-2-analysis-contract-and-sdk.md#current-algorithm-migration); [7.5.4 installed Wasm execution](phase-7-5-4-wasm-execution.md#current-algorithm-migration) |
 | Discovery Engine | `0b5b73425c5aec89b803e737b188b2a331d0e218` | [7.5.8 algorithm packages](phase-7-5-8-discovery-engine-algorithms.md) |
 | OpenSearch Security Analytics | `e33c62506efcb15ae795847484357704b539bcf1` | [7.5.9 algorithm packages](phase-7-5-9-security-analytics-algorithms.md) |
 
@@ -47,7 +47,9 @@ the phase. A scope reduction needs an explicit recorded decision.
 
 ## Current Araphor algorithms
 
-All rows belong to 7.5.4 and are **Not done** for migration.
+All rows belong to 7.5.2 for SDK conversion, production adapters, and equivalence
+through trusted Rust calls. That migration is **Not done**. Installed Wasm
+execution and dispatch replacement belong to 7.5.4 and are also **Not done**.
 For AR-04, migration means integration with the shared host selector through the
 SDK input contract. Authorization and trusted selection stay in that host owner.
 
@@ -63,8 +65,10 @@ SDK input contract. Authorization and trusted selection stay in that host owner.
 
 Shared graph validation, identity construction, proof checks, window selection,
 expiration, result assembly, storage, and notification routing remain production
-owner operations. The migration must exercise them through package execution;
-it must not copy them into independently trusted plugin implementations.
+owner operations. The 7.5.2 migration exercises them through shared SDK code
+called by existing production owners. Phase 7.5.4 repeats those checks through
+installed packages. Do not copy these checks into independently trusted plugin
+implementations.
 
 ## Discovery Engine algorithms
 
@@ -128,6 +132,9 @@ negative semantic tests, installed-package execution, replay and failure checks,
 and exact source/package revisions. Record numerical tolerances and intended
 security differences explicitly. Reuse one implementation when an upstream
 family matches an existing algorithm; record the mapping and test it.
+For current algorithms, record 7.5.2 computation equivalence separately from
+7.5.4 installed execution and 7.5.7 integrated qualification. Completing the
+SDK conversion alone does not close installed-package coverage.
 
 Upstream HTTP, gRPC, OpenSearch storage, schedulers, installers, cluster clients,
 and dashboards are not additional services to port. Existing Araphor owners

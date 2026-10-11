@@ -37,8 +37,9 @@ in `src/bin`. Use production APIs. Test doubles supply only external inputs.
 Keep physical harnesses and fixtures in their existing directories. Add no long
 shell test program, external source-tree edit, or linked worktree.
 
-Verify every current `AR-*` algorithm migrated in 7.5.4. Use the production
-packages and contract fixtures delivered by 7.5.3 through 7.5.5. This phase
+Verify every current `AR-*` algorithm converted to the SDK in 7.5.2 and switched
+to installed execution in 7.5.4. Use the shared source, production packages,
+and contract fixtures delivered by 7.5.2 through 7.5.5. This phase
 adds integrated proof and regression cases; it does not first implement an
 algorithm required by its own entry gate. Full Discovery Engine development
 belongs to [7.5.8](phase-7-5-8-discovery-engine-algorithms.md); full Security

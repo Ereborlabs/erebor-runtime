@@ -40,7 +40,8 @@ Control restarts or a notification sink fails
 The user approved the SDK and execution direction for this plan on 2026-10-09.
 Native graph storage, direct large-graph reads, bounded native DuckDB traversal,
 and the portable analysis contract and Rust SDK are **Done**. Child phases
-7.5.3 through 7.5.9 below are **Not done**.
+7.5.3 through 7.5.9 below are **Not done**. The added current-algorithm migration
+in 7.5.2 is **Not done** and must pass before 7.5.3.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 
@@ -54,9 +55,9 @@ bindings. Host owners enforce authorization, limits, validation, and commits.
 | Child phase | Deliverable | Entry gate |
 | --- | --- | --- |
 | [7.5.1 Native graph storage and traversal](phase-7-5-1-native-graph-storage.md) | Complete the retained native-row TODOs below, direct large-graph reads, and bounded native DuckDB traversal. | Existing graph owners and tests. |
-| [7.5.2 Analysis contract and SDK](phase-7-5-2-analysis-contract-and-sdk.md) | Complete contract requirements inventory, typed authoring, generated descriptors/interface declarations, and portable fixture tests. | 7.5.1. |
-| [7.5.3 Package lifecycle](phase-7-5-3-package-lifecycle.md) | Local SQL installation, dependency evaluation, atomic state, updates, and CLI/agent inspection. | 7.5.2 and Observability 3. |
-| [7.5.4 Wasm execution and current algorithms](phase-7-5-4-wasm-execution.md) | Embedded Wasmtime and explicit migration of current discovery, context integration, and HF-PROC/HF-DW/HF-XNODE algorithms. | 7.5.3. |
+| [7.5.2 Analysis contract and SDK](phase-7-5-2-analysis-contract-and-sdk.md) | Portable SDK and contract inventory; migrate current discovery, context integration, and HF-PROC/HF-DW/HF-XNODE computation into shared SDK code used by existing Rust callers. | 7.5.1. |
+| [7.5.3 Package lifecycle](phase-7-5-3-package-lifecycle.md) | Local SQL installation, dependency evaluation, atomic state, updates, and CLI/agent inspection. | 7.5.2, including algorithm equivalence, and Observability 3. |
+| [7.5.4 Wasm execution](phase-7-5-4-wasm-execution.md) | Embedded Wasmtime, installed execution of the shared algorithms, runtime equivalence, and production dispatch replacement. | 7.5.3. |
 | [7.5.5 Native execution](phase-7-5-5-native-execution.md) | Isolated compiled workers under the same model and package contract. | 7.5.4. |
 | [7.5.6 Optional Python execution](phase-7-5-6-python-execution.md) | A bundled interpreter and locked dependencies when Python support is selected. | 7.5.5; optional for the core release. |
 | [7.5.7 Package qualification](phase-7-5-7-package-qualification.md) | Integrated current-algorithm migration, package installation, replay, isolation, and paired incident proof. | 7.5.5; also 7.5.6 if Python is advertised. |
@@ -70,10 +71,10 @@ independently. Both are required for the requested full algorithm scope.
 
 ```mermaid
 flowchart LR
-    A["7.5.1 Storage and native traversal"] --> B["7.5.2 Contract and SDK"]
+    A["7.5.1 Storage and native traversal"] --> B["7.5.2 SDK and current algorithms"]
     B --> C["7.5.3 SQL package lifecycle"]
     O["Observability 3"] --> C
-    C --> D["7.5.4 Wasm and current migration"]
+    C --> D["7.5.4 Wasm and installed execution"]
     D --> E["7.5.5 Native execution"]
     E --> G["7.5.7 Runtime qualification"]
     E --> F["7.5.6 Optional Python"]
@@ -88,8 +89,10 @@ flowchart LR
 
 The [algorithm inventory](algorithm-coverage.md) pins the three source revisions,
 names current migration items and upstream families, and defines the completion
-gate. Phase 7.5.2 completes the contract requirements audit; 7.5.8 and 7.5.9
-implement the upstream catalogue. Missing algorithms remain Not done. Missing
+gate. Phase 7.5.2 completes the contract requirements audit and current-algorithm
+conversion with production equivalence. Phase 7.5.4 proves the same algorithms
+through installed Wasm execution. Phases 7.5.8 and 7.5.9 implement the upstream
+catalogue. Missing algorithms remain Not done. Missing
 deployment inputs are recorded separately. Package computation can complete
 without policy activation; 7.6 and
 7.8 retain preview and publication authority.
@@ -142,8 +145,9 @@ The historical result body and all seven storage TODOs are preserved exactly.
 No runtime code, dependency, incident test, or benchmark changed or ran.
 Implementation remains **Not done** for the new child phases.
 
-The subsequent algorithm-scope update makes all seven current migration items
-explicit in 7.5.4 and adds 7.5.8 and 7.5.9. There are now nine child plans. The
+The earlier algorithm-scope update assigned all seven current migration items
+to 7.5.4 and added 7.5.8 and 7.5.9. The revised scope above moves computation
+conversion into 7.5.2. There are now nine child plans. The
 source inventory and new phases are recorded; algorithm implementation and
 full per-function coverage remain **Not done**. This update changes plans only.
 The plan update is **Done**. Checks pass for 15 Markdown files, 125 local links
@@ -166,6 +170,21 @@ results and storage TODOs remain unchanged. The diff whitespace check passes.
 No Rust, runtime, physical, or performance test ran for this documentation edit.
 New implementation phases remain **Not done**.
 
+### Algorithm migration order update
+
+**Done** for the approved plan change on 2026-10-10. The 7.5.2 follow-up now owns
+all seven current algorithm items, production adapters, and equivalence through
+trusted Rust calls. Its completed portable SDK result remains unchanged. The
+extended phase is **Not done**. Phase 7.5.3 requires that follow-up; 7.5.4 owns
+installed Wasm execution, runtime equivalence, and replacement of built-in
+dispatch. The inventories, verification tables, and qualification plan use the
+same boundaries.
+
+Checks pass for 11 changed Markdown files, 199 local links and anchors, code
+fences, and exact preservation of all seven moved checklist items. Independent
+review found no scope or status conflict. `git diff --check` passes. This update
+changes plans and supporting records only. No Rust or runtime test ran.
+
 ## Entry gate and owners
 
 Require Phase 7.4. GraphAndFindingOwner owns graph and finding revisions;
@@ -184,8 +203,9 @@ incident graph, source collector, or query database is required.
 
 Status: **Not done** for the complete package scope. Native graph storage,
 traversal, and the portable analysis contract and Rust SDK are **Done**. The
-[SDK result](phase-7-5-2-analysis-contract-and-sdk.md#result) records its source,
-tests, and limits. Package lifecycle and execution remain pending.
+[SDK result](phase-7-5-2-analysis-contract-and-sdk.md#portable-sdk-result) records
+its source, tests, and limits. The current-algorithm follow-up in 7.5.2, package
+lifecycle, and installed execution remain pending.
 The nine review corrections are **Done**. They pass the focused Rust checks,
 final shared Rust procedure, and fresh lightweight and paired physical
 incidents at `6beb143d`. The owned qualification VM is removed.
@@ -1261,7 +1281,7 @@ added by this approval.
 ## End scope and example
 
 Complete when all required children pass: native graph storage, the SDK and
-contract inventory, SQL package lifecycle, current algorithm migration, Wasm and
+contract inventory, current algorithm migration, SQL package lifecycle, Wasm and
 native execution, runtime qualification, and the full pinned Discovery Engine
 and Security Analytics algorithm catalogues. Include Python only if advertised.
 Each algorithm has implementation proof and a separate live-input readiness

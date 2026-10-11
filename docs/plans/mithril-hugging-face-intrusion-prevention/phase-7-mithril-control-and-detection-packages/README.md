@@ -16,8 +16,9 @@ The [algorithm and detector extension evaluation](algorithm-and-detection-extens
 compares runtime choices. The approved [7.5 child phases](phase-7-5-graphs-findings-and-notifications/README.md#approved-extension-and-child-phases)
 select one SDK and package contract, default Wasm execution for compiled code,
 existing SQL, native execution, and optional Python. The portable contract and
-Rust author SDK are **Done**. Package lifecycle and execution adapters are
-**Not done**. The child results record their implementation and qualification.
+Rust author SDK are **Done**. Current-algorithm conversion, package lifecycle,
+and execution adapters are **Not done**. The child results record their
+implementation and qualification.
 
 ## Intended end state
 
@@ -218,13 +219,15 @@ Independent work may use the entry gates in the table, not skip them.
 Within 7.5, complete 7.5.1 through 7.5.5, then 7.5.7. Include 7.5.6 only when
 Python support is selected. Require Observability 3 before 7.5.3's public package
 API. Then complete 7.5.8 and 7.5.9; they are independent after 7.5.7. Phase 7.5.2
-audits all algorithm contract requirements before SDK freeze. Existing discovery
-and detector migration belongs to 7.5.4. Phase 7.5.7 verifies that migration
-without requiring either later upstream port. Each child requires its own checks.
+audits all algorithm contract requirements and moves current discovery and
+detector computation into shared SDK code. Its production equivalence checks
+must pass before 7.5.3. Phase 7.5.4 runs that same code as installed Wasm packages
+and replaces built-in dispatch. Phase 7.5.7 verifies the complete path without
+requiring either later upstream port. Each child requires its own checks.
 Historical graph results do not qualify new runtimes or upstream algorithms.
 
 The decoder and query engine belong to the data crate from 7.3. Discovery input,
-validation, and persistence belong there from 7.4. Phase 7.5.4 moves reusable
+validation, and persistence belong there from 7.4. Phase 7.5.2 moves reusable
 computation into SDK packages while the data owners retain these boundaries.
 They do not depend on Control-local files. Phase 7.9 places the same owners,
 package contract, and qualified execution adapters outside Control; it does not
@@ -247,7 +250,8 @@ production owners without Kubernetes; run a physical case only where listed.
 | 7.3 | Check reader/rotation progress, shared decoding, trusted scope, extraction limits, moving/fixed windows, follow frames, pending-source visibility and replay floors. | Run internal `query-follow` against AnalysisStore and QueryOwner. Public SQL admission, disclosure and bounded Tokio execution are tested in Observability 3; physical qualification follows in 7.10. |
 | 7.4 | Check exact atoms, context selection, comparison and deterministic replay. | Run `context-roundtrip` and `profile-restart` from Node WAL through mTLS and DiscoveryOwner; physical qualification follows in 7.10. |
 | 7.5 | Check graph storage, graph/finding validation, package contracts, runtime isolation, replay, provenance, and routing. | Run `analysis-packages` and `graph-notification` through production owners, then the paired physical incident case. The child plans define new case requirements. |
-| 7.5.4 | Check all AR-01 through AR-07 migration items against prior results, including host context integration. | Run `context-roundtrip`, `profile-restart`, and `graph-notification` through the migrated path; exercise new Wasm packages in `analysis-packages`. |
+| 7.5.2 | Check AR-01 through AR-07 SDK conversion and production adapters against prior results, including host context integration. | Run `context-roundtrip`, `profile-restart`, and `graph-notification` through trusted Rust calls to the shared computation. |
+| 7.5.4 | Check installed Wasm equivalence for AR-01 through AR-07, runtime limits, isolation, and dispatch replacement. | Reuse those three cases through installed components; exercise new Wasm packages in `analysis-packages`. |
 | 7.5.8, 7.5.9 | Check every pinned upstream algorithm, semantic variant, and source-to-package mapping. | Run `discovery-engine-algorithms` and `security-analytics-algorithms`; record complete inventory results separately from live-input readiness. |
 | 7.6 | Check method matches, suggestion validation and exact preview counterexamples. | Run `detection-context`, `proposal-preview` and `poisoned-window` through production owners; physical policy proof follows in 7.8 and 7.10. |
 | 7.7 | Check assessment citations, disclosure, abstention and grant rejection. | Run `assessment-loop` with a recorded agent through CLI and gRPC; no live model or physical effect is required. |

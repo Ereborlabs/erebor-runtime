@@ -10,6 +10,9 @@ Source record: the primary checkout at `2b9fe8c`, with validation correction
 Test error propagation is recorded in `2b9fe8c`. The original SDK commit is
 `c85be1d7`; the host contract commit is `412c001b`.
 The plan Result records the final source and verification evidence.
+This review records the completed portable SDK scope. The added
+[current-algorithm follow-up](phase-7-5-2-analysis-contract-and-sdk.md#current-algorithm-migration)
+requires production adapters and shared computation. That work is **Not done**.
 
 ## Intended end state
 
@@ -156,7 +159,8 @@ The SDK descriptors are not an installed-package dispatch path.
 **Implemented outside this phase:** the host selects authorized native graph
 rows through [traversal version checks](../../../../../crates/araphor-data/src/analysis/extraction/graph/traversal/versions.rs).
 **Not implemented:** the production adapter from those rows into an SDK
-`Evaluation`. The fixture test proves that selected relations and a manifest can
+`Evaluation`. The 7.5.2 follow-up owns this adapter and its production tests.
+The fixture test proves that selected relations and a manifest can
 retain exact versions, empty replacements, subject key bytes, source windows,
 limits, and hop boundaries. Its computation joins relationship endpoints to
 subjects within each version and returns per-version counts. Assertions inspect

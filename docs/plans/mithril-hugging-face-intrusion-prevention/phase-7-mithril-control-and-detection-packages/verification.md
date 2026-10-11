@@ -374,7 +374,8 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | 7.3 | query_input_, query_scope_, query_follow_, frame and configured extraction-limit tests | internal query-follow, durable pending ranges, replay-floor restart and input cleanup |
 | 7.4 | discovery_derivation_, discovery_context_, discovery_comparison_ | context-roundtrip; profile-restart |
 | 7.5 | control_graph_, control_notification_, control_authority_; native-row storage, SDK, package lifecycle, execution isolation, and parity tests | graph-notification; analysis-packages under the [child qualification matrix](phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md) |
-| 7.5.4 | AR-01 through AR-07 migration equivalence, host context/proof checks, and component limits | context-roundtrip; profile-restart; graph-notification; analysis-packages with real Wasm execution |
+| 7.5.2 | AR-01 through AR-07 SDK conversion, input/output adapters, result equivalence, and host context/proof checks | context-roundtrip; profile-restart; graph-notification through production owners that directly call the shared Rust computation |
+| 7.5.4 | Installed Wasm execution of AR-01 through AR-07, equivalent results, component isolation and limits, and replacement of built-in dispatch | context-roundtrip; profile-restart; graph-notification through installed packages; analysis-packages with real Wasm execution |
 | 7.5.8 | Every Discovery Engine source algorithm and variant in the [coverage inventory](phase-7-5-graphs-findings-and-notifications/algorithm-coverage.md#discovery-engine-algorithms); package semantic and recovery tests | discovery-engine-algorithms through installed SDK packages and production owners |
 | 7.5.9 | Every Security Analytics source algorithm, operator, rule mapping, and delegated computation in the [coverage inventory](phase-7-5-graphs-findings-and-notifications/algorithm-coverage.md#security-analytics-algorithms) | security-analytics-algorithms; full corpus compatibility report, package execution, recovery, and mandatory notification checks |
 | 7.6 | discovery_detection_, discovery_proposal_, discovery_suggestion_ | detection-context; proposal-preview; poisoned-window |
@@ -388,9 +389,14 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | Observability 4 | observability_crd_ | trace-crd; physical Kubernetes pair |
 
 Phase 7.5.2 must resolve inventory and contract requirements before SDK freeze.
+Its follow-up must move all seven current algorithms to the SDK contract and
+prove equivalent results through the existing production owners before 7.5.3.
+These trusted direct Rust calls do not qualify installed package execution.
 Phase 7.5.3 requires Observability 3 for the public package API and qualifies SQL
-execution only. Phase 7.5.7 uses the migrated algorithms and qualified runtime
-fixtures; it does not depend on 7.5.8 or 7.5.9. Those two phases qualify the full
+execution only. Phase 7.5.4 qualifies the same computation through installed
+Wasm packages without a second implementation. Phase 7.5.7 uses the migrated
+algorithms and qualified runtime fixtures; it does not depend on 7.5.8 or 7.5.9.
+Those two phases qualify the full
 upstream catalogue separately. Each 7.5 child ends with its completion scope and
 an expected example; the example does not replace its full acceptance matrix.
 

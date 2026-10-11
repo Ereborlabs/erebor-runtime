@@ -2,7 +2,10 @@
 
 This record expands the current Araphor rows in [the coverage index](algorithm-coverage.md).
 The [contract and SDK](phase-7-5-2-analysis-contract-and-sdk.md) use these requirements.
-The [current migration](phase-7-5-4-wasm-execution.md) implements these exports later.
+The [SDK migration](phase-7-5-2-analysis-contract-and-sdk.md#current-algorithm-migration)
+implements these exports and their production adapters through direct Rust
+calls. [Wasm execution](phase-7-5-4-wasm-execution.md) then runs that same code
+through installed packages.
 
 ## Source and result
 
@@ -13,9 +16,10 @@ retain their owners and meaning. The audit reads each entry point, its helpers,
 its model validation, and its tests. It does not run a package or replace dispatch.
 
 **Done:** identify the contract requirements and migration boundaries.
-**Not done:** migrate any computation to installed package execution.
-Every row below belongs to the current migration owner. The target is Rust
-computation with the default Wasm binding and a qualified native binding.
+**Not done:** SDK computation conversion, production equivalence, and installed
+package execution. Every row below belongs to the 7.5.2 migration follow-up for
+shared Rust computation. The default Wasm binding follows in 7.5.4 and the
+qualified native binding in 7.5.5.
 The host context selector remains a host operation.
 
 ## Inputs and outputs
@@ -91,8 +95,10 @@ several exports need the same operation.
 
 Graph test symbols and fixtures are under [graph tests](../../../../../crates/araphor-data/src/graph/tests.rs)
 and [processing tests](../../../../../crates/araphor-data/src/graph/tests/processing.rs).
-The migration must extend these test mappings and run the installed
-production path. The current tests do not prove package execution.
+The 7.5.2 migration must extend these test mappings and run production owners
+through the shared SDK computation. Phase 7.5.4 must then run those checks
+through the installed production path. The current tests do not prove either
+migration result.
 
 ## Shared operations that remain host-owned
 

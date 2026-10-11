@@ -4,6 +4,9 @@ Install, compose, inspect, update, and remove analysis packages through one
 owner. Parent: [7.5](README.md). Require 7.5.2 and the authenticated client API
 from [Observability 3](../../../araphor-observability/phase-3-cli-api-and-console.md).
 Use SQL to prove the lifecycle before adding component and native execution.
+The 7.5.2 entry gate includes current algorithm conversion, production adapters,
+and equivalence through trusted Rust calls. The portable SDK result alone does
+not satisfy this gate.
 
 ## Intended end state
 
@@ -87,6 +90,7 @@ alone does not authorize executable installation.
 Only SQL exports become executable in this phase. Prove checkpoint commits and
 upgrade rebuilds with SQL models that consume explicit prior-state rows and
 return declared next-state rows. Reject activation of unavailable targets.
+Current algorithms continue through the shared built-in Rust calls from 7.5.2.
 Executable component and native conversion functions arrive with their runtime
 phases; this phase must not use a test-only executor to simulate them.
 
@@ -114,7 +118,8 @@ Stop after the production lifecycle works with SQL and shared runtime dispatch.
 Complete when an authorized operator or agent can install, inspect, run, update,
 roll back, and remove local SQL packages through the production API. Dependency
 selection, result/state commits, stale-result reporting, and recovery work.
-Compiled algorithms and the current detector migration remain in 7.5.4.
+Current algorithms already use the SDK through trusted Rust calls. Installed
+Wasm execution and the production dispatch change remain in 7.5.4.
 
 Example at completion: install two SQL models. `denials.count` groups distinct
 denied-open events by exact subject and resource. `denials.repeated` selects

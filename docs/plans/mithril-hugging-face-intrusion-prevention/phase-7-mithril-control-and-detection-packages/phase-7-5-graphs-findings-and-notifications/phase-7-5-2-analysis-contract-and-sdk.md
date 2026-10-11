@@ -1,7 +1,9 @@
 # Phase 7.5.2: Analysis Contract And SDK
 
 Give authors one typed interface for reusable algorithms and detectors. Hide
-execution bindings behind an SDK. Parent: [7.5](README.md). Require 7.5.1.
+execution bindings behind an SDK. Move current algorithms into shared SDK code
+before package installation or Wasm execution. Parent: [7.5](README.md).
+Require 7.5.1.
 
 ## Intended end state
 
@@ -9,6 +11,9 @@ An author defines inputs, parameters, outputs, and checkpoint types once. A
 model can consume several datasets and return several datasets with different
 row counts. Another model can use its named output. The same descriptor supplies
 validation, package inspection, generated bindings, and agent descriptions.
+Existing production owners call the same SDK-compatible computation through
+ordinary Rust calls. Findings, evidence, coverage, checkpoints, and notifications
+retain their current behavior. These calls use trusted built-in code.
 
 ## Implementation flow
 
@@ -27,6 +32,19 @@ Author tests an export against fixtures
 An export returns an invalid schema, reference, or checkpoint
   -> validation rejects the complete result with a structured reason
   -> no durable result or progress is committed
+
+An existing discovery or graph owner evaluates accepted input
+  -> the owner authorizes and freezes the exact input revisions and context
+  -> the shared adapter supplies bounded SDK datasets and closes durable readers
+  -> the owner calls the shared built-in Rust algorithm through the SDK contract
+  -> the owner validates output, identity, coverage, proof, and evidence references
+  -> AnalysisStore commits through the existing production path
+  -> NotificationRouter retains required routes and deadlines
+
+The built-in evaluation fails or its input expires
+  -> the owner discards uncommitted output and retains the last complete commit
+  -> the existing owner records the failure or incomplete coverage
+  -> retry uses the existing replay and commit rules
 ```
 
 ## Scope and owners
@@ -49,10 +67,11 @@ without making SDK use a condition for accepting a valid implementation.
    separate; both implement this analysis contract. Rust is the first SDK.
    Other languages can use the versioned interface without a new host contract.
 4. Define descriptors for existing package IDs, namespaced reason codes, and
-   typed details. Test their mapping to current findings. Keep existing graph
-   dispatch operational. Phase 7.5.3 connects descriptor validation to admission;
-   7.5.4 replaces detector dispatch when compiled packages can run. Preserve
-   host-owned identity, coverage, authority, and proof checks throughout.
+   typed details. Test their mapping to current findings. Change existing graph
+   dispatch to call the shared SDK computation. Phase 7.5.3 connects descriptor
+   validation to admission; 7.5.4 replaces built-in dispatch with installed
+   component execution. Preserve host-owned identity, coverage, authority, and
+   proof checks throughout.
 5. Define build, inspect, and test operations. A directory can contain a generated
    descriptor, source, built artifacts, dependency lock, and fixtures. Operators
    need only built artifacts and the locked closure. No build runs during install.
@@ -67,12 +86,58 @@ without making SDK use a condition for accepting a valid implementation.
    establish coverage of the requested algorithms.
 
 Target artifact builds and execution adapters belong to 7.5.4 and 7.5.5. This
-phase proves the portable interface and author tests without package activation.
+phase owns the production input/output adapters and direct Rust calls through
+the portable interface. It does not activate installed packages.
 
 The [SDK guide](../../../../../crates/araphor-analysis-sdk/README.md) specifies
 the Arrow schemas, precision, ordering, evidence, checkpoint, and bound rules.
 The [source review](analysis-contract-review.md) links each implemented owner
 and identifies the runtime interfaces that remain declarations.
+
+### Current algorithm migration
+
+This follow-up uses the completed portable SDK. Complete it before 7.5.3.
+The [source inventory](algorithm-coverage.md#current-araphor-algorithms) and
+[contract records](current-contract-inventory.md) give each source entry point,
+variant, export, and host boundary:
+
+- [ ] `AR-01`: exact behavior-atom derivation, counts, evidence samples, and
+  unresolved, excluded, coverage, and lifecycle accounting.
+- [ ] `AR-02`: behavior snapshot merge and deterministic display grouping.
+- [ ] `AR-03`: reviewed-baseline comparison for added and removed behavior,
+  count, outcome and identity changes, new resources, forbidden groups, coverage,
+  and lifecycle changes.
+- [ ] `AR-04`: context selection and its cutoff, ordering, conflict, omission,
+  and missing-fact behavior through the SDK input contract. Authorization and
+  trusted context selection remain shared host operations.
+- [ ] `AR-05`: `HF-PROC-001` process and file findings, qualified relationships,
+  effect interpretation, and contextual outside-authority, in-memory, and
+  unobservable-payload classifications.
+- [ ] `AR-06`: `HF-DW-001` credential and local-channel correlation, including
+  contextual-only results and missing-proof outcomes.
+- [ ] `AR-07`: the implemented `HF-XNODE-001` request, audit, object, scheduling,
+  and remote-admission state handling. Preserve its unqualified cross-node
+  causality result; migration adds no new physical proof.
+
+Move reusable computation into focused package modules with one implementation
+per algorithm. Existing production callers and SDK fixtures must call that same
+code. Remove replaced computation after equivalence checks pass. Retain built-in
+selection until 7.5.4 supplies installed component execution. Direct calls do not
+load external code and do not implement the native plugin runtime from 7.5.5.
+
+`DiscoveryOwner` and `GraphAndFindingOwner` retain input authorization, identity,
+coverage and proof validation, graph assembly, and output checks. AnalysisStore
+retains commits. AR-04 uses the shared authorized selector; packages cannot
+replace that trust decision. Preserve historical reason codes, finding JSON,
+evidence references, and notification behavior. Keep the SDK independent of
+Control, DuckDB, and the host store.
+
+Supply production adapters for authorized inputs, selected native graph rows,
+domain outputs, and checkpoints. Reuse bounded extraction and row selection.
+Preserve complete identities, exact versions, source windows, empty replacement
+versions, traversal limits, and evidence row references across batches. Close
+durable readers before computation. Share these adapters with later execution
+targets; transport bindings must not contain another algorithm implementation.
 
 ## Acceptance and verification
 
@@ -89,13 +154,33 @@ input reordering. Test selected Arrow ranges and parent null masks. Selected
 graph tests must compute from subjects, relationships, and the version manifest;
 assertions must inspect the returned computation.
 
+Capture expected results from the current algorithms before changing them.
+Check every `AR-*` item and its inventory variants against those results. Include
+negative, missing-input, duplicate, conflicting, late, expiry, and replay cases.
+Check exact findings, reasons, evidence, coverage, revisions, and checkpoints.
+Run `context-roundtrip`, `profile-restart`, and `graph-notification` through the
+production owners that call the shared SDK computation. No migrated item can
+retain a separate production implementation. AR-04 requires host selector
+integration tests. Record per-item results and run the final shared Rust gate.
+These checks prove computation and host integration. Installed execution and
+isolation checks remain in 7.5.4 and 7.5.5.
+
 ## Exclusions and stop point
 
 Add no new query language, compiler service, policy authority, or mandatory
 Python dependency. The SDK does not enforce host permissions. Stop at a tested
-contract and authoring interface before package activation.
+contract, authoring interface, and current algorithms used by trusted production
+Rust callers. Package installation and executable target loading remain later
+work. Do not add a temporary plugin runtime to complete this migration.
 
 ## Result
+
+**Not done** for the extended phase. All seven algorithm migration items and
+their production adapters and equivalence checks remain to be implemented.
+The portable SDK result below remains **Done**. Its earlier checks do not prove
+the added migration scope or satisfy the entry gate for 7.5.3.
+
+### Portable SDK result
 
 **Done** for the portable contract, Rust author SDK, interface declarations,
 and local fixture tests. SDK commit `c85be1d7` adds the shared types, validation,
@@ -191,8 +276,10 @@ portable contract and authoring scope.
 
 Complete when the source inventory covers the contract requirements, the Rust
 SDK generates consistent descriptors and interface declarations, and portable
-fixture tests validate inputs, outputs, evidence, and state. Existing detectors
-still run through their current dispatch. Package installation comes in 7.5.3.
+fixture tests validate inputs, outputs, evidence, and state. Every `AR-01` through
+`AR-07` migration item must also pass through the shared SDK computation and
+existing production owners. Built-in dispatch selects that code until installed
+Wasm execution is qualified in 7.5.4. Package installation comes in 7.5.3.
 
 Example at completion: an author defines a Rust `files.count` export with typed
 event input and subject/count output. Inspection reports those same types. A
@@ -206,3 +293,9 @@ with an exact baseline. A new subject/resource pair produces a finding with an
 baseline returns `Incomplete`. The author uses one package descriptor, Arrow
 types, a Rust function, and ordinary Rust tests. Installation and preventive
 action remain outside this scope.
+
+Migration example at completion: the existing protected-file replay calls the
+shared `HF-PROC-001` Rust export through the production graph owner. It returns
+the same finding, evidence, coverage limits, and notification behavior as the
+captured result. Missing coverage retains the incomplete result. This check
+requires no Wasm runtime or installed package.
