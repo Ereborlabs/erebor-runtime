@@ -59,6 +59,10 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Contract { code, .. } => *code,
+            Self::Batch {
+                source: arrow_schema::ArrowError::IoError(_, error),
+                ..
+            } if error.kind() == std::io::ErrorKind::FileTooLarge => ErrorCode::Limit,
             Self::Batch { .. } => ErrorCode::Invalid,
             Self::Encoding { .. } | Self::Io { .. } => ErrorCode::Failed,
         }

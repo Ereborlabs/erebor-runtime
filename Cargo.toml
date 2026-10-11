@@ -24,6 +24,13 @@ members = [
     "crates/araphor-data",
     "crates/araphor-analysis-sdk",
     "crates/araphor-analysis-builtins",
+    "crates/araphor-analysis-builtins/components/discovery",
+    "crates/araphor-analysis-builtins/components/process",
+    "crates/araphor-analysis-builtins/components/credentials",
+    "crates/araphor-analysis-builtins/components/kubernetes",
+    "crates/araphor-component-build",
+    "crates/araphor-detector-example",
+    "crates/araphor-analysis-sdk/tests/component",
     "crates/araphor-observability",
     "crates/mithril-e2e",
     "crates/mithril-e2e-macros",
@@ -68,7 +75,7 @@ libbpf-cargo = "=0.27.0"
 minicbor = { version = "2.3.0", features = ["derive", "half", "std"] }
 openidconnect = "4.0.1"
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 serde-saphyr = "1.0.1"
 sha2 = "0.10"
 snafu = "0.8"

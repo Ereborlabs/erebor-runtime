@@ -66,6 +66,44 @@ pub struct Evaluation {
 }
 
 impl Evaluation {
+    pub fn allocated_bytes(&self) -> usize {
+        let mut bytes = self
+            .export
+            .capacity()
+            .saturating_add(self.context.id.capacity())
+            .saturating_add(
+                self.inputs
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Input>()),
+            );
+        for input in &self.inputs {
+            bytes = bytes
+                .saturating_add(input.data.memory())
+                .saturating_add(input.revision.owner.capacity())
+                .saturating_add(input.revision.id.capacity())
+                .saturating_add(
+                    input
+                        .coverage
+                        .limits
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<String>()),
+                );
+            if let Some(window) = &input.revision.window {
+                bytes = bytes.saturating_add(window.source.capacity());
+            }
+            for limit in &input.coverage.limits {
+                bytes = bytes.saturating_add(limit.capacity());
+            }
+        }
+        if let Some(parameters) = &self.parameters {
+            bytes = bytes.saturating_add(Dataset::batch_allocation(parameters));
+        }
+        if let Some(checkpoint) = &self.checkpoint {
+            bytes = bytes.saturating_add(Dataset::allocation(&checkpoint.datasets));
+        }
+        bytes
+    }
+
     pub fn input(&self, name: &str) -> Result<&Input> {
         self.inputs
             .iter()
@@ -107,4 +145,84 @@ pub struct Output {
     pub evidence: Vec<EvidenceLink>,
     pub reasons: Vec<ReasonValue>,
     pub checkpoint: Option<Checkpoint>,
+}
+
+impl Output {
+    pub fn allocated_bytes(&self) -> usize {
+        let mut bytes = Dataset::allocation(&self.datasets);
+        bytes = bytes.saturating_add(
+            self.evidence
+                .capacity()
+                .saturating_mul(std::mem::size_of::<EvidenceLink>()),
+        );
+        for link in &self.evidence {
+            bytes = bytes
+                .saturating_add(link.input.dataset.capacity())
+                .saturating_add(link.output.dataset.capacity());
+        }
+        bytes = bytes.saturating_add(
+            self.reasons
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ReasonValue>()),
+        );
+        for reason in &self.reasons {
+            bytes = bytes
+                .saturating_add(reason.output.dataset.capacity())
+                .saturating_add(reason.code.capacity())
+                .saturating_add(Dataset::batch_allocation(&reason.details));
+        }
+        if let Some(checkpoint) = &self.checkpoint {
+            bytes = bytes.saturating_add(Dataset::allocation(&checkpoint.datasets));
+        }
+        bytes
+    }
+}
+
+impl Dataset {
+    fn allocation(datasets: &Vec<Self>) -> usize {
+        let mut bytes = datasets
+            .capacity()
+            .saturating_mul(std::mem::size_of::<Self>());
+        for data in datasets {
+            bytes = bytes.saturating_add(data.memory());
+        }
+        bytes
+    }
+
+    fn memory(&self) -> usize {
+        let mut bytes = self.name.capacity().saturating_add(
+            self.batches
+                .capacity()
+                .saturating_mul(std::mem::size_of::<RecordBatch>()),
+        );
+        for batch in &self.batches {
+            bytes = bytes.saturating_add(Self::batch_allocation(batch));
+        }
+        bytes
+    }
+
+    fn batch_allocation(batch: &RecordBatch) -> usize {
+        let schema = batch.schema_ref();
+        let mut bytes = batch
+            .get_array_memory_size()
+            .saturating_add(
+                batch
+                    .num_columns()
+                    .saturating_mul(std::mem::size_of::<arrow_array::ArrayRef>()),
+            )
+            .saturating_add(std::mem::size_of::<crate::Schema>())
+            .saturating_add(schema.fields().size())
+            .saturating_add(
+                schema
+                    .metadata()
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<(String, String)>()),
+            );
+        for (key, value) in schema.metadata() {
+            bytes = bytes
+                .saturating_add(key.capacity())
+                .saturating_add(value.capacity());
+        }
+        bytes
+    }
 }

@@ -5,6 +5,10 @@ mod evaluation;
 mod fixture;
 mod model;
 mod validation;
+pub mod wire;
+
+#[cfg(feature = "guest")]
+pub mod guest;
 
 pub use arrow_array;
 pub use arrow_array::RecordBatch;

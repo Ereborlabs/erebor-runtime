@@ -1,0 +1,15 @@
+[package]
+name = "araphor-component-fixture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+araphor-analysis-sdk = { path = "../..", features = ["guest"] }
+
+[lints]
+workspace = true

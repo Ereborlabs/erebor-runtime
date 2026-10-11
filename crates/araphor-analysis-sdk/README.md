@@ -79,7 +79,50 @@ This example uses local fixtures. It reports a difference from an audited
 baseline. It does not establish malicious intent, grant policy authority, or
 prevent an operation. Zero findings means that the supplied events contain no
 match. Check the input coverage in the report before you assess that result.
-Installation and target execution remain later work.
+The [compiled detector example](../araphor-detector-example/README.md) supplies
+the installed component path.
+
+## Build a Wasm component
+
+Enable the SDK `guest` feature. Implement `guest::Guest::package` and
+`guest::Guest::evaluate` on the algorithm type. Use
+`export_component!(Algorithm)` under `#[cfg(target_arch = "wasm32")]` to export
+the generated analysis interface. Use a `cdylib` crate for the core module.
+The guest wrapper decodes typed inputs, validates the evaluation, calls the
+algorithm, and validates and encodes its complete result.
+
+The bindings use `wit-bindgen` 0.61.1. The component builder uses
+`wit-component` and `wasmparser` 0.258.3. The production host uses Wasmtime
+49.0.2. The world imports only the versioned `host.cancelled` operation.
+Evaluation time and the seed come from `EvaluationContext`.
+
+Build the [detector example](../araphor-detector-example/README.md) with a fixed
+compile-time seed. Use the same Rust compiler, source, target, and lock file
+to reproduce the artifact bytes:
+
+```sh
+rtk proxy env CARGO_TARGET_DIR=/tmp/araphor-wasm-build CARGO_INCREMENTAL=0 CONST_RANDOM_SEED=araphor-analysis-v1 cargo build --locked --release --target wasm32-unknown-unknown -p araphor-detector-example
+rtk proxy env CARGO_TARGET_DIR=/tmp/araphor-wasm-build cargo run --locked -p araphor-detector-example --example build_package -- /tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_detector_example.wasm /tmp/araphor-burst-package
+```
+
+`ComponentBuilder::package` writes `descriptor.json`, `analysis.wit`,
+`analysis.h`, `detector.wasm`, and the complete `package.json`. The builder
+removes core debug names and debug sections, keeps the WIT metadata, and
+validates the component. One component can implement all declared exports.
+The package owner validates the manifest during admission. Operators install
+the built folder. The package owner compiles the component in its bounded
+compiler process. Installation does not run an author compiler or hook.
+`ComponentBuilder::package_component` writes the same folder from an existing
+component. It preserves the supplied component bytes.
+
+`wire` carries uncompressed Arrow IPC streams. It rejects dictionary messages,
+compressed batches, unsupported schemas, and row or batch limits before batch
+decoding. Supported types are nullable `Null`, Boolean, signed and unsigned
+integers, Float32, Float64, Utf8, Binary, UTC nanosecond timestamps,
+FixedSizeBinary, List, FixedSizeList, and Struct. Fixed-size lengths are from
+1 through 65,536. Schema nesting is at most 16 levels with at most 1,024 fields.
+Encoding and decoding copy buffers. The wire bounds apply to encoded bytes
+and decoded Arrow storage. They do not claim a zero-copy interface.
 
 ## Data and result rules
 
@@ -146,6 +189,8 @@ each have a separate checkpoint budget. These budgets also check dataset names,
 revision text, coverage limits, and reference text. Shared Arrow allocations
 can be charged more than once. These checks are data bounds, not a hard process
 memory limit or execution timeout.
+`Evaluation::allocated_bytes` and `Output::allocated_bytes` measure retained
+Arrow storage, schemas, and owned metadata for host memory reservations.
 
 Default bounds are 1,024 batches, 1,000,000 rows, 64 MiB of data, and 16 MiB of
 checkpoint data. Descriptors have a 1 MiB encoded size bound. Schema checks
@@ -169,8 +214,10 @@ The native manifest retains source cursor ranges without inferring UTC time.
 The WIT declaration carries named Arrow IPC streams and the versioned
 evaluation/result envelope. The native C declaration uses Arrow C stream
 interfaces inside one isolated worker. Both carry the same descriptor.
-Syntax tests parse the WIT and compile the C header. Runtime transport,
-cancellation, isolation, executable builds, and target parity are later work.
+Syntax tests parse the WIT and compile the C header. The guest feature supplies
+the generated component bindings and bounded IPC transport. The package
+execution owner supplies cancellation and Wasmtime isolation. Native execution
+and cross-target parity remain later work.
 
 Local fixture tests call trusted Rust code in the test process. These tests
 do not install a package or prove a sandbox. Structured errors distinguish
@@ -180,8 +227,9 @@ An invalid computation returns no fixture report.
 `araphor-data` retains identity, sensitivity, authorization, evidence, graph,
 finding, storage, retry, and commit checks. Its production discovery and HF
 detector owners call [shared built-in computations](../araphor-analysis-builtins/README.md)
-through the SDK contract. The same computations run in local SDK fixtures.
-Reason conversion retains host validation and the declared SDK detail schema.
-The fixed reason catalogue remains operational. General installed-package
-result mapping must support new namespaced reasons before detector activation.
+through installed components built from the SDK contract. The same computation
+source runs in local SDK fixtures. Reason conversion retains host validation
+and the declared SDK detail schema. Installed detectors retain declared
+namespaced reasons and typed details. The host retains the reason mapping used
+by historical HF findings.
 No package descriptor grants policy or physical authority.

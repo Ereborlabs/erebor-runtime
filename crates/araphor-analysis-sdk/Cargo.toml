@@ -7,15 +7,22 @@ repository.workspace = true
 
 [dependencies]
 arrow-array = "=58.4.0"
+arrow-buffer = "=58.4.0"
+arrow-ipc = "=58.4.0"
 arrow-schema = { version = "=58.4.0", features = ["serde"] }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
+wit-bindgen = { version = "=0.61.1", optional = true, default-features = false, features = ["macros", "realloc"] }
+
+[features]
+guest = ["dep:wit-bindgen"]
 
 [dev-dependencies]
+flatbuffers = "=25.12.19"
 tempfile = "3.23.0"
-wit-parser = "=0.251.0"
+wit-parser = "=0.258.3"
 
 [lints]
 workspace = true

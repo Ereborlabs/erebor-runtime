@@ -1,0 +1,19 @@
+[package]
+name = "araphor-component-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1"
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
+clap.workspace = true
+erebor-runtime-error = { path = "../erebor-runtime-error" }
+serde_json.workspace = true
+snafu.workspace = true
+wasmparser = "=0.258.3"
+wit-component = "=0.258.3"
+
+[lints]
+workspace = true
