@@ -628,19 +628,33 @@ The [build proof](wasm-component-build-proof.json) records independent component
 build hashes. This work adds no new BPF program or ABI, physical-prevention
 qualification, native target, OCI distribution, or performance result.
 
-The current Rust source is committed through `6f6ac795`. All 1,586 files in
-`/tmp/araphor-wasm-source-manifest-production-v37.json` match source SHA256
+The current Rust source is committed through `20db87a9`. Its 1,586-file manifest
+is `/tmp/araphor-wasm-source-manifest-production-v38.json`, with source SHA256
+`e4681bec06f08de042c760c75fd0a76025b5fdfa945262e30e9377c1455a1a06`.
+The saved normal executable is
+`/tmp/araphor-current-v38-bin/mithril_discovery_test`, with SHA256
+`b1d25154f255dbac2aefb7fc1fc063d38972628beba20f7fbcddef000173320f`.
+Fresh `analysis-packages`, `context-roundtrip`, and `profile-restart` cases use
+this unchanged executable. All three exit zero and produce schema version 1
+`PASS` results. Their records have separate commits: `e4deb6cd`, `fdbd67c9`,
+and `75c0e363`, respectively. The proof is
+`/tmp/araphor-wasm-production-proof-v38.json`.
+Graph notification and the final shared Rust procedure remain required.
+
+The retained v37 Rust source is committed through `6f6ac795`. All 1,586 files in
+`/tmp/araphor-wasm-source-manifest-production-v37.json` matched source SHA256
 `0df1d83246835e7158967cd7890a9cb8deda67f0061859b18e81191e628d6bb0`.
-Two independent builds reproduce all six source-built components. The current
-runtime group has ten passes and one filesystem-reserve failure. After checked
-cache recovery, the unchanged installed overlap test passes in 87.58 seconds.
+Two independent builds reproduced all six source-built components. The v37
+runtime group had ten passes and one filesystem-reserve failure. After checked
+cache recovery, the unchanged installed overlap test passed in 87.58 seconds.
 The group and retry logs have SHA256 values
 `7ac12dddedc80822246c50be7be6e82bf655285f45cbc36cf71e94caa0d6160a`
 and `2f559b478f7ebf49bb9093fd2941fdfb4e104697f050a3addbd8ad5b5c510fee`.
 The [phase record](phase-7-5-4-wasm-execution.md#current-native-build-failure)
 contains the exact reserve, cache, loaded-section, and executable proof.
-Four fresh normal production cases and the final shared Rust procedure remain
-required. The records below retain their historical source and limits.
+Four fresh normal production cases and the final shared Rust procedure remained
+required on that source. The records below retain their historical source and
+limits.
 
 The retained v31 verification record follows `d8528992`. Its 1,576-file source
 manifest is `/tmp/araphor-wasm-source-manifest-production-v31.json`, with SHA256
@@ -649,7 +663,7 @@ Canonical evidence publication, the derived JSON byte check, and the common
 edge prefix are implemented. The v27 graph group has five passes at production
 limits. These are historical checks; final current-source CI remains required.
 
-Three fresh production cases pass with the saved normal executable:
+The earlier v30 production cases passed with the saved normal executable:
 `analysis-packages`, `context-roundtrip`, and `profile-restart`.
 The executable is `/tmp/araphor-current-v30-bin/mithril_discovery_test`, with
 SHA256 `2bce7ffca52037ea28d6b974f38a9d16fad443ed76d63de2968568ba8f96eca2`.
@@ -665,7 +679,7 @@ and the final shared Rust procedure remain required.
 Current source also includes optional Wasm quotas, input reservation from
 retained allocations, native window selection, and caller-location errors.
 The combined source still requires complete algorithm and lifecycle checks,
-all four fresh production cases with one unchanged executable, and the final
+the remaining graph production case with the saved executable, and the final
 shared Rust procedure after the last Rust edit. Earlier source records do not
 qualify these corrections. The dispatch ordering breach remains recorded.
 
