@@ -1063,6 +1063,9 @@ facts do not measure each operation's share of the current elapsed time.
   activation rows for each window. Check current grants and admission each
   time. Load newly selected roots and release inactive roots. Keep the existing
   query leases and commit fences. Add no global cache, schema, policy, or limit.
+- [ ] Correct the removal and reinstall test setup. A retained SQL result keeps
+  its dependency revision immutable. Use a new dependency revision and keep
+  the same removed root revision. Require a full replacement bundle reload.
 - [ ] Keep every current qualification input, assertion, deadline, and compiler
   profile. After the corrections, capture a new source manifest and normal
   executable. Run all four fresh production cases and the exact final Rust
