@@ -35,6 +35,7 @@ pub(crate) struct WasmExecution {
     entered: Mutex<Option<execution::GuestEntry>>,
 }
 
+#[derive(Clone)]
 pub(super) struct PreparedComponent(Arc<cache::CacheEntry>);
 
 impl PreparedComponent {
@@ -189,7 +190,7 @@ impl WasmExecution {
                 .context(crate::AnalysisContractSnafu)?,
         };
         control.check()?;
-        let output = self.invoke(component, input.into(), control)?;
+        let output = self.invoke(&prepared, input.into(), control)?;
         let decoded = sdk::wire::Output::from(output)
             .decode(descriptor, &evaluation)
             .context(crate::AnalysisContractSnafu)?;

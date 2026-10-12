@@ -57,3 +57,43 @@ fn prepared_handle_keeps_binding() -> TestResult {
     assert_eq!(runtime.running.load(Ordering::Acquire), 0);
     Ok(())
 }
+
+#[test]
+fn retained_trap_keeps_code() -> TestResult {
+    let runtime = WasmExecution::new(WasmLimits::default())?;
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let package = package();
+    let prepared = runtime.prepare(COMPONENT, &control)?;
+    let retained = Arc::downgrade(&prepared.0);
+    drop(prepared);
+    let input = evaluation(&package, "trap", 0)?;
+    let error = runtime
+        .evaluate(&package, &input, COMPONENT, &control)
+        .err()
+        .ok_or("guest trap absent")?;
+    let Error::PackageWasm { code, source, .. } = &error else {
+        return Err("guest trap variant changed".into());
+    };
+    assert_eq!(*code, Code::Incomplete);
+    assert!(source.to_string().contains("wasm backtrace:\n    0:"));
+    let mut cause: &dyn std::error::Error = source.as_ref();
+    while let Some(next) = cause.source() {
+        cause = next;
+    }
+    assert_eq!(
+        cause.downcast_ref::<wasmtime::Trap>(),
+        Some(&wasmtime::Trap::UnreachableCodeReached)
+    );
+    runtime
+        .cache
+        .lock()
+        .map_err(|_| "fixture cache lock")?
+        .clear();
+    assert!(
+        retained.upgrade().is_some(),
+        "retained trap released its compiled code charge"
+    );
+    drop(error);
+    assert!(retained.upgrade().is_none());
+    Ok(())
+}

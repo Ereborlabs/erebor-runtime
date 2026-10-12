@@ -11,11 +11,29 @@ use wasmtime::{Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, 
 use crate::{query::WasmLimits, AnalysisReadControl, Result};
 
 use super::{
-    bindings::{self, araphor::analysis::types, AnalysisPackagePre},
-    Code,
+    bindings::{self, araphor::analysis::types},
+    Code, PreparedComponent,
 };
 
 const MAX_EVALUATIONS: usize = 4;
+
+#[derive(snafu::Snafu)]
+#[snafu(display("{source}"))]
+struct EvaluationFailure {
+    // Drop the trap source before the code pin.
+    #[snafu(source(from(wasmtime::Error, wasmtime::Error::into_boxed_dyn_error)))]
+    source: Box<dyn std::error::Error + Send + Sync>,
+    _pin: PreparedComponent,
+}
+
+impl std::fmt::Debug for EvaluationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvaluationFailure")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
 
 #[cfg(test)]
 pub(super) struct GuestEntry {
@@ -209,7 +227,7 @@ impl Drop for EvaluationPermit<'_> {
 impl super::WasmExecution {
     pub(super) fn invoke(
         &self,
-        component: &AnalysisPackagePre<GuestState>,
+        prepared: &PreparedComponent,
         input: types::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<types::Output> {
@@ -243,11 +261,14 @@ impl super::WasmExecution {
                 Ok(UpdateDeadline::Continue(1))
             }
         });
-        let result = component.instantiate(&mut store).and_then(|instance| {
-            instance
-                .araphor_analysis_analysis()
-                .call_evaluate(&mut store, &input)
-        });
+        let result = prepared
+            .component()
+            .instantiate(&mut store)
+            .and_then(|instance| {
+                instance
+                    .araphor_analysis_analysis()
+                    .call_evaluate(&mut store, &input)
+            });
         let result = result.map_err(|source| {
             let code = if store.data().limited
                 || matches!(
@@ -268,7 +289,12 @@ impl super::WasmExecution {
                 code,
                 operation: "component evaluation",
             }
-            .into_error(source)
+            .into_error(wasmtime::Error::new(
+                EvaluationFailureSnafu {
+                    _pin: prepared.clone(),
+                }
+                .into_error(source),
+            ))
         });
         store.data().control.check()?;
         result?.map_err(|error| {

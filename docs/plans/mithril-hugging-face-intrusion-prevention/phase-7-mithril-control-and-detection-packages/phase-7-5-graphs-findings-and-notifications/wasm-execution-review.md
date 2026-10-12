@@ -582,6 +582,18 @@ workers remain ignored in the parent harness. The proof is
 `bd1c71ec2f6a2fe747f938fb1b6e5554397a56e53b48d2f43bf742ad5cc08fad`.
 The five current component charges total 66,333,163 bytes. The complete cases
 and final workspace procedure remain required after the last Rust edit.
+The [execution error](../../../../../crates/araphor-data/src/package/wasm/execution.rs)
+also retains a charged handle. Wasmtime backtrace frames retain compiled modules.
+The original error source drops before the handle. The host classifies the
+original trap before it adds the handle. Display, the source chain, and the
+exact root trap remain available. The retained-trap regression fails on the
+original error path and passes after the correction. Cache clearing cannot
+release the charge while the error is retained. Dropping the error releases
+the last charge. The v45 focused runs pass 41 tests with zero failures and four
+ignored private worker entries. The reviewed proof is
+`/tmp/araphor-retained-trap-reviewed-proof-v45.json`, with SHA-256
+`8a096e939a8fcf0e68581f4ac17a7775aa7384926c72d00c8f073116e4eb5799`.
+Complete qualification and final workspace verification remain required.
 The code charge excludes engine metadata, allocator overhead, and Arrow buffers.
 Query accounting and evaluation limits bound input and output separately. The
 code limit is not a total process memory limit.

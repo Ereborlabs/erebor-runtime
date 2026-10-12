@@ -1741,6 +1741,14 @@ only for qualified physical environments.
   handle drops. Eviction cannot release a live handle's charge. Return the
   existing `Busy` error when retained code prevents admission. Keep the limit,
   guest quota defaults, and compiler profile unchanged.
+- [x] Retain the code charge in returned guest execution errors. Wasmtime 49
+  backtrace frames own modules. The modules retain compiled image memory.
+  `PackageWasm` keeps this error after execution ends. The original cache entry
+  can drop while that error still owns code. Add a real retained-trap regression
+  before the fix. Keep the original error display, source chain, trap type,
+  cancellation, and final release. The v44 handle proof does not cover this
+  error lifetime. The preliminary Data Clippy run is stopped with exit 130
+  before this correction. It is not a pass or a final workspace check.
 - [ ] Prove each correction with focused real-component or production-owner
   tests. Preserve the original failure and workload evidence. Commit each
   deliverable.
@@ -1818,6 +1826,38 @@ logs, and component charges. Independent source review finds no concrete defect
 in this slice. Graph fixture correction, smaller tests, diagnostics, four new
 complete cases, and final workspace verification remain required. The phase
 result stays **Not done**.
+
+### Retained guest-error correction proof
+
+Wasmtime backtrace frames retain modules and their compiled image memory.
+The execution error now holds a clone of the charged component handle.
+The original error source drops before this handle. Error classification uses
+the original Wasmtime error before the host adds the handle. Display text,
+the error source chain, and the exact root trap remain available. Successful
+execution does not retain an error handle. Cancellation still takes precedence
+after invocation. No quota, compiler setting, or public error type changes.
+
+The real retained-trap test fails before the correction with
+`retained trap released its compiled code charge`. The same test passes after
+the correction. The test clears the cache while it retains the trap error.
+The code charge stays live. The last charge drops when the test drops the error.
+The file has 99 lines and contains two ordinary Rust tests.
+
+The focused Wasm run passes 39 tests with zero failures in 535.70 seconds.
+Four private compiler-worker entries remain ignored in the parent harness.
+Native graph input and mixed graph export pass two tests with zero failures
+in 123.63 seconds. The five component charges remain 66,333,163 bytes.
+The byte limit remains 80 MiB. The entry limit remains 16.
+These durations record verification work. They are not a performance result.
+
+The reviewed proof is `/tmp/araphor-retained-trap-reviewed-proof-v45.json`.
+Its SHA-256 is
+`8a096e939a8fcf0e68581f4ac17a7775aa7384926c72d00c8f073116e4eb5799`.
+The proof records source, executable, logs, component charges, and the original
+failure. Independent review finds no required correction in the error path.
+Workspace formatting and the diff whitespace check pass. Smaller end-to-end
+tests, four fresh complete cases, and final workspace verification remain
+required. The phase result stays **Not done**.
 
 ### Implementation TODOs
 
