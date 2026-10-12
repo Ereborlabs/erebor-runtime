@@ -745,8 +745,9 @@ source. All 1,590 source hashes, 24 independent artifact hashes, and the saved
 executable hash remain equal to their captured values. The review proof is
 `/tmp/araphor-wasm-review-audit-v41.json`, with SHA256
 `58f5e3d4fce119622894d7d93d900ce547dd7feaac424204c8b6fcd411e849b3`.
-This proof retains a partial CI snapshot. Final CI and graph qualification
-remain required.
+This proof retains the earlier partial CI snapshot. The later v41 graph proof
+above closes fresh graph qualification. Ordered final CI and closure remain
+required.
 
 The retained v40 graph retry exits zero and reports `PASS`, with result SHA256
 `125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.
