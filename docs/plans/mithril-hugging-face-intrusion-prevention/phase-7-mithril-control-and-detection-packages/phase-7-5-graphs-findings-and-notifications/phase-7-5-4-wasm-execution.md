@@ -625,7 +625,7 @@ user before implementation. The current source still uses fixed runtime quotas.
   schema scratch before encoding. Keep shared pool capacity unchanged. Preserve
   lease, metadata, cancellation, and rejection checks. Add a default-ceiling
   input test and retain the rejection above the effective input limit.
-- [ ] Report the caller of the final read deadline through the existing error
+- [x] Report the caller of the final read deadline through the existing error
   location. Add caller tracking to the read runner and snapshot wrapper. Extend
   the existing native deadline test without removing its 16 iterations,
   cleanup, metadata, or fresh-reader checks.
@@ -638,6 +638,17 @@ user before implementation. The current source still uses fixed runtime quotas.
   executable and run all four fresh production cases with that executable.
   After the last Rust edit, run the final shared Rust procedure. Update the
   review guide and result with exact source and proof. Commit each deliverable.
+
+The caller-location correction passes the existing native deadline test on
+source v33. The test retains all 16 direct read iterations and adds one wrapped
+snapshot deadline. Every error identifies the calling line. The test also checks
+transaction cleanup, all 16 released reader slots, unchanged metadata, and a new
+reader after checkpoint. The focused run has one pass in 2.44 seconds.
+Its log is `/tmp/araphor-wasm-read-caller-v33.log`, with SHA256
+`0aea2e57cae8bfd9f3ebbb6f5f7ba93a5c347e6fbfc7bfffd4d39ab673749958`.
+The combined source manifest is `/tmp/araphor-wasm-source-manifest-production-v33.json`,
+with SHA256 `3aafb4341b322cf553036e9e2454bc1158b0adf1e784158236a017173c1ae4d9`.
+The production graph retry and final workspace procedure remain required.
 
 ### Implementation TODOs
 

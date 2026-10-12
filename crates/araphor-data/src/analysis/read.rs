@@ -126,6 +126,7 @@ impl AnalysisReadControl {
         .build()
     }
 
+    #[track_caller]
     pub(super) fn run<T>(
         &self,
         reader: &mut super::connection::AnalysisConnection<'_>,
@@ -265,6 +266,7 @@ impl AnalysisStore {
         })
     }
 
+    #[track_caller]
     pub(super) fn read_snapshot<T>(
         &self,
         read: impl FnOnce(&duckdb::Connection) -> Result<T>,
@@ -647,6 +649,7 @@ mod tests {
         for _ in 0..16 {
             let control = AnalysisReadControl::with_timeout(Duration::from_millis(50))?;
             let started = Instant::now();
+            let call_line = line!() + 1;
             let result = control.run(&mut reader, |snapshot| {
                 snapshot
                     .query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
@@ -657,7 +660,11 @@ mod tests {
                     })
             });
             assert!(
-                matches!(result, Err(crate::Error::AnalysisReadDeadline { .. })),
+                matches!(
+                    &result,
+                    Err(crate::Error::AnalysisReadDeadline { location })
+                        if location.file == file!() && location.line == call_line
+                ),
                 "{result:?}"
             );
             assert!(started.elapsed() < Duration::from_secs(2));
@@ -674,6 +681,25 @@ mod tests {
             snapshot.rollback()?;
         }
         drop(reader);
+        let call_line = line!() + 1;
+        let result = store.read_snapshot(|snapshot| {
+            snapshot
+                .query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "test snapshot deadline",
+                })
+        });
+        assert!(
+            matches!(
+                &result,
+                Err(crate::Error::AnalysisReadDeadline { location })
+                    if location.file == file!() && location.line == call_line
+            ),
+            "{result:?}"
+        );
+        assert_eq!(store.read_slots.available_permits(), 16);
         assert!(store.maintenance.try_write().is_ok());
         assert_eq!(store.meta()?, before);
         store.checkpoint()?;
