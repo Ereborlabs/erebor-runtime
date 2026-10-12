@@ -66,11 +66,7 @@ impl ReplayQualification {
             .filter(|record| record.reason == EffectObservationReasonV1::ExactPolicyDeny as u8)
             .count();
         let source = self.accept_node(input.source, raw, &self.authenticated, false)?;
-        let graph = GraphAndFindingOwner::new(
-            self.data.clone(),
-            self.inputs.clone(),
-            self.execution.clone(),
-        )?;
+        let graph = &self.graph;
         let mut snapshot = None;
         for _ in 0..32 {
             graph.process(self.now)?;
@@ -119,7 +115,7 @@ impl ReplayQualification {
             .findings
             .first()
             .ok_or("native window finding absent")?;
-        let reference = GraphNotificationQualification::finding_ref(&graph, finding)?;
+        let reference = GraphNotificationQualification::finding_ref(graph, finding)?;
         let traversal = GraphNotificationQualification::traverse(
             self.data.clone(),
             &snapshot,
@@ -128,7 +124,6 @@ impl ReplayQualification {
             self.now,
         )
         .await?;
-        drop(graph);
         assert_eq!(
             self.reopen_window(&snapshot, finding, &reference.result_id)
                 .await?,
@@ -155,6 +150,7 @@ impl ReplayQualification {
     ) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
         let Self {
             root,
+            graph,
             intake,
             data,
             inputs,
@@ -162,6 +158,7 @@ impl ReplayQualification {
             authenticated,
             now,
         } = self;
+        drop(graph);
         drop(intake);
         drop(execution);
         drop(data);

@@ -1722,10 +1722,15 @@ only for qualified physical environments.
 - [ ] Map every complete-case assertion to focused Rust tests. Keep combined
   source-window checks, negative cases, large inputs, restart, and rollback.
   Keep the complete CLI qualification case available.
-- [ ] Add bounded step-time diagnostics to the existing qualification case.
+- [x] Add bounded step-time diagnostics to the existing qualification case.
   Use ordinary Rust timing and static labels. Preserve finding JSON, inputs,
   assertions, deadlines, and compiler profiles. Add no new timing threshold.
-- [ ] Correct confirmed fixture lifetime repetition through supported owner
+- [x] Move the existing telemetry dependency from test dependencies to regular
+  dependencies. The new qualification diagnostics and CLI use this library.
+  The normal CLI check fails with unresolved import `erebor_telemetry` in
+  `/tmp/araphor-graph-diagnostics-cli-check-v44.log`. The test build passes
+  because test dependencies include the library. Rerun the normal CLI check.
+- [x] Correct confirmed fixture lifetime repetition through supported owner
   APIs. Check new-source registration and context updates first. Keep explicit
   restart and independent replay checks.
 - [x] Remove confirmed repeated work inside production component invocation. Preserve
@@ -1742,6 +1747,46 @@ only for qualified physical environments.
 - [ ] After the last Rust edit, capture a new normal executable and source.
   Run all four complete production cases, then the exact final Rust procedure.
   Update the guide and result. Retain v43 proof with its original source.
+
+The small-test replacement keeps the complete CLI qualification case. The CLI
+case retains 193 assertion declaration sites and the shared 33-source,
+54-record interaction. Loop iterations execute some declarations more than
+once. Keep the existing density and both native-window workloads. Replace the
+ordinary Rust aggregate call only after focused transport, commit, replay,
+notification, incident, read, send, local-policy, node, and authorization tests
+pass. Each new test shows its tested public owner calls and security assertions.
+Fixture helpers supply inputs and own resources. Fixture helpers do not perform
+the tested operation sequence. Keep the existing-output rejection as a small
+test. Keep complete `graph.json` and `result.json` checks in the CLI proof.
+
+### Graph owner and diagnostic correction proof
+
+`ReplayQualification` retains one graph owner before intake accepts a source.
+Snapshot reads and context refresh use the same owner. The consuming density
+and native-window paths drop this owner before store reopen. The graph field
+drops before the other fixture fields. The temporary directory drops last.
+All original scenario inputs, assertions, bounds, and deadlines remain.
+
+The registration test fails against the original fixture with
+`the new source has no required graph processor`. Its runtime is 75.17 seconds.
+The corrected registration and cursor/context tests pass two tests with zero
+failures in 121.09 seconds. The second test checks a new source before the saved
+page cursor, context refresh, unchanged effects and action, retained historical
+finding, unchanged other-source snapshot, and exactly two current findings.
+The test file has 70 lines. The proof is
+`/tmp/araphor-graph-owner-proof-v44.json`. Its SHA-256 is
+`285008d9497bf605c6eea26b765288883bc4c505ee7bad5e01fdb44bec40e3c5`.
+The proof retains the original failure reference and the tested working tree.
+
+The CLI initializes the existing stderr logger after compiler-worker dispatch.
+The qualification case records static DEBUG step labels and elapsed time.
+The INFO whole-case result includes TLS directory cleanup. The diagnostics add
+no timing threshold or performance claim. The first normal CLI check fails
+because telemetry is a test dependency. The declaration now uses regular
+dependencies. The locked normal CLI check passes in 6.77 seconds in
+`/tmp/araphor-graph-diagnostics-cli-check-v44-retry.log`. Workspace formatting
+and the scoped diff check pass. Complete runtime diagnostics and all remaining
+qualification gates still need the final source. The result stays **Not done**.
 
 ### Live compiled-code correction proof
 

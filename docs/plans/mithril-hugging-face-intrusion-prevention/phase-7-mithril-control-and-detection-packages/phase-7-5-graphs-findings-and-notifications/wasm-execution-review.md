@@ -635,6 +635,20 @@ The [metadata deadline test](../../../../../crates/araphor-data/src/analysis/rea
 includes the native graph snapshot read. It checks typed expiry, released read
 slots, unchanged metadata, and a successful fresh read.
 
+The [graph replay fixture](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay.rs)
+retains one graph owner before intake accepts sources. The same owner processes
+sources, reads snapshots, and refreshes context. Reopen paths drop the owner
+before they close stores. The directory drops last. The
+[owner lifetime tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/lifetime.rs)
+check required registration, cursor wrap, context replacement, historical
+findings, and source isolation. The registration test fails on the original
+fixture. Both corrected tests pass. Their proof is
+`/tmp/araphor-graph-owner-proof-v44.json`, with SHA-256
+`285008d9497bf605c6eea26b765288883bc4c505ee7bad5e01fdb44bec40e3c5`.
+The complete CLI case has static DEBUG step timings and an INFO whole-case
+duration. These diagnostics add no timing threshold. The four complete cases
+and final workspace procedure remain required for the final source.
+
 Review these boundary tests with the algorithm cases:
 
 - [Installed guest overlap](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)

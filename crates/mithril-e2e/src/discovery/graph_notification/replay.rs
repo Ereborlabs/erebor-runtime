@@ -2,6 +2,8 @@ use super::*;
 use serde::Deserialize;
 
 mod authority;
+#[cfg(test)]
+mod lifetime;
 mod window;
 
 #[derive(Deserialize)]
@@ -14,6 +16,7 @@ struct Card {
 }
 
 struct ReplayQualification {
+    graph: GraphAndFindingOwner,
     intake: EvidenceIntakeOwner,
     data: Arc<AnalysisStore>,
     inputs: Arc<GraphInputs>,
@@ -24,27 +27,89 @@ struct ReplayQualification {
 }
 
 pub(super) async fn run(now: u64) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
+    let started = Instant::now();
+    debug!(step = "replay_startup", "graph qualification step started");
     let fixture = ReplayQualification::new(now)?;
     let cards: Vec<Card> = serde_json::from_slice(include_bytes!(
         "../../../fixtures/discovery/incident-cards-v1.json"
     ))?;
     assert_eq!(cards.len(), 12);
+    debug!(
+        step = "replay_startup",
+        elapsed_ms = %started.elapsed().as_millis(),
+        success = true,
+        "graph qualification step finished"
+    );
+    let started = Instant::now();
+    debug!(step = "incident_cards", "graph qualification step started");
     let mut results = Vec::new();
     for (index, card) in cards.into_iter().enumerate() {
         assert_eq!(card.id, format!("HF-{:03}", index + 1));
         results.push(fixture.card(&card, u8::try_from(index + 40)?)?);
     }
+    debug!(
+        step = "incident_cards",
+        elapsed_ms = %started.elapsed().as_millis(),
+        success = true,
+        cards = results.len(),
+        "graph qualification step finished"
+    );
+    let started = Instant::now();
+    debug!(
+        step = "replay_contracts",
+        "graph qualification step started"
+    );
     let reads = fixture.read_results()?;
     let sends = fixture.send_results()?;
     let authorization = authority::run(now)?;
     let local = fixture.local_contract()?;
     let nodes = fixture.nodes()?;
+    debug!(
+        step = "replay_contracts",
+        elapsed_ms = %started.elapsed().as_millis(),
+        success = true,
+        "graph qualification step finished"
+    );
     drop(fixture);
-    let density = ReplayQualification::new(now)?
-        .notification_density()
-        .await?;
-    let window = ReplayQualification::new(now)?.mixed_window().await?;
-    let physical_window = ReplayQualification::new(now)?.physical_window().await?;
+    let started = Instant::now();
+    debug!(
+        step = "notification_density",
+        "graph qualification step started"
+    );
+    let density = ReplayQualification::new(now)?.notification_density().await;
+    debug!(
+        step = "notification_density",
+        elapsed_ms = %started.elapsed().as_millis(),
+        success = density.is_ok(),
+        "graph qualification step finished"
+    );
+    let density = density?;
+    let started = Instant::now();
+    debug!(
+        step = "native_window_64",
+        "graph qualification step started"
+    );
+    let window = ReplayQualification::new(now)?.mixed_window().await;
+    debug!(
+        step = "native_window_64",
+        elapsed_ms = %started.elapsed().as_millis(),
+        success = window.is_ok(),
+        "graph qualification step finished"
+    );
+    let window = window?;
+    let started = Instant::now();
+    debug!(
+        step = "native_window_185",
+        "graph qualification step started"
+    );
+    let physical_window = ReplayQualification::new(now)?.physical_window().await;
+    debug!(
+        step = "native_window_185",
+        elapsed_ms = %started.elapsed().as_millis(),
+        success = physical_window.is_ok(),
+        "graph qualification step finished"
+    );
+    let physical_window = physical_window?;
     Ok(json!({"incident_cards": results, "HF-LOCAL-001": {
         "families": ["exec", "file", "network", "device"],
         "qualification": "RECORDED_GRAPH_REPLAY", "physical_incident_reproduced": false,
@@ -84,11 +149,7 @@ impl ReplayQualification {
                 false,
             )?);
         }
-        let graph = GraphAndFindingOwner::new(
-            self.data.clone(),
-            self.inputs.clone(),
-            self.execution.clone(),
-        )?;
+        let graph = &self.graph;
         for _ in 0..512 {
             graph.process(self.now)?;
             let mut complete = true;
@@ -121,7 +182,7 @@ impl ReplayQualification {
             &grants,
         )?);
         let router = NotificationRouter::new(self.data.clone(), authority)?;
-        assert_eq!(router.route(&graph, self.now)?, 256);
+        assert_eq!(router.route(graph, self.now)?, 256);
         let health = router.health(&grants[1], self.now)?;
         assert_eq!(health.obligations, 256);
         assert_eq!(health.unrouted, 256);
@@ -135,10 +196,10 @@ impl ReplayQualification {
                 .is_none_or(|reference| reference.finding_id != tail.finding_id)
         }));
         drop(router);
-        drop(graph);
         drop(store);
         let Self {
             root,
+            graph,
             intake,
             data,
             inputs,
@@ -146,6 +207,7 @@ impl ReplayQualification {
             authenticated,
             now,
         } = self;
+        drop(graph);
         drop(intake);
         drop(execution);
         drop(data);
@@ -373,10 +435,13 @@ impl ReplayQualification {
             data.clone(),
             Arc::new(Clock(UNIX_EPOCH + Duration::from_nanos(now))),
         )?;
+        let inputs = Arc::new(GraphInputs::default());
+        let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone(), execution.clone())?;
         Ok(Self {
+            graph,
             intake,
             data,
-            inputs: Arc::new(GraphInputs::default()),
+            inputs,
             execution,
             now,
             authenticated: AuthenticatedEvidenceNodeV1 {
@@ -464,11 +529,7 @@ impl ReplayQualification {
         &self,
         source: &EvidenceIntakeIdentityV1,
     ) -> std::result::Result<GraphSnapshotV1, Box<dyn StdError>> {
-        let graph = GraphAndFindingOwner::new(
-            self.data.clone(),
-            self.inputs.clone(),
-            self.execution.clone(),
-        )?;
+        let graph = &self.graph;
         for _ in 0..32 {
             graph.process(self.now)?;
             if let Some(snapshot) = graph.snapshot(source)? {
@@ -661,13 +722,9 @@ impl ReplayQualification {
     ) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
         let record = self.record(source, 1)?;
         self.policy(&record)?;
-        let graph = GraphAndFindingOwner::new(
-            self.data.clone(),
-            self.inputs.clone(),
-            self.execution.clone(),
-        )?;
+        let graph = &self.graph;
         assert!(graph.refresh(source, self.now + 300_000_000_000)?);
-        let late = self.result_snapshot(&graph, source, &original.package_id)?;
+        let late = self.result_snapshot(graph, source, &original.package_id)?;
         let finding = late
             .findings
             .iter()
@@ -699,7 +756,7 @@ impl ReplayQualification {
             1,
         )?;
         assert!(graph.refresh(source, self.now + 300_000_000_001)?);
-        let contradicted = self.result_snapshot(&graph, source, &original.package_id)?;
+        let contradicted = self.result_snapshot(graph, source, &original.package_id)?;
         let conflict = contradicted
             .findings
             .iter()
@@ -810,13 +867,9 @@ impl ReplayQualification {
             "cross-node-scheduled",
             1,
         )?;
-        let graph = GraphAndFindingOwner::new(
-            self.data.clone(),
-            self.inputs.clone(),
-            self.execution.clone(),
-        )?;
+        let graph = &self.graph;
         assert!(graph.refresh(&local, self.now + 1)?);
-        let partial = self.result_snapshot(&graph, &local, "HF-XNODE-001")?;
+        let partial = self.result_snapshot(graph, &local, "HF-XNODE-001")?;
         let finding = partial
             .findings
             .iter()
@@ -1010,13 +1063,9 @@ impl ReplayQualification {
                 "late-authority",
                 1,
             )?;
-            let graph = GraphAndFindingOwner::new(
-                self.data.clone(),
-                self.inputs.clone(),
-                self.execution.clone(),
-            )?;
+            let graph = &self.graph;
             assert!(graph.refresh(&source, self.now + 300_000_000_000)?);
-            let snapshot = self.result_snapshot(&graph, &source, "HF-DW-001")?;
+            let snapshot = self.result_snapshot(graph, &source, "HF-DW-001")?;
             assert_ne!(snapshot.input_manifest, earlier.input_manifest);
             let finding = snapshot
                 .findings

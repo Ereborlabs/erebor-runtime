@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, RwLock,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use araphor_data::*;
@@ -15,6 +15,7 @@ use erebor_interceptor_abi::{
     EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
     EffectPhysicalResultV1, KernelEffectFamilyV1, KernelEffectOperationV1,
 };
+use erebor_telemetry::{debug, info};
 use mithril_control::{
     AuthenticatedEvidenceNodeV1, ConfiguredNotificationAuthority, ControlStore, CoverageCounters,
     CoverageInterval, CoverageReport, EvidenceIntakeOwner, IntakeClock,
@@ -167,15 +168,50 @@ impl GraphNotificationQualification {
         if self.output.exists() {
             return Err("the qualification output already exists".into());
         }
-        let tls = MtlsFixture::new(false)?;
-        self.run_tls(&tls).await
+        let total = Instant::now();
+        info!(step = "whole_case", "graph qualification started");
+        let started = Instant::now();
+        debug!(step = "tls_fixture", "graph qualification step started");
+        let tls = MtlsFixture::new(false);
+        debug!(
+            step = "tls_fixture",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = tls.is_ok(),
+            "graph qualification step finished"
+        );
+        let result = match tls {
+            Ok(tls) => {
+                let result = self.run_tls(&tls).await;
+                drop(tls);
+                result
+            }
+            Err(error) => Err(error),
+        };
+        info!(
+            step = "whole_case",
+            elapsed_ms = %total.elapsed().as_millis(),
+            success = result.is_ok(),
+            "graph qualification finished"
+        );
+        result
     }
 
     async fn run_tls(&self, tls: &MtlsFixture) -> std::result::Result<(), Box<dyn StdError>> {
         let mut server = None;
         let result = self.run_server(tls, &mut server).await;
         let shutdown = match server.take() {
-            Some(server) => server.shutdown().await,
+            Some(server) => {
+                let started = Instant::now();
+                debug!(step = "shutdown", "graph qualification step started");
+                let shutdown = server.shutdown().await;
+                debug!(
+                    step = "shutdown",
+                    elapsed_ms = %started.elapsed().as_millis(),
+                    success = shutdown.is_ok(),
+                    "graph qualification step finished"
+                );
+                shutdown
+            }
             None => Ok(()),
         };
         result.and(shutdown)
@@ -186,6 +222,8 @@ impl GraphNotificationQualification {
         tls: &MtlsFixture,
         server: &mut Option<ControlServerFixture>,
     ) -> std::result::Result<(), Box<dyn StdError>> {
+        let started = Instant::now();
+        debug!(step = "startup", "graph qualification step started");
         let root = tls.path().join("control-store");
         let data_root = tls.path().join("analysis");
         let store = ControlStore::open(&root)?;
@@ -198,7 +236,24 @@ impl GraphNotificationQualification {
         )?;
         let control = tls.control_from_intake(intake.clone(), 1)?;
         let execution = control.installed_analysis()?;
-        *server = Some(tls.start(control).await?);
+        debug!(
+            step = "startup",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = true,
+            "graph qualification step finished"
+        );
+        let started = Instant::now();
+        debug!(step = "tls_start", "graph qualification step started");
+        let ready = tls.start(control).await;
+        debug!(
+            step = "tls_start",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = ready.is_ok(),
+            "graph qualification step finished"
+        );
+        *server = Some(ready?);
+        let started = Instant::now();
+        debug!(step = "transport", "graph qualification step started");
         let boot = [7; 16];
         let wal = EffectObservationStore::durable(
             8,
@@ -299,6 +354,18 @@ impl GraphNotificationQualification {
             label_epoch: source.label_epoch,
         };
         intake.receive_coverage(&authenticated, &report)?;
+        debug!(
+            step = "transport",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = true,
+            records = records.len(),
+            "graph qualification step finished"
+        );
+        let started = Instant::now();
+        debug!(
+            step = "commit_traversal",
+            "graph qualification step started"
+        );
         let inputs = Arc::new(GraphInputs::default());
         let graph = GraphAndFindingOwner::new(data.clone(), inputs.clone(), execution)?;
         assert!(!data.discovery_enabled());
@@ -327,15 +394,51 @@ impl GraphNotificationQualification {
         let reference = Self::finding_ref(&graph, &finding)?;
         let traversal =
             Self::traverse(data.clone(), &snapshot, &finding, &reference.result_id, now).await?;
-        let acceptance = replay::run(now).await?;
+        debug!(
+            step = "commit_traversal",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = true,
+            findings = snapshot.findings.len(),
+            "graph qualification step finished"
+        );
+        let started = Instant::now();
+        debug!(step = "replay", "graph qualification step started");
+        let acceptance = replay::run(now).await;
+        debug!(
+            step = "replay",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = acceptance.is_ok(),
+            "graph qualification step finished"
+        );
+        let acceptance = acceptance?;
+        let started = Instant::now();
+        debug!(step = "shutdown", "graph qualification step started");
         drop(connection);
-        server
+        let shutdown = server
             .take()
             .ok_or("the Control server is absent")?
             .shutdown()
-            .await?;
+            .await;
+        debug!(
+            step = "shutdown",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = shutdown.is_ok(),
+            "graph qualification step finished"
+        );
+        shutdown?;
         drop(intake);
-        let mut result = Self::notify(&store, data.clone(), &graph, &finding, now)?;
+        let started = Instant::now();
+        debug!(step = "notification", "graph qualification step started");
+        let notification = Self::notify(&store, data.clone(), &graph, &finding, now);
+        debug!(
+            step = "notification",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = notification.is_ok(),
+            "graph qualification step finished"
+        );
+        let mut result = notification?;
+        let started = Instant::now();
+        debug!(step = "reopen", "graph qualification step started");
         drop(graph);
         drop(data);
         drop(store);
@@ -356,7 +459,27 @@ impl GraphNotificationQualification {
             traversal
         );
         assert_eq!(graph.process(now + 11)?, 0);
-        Self::resume(&store, &data, &graph, &finding, now, &mut result)?;
+        debug!(
+            step = "reopen",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = true,
+            "graph qualification step finished"
+        );
+        let started = Instant::now();
+        debug!(
+            step = "notification_resume",
+            "graph qualification step started"
+        );
+        let resumed = Self::resume(&store, &data, &graph, &finding, now, &mut result);
+        debug!(
+            step = "notification_resume",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = resumed.is_ok(),
+            "graph qualification step finished"
+        );
+        resumed?;
+        let started = Instant::now();
+        debug!(step = "output", "graph qualification step started");
         fs::create_dir(&self.output)?;
         super::write_json(&self.output.join("graph.json"), &snapshot)?;
         super::write_json(
@@ -378,6 +501,12 @@ impl GraphNotificationQualification {
                 "provider_issuance_qualified": false,
             }),
         )?;
+        debug!(
+            step = "output",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = true,
+            "graph qualification step finished"
+        );
         Ok(())
     }
 

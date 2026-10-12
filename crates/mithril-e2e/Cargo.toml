@@ -25,6 +25,7 @@ erebor-interceptor = { path = "../erebor-interceptor", features = ["test-fixture
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-client = { path = "../erebor-runtime-client" }
+erebor-telemetry = { path = "../erebor-telemetry" }
 futures-util.workspace = true
 hex.workspace = true
 k8s-openapi.workspace = true
@@ -62,7 +63,6 @@ zerocopy.workspace = true
 [dev-dependencies]
 rmp-serde.workspace = true
 rusqlite.workspace = true
-erebor-telemetry = { path = "../erebor-telemetry" }
 mithril-e2e-macros = { path = "../mithril-e2e-macros" }
 prost.workspace = true
 reqwest.workspace = true

@@ -73,6 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = cli.validate() {
         error.exit();
     }
+    erebor_telemetry::init_stderr_logging()?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
