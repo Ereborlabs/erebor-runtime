@@ -673,6 +673,18 @@ returns an error after Tokio shutdown. Existing assertions and workloads remain.
 ## Verification record
 
 **Not done.** This guide describes the implementation under qualification.
+The production repetition correction is committed in `82902cf4`. Its frozen
+v39 source manifest has 1,588 files and source SHA256
+`c1c5fcae09434446684c6cbe8fce4da61256a06271c119e469fa2b71a13921fa`.
+The normal build exits zero without warnings. The saved executable is
+`/tmp/araphor-current-v39-bin/mithril_discovery_test`, with SHA256
+`2c6a05f5daefc9e85c921d31496a262e2ecac8ebe17df71d9561b4de90603e3f`.
+The [phase result](phase-7-5-4-wasm-execution.md#corrected-production-source-and-final-verification)
+records source, build, executable, and copy hashes. The new graph case and exact
+final workspace procedure have started. Their terminal results and the other
+three fresh cases remain required. The v38 proof below retains its older source
+boundary.
+
 The [phase result](phase-7-5-4-wasm-execution.md#result) will record final source
 state, commands, counts, and evidence after the required checks pass.
 The [build proof](wasm-component-build-proof.json) records independent component

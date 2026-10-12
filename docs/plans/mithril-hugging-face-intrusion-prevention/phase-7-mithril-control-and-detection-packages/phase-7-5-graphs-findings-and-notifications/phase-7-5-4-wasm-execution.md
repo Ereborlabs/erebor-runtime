@@ -1099,6 +1099,36 @@ Its SHA256 is
 `dc0f64424e05f00a73ee8a1ff8e744fdc24eef215a0f617e4cd03580dfff0a0f`.
 Current normal production qualification and final workspace CI remain required.
 
+### Corrected production source and final verification
+
+The production repetition correction is committed in `82902cf4`. The v39 source
+manifest has 1,588 files and source SHA256
+`c1c5fcae09434446684c6cbe8fce4da61256a06271c119e469fa2b71a13921fa`.
+Its path is `/tmp/araphor-wasm-source-manifest-production-v39.json`, with file
+SHA256 `9091196f92ba704b316b3082a64a0f35ce8e4ed7bb9aea7fdadf59a8222a6cee`.
+The SDK, guest sources, component builder, WIT, and compiler profiles do not
+change. All 24 retained core and component artifact hashes from the two
+independent builds still match. No Wasm artifact is tracked.
+
+The normal build exits zero in 2 minutes 42 seconds without warnings. Its log
+is `/tmp/araphor-wasm-normal-build-v39.log`, with SHA256
+`a13d3b2e55fb237593c5c440336e7cfc3dbb5d81ea25b750d54331d094eb0489`.
+The saved executable is `/tmp/araphor-current-v39-bin/mithril_discovery_test`,
+with SHA256
+`2c6a05f5daefc9e85c921d31496a262e2ecac8ebe17df71d9561b4de90603e3f`.
+It retains all debug sections and has 1,907,399,792 bytes. Copy verification
+checks the source manifest and executable before and after the copy. The
+capture is `/tmp/araphor-wasm-production-capture-v39.json`, with SHA256
+`51cc6c97fe989ef9927e5744e63032db6071feec03b67e0969a17728362e3f28`.
+Available space after the copy is 53,251,252,224 bytes. The append reserve
+remains 2,684,354,560 bytes.
+
+The fresh graph case starts with this saved executable. The exact final
+`bash .github/scripts/verify-rust-ci.sh` procedure also starts after the last
+Rust edit. Both remain running at this record. No terminal pass is claimed.
+The other three fresh production cases remain required. The current phase
+result stays **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
