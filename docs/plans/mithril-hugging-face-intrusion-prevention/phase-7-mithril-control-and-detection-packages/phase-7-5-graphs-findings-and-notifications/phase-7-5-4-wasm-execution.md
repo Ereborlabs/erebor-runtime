@@ -1468,6 +1468,18 @@ workspace pass is claimed. Final verification and closure remain required.
   changes the live aggregate. Name the immutable graph-completion snapshot
   beside its recorded hash. Keep the graph result and proof unchanged.
 
+The current closure review checks all 1,590 source hashes, 24 independent
+artifact hashes, the saved executable hash, and all four case result and log
+hashes. All 157 guide links and anchors and three phase links resolve.
+Independent review finds no additional required source correction. The proof is
+`/tmp/araphor-wasm-closure-review-v41.json`, with SHA256
+`cb14026f4ba037565536d86f8cb021d4305d206931b68c1ffbb024acd87facca`.
+Its ordered CI snapshot has 11 completed top-level suites, 135 passes, zero
+failures, and one ignored test. The Data suite has 595 tests and no final
+footer. This is incomplete verification. Final CI and closure remain required.
+The historical dispatch order remains unmet. The earlier deadline cause
+remains unresolved. Current passes do not prove that cause or earlier order.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
