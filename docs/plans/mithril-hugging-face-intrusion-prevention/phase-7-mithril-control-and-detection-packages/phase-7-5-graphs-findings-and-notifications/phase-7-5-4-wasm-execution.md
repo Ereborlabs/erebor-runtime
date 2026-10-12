@@ -879,9 +879,17 @@ Its four callers are unit tests. Production window reads use `graph_page`,
 and result reads use `graph_result`. The existing convenience wrapper is no
 longer part of production execution after native window selection.
 
-- [ ] Compile `graph_snapshots` only for unit tests. Preserve the method body,
+- [x] Compile `graph_snapshots` only for unit tests. Preserve the method body,
   four test callers, production `graph_page`, and snapshot result APIs. Rebuild
   the normal executable on the new source before production qualification.
+
+The correction adds only `#[cfg(test)]` to the existing method. All four test
+callers and the method body stay unchanged. Scoped Data formatting passes.
+The first normal build completes in 32 minutes 50 seconds with the recorded
+warning. Its log SHA256 is
+`e46af17098c6d9bcb9ce62c57f4cd67193a355edc114b5e6b616ed99c26f8bb4`.
+Data compilation in that run precedes the correction. Rebuild on the corrected
+source before the four fresh production cases and the final workspace checks.
 
 ### Implementation TODOs
 

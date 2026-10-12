@@ -233,6 +233,7 @@ impl AnalysisStore {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn graph_snapshots(
         &self,
         tenant: [u8; 16],
