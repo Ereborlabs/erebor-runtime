@@ -689,6 +689,17 @@ returns an error after Tokio shutdown. Existing assertions and workloads remain.
 ## Verification record
 
 **Not done.** This guide describes the implementation under qualification.
+The current multi-export correction is committed in `b14ffb2`. Its two focused
+regressions pass. Its normal executable, four fresh production cases, and exact
+final workspace procedure remain required.
+
+The retained v40 graph retry exits zero and reports `PASS`, with result SHA256
+`125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.
+All four retained v39/v40 cases pass. The aggregate proof SHA256 is
+`1eda662b77adc7a5e4dedc702935084b56fb158db84b015a5f55e3c2b3c74e26`.
+The earlier failures remain recorded. These passes do not qualify the
+multi-export correction. The records below retain their source boundaries.
+
 The production repetition correction is committed in `82902cf4`. Its frozen
 v39 source manifest has 1,588 files and source SHA256
 `c1c5fcae09434446684c6cbe8fce4da61256a06271c119e469fa2b71a13921fa`.

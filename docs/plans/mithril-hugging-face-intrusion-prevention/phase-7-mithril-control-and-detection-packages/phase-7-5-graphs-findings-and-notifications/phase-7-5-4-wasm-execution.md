@@ -1270,6 +1270,24 @@ Independent source review finds no additional defect in this correction.
 Fresh production qualification and the exact final workspace procedure remain
 required. The result stays **Not done**.
 
+The retained v40 graph retry exits zero and reports `PASS` after storage
+recovers. It uses the saved v39 executable and the proved byte-identical v40
+normal build. Its result is
+`/tmp/araphor-current-v40-graph-notification-retry/result.json`, with SHA256
+`125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.
+The original workloads remain intact: 12 incident cards, 257 findings and
+notification obligations, 33 source windows, and 64-record and 185-record native
+windows. The latter returns 370 relationships through two SQL chunks. Reopen,
+exact versions, subject joins, evidence, proof, and coverage checks pass.
+Intake ACKs remain null, null, 2, 2. Accepted cursors remain 0, 0, 2, 2.
+
+All four retained v39/v40 production cases now pass. The aggregate proof is
+`/tmp/araphor-wasm-production-proof-v39.json`, with SHA256
+`1eda662b77adc7a5e4dedc702935084b56fb158db84b015a5f55e3c2b3c74e26`.
+It retains both storage failures. These cases do not qualify the subsequent
+multi-export correction in `b14ffb2`. The case remains lightweight and establishes
+no physical-prevention, cross-node, provider-issuance, or performance claim.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
