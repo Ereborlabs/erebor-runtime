@@ -1698,6 +1698,15 @@ retains one owner. Both paths share the installed package owner and compiler
 cache. The case also creates independent replay fixtures. Per-step costs have
 not been measured. Keep these facts separate from a production latency claim.
 
+Use the [scenario maintainability guidance](../../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md)
+for tests changed in this task. Its listed migrations belong to another thread.
+Do not edit that inventory or implement those migrations here. Keep each test
+small and focused. Show public production calls, security assertions, and
+lifecycle order in the test. Shared fixtures own resources and cleanup. Do not
+hide the same large scenario behind a new wrapper or file split. Use ordinary
+Rust tests for in-process behavior and the existing platform test mechanism
+only for qualified physical environments.
+
 - [ ] Map every complete-case assertion to focused Rust tests. Keep combined
   source-window checks, negative cases, large inputs, restart, and rollback.
   Keep the complete CLI qualification case available.
