@@ -874,6 +874,15 @@ Available space after the last operation is 9,266,561,024 bytes. Each record
 retains exact file identities and hashes. Recovery changes no source, compiler
 profile, current dependency, runtime quota, test, or storage reserve.
 
+The normal build reports `dead_code` for `AnalysisStore::graph_snapshots`.
+Its four callers are unit tests. Production window reads use `graph_page`,
+and result reads use `graph_result`. The existing convenience wrapper is no
+longer part of production execution after native window selection.
+
+- [ ] Compile `graph_snapshots` only for unit tests. Preserve the method body,
+  four test callers, production `graph_page`, and snapshot result APIs. Rebuild
+  the normal executable on the new source before production qualification.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
