@@ -941,10 +941,34 @@ Its log is `/tmp/araphor-wasm-normal-build-v38-retry.log`, with SHA256
 All 1,586 current manifest files still match. The executable is 1,907,087,704
 bytes. Available space is 2,460,467,200 bytes, below the unchanged append reserve.
 
-- [ ] Preserve one current normal executable for all four fresh cases. Remove
+- [x] Preserve one current normal executable for all four fresh cases. Remove
   only debug sections with the native cache lock held and the loaded-section
   verifier. Copy the checked executable to a new proof directory. Check source
   and executable hashes before and after qualification. Keep the storage reserve.
+
+The current normal executable has equal loaded sections before and after debug
+removal. Its proof is `/tmp/araphor-strip-normal-v38-proof.json`, with SHA256
+`7e5cc6a5eadfa47d05f3278c41221c97610447029b87b7949c85da430d54b7db`.
+The saved executable is `/tmp/araphor-current-v38-bin/mithril_discovery_test`,
+with SHA256
+`b1d25154f255dbac2aefb7fc1fc063d38972628beba20f7fbcddef000173320f`.
+Its 395,434,880 bytes equal the checked normal build output. All current
+manifest files still match. Available space after the copy is 3,573,731,328
+bytes, above the unchanged 2,684,354,560-byte append reserve. The capture is
+`/tmp/araphor-wasm-production-capture-v38.json`, with SHA256
+`aa6edf9f834f5aaebec11dba402e62db7fbad3fba52c4fc7f8399175eb8bf07f`.
+
+The fresh `analysis-packages` case passes with this executable. Its result is
+`/tmp/araphor-current-v38-analysis-packages/result.json`, with SHA256
+`7235e146748e0cf8be7a1ccd7ac345cd71add05367a045ec18af1be7997f655d`.
+The SDK detector is admitted from its built folder over native TLS transport
+without a host rebuild. It retains threshold 3, four inputs, three evidence
+records, checkpoint 4, and reason `example-burst.THRESHOLD`. Restart and retry
+retain the result. Trust revocation denies current compute and historical replay
+while retaining committed history. The paired SQL checks retain correction,
+empty replacement, checkpoint counts 2, 2, and 1, failed upgrade, rollback,
+revocation, and removal behavior. The result makes no physical or performance
+claim. The other three fresh production cases and final CI remain required.
 
 ### Implementation TODOs
 
