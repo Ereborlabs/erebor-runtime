@@ -1480,6 +1480,34 @@ footer. This is incomplete verification. Final CI and closure remain required.
 The historical dispatch order remains unmet. The earlier deadline cause
 remains unresolved. Current passes do not prove that cause or earlier order.
 
+### Trace authority timestamp correction TODOs
+
+The ordered v41 procedure reports a failure in
+`discovery_owner_service_isolation`. The focused test uses the same compiled
+Rust test executable and exits 101. Its error is
+`DataLoss: trace accepted bounds changed`. The log is
+`/tmp/araphor-owner-isolation-repro-v41.log`, with SHA256
+`dc4ec01b901368ecbe191dca335adaf1b2a0593ec08326f00cb66e716e2b5621`.
+The complete workspace procedure is still running. It has no terminal pass.
+
+The fixture creates a trace grant before cold package startup. The grant lasts
+120 seconds. Production acceptance uses current time and requires 45 seconds
+for its 30-second collection and 15-second completion interval. Startup and
+first discovery processing can consume more than 75 seconds. The existing
+integrity check then rejects the remaining authority interval.
+
+- [x] Reproduce the failure with the existing test executable. Trace the
+  acceptance clock, deadline calculation, and unchanged integrity check.
+- [ ] Create the trace request and grant immediately before acceptance. Use
+  that timestamp for the first trace output read. Keep the 120-second grant,
+  30-second collection, fixed intake clock, retention at `now + 1`, real resume
+  time, and every assertion. Change no production authority or deadline rule.
+- [ ] Rerun the existing isolation test and retain its exact result. Preserve
+  the ordered v41 failure and each production proof with its original source.
+- [ ] Complete the four fresh production cases and final shared Rust procedure
+  after the last Rust edit. Update the existing guide and result and commit
+  each correction and proof deliverable.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
