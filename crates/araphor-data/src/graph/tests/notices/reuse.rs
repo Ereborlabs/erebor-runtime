@@ -275,7 +275,10 @@ fn changed_context_precedes_reuse() -> TestResult {
         }
         fixture.set_facts(vec![changed, active.clone()])?;
         fixture.provider.revision.fetch_add(1, Ordering::SeqCst);
-        let error = fixture.process(11).expect_err("changed context accepted");
+        let error = fixture
+            .process(11)
+            .err()
+            .ok_or("changed context accepted")?;
         assert!(
             matches!(
                 &error,

@@ -1137,6 +1137,17 @@ result stays **Not done**.
   edit. Preserve current executable qualification. Verify rebuilt executable
   identity before reusing any production result across the test-only edit.
 
+The test-only lint correction returns an error when changed context is accepted.
+Every existing assertion stays intact. The exact context-rejection test exits
+zero with one pass. Formatting passes after the expression is wrapped. The
+v39 final procedure failure log has SHA256
+`7686dd97f6d549d942802aeab3476da0c9af1e752d73e722aa54778e854b2a2e`.
+Its workspace tests do not start. The correction log has SHA256
+`a2fac01fc2b826c83d1464b5da37ee8163f6fc2c0c61950ac7829a28185f2c3a`.
+The proof is `/tmp/araphor-wasm-test-lint-proof-v40.json`, with SHA256
+`faa6897e2049e6c4c24d0826479ca02185bf2944ecf5301ea9d9ab63c9212a3d`.
+Current-source final workspace verification remains required.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
