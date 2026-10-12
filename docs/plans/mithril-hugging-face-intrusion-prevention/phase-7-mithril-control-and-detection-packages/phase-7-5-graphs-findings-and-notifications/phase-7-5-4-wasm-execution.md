@@ -1174,6 +1174,17 @@ The aggregate proof is `/tmp/araphor-wasm-production-proof-v39.json`. The graph
 case and current final workspace procedure remain running. The other production
 case results require separate records. The phase remains **Not done**.
 
+The fresh context transport case exits zero and reports `PASS`. Its result is
+`/tmp/araphor-current-v39-context-roundtrip/result.json`, with SHA256
+`312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
+The same saved normal executable preserves Node WAL intake, signed context,
+TLS lookup, and reopen. Installed context execution retains exact identities,
+revision, and coverage. Cutoff 3000 selects one record. Cutoff 1999 selects no
+record and retains one omission. This lightweight case establishes no physical
+profile, deterministic profile, late-context, or production-authority claim.
+The profile restart and graph cases and the current final workspace procedure
+remain required. The current result stays **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
