@@ -891,6 +891,27 @@ warning. Its log SHA256 is
 Data compilation in that run precedes the correction. Rebuild on the corrected
 source before the four fresh production cases and the final workspace checks.
 
+The corrected source is committed through `20db87a9`. Its 1,586-file manifest is
+`/tmp/araphor-wasm-source-manifest-production-v38.json`, with source SHA256
+`e4681bec06f08de042c760c75fd0a76025b5fdfa945262e30e9377c1455a1a06`
+and file SHA256
+`30d6ca5ce5d89ff712cec40dde60f189f641b493b6db3cb1c6dd6fc47ac27181`.
+Only `analysis/graph.rs` differs from v37. The six component sources and bytes
+stay unchanged.
+
+The corrected normal build exits 101 while creating the Control Rust archive.
+The error is `No space left on device`. Its log is
+`/tmp/araphor-wasm-normal-build-v38.log`, with SHA256
+`b6d0b4267991f5dc4efc4b1f63db8e138642b6982ca4e2c1883e9e54a2cecd0c`.
+No fresh production case starts. Automatic review rejects a proposed cleanup
+while Cargo and rustc remain active. That cleanup does not run. After build
+termination, a new process scan finds no Cargo or native compiler process.
+
+- [ ] Recover the completed `e96` cache's duplicate native objects with the
+  native cache lock held and compiler checks restored. Verify the saved member
+  hashes, current file identities, and live references. Keep the complete
+  archive and fingerprints unchanged. Retry the corrected normal build.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
