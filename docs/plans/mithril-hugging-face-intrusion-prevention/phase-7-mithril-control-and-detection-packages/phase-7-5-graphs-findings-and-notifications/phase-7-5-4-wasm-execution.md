@@ -1606,6 +1606,21 @@ The append reserve and compiler profile remain unchanged. All four fresh cases
 and then final workspace verification remain required on this frozen source.
 The result remains **Not done**.
 
+### Fresh qualification on the corrected source
+
+The fresh v43 `analysis-packages` case exits zero and reports `PASS` with the
+saved normal executable. Its result SHA256 is
+`84b735128d874cf3cd6e59a4287c25ea36943ac8921a3fd10a0bea0b2ed80954`.
+The proof is `/tmp/araphor-wasm-analysis-packages-proof-v43.json`, with SHA256
+`e474912d79f938e45164bcdb8acab897ac2cc2987189cc92e53a550b603c490e`.
+All 1,590 source hashes and the saved executable hash still match the capture.
+The real client installs the detector folder over native gRPC with TLS. It
+produces `example-burst.THRESHOLD` with threshold three, four input records,
+three matching evidence records, and checkpoint four. No host rebuild occurs.
+Restart, retry, trust revocation, rollback, removal, and retained history checks
+pass. Context, profile restart, graph notification, and final CI remain required.
+The aggregate is `/tmp/araphor-wasm-production-proof-v43.json`.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.

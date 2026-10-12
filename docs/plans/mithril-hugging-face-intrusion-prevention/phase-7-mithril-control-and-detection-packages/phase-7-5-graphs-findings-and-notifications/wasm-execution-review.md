@@ -706,7 +706,11 @@ retains both red and green results. The corrected Rust source is committed
 through `6cce92d1`. Its normal locked build passes without warnings. The
 [capture](phase-7-5-4-wasm-execution.md#corrected-normal-qualification-capture)
 records the frozen source and complete saved executable. All four fresh cases
-and ordered final workspace verification remain required.
+and ordered final workspace verification remain required. The fresh installed
+package case now passes with that executable. The
+[record](phase-7-5-4-wasm-execution.md#fresh-qualification-on-the-corrected-source)
+retains the real client installation, custom reason, checkpoint, and lifecycle
+proof. Context, profile restart, graph, and final CI remain required.
 
 The retained multi-export correction is committed in `b14ffb2`. Its two focused
 regressions and normal build pass. Its source has 1,590 files and source SHA256
