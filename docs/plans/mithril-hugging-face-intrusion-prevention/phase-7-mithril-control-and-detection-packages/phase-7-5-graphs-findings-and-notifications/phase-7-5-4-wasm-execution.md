@@ -1317,6 +1317,19 @@ Available space is 22,178,349,056 bytes after recovery. The append reserve stays
 2,684,354,560 bytes. Fresh production cases and final workspace CI remain
 required. The result stays **Not done**.
 
+The fresh v41 installed-package case exits zero and reports `PASS`. Its result
+is `/tmp/araphor-current-v41-analysis-packages/result.json`, with SHA256
+`30f956ac4e461befe7eb0e7ada5991dd18da041d52ca943c795eda51ed2738f6`.
+The real client installs the built folder over native gRPC TLS without a host
+rebuild. Threshold 3 selects three evidence records from four inputs and retains
+checkpoint 4 and `example-burst.THRESHOLD`. Restart, retry, revocation, retained
+history, correction, empty replacement, rejected upgrade, rollback, removal,
+and renewal checks pass. The aggregate proof is
+`/tmp/araphor-wasm-production-proof-v41.json`, with SHA256
+`a6e3b327c10476ba257f7b66f249843cd0fbb5f89d9c511abed4433dca193314`.
+The other three fresh cases and the exact final workspace procedure remain
+required. This result retains the saved v41 executable and its source boundary.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
