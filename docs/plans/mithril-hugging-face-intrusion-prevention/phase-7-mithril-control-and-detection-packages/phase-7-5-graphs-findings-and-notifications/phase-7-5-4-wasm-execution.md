@@ -992,12 +992,27 @@ Both profile JSON files remain in the result directory. Source and saved
 executable hashes remain unchanged. This case makes no physical-profile claim.
 The fresh graph notification case and final workspace CI remain required.
 
-- [ ] Recover the inactive `5f7be5d7788f661d` Rust wrapper before final CI.
+- [x] Recover the inactive `5f7be5d7788f661d` Rust wrapper before final CI.
   Check its dependency file, hashes, file identities, and live references.
   Hold the Cargo cache lock and reject an active compiler. Remove only its
   three generated files and matching fingerprint. Keep the `dec44bd4c33f5815`
   native archive, current executable, component outputs, and proof files.
   Keep all source, test inputs, compiler profiles, and storage reserves.
+
+The locked recovery removes only the three generated Rust files and four
+matching fingerprint files. It frees 2,169,651,200 bytes. The retained native
+archive keeps SHA256
+`948fa252e09e49c0de719d6857e253022f3b6ba45c343448791aaf57f230d172`.
+The read-only proof is
+`/tmp/araphor-rust-cache-recovery-5f7be5d7788f661d-v38.json`, with SHA256
+`fe5bb0764933b9c6eb1ca41051ae22ac168e57eec2b16a912f7b40947a40d2f5`.
+The completion record is
+`/tmp/araphor-wrapper-5f7be5d7788f661d-retirement-v38.json`, with SHA256
+`ad21f07c169656c11c29cbab9d328b4e47eca70bc7c65077e790986ddcd913a5`.
+The scan finds no active compiler or observed file reference. Its systemd,
+sd-pam, and ssh-agent permission gaps remain explicit. The running graph
+executable stays intact. All 1,586 source hashes still match. Available space
+after recovery is 5,580,275,712 bytes. Final workspace CI remains required.
 
 ### Implementation TODOs
 
