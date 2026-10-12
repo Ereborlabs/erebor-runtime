@@ -692,8 +692,13 @@ identity proof is `/tmp/araphor-wasm-production-identity-v40.json`, with SHA256
 Fresh installed-package, context transport, and profile restart cases exit zero
 with the unchanged saved executable. Their records have separate commits and
 cover this byte-identical current normal executable. The graph case and exact
-current-source final workspace procedure remain pending. The aggregate proof
-is `/tmp/araphor-wasm-production-proof-v39.json`.
+current-source final workspace procedure require retries. The graph case exits
+1 at the filesystem reserve and produces no result file. The final procedure
+passes formatting, workspace check, strict Clippy, and test linking, then exits
+134 during workspace tests after the disk fills. No complete workspace pass is
+recorded. The [storage failure record](phase-7-5-4-wasm-execution.md#current-storage-failure-and-recovery-todos)
+preserves both log hashes and required retries. The aggregate proof is
+`/tmp/araphor-wasm-production-proof-v39.json`.
 
 The [phase result](phase-7-5-4-wasm-execution.md#result) will record final source
 state, commands, counts, and evidence after the required checks pass.

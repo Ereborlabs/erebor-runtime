@@ -136,10 +136,10 @@ close a verification gate. The phase remains **Not done**.
 | --- | --- | --- |
 | 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The SDK suite has 51 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. Final workspace verification remains required. |
 | 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Current native graph qualification has five passes. Final workspace verification remains required. |
-| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The four fresh v38 production cases pass. The production repetition corrections require a new source capture and fresh qualification. |
+| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | Three fresh cases pass for the corrected production executable. The graph case fails at the filesystem reserve. It requires a fresh retry. The four v38 passes retain their earlier source boundary. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at production limits. The v27 graph group has five passes, including unchanged splitting and historical JSON baselines. Fresh installed context transport passes. Final CI must qualify the complete corpus with current artifacts. The dispatch ordering breach remains recorded. |
 | 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. Fresh installed-detector and profile-restart cases pass. Final workspace verification remains required. |
-| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | All four fresh v38 production cases pass. Qualify the production repetition corrections, run the final Rust procedure, and complete the final review and result. |
+| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | Three fresh corrected-executable cases pass. The graph case and current workspace test run fail after storage exhaustion. Repeat these gates, then complete the final review and result. |
 
 The Rust source before the bounded-input correction is committed through
 `8f150fd4`. Its 1,558 source file hashes equal the v12 manifest. Formatting,
@@ -1194,6 +1194,37 @@ through installed execution. The case remains lightweight. It establishes no
 physical profile or production-authority claim. All three fresh completed
 cases have separate commits. The graph case and current final workspace
 procedure remain pending. The current phase remains **Not done**.
+
+### Current storage failure and recovery TODOs
+
+The v40 final procedure exits 134. Formatting, workspace check, strict Clippy,
+and test linking pass. Workspace tests start, but the filesystem reaches zero
+available bytes. Many Data tests fail. The run has no complete workspace test
+result. Do not treat every failed test as a source defect or claim a pass.
+The log is `/tmp/araphor-wasm-rust-ci-final-v40.log`, with SHA256
+`ee17c2740b13464407da82f804f4dd4b51ed21820e312502e296a2cd2b9f4441`.
+
+The graph case exits 1 without `result.json`. Its exact error is
+`Analysis storage reached its filesystem reserve limit`.
+The log is `/tmp/araphor-current-v39-graph-notification.log`, with SHA256
+`162cde05c5efed3128ed3c19d05403bbf7ca8029c50d6fd306d9669e1b1a51bc`.
+The three completed cases remain valid for the saved executable. An earlier
+graph pass does not qualify the production repetition correction.
+
+After both jobs exit, available space is 26,115,563,520 bytes. This observation
+does not prove sufficient capacity for another complete run. A separate build
+uses its own worktree target. This goal does not own or stop that build.
+
+- [x] Preserve both failed logs and their exact terminal results. Keep the
+  current source manifest and three completed production case records.
+- [ ] Check storage capacity and inactive main-checkout build artifacts before
+  another run. Preserve source, native archives, component artifacts, logs,
+  proofs, and the saved qualification executable. Do not change another build.
+- [ ] Repeat the graph case in a fresh output directory. Repeat the exact final
+  workspace procedure on the unchanged v40 source. Keep workloads, assertions,
+  deadlines, compiler profiles, and the filesystem reserve unchanged.
+- [ ] Record successful terminal results, complete the final source review,
+  and commit each deliverable. The phase remains **Not done**.
 
 ### Implementation TODOs
 
