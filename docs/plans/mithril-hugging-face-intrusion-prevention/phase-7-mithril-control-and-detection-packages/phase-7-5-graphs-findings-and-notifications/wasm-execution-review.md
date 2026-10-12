@@ -628,7 +628,7 @@ The [build proof](wasm-component-build-proof.json) records independent component
 build hashes. This work adds no new BPF program or ABI, physical-prevention
 qualification, native target, OCI distribution, or performance result.
 
-The current Rust source is committed through `20db87a9`. Its 1,586-file manifest
+The retained v38 Rust source is committed through `20db87a9`. Its 1,586-file manifest
 is `/tmp/araphor-wasm-source-manifest-production-v38.json`, with source SHA256
 `e4681bec06f08de042c760c75fd0a76025b5fdfa945262e30e9377c1455a1a06`.
 The saved normal executable is
@@ -639,7 +639,17 @@ this unchanged executable. All three exit zero and produce schema version 1
 `PASS` results. Their records have separate commits: `e4deb6cd`, `fdbd67c9`,
 and `75c0e363`, respectively. The proof is
 `/tmp/araphor-wasm-production-proof-v38.json`.
-Graph notification and the final shared Rust procedure remain required.
+The fresh `graph-notification` case also exits zero and reports `PASS`. Its
+result SHA256 is
+`7e79955351206bd3ab153a803fac872d03509daf2e888b03906e029316c3644d`.
+It preserves 12 incident cards, 257 findings and notification obligations,
+33 source windows, and the 64-record and 185-record native windows. The latter
+selects 370 relationships through two SQL chunks and reopens with equal output.
+The aggregate proof SHA256 is
+`3d9531eaed7693c662acf3379c3a0545cbc8f1f33c0220a24879b2385e3174f8`.
+These four passes cover the retained v38 executable. Production repetition
+corrections are under review. They require a new source capture, normal build,
+four fresh production cases, and the final shared Rust procedure.
 
 The retained v37 Rust source is committed through `6f6ac795`. All 1,586 files in
 `/tmp/araphor-wasm-source-manifest-production-v37.json` matched source SHA256

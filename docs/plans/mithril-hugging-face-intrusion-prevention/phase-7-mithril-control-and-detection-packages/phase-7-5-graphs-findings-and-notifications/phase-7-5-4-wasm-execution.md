@@ -136,10 +136,10 @@ close a verification gate. The phase remains **Not done**.
 | --- | --- | --- |
 | 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The SDK suite has 51 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. Final workspace verification remains required. |
 | 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Current native graph qualification has five passes. Final workspace verification remains required. |
-| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The fresh installed-detector case passes. The fresh production finding-to-notification case remains required. |
+| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The four fresh v38 production cases pass. The production repetition corrections require a new source capture and fresh qualification. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at production limits. The v27 graph group has five passes, including unchanged splitting and historical JSON baselines. Fresh installed context transport passes. Final CI must qualify the complete corpus with current artifacts. The dispatch ordering breach remains recorded. |
 | 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. Fresh installed-detector and profile-restart cases pass. Final workspace verification remains required. |
-| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | Three fresh production cases pass and have separate commits. Finish graph notification, the final Rust procedure, and the final review and result. |
+| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | All four fresh v38 production cases pass. Qualify the production repetition corrections, run the final Rust procedure, and complete the final review and result. |
 
 The Rust source before the bounded-input correction is committed through
 `8f150fd4`. Its 1,558 source file hashes equal the v12 manifest. Formatting,
@@ -1026,7 +1026,28 @@ replace current runtime qualification.
 
 ### Repeated production work correction TODOs
 
-The running v38 graph case still has no terminal result. Source review finds
+The v38 graph case now exits zero and reports `PASS`. Its result is
+`/tmp/araphor-current-v38-graph-notification/result.json`, with SHA256
+`7e79955351206bd3ab153a803fac872d03509daf2e888b03906e029316c3644d`.
+Its log has SHA256
+`b090dc6bbc2e1369c456cfc6a43a7f9de20e301f7f8ca03b6fb89103b6d64a8a`.
+The saved executable retains SHA256
+`b1d25154f255dbac2aefb7fc1fc063d38972628beba20f7fbcddef000173320f`.
+The aggregate proof is `/tmp/araphor-wasm-production-proof-v38.json`, with
+SHA256 `3d9531eaed7693c662acf3379c3a0545cbc8f1f33c0220a24879b2385e3174f8`.
+
+The case preserves ACKs `[null, null, 2, 2]`, accepted cursors `[0, 0, 2, 2]`,
+rollback progress, and canonical replay. It checks 12 incident cards and 257
+findings with 257 persisted notification obligations across 33 source windows.
+The 64-record and 185-record native windows reopen with equal results. The
+185-record window selects 370 relationships through two SQL chunks. Native
+reads retain exact versions, subject joins, evidence, proof, and coverage.
+This is lightweight proof on the retained v38 source. It establishes no new
+physical, cross-node, provider-issuance, or performance qualification.
+
+All four fresh v38 cases pass. The final workspace procedure has not run on
+that source. New Rust corrections below also require new qualification.
+Source review finds
 two repeated operations. A global provider notice makes earlier source windows
 run all installed detectors before the unchanged-result check. Each window
 also reads and validates the same installed component bundles again. These
