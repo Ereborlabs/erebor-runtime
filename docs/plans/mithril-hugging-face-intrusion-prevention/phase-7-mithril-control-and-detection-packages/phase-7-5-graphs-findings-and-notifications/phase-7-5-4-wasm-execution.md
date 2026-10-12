@@ -1020,8 +1020,9 @@ host domain validation, or atomic commit fences. Wasm errors propagate without
 a built-in fallback. The host retains context selection, evidence checks,
 coverage checks, and causal authority checks. Commit fences check exact
 activations and all saved grant and package-root pairs. The component builder
-tracks shared source inputs and builds all six guests from one computation
-source. This source review does not replace current runtime qualification.
+tracks source inputs and builds all six guests from source. Each current
+algorithm uses its shared computation source. This source review does not
+replace current runtime qualification.
 
 ### Implementation TODOs
 
