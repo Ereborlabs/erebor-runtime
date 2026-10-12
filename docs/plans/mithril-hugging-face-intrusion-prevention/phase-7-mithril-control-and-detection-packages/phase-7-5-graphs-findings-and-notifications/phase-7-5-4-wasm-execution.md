@@ -981,6 +981,17 @@ The source manifest and saved executable hashes remain unchanged. Live-profile
 and deterministic-profile checks belong to the remaining restart case. Graph
 notification and final workspace CI also remain required.
 
+The fresh `profile-restart` case passes with the same v38 executable. Its result
+is `/tmp/araphor-current-v38-profile-restart/result.json`, with SHA256
+`3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
+Signed context, persisted live profiles, late context resolution, atomic
+profile progress, deterministic profiles, immutable sealed revisions, and
+frozen replay without provider calls pass. The installed context transport
+retains exact identity, revision, coverage, cutoff, and omission checks.
+Both profile JSON files remain in the result directory. Source and saved
+executable hashes remain unchanged. This case makes no physical-profile claim.
+The fresh graph notification case and final workspace CI remain required.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
