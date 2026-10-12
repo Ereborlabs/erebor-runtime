@@ -911,6 +911,10 @@ termination, a new process scan finds no Cargo or native compiler process.
   native cache lock held and compiler checks restored. Verify the saved member
   hashes, current file identities, and live references. Keep the complete
   archive and fingerprints unchanged. Retry the corrected normal build.
+- [ ] Remove debug sections from the inactive earlier normal executable if
+  headroom requires it. Hold the native cache lock, check process references,
+  and use the existing loaded-section verifier. Keep the current source,
+  compiler profile, and all loaded code unchanged.
 
 ### Implementation TODOs
 
