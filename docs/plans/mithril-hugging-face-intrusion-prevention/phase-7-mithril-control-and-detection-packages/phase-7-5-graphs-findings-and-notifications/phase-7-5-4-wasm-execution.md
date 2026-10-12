@@ -1351,6 +1351,14 @@ have separate commits. The graph case and exact final workspace procedure
 remain required. The aggregate proof SHA256 is
 `f0b3c8bc3424049d7cc0e528f282f073fecd43beb6492b4def6f0289fb839bc8`.
 
+The exact final workspace procedure starts after the final Rust edit in
+`b14ffb2`. All 1,590 source hashes still match the frozen manifest. Its command
+is `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+Its log is `/tmp/araphor-wasm-rust-ci-final-v41.log`. The capture is
+`/tmp/araphor-wasm-final-ci-capture-v41.json`. Formatting, workspace check, and
+strict Clippy pass. Test compilation remains running at this record. No
+terminal workspace pass is claimed. The fresh graph case remains required.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.

@@ -708,6 +708,9 @@ The fresh profile restart case also passes, with result SHA256
 `3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
 All three completed v41 cases have separate commits. The graph case and exact
 final workspace procedure remain required.
+The exact final procedure is now running after the last Rust edit. Formatting,
+workspace check, and strict Clippy pass. Test compilation remains in progress.
+The log is `/tmp/araphor-wasm-rust-ci-final-v41.log`. No terminal pass is claimed.
 
 The retained v40 graph retry exits zero and reports `PASS`, with result SHA256
 `125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.
