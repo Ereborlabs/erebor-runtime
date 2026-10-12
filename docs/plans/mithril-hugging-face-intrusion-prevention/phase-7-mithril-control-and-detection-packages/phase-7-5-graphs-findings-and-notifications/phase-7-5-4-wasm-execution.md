@@ -1538,13 +1538,27 @@ Listener startup installs and compiles required components. The backend has a
 30-second collection interval. The 10-second query timeout starts after listener
 startup. The outer fixture timeout remains 60 seconds.
 
+The diagnostic source builds. Its first run reaches the outer timeout. The
+unchanged retry reports terminal reason `Deadline` after 59,221 milliseconds in
+the query helper. The launch count is one. The receipt and retained output remain
+equal, the frame count remains two, and the writer remains ready. The current
+time is 14.4 seconds after the signed deadline. This confirms that service setup
+consumes the capture lifetime. The proof is
+`/tmp/araphor-query-upload-diagnostic-v42-proof.json`, with SHA256
+`96fb20ac27c04a0f1bd0ad9ad216fb9ad0e4c8993ea9ca748ba691b01c2ed2bf`.
+It retains the exact source diff, binary, build log, and both failed runs.
+
 - [x] Reproduce the failure with the existing test executable. Read listener
   startup, query timeout, backend collection, and post-query state checks.
-- [ ] Report the exact failed state check and terminal reason. Keep every
+- [x] Report the exact failed state check and terminal reason. Keep every
   existing assertion, workload, collection interval, and timeout unchanged.
-- [ ] If startup consumes the capture interval, start the production listener
-  and client before capture. Run the same query failure and recovery while
-  capture is active. Add no warm-up call or alternate evaluator.
+- [ ] Start the public query listener with the other Control services before
+  the 60-second active case. Keep its provider, credential, and profile in one
+  fixture owner. Connect the public client and run the same 10-second query
+  failure and recovery during capture. Shut down the query listener and provider
+  before Control reopen. Keep the 120-second grant, 30-second collection,
+  60-second active case, all output and ACK checks, and every assertion. Add no
+  warm-up call or alternate evaluator. This order matches the physical case.
 - [ ] Verify the corrected query-upload and isolation cases. Commit each
   correction. Repeat all four fresh cases and final workspace verification
   after the last Rust edit. Retain the v41 failures with their source boundary.
