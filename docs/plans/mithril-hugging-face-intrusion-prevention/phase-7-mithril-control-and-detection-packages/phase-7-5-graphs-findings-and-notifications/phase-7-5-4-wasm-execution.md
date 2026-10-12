@@ -783,6 +783,25 @@ The runtime retry starts on the unchanged source. Its log is
 `/tmp/araphor-wasm-runtime-generated-v37-retry.log`. No test result is claimed
 until this command finishes.
 
+The runtime retry completes native compilation in 25 minutes 38 seconds.
+Its 11 tests finish with ten passes and one failure in 144.20 seconds. The
+failed test is `installed_guests_overlap`. Store initialization rejects the
+filesystem reserve before the concurrent guest calls start. The log SHA256 is
+`7ac12dddedc80822246c50be7be6e82bf655285f45cbc36cf71e94caa0d6160a`.
+The unchanged default append reserve is 2,684,354,560 bytes. Available space
+after the run is 2,312,478,720 bytes. The ten passing tests cover default and
+configured quotas, transfer limits, interruption, errors, and instance state.
+This run does not prove installed guest overlap.
+
+- [ ] Recover the completed native cache's duplicate object files after checked
+  archive-member equality and a new live-reference scan. Keep its archive and
+  Cargo fingerprint unchanged.
+- [ ] If link headroom requires it, remove only debug sections from the completed
+  inactive Data executable. Use the existing loaded-section checker. Preserve
+  each loaded section and its metadata. Keep source and test behavior unchanged.
+- [ ] Rerun the installed overlap test with the same executable and the unchanged
+  storage reserve, inputs, two entry gates, deadlines, and output assertions.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
