@@ -730,6 +730,14 @@ The log is `/tmp/araphor-wasm-rust-ci-final-v41.log`, with SHA256
 `2cfcd512d1c13470b97bc251c39779d82753cad1c03faad80aa2b219ac1fb56d`.
 The final procedure must run again after fresh graph qualification.
 
+The ordered final procedure now starts after all four fresh cases pass.
+All 1,590 source hashes, the saved executable hash, and all four result file
+hashes match before the start. The command retains one Cargo build job and one
+test thread. The log is `/tmp/araphor-wasm-rust-ci-ordered-v41.log`. The capture is
+`/tmp/araphor-wasm-final-ci-ordered-capture-v41.json`, with SHA256
+`ba2a5b58be2ce2659a49e22d2dafed33c6c9a7e3627a9b858e6568aca06b4d93`.
+The procedure is running. No terminal workspace pass is claimed.
+
 Independent guide review finds no additional source correction. All 157 local
 links and anchors resolve. The review checks owners, quota defaults, generated
 builds, operator installation, mixed exports, and lifecycle failures against

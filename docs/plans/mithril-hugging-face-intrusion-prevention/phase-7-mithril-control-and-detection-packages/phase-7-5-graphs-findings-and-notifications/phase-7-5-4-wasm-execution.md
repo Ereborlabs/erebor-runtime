@@ -1437,12 +1437,33 @@ pass. Intake acknowledgements are null, null, 2, 2. Accepted cursors are
 0, 0, 2, 2. Canonical replay and transaction rollback checks pass.
 
 All four fresh v41 production cases now pass with the same saved executable.
-The aggregate proof SHA256 is
+The immutable aggregate at graph completion is
+`/tmp/araphor-wasm-production-graph-complete-v41.json`, with SHA256
 `a4cf691d60015c71ec4df18c6ff92e3d784a1c5729619dcdbb6a6be603b07897`.
 The graph case remains lightweight recorded replay. It adds no physical
 prevention, provider issuance, cross-node physical, or performance claim.
 The ordered final shared Rust procedure and final closure remain required.
 The phase remains **Not done**. The historical dispatch ordering breach remains.
+
+### Ordered final workspace verification
+
+The final shared Rust procedure starts after all four fresh v41 production
+cases finish with `PASS`. All 1,590 source hashes and the saved executable hash
+match before the procedure starts. Each result file still matches its recorded
+hash. The source remains `b14ffb2`; only documentation changes after that commit.
+
+The command is
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+The log is `/tmp/araphor-wasm-rust-ci-ordered-v41.log`. The capture is
+`/tmp/araphor-wasm-final-ci-ordered-capture-v41.json`, with SHA256
+`ba2a5b58be2ce2659a49e22d2dafed33c6c9a7e3627a9b858e6568aca06b4d93`.
+Available filesystem space is 24,321,978,368 bytes at capture. The append reserve
+and test workloads remain unchanged. The procedure is running. No terminal
+workspace pass is claimed. Final verification and closure remain required.
+
+- [x] Retain the aggregate bytes at graph completion. The ordered CI capture
+  changes the live aggregate. Name the immutable graph-completion snapshot
+  beside its recorded hash. Keep the graph result and proof unchanged.
 
 ### Implementation TODOs
 
