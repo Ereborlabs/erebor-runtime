@@ -992,6 +992,13 @@ Both profile JSON files remain in the result directory. Source and saved
 executable hashes remain unchanged. This case makes no physical-profile claim.
 The fresh graph notification case and final workspace CI remain required.
 
+- [ ] Recover the inactive `5f7be5d7788f661d` Rust wrapper before final CI.
+  Check its dependency file, hashes, file identities, and live references.
+  Hold the Cargo cache lock and reject an active compiler. Remove only its
+  three generated files and matching fingerprint. Keep the `dec44bd4c33f5815`
+  native archive, current executable, component outputs, and proof files.
+  Keep all source, test inputs, compiler profiles, and storage reserves.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
