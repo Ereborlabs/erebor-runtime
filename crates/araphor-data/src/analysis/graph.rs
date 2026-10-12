@@ -10,6 +10,7 @@ use super::graph_rows::GraphRows;
 
 mod findings;
 pub(super) mod traversal;
+mod windows;
 
 impl AnalysisStore {
     pub(crate) fn graph_set_health(
@@ -240,32 +241,8 @@ impl AnalysisStore {
         current: bool,
     ) -> Result<Vec<(String, GraphSnapshotV1, u64)>> {
         self.read_snapshot(|snapshot| {
-            let mut statement = snapshot.prepare(
-                "SELECT result_id, commit_revision FROM (
-                    SELECT result_id, commit_revision, stream_key,
-                    row_number() OVER (PARTITION BY stream_key, first_cursor ORDER BY commit_revision DESC) AS current_rank
-                    FROM analysis_results WHERE tenant_id = ? AND processor_id = ? AND method_version = ?
-                        AND stream_key IS NOT NULL
-                 ) heads WHERE (? IS NULL OR stream_key = ?) AND (? IS NULL OR result_id > ?)
-                    AND (NOT ? OR current_rank = 1) ORDER BY result_id LIMIT 1",
-            ).context(AnalysisDatabaseSnafu { operation: "prepare committed graph snapshots" })?;
-            let key = source.map(EvidenceIntakeIdentityV1::key);
-            let rows = statement.query_map(params![tenant.as_slice(), GRAPH_PROCESSOR, GRAPH_SCHEMA_VERSION, key.as_deref(), key.as_deref(), after, after, current], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-            }).context(AnalysisDatabaseSnafu { operation: "read committed graph snapshots" })?;
-            let references = rows.collect::<std::result::Result<Vec<_>, _>>().context(AnalysisDatabaseSnafu { operation: "decode committed graph references" })?;
-            drop(statement);
-            let mut values = Vec::new();
-            for (id, revision) in references {
-                let header = GraphRows::read_header(snapshot, tenant, &id)?
-                    .ok_or_else(|| self.state_error("the committed graph header is absent"))?;
-                let graph = GraphRows::read(snapshot, &id, &header)?;
-                if graph.scope.identity.tenant_id != tenant || source.is_some_and(|source| source != &graph.scope.identity) {
-                    return self.reject("the committed graph source differs from its index");
-                }
-                values.push((id, graph, revision));
-            }
-            Ok(values)
+            self.graph_page(snapshot, tenant, source, after, current, None)
+                .map(|(values, _)| values)
         })
     }
 

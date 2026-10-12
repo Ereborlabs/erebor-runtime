@@ -53,20 +53,15 @@ impl GraphAndFindingOwner {
         let mut heads = BTreeMap::new();
         let mut after = None;
         loop {
-            let page = self.store.graph_snapshots(
-                source.tenant_id,
-                Some(source),
-                after.as_deref(),
-                true,
-            )?;
-            if page.is_empty() {
+            let (page, next) =
+                self.store
+                    .graph_window_page(source, first, last, after.as_deref())?;
+            let Some(next) = next else {
                 break;
-            }
-            after = page.last().map(|row| row.0.clone());
+            };
+            after = Some(next);
             for row in page {
-                if row.1.first_cursor <= last && row.1.last_cursor >= first {
-                    heads.insert(row.1.first_cursor, row);
-                }
+                heads.insert(row.1.first_cursor, row);
             }
         }
         Ok(heads)

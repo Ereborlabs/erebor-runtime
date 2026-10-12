@@ -122,26 +122,13 @@ impl GraphAndFindingOwner {
         let mut after = None;
         let mut changed = false;
         loop {
-            let page = self.store.graph_snapshots(
-                source.tenant_id,
-                Some(source),
-                after.as_deref(),
-                true,
-            )?;
+            let page = self.store.graph_window_bounds(source, after)?;
             if page.is_empty() {
                 break;
             }
-            after = page.last().map(|row| row.0.clone());
-            for (_, snapshot, _) in page {
-                changed |= self.commit_window(
-                    source,
-                    snapshot.first_cursor,
-                    snapshot.last_cursor,
-                    consumed,
-                    false,
-                    now,
-                    force,
-                )?;
+            after = page.last().map(|row| row.0);
+            for (first, last) in page {
+                changed |= self.commit_window(source, first, last, consumed, false, now, force)?;
             }
         }
         Ok(changed)

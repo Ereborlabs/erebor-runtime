@@ -635,7 +635,7 @@ user before implementation. The current source still uses fixed runtime quotas.
   location. Add caller tracking to the read runner and snapshot wrapper. Extend
   the existing native deadline test without removing its 16 iterations,
   cleanup, metadata, or fresh-reader checks.
-- [ ] Remove repeated production graph reads and validation where the same
+- [x] Remove repeated production graph reads and validation where the same
   owner has already checked the same immutable version. Keep corruption,
   authorization, expiry, historical replay, and transaction checks. Add focused
   Rust proof before changing each affected path. Do not copy owner sequences
@@ -655,6 +655,18 @@ Its log is `/tmp/araphor-wasm-read-caller-v33.log`, with SHA256
 The combined source manifest is `/tmp/araphor-wasm-source-manifest-production-v33.json`,
 with SHA256 `3aafb4341b322cf553036e9e2454bc1158b0adf1e784158236a017173c1ae4d9`.
 The production graph retry and final workspace procedure remain required.
+
+The native window selection correction passes three focused tests on v33 in
+123.68 seconds. Refresh reads checked window headers in first-cursor order.
+Each window then reconstructs only current overlapping graphs. Current-head
+selection occurs before overlap checks. A short replacement cannot expose an
+older wide version. A skipped row still advances the result-ID page cursor.
+Historical result reads retain their existing order and complete graph output.
+The tests check source scope, invalid ranges, replacement, saved progress,
+corrupt selected rows, and invalid headers. Readers keep the existing deadline
+and close before computation. Existing large graph test inputs stay unchanged.
+The log is `/tmp/araphor-wasm-native-windows-v33.log`.
+Full graph, lifecycle, production, and workspace qualification remain required.
 
 ### Implementation TODOs
 
