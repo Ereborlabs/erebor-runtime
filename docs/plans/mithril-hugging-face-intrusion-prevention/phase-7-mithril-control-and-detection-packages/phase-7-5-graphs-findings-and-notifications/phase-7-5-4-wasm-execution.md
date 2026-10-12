@@ -1129,6 +1129,14 @@ Rust edit. Both remain running at this record. No terminal pass is claimed.
 The other three fresh production cases remain required. The current phase
 result stays **Not done**.
 
+- [ ] Replace the forbidden `expect_err` call in the new notice test with a
+  returned test error when the owner accepts changed context. Keep every
+  rejection, guest-entry, result, context, notice, and health assertion. The
+  v39 final procedure passes formatting and workspace check, then exits 101
+  under `clippy::expect_used`. Rerun the exact final procedure after the test
+  edit. Preserve current executable qualification. Verify rebuilt executable
+  identity before reusing any production result across the test-only edit.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
