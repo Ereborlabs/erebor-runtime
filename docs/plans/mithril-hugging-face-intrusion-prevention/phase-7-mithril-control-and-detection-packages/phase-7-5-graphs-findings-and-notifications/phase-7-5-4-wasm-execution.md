@@ -1000,7 +1000,8 @@ The fresh graph notification case and final workspace CI remain required.
   Keep all source, test inputs, compiler profiles, and storage reserves.
 
 The locked recovery removes only the three generated Rust files and four
-matching fingerprint files. It frees 2,169,651,200 bytes. The retained native
+matching fingerprint files. Available space increases by 2,169,651,200 bytes.
+The retained native
 archive keeps SHA256
 `948fa252e09e49c0de719d6857e253022f3b6ba45c343448791aaf57f230d172`.
 The read-only proof is
@@ -1013,6 +1014,14 @@ The scan finds no active compiler or observed file reference. Its systemd,
 sd-pam, and ssh-agent permission gaps remain explicit. The running graph
 executable stays intact. All 1,586 source hashes still match. Available space
 after recovery is 5,580,275,712 bytes. Final workspace CI remains required.
+
+The current source review finds no additional defect in installed dispatch,
+host domain validation, or atomic commit fences. Wasm errors propagate without
+a built-in fallback. The host retains context selection, evidence checks,
+coverage checks, and causal authority checks. Commit fences check exact
+activations and all saved grant and package-root pairs. The component builder
+tracks shared source inputs and builds all six guests from one computation
+source. This source review does not replace current runtime qualification.
 
 ### Implementation TODOs
 
