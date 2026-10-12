@@ -134,12 +134,12 @@ close a verification gate. The phase remains **Not done**.
 
 | Deliverable | Source and commit | Remaining proof |
 | --- | --- | --- |
-| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The SDK suite has 51 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. The exact final workspace procedure is running on v41. |
+| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The v41 SDK suite has 52 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. Final CI must run after fresh graph qualification. |
 | 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Native graph qualification has five passes. Final workspace tests and fresh v41 graph qualification remain required. |
 | 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The multi-export correction in `b14ffb2` has two focused passes. Fresh v41 package, context, and profile cases pass. The graph case remains required. The v39/v40 and v38 results retain their source boundaries. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at its recorded production limits. The v27 graph group has five passes, including unchanged splitting and historical JSON baselines. Fresh v41 installed context transport passes. Final CI must qualify the complete corpus with current artifacts. The dispatch ordering breach remains recorded. |
 | 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. Fresh v41 installed-detector and profile-restart cases pass. Final workspace verification remains required. |
-| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | The v41 source and normal executable are captured. Three fresh cases pass in separate commits. Final CI passes formatting, check, strict Clippy, and linking; workspace tests are running. The fresh graph case and final review and result remain required. The earlier storage failures remain recorded. |
+| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | The v41 source and normal executable are captured. Three fresh cases pass in separate commits. The first CI attempt passes formatting, check, strict Clippy, and linking, then exits 130 at the controlled stop. Fresh graph qualification, ordered final CI, and final review and result remain required. The earlier storage failures remain recorded. |
 
 The Rust source before the bounded-input correction is committed through
 `8f150fd4`. Its 1,558 source file hashes equal the v12 manifest. Formatting,
@@ -1386,6 +1386,36 @@ executable hash still match. The review proof is
 The proof retains a partial CI log snapshot and makes no terminal CI claim.
 Final workspace tests, fresh graph qualification, and final closure remain
 required. The phase remains **Not done**. No Rust or test source changes.
+
+### Final verification order correction TODOs
+
+The earlier guide correction missed the implementation checklist's requirement
+to run all four production cases before the final shared Rust procedure.
+The absence of that order in the goal does not cancel this compatible plan
+requirement. The v41 workspace run starts before fresh graph qualification.
+This run cannot close the final verification order requirement.
+
+- [x] Stop the unfinished v41 workspace run and preserve its exit status and
+  partial log. Keep its completed checks separate from final verification.
+- [ ] Restore the guide's required order. Run the fresh graph case with the
+  saved executable, then run the complete shared Rust procedure on the same
+  frozen source. Preserve every test, assertion, limit, and earlier result.
+- [ ] Record each terminal result and commit each proof deliverable. Retain
+  the historical dispatch ordering breach as a separate unmet requirement.
+
+The first v41 workspace run exits 130 after a controlled SIGINT. No test failure
+is reported. All build and CI test processes are absent after the stop. The
+log SHA256 is
+`2cfcd512d1c13470b97bc251c39779d82753cad1c03faad80aa2b219ac1fb56d`.
+The interrupted result is
+`/tmp/araphor-wasm-rust-ci-final-v41-interrupted-result.json`, with SHA256
+`e157165ae2eaf10bfc4aa1d52cc82be61140d8797cd6d62869f434918123e917`.
+Eleven completed top-level suites have 135 passes, zero failures, and one ignored
+test. The Data suite has 595 tests and no final footer. Its large native
+traversal test passes before the stop. This result is incomplete verification.
+The guide now requires all four production cases before final CI. The three
+v41 cases remain passed. Fresh graph qualification and final CI remain required.
+All 1,590 source hashes still match. No Rust or test source changes.
 
 ### Implementation TODOs
 

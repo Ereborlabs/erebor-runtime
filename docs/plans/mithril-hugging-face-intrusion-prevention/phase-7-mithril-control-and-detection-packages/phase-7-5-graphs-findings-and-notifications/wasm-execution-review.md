@@ -650,8 +650,9 @@ Review these boundary tests with the algorithm cases:
 
 Build the normal qualification binary for the current source. Run all four
 cases and the final shared Rust procedure after the last Rust edit.
-Keep the source unchanged until both checks finish. Run the graph case and CI
-separately to reduce simultaneous disk use.
+Run all four cases before the final shared Rust procedure, as the phase
+implementation checklist requires. Keep the source unchanged until both checks
+finish. Run the graph case and CI separately to reduce simultaneous disk use.
 Run each case in a separate output directory that does not yet exist. Use the
 same binary for all four cases. Keep it unchanged while its compiler children
 run.
@@ -709,11 +710,15 @@ The fresh profile restart case also passes, with result SHA256
 `3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
 All three completed v41 cases have separate commits. The graph case and exact
 final workspace procedure remain required.
-The exact final procedure is now running after the last Rust edit. Formatting,
-workspace check, strict Clippy, and test linking pass. Workspace tests are
-running. The native window selection and graph migration checks have passed
-through reference retention. No test failure is reported at this record.
-The log is `/tmp/araphor-wasm-rust-ci-final-v41.log`. No terminal pass is claimed.
+The first v41 procedure starts after the last Rust edit, before the fresh graph
+case. Formatting, workspace check, strict Clippy, and test linking pass. The
+root stops this unfinished run with SIGINT to follow the phase's required order.
+It exits 130. No test failure is reported. The SDK suite has 52 passes. The
+large corpus, graph bounds, evidence recovery, mixed-export graph regression,
+and large native traversal tests pass. Workspace verification is incomplete.
+The log is `/tmp/araphor-wasm-rust-ci-final-v41.log`, with SHA256
+`2cfcd512d1c13470b97bc251c39779d82753cad1c03faad80aa2b219ac1fb56d`.
+The final procedure must run again after fresh graph qualification.
 
 Independent guide review finds no additional source correction. All 157 local
 links and anchors resolve. The review checks owners, quota defaults, generated
