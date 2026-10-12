@@ -625,6 +625,12 @@ user before implementation. The current source still uses fixed runtime quotas.
   schema scratch before encoding. Keep shared pool capacity unchanged. Preserve
   lease, metadata, cancellation, and rejection checks. Add a default-ceiling
   input test and retain the rejection above the effective input limit.
+- [ ] Include Arrow encoding allocations that do not appear in retained array
+  buffers. A valid million-row Struct array with a nullable Null child needs a
+  new 125,000-byte validity bitmap. Nested FixedSizeList arrays can increase
+  this allocation. Reserve this space before encoding through the shared owner.
+  Add focused Rust tests for both shapes. Keep the dataset, shared capacity,
+  existing limits, and one encoding pass.
 - [x] Report the caller of the final read deadline through the existing error
   location. Add caller tracking to the read runner and snapshot wrapper. Extend
   the existing native deadline test without removing its 16 iterations,
