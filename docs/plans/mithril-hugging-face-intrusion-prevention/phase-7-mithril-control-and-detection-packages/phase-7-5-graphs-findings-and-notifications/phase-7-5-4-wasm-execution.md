@@ -146,10 +146,10 @@ four fresh production cases, and a new final shared Rust procedure remain
 required.
 
 The retained corpus run used 64 MiB of data and 8 billion fuel units.
-Production permits 32 MiB and 100 million fuel units. That test result does
+At that time, production permitted 32 MiB and 100 million fuel units. That test result does
 not prove production equivalence. Automatic approval review rejects the
-proposed production limit increase. The current correction keeps production
-limits unchanged and removes the larger unit-test allowances. Qualify the
+proposed production limit increase. The earlier correction kept production
+limits unchanged and removed the larger unit-test allowances. Qualify the
 bounded-input correction with the same limits in both paths. Keep this gate
 open until the required checks pass.
 The production dispatch has already changed. The required complete production
@@ -595,6 +595,44 @@ The saved execution copy has the same SHA256 after removal. The proof is
 All 1,576 current source hashes still match the v31 manifest. The retry uses
 `/tmp/araphor-current-v31-graph-retry` as its fresh output directory.
 
+The retry exits one with `AnalysisReadDeadline` at
+`crates/araphor-data/src/analysis/read.rs:161`. It writes no result artifact.
+Available filesystem space at exit is 10,058,031,104 bytes. The reserve remains
+unchanged. The failure log is `/tmp/araphor-current-v31-graph-retry.log`, with
+SHA256 `25de98ad83f4a6d2feb14fda10df58cecd27239b82a3bd2a1e8acacffba625fb`.
+The existing proof retains this failure. The location is the final check after
+read cleanup; it does not identify the failed read operation.
+
+### Approved resource policy correction
+
+The user approves the Extism resource policy as a design reference. Do not add
+an Extism dependency or replace the WIT interface. Configurable plugin quotas
+must be optional and unset by default. Keep host authorization, validation,
+caller cancellation, and atomic commits. Present further design choices to the
+user before implementation. The current source still uses fixed runtime quotas.
+
+- [ ] Make plugin execution quotas optional through the existing host owners.
+  Disable instruction fuel when no fuel budget is set. Keep compiler and parent
+  engine configurations equal. Preserve the SDK, WIT interface, Arrow data, and
+  installed package format. Use the same configuration path in production and
+  tests. Test configured rejection and default execution separately.
+- [ ] Preserve every large workload and its assertions. Keep all 21 corpus
+  cases, the 256-record window case, 257 findings across 33 sources, all 12
+  incident cards, and the 64- and 185-record traversal cases.
+- [ ] Report the caller of the final read deadline through the existing error
+  location. Add caller tracking to the read runner and snapshot wrapper. Extend
+  the existing native deadline test without removing its 16 iterations,
+  cleanup, metadata, or fresh-reader checks.
+- [ ] Remove repeated production graph reads and validation where the same
+  owner has already checked the same immutable version. Keep corruption,
+  authorization, expiry, historical replay, and transaction checks. Add focused
+  Rust proof before changing each affected path. Do not copy owner sequences
+  into qualification helpers.
+- [ ] Run the complete current-algorithm and lifecycle cases. Build one normal
+  executable and run all four fresh production cases with that executable.
+  After the last Rust edit, run the final shared Rust procedure. Update the
+  review guide and result with exact source and proof. Commit each deliverable.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
@@ -798,10 +836,12 @@ checked correction scopes remain subject to final workspace verification.
   control, and use installed computation for each part and its merge. Check
   the largest normal and replay cases, display groups, and comparison at the
   production limits. Commit no intermediate page result.
-- [x] Remove the larger unit-test data and fuel allowances.
+- Superseded correction: remove the larger unit-test data and fuel allowances.
+  The source removed test-only overrides. The user now approves optional
+  runtime quotas. Use the approved resource policy correction above; retain
+  every large test and its assertions.
 - [ ] Verify the complete current-algorithm corpus and resource failures with
-  the same 32 MiB and
-  100-million fuel limits as production. Keep resource failures explicit and
+  the same runtime configuration as production. Keep resource failures explicit and
   atomic. Run the four production cases before the final shared Rust procedure.
 - [x] Recover filesystem space after the v12 test link failure. Remove debug
   sections only from inactive generated executables. Check every loaded
