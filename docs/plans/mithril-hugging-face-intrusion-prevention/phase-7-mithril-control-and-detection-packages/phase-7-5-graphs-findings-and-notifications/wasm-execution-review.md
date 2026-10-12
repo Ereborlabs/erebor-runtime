@@ -628,6 +628,20 @@ The [build proof](wasm-component-build-proof.json) records independent component
 build hashes. This work adds no new BPF program or ABI, physical-prevention
 qualification, native target, OCI distribution, or performance result.
 
+The current Rust source is committed through `6f6ac795`. All 1,586 files in
+`/tmp/araphor-wasm-source-manifest-production-v37.json` match source SHA256
+`0df1d83246835e7158967cd7890a9cb8deda67f0061859b18e81191e628d6bb0`.
+Two independent builds reproduce all six source-built components. The current
+runtime group has ten passes and one filesystem-reserve failure. After checked
+cache recovery, the unchanged installed overlap test passes in 87.58 seconds.
+The group and retry logs have SHA256 values
+`7ac12dddedc80822246c50be7be6e82bf655285f45cbc36cf71e94caa0d6160a`
+and `2f559b478f7ebf49bb9093fd2941fdfb4e104697f050a3addbd8ad5b5c510fee`.
+The [phase record](phase-7-5-4-wasm-execution.md#current-native-build-failure)
+contains the exact reserve, cache, loaded-section, and executable proof.
+Four fresh normal production cases and the final shared Rust procedure remain
+required. The records below retain their historical source and limits.
+
 The retained v31 verification record follows `d8528992`. Its 1,576-file source
 manifest is `/tmp/araphor-wasm-source-manifest-production-v31.json`, with SHA256
 `12f6f8e821a5fe2aeb18fe727b3f6d9a65202492a75d7f9bb4a79237841823e7`.
