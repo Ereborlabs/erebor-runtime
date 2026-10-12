@@ -171,9 +171,10 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 reason: "discovery blocked or changed the raw evidence query",
             }
         );
+        let trace_now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
         let (request, access) = ObservabilityQualification::trace_inputs(
             facts.into_iter().next().ok_or("workload fact absent")?,
-            now,
+            trace_now,
         )?;
         control.accept_trace(request.clone(), access.clone())?;
         let dispatch = connection
@@ -209,7 +210,7 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
             request.request_id,
             0,
             &access,
-            now,
+            trace_now,
             0,
         )?;
         ensure!(

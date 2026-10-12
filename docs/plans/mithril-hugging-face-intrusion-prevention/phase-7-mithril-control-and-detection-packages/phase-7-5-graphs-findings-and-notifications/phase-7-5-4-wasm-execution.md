@@ -1514,15 +1514,23 @@ integrity check then rejects the remaining authority interval.
 
 - [x] Reproduce the failure with the existing test executable. Trace the
   acceptance clock, deadline calculation, and unchanged integrity check.
-- [ ] Create the trace request and grant immediately before acceptance. Use
+- [x] Create the trace request and grant immediately before acceptance. Use
   that timestamp for the first trace output read. Keep the 120-second grant,
   30-second collection, fixed intake clock, retention at `now + 1`, real resume
   time, and every assertion. Change no production authority or deadline rule.
-- [ ] Rerun the existing isolation test and retain its exact result. Preserve
+- [x] Rerun the existing isolation test and retain its exact result. Preserve
   the ordered v41 failure and each production proof with its original source.
 - [ ] Complete the four fresh production cases and final shared Rust procedure
   after the last Rust edit. Update the existing guide and result and commit
   each correction and proof deliverable.
+
+The corrected existing isolation case passes in 88.81 seconds. It has one pass,
+zero failures, zero ignored tests, and 699 filtered tests. The proof is
+`/tmp/araphor-owner-isolation-corrected-v42-proof.json`, with SHA256
+`1779d4a2e22d3c9425f9c2111fc07037eaf63916be00ae3f09c5b49956543d7f`.
+It retains the source, diagnostic binary, original failure, and corrected log.
+The correction changes only the trace request time and first output read time.
+Four fresh cases and final workspace verification still remain required.
 
 ### Query upload diagnostic correction TODOs
 
