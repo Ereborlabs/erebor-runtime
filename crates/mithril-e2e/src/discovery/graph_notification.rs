@@ -1094,13 +1094,4 @@ mod tests {
         assert!(!root.exists());
         Ok(())
     }
-
-    #[tokio::test]
-    async fn graph_notification_roundtrip() -> crate::platform::TestResult<()> {
-        let directory = tempfile::tempdir()?;
-        let runner = super::GraphNotificationQualification::new(directory.path().join("proof"));
-        runner.run().await?;
-        assert!(runner.run().await.is_err());
-        Ok(())
-    }
 }

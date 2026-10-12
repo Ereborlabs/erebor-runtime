@@ -671,7 +671,7 @@ Review these boundary tests with the algorithm cases:
   and initial resources only. All eight tests pass on the v46 captured source.
   The proof is `/tmp/araphor-focused-graph-proof-v46.json`, with SHA-256
   `5099009ea6a0500a6d26aa1220ecc6a85cd5ab8302ef7c65e2d010fb619a70c2`.
-  The full CLI, large workloads, and original aggregate remain unchanged.
+  At the v46 record, the full CLI, large workloads, and aggregate are unchanged.
 - [Focused host boundary tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/tests/context.rs)
   retain all 12 cards, device denial, policy history, local input proof, node
   isolation, provider facts, and read scope in nine more ordinary Rust tests.
@@ -685,6 +685,14 @@ Review these boundary tests with the algorithm cases:
   Reuse these owner tests for read-result, contradiction, provenance, baseline,
   authorization, sensitivity, follow, and subject-join checks. The complete CLI
   retains combined-source checks, all read and send records, and large inputs.
+  The aggregate Rust invocation is removed after the focused proofs pass.
+  The existing-output test retains its rejection assertion. The supported CLI
+  still runs the complete case. Production source before the test module,
+  density, both native windows, and large Data traversal remain byte-identical.
+  The library test build passes after removal. Standard test registration proof
+  is `/tmp/araphor-graph-aggregate-retirement-proof-v50.json`, with SHA-256
+  `8f3ad02fcefab1e40d0d113253cd6057e3c40cc5a0896cced6061ce78d78d8aa`.
+  Four fresh complete cases and final workspace verification remain required.
 - [Installed guest overlap](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
   uses the shipped Discovery `groups` component for two tenants. Both tenant
   snapshots retain the same installed owner. The test checks separate

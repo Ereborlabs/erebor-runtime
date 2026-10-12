@@ -125,7 +125,8 @@ executable. The ordered final shared Rust procedure fails in the isolation and
 query-upload tests. The two fixture corrections now pass their focused cases.
 All four fresh v43 cases pass on the corrected source `6cce92d1`. Final
 workspace verification remains required after these Rust edits. The requested
-focused-test and repeated-work corrections also remain required. The dispatch change
+focused-test and repeated-work corrections are implemented and have focused
+proof. New complete cases must qualify the final source. The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
 
@@ -1719,7 +1720,7 @@ hide the same large scenario behind a new wrapper or file split. Use ordinary
 Rust tests for in-process behavior and the existing platform test mechanism
 only for qualified physical environments.
 
-- [ ] Map every complete-case assertion to focused Rust tests. Keep combined
+- [x] Map every complete-case assertion to focused Rust tests. Keep combined
   source-window checks, negative cases, large inputs, restart, and rollback.
   Keep the complete CLI qualification case available.
 - [x] Add bounded step-time diagnostics to the existing qualification case.
@@ -1749,7 +1750,7 @@ only for qualified physical environments.
   cancellation, and final release. The v44 handle proof does not cover this
   error lifetime. The preliminary Data Clippy run is stopped with exit 130
   before this correction. It is not a pass or a final workspace check.
-- [ ] Prove each correction with focused real-component or production-owner
+- [x] Prove each correction with focused real-component or production-owner
   tests. Preserve the original failure and workload evidence. Commit each
   deliverable.
 - [ ] After the last Rust edit, capture a new normal executable and source.
@@ -1949,6 +1950,25 @@ the 64-record and 185-record native windows. No original assertion, deadline,
 or workload changes in this deliverable. The ordinary aggregate invocation
 can now be removed. Four fresh complete cases and final workspace verification
 remain required. The phase result stays **Not done**.
+
+### Duplicate aggregate invocation removal
+
+The ordinary Rust `graph_notification_roundtrip` invocation is removed after
+the 17 focused tests and 18 reused graph/query tests pass. The focused output
+test retains the original existing-output rejection. The supported CLI still
+calls the complete production case. Its source before the test module is
+byte-identical to the committed source before removal. Density, both native
+windows, and the large Data traversal test are byte-identical to that source.
+No production assertion, input, deadline, or compiler setting changes.
+
+The normal library test build passes after removal. The standard harness lists
+all 17 new focused tests and the retained graph qualification tests. The proof
+is `/tmp/araphor-graph-aggregate-retirement-proof-v50.json`, with SHA-256
+`8f3ad02fcefab1e40d0d113253cd6057e3c40cc5a0896cced6061ce78d78d8aa`.
+The build duration is 1 minute 19 seconds. This check is compilation and test
+registration proof. It does not replace the focused runtime proofs or final CI.
+Four fresh complete cases and final workspace verification remain required.
+The phase result stays **Not done**.
 
 ### Implementation TODOs
 
