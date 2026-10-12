@@ -127,10 +127,12 @@ example, trust configuration, and commands.
 
 ## State and recovery rules
 
-New stores use schema 19. The [parent plan](../README.md) requires fresh data
-for this development scope. Schema 18 stores are rejected without writes;
-there is no conversion from 18 to 19. The existing checked graph migration
-from schema 17 remains supported.
+New stores use schema 20. The checked conversion from schema 19 separates
+immutable graph context from refresh notice metadata. The existing checked
+graph migration from schema 17 remains supported. Schema 18 stores are rejected
+without writes. Read the
+[current recovery checks](wasm-execution-review.md#commit-and-recovery) before
+updating a store.
 
 Each model evaluates one bounded snapshot of its selected inputs. The store
 uses the `snapshot` window key for the current result. A changed source snapshot

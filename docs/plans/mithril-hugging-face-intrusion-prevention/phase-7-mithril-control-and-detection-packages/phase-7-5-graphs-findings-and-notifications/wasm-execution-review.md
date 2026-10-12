@@ -69,6 +69,8 @@ use the same versioned WebAssembly Interface Types
 ([WIT contract](../../../../../crates/araphor-analysis-sdk/src/bindings/analysis.wit)).
 The [detector example](../../../../../crates/araphor-detector-example/README.md)
 contains the author commands and a complete detector.
+The runtime keeps Wasmtime and this WIT interface. Extism supplies the approved
+resource-policy reference. The runtime adds no Extism dependency.
 
 A built folder contains `package.json` and `detector.wasm`.
 `package.json` embeds the component bytes and complete artifact closure.
@@ -141,7 +143,9 @@ sets `release: None` and keeps its cancellation assertion.
 [CompilerChild](../../../../../crates/araphor-data/src/package/wasm/compiler.rs)
 starts the current executable in compiler mode with a cleared environment.
 The entry point runs before the application runtime.
-The child receives component bytes through standard input.
+The [CompilerInput request](../../../../../crates/araphor-data/src/package/wasm/compiler/input.rs)
+carries a version, fuel mode, and component bytes through standard input.
+The child uses the same fuel mode as the parent engine.
 The reply contains a bounded image and its digest.
 The parent accepts no installed native image or external precompiled image.
 Cancellation or deadline kills and reaps the child.
@@ -363,6 +367,26 @@ check updates, added compatible exports, removal, history, and exact health.
 The [metadata tests](../../../../../crates/araphor-data/src/analysis/progress/notices/tests.rs)
 check separate windows, old-head rejection, immutable metadata, and retry.
 
+[GraphAndFindingOwner::refresh_source](../../../../../crates/araphor-data/src/graph/live.rs)
+reads current window bounds through
+[graph_window_bounds](../../../../../crates/araphor-data/src/analysis/graph/windows.rs).
+The native query filters the tenant and source before it ranks window heads.
+The bounds read validates the selected header without reconstructing its rows.
+[window_heads](../../../../../crates/araphor-data/src/graph/window.rs) uses
+`graph_window_page` to select possible overlapping ranges. The checked header
+decides exact overlap before the owner reconstructs rows. A page retains its
+continuation ID when the candidate does not overlap.
+The [window read tests](../../../../../crates/araphor-data/src/analysis/graph/windows/tests.rs)
+check selection, continuation, history, and corruption. Current-source
+qualification remains pending.
+
+[AnalysisReadControl::run and AnalysisStore::read_snapshot](../../../../../crates/araphor-data/src/analysis/read.rs)
+carry the native caller location into the existing deadline error. This location
+identifies the call to the read runner or snapshot wrapper. The location does
+not identify a specific SQL statement inside its read closure. The one-second
+default read deadline
+and cleanup rules stay unchanged.
+
 [Graph notice migration](../../../../../crates/araphor-data/src/analysis/graph_migration/notices.rs)
 converts schema 19 to schema 20 in one transaction. It initializes each retained
 graph notice from its checked native header. The schema 17 conversion uses the
@@ -399,24 +423,42 @@ and 45-second wall deadline. Structural scan limits also apply.
 Host domain calls have a finite 60-second outer deadline for a cold cache.
 [QueryLimits](../../../../../crates/araphor-data/src/query/mod.rs) defaults to a
 one-second evaluation timeout. The query owner uses its configured timeout.
-This deadline and a five-second guest control deadline apply after compilation.
+This query deadline applies after compilation. A configured Wasm timeout can
+shorten the inherited caller deadline.
 Epoch interruption stops guest instructions. A synchronous
 host call or canonical application binary interface (ABI) operation finishes
 before the host checks the
 control deadline again. An expired call cannot commit.
 
-Each guest has at most 256 MiB linear memory, one memory, four tables,
-16,384 elements per table, 16 instances, and 100 million fuel units.
-The host permits four active evaluations and 4,096 cancellation imports per
-call. Guest-to-host value lifting has 32 MiB of approximate allocation fuel.
-This fuel is not a measure of total host resident memory.
-The component path caps data at 32 MiB, checkpoint data at 16 MiB,
-1,024 batches, and one million rows. Lower descriptor and query limits apply.
+[WasmLimits](../../../../../crates/araphor-data/src/query/wasm.rs) contains six
+optional quotas. Every field defaults to `None`. An omitted or `null` field
+leaves that additional Wasm quota unset.
 
-Earlier unit tests used temporary allowances of 64 MiB for data and
-8 billion fuel units. Current source removes these allowances. Production and
-unit tests use the same 32 MiB data limit and 100 million fuel units. Current
-source qualification at these limits remains pending.
+| Field | Configured quota |
+| --- | --- |
+| `fuel` | Instruction fuel units per evaluation |
+| `memory_bytes` | Guest linear memory bytes, including initial memory |
+| `data_bytes` | Additional SDK data-byte ceiling |
+| `timeout` | Additional guest timeout, within the caller deadline |
+| `allocation_bytes` | Approximate allocation fuel for canonical ABI copies |
+| `host_calls` | Calls to the WIT `cancelled` import |
+
+The parent and compiler engines enable instruction metering only when `fuel`
+is set. Each call applies its configured fuel budget. The same configuration
+path applies in production and tests. Resource-failure tests set the quotas
+they check. The earlier 32 MiB data and 100 million fuel settings are historical
+configurations. Current-source qualification remains pending.
+
+Mandatory guards remain. Each store permits one memory, four tables,
+16,384 elements per table, and 16 instances. The engine uses a 512 KiB Wasm
+stack bound. The Wasm owner permits four active evaluations. SDK schema,
+reference, batch, row, and byte checks remain. The component path caps batches
+at 1,024, rows at one million, and checkpoint data at 16 MiB. Query input defaults
+to 64 MiB. Shared query input capacity is 128 MiB; output capacity is 16 MiB.
+Caller cancellation, the query deadline, authorization, and atomic commit checks
+remain. The `allocation_bytes` quota does not measure total host resident memory.
+When this quota is unset, value lifting has no additional Wasm allocation cap.
+These settings do not bound total process resident memory.
 
 The local package file has a 32 MiB bound.
 Package JSON requests and replies allow an additional 64 KiB.
@@ -536,7 +578,8 @@ cp target/debug/mithril_discovery_test "$qualification_root/mithril_discovery_te
 
 Require exit code 0 and a `result.json` with schema version 1, the exact case
 name, and result `PASS`. Retain the source and binary hashes, logs, and output
-files. These cases use production data and fuel limits.
+files. These cases use the production configuration with optional Wasm quotas
+unset. Configured resource-failure tests remain separate required checks.
 
 | Case | Required proof |
 | --- | --- |
@@ -565,7 +608,7 @@ The [build proof](wasm-component-build-proof.json) records independent component
 build hashes. This work adds no new BPF program or ABI, physical-prevention
 qualification, native target, OCI distribution, or performance result.
 
-This guide covers frozen source v31 after `d8528992`. Its 1,576-file source
+The retained v31 verification record follows `d8528992`. Its 1,576-file source
 manifest is `/tmp/araphor-wasm-source-manifest-production-v31.json`, with SHA256
 `12f6f8e821a5fe2aeb18fe727b3f6d9a65202492a75d7f9bb4a79237841823e7`.
 Canonical evidence publication, the derived JSON byte check, and the common
@@ -580,8 +623,17 @@ Production source is unchanged between v30 and v31. The v31 normal build
 produces the same executable bytes after test-only corrections.
 The graph case exits one on the unchanged filesystem reserve and writes no
 result. Its same-binary retry uses `/tmp/araphor-current-v31-graph-retry`.
+The retry also exits one, with `AnalysisReadDeadline` at the final read cleanup
+check. This earlier location does not identify the native read operation.
 The proof is `/tmp/araphor-wasm-production-proof-v30.json`. Graph qualification
 and the final shared Rust procedure remain required.
+
+Current source also includes optional Wasm quotas, input reservation from
+retained allocations, native window selection, and caller-location errors.
+The combined source still requires complete algorithm and lifecycle checks,
+all four fresh production cases with one unchanged executable, and the final
+shared Rust procedure after the last Rust edit. Earlier source records do not
+qualify these corrections. The dispatch ordering breach remains recorded.
 
 The retained v23 graph group has one pass and one failure. Evidence recovery
 passes. The split test exhausts guest fuel in graph output encoding. The log is
@@ -668,7 +720,8 @@ checks exact groups and all eleven comparison fields against a 64-record
 baseline. Its proof is `/tmp/araphor-wasm-production-bounds-proof-v20.json`.
 Later component rebuilds require new qualification.
 
-Production and tests now both use 32 MiB of data and 100 million fuel units.
+The earlier v13 production and tests use 32 MiB of data and 100 million fuel
+units.
 Source `v13` has SHA256
 `8c34f38f69015fb184c8d8660e81e7882340ac0f9dbea0109ff58a15e389f42a`.
 The ten planner tests and both real-component correction tests pass. Their

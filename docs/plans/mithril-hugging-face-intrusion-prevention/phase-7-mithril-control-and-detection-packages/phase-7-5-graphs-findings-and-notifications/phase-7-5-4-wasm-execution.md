@@ -123,6 +123,10 @@ dispatch change, and Rust qualification cases are implemented. Full production
 qualification and the final shared Rust procedure remain pending. The TODOs
 below record the required corrections and proof.
 
+The approved optional resource policy below supersedes earlier fixed data,
+fuel, memory, and guest-time statements. Earlier proof retains its original
+source and limits. It does not qualify the current source or generated build.
+
 ### Goal deliverable review
 
 The review uses all six approved goal deliverables. A source commit does not
@@ -609,7 +613,8 @@ The user approves the Extism resource policy as a design reference. Do not add
 an Extism dependency or replace the WIT interface. Configurable plugin quotas
 must be optional and unset by default. Keep host authorization, validation,
 caller cancellation, and atomic commits. Present further design choices to the
-user before implementation. The current source still uses fixed runtime quotas.
+user before implementation. The current source has optional unset runtime
+quotas. Compiler, cache, SDK, shared query, and caller guards remain.
 
 - [ ] Remove the six generated `.wasm` files from version control. Build the
   four required components, detector example, and runtime fixture from their
@@ -618,21 +623,21 @@ user before implementation. The current source still uses fixed runtime quotas.
   reproducible artifact checks, offline built-folder installation, and the
   operator path without an author compiler or installation hooks.
 
-- [ ] Make plugin execution quotas optional through the existing host owners.
+- [x] Make plugin execution quotas optional through the existing host owners.
   Disable instruction fuel when no fuel budget is set. Keep compiler and parent
   engine configurations equal. Preserve the SDK, WIT interface, Arrow data, and
   installed package format. Use the same configuration path in production and
   tests. Test configured rejection and default execution separately.
-- [ ] Preserve every large workload and its assertions. Keep all 21 corpus
+- [x] Preserve every large workload and its assertions. Keep all 21 corpus
   cases, the 256-record window case, 257 findings across 33 sources, all 12
   incident cards, and the 64- and 185-record traversal cases.
-- [ ] Correct component input reservation when the runtime data quota is unset.
+- [x] Correct component input reservation when the runtime data quota is unset.
   A 64 MiB declared ceiling reserves more than the 128 MiB shared input pool
   even for a small input. Reserve the retained input, encoding buffers, and
   schema scratch before encoding. Keep shared pool capacity unchanged. Preserve
   lease, metadata, cancellation, and rejection checks. Add a default-ceiling
   input test and retain the rejection above the effective input limit.
-- [ ] Include Arrow encoding allocations that do not appear in retained array
+- [x] Include Arrow encoding allocations that do not appear in retained array
   buffers. A valid million-row Struct array with a nullable Null child needs a
   new 125,000-byte validity bitmap. Nested FixedSizeList arrays can increase
   this allocation. Reserve this space before encoding through the shared owner.
@@ -673,7 +678,40 @@ The tests check source scope, invalid ranges, replacement, saved progress,
 corrupt selected rows, and invalid headers. Readers keep the existing deadline
 and close before computation. Existing large graph test inputs stay unchanged.
 The log is `/tmp/araphor-wasm-native-windows-v33.log`.
+Its SHA256 is `4a37da55a8e9f92a24d271453bfa9f71b71faaafcbe19a938e6b7256c7c5632e`.
 Full graph, lifecycle, production, and workspace qualification remain required.
+
+The optional quota and input reservation correction is implemented. The six
+`WasmLimits` fields default to `None` through the existing query configuration.
+Unset fuel disables instruction instrumentation. The bounded compiler request
+keeps the child and parent engine fuel modes equal. Cached fixture code retains
+the caller quotas and checks initial memory before use.
+Configured failure cases keep their original workloads and error assertions.
+The runtime group has ten passes and one failure in the new fuel assertion.
+That assertion checked the outer error wrapper. The corrected test requires the
+underlying typed `OutOfFuel` trap and passes in 10.39 seconds. Its log is
+`/tmp/araphor-wasm-explicit-fuel-v34.log`, with SHA256
+`6023310ef1b61f6e0006b5e604b8dec67e8066b81846cb421c7ae43966908c52`.
+
+Two new nested-array tests fail before the encoding correction. They return
+`QueryLimit` after encoding instead of the required capacity rejection before
+encoding. The log is `/tmp/araphor-wasm-nested-reservation-before-v34-retry.log`,
+with SHA256 `b48a0bb2e76ab35d6858bfc7343e7b734874d30c3101461aaf8f5dbde65231fb`.
+One shared SDK visitor now preserves decode checks and counts additional
+aligned validity-buffer space. Input, parameter, and checkpoint accounting use
+this visitor. The host reserves retained data, this space, and schema buffers
+before its single encoding pass. Shared capacity stays unchanged.
+All seven reservation tests pass in 5.35 seconds. The log is
+`/tmp/araphor-wasm-component-reservation-v35.log`, with SHA256
+`f464958770595443ac2c85d42a55e375405c9a6bc10c8b11f62a5c26afc139cd`.
+The SDK library suite has 51 passes in 0.58 seconds. It includes the original
+sparse-null decode rejection and a million-row constant-Null round trip.
+Its log is `/tmp/araphor-wasm-sdk-v35.log`, with SHA256
+`d3fc2527726252632f836744bee8aad3c1fe4fc0e643ff1427a0e6e1101c10bc`.
+The correction manifest is `/tmp/araphor-wasm-source-manifest-correction-v35.json`,
+with SHA256 `368ac75c3f66fd1ecfedb773003f008fa620cd9a2f65685abf37fc912ff5ceec`.
+Reproduce all six components from this SDK source, qualify installed execution,
+and run final workspace verification before closure.
 
 ### Implementation TODOs
 

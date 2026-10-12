@@ -6,10 +6,12 @@ The CLI and agents call the same package owner. Read the
 [implementation limits](wasm-execution-review.md#limits-and-proof)
 before selecting an input scope.
 
-Use a fresh schema 19 analysis store for this development version. An existing
-schema 18 store is rejected without changes. Read the
-[storage boundary](package-lifecycle-review.md#state-and-recovery-rules) before
-updating a deployment.
+New analysis stores use schema 20. The
+[schema owner](../../../../../crates/araphor-data/src/analysis/mod.rs) applies
+checked conversions from schemas 19 and 17. Schema 18 remains unsupported and
+is rejected without changes. Read the
+[notice conversion](wasm-execution-review.md#commit-and-recovery) before updating
+a deployment.
 
 ## Built package
 
@@ -26,10 +28,49 @@ manifest. Install that detector in scope `analysis`. The graph owner supplies
 its authorized inputs and validates its findings and checkpoint. The operator
 does not need a Rust compiler.
 
-Wasm qualification is **Not done**. Production permits 32 MiB of data and
-100 million fuel units. The current corpus proof uses larger test-only limits.
+Wasm qualification is **Not done**. The runtime keeps Wasmtime and the generated
+WebAssembly Interface Types (WIT) interface. It adds no Extism dependency.
+The six optional Wasm quotas default
+to unset. Compiler, cache, SDK, shared query, caller, and commit guards remain.
 Read the [open production gates](phase-7-5-4-wasm-execution.md#goal-deliverable-review)
 before using this implementation.
+
+Configure these quotas in `client.investigation.query.wasm` in the existing
+Control configuration. The
+[Control configuration](../../../../../crates/mithril-control/src/config.rs),
+[client listener](../../../../../crates/mithril-control/src/client_listener.rs),
+and [query configuration](../../../../../crates/mithril-control/src/client_grpc.rs)
+use this path. This fragment shows the default values; retain the other fields
+in the complete configuration:
+
+```json
+{
+  "client": {
+    "investigation": {
+      "query": {
+        "wasm": {
+          "fuel": null,
+          "memory_bytes": null,
+          "data_bytes": null,
+          "timeout": null,
+          "allocation_bytes": null,
+          "host_calls": null
+        }
+      }
+    }
+  }
+}
+```
+
+An omitted or `null` quota remains unset. `fuel` counts instruction fuel units.
+`memory_bytes` limits guest linear memory. `data_bytes` adds a data-byte ceiling.
+`timeout` adds a guest timeout within the caller deadline; its JSON value uses
+`secs` and `nanos`. `allocation_bytes` limits approximate allocation fuel for
+canonical application binary interface (ABI) copies. `host_calls` limits calls
+to the WIT `cancelled` import.
+These quotas do not measure total process resident memory. Read the
+[remaining guards](wasm-execution-review.md#limits-and-proof) and current
+qualification status before setting quotas.
 
 The [two-model fixture](../../../../../crates/mithril-e2e/src/discovery/packages/bundle.rs)
 is a complete example of the format through its Rust constructors. Its root is

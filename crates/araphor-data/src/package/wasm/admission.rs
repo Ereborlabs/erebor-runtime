@@ -150,7 +150,11 @@ impl CompileBudget {
         Ok(())
     }
 
-    pub(super) fn interface(engine: &Engine, component: &Component) -> Result<()> {
+    pub(super) fn interface(
+        engine: &Engine,
+        component: &Component,
+        memory_bytes: Option<usize>,
+    ) -> Result<()> {
         let interface = component.component_type();
         for (name, item) in interface.imports(engine) {
             if !matches!(name, HOST | TYPES)
@@ -170,14 +174,20 @@ impl CompileBudget {
             }
             Self::instance(engine, name, item.ty)?;
         }
+        Self::resources(component, memory_bytes)
+    }
+
+    pub(super) fn resources(component: &Component, memory_bytes: Option<usize>) -> Result<()> {
         let resources = component
             .resources_required()
             .ok_or_else(|| Code::Unsupported.error("component resources"))?;
         if resources.num_memories > 1
             || resources.num_tables > 4
-            || resources
-                .max_initial_memory_size
-                .is_some_and(|pages| pages > 4096)
+            || memory_bytes.is_some_and(|maximum| {
+                resources
+                    .max_initial_memory_size
+                    .is_some_and(|pages| pages > maximum as u64 / 65_536)
+            })
             || resources
                 .max_initial_table_size
                 .is_some_and(|elements| elements > 16_384)

@@ -4,12 +4,13 @@ use std::time::Duration;
 use araphor_analysis_sdk as sdk;
 use sdk::arrow_array::{StringArray, UInt64Array};
 
-use crate::{AnalysisReadControl, Error, PackageErrorCodeV1 as Code};
+use crate::{query::WasmLimits, AnalysisReadControl, Error, PackageErrorCodeV1 as Code};
 
 use super::{TestResult, WasmExecution};
 
 mod batches;
 mod concurrency;
+mod quotas;
 
 const COMPONENT: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -65,7 +66,7 @@ fn value(output: &sdk::Output) -> std::result::Result<u64, &'static str> {
 
 #[test]
 fn component_state_is_separate() -> TestResult {
-    let runtime = WasmExecution::new()?;
+    let runtime = WasmExecution::new(WasmLimits::default())?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     runtime.admit(COMPONENT, &control)?;
     {
@@ -98,7 +99,14 @@ fn component_state_is_separate() -> TestResult {
 
 #[test]
 fn component_recovers_after_failure() -> TestResult {
-    let runtime = WasmExecution::new()?;
+    let runtime = WasmExecution::new(WasmLimits {
+        fuel: Some(100_000_000),
+        memory_bytes: Some(256 * 1024 * 1024),
+        data_bytes: Some(32 * 1024 * 1024),
+        timeout: Some(Duration::from_secs(5)),
+        allocation_bytes: Some(32 * 1024 * 1024),
+        host_calls: Some(4096),
+    })?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     runtime.admit(COMPONENT, &control)?;
     let package = package();
@@ -157,7 +165,7 @@ fn component_recovers_after_failure() -> TestResult {
 
 #[test]
 fn component_validates_error_output() -> TestResult {
-    let runtime = WasmExecution::new()?;
+    let runtime = WasmExecution::new(WasmLimits::default())?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let package = package();
     for (mode, code, field) in [
@@ -196,7 +204,10 @@ fn component_validates_error_output() -> TestResult {
 
 #[test]
 fn component_enforces_transfer_limits() -> TestResult {
-    let runtime = WasmExecution::new()?;
+    let runtime = WasmExecution::new(WasmLimits {
+        data_bytes: Some(32 * 1024 * 1024),
+        ..WasmLimits::default()
+    })?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let mut package = package();
     package.exports[0].limits = sdk::Limits {
@@ -210,11 +221,7 @@ fn component_enforces_transfer_limits() -> TestResult {
     assert_eq!(value(&result)?, 42);
     assert_eq!(input.context.limits, package.exports[0].limits);
 
-    let input = evaluation(
-        &package,
-        &"x".repeat(super::super::MAX_DATA_BYTES as usize),
-        0,
-    )?;
+    let input = evaluation(&package, &"x".repeat(32 * 1024 * 1024), 0)?;
     let result = runtime.evaluate(&package, &input, COMPONENT, &control);
     assert!(
         matches!(
@@ -229,7 +236,7 @@ fn component_enforces_transfer_limits() -> TestResult {
 
 #[test]
 fn component_control_interrupts_runs() -> TestResult {
-    let runtime = WasmExecution::new()?;
+    let runtime = WasmExecution::new(WasmLimits::default())?;
     runtime.admit(
         COMPONENT,
         &AnalysisReadControl::with_timeout(Duration::from_secs(30))?,
@@ -275,8 +282,8 @@ fn component_control_interrupts_runs() -> TestResult {
 
 #[test]
 fn fixture_code_separates_state() -> TestResult {
-    let first = WasmExecution::fixture_code()?;
-    let second = WasmExecution::fixture_code()?;
+    let first = WasmExecution::fixture_code(WasmLimits::default())?;
+    let second = WasmExecution::fixture_code(WasmLimits::default())?;
     assert!(Arc::ptr_eq(&first.epoch, &second.epoch));
     let package = package();
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;

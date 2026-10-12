@@ -4,7 +4,7 @@ use std::time::Duration;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use crate::{AnalysisPackageOwner, AnalysisReadControl, Result};
+use crate::{query::WasmLimits, AnalysisPackageOwner, AnalysisReadControl, Result};
 
 use super::{Code, WasmExecution};
 
@@ -18,19 +18,23 @@ impl AnalysisPackageOwner {
     /// Reuse compiled fixture code and keep each evaluation store separate.
     /// This method is available for tests and the test-fixtures feature.
     pub fn prepare_test_code(&mut self) -> Result<()> {
-        self.wasm = WasmExecution::fixture_code()?;
+        self.wasm = WasmExecution::fixture_code(self.wasm.limits)?;
         Ok(())
     }
 }
 
 impl WasmExecution {
-    pub(super) fn fixture_code() -> Result<Self> {
-        static FIXTURES: Mutex<Option<WasmExecution>> = Mutex::new(None);
+    pub(super) fn fixture_code(limits: WasmLimits) -> Result<Self> {
+        static FIXTURES: Mutex<[Option<WasmExecution>; 2]> = Mutex::new([None, None]);
         let mut fixtures = FIXTURES
             .lock()
             .map_err(|_| Code::Incomplete.error("component fixture code lock"))?;
-        if fixtures.is_none() {
-            let prepared = Self::new()?;
+        let fixture = &mut fixtures[usize::from(limits.fuel.is_some())];
+        if fixture.is_none() {
+            let prepared = Self::new(WasmLimits {
+                fuel: limits.fuel,
+                ..WasmLimits::default()
+            })?;
             let sources = Self::fixture_sources();
             let mut charges = [0; 5];
             for (index, (_, source)) in sources.iter().enumerate() {
@@ -55,9 +59,9 @@ impl WasmExecution {
                     );
                 }
             }
-            *fixtures = Some(prepared);
+            *fixture = Some(prepared);
         }
-        let prepared = fixtures
+        let prepared = fixture
             .as_ref()
             .ok_or_else(|| Code::Incomplete.error("component fixture code"))?;
         let cache = prepared
@@ -66,6 +70,7 @@ impl WasmExecution {
             .map_err(|_| Code::Incomplete.error("component fixture cache lock"))?
             .clone();
         Ok(Self {
+            limits,
             engine: prepared.engine.clone(),
             linker: prepared.linker.clone(),
             epoch: prepared.epoch.clone(),

@@ -60,16 +60,14 @@ impl QueryOwner {
             }
             .fail();
         }
-        let wire = limits.max_bytes.checked_add(
-            evaluation
-                .checkpoint
-                .as_ref()
-                .map_or(0, |_| limits.max_checkpoint_bytes),
-        );
-        // Reserve vector growth and owned metadata before encoding.
-        wire.and_then(|wire| usize::try_from(wire).ok())
-            .and_then(|wire| wire.checked_add(evaluation.allocated_bytes()))
-            .and_then(|bytes| bytes.checked_mul(2))
+        // Reserve retained arrays, IPC copies, and vector growth before encoding.
+        let scratch = evaluation
+            .encoding_scratch_bytes()
+            .context(crate::AnalysisContractSnafu)?;
+        evaluation
+            .allocated_bytes()
+            .checked_add(scratch)
+            .and_then(|bytes| bytes.checked_mul(4))
             // Reserve schema builder growth, its message copy, and padding.
             .and_then(|bytes| {
                 package

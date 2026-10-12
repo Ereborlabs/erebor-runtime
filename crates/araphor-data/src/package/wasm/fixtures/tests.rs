@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn fixture_cache_charges_fit() -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>
 {
-    let runtime = WasmExecution::new()?;
+    let runtime = WasmExecution::new(WasmLimits::default())?;
     let sources = WasmExecution::fixture_sources();
     let mut output = std::io::stdout();
     let mut digests = BTreeSet::new();

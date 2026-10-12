@@ -29,9 +29,7 @@ impl AnalysisPackageOwner {
                 artifact: bytes, ..
             } => {
                 self.wasm.admit(bytes, control)?;
-                let limits = super::wasm::WasmExecution::limits(
-                    self.query.component_limits(evaluation.context.limits),
-                );
+                let limits = self.query.component_limits(evaluation.context.limits);
                 let bounded = if limits == evaluation.context.limits {
                     Cow::Borrowed(evaluation)
                 } else {

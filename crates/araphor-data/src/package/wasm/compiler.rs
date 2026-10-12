@@ -1,4 +1,3 @@
-use std::io::Write as _;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
@@ -11,6 +10,7 @@ use crate::{AnalysisReadControl, Result};
 use super::{Code, WasmExecution};
 
 mod image;
+mod input;
 mod worker;
 
 #[cfg(test)]
@@ -114,6 +114,7 @@ impl CompilerChild<'_> {
     fn capture(
         entry: &str,
         bytes: &[u8],
+        fuel: bool,
         control: &AnalysisReadControl,
         failed: &mut bool,
         #[cfg(test)] entered: Option<std::sync::mpsc::Sender<u32>>,
@@ -135,7 +136,7 @@ impl CompilerChild<'_> {
                 reaped: false,
                 failed,
             };
-            let mut input = worker
+            let input = worker
                 .child
                 .stdin
                 .take()
@@ -147,7 +148,9 @@ impl CompilerChild<'_> {
                 .ok_or_else(|| Code::Incomplete.error("component compiler output"))?;
             let sender = std::thread::Builder::new()
                 .name("component-compiler-input".into())
-                .spawn_scoped(scope, move || input.write_all(bytes))
+                .spawn_scoped(scope, move || {
+                    input::CompilerInput::write(fuel, bytes, input)
+                })
                 .map_err(wasmtime::Error::new)
                 .context(crate::PackageWasmSnafu {
                     code: Code::Incomplete,
@@ -192,11 +195,7 @@ impl CompilerChild<'_> {
                     },
                 );
             }
-            sent.map_err(wasmtime::Error::new)
-                .context(crate::PackageWasmSnafu {
-                    code: Code::Incomplete,
-                    operation: "component compiler input transfer",
-                })?;
+            sent?;
             control.check()?;
             image
         })
@@ -243,6 +242,7 @@ impl WasmExecution {
         CompilerChild::capture(
             TEST_ENTRY,
             bytes,
+            self.limits.fuel.is_some(),
             control,
             failed,
             #[cfg(test)]

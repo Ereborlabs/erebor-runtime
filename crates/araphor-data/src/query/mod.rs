@@ -36,6 +36,7 @@ mod owner_tests;
 mod plan;
 #[cfg(test)]
 mod tests;
+mod wasm;
 
 pub use admission::{QueryBinding, QuerySql};
 pub use analysis::GraphAnalysisInputsV1;
@@ -54,10 +55,12 @@ pub use model::{
     SqlReasonV1,
 };
 pub use plan::{QueryOperation, QueryPlan, QueryTemplate, QUERY_SCHEMA_VERSION};
+pub use wasm::WasmLimits;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QueryLimits {
+    pub wasm: WasmLimits,
     pub scan_bytes: usize,
     pub input_bytes: usize,
     pub output_rows: usize,
@@ -78,6 +81,7 @@ pub struct QueryLimits {
 impl Default for QueryLimits {
     fn default() -> Self {
         Self {
+            wasm: WasmLimits::default(),
             scan_bytes: 256 * 1024 * 1024,
             input_bytes: 64 * 1024 * 1024,
             output_rows: 200,
@@ -200,6 +204,10 @@ impl Drop for QueryTask {
 }
 
 impl QueryOwner {
+    pub(crate) fn wasm_limits(&self) -> &WasmLimits {
+        &self.limits.wasm
+    }
+
     pub fn new(store: Arc<AnalysisStore>, limits: QueryLimits) -> Result<Self> {
         limits.validate()?;
         let budget = QueryBudget::new(limits.clone());

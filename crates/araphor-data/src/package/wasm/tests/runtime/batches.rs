@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn component_keeps_input_batches() -> TestResult {
-    let runtime = WasmExecution::fixture_code()?;
+    let runtime = WasmExecution::fixture_code(WasmLimits::default())?;
     let mut package = package();
     let mut model = package.exports[0].clone();
     model.name = "count-input".into();

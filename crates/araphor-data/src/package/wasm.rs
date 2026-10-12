@@ -7,7 +7,7 @@ use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 use wasmtime::{component::Linker, Config, Engine, OptLevel};
 
-use crate::{AnalysisReadControl, Result};
+use crate::{query::WasmLimits, AnalysisReadControl, Result};
 
 use super::PackageErrorCodeV1 as Code;
 
@@ -20,13 +20,11 @@ mod execution;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod fixtures;
 
-const MAX_LIFT_BYTES: usize = 32 * 1024 * 1024;
-const MAX_DATA_BYTES: u64 = 32 * 1024 * 1024;
-
 #[cfg(test)]
 mod tests;
 
 pub(crate) struct WasmExecution {
+    limits: WasmLimits,
     engine: Engine,
     linker: Linker<execution::GuestState>,
     epoch: Arc<execution::EpochTicker>,
@@ -38,17 +36,19 @@ pub(crate) struct WasmExecution {
 }
 
 impl WasmExecution {
-    pub(crate) fn limits(limits: sdk::Limits) -> sdk::Limits {
+    pub(crate) fn limits(limits: sdk::Limits, quota: &WasmLimits) -> sdk::Limits {
         sdk::Limits {
             max_batches: limits.max_batches.min(1024),
             max_rows: limits.max_rows.min(1_000_000),
-            max_bytes: limits.max_bytes.min(MAX_DATA_BYTES),
+            max_bytes: quota
+                .data_bytes
+                .map_or(limits.max_bytes, |maximum| limits.max_bytes.min(maximum)),
             max_checkpoint_bytes: limits.max_checkpoint_bytes.min(16 * 1024 * 1024),
         }
     }
 
-    pub(crate) fn new() -> Result<Self> {
-        let engine = Self::new_engine()?;
+    pub(crate) fn new(limits: WasmLimits) -> Result<Self> {
+        let engine = Self::new_engine(limits.fuel.is_some())?;
         let mut linker = Linker::new(&engine);
         bindings::AnalysisPackage::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
             &mut linker,
@@ -59,6 +59,7 @@ impl WasmExecution {
             operation: "analysis host bindings",
         })?;
         Ok(Self {
+            limits,
             epoch: Arc::new(execution::EpochTicker::new(engine.clone())),
             engine,
             linker,
@@ -70,10 +71,10 @@ impl WasmExecution {
         })
     }
 
-    fn new_engine() -> Result<Engine> {
+    fn new_engine(fuel: bool) -> Result<Engine> {
         let mut config = Config::new();
         config
-            .consume_fuel(true)
+            .consume_fuel(fuel)
             .epoch_interruption(true)
             .cranelift_opt_level(OptLevel::None)
             .cranelift_nan_canonicalization(true)
@@ -138,13 +139,14 @@ impl WasmExecution {
         descriptor
             .validate_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
-        let evaluation = if Self::limits(evaluation.context.limits) == evaluation.context.limits {
-            Cow::Borrowed(evaluation)
-        } else {
-            let mut evaluation = evaluation.clone();
-            evaluation.context.limits = Self::limits(evaluation.context.limits);
-            Cow::Owned(evaluation)
-        };
+        let evaluation =
+            if Self::limits(evaluation.context.limits, &self.limits) == evaluation.context.limits {
+                Cow::Borrowed(evaluation)
+            } else {
+                let mut evaluation = evaluation.clone();
+                evaluation.context.limits = Self::limits(evaluation.context.limits, &self.limits);
+                Cow::Owned(evaluation)
+            };
         let input = match input {
             Some(input) => input,
             None => sdk::wire::Evaluation::encode(descriptor, &evaluation)

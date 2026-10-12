@@ -46,13 +46,14 @@ impl AnalysisPackageOwner {
                 .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
             store.collect_package_admissions()?;
         }
+        let wasm = super::wasm::WasmExecution::new(*query.wasm_limits())?;
         Ok(Self {
             lifecycle: store.package_lifecycle.clone(),
             store,
             query,
             authority,
             operations: Arc::new(tokio::sync::Semaphore::new(4)),
-            wasm: super::wasm::WasmExecution::new()?,
+            wasm,
         })
     }
 

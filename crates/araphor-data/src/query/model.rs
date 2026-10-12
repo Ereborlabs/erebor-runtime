@@ -67,7 +67,7 @@ impl QueryOwner {
 
     pub(crate) fn component_limits(&self, mut limits: sdk::Limits) -> sdk::Limits {
         limits.max_bytes = limits.max_bytes.min(self.limits.input_bytes as u64);
-        crate::package::wasm::WasmExecution::limits(limits)
+        crate::package::wasm::WasmExecution::limits(limits, &self.limits.wasm)
     }
 
     pub fn admit_model(model: &sdk::Model, program: &SqlModelV1) -> Result<()> {

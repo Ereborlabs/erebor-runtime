@@ -74,11 +74,20 @@ pub(in crate::package) struct Fixture {
     pub owner: Arc<AnalysisPackageOwner>,
     pub grant: PackageGrantV1,
     pub authority: Arc<Authority>,
+    limits: QueryLimits,
     _directory: tempfile::TempDir,
 }
 
 impl Fixture {
     pub fn new() -> TestResult<Self> {
+        Self::new_limits(QueryLimits {
+            extract_timeout: Duration::from_secs(30),
+            evaluate_timeout: Duration::from_secs(30),
+            ..Default::default()
+        })
+    }
+
+    pub fn new_limits(limits: QueryLimits) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
         let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
         let authority = Arc::new(Authority {
@@ -86,11 +95,12 @@ impl Fixture {
             changes: watch::channel(1).0,
             after_commit: Mutex::new(None),
         });
-        let owner = Self::owner(store.clone(), authority.clone())?;
+        let owner = Self::owner(store.clone(), authority.clone(), limits.clone())?;
         Ok(Self {
             store,
             owner,
             authority,
+            limits,
             _directory: directory,
             grant: PackageGrantV1 {
                 principal: "fixture".into(),
@@ -105,15 +115,9 @@ impl Fixture {
     fn owner(
         store: Arc<AnalysisStore>,
         authority: Arc<Authority>,
+        limits: QueryLimits,
     ) -> TestResult<Arc<AnalysisPackageOwner>> {
-        let query = Arc::new(QueryOwner::new(
-            store.clone(),
-            QueryLimits {
-                extract_timeout: Duration::from_secs(30),
-                evaluate_timeout: Duration::from_secs(30),
-                ..Default::default()
-            },
-        )?);
+        let query = Arc::new(QueryOwner::new(store.clone(), limits)?);
         let mut owner = AnalysisPackageOwner::new(store, query, authority)?;
         owner.prepare_test_code()?;
         Ok(Arc::new(owner))
@@ -125,17 +129,19 @@ impl Fixture {
             owner,
             grant,
             authority,
+            limits,
             _directory,
         } = self;
         drop(owner);
         drop(store);
         let store = Arc::new(AnalysisStore::open(_directory.path().join("analysis"))?);
-        let owner = Self::owner(store.clone(), authority.clone())?;
+        let owner = Self::owner(store.clone(), authority.clone(), limits.clone())?;
         Ok(Self {
             store,
             owner,
             grant,
             authority,
+            limits,
             _directory,
         })
     }

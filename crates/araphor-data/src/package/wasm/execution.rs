@@ -8,16 +8,14 @@ use araphor_analysis_sdk as sdk;
 use snafu::{IntoError as _, ResultExt as _};
 use wasmtime::{Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 
-use crate::{AnalysisReadControl, Result};
+use crate::{query::WasmLimits, AnalysisReadControl, Result};
 
 use super::{
     bindings::{self, araphor::analysis::types, AnalysisPackagePre},
-    Code, MAX_LIFT_BYTES,
+    Code,
 };
 
 const MAX_EVALUATIONS: usize = 4;
-const MAX_HOST_CALLS: usize = 4096;
-const MAX_FUEL: u64 = 100_000_000;
 
 #[cfg(test)]
 pub(super) struct GuestEntry {
@@ -29,24 +27,28 @@ pub(super) struct GuestState {
     limits: StoreLimits,
     control: AnalysisReadControl,
     host_calls: usize,
+    host_limit: Option<usize>,
     limited: bool,
     #[cfg(test)]
     entered: Option<GuestEntry>,
 }
 
 impl GuestState {
-    fn new(control: AnalysisReadControl) -> Self {
+    fn new(control: AnalysisReadControl, quota: &WasmLimits) -> Self {
+        let mut limits = StoreLimitsBuilder::new()
+            .memories(1)
+            .table_elements(16_384)
+            .tables(4)
+            .instances(16)
+            .trap_on_grow_failure(true);
+        if let Some(bytes) = quota.memory_bytes {
+            limits = limits.memory_size(bytes);
+        }
         Self {
-            limits: StoreLimitsBuilder::new()
-                .memory_size(256 * 1024 * 1024)
-                .memories(1)
-                .table_elements(16_384)
-                .tables(4)
-                .instances(16)
-                .trap_on_grow_failure(true)
-                .build(),
+            limits: limits.build(),
             control,
             host_calls: 0,
+            host_limit: quota.host_calls,
             limited: false,
             #[cfg(test)]
             entered: None,
@@ -101,11 +103,14 @@ impl bindings::araphor::analysis::host::Host for GuestState {
                     .map_err(wasmtime::Error::new)?;
             }
         }
-        self.host_calls += 1;
-        if self.host_calls > MAX_HOST_CALLS {
+        if self
+            .host_limit
+            .is_some_and(|maximum| self.host_calls >= maximum)
+        {
             self.limited = true;
             return Err(wasmtime::Error::msg("analysis host call limit"));
         }
+        self.host_calls = self.host_calls.saturating_add(1);
         Ok(self.control.check().is_err())
     }
 }
@@ -208,9 +213,12 @@ impl super::WasmExecution {
         input: types::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<types::Output> {
-        let control = control.within(Duration::from_secs(5))?;
+        let control = match self.limits.timeout {
+            Some(timeout) => control.within(timeout)?,
+            None => control.within(control.remaining()?)?,
+        };
         self.epoch.start()?;
-        let mut store = Store::new(&self.engine, GuestState::new(control));
+        let mut store = Store::new(&self.engine, GuestState::new(control, &self.limits));
         #[cfg(test)]
         {
             store.data_mut().entered = self
@@ -220,11 +228,13 @@ impl super::WasmExecution {
                 .take();
         }
         store.limiter(|state| state);
-        store.set_fuel(MAX_FUEL).context(crate::PackageWasmSnafu {
-            code: Code::Incomplete,
-            operation: "component fuel",
-        })?;
-        store.set_hostcall_fuel(MAX_LIFT_BYTES);
+        if let Some(fuel) = self.limits.fuel {
+            store.set_fuel(fuel).context(crate::PackageWasmSnafu {
+                code: Code::Incomplete,
+                operation: "component fuel",
+            })?;
+        }
+        store.set_hostcall_fuel(self.limits.allocation_bytes.unwrap_or(usize::MAX));
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(|store| {
             if store.data().control.check().is_err() {

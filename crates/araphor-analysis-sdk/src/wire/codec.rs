@@ -10,7 +10,19 @@ use crate::{Error, ErrorCode, Limits, Model, Package, RecordBatch, Result, Schem
 
 use super::Dataset;
 
+mod allocation;
+use allocation::ArrayBudget;
+
 impl Dataset {
+    pub(crate) fn encoding_scratch(batch: &RecordBatch) -> Result<usize> {
+        let arrays = batch
+            .columns()
+            .iter()
+            .map(|array| array.to_data())
+            .collect::<Vec<_>>();
+        Ok(ArrayBudget::new(&arrays, u64::MAX)?.scratch)
+    }
+
     pub fn encode(data: &crate::Dataset, schema: &Schema, limits: Limits) -> Result<Self> {
         let mut bytes = BoundedBuffer::new(limits.max_bytes);
         let mut writer = StreamWriter::try_new(&mut bytes, schema)?;
@@ -103,19 +115,7 @@ impl Dataset {
             .iter()
             .map(|array| array.to_data())
             .collect::<Vec<_>>();
-        let mut pending = arrays.iter().collect::<Vec<_>>();
-        let mut bytes = 0_u64;
-        while let Some(array) = pending.pop() {
-            for buffer in array.buffers() {
-                bytes = bytes.saturating_add(buffer.len() as u64);
-            }
-            // A nullable parent can require a temporary child validity buffer.
-            bytes = bytes.saturating_add((array.len() as u64).div_ceil(8));
-            if bytes > limit {
-                return Err(Error::contract(ErrorCode::Limit, "decoded dataset"));
-            }
-            pending.extend(array.child_data());
-        }
+        ArrayBudget::new(&arrays, limit)?;
         let mut columns = Vec::with_capacity(arrays.len());
         for array in &arrays {
             array.validate_full()?;

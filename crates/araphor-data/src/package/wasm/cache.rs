@@ -59,10 +59,18 @@ impl super::WasmExecution {
         &self,
         digest: &[u8; 32],
     ) -> Result<Option<AnalysisPackagePre<GuestState>>> {
-        self.cache
+        let prepared = self
+            .cache
             .lock()
             .map(|cache| cache.get(digest))
-            .map_err(|_| Code::Incomplete.error("component cache lock"))
+            .map_err(|_| Code::Incomplete.error("component cache lock"))?;
+        if let Some(prepared) = &prepared {
+            CompileBudget::resources(
+                prepared.instance_pre().component(),
+                self.limits.memory_bytes,
+            )?;
+        }
+        Ok(prepared)
     }
 
     pub(super) fn compiled(
@@ -97,7 +105,7 @@ impl super::WasmExecution {
         if image_bytes > MAX_IMAGE_BYTES {
             return Err(Code::Limit.error("component compiled image"));
         }
-        CompileBudget::interface(&self.engine, &component)?;
+        CompileBudget::interface(&self.engine, &component, self.limits.memory_bytes)?;
         let instance =
             self.linker
                 .instantiate_pre(&component)
@@ -129,7 +137,7 @@ mod tests {
     #[test]
     fn cache_enforces_each_bound(
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let runtime = super::super::WasmExecution::new()?;
+        let runtime = super::super::WasmExecution::new(crate::query::WasmLimits::default())?;
         let prepared = runtime.compiled(
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),

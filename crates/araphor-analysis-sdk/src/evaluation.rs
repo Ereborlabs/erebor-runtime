@@ -66,6 +66,22 @@ pub struct Evaluation {
 }
 
 impl Evaluation {
+    pub fn encoding_scratch_bytes(&self) -> Result<usize> {
+        self.inputs
+            .iter()
+            .flat_map(|input| &input.data.batches)
+            .chain(self.parameters.iter())
+            .chain(
+                self.checkpoint.iter().flat_map(|checkpoint| {
+                    checkpoint.datasets.iter().flat_map(|data| &data.batches)
+                }),
+            )
+            .try_fold(0_usize, |bytes, batch| {
+                crate::wire::Dataset::encoding_scratch(batch)
+                    .map(|scratch| bytes.saturating_add(scratch))
+            })
+    }
+
     pub fn allocated_bytes(&self) -> usize {
         let mut bytes = self
             .export

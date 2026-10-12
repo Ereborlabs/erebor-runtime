@@ -1,11 +1,9 @@
-use std::io::Read as _;
-
 use snafu::ResultExt as _;
 
 use crate::{AnalysisPackageOwner, AnalysisReadControl, Result};
 
-use super::super::{admission::CompileBudget, admission::MAX_SOURCE_BYTES, cache::MAX_IMAGE_BYTES};
-use super::{image::CompilerImage, Code, WasmExecution, WORKER_ARG};
+use super::super::{admission::CompileBudget, cache::MAX_IMAGE_BYTES};
+use super::{image::CompilerImage, input::CompilerInput, Code, WasmExecution, WORKER_ARG};
 
 impl AnalysisPackageOwner {
     /// Run the compiler child before application setup.
@@ -57,32 +55,18 @@ impl WasmExecution {
     }
 
     fn worker_image() -> Result<Vec<u8>> {
-        let mut source = Vec::new();
-        source
-            .try_reserve_exact(MAX_SOURCE_BYTES + 1)
-            .map_err(wasmtime::Error::new)
-            .context(crate::PackageWasmSnafu {
-                code: Code::Limit,
-                operation: "component compiler source allocation",
-            })?;
-        std::io::stdin()
-            .lock()
-            .take((MAX_SOURCE_BYTES + 1) as u64)
-            .read_to_end(&mut source)
-            .map_err(wasmtime::Error::new)
-            .context(crate::PackageWasmSnafu {
-                code: Code::Incomplete,
-                operation: "component compiler source read",
-            })?;
+        let input = CompilerInput::read(std::io::stdin().lock())?;
+        let request = input.request()?;
         let control = AnalysisReadControl::with_timeout(super::MAX_WALL_TIME)?;
-        CompileBudget::check(&source, &control)?;
-        let engine = Self::new_engine()?;
-        let image = engine
-            .precompile_component(&source)
-            .context(crate::PackageWasmSnafu {
-                code: Code::Invalid,
-                operation: "component compilation",
-            })?;
+        CompileBudget::check(request.source, &control)?;
+        let engine = Self::new_engine(request.fuel)?;
+        let image =
+            engine
+                .precompile_component(request.source)
+                .context(crate::PackageWasmSnafu {
+                    code: Code::Invalid,
+                    operation: "component compilation",
+                })?;
         if image.len() > MAX_IMAGE_BYTES {
             return Err(Code::Limit.error("component compiled image"));
         }

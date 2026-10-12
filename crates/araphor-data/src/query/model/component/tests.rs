@@ -12,6 +12,8 @@ use super::*;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
+mod nested;
+
 fn input(schema: sdk::Schema) -> sdk::Result<(sdk::Package, sdk::Evaluation)> {
     let model = sdk::Model::new(
         "evaluate",
@@ -55,6 +57,47 @@ fn input(schema: sdk::Schema) -> sdk::Result<(sdk::Package, sdk::Evaluation)> {
 
 fn schema() -> sdk::Schema {
     sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)])
+}
+
+#[test]
+fn default_ceiling_keeps_small_input() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let query = fixture.owner(QueryLimits::default())?;
+    let (package, mut evaluation) = input(schema())?;
+    evaluation.context.limits = package.exports[0].limits;
+    let retained = evaluation.allocated_bytes();
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let output =
+        query.evaluate_component([1; 16], &package, &evaluation, &control, |_, _, wire| {
+            let decoded = wire
+                .decode(&package)
+                .context(crate::AnalysisContractSnafu)?;
+            assert_eq!(
+                decoded.inputs[0].data.batches,
+                evaluation.inputs[0].data.batches
+            );
+            assert_eq!(decoded.context.limits, package.exports[0].limits);
+            let output = sdk::Output {
+                datasets: vec![sdk::Dataset {
+                    name: "data".into(),
+                    batches: decoded.inputs[0].data.batches.clone(),
+                }],
+                ..Default::default()
+            };
+            let bytes = output.allocated_bytes();
+            Ok((output, bytes))
+        })?;
+    assert_eq!(
+        output.output.datasets[0].batches,
+        evaluation.inputs[0].data.batches
+    );
+    let capacity = QueryLimits::default().input_capacity;
+    let rest = query.retain_analysis_input(capacity - retained)?;
+    assert!(query.retain_analysis_input(1).is_err());
+    drop(rest);
+    drop(output);
+    drop(query.retain_analysis_input(capacity)?);
+    Ok(())
 }
 
 #[test]
@@ -154,22 +197,42 @@ fn component_encode_releases_lease() -> TestResult {
 fn component_preflight_keeps_limits() -> TestResult {
     let fixture = QueryFixture::new()?;
     let query = fixture.owner(QueryLimits::default())?;
-    let (package, mut evaluation) = input(schema())?;
+    let (mut package, mut evaluation) = input(schema())?;
+    package.exports[0].checkpoint = Some(sdk::CheckpointSpec {
+        version: 1,
+        datasets: vec![sdk::Port::new("state", schema())],
+    });
     let initial = query.component_preflight(&package, &evaluation)?;
+    let scratch = evaluation.encoding_scratch_bytes()?;
     assert_eq!(
         initial,
-        2 * (evaluation.context.limits.max_bytes as usize + evaluation.allocated_bytes())
-            + 4 * package.allocated_bytes()
+        4 * (evaluation.allocated_bytes() + scratch) + 4 * package.allocated_bytes()
     );
     evaluation.checkpoint = Some(sdk::Checkpoint {
         version: 1,
         datasets: Vec::new(),
     });
+    assert_eq!(query.component_preflight(&package, &evaluation)?, initial);
+    let retained = evaluation.allocated_bytes();
+    evaluation
+        .checkpoint
+        .as_mut()
+        .ok_or("checkpoint missing")?
+        .datasets
+        .push(sdk::Dataset {
+            name: "state".into(),
+            batches: evaluation.inputs[0].data.batches.clone(),
+        });
+    package.validate_evaluation(&evaluation)?;
+    let expanded = query.component_preflight(&package, &evaluation)?;
+    assert!(expanded > initial);
     assert_eq!(
-        query.component_preflight(&package, &evaluation)?,
-        initial + 2 * evaluation.context.limits.max_checkpoint_bytes as usize
+        expanded,
+        initial
+            + 4 * (evaluation.allocated_bytes() - retained)
+            + 4 * (evaluation.encoding_scratch_bytes()? - scratch)
     );
-    evaluation.context.limits.max_bytes = QueryLimits::default().input_bytes as u64;
+    evaluation.context.limits.max_bytes = QueryLimits::default().input_bytes as u64 + 1;
     assert!(matches!(
         query.component_preflight(&package, &evaluation),
         Err(crate::Error::QueryInvalid {
@@ -194,7 +257,7 @@ fn empty_inputs_reserve_schema() -> TestResult {
     for limit in [101 * 1024, 1024] {
         evaluation.context.limits.max_bytes = limit as u64;
         package.validate_evaluation(&evaluation)?;
-        let previous = 2 * (limit + retained);
+        let previous = 4 * retained;
         assert_eq!(
             query.component_preflight(&package, &evaluation)?,
             previous + 4 * package.allocated_bytes()

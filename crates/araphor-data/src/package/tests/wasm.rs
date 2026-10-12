@@ -138,7 +138,19 @@ async fn wasm_failure_retains_state() -> TestResult {
         ("limit", PackageErrorCodeV1::Limit),
         ("invalid-evidence", PackageErrorCodeV1::Invalid),
     ] {
-        let fixture = Fixture::new()?;
+        let fixture = Fixture::new_limits(crate::QueryLimits {
+            wasm: crate::query::WasmLimits {
+                fuel: Some(100_000_000),
+                memory_bytes: Some(256 * 1024 * 1024),
+                data_bytes: Some(32 * 1024 * 1024),
+                timeout: Some(std::time::Duration::from_secs(5)),
+                allocation_bytes: Some(32 * 1024 * 1024),
+                host_calls: Some(4096),
+            },
+            extract_timeout: std::time::Duration::from_secs(30),
+            evaluate_timeout: std::time::Duration::from_secs(30),
+            ..Default::default()
+        })?;
         let mut package = component("1");
         package.artifacts[0]
             .implementations

@@ -1,7 +1,7 @@
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-use crate::AnalysisReadControl;
+use crate::{query::WasmLimits, AnalysisReadControl};
 
 use super::{admission::CompileBudget, execution::EvaluationPermit, WasmExecution};
 
@@ -11,7 +11,10 @@ mod runtime;
 
 #[test]
 fn admission_requires_analysis_contract() -> TestResult {
-    let runtime = WasmExecution::new()?;
+    let runtime = WasmExecution::new(WasmLimits {
+        memory_bytes: Some(256 * 1024 * 1024),
+        ..WasmLimits::default()
+    })?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(10))?;
     for source in [
         "(component)",
@@ -40,7 +43,7 @@ fn admission_requires_analysis_contract() -> TestResult {
 
 #[test]
 fn sdk_components_pass_admission() -> TestResult {
-    let runtime = WasmExecution::new()?;
+    let runtime = WasmExecution::new(WasmLimits::default())?;
     let components: [(&str, &[u8]); 5] = [
         (
             "discovery",

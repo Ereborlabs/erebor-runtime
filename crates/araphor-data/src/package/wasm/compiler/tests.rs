@@ -32,6 +32,7 @@ fn araphor_component_compiler_blocking() -> TestResult {
 #[ignore]
 fn araphor_component_compiler_memory() -> TestResult {
     super::WasmExecution::worker_limits()?;
+    super::input::CompilerInput::read(std::io::stdin().lock())?.request()?;
     let mut allocation = Vec::<u8>::new();
     assert!(allocation
         .try_reserve_exact(MAX_ADDRESS_BYTES as usize + 1)
@@ -49,6 +50,7 @@ fn araphor_component_compiler_cpu() -> TestResult {
     use rustix::process::{setrlimit, Resource, Rlimit};
 
     super::WasmExecution::worker_limits()?;
+    super::input::CompilerInput::read(std::io::stdin().lock())?.request()?;
     setrlimit(
         Resource::Cpu,
         Rlimit {
@@ -63,10 +65,10 @@ fn araphor_component_compiler_cpu() -> TestResult {
 
 #[test]
 fn compiler_enforces_os_limits() -> TestResult {
-    let runtime = super::WasmExecution::new()?;
+    let runtime = super::WasmExecution::new(crate::query::WasmLimits::default())?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(5))?;
     let mut failed = false;
-    let image = CompilerChild::capture(MEMORY_ENTRY, &[], &control, &mut failed, None)?;
+    let image = CompilerChild::capture(MEMORY_ENTRY, &[], false, &control, &mut failed, None)?;
     assert!(matches!(
         image.component(&runtime.engine),
         Err(crate::Error::PackageWasm {
@@ -75,7 +77,7 @@ fn compiler_enforces_os_limits() -> TestResult {
         })
     ));
     assert!(matches!(
-        CompilerChild::capture(CPU_ENTRY, &[], &control, &mut failed, None),
+        CompilerChild::capture(CPU_ENTRY, &[], false, &control, &mut failed, None),
         Err(crate::Error::PackageWasm {
             code: super::Code::Limit,
             ..
@@ -99,6 +101,7 @@ fn compiler_reaps_interrupted_children() -> TestResult {
                     CompilerChild::capture(
                         BLOCKING_ENTRY,
                         &[],
+                        false,
                         control_worker,
                         failed_worker,
                         Some(entered),
@@ -131,11 +134,12 @@ fn compiler_reaps_interrupted_children() -> TestResult {
         let image = CompilerChild::capture(
             TEST_ENTRY,
             &wat::parse_str("(component)")?,
+            false,
             &AnalysisReadControl::default(),
             &mut failed,
             None,
         )?;
-        let runtime = super::WasmExecution::new()?;
+        let runtime = super::WasmExecution::new(crate::query::WasmLimits::default())?;
         image.component(&runtime.engine)?;
     }
     Ok(())
@@ -143,11 +147,12 @@ fn compiler_reaps_interrupted_children() -> TestResult {
 
 #[test]
 fn installation_rejects_native_images() -> TestResult {
-    let runtime = super::WasmExecution::new()?;
+    let runtime = super::WasmExecution::new(crate::query::WasmLimits::default())?;
     let mut failed = false;
     let image = CompilerChild::capture(
         TEST_ENTRY,
         &wat::parse_str("(component)")?,
+        false,
         &AnalysisReadControl::default(),
         &mut failed,
         None,
@@ -164,11 +169,12 @@ fn installation_rejects_native_images() -> TestResult {
 
 #[test]
 fn compiler_requires_worker_dispatch() -> TestResult {
-    let runtime = super::WasmExecution::new()?;
+    let runtime = super::WasmExecution::new(crate::query::WasmLimits::default())?;
     let mut failed = false;
     let image = CompilerChild::capture(
         "missing_component_compiler",
         &[],
+        false,
         &AnalysisReadControl::with_timeout(Duration::from_secs(5))?,
         &mut failed,
         None,
