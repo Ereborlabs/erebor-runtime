@@ -970,6 +970,17 @@ empty replacement, checkpoint counts 2, 2, and 1, failed upgrade, rollback,
 revocation, and removal behavior. The result makes no physical or performance
 claim. The other three fresh production cases and final CI remain required.
 
+The fresh `context-roundtrip` case passes with the same v38 executable. Its
+result is `/tmp/araphor-current-v38-context-roundtrip/result.json`, with SHA256
+`312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
+The installed component preserves the host-selected context identity, revision,
+and coverage. The 3,000-nanosecond cutoff selects one record. The
+1,999-nanosecond cutoff excludes that record and retains one omission. Node WAL,
+TLS intake, exact retained bytes, signed context, and Data restart checks pass.
+The source manifest and saved executable hashes remain unchanged. Live-profile
+and deterministic-profile checks belong to the remaining restart case. Graph
+notification and final workspace CI also remain required.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
