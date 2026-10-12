@@ -793,14 +793,37 @@ after the run is 2,312,478,720 bytes. The ten passing tests cover default and
 configured quotas, transfer limits, interruption, errors, and instance state.
 This run does not prove installed guest overlap.
 
-- [ ] Recover the completed native cache's duplicate object files after checked
+- [x] Recover the completed native cache's duplicate object files after checked
   archive-member equality and a new live-reference scan. Keep its archive and
   Cargo fingerprint unchanged.
-- [ ] If link headroom requires it, remove only debug sections from the completed
+- [x] If link headroom requires it, remove only debug sections from the completed
   inactive Data executable. Use the existing loaded-section checker. Preserve
   each loaded section and its metadata. Keep source and test behavior unchanged.
 - [ ] Rerun the installed overlap test with the same executable and the unchanged
   storage reserve, inputs, two entry gates, deadlines, and output assertions.
+
+The completed-cache recovery removes 291 duplicate native objects and frees
+2,103,660,544 bytes. The retained archive SHA256 stays
+`4130b9afc78960bbd6d1a837ba151857c8eeb3d30ca6fe6ef4b7a3d79237cab1`.
+The equality proof is `/tmp/araphor-duckdb-object-recovery-current-9b99.json`,
+with SHA256
+`7b6c58c33e3ee21deecfe32a00d755d50cc68cd7272db259875fbaca9dfec900`.
+The completed recovery record is
+`/tmp/araphor-duckdb-current-recovery-completed-v37.json`, with SHA256
+`1d12bd339a732bcc5ea5b1ec134799a9dd4d4a23f6dda559355f09c611bb994d`.
+
+The inactive Data executable changes from 1,351,017,504 to 307,046,840 bytes
+after removal of debug sections. All loaded sections retain their addresses,
+sizes, flags, types, and bytes. The proof is
+`/tmp/araphor-strip-data-proof-v37.json`, with SHA256
+`a023c21818e3d4a85cffb03a13edd33793a408b9440b368b888c0d3c86b5bfc9`.
+The loaded-code-equivalent executable SHA256 is
+`2f71e42e18d90dceb96599c8a76504eccaf71ce4765aed951774f8bd0ddb3cc0`.
+Both recovery operations hold the native cache lock and check live references.
+The other checkout's active test executable has a different path and identity.
+Available space after object recovery is 5,455,912,960 bytes. The unchanged
+installed overlap test starts with the completed executable. Its log is
+`/tmp/araphor-wasm-overlap-reserve-v37.log`; its result remains pending.
 
 ### Implementation TODOs
 
