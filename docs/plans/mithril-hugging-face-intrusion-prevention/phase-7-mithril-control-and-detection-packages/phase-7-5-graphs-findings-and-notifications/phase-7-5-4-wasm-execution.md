@@ -619,6 +619,12 @@ user before implementation. The current source still uses fixed runtime quotas.
 - [ ] Preserve every large workload and its assertions. Keep all 21 corpus
   cases, the 256-record window case, 257 findings across 33 sources, all 12
   incident cards, and the 64- and 185-record traversal cases.
+- [ ] Correct component input reservation when the runtime data quota is unset.
+  A 64 MiB declared ceiling reserves more than the 128 MiB shared input pool
+  even for a small input. Reserve the retained input, encoding buffers, and
+  schema scratch before encoding. Keep shared pool capacity unchanged. Preserve
+  lease, metadata, cancellation, and rejection checks. Add a default-ceiling
+  input test and retain the rejection above the effective input limit.
 - [ ] Report the caller of the final read deadline through the existing error
   location. Add caller tracking to the read runner and snapshot wrapper. Extend
   the existing native deadline test without removing its 16 iterations,
