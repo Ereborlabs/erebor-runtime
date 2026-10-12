@@ -119,9 +119,12 @@ runtime, and limits before a performance test is added. Stop before native work.
 ## Result
 
 **Not done.** The component runtime, installed domain adapters, production
-dispatch change, and Rust qualification cases are implemented. Full production
-qualification and the final shared Rust procedure remain pending. The TODOs
-below record the required corrections and proof.
+dispatch change, and Rust qualification cases are implemented. All four fresh
+v41 lightweight production cases pass on source `b14ffb2` with the same
+executable. The ordered final shared Rust procedure and final closure remain
+required. The dispatch change
+preceded the required complete equivalence proof. This historical order
+requirement remains unmet. The TODOs below retain the corrections and proof.
 
 The approved optional resource policy below supersedes earlier fixed data,
 fuel, memory, and guest-time statements. Earlier proof retains its original
@@ -1217,7 +1220,7 @@ uses its own worktree target. This goal does not own or stop that build.
 
 - [x] Preserve both failed logs and their exact terminal results. Keep the
   current source manifest and three completed production case records.
-- [ ] Check storage capacity and inactive main-checkout build artifacts before
+- [x] Check storage capacity and inactive main-checkout build artifacts before
   another run. Preserve source, native archives, component artifacts, logs,
   proofs, and the saved qualification executable. Do not change another build.
 - [ ] Repeat the graph case in a fresh output directory. Repeat the exact final
@@ -1776,7 +1779,8 @@ checked correction scopes remain subject to final workspace verification.
   scheduler records typed readiness and stale results. Domain adapters return
   errors to their existing owner failure and coverage paths.
 - [x] Remove the unused error conversion in Control configuration.
-- [ ] Run the final Clippy check with warnings denied.
+- [x] Run the final Clippy check with warnings denied. The ordered v41 procedure
+  completes this check. The full workspace test result remains pending.
 - [x] Recover filesystem capacity after workspace test linking fills the disk.
   Remove debug sections from inactive generated executables. Verify that all
   loaded sections stay equal. Preserve source, native archives, logs, proof
