@@ -1024,6 +1024,29 @@ tracks source inputs and builds all six guests from source. Each current
 algorithm uses its shared computation source. This source review does not
 replace current runtime qualification.
 
+### Repeated production work correction TODOs
+
+The running v38 graph case still has no terminal result. Source review finds
+two repeated operations. A global provider notice makes earlier source windows
+run all installed detectors before the unchanged-result check. Each window
+also reads and validates the same installed component bundles again. These
+facts do not measure each operation's share of the current elapsed time.
+
+- [ ] Compare validated selected input and exact installed references before
+  detector execution on a normal refresh. Share input normalization and
+  manifest construction. Keep raw immutable-context checks, authorization,
+  and notice acknowledgement. Keep advance, forced refresh, failed recovery,
+  expiry, changed coverage, and changed installed references on their required
+  paths. Prove guest entry with a real component; use no time threshold.
+- [ ] Reuse immutable bundle Arcs within one graph operation. Read fresh
+  activation rows for each window. Check current grants and admission each
+  time. Load newly selected roots and release inactive roots. Keep the existing
+  query leases and commit fences. Add no global cache, schema, policy, or limit.
+- [ ] Keep every current qualification input, assertion, deadline, and compiler
+  profile. After the corrections, capture a new source manifest and normal
+  executable. Run all four fresh production cases and the exact final Rust
+  procedure. Retain the v38 results with their original source boundary.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
