@@ -907,14 +907,33 @@ No fresh production case starts. Automatic review rejects a proposed cleanup
 while Cargo and rustc remain active. That cleanup does not run. After build
 termination, a new process scan finds no Cargo or native compiler process.
 
-- [ ] Recover the completed `e96` cache's duplicate native objects with the
+- [x] Recover the completed `e96` cache's duplicate native objects with the
   native cache lock held and compiler checks restored. Verify the saved member
   hashes, current file identities, and live references. Keep the complete
   archive and fingerprints unchanged. Retry the corrected normal build.
-- [ ] Remove debug sections from the inactive earlier normal executable if
+- [x] Remove debug sections from the inactive earlier normal executable if
   headroom requires it. Hold the native cache lock, check process references,
   and use the existing loaded-section verifier. Keep the current source,
   compiler profile, and all loaded code unchanged.
+
+After build termination, locked recovery removes 291 duplicate `e96` objects
+and frees 2,103,746,560 bytes. The archive remains unchanged, with SHA256
+`e6605a46b252ea8b76530356092743908b59ae62be502a7f0ac3d924f57b5431`.
+The equality proof is `/tmp/araphor-duckdb-object-recovery-current-e96.json`,
+with SHA256
+`e909c2e35cd005662b6caa724e27041c0b5b9fee9c78a607111f17c6b4d7d3fb`.
+The completed recovery record is
+`/tmp/araphor-duckdb-e96-recovery-completed-v38.json`, with SHA256
+`4a913fd2564d747fe38db90a846163a852cd0c253dcc3e42f447569827baa342`.
+
+The inactive earlier normal executable changes from 1,907,087,704 to
+395,434,880 bytes after debug removal. Every loaded section retains its type,
+flags, address, size, and bytes. The proof is
+`/tmp/araphor-strip-normal-v37-proof.json`, with SHA256
+`c40251b0eebcfc5727292f9e8e24adc2e9c921efb4c31224810de15ad014f1d6`.
+Both operations hold the native cache lock and reject a live compiler or file
+reference. No source, test, quota, profile, or storage reserve changes.
+The corrected normal executable still requires a successful rebuild.
 
 ### Implementation TODOs
 
