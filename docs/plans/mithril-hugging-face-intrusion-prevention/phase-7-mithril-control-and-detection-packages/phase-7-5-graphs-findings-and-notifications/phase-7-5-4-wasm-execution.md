@@ -1185,6 +1185,16 @@ profile, deterministic profile, late-context, or production-authority claim.
 The profile restart and graph cases and the current final workspace procedure
 remain required. The current result stays **Not done**.
 
+The fresh profile restart case exits zero and reports `PASS`. Its result is
+`/tmp/araphor-current-v39-profile-restart/result.json`, with SHA256
+`3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
+The unchanged saved executable qualifies signed context, live profile storage,
+late context, deterministic profile output, atomic progress, and restart replay
+through installed execution. The case remains lightweight. It establishes no
+physical profile or production-authority claim. All three fresh completed
+cases have separate commits. The graph case and current final workspace
+procedure remain pending. The current phase remains **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.

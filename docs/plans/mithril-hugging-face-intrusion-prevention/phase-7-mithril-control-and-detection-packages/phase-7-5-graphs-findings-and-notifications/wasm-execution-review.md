@@ -685,6 +685,16 @@ final workspace procedure have started. Their terminal results and the other
 three fresh cases remain required. The v38 proof below retains its older source
 boundary.
 
+The test-only lint correction in `b1339b57` changes no production input. The
+v40 normal rebuild produces the same complete executable bytes as v39. The
+identity proof is `/tmp/araphor-wasm-production-identity-v40.json`, with SHA256
+`00816dde3e71d8d77f12a81ad53409391fc22085b31e81490324d3863a7660a6`.
+Fresh installed-package, context transport, and profile restart cases exit zero
+with the unchanged saved executable. Their records have separate commits and
+cover this byte-identical current normal executable. The graph case and exact
+current-source final workspace procedure remain pending. The aggregate proof
+is `/tmp/araphor-wasm-production-proof-v39.json`.
+
 The [phase result](phase-7-5-4-wasm-execution.md#result) will record final source
 state, commands, counts, and evidence after the required checks pass.
 The [build proof](wasm-component-build-proof.json) records independent component
