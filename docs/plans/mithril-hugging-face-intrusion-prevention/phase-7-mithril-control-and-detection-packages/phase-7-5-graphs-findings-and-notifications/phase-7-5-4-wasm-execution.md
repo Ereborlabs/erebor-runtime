@@ -799,7 +799,7 @@ This run does not prove installed guest overlap.
 - [x] If link headroom requires it, remove only debug sections from the completed
   inactive Data executable. Use the existing loaded-section checker. Preserve
   each loaded section and its metadata. Keep source and test behavior unchanged.
-- [ ] Rerun the installed overlap test with the same executable and the unchanged
+- [x] Rerun the installed overlap test with the same executable and the unchanged
   storage reserve, inputs, two entry gates, deadlines, and output assertions.
 
 The completed-cache recovery removes 291 duplicate native objects and frees
@@ -824,6 +824,18 @@ The other checkout's active test executable has a different path and identity.
 Available space after object recovery is 5,455,912,960 bytes. The unchanged
 installed overlap test starts with the completed executable. Its log is
 `/tmp/araphor-wasm-overlap-reserve-v37.log`; its result remains pending.
+
+The installed overlap retry passes in 87.58 seconds with no source change.
+Both guests reach the real host import before either release gate opens. The
+test retains the exact tenant, group, sample, and count assertions. The log
+SHA256 is
+`2f559b478f7ebf49bb9093fd2941fdfb4e104697f050a3addbd8ad5b5c510fee`.
+All 1,586 manifest files still match source SHA256
+`0df1d83246835e7158967cd7890a9cb8deda67f0061859b18e81191e628d6bb0`.
+The current 11 runtime tests have passed across the group run and this retry.
+The group run's reserve failure remains recorded. The final workspace procedure
+must run the complete group again with the remaining workspace tests. Four
+fresh normal production cases and closure remain required.
 
 ### Implementation TODOs
 
