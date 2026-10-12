@@ -1659,6 +1659,10 @@ hashes still match. This remains lightweight proof.
 All four fresh v43 cases pass on source `6cce92d1`. The immutable completion
 snapshot is `/tmp/araphor-wasm-four-cases-complete-v43.json`, with SHA256
 `1bcfa6ce81aabcb97d462f4aaebfc79b3497e5e37bdc8c183bd5ba29b65b0b7d`.
+Its inherited `remaining` list still names the four fresh cases. The four
+terminal case records and empty `cases_pending` list establish their passes.
+The current aggregate removes that old pending item. Keep the snapshot bytes
+and hash unchanged.
 The final workspace procedure must start after these completed cases. Final CI,
 review closure, and the historical dispatch-order requirement remain open.
 
@@ -1680,6 +1684,38 @@ The start record is `/tmp/araphor-wasm-final-ci-start-v43.json`, with SHA256
 The procedure is running. Its terminal result, complete target accounting,
 post-run source checks, and final review remain required. No workspace pass is
 claimed. The phase remains **Not done**.
+
+- [x] Explain the inherited remaining-work list in the immutable four-case
+  snapshot. Preserve its bytes and hash. Use the terminal case records and
+  current aggregate for the current status.
+
+### Focused tests and repeated-work correction TODOs
+
+The user requests smaller Rust tests and performance improvements. The complete
+v43 graph case passes in about 35 minutes with the normal compiler profile.
+The snapshot helper creates a graph owner for each of 33 requests. Production
+retains one owner. Both paths share the installed package owner and compiler
+cache. The case also creates independent replay fixtures. Per-step costs have
+not been measured. Keep these facts separate from a production latency claim.
+
+- [ ] Map every complete-case assertion to focused Rust tests. Keep combined
+  source-window checks, negative cases, large inputs, restart, and rollback.
+  Keep the complete CLI qualification case available.
+- [ ] Add bounded step-time diagnostics to the existing qualification case.
+  Use ordinary Rust timing and static labels. Preserve finding JSON, inputs,
+  assertions, deadlines, and compiler profiles. Add no new timing threshold.
+- [ ] Correct confirmed fixture lifetime repetition through supported owner
+  APIs. Check new-source registration and context updates first. Keep explicit
+  restart and independent replay checks.
+- [ ] Remove confirmed repeated work inside production operations. Preserve
+  input reservations, trust-boundary validation, current grants, lifecycle
+  fences, cancellation, evidence checks, and atomic commits.
+- [ ] Prove each correction with focused real-component or production-owner
+  tests. Preserve the original failure and workload evidence. Commit each
+  deliverable.
+- [ ] After the last Rust edit, capture a new normal executable and source.
+  Run all four complete production cases, then the exact final Rust procedure.
+  Update the guide and result. Retain v43 proof with its original source.
 
 ### Implementation TODOs
 
