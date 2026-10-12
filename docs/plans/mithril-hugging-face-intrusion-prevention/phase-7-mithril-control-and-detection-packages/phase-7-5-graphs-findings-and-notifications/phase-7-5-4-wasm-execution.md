@@ -1970,6 +1970,45 @@ registration proof. It does not replace the focused runtime proofs or final CI.
 Four fresh complete cases and final workspace verification remain required.
 The phase result stays **Not done**.
 
+### Shared fixture input correction TODOs
+
+Source review finds duplicate card, read, and provider input construction in
+the complete CLI and the new focused tests. One input owner prevents these
+paths from changing independently. The graph operations and assertions stay
+in their current callers. This correction changes no algorithm or architecture.
+
+- [ ] Put the existing input methods under one normal `ReplayQualification`
+  input module family. Use the CLI error type. Do not depend on the test-only
+  platform module. Share the incident-card loader and exact context inputs.
+- [ ] Share read input construction with an explicit operation and optional
+  result/byte pair. Preserve all nine read variants and all completion identity
+  checks. Snapshot reads still precede late authority insertion.
+- [ ] Share send input construction. Preserve all five send variants and source
+  identities. Only the provider-write variant receives the provider fact.
+- [ ] Reuse policy contradiction and partial-node input methods. Keep process,
+  refresh, snapshot, history, derive, and assertions visible in both callers.
+- [ ] Verify the changed callers with all 17 focused tests. Compare the original
+  and shared input fields. Commit this deliverable. Capture a new final source,
+  run all four complete cases, then run the exact shared Rust procedure.
+
+The v51 normal build passes in 34.09 seconds. Its source has 1,611 files and
+source SHA-256
+`6cc7443025858cf98b0234518dac238e5677a5329846604e857e13b6d293813e`.
+All 24 retained component/core artifact hashes match. The normal executable
+has 1,912,903,080 bytes and retains its debug sections. Its SHA-256 is
+`89c7defd75f24ae43f36533f6b42fd0c6feaa1106cc4df929e5e579e9239dd9c`.
+The capture is `/tmp/araphor-wasm-production-capture-v51.json`, with SHA-256
+`78d580faf8854e2b9e4b4f6271ffa7c668788a1fb9c36bad47c2c56f7f9d137d`.
+The installed-package case exits zero and reports `PASS` on this source.
+The proof is `/tmp/araphor-wasm-analysis-packages-proof-v51.json`, with SHA-256
+`b03c17ef47d98df3e25b804e4ea7406e2a7e599165cd96e3a96167dda61d994c`.
+The real client installs the built SDK detector over TLS without a host rebuild.
+The case retains threshold 3, four inputs, three evidence records, checkpoint 4,
+restart, retry, revocation, correction, empty replacement, upgrade rejection,
+rollback, removal, and renewal. This proof does not cover the later shared-input
+correction. Fresh complete cases and final CI remain required after that edit.
+The phase result stays **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
