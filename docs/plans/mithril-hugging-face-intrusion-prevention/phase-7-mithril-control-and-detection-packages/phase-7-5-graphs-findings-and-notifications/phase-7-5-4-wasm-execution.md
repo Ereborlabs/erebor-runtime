@@ -845,12 +845,34 @@ native DuckDB build in `libduckdb-sys-e96a13ff94003ddf`. With 172 objects built,
 available space is 3,842,932,736 bytes. The completed archive, remaining objects,
 and executable links still require space. This build remains pending.
 
-- [ ] Check unused earlier native build caches for further space recovery.
+- [x] Check unused earlier native build caches for further space recovery.
   Identify exact generated paths and their Cargo fingerprints. Check live
   references and the current dependency graph. Preserve active caches, the
   recent retained archives, source, proof, and the other checkout. Remove a
   cache's success fingerprint with its retired output so Cargo rebuilds it
   when required. Do not change a profile, source, workload, or storage reserve.
+
+The audit selects three inactive Rust wrapper variants rather than native
+archives. Recovery removes each wrapper's `.rlib`, `.rmeta`, dependency file,
+and matching library fingerprint. Their native archives and native build
+fingerprints stay intact. A future wrapper build can use the retained native
+output. The selected wrappers are `5fcd540258e305f8`, `c17904adfab012f1`, and
+`f3c4e59454dc1156`. Live argument, descriptor, and mapping checks find no
+references to these files. The current CLI selects `9ce67e35cfb9c8cb` and native
+cache `e96a13ff94003ddf`; these remain untouched. The other checkout has a
+separate target directory. The normal build continues during recovery.
+
+The completed proof records are:
+
+| Wrapper | Proof file | SHA256 |
+| --- | --- | --- |
+| `5fcd540258e305f8` | `/tmp/araphor-old-wrapper-retirement-v37.json` | `5bfcce18572a63cb822f515006f1a98b1e1abb8dd5a024efe165deeea2ed2f1c` |
+| `c17904adfab012f1` | `/tmp/araphor-wrapper-c17904adfab012f1-retirement-v37.json` | `7a6709aafd22f1fbc956b93b2ff3f216e51e07e3bc7d43c471fd024649ec4560` |
+| `f3c4e59454dc1156` | `/tmp/araphor-wrapper-f3c4e59454dc1156-retirement-v37.json` | `252eef48d67e8639098d2da9dc3505dde2adbd40cd280eddbad2c0608138abb9` |
+
+Available space after the last operation is 9,266,561,024 bytes. Each record
+retains exact file identities and hashes. Recovery changes no source, compiler
+profile, current dependency, runtime quota, test, or storage reserve.
 
 ### Implementation TODOs
 
