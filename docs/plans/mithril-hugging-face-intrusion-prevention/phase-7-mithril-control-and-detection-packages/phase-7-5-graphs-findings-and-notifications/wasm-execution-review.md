@@ -702,7 +702,11 @@ One shutdown method closes the query service before Control reopen. Its existing
 case passes in 69.70 seconds, including service startup. The 60-second active
 case, 30-second capture, 120-second grant, and original assertions remain.
 The [phase record](phase-7-5-4-wasm-execution.md#query-upload-diagnostic-correction-todos)
-retains both red and green results. New source qualification remains required.
+retains both red and green results. The corrected Rust source is committed
+through `6cce92d1`. Its normal locked build passes without warnings. The
+[capture](phase-7-5-4-wasm-execution.md#corrected-normal-qualification-capture)
+records the frozen source and complete saved executable. All four fresh cases
+and ordered final workspace verification remain required.
 
 The retained multi-export correction is committed in `b14ffb2`. Its two focused
 regressions and normal build pass. Its source has 1,590 files and source SHA256

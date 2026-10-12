@@ -1583,6 +1583,29 @@ log. `QueryFixture` uses one shutdown method for success and failure. The query
 contract, original test assertions, and external backend scripts remain equal
 to `b14ffb2`. No production authority, execution limit, or algorithm changes.
 
+### Corrected normal qualification capture
+
+The corrected Rust source is committed through `6cce92d1`. Its 1,590-file
+manifest is `/tmp/araphor-wasm-source-manifest-production-v43.json`, with SHA256
+`ddaaa616ca0ac2c6d707fb64c241b999234122c0737f166d07ec1914cbe8f06a`.
+The source SHA256 is
+`3aa1bdb0fc897e3eac6a3b752465527efbfccd168c1b675d2230af78d8d714c5`.
+Only the isolation and observability qualification sources change after v41.
+All 24 independent core and component artifact hashes still match.
+
+The normal locked build exits zero in 33.52 seconds without warnings. Its log
+is `/tmp/araphor-wasm-normal-build-v43.log`, with SHA256
+`06b5f4fb163a10f139790a11191a9e28192e86cca335889eda8f7ebbb97d7328`.
+The saved executable is `/tmp/araphor-current-v43-bin/mithril_discovery_test`,
+with SHA256
+`646abae2ac0b3bf32171f26080c4b08be1f631ab294336ee3d9f597e967bba52`.
+All 1,907,947,232 bytes match the build output. Debug sections remain present.
+The capture is `/tmp/araphor-wasm-production-capture-v43.json`, with SHA256
+`0edcfe4bc3b7590eca8abcc0c10bca13f16d14304a9878971ed4931ee2709fa9`.
+The append reserve and compiler profile remain unchanged. All four fresh cases
+and then final workspace verification remain required on this frozen source.
+The result remains **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
