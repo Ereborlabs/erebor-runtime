@@ -752,13 +752,33 @@ Its file SHA256 is
 The filesystem has 1,293,942,784 available bytes at the recovery check.
 This build failure supplies no runtime test result. The result stays **Not done**.
 
-- [ ] Recover only duplicate generated native objects from an inactive cache.
+- [x] Recover only duplicate generated native objects from an inactive cache.
   Check each object against its member in a complete regular archive. Check
   live process references before removal. Keep the archive unchanged so its
   members can restore the objects. Keep failed-build objects, source, generated
   components, proof, all test inputs, and the storage reserve unchanged.
 - [ ] Retry current runtime qualification after cache recovery. Then run the
   remaining algorithm, lifecycle, four production, and final workspace checks.
+
+Recovery removes 873 generated object files from three complete native caches.
+Each object has the same bytes as its unique member in the retained archive.
+The three archives retain their original SHA256 hashes after recovery. A new
+process scan finds no native build process or object reference before removal.
+Metadata access fails for user `systemd`, `sd-pam`, and `ssh-agent`; the proof
+records that limit. The failed native cache and the source remain unchanged.
+
+The recovery frees 6,311,321,600 bytes. Available space changes from
+1,280,217,088 to 7,591,538,688 bytes. The checked object proof is
+`/tmp/araphor-duckdb-object-recovery-v36.json`, with SHA256
+`fafeec52ba632a06c1755e964011bdb3ec5508ff2bd15c501b7d084eeac631d4`.
+The completed recovery record is
+`/tmp/araphor-duckdb-object-recovery-completed-v37.json`, with SHA256
+`e44918fece69a52089bce5628f1e79f8ebb6aeaeab598d8542afaba0e0a946f9`.
+Extract a recorded archive member with `ar x` to restore its object, then check
+the recorded object SHA256. No archive or Cargo fingerprint is replaced.
+The runtime retry starts on the unchanged source. Its log is
+`/tmp/araphor-wasm-runtime-generated-v37-retry.log`. No test result is claimed
+until this command finishes.
 
 ### Implementation TODOs
 
