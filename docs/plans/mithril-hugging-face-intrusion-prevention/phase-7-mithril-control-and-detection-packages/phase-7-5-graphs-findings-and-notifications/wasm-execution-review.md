@@ -690,8 +690,13 @@ returns an error after Tokio shutdown. Existing assertions and workloads remain.
 
 **Not done.** This guide describes the implementation under qualification.
 The current multi-export correction is committed in `b14ffb2`. Its two focused
-regressions pass. Its normal executable, four fresh production cases, and exact
-final workspace procedure remain required.
+regressions and normal build pass. Its 1,590-file source manifest has SHA256
+`1807fd55302479664c33f129c2e487020e0f0b872fd24f06135e9ca74e192c0a`.
+The saved executable is `/tmp/araphor-current-v41-bin/mithril_discovery_test`,
+with SHA256 `8096891350c3022c5674df9974abb6ef390a5b48336f52d6dba7d4795623bcee`.
+The [current capture](phase-7-5-4-wasm-execution.md#current-multi-export-production-capture)
+records copy checks, component hashes, and checked cache recovery. Four fresh
+production cases and the exact final workspace procedure remain required.
 
 The retained v40 graph retry exits zero and reports `PASS`, with result SHA256
 `125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.

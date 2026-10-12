@@ -1288,6 +1288,35 @@ It retains both storage failures. These cases do not qualify the subsequent
 multi-export correction in `b14ffb2`. The case remains lightweight and establishes
 no physical-prevention, cross-node, provider-issuance, or performance claim.
 
+### Current multi-export production capture
+
+The correction is committed in `b14ffb2`. Its frozen source has 1,590 files and
+source SHA256
+`1807fd55302479664c33f129c2e487020e0f0b872fd24f06135e9ca74e192c0a`.
+The manifest is `/tmp/araphor-wasm-source-manifest-production-v41.json`, with
+SHA256 `77236c7a272dbf532fea3adfa1bb72b1ead38182a698e56f046c2cc23cf92173`.
+The normal build exits zero in 2 minutes 28 seconds without warnings. Its log
+SHA256 is `36b97a03ab5302a32deba50cc2f40ae24eca1626a2a57a30cdfddb2bfaad480d`.
+
+The saved executable is `/tmp/araphor-current-v41-bin/mithril_discovery_test`,
+with 1,907,327,672 bytes and SHA256
+`8096891350c3022c5674df9974abb6ef390a5b48336f52d6dba7d4795623bcee`.
+It retains all debug sections. Source and executable checks pass before and
+after the copy. The capture is `/tmp/araphor-wasm-production-capture-v41.json`,
+with SHA256 `8e656c93d46768f730ca546f63ef72b0b5625591edff7907ddcdebc6f1c9959d`.
+All 24 retained independent core and component hashes still match. SDK, guest,
+WIT, builder, compiler-profile, and CI inputs remain unchanged.
+
+With no compiler or Cargo process present, checked removal of debug sections
+from five inactive generated executables recovers 7,511,363,256 bytes. Each
+loaded section stays equal. Source and all protected executable hashes remain
+equal. Native archives and component artifacts remain intact. The proof is
+`/tmp/araphor-strip-inactive-pre-ci-v41-proof.json`, with SHA256
+`a383367214fc46f0d97fede7818a34c37d79a1e0b8c092cdc66f87c611a81334`.
+Available space is 22,178,349,056 bytes after recovery. The append reserve stays
+2,684,354,560 bytes. Fresh production cases and final workspace CI remain
+required. The result stays **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
