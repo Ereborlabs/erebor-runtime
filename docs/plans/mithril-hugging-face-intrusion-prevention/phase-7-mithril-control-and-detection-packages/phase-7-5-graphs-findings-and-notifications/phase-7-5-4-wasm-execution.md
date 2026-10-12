@@ -124,7 +124,8 @@ v41 lightweight production cases pass on source `b14ffb2` with the same
 executable. The ordered final shared Rust procedure fails in the isolation and
 query-upload tests. The two fixture corrections now pass their focused cases.
 All four fresh v43 cases pass on the corrected source `6cce92d1`. Final
-workspace verification remains required after these Rust edits. The dispatch change
+workspace verification remains required after these Rust edits. The requested
+focused-test and repeated-work corrections also remain required. The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
 
@@ -1681,9 +1682,20 @@ The log is `/tmp/araphor-wasm-rust-ci-ordered-v43.log`. The capture is
 `7dba41c468e885f0d5fcee07d4d1be713d8ead82adb378580b98c1cd2534ae64`.
 The start record is `/tmp/araphor-wasm-final-ci-start-v43.json`, with SHA256
 `8661ff6419f021b5328fcbc8a7b203e222747c3f700604ef04c1ab6ab2d59e38`.
-The procedure is running. Its terminal result, complete target accounting,
-post-run source checks, and final review remain required. No workspace pass is
-claimed. The phase remains **Not done**.
+The procedure exits 130 after a controlled SIGINT before the requested Rust
+corrections. Formatting, workspace check, strict Clippy, and test linking pass.
+The 11 completed targets have 135 passes, zero failures, and one ignored test.
+The Data target is unfinished. No test failure is recorded. The log has SHA256
+`2e859712ade5bb6e2e939af11b76f046ade3cbbbed181fa35a55cb18d4854eaf`.
+The interrupted result is
+`/tmp/araphor-wasm-rust-ci-ordered-v43-interrupted-result.json`, with SHA256
+`cd7746e75a767b534616881f68e8f09b5f5225f960c8a191282eed7bd8399c26`.
+Before correction, all 1,590 source hashes, 24 artifact hashes, the saved
+executable hash, and all four result hashes still match. That proof is
+`/tmp/araphor-wasm-ci-pre-correction-check-v43.json`, with SHA256
+`25bc6531996a271178e0ae6540c18ed46f6118dd5019e4761be7851050c31331`.
+New qualification and final CI remain required after the last Rust correction.
+No workspace pass is claimed. The phase remains **Not done**.
 
 - [x] Explain the inherited remaining-work list in the immutable four-case
   snapshot. Preserve its bytes and hash. Use the terminal case records and

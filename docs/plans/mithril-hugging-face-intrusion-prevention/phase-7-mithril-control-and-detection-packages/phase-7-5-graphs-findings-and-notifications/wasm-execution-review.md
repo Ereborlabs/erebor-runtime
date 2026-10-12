@@ -714,10 +714,15 @@ proof. Fresh context and profile restart cases also pass with equal v41 result
 bytes. The graph case exits zero and reports `PASS`. It retains all 12 incident
 cards, 257 findings and obligations across 33 sources, and both native windows.
 The phase record retains the immutable four-case completion snapshot. Final CI
-now runs after all four cases pass. The
+starts after all four cases pass, then stops with a controlled SIGINT before
+the user-requested performance and test-maintainability corrections. It exits
+130. Formatting, workspace check, strict Clippy, and linking pass. The completed
+targets have 135 passes and one ignored test. Workspace verification is
+unfinished. The
 [start record](phase-7-5-4-wasm-execution.md#ordered-final-verification-on-the-corrected-source)
-retains its command and source checks. Its terminal result and review closure
-remain required. The historical dispatch order remains unmet.
+retains its command, source checks, and interrupted result. After the last Rust
+correction, all four fresh cases and final CI remain required. The historical
+dispatch order remains unmet.
 
 The retained multi-export correction is committed in `b14ffb2`. Its two focused
 regressions and normal build pass. Its source has 1,590 files and source SHA256
