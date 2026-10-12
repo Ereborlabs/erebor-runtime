@@ -134,12 +134,12 @@ close a verification gate. The phase remains **Not done**.
 
 | Deliverable | Source and commit | Remaining proof |
 | --- | --- | --- |
-| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The SDK suite has 51 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. Final workspace verification remains required. |
-| 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Current native graph qualification has five passes. Final workspace verification remains required. |
-| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The multi-export correction has two focused passes. All four fresh production cases remain required for that correction. The v39/v40 and v38 results retain their source boundaries. |
-| 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at production limits. The v27 graph group has five passes, including unchanged splitting and historical JSON baselines. Fresh installed context transport passes. Final CI must qualify the complete corpus with current artifacts. The dispatch ordering breach remains recorded. |
-| 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. Fresh installed-detector and profile-restart cases pass. Final workspace verification remains required. |
-| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | Capture the multi-export correction, repeat all four production cases and the exact final workspace procedure, then complete the final review and result. The earlier storage failures remain recorded. |
+| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The SDK suite has 51 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. The exact final workspace procedure is running on v41. |
+| 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Native graph qualification has five passes. Final workspace tests and fresh v41 graph qualification remain required. |
+| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The multi-export correction in `b14ffb2` has two focused passes. Fresh v41 package, context, and profile cases pass. The graph case remains required. The v39/v40 and v38 results retain their source boundaries. |
+| 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at its recorded production limits. The v27 graph group has five passes, including unchanged splitting and historical JSON baselines. Fresh v41 installed context transport passes. Final CI must qualify the complete corpus with current artifacts. The dispatch ordering breach remains recorded. |
+| 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. Fresh v41 installed-detector and profile-restart cases pass. Final workspace verification remains required. |
+| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | The v41 source and normal executable are captured. Three fresh cases pass in separate commits. Final CI passes formatting, check, strict Clippy, and linking; workspace tests are running. The fresh graph case and final review and result remain required. The earlier storage failures remain recorded. |
 
 The Rust source before the bounded-input correction is committed through
 `8f150fd4`. Its 1,558 source file hashes equal the v12 manifest. Formatting,
@@ -1358,6 +1358,34 @@ Its log is `/tmp/araphor-wasm-rust-ci-final-v41.log`. The capture is
 `/tmp/araphor-wasm-final-ci-capture-v41.json`. Formatting, workspace check, and
 strict Clippy pass. Test compilation remains running at this record. No
 terminal workspace pass is claimed. The fresh graph case remains required.
+
+### Verification guide correction TODOs
+
+- [x] Update the goal review table and current guide record with the three
+  completed v41 cases. Record completed test linking and the running workspace
+  suite. Do not record a terminal pass before the procedure finishes.
+- [x] Correct the guide's instruction to run all production cases before CI.
+  The goal requires both checks after the last Rust edit. It does not require
+  that order. Preserve the source and executable checks for each run.
+- [x] Check the guide's source links and obtain independent source review.
+  Keep the historical dispatch ordering breach and older proof boundaries.
+- [x] Identify the historical source in three older guide statements that use
+  the word `current`. Preserve their facts and required checks at that source.
+
+The guide review finds no additional source correction. All 157 local guide
+links and anchors resolve. The phase has three checked local links. Markdown
+fences and the diff whitespace check pass. Independent review checks owners,
+optional quota defaults, component build and operator installation, complete
+mixed-export descriptors, prepared model selection, and lifecycle failures.
+The three earlier guide statements now identify their historical records.
+
+All 1,590 frozen source hashes, all 24 independent artifact hashes, and the saved
+executable hash still match. The review proof is
+`/tmp/araphor-wasm-review-audit-v41.json`, with SHA256
+`58f5e3d4fce119622894d7d93d900ce547dd7feaac424204c8b6fcd411e849b3`.
+The proof retains a partial CI log snapshot and makes no terminal CI claim.
+Final workspace tests, fresh graph qualification, and final closure remain
+required. The phase remains **Not done**. No Rust or test source changes.
 
 ### Implementation TODOs
 

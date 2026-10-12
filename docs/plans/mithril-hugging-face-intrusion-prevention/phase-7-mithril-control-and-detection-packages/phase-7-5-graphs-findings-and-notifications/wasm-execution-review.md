@@ -434,8 +434,9 @@ replacement, forced execution, raw-context rejection, and recovery. A newer
 report for an unrelated interval runs the guest even when manifest coverage
 keys stay empty. The six focused notice tests pass. Disabling the shortcut
 makes the skip test fail because the guest enters. The existing activation and
-revocation group has two passes. A new normal build, four fresh production
-cases, and final workspace verification remain required.
+revocation group has two passes. At the initial v39 focused record, a new normal
+build, four fresh production cases, and final workspace verification remain
+required.
 
 When a changed notice produces the same graph,
 [commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)
@@ -648,7 +649,9 @@ Review these boundary tests with the algorithm cases:
 ## Production qualification
 
 Build the normal qualification binary for the current source. Run all four
-cases before the final shared Rust procedure.
+cases and the final shared Rust procedure after the last Rust edit.
+Keep the source unchanged until both checks finish. Run the graph case and CI
+separately to reduce simultaneous disk use.
 Run each case in a separate output directory that does not yet exist. Use the
 same binary for all four cases. Keep it unchanged while its compiler children
 run.
@@ -698,19 +701,29 @@ The [current capture](phase-7-5-4-wasm-execution.md#current-multi-export-product
 records copy checks, component hashes, and checked cache recovery. The fresh
 installed-package case passes with result SHA256
 `30f956ac4e461befe7eb0e7ada5991dd18da041d52ca943c795eda51ed2738f6`.
-The other three fresh production cases and the exact final workspace procedure
-remain required. The aggregate proof is
+The aggregate proof is
 `/tmp/araphor-wasm-production-proof-v41.json`.
 The fresh context round-trip case also passes, with result SHA256
 `312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
-Profile restart, graph, and final workspace verification remain required.
 The fresh profile restart case also passes, with result SHA256
 `3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
 All three completed v41 cases have separate commits. The graph case and exact
 final workspace procedure remain required.
 The exact final procedure is now running after the last Rust edit. Formatting,
-workspace check, and strict Clippy pass. Test compilation remains in progress.
+workspace check, strict Clippy, and test linking pass. Workspace tests are
+running. The native window selection and graph migration checks have passed
+through reference retention. No test failure is reported at this record.
 The log is `/tmp/araphor-wasm-rust-ci-final-v41.log`. No terminal pass is claimed.
+
+Independent guide review finds no additional source correction. All 157 local
+links and anchors resolve. The review checks owners, quota defaults, generated
+builds, operator installation, mixed exports, and lifecycle failures against
+source. All 1,590 source hashes, 24 independent artifact hashes, and the saved
+executable hash remain equal to their captured values. The review proof is
+`/tmp/araphor-wasm-review-audit-v41.json`, with SHA256
+`58f5e3d4fce119622894d7d93d900ce547dd7feaac424204c8b6fcd411e849b3`.
+This proof retains a partial CI snapshot. Final CI and graph qualification
+remain required.
 
 The retained v40 graph retry exits zero and reports `PASS`, with result SHA256
 `125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.
@@ -737,8 +750,8 @@ identity proof is `/tmp/araphor-wasm-production-identity-v40.json`, with SHA256
 `00816dde3e71d8d77f12a81ad53409391fc22085b31e81490324d3863a7660a6`.
 Fresh installed-package, context transport, and profile restart cases exit zero
 with the unchanged saved executable. Their records have separate commits and
-cover this byte-identical current normal executable. The graph case and exact
-current-source final workspace procedure require retries. The graph case exits
+cover the byte-identical v39/v40 normal executable. At that v40 record, the graph
+case and exact v40 workspace procedure require retries. The graph case exits
 1 at the filesystem reserve and produces no result file. The final procedure
 passes formatting, workspace check, strict Clippy, and test linking, then exits
 134 during workspace tests after the disk fills. No complete workspace pass is
@@ -876,8 +889,8 @@ after the stop. The log SHA256 is
 `5a870fce9d077ac6fe0c9f6ad04bbf4545720d2dc2ae5e7b688d3d1bfb1c15c4`.
 Formatting, workspace checking, and strict Clippy pass on v12. Workspace tests
 remain incomplete. The bounded-input correction is implemented and committed.
-Current source still requires all four fresh production cases and a new final
-shared Rust procedure.
+At this earlier bounded-input record, all four fresh production cases and a new
+final shared Rust procedure remain required.
 
 ## Bounded discovery input correction
 
