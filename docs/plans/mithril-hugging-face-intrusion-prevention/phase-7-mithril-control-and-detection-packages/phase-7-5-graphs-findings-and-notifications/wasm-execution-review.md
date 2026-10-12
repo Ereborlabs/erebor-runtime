@@ -736,7 +736,16 @@ hashes match before the start. The command retains one Cargo build job and one
 test thread. The log is `/tmp/araphor-wasm-rust-ci-ordered-v41.log`. The capture is
 `/tmp/araphor-wasm-final-ci-ordered-capture-v41.json`, with SHA256
 `ba2a5b58be2ce2659a49e22d2dafed33c6c9a7e3627a9b858e6568aca06b4d93`.
-The procedure is running. No terminal workspace pass is claimed.
+The procedure exits 101. Formatting, workspace check, strict Clippy, and test
+linking pass. The 75 completed Cargo targets have 1,748 passes, two failures,
+and 552 ignored tests. Data has 588 passes and seven ignored tests. The failing
+e2e target has 171 passes, two failures, and 527 ignored tests. The failures are
+the isolation trace-authority check and the query-upload timeout. Later targets
+do not run. The log has SHA256
+`fb8ccc87c6f8685051adf13f195c270a4528ea3c4c87d747cff443fcbab10d9c`.
+The [phase record](phase-7-5-4-wasm-execution.md#ordered-final-workspace-verification)
+links the immutable failed result and correction TODOs. No workspace pass is
+claimed.
 
 Independent guide review finds no additional source correction. All 157 local
 links and anchors resolve. The review checks owners, quota defaults, generated

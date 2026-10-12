@@ -121,8 +121,9 @@ runtime, and limits before a performance test is added. Stop before native work.
 **Not done.** The component runtime, installed domain adapters, production
 dispatch change, and Rust qualification cases are implemented. All four fresh
 v41 lightweight production cases pass on source `b14ffb2` with the same
-executable. The ordered final shared Rust procedure and final closure remain
-required. The dispatch change
+executable. The ordered final shared Rust procedure fails in the isolation and
+query-upload tests. Correct both failures and repeat qualification before
+closure. The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
 
@@ -1461,8 +1462,23 @@ The log is `/tmp/araphor-wasm-rust-ci-ordered-v41.log`. The capture is
 `/tmp/araphor-wasm-final-ci-ordered-capture-v41.json`, with SHA256
 `ba2a5b58be2ce2659a49e22d2dafed33c6c9a7e3627a9b858e6568aca06b4d93`.
 Available filesystem space is 24,321,978,368 bytes at capture. The append reserve
-and test workloads remain unchanged. The procedure is running. No terminal
-workspace pass is claimed. Final verification and closure remain required.
+and test workloads remain unchanged. The procedure exits 101. Formatting,
+workspace check, strict Clippy, and test linking pass. The 75 completed Cargo
+targets contain 1,748 passes, two failures, and 552 ignored tests. These counts
+exclude seven child-test footers. Data has 588 passes and seven ignored tests.
+The failing e2e target has 171 passes, two failures, and 527 ignored tests.
+Later workspace targets do not run. Final verification and closure remain
+required.
+
+The errors are `DataLoss: trace accepted bounds changed` in the isolation test
+and `Elapsed(())` in the query-upload test. The log has SHA256
+`fb8ccc87c6f8685051adf13f195c270a4528ea3c4c87d747cff443fcbab10d9c`.
+The immutable failed result is
+`/tmp/araphor-wasm-rust-ci-ordered-v41-failed-result.json`, with SHA256
+`863190f2c51e64e54a93e38c4627b2446df80be1b88b5399e479f32112ad9a4c`.
+Before corrections, all 1,590 source hashes, the saved executable hash, and all
+four result hashes still match the capture. Their passes do not make this CI
+run pass. The live aggregate now records the terminal failure.
 
 - [x] Retain the aggregate bytes at graph completion. The ordered CI capture
   changes the live aggregate. Name the immutable graph-completion snapshot
@@ -1488,7 +1504,7 @@ Rust test executable and exits 101. Its error is
 `DataLoss: trace accepted bounds changed`. The log is
 `/tmp/araphor-owner-isolation-repro-v41.log`, with SHA256
 `dc4ec01b901368ecbe191dca335adaf1b2a0593ec08326f00cb66e716e2b5621`.
-The complete workspace procedure is still running. It has no terminal pass.
+The complete workspace procedure exits 101 with two failures. It has no pass.
 
 The fixture creates a trace grant before cold package startup. The grant lasts
 120 seconds. Production acceptance uses current time and requires 45 seconds
@@ -1507,6 +1523,31 @@ integrity check then rejects the remaining authority interval.
 - [ ] Complete the four fresh production cases and final shared Rust procedure
   after the last Rust edit. Update the existing guide and result and commit
   each correction and proof deliverable.
+
+### Query upload diagnostic correction TODOs
+
+The existing v41 test executable reproduces query-upload failure with exit 101
+in 59.24 seconds. It reports `query error changed the live capture or durable
+prefix` after the query checks return. The log is
+`/tmp/araphor-query-upload-repro-v41.log`, with SHA256
+`55ace0a642b940a917bdef9e3be9f72fefef51daa6eccd7b21d5428b28065e48`.
+This focused result does not identify the exact failed state check.
+
+The fixture starts the production public query listener after capture starts.
+Listener startup installs and compiles required components. The backend has a
+30-second collection interval. The 10-second query timeout starts after listener
+startup. The outer fixture timeout remains 60 seconds.
+
+- [x] Reproduce the failure with the existing test executable. Read listener
+  startup, query timeout, backend collection, and post-query state checks.
+- [ ] Report the exact failed state check and terminal reason. Keep every
+  existing assertion, workload, collection interval, and timeout unchanged.
+- [ ] If startup consumes the capture interval, start the production listener
+  and client before capture. Run the same query failure and recovery while
+  capture is active. Add no warm-up call or alternate evaluator.
+- [ ] Verify the corrected query-upload and isolation cases. Commit each
+  correction. Repeat all four fresh cases and final workspace verification
+  after the last Rust edit. Retain the v41 failures with their source boundary.
 
 ### Implementation TODOs
 
