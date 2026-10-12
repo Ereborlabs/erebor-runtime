@@ -704,6 +704,10 @@ remain required. The aggregate proof is
 The fresh context round-trip case also passes, with result SHA256
 `312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
 Profile restart, graph, and final workspace verification remain required.
+The fresh profile restart case also passes, with result SHA256
+`3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
+All three completed v41 cases have separate commits. The graph case and exact
+final workspace procedure remain required.
 
 The retained v40 graph retry exits zero and reports `PASS`, with result SHA256
 `125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.

@@ -1340,6 +1340,17 @@ The case remains lightweight and establishes no physical profile, late-context,
 deterministic-profile, or production-authority claim. Profile restart, graph,
 and final workspace verification remain required.
 
+The fresh v41 profile restart case exits zero and reports `PASS`. Its result is
+`/tmp/araphor-current-v41-profile-restart/result.json`, with SHA256
+`3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
+The saved executable qualifies signed context, live profile storage, late
+context, deterministic profile output, atomic progress, and restart replay
+through installed execution. The case remains lightweight and establishes no
+physical profile or production-authority claim. The three completed v41 cases
+have separate commits. The graph case and exact final workspace procedure
+remain required. The aggregate proof SHA256 is
+`f0b3c8bc3424049d7cc0e528f282f073fecd43beb6492b4def6f0289fb839bc8`.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
