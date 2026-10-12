@@ -701,6 +701,9 @@ installed-package case passes with result SHA256
 The other three fresh production cases and the exact final workspace procedure
 remain required. The aggregate proof is
 `/tmp/araphor-wasm-production-proof-v41.json`.
+The fresh context round-trip case also passes, with result SHA256
+`312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
+Profile restart, graph, and final workspace verification remain required.
 
 The retained v40 graph retry exits zero and reports `PASS`, with result SHA256
 `125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.

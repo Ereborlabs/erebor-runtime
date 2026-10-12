@@ -1330,6 +1330,16 @@ and renewal checks pass. The aggregate proof is
 The other three fresh cases and the exact final workspace procedure remain
 required. This result retains the saved v41 executable and its source boundary.
 
+The fresh v41 context round-trip case exits zero and reports `PASS`. Its result
+is `/tmp/araphor-current-v41-context-roundtrip/result.json`, with SHA256
+`312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
+The case preserves Node WAL intake, signed context, TLS lookup, and reopen.
+Installed context execution retains exact identities, revision, and coverage.
+Cutoff 3000 selects one record. Cutoff 1999 selects none and retains one omission.
+The case remains lightweight and establishes no physical profile, late-context,
+deterministic-profile, or production-authority claim. Profile restart, graph,
+and final workspace verification remain required.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
