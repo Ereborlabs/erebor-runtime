@@ -837,6 +837,21 @@ The group run's reserve failure remains recorded. The final workspace procedure
 must run the complete group again with the remaining workspace tests. Four
 fresh normal production cases and closure remain required.
 
+The normal production executable build starts on the same source. Its command
+is `cargo build --locked -p mithril-e2e --bin mithril_discovery_test`, with one
+Cargo job and incremental compilation disabled. The log is
+`/tmp/araphor-wasm-normal-build-v37.log`. Its dependency graph starts a separate
+native DuckDB build in `libduckdb-sys-e96a13ff94003ddf`. With 172 objects built,
+available space is 3,842,932,736 bytes. The completed archive, remaining objects,
+and executable links still require space. This build remains pending.
+
+- [ ] Check unused earlier native build caches for further space recovery.
+  Identify exact generated paths and their Cargo fingerprints. Check live
+  references and the current dependency graph. Preserve active caches, the
+  recent retained archives, source, proof, and the other checkout. Remove a
+  cache's success fingerprint with its retired output so Cargo rebuilds it
+  when required. Do not change a profile, source, workload, or storage reserve.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
