@@ -733,6 +733,33 @@ The current build record is also in `wasm-component-build-proof.json`, under
 `source_build_correction`. Earlier artifact records retain their original paths
 and hashes. Installed execution and final workspace verification remain required.
 
+### Current native build failure
+
+The current source is committed through `6f6ac795`. The runtime test command is:
+
+```sh
+env CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 cargo test --locked -p araphor-data --lib package::wasm::tests::runtime:: -- --nocapture
+```
+
+This command exits 101 before tests start. DuckDB archive creation reports
+`No space left on device` in the generated native cache
+`target/debug/build/libduckdb-sys-9b99d6395d89805e/out`. The log is
+`/tmp/araphor-wasm-runtime-generated-v37.log`, with SHA256
+`c28f3127381976dffadd6e4c9bd8ebc494fbc5eece068a95527b2934199f1ff0`.
+The source manifest is `/tmp/araphor-wasm-source-manifest-production-v37.json`.
+Its file SHA256 is
+`bc6b7369ade2f92ec5b3f2468ffd693074b71d1bce8e2cb15317532fd62f6996`.
+The filesystem has 1,293,942,784 available bytes at the recovery check.
+This build failure supplies no runtime test result. The result stays **Not done**.
+
+- [ ] Recover only duplicate generated native objects from an inactive cache.
+  Check each object against its member in a complete regular archive. Check
+  live process references before removal. Keep the archive unchanged so its
+  members can restore the objects. Keep failed-build objects, source, generated
+  components, proof, all test inputs, and the storage reserve unchanged.
+- [ ] Retry current runtime qualification after cache recovery. Then run the
+  remaining algorithm, lifecycle, four production, and final workspace checks.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
