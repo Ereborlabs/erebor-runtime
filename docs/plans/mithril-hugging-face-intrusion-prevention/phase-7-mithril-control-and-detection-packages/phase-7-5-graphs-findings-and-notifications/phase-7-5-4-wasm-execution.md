@@ -935,6 +935,17 @@ Both operations hold the native cache lock and reject a live compiler or file
 reference. No source, test, quota, profile, or storage reserve changes.
 The corrected normal executable still requires a successful rebuild.
 
+The corrected normal retry succeeds in 1 minute 42 seconds without warnings.
+Its log is `/tmp/araphor-wasm-normal-build-v38-retry.log`, with SHA256
+`70a8e44a7df907357fffe90257da183f11bdb5114d76fec20ad5489ed56a2035`.
+All 1,586 current manifest files still match. The executable is 1,907,087,704
+bytes. Available space is 2,460,467,200 bytes, below the unchanged append reserve.
+
+- [ ] Preserve one current normal executable for all four fresh cases. Remove
+  only debug sections with the native cache lock held and the loaded-section
+  verifier. Copy the checked executable to a new proof directory. Check source
+  and executable hashes before and after qualification. Keep the storage reserve.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
