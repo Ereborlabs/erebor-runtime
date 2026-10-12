@@ -705,20 +705,23 @@ The [phase record](phase-7-5-4-wasm-execution.md#query-upload-diagnostic-correct
 retains both red and green results. The corrected Rust source is committed
 through `6cce92d1`. Its normal locked build passes without warnings. The
 [capture](phase-7-5-4-wasm-execution.md#corrected-normal-qualification-capture)
-records the frozen source and complete saved executable. All four fresh cases
-and ordered final workspace verification remain required. The fresh installed
-package case now passes with that executable. The
+records the frozen source and complete saved executable. All four fresh v43
+cases pass with that executable. Ordered final workspace verification remains
+required. The
 [record](phase-7-5-4-wasm-execution.md#fresh-qualification-on-the-corrected-source)
 retains the real client installation, custom reason, checkpoint, and lifecycle
 proof. Fresh context and profile restart cases also pass with equal v41 result
-bytes. The graph case and final CI remain required.
+bytes. The graph case exits zero and reports `PASS`. It retains all 12 incident
+cards, 257 findings and obligations across 33 sources, and both native windows.
+The phase record retains the immutable four-case completion snapshot. Final CI
+and review closure remain required. The historical dispatch order remains unmet.
 
 The retained multi-export correction is committed in `b14ffb2`. Its two focused
 regressions and normal build pass. Its source has 1,590 files and source SHA256
 `1807fd55302479664c33f129c2e487020e0f0b872fd24f06135e9ca74e192c0a`.
 The saved executable is `/tmp/araphor-current-v41-bin/mithril_discovery_test`,
 with SHA256 `8096891350c3022c5674df9974abb6ef390a5b48336f52d6dba7d4795623bcee`.
-The [current capture](phase-7-5-4-wasm-execution.md#current-multi-export-production-capture)
+The [v41 capture](phase-7-5-4-wasm-execution.md#current-multi-export-production-capture)
 records copy checks, component hashes, and checked cache recovery. The fresh
 installed-package case passes with result SHA256
 `30f956ac4e461befe7eb0e7ada5991dd18da041d52ca943c795eda51ed2738f6`.

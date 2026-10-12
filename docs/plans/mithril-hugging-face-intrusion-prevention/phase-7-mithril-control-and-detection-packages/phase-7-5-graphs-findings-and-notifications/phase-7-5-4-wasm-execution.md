@@ -123,8 +123,8 @@ dispatch change, and Rust qualification cases are implemented. All four fresh
 v41 lightweight production cases pass on source `b14ffb2` with the same
 executable. The ordered final shared Rust procedure fails in the isolation and
 query-upload tests. The two fixture corrections now pass their focused cases.
-All four fresh cases and final workspace verification remain required after
-these Rust edits. The dispatch change
+All four fresh v43 cases pass on the corrected source `6cce92d1`. Final
+workspace verification remains required after these Rust edits. The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
 
@@ -1603,7 +1603,8 @@ All 1,907,947,232 bytes match the build output. Debug sections remain present.
 The capture is `/tmp/araphor-wasm-production-capture-v43.json`, with SHA256
 `0edcfe4bc3b7590eca8abcc0c10bca13f16d14304a9878971ed4931ee2709fa9`.
 The append reserve and compiler profile remain unchanged. All four fresh cases
-and then final workspace verification remain required on this frozen source.
+pass in the [record below](#fresh-qualification-on-the-corrected-source).
+Final workspace verification remains required on this frozen source.
 The result remains **Not done**.
 
 ### Fresh qualification on the corrected source
@@ -1639,6 +1640,27 @@ The result bytes equal v41. Installed profile computation, late context refresh,
 atomic progress, immutable sealed revisions, and frozen restart replay pass.
 Source and executable hashes still match. The graph case and final CI remain
 required. This remains lightweight proof.
+
+The fresh v43 `graph-notification` case exits zero and reports `PASS` with the
+same saved executable. Its result SHA256 is
+`7261172803e711331218195a9a8245865aceacde3705da42746e0e8a22a555da`.
+The proof is `/tmp/araphor-wasm-graph-notification-proof-v43.json`, with SHA256
+`fa2515ee2dcce6dbf3e57bde2f2770d2dcb39a1c4d6f11f297b739fd4f34f70a`.
+The log has SHA256
+`b090dc6bbc2e1369c456cfc6a43a7f9de20e301f7f8ca03b6fb89103b6d64a8a`.
+The case retains all 12 incident cards, 257 findings and notification
+obligations across 33 sources, and the 64-record and 185-record native windows.
+The windows return 192 and 370 relationships. The larger window uses two SQL
+chunks. Exact versions, subject joins, evidence, proof, coverage, original
+query limits, notification deadlines, human receipt, intake acknowledgements,
+transaction rollback, and canonical replay checks pass. Source and executable
+hashes still match. This remains lightweight proof.
+
+All four fresh v43 cases pass on source `6cce92d1`. The immutable completion
+snapshot is `/tmp/araphor-wasm-four-cases-complete-v43.json`, with SHA256
+`1bcfa6ce81aabcb97d462f4aaebfc79b3497e5e37bdc8c183bd5ba29b65b0b7d`.
+The final workspace procedure must start after these completed cases. Final CI,
+review closure, and the historical dispatch-order requirement remain open.
 
 ### Implementation TODOs
 
