@@ -88,7 +88,9 @@ supply the required packages and the Data and E2E component tests.
 `wasm32-unknown-unknown` Rust target before the ordinary Cargo checks.
 The [builder input inventory](../../../../../crates/araphor-component-build/src/workspace.rs)
 supplies the source-change watches. Generated component files are not source
-inputs. This build path still requires fresh generation and final qualification.
+inputs. The [source-build proof](wasm-component-build-proof.json) records two
+equal builds and matching ordinary Cargo outputs under `source_build_correction`.
+Installed execution and final qualification remain required.
 
 A built folder contains `package.json` and `detector.wasm`.
 `package.json` embeds the component bytes and complete artifact closure.
@@ -671,8 +673,10 @@ The run includes `graph::tests::bounded::output_bytes_split` and
 `package::tests::wasm::lifecycle::wasm_installed_lifecycle`.
 The source manifest is `/tmp/araphor-wasm-source-manifest-correction-v10.json`.
 Its SHA256 is `a0a0ee9405ef1963bc1e471f097c45df66dae7724074e299b11caa31d1aa5481`.
-The run uses the temporary unit test allowances above. The final shared Rust
-procedure and production qualification remain incomplete.
+The run uses temporary unit test allowances. These allowances precede the
+[approved resource policy](phase-7-5-4-wasm-execution.md#approved-resource-policy-correction)
+and do not qualify current execution. The final shared Rust procedure and
+production qualification remain incomplete.
 
 Concurrency correction source `v12` adds
 `package::wasm::tests::runtime::concurrency::installed_guests_overlap`

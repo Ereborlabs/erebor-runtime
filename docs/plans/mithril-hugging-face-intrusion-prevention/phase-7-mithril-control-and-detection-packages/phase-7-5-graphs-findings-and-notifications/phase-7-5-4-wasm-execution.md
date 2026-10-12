@@ -759,7 +759,7 @@ This build failure supplies no runtime test result. The result stays **Not done*
   components, proof, all test inputs, and the storage reserve unchanged.
 - [ ] Retry current runtime qualification after cache recovery. Then run the
   remaining algorithm, lifecycle, four production, and final workspace checks.
-- [ ] Correct two review-guide references. Record the completed source-build
+- [x] Correct two review-guide references. Record the completed source-build
   proof without claiming installed qualification. Keep the v10 unit test
   allowances explicit as historical evidence under the current resource policy.
 
