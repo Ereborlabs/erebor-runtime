@@ -122,8 +122,9 @@ runtime, and limits before a performance test is added. Stop before native work.
 dispatch change, and Rust qualification cases are implemented. All four fresh
 v41 lightweight production cases pass on source `b14ffb2` with the same
 executable. The ordered final shared Rust procedure fails in the isolation and
-query-upload tests. Correct both failures and repeat qualification before
-closure. The dispatch change
+query-upload tests. The two fixture corrections now pass their focused cases.
+All four fresh cases and final workspace verification remain required after
+these Rust edits. The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
 
@@ -1560,16 +1561,27 @@ It retains the exact source diff, binary, build log, and both failed runs.
   startup, query timeout, backend collection, and post-query state checks.
 - [x] Report the exact failed state check and terminal reason. Keep every
   existing assertion, workload, collection interval, and timeout unchanged.
-- [ ] Start the public query listener with the other Control services before
+- [x] Start the public query listener with the other Control services before
   the 60-second active case. Keep its provider, credential, and profile in one
   fixture owner. Connect the public client and run the same 10-second query
   failure and recovery during capture. Shut down the query listener and provider
   before Control reopen. Keep the 120-second grant, 30-second collection,
   60-second active case, all output and ACK checks, and every assertion. Add no
   warm-up call or alternate evaluator. This order matches the physical case.
-- [ ] Verify the corrected query-upload and isolation cases. Commit each
-  correction. Repeat all four fresh cases and final workspace verification
+- [x] Verify the corrected query-upload and isolation cases. Retain each
+  focused pass and original failure with its source boundary.
+- [ ] Repeat all four fresh cases and final workspace verification
   after the last Rust edit. Retain the v41 failures with their source boundary.
+
+The existing query-upload case passes in 69.70 seconds, including service
+startup. The active case retains its 60-second timeout. The result has one pass,
+zero failures, zero ignored tests, and 699 filtered tests. The proof is
+`/tmp/araphor-query-upload-corrected-v43-proof.json`, with SHA256
+`84577d4caa77e07cafacd82acdc0b063f9d35ccf3601d49f58da7e71af307344`.
+It retains the exact source, binary, build log, diagnostic failure, and corrected
+log. `QueryFixture` uses one shutdown method for success and failure. The query
+contract, original test assertions, and external backend scripts remain equal
+to `b14ffb2`. No production authority, execution limit, or algorithm changes.
 
 ### Implementation TODOs
 

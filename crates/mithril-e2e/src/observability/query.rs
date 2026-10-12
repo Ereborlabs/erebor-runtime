@@ -5,6 +5,73 @@ use erebor_runtime_ipc::araphor::{self as proto, query_frame::Payload, query_val
 use mithril_control::{ClientGrpcConfig, ClientListener, ClientListenerConfig, ControlPlane};
 use std::io::Write as _;
 
+pub(super) struct QueryFixture {
+    provider: OidcFixture,
+    server: ControlServerFixture,
+    credential: tempfile::NamedTempFile,
+    profile: AraphorProfile,
+}
+
+impl QueryFixture {
+    pub(super) async fn start(
+        control: ControlPlane,
+        tls: &MtlsFixture,
+        tenant: [u8; 16],
+    ) -> ProofResult<Self> {
+        let provider = OidcFixture::start(&tls.files, "query-qualification").await?;
+        let address = free_address()?;
+        let origin = format!("https://localhost:{}", address.port());
+        let config = ClientListenerConfig {
+            listen: address,
+            tls_certificate_path: tls.files.server_certificate.clone(),
+            tls_private_key_path: tls.files.server_key.clone(),
+            auth: provider.auth(&origin, Some(tenant), tls.files.ca.clone()),
+            administrative: None,
+            investigation: Some(ClientGrpcConfig::default()),
+            assets: None,
+        };
+        let listener = ClientListener::load(config, control).await?;
+        let server = ControlServerFixture::client(listener, address).await?;
+        let mut credential = tempfile::NamedTempFile::new_in(tls.path())?;
+        credential.write_all(b"fixture-access")?;
+        let profile = AraphorProfile {
+            endpoint: origin,
+            tenant_id: uuid::Uuid::from_bytes(tenant).to_string(),
+            credential_file: credential.path().to_path_buf(),
+            ca_file: Some(tls.files.ca.clone()),
+        };
+        Ok(Self {
+            provider,
+            server,
+            credential,
+            profile,
+        })
+    }
+
+    pub(super) async fn run(self) -> ProofResult<serde_json::Value> {
+        let result = async {
+            let client = AraphorClient::connect(self.profile.clone()).await?;
+            let result = ObservabilityQualification::query_failure(&client).await;
+            drop(client);
+            result
+        }
+        .await;
+        let stopped = self.shutdown().await;
+        let record = result?;
+        stopped?;
+        Ok(record)
+    }
+
+    pub(super) async fn shutdown(self) -> ProofResult<()> {
+        let server_stop = self.server.shutdown().await;
+        let provider_stop = self.provider.shutdown().await;
+        drop(self.credential);
+        server_stop?;
+        provider_stop?;
+        Ok(())
+    }
+}
+
 impl ObservabilityQualification {
     pub(crate) fn trace_inputs(
         fact: mithril_control::WorkloadTargetFactV1,
@@ -82,46 +149,6 @@ impl ObservabilityQualification {
             "The production TLS Query RPC authenticates a service credential through an external HTTPS OIDC provider. QueryOwner runs admitted SQL in process through its asynchronous API. A catalog conversion query returns EvaluationFailed and gRPC INTERNAL. A valid query then completes on the same client service. Production Node capture emits a new frame after the query error. Control commits that frame before its mTLS ACK. Cancellation, Node spool reopen, Control reopen, retained output and ACK replay use production owners. The backend and binding inputs are external fixtures. This case does not prove native interruption, process-crash isolation, BPF cleanup, enforcement or performance."
         );
         self.write("result.json", &record)
-    }
-
-    pub(super) async fn fail_query(
-        control: ControlPlane,
-        tls: &MtlsFixture,
-        tenant: [u8; 16],
-    ) -> ProofResult<serde_json::Value> {
-        let provider = OidcFixture::start(&tls.files, "query-qualification").await?;
-        let address = free_address()?;
-        let origin = format!("https://localhost:{}", address.port());
-        let config = ClientListenerConfig {
-            listen: address,
-            tls_certificate_path: tls.files.server_certificate.clone(),
-            tls_private_key_path: tls.files.server_key.clone(),
-            auth: provider.auth(&origin, Some(tenant), tls.files.ca.clone()),
-            administrative: None,
-            investigation: Some(ClientGrpcConfig::default()),
-            assets: None,
-        };
-        let listener = ClientListener::load(config, control).await?;
-        let server = ControlServerFixture::client(listener, address).await?;
-        let mut credential = tempfile::NamedTempFile::new_in(tls.path())?;
-        credential.write_all(b"fixture-access")?;
-        let result = async {
-            let client = AraphorClient::connect(AraphorProfile {
-                endpoint: origin,
-                tenant_id: uuid::Uuid::from_bytes(tenant).to_string(),
-                credential_file: credential.path().to_path_buf(),
-                ca_file: Some(tls.files.ca.clone()),
-            })
-            .await?;
-            Self::query_failure(&client).await
-        }
-        .await;
-        let server_stop = server.shutdown().await;
-        let provider_stop = provider.shutdown().await;
-        let record = result?;
-        server_stop?;
-        provider_stop?;
-        Ok(record)
     }
 
     pub(crate) async fn query_failure(client: &AraphorClient) -> ProofResult<serde_json::Value> {

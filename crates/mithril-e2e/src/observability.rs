@@ -927,6 +927,11 @@ impl ObservabilityQualification {
                 .collect(),
         )?;
         let mut server = Some(tls.start(control.clone()).await?);
+        let mut query_fixture = if query {
+            Some(query::QueryFixture::start(control.clone(), &tls, request.tenant_id).await?)
+        } else {
+            None
+        };
         let mut registration = OutagePolicyFixture::registration([7; 16], false);
         registration.effect_prevention_claims_enabled = false;
         let mut cache = TrustCache::load(&tls.path().join("node-trust"))?;
@@ -1120,16 +1125,25 @@ impl ObservabilityQualification {
                         .ok_or("missing query case binding")?.identity;
                     let before = data.trace_receipt(identity)?.ok_or("missing active query case receipt")?;
                     let retained = owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)?;
-                    let mut failure = Self::fail_query(
-                        control.clone(), &tls, request.tenant_id,
-                    ).await?;
+                    let query_started = Instant::now();
+                    let mut failure = query_fixture.take().ok_or("query fixture is absent")?.run().await?;
                     node.reap()?;
-                    if node.terminal(id)?.is_some() || launches.load(Ordering::Acquire) != 1
-                        || data.trace_receipt(identity)?.as_ref() != Some(&before)
-                        || owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)? != retained
-                        || node.frames(id, 0)?.len() != 2 || !data.storage_health()?.write_ready
+                    let terminal = node.terminal(id)?;
+                    let launch_count = launches.load(Ordering::Acquire);
+                    let receipt_same = data.trace_receipt(identity)?.as_ref() == Some(&before);
+                    let output_same = owner.output(request.tenant_id, request.request_id, 0, &access, now, 0)? == retained;
+                    let frame_count = node.frames(id, 0)?.len();
+                    let writer_ready = data.storage_health()?.write_ready;
+                    if terminal.is_some() || launch_count != 1 || !receipt_same
+                        || !output_same || frame_count != 2 || !writer_ready
                     {
-                        return Err("query error changed the live capture or durable prefix".into());
+                        let checked_at = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+                        return Err(format!(
+                            "query error changed the live capture or durable prefix: terminal={:?}, query_elapsed_ms={}, collection_seconds={}, deadline_unix_ns={}, now_unix_ns={checked_at}, launch_count={launch_count}, receipt_same={receipt_same}, output_same={output_same}, frame_count={frame_count}, writer_ready={writer_ready}",
+                            terminal.map(|state| state.reason), query_started.elapsed().as_millis(),
+                            request.collection_seconds, dispatch.accepted.deadline_unix_ns,
+                        ).into());
                     }
                     fs::write(&finish_path, b"query failed")?;
                     let limit = Instant::now() + Duration::from_secs(3);
@@ -1714,12 +1728,18 @@ impl ObservabilityQualification {
                 "discovery_index_present": false, "physical": false, "performance_claim": false,
             }))
         }).await;
+        let query_stop = if let Some(fixture) = query_fixture {
+            fixture.shutdown().await
+        } else {
+            Ok(())
+        };
         let shutdown = if let Some(server) = server {
             server.shutdown().await
         } else {
             Ok(())
         };
         let record = result??;
+        query_stop?;
         shutdown?;
         Ok(record)
     }

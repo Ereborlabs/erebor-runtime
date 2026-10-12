@@ -693,7 +693,18 @@ returns an error after Tokio shutdown. Existing assertions and workloads remain.
 ## Verification record
 
 **Not done.** This guide describes the implementation under qualification.
-The current multi-export correction is committed in `b14ffb2`. Its two focused
+The isolation fixture now issues trace authority after service startup. Its
+existing case passes in 88.81 seconds. The
+[query fixture](../../../../../crates/mithril-e2e/src/observability/query.rs)
+starts the public listener with the other services before capture. It connects
+the same client and runs the unchanged 10-second query contract during capture.
+One shutdown method closes the query service before Control reopen. Its existing
+case passes in 69.70 seconds, including service startup. The 60-second active
+case, 30-second capture, 120-second grant, and original assertions remain.
+The [phase record](phase-7-5-4-wasm-execution.md#query-upload-diagnostic-correction-todos)
+retains both red and green results. New source qualification remains required.
+
+The retained multi-export correction is committed in `b14ffb2`. Its two focused
 regressions and normal build pass. Its source has 1,590 files and source SHA256
 `1807fd55302479664c33f129c2e487020e0f0b872fd24f06135e9ca74e192c0a`.
 The saved executable is `/tmp/araphor-current-v41-bin/mithril_discovery_test`,
