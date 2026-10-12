@@ -12,10 +12,7 @@ mod batches;
 mod concurrency;
 mod quotas;
 
-const COMPONENT: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../araphor-analysis-sdk/tests/artifacts/runtime.wasm"
-));
+const COMPONENT: &[u8] = araphor_analysis_builtins::components::RUNTIME;
 
 fn package() -> sdk::Package {
     let mut model = sdk::Model::new(

@@ -115,6 +115,13 @@ compiler process. Installation does not run an author compiler or hook.
 `ComponentBuilder::package_component` writes the same folder from an existing
 component. It preserves the supplied component bytes.
 
+Host Cargo builds generate the repository components through the
+[built-in artifact owner](../araphor-analysis-builtins/README.md#generated-components).
+The build machine needs the `wasm32-unknown-unknown` Rust target. CI installs
+this target. Generated components stay in Cargo's `OUT_DIR`; do not commit
+these files. The author commands above still build the package folder that an
+operator installs without an author compiler or installation hook.
+
 `wire` carries uncompressed Arrow IPC streams. It rejects dictionary messages,
 compressed batches, unsupported schemas, and row or batch limits before batch
 decoding. Supported types are nullable `Null`, Boolean, signed and unsigned

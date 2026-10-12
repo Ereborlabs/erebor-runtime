@@ -10,8 +10,7 @@ use araphor_data::{
 use sdk::arrow_array::cast::AsArray as _;
 use tokio::sync::watch;
 
-const COMPONENT: &[u8] =
-    include_bytes!("../../../../../araphor-analysis-sdk/tests/artifacts/runtime.wasm");
+const COMPONENT: &[u8] = araphor_analysis_builtins::components::RUNTIME;
 const SCOPE: &str = "qualified-context";
 
 pub(super) struct ContextComponent {

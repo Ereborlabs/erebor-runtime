@@ -31,6 +31,20 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Workspace build at {} could not start: {source}", path.display()))]
+    Build {
+        path: PathBuf,
+        source: std::io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Workspace build at {} failed: {status}", path.display()))]
+    BuildFailed {
+        path: PathBuf,
+        status: std::process::ExitStatus,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -40,13 +54,18 @@ impl ErrorExt for Error {
         match self {
             Self::Contract { source, .. } => source.status_code(),
             Self::Component { .. } => StatusCode::InvalidArguments,
-            Self::Encoding { .. } | Self::Io { .. } => StatusCode::Internal,
+            Self::Encoding { .. }
+            | Self::Io { .. }
+            | Self::Build { .. }
+            | Self::BuildFailed { .. } => StatusCode::Internal,
         }
     }
     fn retry_hint(&self) -> RetryHint {
         match self {
             Self::Contract { source, .. } => source.retry_hint(),
-            Self::Io { source, .. } => RetryHint::from_io_error(source),
+            Self::Io { source, .. } | Self::Build { source, .. } => {
+                RetryHint::from_io_error(source)
+            }
             _ => RetryHint::NonRetryable,
         }
     }

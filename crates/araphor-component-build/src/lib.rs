@@ -3,6 +3,7 @@ use std::path::Path;
 use snafu::{IntoError as _, ResultExt as _};
 
 mod error;
+mod workspace;
 pub use error::{Error, Result};
 
 pub struct ComponentBuilder;

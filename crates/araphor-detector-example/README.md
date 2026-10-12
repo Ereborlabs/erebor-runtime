@@ -29,9 +29,14 @@ folder builder depends on the SDK and the Rust component encoder. It does not
 require an Araphor host build.
 
 Use the same source, lock file, target, and Rust compiler to reproduce the
-artifact. The checked-in artifact uses Rust 1.97.1. The fixed
+artifact. The recorded reproducibility proof uses Rust 1.97.1. The fixed
 `CONST_RANDOM_SEED` controls the compile-time hash seed in Arrow dependencies.
 Recorded evaluation time and seed remain separate contract values.
+
+Host Cargo builds generate repository component bytes from source through the
+[built-in artifact owner](../araphor-analysis-builtins/README.md#generated-components).
+Cargo stores these components in `OUT_DIR`. Do not commit generated Wasm files.
+The author commands above produce the separate folder for installation.
 
 ## Install the built folder
 

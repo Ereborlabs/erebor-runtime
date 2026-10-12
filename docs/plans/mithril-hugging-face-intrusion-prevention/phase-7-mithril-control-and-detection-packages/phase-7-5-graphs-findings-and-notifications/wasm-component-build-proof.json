@@ -1219,5 +1219,136 @@
       "/tmp/araphor-prefix-guest-build-v27-final.log",
       "/tmp/araphor-prefix-guest-repro-v27-final.log"
     ]
+  },
+  "source_build_correction": {
+    "status": "PASS",
+    "created_utc": "2026-10-12T01:56:18.729526+00:00",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "builder": {
+      "path": "/tmp/araphor-source-builder-v36/workspace",
+      "sha256": "d5d846a276d5fa96c0243cc5d6e86d230df105f83a84f64694c94b971ade2e0c"
+    },
+    "build_owner": "ComponentBuilder::workspace",
+    "configuration": {
+      "target": "wasm32-unknown-unknown",
+      "profile": "release",
+      "locked": true,
+      "lib_only": true,
+      "jobs": 1,
+      "incremental": false,
+      "const_random_seed": "araphor-analysis-v1"
+    },
+    "pairs": [
+      {
+        "name": "discovery",
+        "core_equal": true,
+        "component_equal": true,
+        "independent_core_inodes": true,
+        "core_bytes": 3466962,
+        "component_bytes": 2621685,
+        "core_sha256": "3d6a60997dafc3936651049f7d1f5e1c1d8d343a7d483fcf600c035cefb44d99",
+        "component_sha256": "38e4ac6f86ca61b561410eee1bfd7f39837461e6f18b5d8e16822bf9c87ab3c5",
+        "first_core": "/tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_discovery_component.wasm",
+        "second_core": "/tmp/araphor-wasm-repro-20261011/wasm32-unknown-unknown/release/araphor_discovery_component.wasm",
+        "first_component": "/tmp/araphor-generated-v36-first/discovery.wasm",
+        "second_component": "/tmp/araphor-generated-v36-second/discovery.wasm"
+      },
+      {
+        "name": "process",
+        "core_equal": true,
+        "component_equal": true,
+        "independent_core_inodes": true,
+        "core_bytes": 3346875,
+        "component_bytes": 2524021,
+        "core_sha256": "e1e17088877f333ef1aaf88114311af162c33c00b0a757f58eed35d271c87a6c",
+        "component_sha256": "b09894707c65ff624c8538761ecf46524aacab23b62b076dfe738068cf2e026e",
+        "first_core": "/tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_process_component.wasm",
+        "second_core": "/tmp/araphor-wasm-repro-20261011/wasm32-unknown-unknown/release/araphor_process_component.wasm",
+        "first_component": "/tmp/araphor-generated-v36-first/process.wasm",
+        "second_component": "/tmp/araphor-generated-v36-second/process.wasm"
+      },
+      {
+        "name": "credentials",
+        "core_equal": true,
+        "component_equal": true,
+        "independent_core_inodes": true,
+        "core_bytes": 3346911,
+        "component_bytes": 2524021,
+        "core_sha256": "21f13cd1751a10644a05605b8b6380af5a51885a20feae79a3ef77f816997df1",
+        "component_sha256": "4e068093511f3f875cbb95439fce9d2d6c4b6c371b82ed0bd93e94917fffd58e",
+        "first_core": "/tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_credentials_component.wasm",
+        "second_core": "/tmp/araphor-wasm-repro-20261011/wasm32-unknown-unknown/release/araphor_credentials_component.wasm",
+        "first_component": "/tmp/araphor-generated-v36-first/credentials.wasm",
+        "second_component": "/tmp/araphor-generated-v36-second/credentials.wasm"
+      },
+      {
+        "name": "kubernetes",
+        "core_equal": true,
+        "component_equal": true,
+        "independent_core_inodes": true,
+        "core_bytes": 3346902,
+        "component_bytes": 2524021,
+        "core_sha256": "8075f5270782397668b90fe0c2f733162ea2b4ef24b0351883eb594244f94bbd",
+        "component_sha256": "0e179641d1cfcc8de85aaa3886950607c3f61bff9529b1c0e6141a995ec2d424",
+        "first_core": "/tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_kubernetes_component.wasm",
+        "second_core": "/tmp/araphor-wasm-repro-20261011/wasm32-unknown-unknown/release/araphor_kubernetes_component.wasm",
+        "first_component": "/tmp/araphor-generated-v36-first/kubernetes.wasm",
+        "second_component": "/tmp/araphor-generated-v36-second/kubernetes.wasm"
+      },
+      {
+        "name": "detector",
+        "core_equal": true,
+        "component_equal": true,
+        "independent_core_inodes": true,
+        "core_bytes": 3110651,
+        "component_bytes": 2329140,
+        "core_sha256": "2f86e5c9fa0bd4bcc20b897d4dcae7286cdde5caf163a60a348b68699defafd6",
+        "component_sha256": "8153f337229bcf5789f948cfe58e2dc58d06d5dd95339e773951eff59cd0955d",
+        "first_core": "/tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_detector_example.wasm",
+        "second_core": "/tmp/araphor-wasm-repro-20261011/wasm32-unknown-unknown/release/araphor_detector_example.wasm",
+        "first_component": "/tmp/araphor-generated-v36-first/detector.wasm",
+        "second_component": "/tmp/araphor-generated-v36-second/detector.wasm"
+      },
+      {
+        "name": "runtime",
+        "core_equal": true,
+        "component_equal": true,
+        "independent_core_inodes": true,
+        "core_bytes": 2907622,
+        "component_bytes": 2156999,
+        "core_sha256": "5e38a399a5187ab5ae990fb43ffdcf9164aba6fdf3784c3fa1aac50b2ca718c6",
+        "component_sha256": "fba0bc023b9594814b88257f24d3c1072d34476df65d8bc669bb8d0f721f43d6",
+        "first_core": "/tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_component_fixture.wasm",
+        "second_core": "/tmp/araphor-wasm-repro-20261011/wasm32-unknown-unknown/release/araphor_component_fixture.wasm",
+        "first_component": "/tmp/araphor-generated-v36-first/runtime.wasm",
+        "second_component": "/tmp/araphor-generated-v36-second/runtime.wasm"
+      }
+    ],
+    "ordinary_cargo_outputs": [
+      {
+        "path": "target/debug/build/araphor-analysis-builtins-808c5c825c974e3d/out",
+        "six_components_equal": true
+      }
+    ],
+    "logs": [
+      {
+        "path": "/tmp/araphor-wasm-source-builder-v36.log",
+        "sha256": "1f2172936bfd68f3802919310e71086f591efa7fe9893909d10bcf1926ec0c0d"
+      },
+      {
+        "path": "/tmp/araphor-wasm-source-builder-v36-retry.log",
+        "sha256": "c538a5600c408e49208449747d82e68f58855e8f2cfd63c8e02f00f961be2d91"
+      },
+      {
+        "path": "/tmp/araphor-wasm-source-generation-first-v36.log",
+        "sha256": "a9ce2a724b6c6da11cda60e06e7cbf2694539b18633d39e1e6843da1921fce52"
+      },
+      {
+        "path": "/tmp/araphor-wasm-source-generation-second-v36.log",
+        "sha256": "04ced371f16029afc7178801ede50e4646045ed825f200c40d02863b89dc8457"
+      }
+    ],
+    "qualification": "Reproducibility only. Installed runtime, fresh production cases, and final workspace CI remain required.",
+    "storage": "Generated components are in Cargo OUT_DIR. No .wasm file is tracked."
   }
 }

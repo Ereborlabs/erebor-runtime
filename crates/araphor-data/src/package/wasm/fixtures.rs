@@ -86,24 +86,18 @@ impl WasmExecution {
         [
             (
                 "discovery",
-                include_bytes!("../../../../araphor-analysis-builtins/artifacts/discovery.wasm"),
+                araphor_analysis_builtins::components::DISCOVERY,
             ),
-            (
-                "process",
-                include_bytes!("../../../../araphor-analysis-builtins/artifacts/process.wasm"),
-            ),
+            ("process", araphor_analysis_builtins::components::PROCESS),
             (
                 "credentials",
-                include_bytes!("../../../../araphor-analysis-builtins/artifacts/credentials.wasm"),
+                araphor_analysis_builtins::components::CREDENTIALS,
             ),
             (
                 "kubernetes",
-                include_bytes!("../../../../araphor-analysis-builtins/artifacts/kubernetes.wasm"),
+                araphor_analysis_builtins::components::KUBERNETES,
             ),
-            (
-                "runtime",
-                include_bytes!("../../../../araphor-analysis-sdk/tests/artifacts/runtime.wasm"),
-            ),
+            ("runtime", araphor_analysis_builtins::components::RUNTIME),
         ]
     }
 }

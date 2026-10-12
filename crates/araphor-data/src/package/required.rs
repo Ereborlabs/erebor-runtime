@@ -19,19 +19,19 @@ impl AnalysisPackageOwner {
         let definitions: [(araphor_analysis_sdk::Package, &[u8]); 4] = [
             (
                 Discovery::package(),
-                include_bytes!("../../../araphor-analysis-builtins/artifacts/discovery.wasm"),
+                araphor_analysis_builtins::components::DISCOVERY,
             ),
             (
                 Detector::Process.descriptor(),
-                include_bytes!("../../../araphor-analysis-builtins/artifacts/process.wasm"),
+                araphor_analysis_builtins::components::PROCESS,
             ),
             (
                 Detector::Credentials.descriptor(),
-                include_bytes!("../../../araphor-analysis-builtins/artifacts/credentials.wasm"),
+                araphor_analysis_builtins::components::CREDENTIALS,
             ),
             (
                 Detector::Kubernetes.descriptor(),
-                include_bytes!("../../../araphor-analysis-builtins/artifacts/kubernetes.wasm"),
+                araphor_analysis_builtins::components::KUBERNETES,
             ),
         ];
         definitions

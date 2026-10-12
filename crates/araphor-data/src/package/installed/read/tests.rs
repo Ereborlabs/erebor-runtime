@@ -93,10 +93,7 @@ fn component() -> PackageBundleV1 {
         implementations: vec![PackageImplementationV1::Wasm {
             exports: vec!["count-input".into()],
             inputs: None,
-            artifact: include_bytes!(
-                "../../../../../araphor-analysis-sdk/tests/artifacts/runtime.wasm"
-            )
-            .to_vec(),
+            artifact: araphor_analysis_builtins::components::RUNTIME.to_vec(),
         }],
         fixtures: Vec::new(),
     };

@@ -139,10 +139,7 @@ mod tests {
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let runtime = super::super::WasmExecution::new(crate::query::WasmLimits::default())?;
         let prepared = runtime.compiled(
-            include_bytes!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../araphor-analysis-sdk/tests/artifacts/runtime.wasm"
-            )),
+            araphor_analysis_builtins::components::RUNTIME,
             &AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?,
         )?;
         let entry = |index: u8, charge| CacheEntry {

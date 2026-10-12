@@ -47,23 +47,20 @@ fn sdk_components_pass_admission() -> TestResult {
     let components: [(&str, &[u8]); 5] = [
         (
             "discovery",
-            include_bytes!("../../../../araphor-analysis-builtins/artifacts/discovery.wasm"),
+            araphor_analysis_builtins::components::DISCOVERY,
         ),
-        (
-            "process",
-            include_bytes!("../../../../araphor-analysis-builtins/artifacts/process.wasm"),
-        ),
+        ("process", araphor_analysis_builtins::components::PROCESS),
         (
             "credentials",
-            include_bytes!("../../../../araphor-analysis-builtins/artifacts/credentials.wasm"),
+            araphor_analysis_builtins::components::CREDENTIALS,
         ),
         (
             "kubernetes",
-            include_bytes!("../../../../araphor-analysis-builtins/artifacts/kubernetes.wasm"),
+            araphor_analysis_builtins::components::KUBERNETES,
         ),
         (
             "detector-example",
-            include_bytes!("../../../../araphor-detector-example/artifacts/detector.wasm"),
+            araphor_analysis_builtins::components::DETECTOR,
         ),
     ];
     for (name, bytes) in components {

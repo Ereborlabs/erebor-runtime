@@ -21,8 +21,7 @@ use crate::control_fixture::MtlsFixture;
 use super::super::graph_notification::{GraphInputs, GraphNotificationQualification};
 use super::{Fixture, Result};
 
-const COMPONENT: &[u8] =
-    include_bytes!("../../../../araphor-detector-example/artifacts/detector.wasm");
+const COMPONENT: &[u8] = araphor_analysis_builtins::components::DETECTOR;
 
 pub(super) fn bundle() -> PackageBundleV1 {
     let descriptor = BurstDetector::package();

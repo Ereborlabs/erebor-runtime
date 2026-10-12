@@ -72,6 +72,24 @@ contains the author commands and a complete detector.
 The runtime keeps Wasmtime and this WIT interface. Extism supplies the approved
 resource-policy reference. The runtime adds no Extism dependency.
 
+The [built-in build script](../../../../../crates/araphor-analysis-builtins/build.rs)
+runs during a native Cargo build. It calls
+[ComponentBuilder::workspace](../../../../../crates/araphor-component-build/src/workspace.rs)
+to compile and pack all six repository components. The build uses the locked
+source, release profile, and fixed seed. The guest Cargo cache defaults to
+`target/analysis-guest`. `ARAPHOR_COMPONENT_TARGET` selects another build cache.
+The script rejects a cache that contains the native Cargo output directory.
+The Wasm target branch skips this step to prevent recursive builds.
+
+The packed bytes remain in Cargo `OUT_DIR`.
+[Generated component constants](../../../../../crates/araphor-analysis-builtins/src/components.rs)
+supply the required packages and the Data and E2E component tests.
+[CI](../../../../../.github/workflows/ci.yml) installs the
+`wasm32-unknown-unknown` Rust target before the ordinary Cargo checks.
+The [builder input inventory](../../../../../crates/araphor-component-build/src/workspace.rs)
+supplies the source-change watches. Generated component files are not source
+inputs. This build path still requires fresh generation and final qualification.
+
 A built folder contains `package.json` and `detector.wasm`.
 `package.json` embeds the component bytes and complete artifact closure.
 Operators install this file or folder. Installation has no author compiler,

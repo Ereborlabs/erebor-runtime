@@ -12,5 +12,8 @@ serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 
+[build-dependencies]
+araphor-component-build = { path = "../araphor-component-build" }
+
 [lints]
 workspace = true
