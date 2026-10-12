@@ -1,5 +1,7 @@
 use super::*;
 
+mod reusing;
+
 struct RetainedFixture {
     fixture: Fixture,
     selected: PackageBundleV1,

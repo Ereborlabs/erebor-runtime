@@ -1053,23 +1053,51 @@ run all installed detectors before the unchanged-result check. Each window
 also reads and validates the same installed component bundles again. These
 facts do not measure each operation's share of the current elapsed time.
 
-- [ ] Compare validated selected input and exact installed references before
+- [x] Compare validated selected input and exact installed references before
   detector execution on a normal refresh. Share input normalization and
   manifest construction. Keep raw immutable-context checks, authorization,
   and notice acknowledgement. Keep advance, forced refresh, failed recovery,
   expiry, changed coverage, and changed installed references on their required
   paths. Prove guest entry with a real component; use no time threshold.
-- [ ] Reuse immutable bundle Arcs within one graph operation. Read fresh
+- [x] Reuse immutable bundle Arcs within one graph operation. Read fresh
   activation rows for each window. Check current grants and admission each
   time. Load newly selected roots and release inactive roots. Keep the existing
   query leases and commit fences. Add no global cache, schema, policy, or limit.
-- [ ] Correct the removal and reinstall test setup. A retained SQL result keeps
+- [x] Correct the removal and reinstall test setup. A retained SQL result keeps
   its dependency revision immutable. Use a new dependency revision and keep
   the same removed root revision. Require a full replacement bundle reload.
 - [ ] Keep every current qualification input, assertion, deadline, and compiler
   profile. After the corrections, capture a new source manifest and normal
   executable. Run all four fresh production cases and the exact final Rust
   procedure. Retain the v38 results with their original source boundary.
+
+The production corrections are implemented. `GraphReplayInputV1` shares input
+normalization and manifest construction. A normal refresh can acknowledge an
+unchanged selected input before guest execution. The saved coverage revision
+and all compatible installed references must also match. Full context checks
+and current commit authorization still run. Advance, forced refresh, failed
+recovery, and expiry keep their existing paths.
+
+`InstalledAnalysis::snapshot_reusing` reuses only charged immutable bundle Arcs
+from the same owner, scope, and tenant. Fresh activation rows, Run permission,
+and admission checks apply to each window. At least one matching activation
+generation, revision, and metadata must keep the root and dependency closure
+retained. Removal and reinstall cannot reuse stale bytes under the same root
+revision. Inactive bundle and old snapshot leases drop before new roots load.
+
+Focused proof has six graph notice passes, five bundle reuse passes, and two
+existing activation and authority passes. With only the new shortcut disabled,
+the notice regression fails because it observes real guest entry. The restored
+source passes. The first bundle group has four passes and one fixture conflict:
+a saved SQL result keeps dependency revision 1 immutable. The corrected setup
+uses dependency revision 2 and keeps the removed root revision unchanged. All
+five bundle cases then pass with their generation, release, and artifact checks.
+The graph group precedes only this isolated test setup correction; production
+files stay unchanged. Formatting passes after the correction. The proof is
+`/tmp/araphor-graph-repetition-focused-proof-v39.json`.
+Its SHA256 is
+`dc0f64424e05f00a73ee8a1ff8e744fdc24eef215a0f617e4cd03580dfff0a0f`.
+Current normal production qualification and final workspace CI remain required.
 
 ### Implementation TODOs
 

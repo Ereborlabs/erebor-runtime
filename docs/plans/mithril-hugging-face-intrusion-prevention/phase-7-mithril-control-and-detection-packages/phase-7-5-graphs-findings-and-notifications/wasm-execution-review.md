@@ -285,6 +285,21 @@ generation, revision, and grants. Cached bundle bytes do not cache permission.
 Native graph extraction and seeded traversal retain their existing byte limits
 and whole-version permission checks.
 
+[GraphAndFindingOwner::process](../../../../../crates/araphor-data/src/graph/live.rs)
+retains a previous installed snapshot only during the current operation.
+[InstalledAnalysis::snapshot_reusing](../../../../../crates/araphor-data/src/package/installed/read.rs)
+reads fresh activations under the shared lifecycle lock for each live window.
+Bundle reuse requires the same owner, scope, and tenant. A retained root must
+have a current activation with the same key, generation, revision, and metadata.
+The owner checks each current prepared-export grant and bundle trust.
+Each reused Arc keeps the same immutable root and complete dependency closure.
+The previous snapshot drops before new roots load. Unused bundle leases release
+when their last owner drops. Explicit pinned and historical handles keep their
+existing selection rules. The
+[bundle reuse tests](../../../../../crates/araphor-data/src/package/installed/read/tests/retained/reusing.rs)
+check current grants, active roots, scope, tenant, generation, and capacity
+release before a new root loads. The corrected fixture retry has five passes.
+
 [Adapter](../../../../../crates/araphor-data/src/discovery/sdk/mod.rs)
 executes atoms, merge, groups, and compare through installed components.
 The host checks exact keys, attribution, accounting, coverage, and prevention
@@ -294,6 +309,15 @@ The shared context selector remains a host operation.
 [GraphDerivation](../../../../../crates/araphor-data/src/graph/derive/adapter/mod.rs)
 selects installed graph exports by their declared schemas.
 It does not restrict package IDs to the current HF detectors.
+[GraphReplayInputV1::normalized and manifest](../../../../../crates/araphor-data/src/graph/input.rs)
+share input preparation between derivation and refresh. Normalization keeps the
+existing full record and context conflict checks. It orders and removes duplicate
+coverage ranges, keys, and gaps. It excludes the reserved package sidecar from
+fact input. `manifest` constructs the same exact retained references.
+[GraphAndFindingOwner::derive](../../../../../crates/araphor-data/src/graph/derive.rs)
+pins and authorizes the tenant before normalization. `derive_selected` then
+validates the input, checks required packages, and runs the selected installed
+exports. The normal refresh path uses this same preparation.
 [Graph validation](../../../../../crates/araphor-data/src/graph/derive/adapter/validation.rs)
 checks exact subject identities, parent facts, direct cause, evidence, confirmed
 findings, and qualified coverage.
@@ -369,6 +393,33 @@ The provider notice and coverage revision must match the saved per-result
 metadata. [installed_current](../../../../../crates/araphor-data/src/graph/installed.rs)
 then compares all compatible installed references and checks current permission.
 Update, removal, a new compatible export, or revocation cannot use this shortcut.
+
+[commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)
+can also skip guest execution after a provider notice changes. This path applies
+only to a normal refresh. The selected input must validate, and its normalized
+manifest must match the retained result. The saved coverage revision must equal
+the current source coverage revision. All compatible installed references must
+match, including exports, roots, revisions, generations, and parameters.
+[window_context](../../../../../crates/araphor-data/src/graph/input.rs)
+checks complete immutable context values before this decision. A change to raw
+body bytes, validity times, or sensitivity under the same key fails this check.
+[acknowledge_window](../../../../../crates/araphor-data/src/graph/commit.rs)
+holds current activation and commit authority through `authorize`, then calls
+`mark_graph_notice` for the same immutable window head.
+
+[WindowRun](../../../../../crates/araphor-data/src/graph/window.rs)
+keeps advance and force flags through chunk processing. Both flags bypass the
+pre-guest reuse check. Failed-source recovery uses force.
+[Expiry](../../../../../crates/araphor-data/src/graph/expiry.rs) runs before reuse
+and keeps its existing proof downgrade and original package references.
+The [notice reuse tests](../../../../../crates/araphor-data/src/graph/tests/notices/reuse.rs)
+observe the real guest import. They check a notice-only skip, a later fact
+replacement, forced execution, raw-context rejection, and recovery. A newer
+report for an unrelated interval runs the guest even when manifest coverage
+keys stay empty. The six focused notice tests pass. Disabling the shortcut
+makes the skip test fail because the guest enters. The existing activation and
+revocation group has two passes. A new normal build, four fresh production
+cases, and final workspace verification remain required.
 
 When a changed notice produces the same graph,
 [commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)

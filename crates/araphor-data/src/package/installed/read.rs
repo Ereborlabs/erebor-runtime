@@ -13,6 +13,14 @@ use super::InstalledAnalysis;
 
 impl InstalledAnalysis {
     pub fn snapshot(&self, tenant: [u8; 16]) -> Result<Self> {
+        self.snapshot_reusing(tenant, None)
+    }
+
+    pub(crate) fn snapshot_reusing(
+        &self,
+        tenant: [u8; 16],
+        previous: Option<Self>,
+    ) -> Result<Self> {
         if self.tenant.is_some_and(|value| value != tenant) {
             return Err(Code::Denied.error("installed snapshot tenant"));
         }
@@ -24,18 +32,46 @@ impl InstalledAnalysis {
             .lifecycle
             .lock()
             .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
-        let mut pins = Vec::new();
-        let mut bundles = Vec::<Arc<super::snapshot::InstalledBundle>>::new();
-        let mut roots = BTreeSet::new();
-        for active in self
+        let active = self
             .owner
             .store
             .package_activations(tenant, &self.scope, None)?
-        {
-            if !active.active {
-                continue;
-            }
-            let context: InstalledContext = AnalysisPackageOwner::decode(&active.metadata)?;
+            .into_iter()
+            .filter(|active| active.active)
+            .map(|active| {
+                let context: InstalledContext = AnalysisPackageOwner::decode(&active.metadata)?;
+                Ok((active, context))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut bundles = previous
+            .filter(|previous| {
+                Arc::ptr_eq(&self.owner, &previous.owner)
+                    && previous.scope == self.scope
+                    && previous.tenant == Some(tenant)
+            })
+            .and_then(|mut previous| previous.snapshot.take())
+            .map(|snapshot| {
+                snapshot
+                    .bundles
+                    .iter()
+                    .filter(|bundle| {
+                        active.iter().any(|(current, context)| {
+                            context.root == bundle.value.root
+                                && snapshot.pins.iter().any(|pin| {
+                                    pin.key == current.key
+                                        && pin.generation == current.generation
+                                        && pin.revision == current.revision
+                                        && pin.metadata == current.metadata
+                                })
+                        })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut pins = Vec::new();
+        let mut roots = BTreeSet::new();
+        for (active, context) in active {
             let bundle = if let Some(bundle) = bundles
                 .iter()
                 .find(|bundle| bundle.value.root == context.root)

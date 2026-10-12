@@ -15,6 +15,21 @@ struct FixtureBudgetError {
 }
 
 impl AnalysisPackageOwner {
+    #[cfg(test)]
+    pub fn observe_guest(&self) -> Result<std::sync::mpsc::Receiver<()>> {
+        let (entered, receiver) = std::sync::mpsc::channel();
+        *self
+            .wasm
+            .entered
+            .lock()
+            .map_err(|_| Code::Incomplete.error("component test gate"))? =
+            Some(super::execution::GuestEntry {
+                entered,
+                release: None,
+            });
+        Ok(receiver)
+    }
+
     /// Reuse compiled fixture code and keep each evaluation store separate.
     /// This method is available for tests and the test-fixtures feature.
     pub fn prepare_test_code(&mut self) -> Result<()> {

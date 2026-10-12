@@ -6,6 +6,12 @@ use crate::{AnalysisSourceStatusV1, EvidenceIntakeIdentityV1, GraphInvalidSnafu}
 pub(super) type WindowHead = (String, GraphSnapshotV1, u64);
 pub(super) type WindowHeads = BTreeMap<u64, WindowHead>;
 
+pub(super) struct WindowRun<'a> {
+    pub(super) advance: bool,
+    pub(super) force: bool,
+    pub(super) installed: &'a mut Option<crate::InstalledAnalysis>,
+}
+
 impl GraphAndFindingOwner {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn commit_window(
@@ -17,6 +23,7 @@ impl GraphAndFindingOwner {
         advance: bool,
         now: u64,
         force: bool,
+        installed: &mut Option<crate::InstalledAnalysis>,
     ) -> Result<bool> {
         let status = self.store.source_status(source)?.ok_or_else(|| {
             GraphInvalidSnafu {
@@ -26,8 +33,13 @@ impl GraphAndFindingOwner {
         })?;
         let notice = self.provider.revision(source)?;
         let heads = self.window_heads(source, first, last)?;
+        let mut run = WindowRun {
+            advance,
+            force,
+            installed,
+        };
         if let Some(changed) = self.expire_window_heads(
-            &status, &heads, first, last, consumed, advance, now, force, notice,
+            &status, &heads, first, last, consumed, &mut run, now, notice,
         )? {
             return Ok(changed);
         }
@@ -35,13 +47,15 @@ impl GraphAndFindingOwner {
             if let Some((id, snapshot, revision)) = heads.get(&first) {
                 if self.store.graph_notice(&snapshot.scope, id, *revision)?
                     == Some((notice, status.receipt.coverage_revision))
-                    && self.installed_current(id, snapshot)?
+                    && self.installed_current(id, snapshot, run.installed)?
                 {
                     return Ok(false);
                 }
             }
         }
-        self.commit_retained_window(&status, &heads, first, last, consumed, advance, now, notice)
+        self.commit_retained_window(
+            &status, &heads, first, last, consumed, &mut run, now, notice,
+        )
     }
 
     fn window_heads(
@@ -75,7 +89,7 @@ impl GraphAndFindingOwner {
         first: u64,
         last: u64,
         consumed: u64,
-        advance: bool,
+        run: &mut WindowRun<'_>,
         now: u64,
         notice: u64,
     ) -> Result<bool> {
@@ -97,7 +111,7 @@ impl GraphAndFindingOwner {
             .unzip();
         let by_record = self.window_context(&records, heads)?;
         self.commit_chunks(
-            status, heads, first, read_first, consumed, advance, now, notice, records, positions,
+            status, heads, first, read_first, consumed, run, now, notice, records, positions,
             by_record,
         )
     }

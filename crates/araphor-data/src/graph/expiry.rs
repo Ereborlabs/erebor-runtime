@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use snafu::ResultExt as _;
 
-use super::window::WindowHeads;
+use super::window::{WindowHeads, WindowRun};
 use super::*;
 use crate::{
     AnalysisResultCommitV1, AnalysisSourceStatusV1, DiscoveryRecordIdV1, GraphEncodingSnafu,
@@ -18,13 +18,12 @@ impl GraphAndFindingOwner {
         first: u64,
         last: u64,
         consumed: u64,
-        advance: bool,
+        run: &mut WindowRun<'_>,
         now: u64,
-        force: bool,
         notice: u64,
     ) -> Result<Option<bool>> {
         let expired = heads.values().filter(|(_, snapshot, _)| {
-            (advance || snapshot.first_cursor == first)
+            (run.advance || snapshot.first_cursor == first)
                 && (snapshot.witness_deadline_utc_ns <= now
                     || snapshot.first_cursor <= status.receipt.retained_floor)
         });
@@ -40,7 +39,7 @@ impl GraphAndFindingOwner {
             )?;
             changed = Some(changed.unwrap_or(false) | committed);
         }
-        if changed.is_some() && advance {
+        if changed.is_some() && run.advance {
             return self
                 .commit_window(
                     &status.receipt.identity,
@@ -49,7 +48,8 @@ impl GraphAndFindingOwner {
                     consumed,
                     true,
                     now,
-                    force,
+                    run.force,
+                    run.installed,
                 )
                 .map(Some);
         }

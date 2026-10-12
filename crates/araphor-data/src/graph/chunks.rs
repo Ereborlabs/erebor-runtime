@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use super::window::WindowHeads;
+use super::window::{WindowHeads, WindowRun};
 use super::*;
 use crate::{AnalysisSourceStatusV1, DiscoveryRecordIdV1, GraphInvalidSnafu, StorePositionV1};
 
@@ -13,7 +13,7 @@ impl GraphAndFindingOwner {
         first: u64,
         read_first: u64,
         consumed: u64,
-        advance: bool,
+        run: &mut WindowRun<'_>,
         now: u64,
         notice: u64,
         records: Vec<DiscoveryRecordV1>,
@@ -24,12 +24,12 @@ impl GraphAndFindingOwner {
         let mut changed = false;
         while let Some(records) = chunks.pop_front() {
             let (_, chunk_last) = Self::chunk_bounds(&records)?;
-            if advance && chunk_last <= consumed {
+            if run.advance && chunk_last <= consumed {
                 continue;
             }
             let result = self.commit_chunk(
-                status, heads, first, read_first, consumed, advance, now, notice, &records,
-                &positions, &by_record,
+                status, heads, first, read_first, consumed, run, now, notice, &records, &positions,
+                &by_record,
             )?;
             let Some(committed) = result else {
                 if records.len() < 2 {
@@ -46,7 +46,7 @@ impl GraphAndFindingOwner {
                 continue;
             };
             changed |= committed;
-            if advance {
+            if run.advance {
                 break;
             }
         }

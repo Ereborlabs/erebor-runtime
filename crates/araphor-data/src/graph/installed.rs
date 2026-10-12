@@ -41,7 +41,7 @@ impl GraphAndFindingOwner {
         )
     }
 
-    fn compatible_refs(
+    pub(super) fn compatible_refs(
         execution: &InstalledAnalysis,
         tenant: [u8; 16],
     ) -> Result<Vec<InstalledRefV1>> {
@@ -64,14 +64,25 @@ impl GraphAndFindingOwner {
         &self,
         result_id: &str,
         snapshot: &GraphSnapshotV1,
+        installed: &mut Option<InstalledAnalysis>,
     ) -> Result<bool> {
         let tenant = snapshot.scope.identity.tenant_id;
-        let execution = self.execution.snapshot(tenant)?;
+        let execution = self.installed_snapshot(tenant, installed)?;
         let references = Self::compatible_refs(&execution, tenant)?;
         if self.installed_refs(tenant, result_id)?.as_ref() != Some(&references) {
             return Ok(false);
         }
         execution.authorize(tenant, &Self::package_revisions(&references), || Ok(true))
+    }
+
+    pub(super) fn installed_snapshot(
+        &self,
+        tenant: [u8; 16],
+        previous: &mut Option<InstalledAnalysis>,
+    ) -> Result<InstalledAnalysis> {
+        let execution = self.execution.snapshot_reusing(tenant, previous.take())?;
+        *previous = Some(execution.clone());
+        Ok(execution)
     }
 
     pub(super) fn package_revisions(references: &[InstalledRefV1]) -> Vec<(String, String)> {

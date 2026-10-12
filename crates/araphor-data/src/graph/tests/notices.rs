@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use super::*;
 
+mod reuse;
+
 #[derive(Default)]
 pub(super) struct NoticeInputs {
     facts: Inputs,

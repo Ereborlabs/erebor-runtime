@@ -29,11 +29,14 @@ impl GraphAndFindingOwner {
         *after = sources.last().cloned();
         let mut count = 0;
         let mut failure = None;
+        let mut installed = None;
         for source in sources {
-            let result = self.process_source(&source, now).and_then(|processed| {
-                self.store.graph_set_health(&source, false)?;
-                Ok(processed)
-            });
+            let result = self
+                .process_source(&source, now, &mut installed)
+                .and_then(|processed| {
+                    self.store.graph_set_health(&source, false)?;
+                    Ok(processed)
+                });
             match result {
                 Ok(processed) => count += processed,
                 Err(error) => {
@@ -45,7 +48,12 @@ impl GraphAndFindingOwner {
         failure.map_or(Ok(count), Err)
     }
 
-    fn process_source(&self, source: &EvidenceIntakeIdentityV1, now: u64) -> Result<usize> {
+    fn process_source(
+        &self,
+        source: &EvidenceIntakeIdentityV1,
+        now: u64,
+        installed: &mut Option<crate::InstalledAnalysis>,
+    ) -> Result<usize> {
         self.store.register_graph(source)?;
         let scope = Self::scope(source);
         let health = self.store.processor_health(&scope)?.ok_or_else(|| {
@@ -57,7 +65,7 @@ impl GraphAndFindingOwner {
         let consumed = health.consumed_cursor.max(health.resume_floor);
         let failed = health.state == crate::ProcessorStateV1::ProcessingFailed;
         let mut changed = if failed {
-            self.refresh_source(source, now, true)?
+            self.refresh_source(source, now, true, installed)?
         } else {
             false
         };
@@ -74,9 +82,10 @@ impl GraphAndFindingOwner {
                     .build()
                 })?
                 .min(health.accepted_cursor);
-            changed |= self.commit_window(source, first, last, consumed, true, now, false)?;
+            changed |=
+                self.commit_window(source, first, last, consumed, true, now, false, installed)?;
         } else if !failed {
-            changed |= self.refresh_source(source, now, false)?;
+            changed |= self.refresh_source(source, now, false, installed)?;
         }
         Ok(usize::from(changed))
     }
@@ -94,7 +103,7 @@ impl GraphAndFindingOwner {
             }
             .build()
         })?;
-        let result = self.refresh_source(source, now, true);
+        let result = self.refresh_source(source, now, true, &mut None);
         if result.is_err() {
             let _health = self.store.graph_set_health(source, true);
         }
@@ -108,6 +117,7 @@ impl GraphAndFindingOwner {
         source: &EvidenceIntakeIdentityV1,
         now: u64,
         force: bool,
+        installed: &mut Option<crate::InstalledAnalysis>,
     ) -> Result<bool> {
         let health = self
             .store
@@ -128,7 +138,8 @@ impl GraphAndFindingOwner {
             }
             after = page.last().map(|row| row.0);
             for (first, last) in page {
-                changed |= self.commit_window(source, first, last, consumed, false, now, force)?;
+                changed |= self
+                    .commit_window(source, first, last, consumed, false, now, force, installed)?;
             }
         }
         Ok(changed)

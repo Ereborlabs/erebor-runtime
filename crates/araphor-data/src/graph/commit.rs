@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use snafu::ResultExt as _;
 
-use super::window::WindowHead;
+use super::window::{WindowHead, WindowRun};
 use super::*;
 use crate::{
     AnalysisContextRefV1, AnalysisResultCommitV1, AnalysisSourceStatusV1, AnalysisStreamIdentityV1,
@@ -16,7 +16,7 @@ impl GraphAndFindingOwner {
         status: &AnalysisSourceStatusV1,
         first: u64,
         consumed: u64,
-        advance: bool,
+        run: &mut WindowRun<'_>,
         now: u64,
         notice: u64,
         deadline: u64,
@@ -27,8 +27,36 @@ impl GraphAndFindingOwner {
         if input.facts.len() > 255 {
             return Ok(None);
         }
-        let execution = self.execution.snapshot(input.source.tenant_id)?;
-        let mut snapshot = match Self::derive(&input, &execution) {
+        let execution = self.installed_snapshot(input.source.tenant_id, run.installed)?;
+        let input = input.normalized()?;
+        if !run.advance && !run.force {
+            if let Some(previous) =
+                previous.filter(|previous| previous.1.input_manifest == input.manifest())
+            {
+                input.validate()?;
+                let coverage =
+                    self.store
+                        .graph_notice(&previous.1.scope, &previous.0, previous.2)?;
+                let installed = Self::compatible_refs(&execution, input.source.tenant_id)?;
+                if coverage
+                    .is_some_and(|(_, revision)| revision == status.receipt.coverage_revision)
+                    && self
+                        .installed_refs(input.source.tenant_id, &previous.0)?
+                        .as_ref()
+                        == Some(&installed)
+                {
+                    self.acknowledge_window(
+                        &execution,
+                        previous,
+                        &installed,
+                        notice,
+                        status.receipt.coverage_revision,
+                    )?;
+                    return Ok(Some(false));
+                }
+            }
+        }
+        let mut snapshot = match Self::derive_selected(&input, &execution) {
             Ok(snapshot) => snapshot,
             Err(crate::Error::GraphInvalid {
                 field: "graph output bytes",
@@ -52,17 +80,14 @@ impl GraphAndFindingOwner {
             }
             _ => false,
         };
-        let revisions = Self::package_revisions(&installed);
-        if let Some((id, previous, revision)) = previous.filter(|_| unchanged) {
-            execution.authorize(input.source.tenant_id, &revisions, || {
-                self.store.mark_graph_notice(
-                    &previous.scope,
-                    id,
-                    *revision,
-                    notice,
-                    status.receipt.coverage_revision,
-                )
-            })?;
+        if let Some(previous) = previous.filter(|_| unchanged) {
+            self.acknowledge_window(
+                &execution,
+                previous,
+                &installed,
+                notice,
+                status.receipt.coverage_revision,
+            )?;
             return Ok(Some(false));
         }
         snapshot.previous_result_id = previous.as_ref().map(|row| row.0.clone());
@@ -71,19 +96,46 @@ impl GraphAndFindingOwner {
         if body.len() > GRAPH_WINDOW_BYTES.min(crate::analysis::MAX_RESULT_BYTES) {
             return Ok(None);
         }
-        execution.authorize(input.source.tenant_id, &revisions, || {
-            self.commit_snapshot(
-                snapshot,
-                body,
-                &input.facts,
-                status,
-                consumed,
-                advance,
-                now,
-                &installed,
-            )
-        })?;
+        execution.authorize(
+            input.source.tenant_id,
+            &Self::package_revisions(&installed),
+            || {
+                self.commit_snapshot(
+                    snapshot,
+                    body,
+                    &input.facts,
+                    status,
+                    consumed,
+                    run.advance,
+                    now,
+                    &installed,
+                )
+            },
+        )?;
         Ok(Some(true))
+    }
+
+    fn acknowledge_window(
+        &self,
+        execution: &crate::InstalledAnalysis,
+        previous: &WindowHead,
+        installed: &[crate::InstalledRefV1],
+        notice: u64,
+        coverage: u64,
+    ) -> Result<()> {
+        execution.authorize(
+            previous.1.scope.identity.tenant_id,
+            &Self::package_revisions(installed),
+            || {
+                self.store.mark_graph_notice(
+                    &previous.1.scope,
+                    &previous.0,
+                    previous.2,
+                    notice,
+                    coverage,
+                )
+            },
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

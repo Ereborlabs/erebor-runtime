@@ -29,51 +29,15 @@ impl GraphAndFindingOwner {
         execution: &crate::InstalledAnalysis,
     ) -> Result<GraphSnapshotV1> {
         let execution = execution.snapshot(input.source.tenant_id)?;
-        let mut records = BTreeMap::new();
-        for record in &input.records {
-            if records
-                .insert(record.id.clone(), record.clone())
-                .is_some_and(|previous| previous != *record)
-            {
-                return GraphInvalidSnafu {
-                    field: "conflicting observation",
-                }
-                .fail();
-            }
-        }
-        let mut facts = BTreeMap::new();
-        for fact in &input.facts {
-            if fact.key.owner_id == "graph-packages-v1" {
-                continue;
-            }
-            if facts
-                .insert(fact.key.clone(), fact.clone())
-                .is_some_and(|previous| previous != *fact)
-            {
-                return GraphInvalidSnafu {
-                    field: "conflicting context version",
-                }
-                .fail();
-            }
-        }
-        let mut coverage = input.coverage.clone();
-        coverage.sort();
-        coverage.dedup();
-        let mut coverage_keys = input.coverage_keys.clone();
-        coverage_keys.sort();
-        coverage_keys.dedup();
-        let mut gaps = input.missing_ranges.clone();
-        gaps.sort();
-        gaps.dedup();
-        let input = GraphReplayInputV1 {
-            source: input.source.clone(),
-            records: records.into_values().collect(),
-            coverage,
-            coverage_keys,
-            facts: facts.into_values().collect(),
-            missing_ranges: gaps,
-        };
-        let mut owner = GraphDerivation::new(&input)?;
+        let input = input.normalized()?;
+        Self::derive_selected(&input, &execution)
+    }
+
+    pub(super) fn derive_selected(
+        input: &GraphReplayInputV1,
+        execution: &crate::InstalledAnalysis,
+    ) -> Result<GraphSnapshotV1> {
+        let mut owner = GraphDerivation::new(input)?;
         let mut packages = execution.descriptors(input.source.tenant_id)?;
         if FindingV1::PACKAGES.iter().any(|id| {
             !packages.iter().any(|package| {
@@ -108,7 +72,7 @@ impl GraphAndFindingOwner {
             }
             if let Some(model) = models.first() {
                 let evaluation = owner.evaluation_for(model)?;
-                owner.evaluate(&execution, &package, &evaluation)?;
+                owner.evaluate(execution, &package, &evaluation)?;
             }
         }
         owner.finish()
@@ -118,16 +82,7 @@ impl GraphAndFindingOwner {
 impl<'a> GraphDerivation<'a> {
     fn new(input: &'a GraphReplayInputV1) -> Result<Self> {
         input.validate()?;
-        let revision = GraphRevisionV1 {
-            evidence: input
-                .records
-                .iter()
-                .map(|record| record.id.clone())
-                .collect(),
-            coverage: input.coverage_keys.clone(),
-            context: input.facts.iter().map(|fact| fact.key.clone()).collect(),
-            missing_ranges: input.missing_ranges.clone(),
-        };
+        let revision = input.manifest();
         let facts = input
             .facts
             .iter()
