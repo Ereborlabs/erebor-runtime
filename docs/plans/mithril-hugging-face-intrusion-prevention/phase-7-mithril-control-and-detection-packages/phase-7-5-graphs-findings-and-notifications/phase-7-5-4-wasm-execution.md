@@ -1662,6 +1662,25 @@ snapshot is `/tmp/araphor-wasm-four-cases-complete-v43.json`, with SHA256
 The final workspace procedure must start after these completed cases. Final CI,
 review closure, and the historical dispatch-order requirement remain open.
 
+### Ordered final verification on the corrected source
+
+The final Rust procedure starts after all four fresh v43 cases exit zero and
+report `PASS`. Before the start, all 1,590 source hashes, 24 independent artifact
+hashes, the saved executable hash, and all four result and proof hashes match.
+The corrected source remains `6cce92d1`. Available filesystem capacity is
+19,827,724,288 bytes. The append reserve and compiler profile remain unchanged.
+
+The command is
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+The log is `/tmp/araphor-wasm-rust-ci-ordered-v43.log`. The capture is
+`/tmp/araphor-wasm-final-ci-ordered-capture-v43.json`, with SHA256
+`7dba41c468e885f0d5fcee07d4d1be713d8ead82adb378580b98c1cd2534ae64`.
+The start record is `/tmp/araphor-wasm-final-ci-start-v43.json`, with SHA256
+`8661ff6419f021b5328fcbc8a7b203e222747c3f700604ef04c1ab6ab2d59e38`.
+The procedure is running. Its terminal result, complete target accounting,
+post-run source checks, and final review remain required. No workspace pass is
+claimed. The phase remains **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.

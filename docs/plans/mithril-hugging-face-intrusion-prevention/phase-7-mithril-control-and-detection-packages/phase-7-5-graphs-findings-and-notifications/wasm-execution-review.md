@@ -714,7 +714,10 @@ proof. Fresh context and profile restart cases also pass with equal v41 result
 bytes. The graph case exits zero and reports `PASS`. It retains all 12 incident
 cards, 257 findings and obligations across 33 sources, and both native windows.
 The phase record retains the immutable four-case completion snapshot. Final CI
-and review closure remain required. The historical dispatch order remains unmet.
+now runs after all four cases pass. The
+[start record](phase-7-5-4-wasm-execution.md#ordered-final-verification-on-the-corrected-source)
+retains its command and source checks. Its terminal result and review closure
+remain required. The historical dispatch order remains unmet.
 
 The retained multi-export correction is committed in `b14ffb2`. Its two focused
 regressions and normal build pass. Its source has 1,590 files and source SHA256
