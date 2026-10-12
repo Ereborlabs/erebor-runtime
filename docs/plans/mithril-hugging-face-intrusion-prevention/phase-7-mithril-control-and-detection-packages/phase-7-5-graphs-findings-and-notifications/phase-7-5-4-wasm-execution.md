@@ -134,12 +134,12 @@ close a verification gate. The phase remains **Not done**.
 
 | Deliverable | Source and commit | Remaining proof |
 | --- | --- | --- |
-| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The v41 SDK suite has 52 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. Final CI must run after fresh graph qualification. |
-| 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Native graph qualification has five passes. Final workspace tests and fresh v41 graph qualification remain required. |
-| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The multi-export correction in `b14ffb2` has two focused passes. Fresh v41 package, context, and profile cases pass. The graph case remains required. The v39/v40 and v38 results retain their source boundaries. |
+| 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The v41 SDK suite has 52 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. Final CI must follow the four completed fresh cases. |
+| 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Fresh v41 native graph qualification passes. Ordered final workspace verification remains required. |
+| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The multi-export correction in `b14ffb2` has two focused passes. All four fresh v41 production cases pass. Ordered final CI remains required. The v39/v40 and v38 results retain their source boundaries. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at its recorded production limits. The v27 graph group has five passes, including unchanged splitting and historical JSON baselines. Fresh v41 installed context transport passes. Final CI must qualify the complete corpus with current artifacts. The dispatch ordering breach remains recorded. |
 | 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. Fresh v41 installed-detector and profile-restart cases pass. Final workspace verification remains required. |
-| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | The v41 source and normal executable are captured. Three fresh cases pass in separate commits. The first CI attempt passes formatting, check, strict Clippy, and linking, then exits 130 at the controlled stop. Fresh graph qualification, ordered final CI, and final review and result remain required. The earlier storage failures remain recorded. |
+| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | The v41 source and normal executable are captured. All four fresh cases pass. The first CI attempt passes formatting, check, strict Clippy, and linking, then exits 130 at the controlled stop. Ordered final CI and final review and result remain required. The earlier storage failures remain recorded. |
 
 The Rust source before the bounded-input correction is committed through
 `8f150fd4`. Its 1,558 source file hashes equal the v12 manifest. Formatting,
@@ -1416,6 +1416,33 @@ traversal test passes before the stop. This result is incomplete verification.
 The guide now requires all four production cases before final CI. The three
 v41 cases remain passed. Fresh graph qualification and final CI remain required.
 All 1,590 source hashes still match. No Rust or test source changes.
+
+### Fresh graph qualification on the corrected source
+
+The fresh v41 graph case exits zero and reports `PASS`. Its result is
+`/tmp/araphor-current-v41-graph-notification/result.json`, with SHA256
+`912f2dbd7d8823190a861c72e09d4bfb5bc23fa4a0e9d6648b70036d0320dbe6`.
+The proof is `/tmp/araphor-wasm-graph-proof-v41.json`, with SHA256
+`ebb44bbfdff12e464b533796119faba58c9b48f95002351af5f88291cfbe67a9`.
+The capture and proof retain the command, executable, source, result, and log
+hashes. All 1,590 source hashes and the saved executable hash match after the run.
+
+All 12 incident cards pass. The case retains 257 findings and notification
+obligations across 33 source windows. The original notification deadline,
+attempts, priority floors, human receipt, and restart state remain intact.
+The 64-record native window returns 192 relationships in one SQL chunk.
+The 185-record native window returns 370 relationships in two SQL chunks.
+Exact versions, subject joins, evidence, proof, coverage, and reopen equality
+pass. Intake acknowledgements are null, null, 2, 2. Accepted cursors are
+0, 0, 2, 2. Canonical replay and transaction rollback checks pass.
+
+All four fresh v41 production cases now pass with the same saved executable.
+The aggregate proof SHA256 is
+`a4cf691d60015c71ec4df18c6ff92e3d784a1c5729619dcdbb6a6be603b07897`.
+The graph case remains lightweight recorded replay. It adds no physical
+prevention, provider issuance, cross-node physical, or performance claim.
+The ordered final shared Rust procedure and final closure remain required.
+The phase remains **Not done**. The historical dispatch ordering breach remains.
 
 ### Implementation TODOs
 

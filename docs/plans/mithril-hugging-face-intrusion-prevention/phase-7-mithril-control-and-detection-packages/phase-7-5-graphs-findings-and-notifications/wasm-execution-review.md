@@ -708,8 +708,18 @@ The fresh context round-trip case also passes, with result SHA256
 `312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
 The fresh profile restart case also passes, with result SHA256
 `3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
-All three completed v41 cases have separate commits. The graph case and exact
-final workspace procedure remain required.
+The fresh v41 graph case also exits zero and reports `PASS`, with result SHA256
+`912f2dbd7d8823190a861c72e09d4bfb5bc23fa4a0e9d6648b70036d0320dbe6`.
+All four fresh cases pass with the same saved executable. The graph proof is
+`/tmp/araphor-wasm-graph-proof-v41.json`, with SHA256
+`ebb44bbfdff12e464b533796119faba58c9b48f95002351af5f88291cfbe67a9`.
+The case retains all 12 incident cards, 257 findings and obligations across
+33 sources, and the 64-record and 185-record native windows. The windows return
+192 and 370 relationships. The larger window uses two SQL chunks. Reopen,
+exact versions, subject joins, evidence, proof, coverage, original deadlines,
+human receipt, intake acknowledgements, and transaction rollback checks pass.
+The case remains lightweight recorded replay. Ordered final CI and closure
+remain required.
 The first v41 procedure starts after the last Rust edit, before the fresh graph
 case. Formatting, workspace check, strict Clippy, and test linking pass. The
 root stops this unfinished run with SIGINT to follow the phase's required order.
