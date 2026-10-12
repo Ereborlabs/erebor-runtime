@@ -41,7 +41,10 @@ impl GraphAndFindingOwner {
         let mut packages = execution.descriptors(input.source.tenant_id)?;
         if FindingV1::PACKAGES.iter().any(|id| {
             !packages.iter().any(|package| {
-                package.id == *id && package.exports.iter().any(Self::supports_analysis)
+                package.id == *id
+                    && execution
+                        .prepared_models(package)
+                        .any(Self::supports_analysis)
             })
         }) {
             return GraphInvalidSnafu {
@@ -59,9 +62,8 @@ impl GraphAndFindingOwner {
             )
         });
         for package in packages {
-            let models = package
-                .exports
-                .iter()
+            let models = execution
+                .prepared_models(&package)
                 .filter(|model| Self::supports_analysis(model))
                 .collect::<Vec<_>>();
             if models.len() > 1 {

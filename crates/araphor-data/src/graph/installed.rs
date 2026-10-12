@@ -52,7 +52,7 @@ impl GraphAndFindingOwner {
             .filter(|reference| {
                 descriptors.iter().any(|package| {
                     package.id == reference.package_id
-                        && package.exports.iter().any(|model| {
+                        && execution.prepared_models(package).any(|model| {
                             model.name == reference.export && Self::supports_analysis(model)
                         })
                 })

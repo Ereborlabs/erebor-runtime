@@ -164,3 +164,4 @@ async fn cache_tracks_installed_changes() -> TestResult {
 }
 
 mod authority;
+mod descriptors;

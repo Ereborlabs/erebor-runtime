@@ -13,6 +13,7 @@ use crate::{AnalysisReadControl, QueryLimits, QueryOwner};
 
 use super::*;
 
+mod descriptors;
 mod retained;
 
 struct SelectionAuthority {

@@ -300,6 +300,22 @@ existing selection rules. The
 check current grants, active roots, scope, tenant, generation, and capacity
 release before a new root loads. The corrected fixture retry has five passes.
 
+[InstalledAnalysis::descriptors and prepared_models](../../../../../crates/araphor-data/src/package/installed/read.rs)
+keep the complete immutable package descriptor. Dependency declarations can
+refer to SQL exports. Snapshot pins select prepared models by package, revision,
+and export. Graph derivation and retained-reference selection share this
+iterator. The graph adapter keeps exact descriptor equality and SDK output
+validation. The
+[package regression](../../../../../crates/araphor-data/src/package/installed/read/tests/descriptors.rs)
+checks the complete contract and direct and snapshot evaluation. The
+[graph regression](../../../../../crates/araphor-data/src/graph/tests/installed/current/descriptors.rs)
+checks mixed exports and complete graph equality. Both pass in
+`/tmp/araphor-installed-descriptor-green-v41-retry.log`. Its SHA256 is
+`235cd00d6beb8fde6c39832569687ba81f50cc52fedf8996f0d7dbf8b1116ddb`.
+The [phase result](phase-7-5-4-wasm-execution.md#multi-export-descriptor-correction-todos)
+records the defect reproduction, fixture lifetime correction, and source hashes.
+Fresh production qualification and final workspace verification remain required.
+
 [Adapter](../../../../../crates/araphor-data/src/discovery/sdk/mod.rs)
 executes atoms, merge, groups, and compare through installed components.
 The host checks exact keys, attribution, accounting, coverage, and prevention

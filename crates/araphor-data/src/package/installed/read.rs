@@ -123,16 +123,22 @@ impl InstalledAnalysis {
                         && artifact.descriptor.revision == active.revision
                 })
                 .ok_or_else(|| Code::Missing.error("installed descriptor"))?;
-            let mut descriptor = artifact.descriptor.clone();
-            descriptor.exports.retain(|model| {
-                snapshot
-                    .pins()
-                    .iter()
-                    .any(|pin| pin.key.package_id == descriptor.id && pin.key.export == model.name)
-            });
-            descriptors.insert(descriptor.id.clone(), descriptor);
+            descriptors.insert(artifact.descriptor.id.clone(), artifact.descriptor.clone());
         }
         Ok(descriptors.into_values().collect())
+    }
+
+    pub(crate) fn prepared_models<'a>(
+        &'a self,
+        package: &'a sdk::Package,
+    ) -> impl Iterator<Item = &'a sdk::Model> + 'a {
+        package.exports.iter().filter(move |model| {
+            self.pins().iter().any(|pin| {
+                pin.key.package_id == package.id
+                    && pin.revision == package.revision
+                    && pin.key.export == model.name
+            })
+        })
     }
 
     pub fn revisions(&self) -> Vec<(String, String)> {

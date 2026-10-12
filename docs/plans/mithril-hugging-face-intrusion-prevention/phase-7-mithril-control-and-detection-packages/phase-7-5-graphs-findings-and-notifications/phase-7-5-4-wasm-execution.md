@@ -136,10 +136,10 @@ close a verification gate. The phase remains **Not done**.
 | --- | --- | --- |
 | 1. SDK component path | Generated bindings, component build, and detector example: `c77eeec2`. Typed runtime fixtures: `d1de114d`. Owned Arrow buffers and six rebuilt components: `f274e413`. | The SDK suite has 51 passes. The v27 shared suite has 14 passes. Two independent builds reproduce all six current component artifacts. Final workspace verification remains required. |
 | 2. Production Wasmtime execution | Compiler worker, bounded cache, guest limits, restricted imports, shared query budget, native inputs, and installed execution: `a6f870a3`. | Retained bundle, input, wire, schema, and result charges are committed in `2a89eefc`. The v16 focused groups have 51 passes. Current native graph qualification has five passes. Final workspace verification remains required. |
-| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | Three fresh cases pass for the corrected production executable. The graph case fails at the filesystem reserve. It requires a fresh retry. The four v38 passes retain their earlier source boundary. |
+| 3. Installed domain outputs | Typed reason storage and historical JSON: `6ca5ed3c`. Domain adapters and retained package references: `d7aaf21a`. | The multi-export correction has two focused passes. All four fresh production cases remain required for that correction. The v39/v40 and v38 results retain their source boundaries. |
 | 4. Current algorithms | AR-01 through AR-03 and AR-05 through AR-07 use installed execution in `d7aaf21a`. AR-04 selection stays on the host. Its installed transport case is in `8f150fd4`. | The v20 corpus has 28 passes at production limits. The v27 graph group has five passes, including unchanged splitting and historical JSON baselines. Fresh installed context transport passes. Final CI must qualify the complete corpus with current artifacts. The dispatch ordering breach remains recorded. |
 | 5. Lifecycle and recovery | Shared lifecycle fences are in `a6f870a3`. Checkpoint, retry, upgrade, rollback, removal, and retained-reference tests are in `fcd587ae`. | Focused lifecycle and overlap tests pass. Fresh installed-detector and profile-restart cases pass. Final workspace verification remains required. |
-| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | Three fresh corrected-executable cases pass. The graph case and current workspace test run fail after storage exhaustion. Repeat these gates, then complete the final review and result. |
+| 6. Qualification and closure | The new detector installation and context transport cases are in `8f150fd4`. | Capture the multi-export correction, repeat all four production cases and the exact final workspace procedure, then complete the final review and result. The earlier storage failures remain recorded. |
 
 The Rust source before the bounded-input correction is committed through
 `8f150fd4`. Its 1,558 source file hashes equal the v12 manifest. Formatting,
@@ -1226,28 +1226,51 @@ uses its own worktree target. This goal does not own or stop that build.
 - [ ] Record successful terminal results, complete the final source review,
   and commit each deliverable. The phase remains **Not done**.
 
-### Implementation TODOs
-
 ### Multi-export descriptor correction TODOs
 
 Source review finds a mismatch between selected and evaluated descriptors.
 `InstalledAnalysis::descriptors` retains active prepared exports. Evaluation
 returns the complete artifact descriptor. The graph adapter requires equality.
 A valid package with a prepared graph export and a SQL export can therefore
-fail after successful component execution.
+fail after successful component execution. Filtering the package can also
+remove an export that a dependency declaration requires. Preserve the complete
+immutable descriptor. Select prepared models from the existing snapshot pins.
 
-- [ ] Reproduce the mismatch with a real installed component and a SQL export
+- [x] Reproduce the mismatch with a real installed component and a SQL export
   in one package. Keep exact descriptor, output, evidence, and authorization
   checks. Preserve direct evaluation behavior when no snapshot is selected.
-- [ ] Share descriptor selection under `InstalledAnalysis`. Return the same
-  selected descriptor from a snapshot read and its evaluation. Keep graph
-  equality checks and the current lifecycle and memory charges.
+- [x] Share prepared model selection under `InstalledAnalysis`. Return the same
+  complete descriptor from a snapshot read and its evaluation. Keep graph
+  equality checks, dependency declarations, and lifecycle and memory charges.
 - [ ] Verify focused Rust cases, capture the corrected production source,
   repeat all four fresh production cases, and run the exact final workspace
   procedure after the last Rust edit. Retain the current graph retry with its
   original source boundary. Commit the correction and each proof deliverable.
+- [x] Correct the new descriptor test's output lifetime. The first corrected
+  run has one graph pass and one package failure at query output capacity.
+  Keep the expected capacity denial while the direct result is retained. Save
+  its comparison values, release that result, and compare the next result.
+  Keep every assertion and the existing production capacity.
 
-### Original implementation TODOs
+The two focused regressions pass. The graph test compares the complete installed
+snapshot, changing only the expected v2 replay contract. It includes a SQL
+auxiliary dependency and a graph-shaped SQL export that remains inactive. The
+package test checks complete direct and snapshot descriptors, exact output,
+prepared pins, capacity denial while output is retained, and successful reuse
+after release. The host output pool remains 16 MiB. No existing test changes.
+
+The former descriptor filtering fails with `Invalid dependency output`.
+The first corrected run passes the graph test and fails the new package fixture
+at query output capacity. The fixture correction retains all comparisons and
+adds the denial assertion. The retry has two passes and no failure.
+The proof is `/tmp/araphor-installed-descriptor-proof-v41.json`, with SHA256
+`563baa6d3fb7bbb9bef9146187594d9af57bb2759e4af8b50a896857a6827be9`.
+It preserves all three log hashes and the exact seven Rust file hashes.
+Independent source review finds no additional defect in this correction.
+Fresh production qualification and the exact final workspace procedure remain
+required. The result stays **Not done**.
+
+### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
 The current source has these required changes:
