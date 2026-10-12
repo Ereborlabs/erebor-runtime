@@ -710,7 +710,8 @@ and ordered final workspace verification remain required. The fresh installed
 package case now passes with that executable. The
 [record](phase-7-5-4-wasm-execution.md#fresh-qualification-on-the-corrected-source)
 retains the real client installation, custom reason, checkpoint, and lifecycle
-proof. Context, profile restart, graph, and final CI remain required.
+proof. The fresh context case also passes with equal v41 result bytes. Profile
+restart, graph, and final CI remain required.
 
 The retained multi-export correction is committed in `b14ffb2`. Its two focused
 regressions and normal build pass. Its source has 1,590 files and source SHA256

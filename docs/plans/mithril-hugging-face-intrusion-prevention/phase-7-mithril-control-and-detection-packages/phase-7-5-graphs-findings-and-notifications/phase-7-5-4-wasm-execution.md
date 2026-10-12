@@ -1618,8 +1618,17 @@ The real client installs the detector folder over native gRPC with TLS. It
 produces `example-burst.THRESHOLD` with threshold three, four input records,
 three matching evidence records, and checkpoint four. No host rebuild occurs.
 Restart, retry, trust revocation, rollback, removal, and retained history checks
-pass. Context, profile restart, graph notification, and final CI remain required.
+pass. Profile restart, graph notification, and final CI remain required.
 The aggregate is `/tmp/araphor-wasm-production-proof-v43.json`.
+
+The fresh v43 `context-roundtrip` case exits zero and reports `PASS` with the
+same saved executable. Its result SHA256 is
+`312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
+The proof is `/tmp/araphor-wasm-context-roundtrip-proof-v43.json`, with SHA256
+`e0811cd5d72c2194dab68905166b0e25d69fd25a1d534982d9bd47c1120497fb`.
+The result bytes equal v41. Node WAL, mTLS intake, exact retained frames,
+installed context transport, cutoff omissions, and data reopen checks pass.
+Source and executable hashes still match. This remains lightweight proof.
 
 ### Implementation TODOs
 
