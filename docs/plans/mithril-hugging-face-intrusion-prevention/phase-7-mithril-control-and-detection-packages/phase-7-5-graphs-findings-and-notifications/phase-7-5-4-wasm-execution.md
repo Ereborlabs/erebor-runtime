@@ -1731,6 +1731,11 @@ only for qualified physical environments.
 - [ ] Remove confirmed repeated work inside production operations. Preserve
   input reservations, trust-boundary validation, current grants, lifecycle
   fences, cancellation, evidence checks, and atomic commits.
+- [ ] Count all live compiled code under the existing cache byte limit. The
+  user approves this correction. Retain each byte charge until the last code
+  handle drops. Eviction cannot release a live handle's charge. Return the
+  existing `Busy` error when retained code prevents admission. Keep the limit,
+  guest quota defaults, and compiler profile unchanged.
 - [ ] Prove each correction with focused real-component or production-owner
   tests. Preserve the original failure and workload evidence. Commit each
   deliverable.
