@@ -1228,6 +1228,27 @@ uses its own worktree target. This goal does not own or stop that build.
 
 ### Implementation TODOs
 
+### Multi-export descriptor correction TODOs
+
+Source review finds a mismatch between selected and evaluated descriptors.
+`InstalledAnalysis::descriptors` retains active prepared exports. Evaluation
+returns the complete artifact descriptor. The graph adapter requires equality.
+A valid package with a prepared graph export and a SQL export can therefore
+fail after successful component execution.
+
+- [ ] Reproduce the mismatch with a real installed component and a SQL export
+  in one package. Keep exact descriptor, output, evidence, and authorization
+  checks. Preserve direct evaluation behavior when no snapshot is selected.
+- [ ] Share descriptor selection under `InstalledAnalysis`. Return the same
+  selected descriptor from a snapshot read and its evaluation. Keep graph
+  equality checks and the current lifecycle and memory charges.
+- [ ] Verify focused Rust cases, capture the corrected production source,
+  repeat all four fresh production cases, and run the exact final workspace
+  procedure after the last Rust edit. Retain the current graph retry with its
+  original source boundary. Commit the correction and each proof deliverable.
+
+### Original implementation TODOs
+
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
 The current source has these required changes:
 
