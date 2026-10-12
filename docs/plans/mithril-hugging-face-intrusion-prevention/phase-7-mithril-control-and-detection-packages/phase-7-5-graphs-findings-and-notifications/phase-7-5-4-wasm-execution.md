@@ -1618,7 +1618,7 @@ The real client installs the detector folder over native gRPC with TLS. It
 produces `example-burst.THRESHOLD` with threshold three, four input records,
 three matching evidence records, and checkpoint four. No host rebuild occurs.
 Restart, retry, trust revocation, rollback, removal, and retained history checks
-pass. Profile restart, graph notification, and final CI remain required.
+pass. Graph notification and final CI remain required.
 The aggregate is `/tmp/araphor-wasm-production-proof-v43.json`.
 
 The fresh v43 `context-roundtrip` case exits zero and reports `PASS` with the
@@ -1629,6 +1629,16 @@ The proof is `/tmp/araphor-wasm-context-roundtrip-proof-v43.json`, with SHA256
 The result bytes equal v41. Node WAL, mTLS intake, exact retained frames,
 installed context transport, cutoff omissions, and data reopen checks pass.
 Source and executable hashes still match. This remains lightweight proof.
+
+The fresh v43 `profile-restart` case exits zero and reports `PASS` with the same
+saved executable. Its result SHA256 is
+`3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
+The proof is `/tmp/araphor-wasm-profile-restart-proof-v43.json`, with SHA256
+`bd68901d6780b1edd83c2bb60318cfe3805e9b65228117921b68a35ce97215d0`.
+The result bytes equal v41. Installed profile computation, late context refresh,
+atomic progress, immutable sealed revisions, and frozen restart replay pass.
+Source and executable hashes still match. The graph case and final CI remain
+required. This remains lightweight proof.
 
 ### Implementation TODOs
 
