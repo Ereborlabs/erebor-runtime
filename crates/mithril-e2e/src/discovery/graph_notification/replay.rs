@@ -1302,6 +1302,10 @@ impl ReplayQualification {
 
 #[cfg(test)]
 mod tests {
+    mod commit;
+    mod notifications;
+    mod transport;
+
     #[tokio::test]
     async fn graph_notification_dense_progress_and_capacity() -> crate::platform::TestResult<()> {
         super::ReplayQualification::new(1_791_400_000_000_000_000)?

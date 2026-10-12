@@ -663,6 +663,15 @@ and final workspace procedure remain required for the final source.
 
 Review these boundary tests with the algorithm cases:
 
+- [Focused graph boundary tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/tests/transport.rs)
+  check transport, output rejection, rollback, replay, routing, delivery, restart,
+  agent limits, and human acknowledgement in eight ordinary Rust tests.
+  The commit and notification modules are siblings of the transport module.
+  Each test shows its production calls and assertions. Helpers prepare inputs
+  and initial resources only. All eight tests pass on the v46 captured source.
+  The proof is `/tmp/araphor-focused-graph-proof-v46.json`, with SHA-256
+  `5099009ea6a0500a6d26aa1220ecc6a85cd5ab8302ef7c65e2d010fb619a70c2`.
+  The full CLI, large workloads, and original aggregate remain unchanged.
 - [Installed guest overlap](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
   uses the shipped Discovery `groups` component for two tenants. Both tenant
   snapshots retain the same installed owner. The test checks separate

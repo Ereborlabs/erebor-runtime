@@ -1859,6 +1859,35 @@ Workspace formatting and the diff whitespace check pass. Smaller end-to-end
 tests, four fresh complete cases, and final workspace verification remain
 required. The phase result stays **Not done**.
 
+### Focused graph boundary test proof
+
+Eight ordinary Rust tests pass with zero failures and no ignored tests in
+319.61 seconds. The tests show public production calls and security assertions
+in their bodies. Input helpers prepare canonical WAL batches, policy values,
+and initial stores. These helpers do not run the tested graph or router sequence.
+The full CLI case and its large workloads remain unchanged.
+
+The transport tests check reordered duplicate uploads, exact pending RPC errors,
+acknowledgements, accepted cursors, retained frames, and output rejection.
+The commit test checks rollback without a partial snapshot, installed replay,
+canonical JSON, and rejection of foreign or conflicting evidence.
+The five notification tests check routing, preserved deadlines and priority
+floors, failed delivery and retry delay, restart, agent limits, tenant isolation,
+overdue escalation, exact human acknowledgement, and changed retry rejection.
+Restart drops the old owners before it opens new stores. Transport awaits
+server shutdown on returned errors and preserves the original error.
+
+The focused files contain one test in 60 to 81 lines. The transport file has
+two related tests and an input method in 125 lines. The notification input module
+has 49 lines. Independent review finds no required source correction.
+The normal test build passes. Workspace formatting and the diff whitespace
+check pass. The proof is `/tmp/araphor-focused-graph-proof-v46.json`, with SHA-256
+`5099009ea6a0500a6d26aa1220ecc6a85cd5ab8302ef7c65e2d010fb619a70c2`.
+Host-specific incident, read completion, provider, local input, and node tests
+remain required before the ordinary aggregate test can be removed.
+Four fresh complete cases and final workspace verification remain required.
+The phase result stays **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
