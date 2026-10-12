@@ -1888,6 +1888,68 @@ remain required before the ordinary aggregate test can be removed.
 Four fresh complete cases and final workspace verification remain required.
 The phase result stays **Not done**.
 
+### Focused host boundary test proof
+
+Nine more ordinary Rust tests pass with zero failures and no ignored tests in
+892.53 seconds. The tests retain all 12 incident cards, device denial, late
+policy and contradiction history, four local input variants, authenticated node
+isolation, partial Kubernetes proof, provider publication, and read scope.
+Read scope includes inherited file descriptors, io-uring, resident memory,
+OpenRead admission, and MmapRead admission. Unproved bytes and remote results
+do not create a stronger causal claim. Helpers prepare WAL and context inputs.
+The tested process, refresh, snapshot, history, and replay calls stay visible.
+Each file with one test has fewer than 100 lines. The context file has two
+related tests in 115 lines. The input modules have 54 to 110 lines.
+
+The proof is `/tmp/araphor-focused-graph-host-proof-v48.json`, with SHA-256
+`0d7be6a3a8f3aab8bb4b17f525c4e40d5b92668fc732815fa6a6e1692e42f644`.
+The normal test build, workspace formatting, and diff whitespace checks pass.
+Independent review finds no required source correction.
+
+Eighteen existing graph and query tests pass with zero failures and no ignored
+tests in 572.48 seconds. These tests cover installed graph baselines, physical
+result stages, read results, same-operation contradictions, policy provenance,
+contextual principal joins, partial Kubernetes proof, retry and restart,
+authorization, sensitivity, limits, cancellation, follow, and subject joins.
+Reuse these tests instead of copying their algorithm and authorization matrices.
+The proof is `/tmp/araphor-focused-graph-reuse-proof-v47.json`, with SHA-256
+`dafc5c5865d6e56f4677f22e5ec8234f2e4b3f39c7dec679079978d79f120957`.
+
+Four existing Control authority tests pass on the retained executable. All
+88 Control source files match the frozen v43 manifest. This check is not a
+fresh rebuild or final workspace proof. The authority proof is
+`/tmp/araphor-focused-authority-reuse-proof-v49.json`, with SHA-256
+`29e149274b8986ba4cdef14b0559b0a629607eb8bf008af09984ce32fe001ff2`.
+
+The complete-case assertion groups have these focused proof owners:
+
+| Assertion group | Focused Rust proof |
+| --- | --- |
+| Upload, ACK, cursor, and exact frames | `tests::transport::reordered_uploads_keep_frames` |
+| Existing output rejection | `tests::transport::existing_output_is_rejected` |
+| Rollback, canonical replay, foreign evidence, and conflict | `tests::commit::failed_commit_replays_exactly`; existing graph retry and restart tests |
+| Route, deadline, priority, delivery, restart, agent limits, and human receipt | The five `tests::notifications` tests; existing notification query tests |
+| Incident cards, external authority, coverage gaps, and device denial | The two `tests::context` tests |
+| Late policy, exact provenance, contradiction, and historical versions | `tests::history::late_policy_keeps_history`; existing provenance tests |
+| Read bytes, admission, completion scope, and resident memory | The three `tests::reads` tests; existing read-result and mmap tests |
+| Provider result without a local bridge | `tests::provider::provider_write_needs_bridge`; existing physical-result tests |
+| Local entry, activation, and initial health | `tests::local::local_inputs_preserve_proof` |
+| Node identity, mixed-source rejection, and partial remote proof | `tests::nodes::node_streams_stay_separate`; existing Kubernetes tests |
+| Tenant scope, context sensitivity, authorization, and traversal | Existing graph query and Control authority tests; retained native traversal tests |
+| Density, capacity, combined sources, and native windows | Retained density and both native-window tests; the complete CLI case |
+
+The `tests` prefix in this table is
+`discovery::graph_notification::replay::tests`.
+The original CLI retains all 193 assertion declaration sites and the combined
+33-source, 54-record interaction. It retains all nine read and five send input
+records. The send-admission, packet-emitted, and content-oracle labels use the
+same allowed Send and baseline input. The focused tests do not duplicate that
+input for each label. The CLI and existing large tests retain density 257 and
+the 64-record and 185-record native windows. No original assertion, deadline,
+or workload changes in this deliverable. The ordinary aggregate invocation
+can now be removed. Four fresh complete cases and final workspace verification
+remain required. The phase result stays **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.

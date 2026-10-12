@@ -1303,7 +1303,14 @@ impl ReplayQualification {
 #[cfg(test)]
 mod tests {
     mod commit;
+    mod context;
+    mod history;
+    mod local;
+    mod nodes;
     mod notifications;
+    mod provider;
+    mod reads;
+    mod recorded;
     mod transport;
 
     #[tokio::test]

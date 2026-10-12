@@ -672,6 +672,19 @@ Review these boundary tests with the algorithm cases:
   The proof is `/tmp/araphor-focused-graph-proof-v46.json`, with SHA-256
   `5099009ea6a0500a6d26aa1220ecc6a85cd5ab8302ef7c65e2d010fb619a70c2`.
   The full CLI, large workloads, and original aggregate remain unchanged.
+- [Focused host boundary tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/tests/context.rs)
+  retain all 12 cards, device denial, policy history, local input proof, node
+  isolation, provider facts, and read scope in nine more ordinary Rust tests.
+  The other modules are siblings of the context module. Each single-test file
+  has fewer than 100 lines. All nine tests pass on the v48 captured source.
+  The proof is `/tmp/araphor-focused-graph-host-proof-v48.json`, with SHA-256
+  `0d7be6a3a8f3aab8bb4b17f525c4e40d5b92668fc732815fa6a6e1692e42f644`.
+  Eighteen existing graph and query tests also pass on the corrected Data source.
+  Their proof is `/tmp/araphor-focused-graph-reuse-proof-v47.json`, with SHA-256
+  `dafc5c5865d6e56f4677f22e5ec8234f2e4b3f39c7dec679079978d79f120957`.
+  Reuse these owner tests for read-result, contradiction, provenance, baseline,
+  authorization, sensitivity, follow, and subject-join checks. The complete CLI
+  retains combined-source checks, all read and send records, and large inputs.
 - [Installed guest overlap](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
   uses the shipped Discovery `groups` component for two tenants. Both tenant
   snapshots retain the same installed owner. The test checks separate
