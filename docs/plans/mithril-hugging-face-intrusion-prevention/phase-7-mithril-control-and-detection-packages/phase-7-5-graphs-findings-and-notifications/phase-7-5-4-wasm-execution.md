@@ -1728,10 +1728,10 @@ only for qualified physical environments.
 - [ ] Correct confirmed fixture lifetime repetition through supported owner
   APIs. Check new-source registration and context updates first. Keep explicit
   restart and independent replay checks.
-- [ ] Remove confirmed repeated work inside production operations. Preserve
+- [x] Remove confirmed repeated work inside production component invocation. Preserve
   input reservations, trust-boundary validation, current grants, lifecycle
   fences, cancellation, evidence checks, and atomic commits.
-- [ ] Count all live compiled code under the existing cache byte limit. The
+- [x] Count all live compiled code under the existing cache byte limit. The
   user approves this correction. Retain each byte charge until the last code
   handle drops. Eviction cannot release a live handle's charge. Return the
   existing `Busy` error when retained code prevents admission. Keep the limit,
@@ -1742,6 +1742,37 @@ only for qualified physical environments.
 - [ ] After the last Rust edit, capture a new normal executable and source.
   Run all four complete production cases, then the exact final Rust procedure.
   Update the guide and result. Retain v43 proof with its original source.
+
+### Live compiled-code correction proof
+
+The package execution owner prepares one charged component handle before query
+evaluation. Invocation uses this handle. Invocation does not repeat the source
+digest, cache lookup, or resource check. The cache entry owns its reservation.
+Cache indexes and active handles share that entry. The charge ends when the
+last reference drops. Admission reserves bytes before host deserialization.
+Admission returns `AnalysisBusy` when retained code prevents a reservation.
+The 80 MiB byte limit and 16-entry limit stay unchanged. Optional quota defaults
+and the compiler profile stay unchanged.
+
+The focused Wasm run passes 38 tests with zero failures in 555.19 seconds. Four
+private compiler-worker entries remain ignored in the parent harness. The run
+checks charged handles after cache clearing, both cache limits, foreign-engine
+rejection, real retained-handle execution, separate state, two overlapping
+tenant guests, cancellation, compiler cleanup, quotas, and lifecycle recovery.
+The native graph input and mixed graph export tests pass two tests with zero
+failures in 131.65 seconds. All five compiled fixture components remain admitted
+at 66,333,163 charged bytes. Each charge includes source and mapped image bytes.
+These timings record verification work. They are not a performance result.
+
+The logs are `/tmp/araphor-live-code-tests-v44.log` and
+`/tmp/araphor-live-code-native-inputs-v44.log`. The proof is
+`/tmp/araphor-live-code-proof-v44.json`. Its SHA-256 is
+`bd1c71ec2f6a2fe747f938fb1b6e5554397a56e53b48d2f43bf742ad5cc08fad`.
+The proof records the seven changed source files, test executable, lock file,
+logs, and component charges. Independent source review finds no concrete defect
+in this slice. Graph fixture correction, smaller tests, diagnostics, four new
+complete cases, and final workspace verification remain required. The phase
+result stays **Not done**.
 
 ### Implementation TODOs
 

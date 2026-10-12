@@ -151,8 +151,18 @@ impl CompilerImage {
         Ok(reply)
     }
 
-    #[allow(unsafe_code)]
+    #[cfg(test)]
     pub(super) fn component(&self, engine: &Engine) -> Result<Component> {
+        self.component_reserved(engine, |_| Ok(()))
+            .map(|(component, ())| component)
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn component_reserved<T>(
+        &self,
+        engine: &Engine,
+        reserve: impl FnOnce(usize) -> Result<T>,
+    ) -> Result<(Component, T)> {
         let reply = self.reply()?;
         let code = match reply.status {
             0 => None,
@@ -180,12 +190,16 @@ impl CompilerImage {
                 },
             );
         }
+        let reservation = reserve(reply.image.len())?;
         // This image comes from the current executable through a private pipe.
         // The child makes the image from source. The digest protects the transfer.
-        unsafe { Component::deserialize(engine, reply.image) }.context(crate::PackageWasmSnafu {
-            code: Code::Incomplete,
-            operation: "component compiler image load",
-        })
+        let component = unsafe { Component::deserialize(engine, reply.image) }.context(
+            crate::PackageWasmSnafu {
+                code: Code::Incomplete,
+                operation: "component compiler image load",
+            },
+        )?;
+        Ok((component, reservation))
     }
 }
 

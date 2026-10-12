@@ -28,7 +28,7 @@ impl AnalysisPackageOwner {
             PackageImplementationV1::Wasm {
                 artifact: bytes, ..
             } => {
-                self.wasm.admit(bytes, control)?;
+                let prepared = self.wasm.prepare(bytes, control)?;
                 let limits = self.query.component_limits(evaluation.context.limits);
                 let bounded = if limits == evaluation.context.limits {
                     Cow::Borrowed(evaluation)
@@ -43,10 +43,10 @@ impl AnalysisPackageOwner {
                     &bounded,
                     control,
                     |control, _limits, input| {
-                        let output = self.wasm.evaluate_encoded(
+                        let output = self.wasm.evaluate_prepared(
                             &artifact.descriptor,
                             &bounded,
-                            bytes,
+                            prepared,
                             input,
                             control,
                         )?;

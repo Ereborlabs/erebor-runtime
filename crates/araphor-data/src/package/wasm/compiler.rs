@@ -233,12 +233,13 @@ impl Drop for CompilerChild<'_> {
 }
 
 impl WasmExecution {
-    pub(super) fn compile(
+    pub(super) fn compile<T>(
         &self,
         bytes: &[u8],
         control: &AnalysisReadControl,
         failed: &mut bool,
-    ) -> Result<Component> {
+        reserve: impl FnOnce(usize) -> Result<T>,
+    ) -> Result<(Component, T)> {
         CompilerChild::capture(
             TEST_ENTRY,
             bytes,
@@ -248,6 +249,6 @@ impl WasmExecution {
             #[cfg(test)]
             None,
         )?
-        .component(&self.engine)
+        .component_reserved(&self.engine, reserve)
     }
 }

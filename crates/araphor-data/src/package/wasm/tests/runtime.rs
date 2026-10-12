@@ -10,6 +10,7 @@ use super::{TestResult, WasmExecution};
 
 mod batches;
 mod concurrency;
+mod prepared;
 mod quotas;
 
 const COMPONENT: &[u8] = araphor_analysis_builtins::components::RUNTIME;

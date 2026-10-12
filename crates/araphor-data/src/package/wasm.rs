@@ -35,6 +35,18 @@ pub(crate) struct WasmExecution {
     entered: Mutex<Option<execution::GuestEntry>>,
 }
 
+pub(super) struct PreparedComponent(Arc<cache::CacheEntry>);
+
+impl PreparedComponent {
+    fn component(&self) -> &bindings::AnalysisPackagePre<execution::GuestState> {
+        &self.0.prepared
+    }
+
+    fn instance_pre(&self) -> &wasmtime::component::InstancePre<execution::GuestState> {
+        self.component().instance_pre()
+    }
+}
+
 impl WasmExecution {
     pub(crate) fn limits(limits: sdk::Limits, quota: &WasmLimits) -> sdk::Limits {
         sdk::Limits {
@@ -100,7 +112,15 @@ impl WasmExecution {
     }
 
     pub(crate) fn admit(&self, bytes: &[u8], control: &AnalysisReadControl) -> Result<()> {
-        self.compiled(bytes, control).map(|_| ())
+        self.prepare(bytes, control).map(|_| ())
+    }
+
+    pub(super) fn prepare(
+        &self,
+        bytes: &[u8],
+        control: &AnalysisReadControl,
+    ) -> Result<PreparedComponent> {
+        self.compiled(bytes, control)
     }
 
     #[cfg(test)]
@@ -111,31 +131,47 @@ impl WasmExecution {
         bytes: &[u8],
         control: &AnalysisReadControl,
     ) -> Result<sdk::Output> {
-        self.evaluate_input(descriptor, evaluation, bytes, None, control)
+        self.evaluate_input(
+            descriptor,
+            evaluation,
+            || self.prepare(bytes, control),
+            None,
+            control,
+        )
     }
 
-    pub(crate) fn evaluate_encoded(
+    pub(super) fn evaluate_prepared(
         &self,
         descriptor: &sdk::Package,
         evaluation: &sdk::Evaluation,
-        bytes: &[u8],
+        component: PreparedComponent,
         input: sdk::wire::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<sdk::Output> {
-        self.evaluate_input(descriptor, evaluation, bytes, Some(input), control)
+        self.evaluate_input(
+            descriptor,
+            evaluation,
+            || Ok(component),
+            Some(input),
+            control,
+        )
     }
 
     fn evaluate_input(
         &self,
         descriptor: &sdk::Package,
         evaluation: &sdk::Evaluation,
-        bytes: &[u8],
+        prepare: impl FnOnce() -> Result<PreparedComponent>,
         input: Option<sdk::wire::Evaluation>,
         control: &AnalysisReadControl,
     ) -> Result<sdk::Output> {
         control.check()?;
         let _permit = execution::EvaluationPermit::acquire(&self.running)?;
-        let component = self.compiled(bytes, control)?;
+        let prepared = prepare()?;
+        let component = prepared.component();
+        if !Engine::same(&self.engine, component.engine()) {
+            return Err(Code::Unsupported.error("component engine"));
+        }
         descriptor
             .validate_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
@@ -153,7 +189,7 @@ impl WasmExecution {
                 .context(crate::AnalysisContractSnafu)?,
         };
         control.check()?;
-        let output = self.invoke(&component, input.into(), control)?;
+        let output = self.invoke(component, input.into(), control)?;
         let decoded = sdk::wire::Output::from(output)
             .decode(descriptor, &evaluation)
             .context(crate::AnalysisContractSnafu)?;

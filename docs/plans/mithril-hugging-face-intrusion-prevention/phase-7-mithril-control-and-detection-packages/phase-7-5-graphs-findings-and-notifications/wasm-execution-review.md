@@ -172,10 +172,19 @@ Cancellation or deadline kills and reaps the child.
 The compiler permit remains held until the I/O threads finish.
 
 The one unsafe image load is in
-[CompilerImage::component](../../../../../crates/araphor-data/src/package/wasm/compiler/image.rs).
+[CompilerImage::component_reserved](../../../../../crates/araphor-data/src/package/wasm/compiler/image.rs).
 Its input comes from the fresh host compiler with the same engine configuration.
 The compiler boundary rejects a malformed reply, incorrect digest, or oversized
-image before this load.
+image before this load. The cache reserves the exact source and image byte charge
+before host deserialization. A failed load releases the reservation.
+
+[WasmExecution::prepare](../../../../../crates/araphor-data/src/package/wasm.rs)
+returns one handle that retains the charged code entry. The package execution
+owner prepares this handle before the query evaluation deadline starts. The
+owner passes the same handle to guest invocation. Invocation does not repeat
+the source digest, cache lookup, or component resource check. The handle stays
+live until output decoding ends. Invocation rejects a handle from another
+engine and releases the evaluation permit.
 
 ## Input, output, and host authority
 
@@ -268,7 +277,7 @@ evidence links, and checkpoint state.
 reserves input, IPC, and schema-message scratch before encoding. It includes
 declared schemas when an input has no batches. The owner encodes once, reduces
 the charge to retained input and wire capacities, and moves the wire into
-`WasmExecution::evaluate_encoded`. After invocation, it retains the input and
+`WasmExecution::evaluate_prepared`. After invocation, it retains the input and
 output charges until the domain adapter releases the result. SQL keeps its
 existing reservation through `QueryOwner::evaluate_analysis`.
 The shared evaluator checks its local query deadline after output validation.
@@ -557,10 +566,25 @@ On the earlier qualified Linux x86-64 build, the four required components charge
 61,237,517 bytes in total. The SDK runtime fixture raises this total to
 74,374,204 bytes. Each charge includes source bytes and mapped image bytes.
 These figures predate the current SDK and graph schema corrections.
-Eviction can require a later bounded compilation.
-This cache charge excludes engine metadata, allocator overhead, active images
-after eviction, and Arrow buffers. Query accounting and evaluation limits bound
-input and output separately. The cache limit is not a total process memory limit.
+The cache index and prepared handles share each code entry. The byte and entry
+charges stay live until the last reference drops. Cache eviction or clearing
+cannot release the charge for retained code. Admission removes only entries
+that have no other reference. Admission returns `AnalysisBusy` when live code
+prevents a new reservation. The byte and entry limits do not change.
+The [cache lifetime test](../../../../../crates/araphor-data/src/package/wasm/cache.rs)
+checks both limits, cloned cache indexes, retained handles, and final release.
+The [prepared execution test](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/prepared.rs)
+clears the index and holds the compiler permit. The saved handle still executes
+the real component and returns value 42. A foreign engine rejects the handle.
+The focused v44 runs pass 40 tests with zero failures. Four private compiler
+workers remain ignored in the parent harness. The proof is
+`/tmp/araphor-live-code-proof-v44.json`, with SHA-256
+`bd1c71ec2f6a2fe747f938fb1b6e5554397a56e53b48d2f43bf742ad5cc08fad`.
+The five current component charges total 66,333,163 bytes. The complete cases
+and final workspace procedure remain required after the last Rust edit.
+The code charge excludes engine metadata, allocator overhead, and Arrow buffers.
+Query accounting and evaluation limits bound input and output separately. The
+code limit is not a total process memory limit.
 
 The [native store](../../../../../crates/araphor-data/src/analysis/connection.rs)
 has one 128 MiB buffer limit shared by its writer and two cloned readers.
