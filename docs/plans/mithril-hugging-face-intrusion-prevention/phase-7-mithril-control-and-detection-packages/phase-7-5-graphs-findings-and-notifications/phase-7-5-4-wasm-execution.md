@@ -1148,6 +1148,32 @@ The proof is `/tmp/araphor-wasm-test-lint-proof-v40.json`, with SHA256
 `faa6897e2049e6c4c24d0826479ca02185bf2944ecf5301ea9d9ab63c9212a3d`.
 Current-source final workspace verification remains required.
 
+The current test-only correction is committed in `b1339b57`. Its v40 manifest
+has 1,588 files and source SHA256
+`f8048abbb0ace4a966def5242e4bfb1badb1ba089f15bd595e5122840bd75eb2`.
+Only `graph/tests/notices/reuse.rs` differs from v39. All production inputs stay
+unchanged. The normal rebuild exits zero without warnings and produces the
+same complete executable bytes, with SHA256
+`2c6a05f5daefc9e85c921d31496a262e2ecac8ebe17df71d9561b4de90603e3f`.
+The identity proof is `/tmp/araphor-wasm-production-identity-v40.json`, with
+SHA256 `00816dde3e71d8d77f12a81ad53409391fc22085b31e81490324d3863a7660a6`.
+Production cases retain their v39 commands and executable. Their runtime proof
+also covers the byte-identical v40 normal executable. The current exact final
+workspace procedure starts after the test edit and remains pending.
+
+The fresh installed-package case exits zero and reports `PASS`. Its result is
+`/tmp/araphor-current-v39-analysis-packages/result.json`, with SHA256
+`2deb9a74257ecdd21cefa5b83538ffd06f27f675ec88ae4ab44d750e52c07c5d`.
+A real client installs the built folder over native gRPC TLS without a host
+rebuild. Threshold 3 selects three evidence records from four inputs and saves
+checkpoint 4 with reason `example-burst.THRESHOLD`. Restart and retry preserve
+the result. Trust revocation denies current computation and historical replay
+while retaining saved output. Corrections, empty replacement, upgrade rejection,
+rollback, removal, and credential renewal retain their required transitions.
+The aggregate proof is `/tmp/araphor-wasm-production-proof-v39.json`. The graph
+case and current final workspace procedure remain running. The other production
+case results require separate records. The phase remains **Not done**.
+
 ### Implementation TODOs
 
 The approved goal starts from the completed local SQL lifecycle at `4b8b524b`.
