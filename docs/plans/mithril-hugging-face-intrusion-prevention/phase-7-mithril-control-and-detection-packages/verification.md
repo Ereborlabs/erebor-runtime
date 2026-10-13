@@ -1,16 +1,18 @@
 # Verification And Release Gates
 
-This record defines required checks. None of the engine, model, operator, or
-physical checks below ran as part of the planning change. A proposed gate is
-not a measured product capability.
+This record defines required checks. A required check is not a measured
+product capability.
 
 ## Test ownership
 
 Pure schema, grouping, transformation, and state tests belong with their
-owner in `araphor-data` or Control. Lightweight end-to-end cases belong in `crates/mithril-e2e/src`
-and call supported production APIs. Their command entry points belong in
-`crates/mithril-e2e/src/bin`. Physical Kubernetes harnesses belong in
-`crates/mithril-e2e/harness`, with inputs in `fixtures`.
+owner in `araphor-data` or Control. All acceptance scenarios belong in
+`crates/mithril-e2e/src` and call supported production APIs. Follow the
+[scenario maintainability rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small Rust platform tests with visible owner calls, actions, assertions,
+and cleanup. Use ordinary non-ignored Rust tests for lightweight checks that
+need no physical platform. Harnesses in `crates/mithril-e2e/harness` prepare the
+environment and run the exact tests. Inputs live in `fixtures`.
 
 Run the lightweight case before its paired physical case. Both must report
 the same transitions, decisions, and semantic result fields. Environmental
@@ -281,7 +283,7 @@ Do not choose tests from whichever services happen to be available.
 | Mithril 8 | Extend the shared context with qualified cross-node evidence; prove the bounded exception request/approval/use/expiry path | Response execution remains Unsupported. |
 | Mithril 9 | Agent and console use the same authorized local/Kubernetes response with physical readback and healthy watch | Unqualified provider actions remain Unsupported. |
 | Mithril 10 | Extend the same loop for each advertised provider source and typed action | Unqualified actions do not inherit another capability's result. |
-| Mithril 11 | Rerun all advertised cases, installation, current-format restart, load, and complete HF conformance on the release revision | Optional Phase 12 work cannot satisfy a missing core result. |
+| Mithril 11 | Rerun all required cases, including package, algorithm, and observability cases, on the release revision. Prove installation, supported version upgrades, restart, Control failover, load, retained protection after Helm removal, signed decommission, and complete HF conformance. | Optional Phase 12 work cannot satisfy a missing core result. Fresh-store tests do not prove upgrades. Optional data placement retains its separate transfer limits. |
 
 For the first bounded release, `DE-LOOP` ends in the qualified policy-change
 result, not a simulated response. Every delivery gate retains negative
@@ -352,16 +354,17 @@ npm run build
 npm run test:e2e
 ```
 
-The phase files specify the new case, harness, and evaluator command interfaces
-to implement. Record nonzero test counts,
+The phase files specify the required behaviors. Map them to standard Rust
+tests and document their exact execution commands. Record nonzero test counts,
 actual arguments, revision, result path, and exact output values with the test output.
 Full Rust verification runs after the final covered Rust edit; a focused check
 cannot replace it.
 
 ## Phase-to-case map
 
-Add new case values to the existing binaries; names below are implementation
-requirements, not claims that all commands exist today. Each case writes
+The names below identify required coverage, not new binary subcommands.
+Implement each behavior as a small Rust test under the shared scenario rules.
+Map coverage IDs to exact test names and applicable platforms. Each case writes
 result.json with revision, capability set, assertion count, owner transitions,
 exact IDs/revisions, coverage, limits and cleanup. Retain a security digest only
 where its security contract requires that value. A filter that runs zero tests fails.
@@ -382,7 +385,7 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | 7.7 | discovery_assessment_, discovery_disclosure_, assessment gRPC validation | assessment-loop |
 | 7.8 | discovery_grpc_, discovery_publish_, UI review tests | review-publish |
 | 7.9 | remote delegation, request identity, placement/transfer tests | remote-placement |
-| 7.10 | full relevant crate suites | all for the frozen capability set; paired physical harness |
+| 7.10 | full relevant crate suites | complete frozen case set through standard Rust tests on each required platform |
 | Observability 1 | observability_backend_ | backend-lifecycle; real backend pair |
 | Observability 2 | observability_target_, observability_recovery_, measurement validation | owned-capture; existing owned/pods/disk-full physical pairs |
 | Observability 3 | query_admission_, disclosure, asynchronous execution, observability_cli_, observability_grpc_, UI stream tests | query-trace-client with public SQL security and native/browser stream parity |
@@ -400,12 +403,13 @@ Those two phases qualify the full
 upstream catalogue separately. Each 7.5 child ends with its completion scope and
 an expected example; the example does not replace its full acceptance matrix.
 
-Keep discovery cases in `src/discovery/` and their entry point in
-`src/bin/mithril_discovery_test.rs`. Keep observability cases in the existing
-`src/observability.rs` family and `src/bin/mithril_observability_test.rs`.
-Physical harnesses stay in `harness/`, inputs in `fixtures/`; never execute
-`examples/`. Require lightweight results from the same revision before physical
-runs. A physical mismatch must first become a failing lightweight assertion.
+Keep discovery cases in `src/discovery/` and observability cases in the
+existing `src/observability.rs` family. Use the standard Rust test harness.
+Do not add custom dispatchers or shell-owned scenario assertions. A result
+writer may preserve the existing artifact format without running a scenario.
+Harnesses stay in `harness/`, inputs in `fixtures/`; never execute `examples/`.
+Require lightweight results from the same revision before physical runs. A
+physical mismatch must first become a failing lightweight assertion.
 
 ## Plan checks
 

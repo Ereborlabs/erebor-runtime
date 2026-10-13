@@ -1,6 +1,6 @@
-# How To Manually Accept Phase 10
+# Platform Tests For Phase 10
 
-Status: Proposed runbook; no Phase 10 implementation or test has been run.
+Status: Required platform test coverage.
 
 Phase: [Provider Connectors And Recovery](../phase-10-provider-connectors-and-recovery.md)  
 Setup: [`PROVIDER-SANDBOX`](./environment-setup.md)
@@ -13,15 +13,16 @@ that each advertised response is one typed capability with exact
 re-resolution, idempotency, authoritative provider readback, and no generic
 provider authority.
 
-## Automated Companion
+## Test implementation
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 10 connector contract, source
-coverage/replay, provider graph, typed actuator, outage/recovery, HF provider,
-and legitimate provider-control suites against run-scoped sandboxes.
-```
+Implement the behaviors below as small Rust scenarios in `crates/mithril-e2e`.
+Follow the [scenario maintainability rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules)
+and the shared [platform test requirements](README.md#platform-test-shape).
+Use the applicable platform cases from one test body. Keep the production
+calls, action, assertions, and cleanup visible. The steps below specify Rust
+test behavior; they are not a separate manual acceptance procedure.
 
-## Procedure
+## Scenario requirements
 
 1. Complete the provider-sandbox setup with synthetic principals, repositories,
    resources, mesh identities, connectors, queues, and artifacts.
@@ -39,7 +40,7 @@ and legitimate provider-control suites against run-scoped sandboxes.
 
 ## First-Owned Edge Fixture Matrix
 
-| Fixture | Operator stimulus | Required oracle and control |
+| Fixture | Rust test action | Required oracle and control |
 | --- | --- | --- |
 | `EDGE-ARTIFACT-CONSUMER-005` | publish immutable synthetic artifact and consume it from two candidate processes | artifact digest/attestation edge is exact; consumer process identity remains separate; allowed consumer succeeds |
 | `EDGE-AWS-SHARED-001` | use one sandbox principal/access path from two isolated actors | account/principal fact stays shared unless session/request proof distinguishes it; exact allowed request succeeds |
@@ -49,7 +50,7 @@ and legitimate provider-control suites against run-scoped sandboxes.
 
 ## First-Owned Hugging Face Fixture Matrix
 
-| Fixture | Operator stimulus | Required oracle and control |
+| Fixture | Rust test action | Required oracle and control |
 | --- | --- | --- |
 | `HF-GRAN-AWS-DRYRUN-001` | request an AWS dry-run/simulation and then an authorized real action | dry-run causes no effect and is not reported applied; real typed action has provider readback |
 | `HF-GRAN-AWS-SPLIT-001` | split issuance/session/use across isolated actors | exact joins use provider-supported IDs; shared identity remains shared; legitimate session continues |
@@ -68,6 +69,11 @@ and legitimate provider-control suites against run-scoped sandboxes.
 
 ## Provider Module And Failure Checks
 
+Record the source fields, installed package revision, output, supported action,
+and readback for each provider. Reuse the Phase 7 package tests for computation.
+Run live source and action cases separately. A recorded-input pass cannot
+qualify authentication, source coverage, or a provider effect.
+
 Run the source and actuator contract separately for every advertised module,
 including Google even when no exact Appendix C fixture is first-owned here.
 Record the provider-supported identifiers and the precise weaker result when
@@ -78,6 +84,12 @@ rate limit, expired authority, provider timeout, contradictory readback, and
 restart from checkpoint. Outage or ambiguity must not widen local authority or
 produce `verified`. Direct TLS must not claim clone/push/verb discrimination
 unless enforcement occurs at a qualified provider capability.
+
+## Execution and results
+
+Map each required case to its exact Rust test name, platform, and lifecycle.
+Document its command and expected result under the shared
+[command contract](README.md#command-contract).
 
 ## Required Artifacts And Pass Rule
 
@@ -95,4 +107,3 @@ or secret material in evidence.
   handle.
 - If the sandbox omits a required source-native ID, qualify the weaker contract
   or mark that capability unsupported; do not fabricate an exact join.
-

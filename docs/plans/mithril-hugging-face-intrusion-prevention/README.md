@@ -10,8 +10,8 @@ Design authority:
 - [Phase 6.2 held OCI route publication proposal](./phase-6-2-held-oci-route-publication-design.md)
 - [Hugging Face adversarial acceptance](./hugging-face-adversarial-acceptance.md)
 - [Live two-node lifecycle probe](./live-two-node-lifecycle-probe.md)
-- [Manual acceptance index](./manual-testing/README.md)
-- [Shared manual-test environment setup](./manual-testing/environment-setup.md)
+- [Platform test requirements](./manual-testing/README.md)
+- [Shared test environment setup](./manual-testing/environment-setup.md)
 - [Implemented outcome review guide](./implemented-phase-review.md)
 
 Node work: [component redesign and simplification](./node-simplification.md).
@@ -92,6 +92,11 @@ proof vocabulary in architecture Chapters 4, 22-25, 31, and 37.
   next.
 - Every phase has named deliverables, design-section bindings, real code-backed
   tests, exact fixtures, and a `Done`, `Not done`, or `Blocked` result.
+- Implement all acceptance scenarios in `crates/mithril-e2e`. Follow the
+  [scenario maintainability rules](../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+  Use small Rust platform tests with visible setup, action, assertions, and
+  cleanup. The [test guides](manual-testing/README.md) specify coverage and
+  execution; they do not define a separate manual acceptance suite.
 - A phase cannot weaken or silently reinterpret the validated architecture. A
   conflict stops implementation and requires an architecture amendment.
 - The protected application, image, command, Pod/process topology, credentials,
@@ -264,7 +269,7 @@ claim that arbitrary scripts are confined by a pod selector.
 | 6.2 | Kubernetes policy desired state, Control reconciliation/signing/rollout, secure node delivery, and durable Control evidence intake | Ch. 5, 11-12, 22, 30, 32, 34-37; A.8.1, A.11, A.15.1 |
 | 6.3 | Product-neutral shared telemetry and structured Mithril operational logs with component-specific verbosity | Ch. 32-35 operational visibility; no authority or evidence change |
 | 7 | Shared evidence processing/recovery/retention, graph/finding packages, discovery methods, agent tools and console publication, policy provenance, notifications, authority leases, and bounded qualification | Ch. 8, 22-25, 30, 32, 34-35; A.10, A.15; linked Discovery backend work lists |
-| 8 | Kubernetes/runtime/audit multi-node causality and conservative purpose classification | Ch. 7-8, 23, 25, 30-31; A.9-A.10, A.15.3 |
+| 8 | Kubernetes/runtime/audit multi-node causality, complete privileged/unmatched workload protection, purpose qualification, and bounded exception requests | Ch. 7-8, 23, 25, 30-31; A.9-A.10, A.15.3 |
 | 9 | Authorized local and distributed response with blast-radius disclosure and verified postconditions | Ch. 24-25, 32, 34; A.15.4-A.15.6 |
 | 10 | Qualified AWS/Google/GitHub/mesh/connector/artifact evidence, leases, and typed provider actuators | Ch. 23-26; A.10, A.15-A.16 |
 | 11 | Packaging, upgrade, platform qualification, performance, complete HF conformance, and signed release claims | Ch. 25, 30-33, 37; A.4-A.7; C |
@@ -274,6 +279,12 @@ Phase order is strict through Phase 11, including Phases 6.1, 6.2, and 6.3
 between Phases 6 and 7. Phase 12 allocation decisions may begin after Phase 0, but a
 physical evaluation must wait for the owning prerequisite named in Phase 12.
 Phase 12 cannot satisfy a Phase 11 core gate.
+
+Before a phase starts, record each prerequisite owner, required case, source
+revision, result, and remaining limit. Require the complete prerequisite
+result from its owner. A case result cannot close unrelated requirements or
+a complete parent phase. Retain open requirements until their owners record
+the required proof.
 
 The [Phase 7 subplan](phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order)
 contains the complete implementation order for data, discovery and observability.
@@ -296,8 +307,9 @@ AI model; external-client measurements do not block its core release.
 
 Observability 1 qualifies the delegated bpftrace backend. Observability 2 uses
 7.2 shared storage. Phase 7.3 proves trusted internal query/follow only.
-Observability 3 needs 7.3 and Observability 2; it adds production SQL admission
-and worker isolation before enabling SQL/trace APIs, CLI and console.
+Observability 3 needs 7.3 and Observability 2; it adds production SQL admission,
+bounded in-process execution, and query/trace APIs, CLI, and console.
+These checks do not prove OS process isolation.
 Discovery algorithms are not required for that client release.
 Storage, query and trace must work with discovery disabled. Optional
 Observability 4 adds the finite Trace CRD after Observability 3.
@@ -683,7 +695,9 @@ the registry artifact, criterion mapping, and this allocation in one review.
 
 ## Required Shape Of Every Phase Result
 
-Each phase ends with this checked-in block:
+Keep phase plans limited to the current implementation requirements and tests.
+Record implementation results in a separate file beside the owning phase.
+Link that result from the phase when it exists. Use this checked-in block:
 
 ```text
 State: Done | Not done | Blocked

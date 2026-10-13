@@ -6,7 +6,8 @@ approval. Nothing here can satisfy Phase 11.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
-Manual evaluation: [Phase 12 runbook](./manual-testing/phase-12-manual-acceptance.md)  
+Platform tests: [Optional evaluation requirements](./manual-testing/phase-12-manual-acceptance.md)
+
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
@@ -27,8 +28,10 @@ Chapters 5, 7, 14, 21, 26, and 35.1; Appendices A.13.6 and A.16.
 
 For every row below, record owner, security boundary, installation path,
 contracts, exact hooks/APIs, failure result, fixtures, performance budget,
-deployment change, and effect on existing claims. Missing information means
-`DEFER`, not a permissive prototype.
+deployment change, and effect on existing claims. An absent physical
+prerequisite means `BLOCKED_ON_PREREQUISITE`. After the required evaluation,
+use `DEFER` when the evidence does not justify adoption. Missing information
+does not authorize a prototype or a production capability.
 
 ### D12.2 — Seccomp compatibility/performance evaluation
 
@@ -74,6 +77,14 @@ quality. They feed Mithril Control as independent evidence only; they never
 become the default node gatherer, native identity, prevention proof, or policy
 authority.
 
+Keep this evaluation separate from recorded-input conversion and analysis in
+[Phase 7.5.8](phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-8-discovery-engine-algorithms.md)
+and [Phase 7.5.9](phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-9-security-analytics-algorithms.md).
+Reuse those package functions when their input contracts match. Evaluate the
+remaining live collection, authentication, source identity, loss, and health
+behavior. Required provider connectors remain in Phase 10. This optional
+evaluation cannot defer or complete a required Phase 10 connector.
+
 ## Per-Surface Prerequisites
 
 | Evaluation | Minimum completed prerequisite before physical prototype |
@@ -97,6 +108,13 @@ Each separately approved surface ends with one reproducible, prerequisite-aware
 checkpoint does not ship the surface or change a Phase 11 claim.
 
 ## Required Tests And Fixtures
+
+Implement all acceptance scenarios in `crates/mithril-e2e`. Follow the
+[scenario maintainability rules](../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small Rust platform tests and the shared fixture tooling. Keep setup,
+production calls, actions, assertions, and cleanup visible. The linked test
+guide defines coverage and execution instructions; it is not a second manual
+acceptance suite.
 
 - Seccomp, when allocated: `SECCOMP-QUAL-001`.
 - Checkpoint/stream, when allocated: `CHECKPOINT-CREATE-001`,
@@ -127,20 +145,3 @@ checkpoint does not ship the surface or change a Phase 11 claim.
 ## Excluded
 
 Unapproved production implementation of any evaluated surface.
-
-## Phase Result
-
-```text
-State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
-Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only rewrite.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: all surfaces remain evaluation-only.
-Remaining work in this phase: every separately approved evaluation.
-Next phase not authorized: yes.
-```

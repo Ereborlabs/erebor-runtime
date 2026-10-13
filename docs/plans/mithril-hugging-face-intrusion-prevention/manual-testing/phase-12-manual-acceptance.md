@@ -1,7 +1,7 @@
-# How To Manually Evaluate Phase 12
+# Platform Tests For Optional Evaluations
 
-Status: Proposed evaluation runbook; no Phase 12 prototype or test has been
-run. This guide cannot authorize or qualify production implementation.
+Status: Required optional-evaluation coverage. Tests require separate
+evaluation approval and cannot authorize production implementation.
 
 Phase: [Optional Ecosystem Compatibility](../phase-12-optional-ecosystem-compatibility.md)  
 Setup: [`OPTIONAL-SURFACE`](./environment-setup.md)
@@ -14,23 +14,25 @@ prerequisite is absent, record `BLOCKED_ON_PREREQUISITE`. `ADOPT` creates a new
 approved implementation phase; it does not ship from Phase 12 or alter the
 Phase 11 claim.
 
-## Automated Companion
+## Test implementation
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run the separately approved optional-surface
-prototype's legitimate, failure, bypass, performance, absence, and exact
-allocated-fixture suites against its completed prerequisite profile.
-```
+Implement the behaviors below as small Rust scenarios in `crates/mithril-e2e`.
+Follow the [scenario maintainability rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules)
+and the shared [platform test requirements](README.md#platform-test-shape).
+Use the applicable platform cases from one test body. Keep the production
+calls, action, assertions, and cleanup visible. The steps below specify Rust
+test behavior; they are not a separate manual acceptance procedure.
 
-## Common Procedure
+## Common scenario requirements
 
 1. Confirm the surface has separate user approval and every physical
    prerequisite named by Phase 12 is `Done`.
 2. Record its owner, security/mediation boundary, installation path, exact
    hooks/APIs, contracts, failure result, fixture IDs, performance budget,
    deployment change, and effect on existing claims.
-3. Run the unchanged core product with the optional component absent and prove
-   Phase 11 behavior is unchanged.
+3. Run the qualified prerequisite baseline with the optional component absent.
+   Record its supported behavior and limits. An early evaluation cannot claim
+   that the complete Phase 11 release has passed.
 4. Install only the prototype, run its legitimate control, exact fixtures,
    failure/bypass cases, and performance comparison with equal evidence load.
 5. Remove it and repeat the core control. Seal the raw results before choosing
@@ -38,7 +40,7 @@ allocated-fixture suites against its completed prerequisite profile.
 
 ## Seccomp Fixture
 
-| Fixture | Operator stimulus | Required oracle and control |
+| Fixture | Rust test action | Required oracle and control |
 | --- | --- | --- |
 | `SECCOMP-QUAL-001` | launch direct and qualified OCI/NRI variants with exact allow/deny, multithread/TSYNC, failed-install, and workload-load cases | filter is installed before user code with exact identity/scope; denied syscall physically fails, allowed control works, failure posture and measured budget are explicit |
 
@@ -47,7 +49,7 @@ approved measured budget. Schema or filter generation alone is insufficient.
 
 ## Checkpoint And Stream Fixtures
 
-| Fixture | Operator stimulus | Required oracle and control |
+| Fixture | Rust test action | Required oracle and control |
 | --- | --- | --- |
 | `CHECKPOINT-CREATE-001` | create a checkpoint through a supported stock authorization/runtime interface | exact authorization, object/task coverage, store result, and unsupported gaps are visible; no runtime patch is assumed |
 | `ENTRY-RESTORE-001` | restore a checkpoint into an isolated target | restored root/identity is created at the qualified first-effect boundary; no stale process lineage is inherited |
@@ -61,7 +63,7 @@ when the stock interface supplies only request/audit facts.
 Evaluate one named platform at a time. Every active row requires an official,
 supported identity/join and a physical lowering oracle.
 
-| Fixture | Operator stimulus | Required oracle and control |
+| Fixture | Rust test action | Required oracle and control |
 | --- | --- | --- |
 | `CI-CACHE-001` | write/read identical cache keys from isolated jobs | cache identity and consumers remain explicit; no invented step/process join |
 | `CI-CONTAINER-001` | run a job step inside the platform's supported container mode | official job/step/container/native joins and physical rule scope are proven |
@@ -103,6 +105,17 @@ and proof quality. It may enter Mithril Control only as independent evidence;
 it cannot become node identity, policy authority, prevention proof, or a
 second loader.
 
+Reuse recorded-input conversion and analysis from Phases 7.5.8 and 7.5.9 where
+their contracts match. Evaluate the remaining live source behavior. Keep
+required Phase 10 provider connectors outside this optional decision. A parser
+test cannot qualify a live source or replace its authentication and loss tests.
+
+## Execution and results
+
+Map each approved evaluation case to its exact Rust test name, platform, and
+lifecycle. Document its command and expected result under the shared
+[command contract](README.md#command-contract).
+
 ## Required Artifacts And Decision Rule
 
 Retain prerequisite proof, allocation ledger, prototype/artifact digests,
@@ -126,4 +139,3 @@ No decision changes a production claim by itself.
   exact per-step enforcement.
 - Optional evidence that reports a deny is not proof that Mithril physically
   prevented the effect.
-

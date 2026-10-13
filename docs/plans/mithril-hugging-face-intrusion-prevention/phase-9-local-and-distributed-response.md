@@ -4,7 +4,8 @@ Status: Proposed; depends on Phase 8 `Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
-Manual acceptance: [Phase 9 runbook](./manual-testing/phase-9-manual-acceptance.md)  
+Platform tests: [Phase 9 test requirements](./manual-testing/phase-9-manual-acceptance.md)
+
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
@@ -78,6 +79,12 @@ verification never injects hostile actions into the compromised target.
 Return only `verified`, `partial`, `failed`, or `unknown` with coverage and
 remaining branches.
 
+Use the existing TraceOwner if approved diagnostic capture supplies a required
+measurement. TraceOwner keeps capture authorization, limits, output, and cleanup.
+ResponseCoordinator keeps response authorization and state. A trace grant does
+not authorize a response. A capture receipt does not prove the response effect.
+Keep prevention independent of diagnostic availability.
+
 ### D9.7 — HF response increment
 
 Implement the local and Kubernetes portions of `HF-021`: contain the local
@@ -100,8 +107,11 @@ Query/follow returns the same committed revisions to agents and the console.
 No additional job-query API or client-owned response state is required.
 Keep provider actions Unsupported until their Phase 10 qualification.
 
-Run the Phase 7.7 query/authorization/local-defender cases with real response
-owners. Add revoked grants, stale findings, lost execution replies, concurrent
+Rerun the query, authorization, and local-defender cases required by
+[Phase 7.10](phase-7-mithril-control-and-detection-packages/phase-7-10-qualification.md)
+and its [verification matrix](phase-7-mithril-control-and-detection-packages/verification.md)
+with real response owners. Reuse the Observability 3 client cases for the shared
+transport. Add revoked grants, stale findings, lost execution replies, concurrent
 approval, PID/UID reuse, Control/client restart, and late replacement branches.
 Require matching lightweight and physical state transitions, postconditions,
 and healthy-watch results. A policy activation, process exit, or successful
@@ -114,6 +124,13 @@ actions; every terminal result includes blast-radius approval and authoritative
 postcondition plus healthy-watch evidence. Provider actuation remains absent.
 
 ## Required Tests And Fixtures
+
+Implement all acceptance scenarios in `crates/mithril-e2e`. Follow the
+[scenario maintainability rules](../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small Rust platform tests and the shared fixture tooling. Keep setup,
+production calls, actions, assertions, and cleanup visible. The linked test
+guide defines coverage and execution instructions; it is not a second manual
+acceptance suite.
 
 `HF-GRAN-CAPTURE-001`, `HF-GRAN-RESPAWN-001`, `HF-RESP-002`, and
 `HF-RESP-BLAST-RADIUS-003`; response-root inheritance, stale PID/pidfd/task
@@ -135,20 +152,3 @@ applicable live two-node response cases.
 ## Excluded
 
 AWS/GitHub/mesh/connector-specific actuators, delivered in Phase 10.
-
-## Phase Result
-
-```text
-State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
-Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only rewrite.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: provider-specific response remains Phase 10.
-Remaining work in this phase: all deliverables.
-Next phase not authorized: yes.
-```

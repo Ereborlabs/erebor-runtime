@@ -249,6 +249,13 @@ release. Missing later owners remain Unsupported in Phase 7.
 Component tests check each changed owner. Lightweight end-to-end tests call
 production owners without Kubernetes; run a physical case only where listed.
 
+Implement acceptance scenarios in `crates/mithril-e2e` under the
+[scenario maintainability rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small Rust platform tests with shared fixtures and visible actions,
+assertions, and cleanup. Launchers own environment preparation only. Follow
+the [test ownership and execution contract](verification.md#test-ownership);
+case labels identify coverage, not a new test dispatcher or manual suite.
+
 | Phase | Component tests | End-to-end and physical tests |
 | --- | --- | --- |
 | 7.1 | Check schema bounds, exact derivation, offline DuckDB recovery, SQL admission and worker isolation. | Run `offline-exact` and `storage-contract` through public recorded and AnalysisStore methods. Do not call live Node intake; no physical case is required. |
@@ -285,5 +292,5 @@ replace a production transaction, authorization decision or execution owner.
 - [Console and API](console-and-api.md): shared RPCs, grants and review behavior.
 - [Verification](verification.md): case matrix, resource limits and release gates.
 - [Research](research-and-demand.md): source studies and demand.
-- [Manual acceptance](../manual-testing/phase-7-manual-acceptance.md): operator checks.
+- [Acceptance coverage](../manual-testing/phase-7-manual-acceptance.md): required scenario assertions under the [shared test contract](../manual-testing/README.md).
 - [Implementation review](implementation-review.md): source reading, not target-design completion.

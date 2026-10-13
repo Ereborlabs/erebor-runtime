@@ -32,8 +32,10 @@ The lightweight incident case passes
 
 ## Scope and owners
 
-Keep lightweight cases in `crates/mithril-e2e/src` and their command entry points
-in `src/bin`. Use production APIs. Test doubles supply only external inputs.
+Keep acceptance scenarios in `crates/mithril-e2e/src`. Follow the
+[scenario maintainability rules](../../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small standard Rust tests and `platform_test` for physical cases. Keep
+production calls and assertions visible. Test doubles supply only external inputs.
 Keep physical harnesses and fixtures in their existing directories. Add no long
 shell test program, external source-tree edit, or linked worktree.
 
@@ -66,8 +68,10 @@ sensors, identity bindings, policy, or enforcement paths.
 
 ## Acceptance and verification
 
-Add `analysis-packages` to the existing `mithril_discovery_test` runner. Run it
-and `graph-notification`, then the paired physical incident case. Record source,
+Implement `analysis-packages` as standard Rust tests in the existing scenario
+family. Map the coverage to exact test names and applicable platforms. Run
+these tests and the `graph-notification` checks, then the paired physical
+incident case through the common platform fixture. Record source,
 commands, nonzero assertions, package revisions, selected targets, result paths,
 coverage, effects, and cleanup. Run the shared Rust procedure after the final
 source or test edit. Update each child result with exact proof and limits.

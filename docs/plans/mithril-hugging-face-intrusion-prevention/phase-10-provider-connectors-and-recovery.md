@@ -4,7 +4,8 @@ Status: Proposed; depends on Phase 9 `Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
-Manual acceptance: [Phase 10 runbook](./manual-testing/phase-10-manual-acceptance.md)  
+Platform tests: [Phase 10 test requirements](./manual-testing/phase-10-manual-acceptance.md)
+
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
@@ -24,6 +25,16 @@ Implement authenticated source health, cursor/checkpoint, schema/version,
 rate/backoff, replay/dedupe, coverage, proof quality, secret redaction, and
 registered edge contracts. A generic connector cannot issue arbitrary provider
 requests or claim an operation succeeded.
+
+Use the existing intake, coverage, AnalysisStore, package execution, and
+authority-lease owners. Reuse the algorithms assigned to
+[Phase 7.5.8](phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-8-discovery-engine-algorithms.md)
+and [Phase 7.5.9](phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/phase-7-5-9-security-analytics-algorithms.md).
+For each provider, list the required input fields, authenticated source,
+package consumer, supported action, and required readback. The host connector
+owns live collection and credentials. Package code receives authorized inputs;
+it receives no provider credentials. Recorded-input tests qualify computation
+only. Qualify live collection and each provider action separately.
 
 ### D10.2 — AWS and Google authority/evidence modules
 
@@ -76,9 +87,12 @@ descriptions, and investigation screens. This phase owns those changes and
 their tests. Reuse `plan_response` and `execute_response`; do not add a
 generic provider-call tool or a second response coordinator.
 
-Bind disclosure grants to the provider evidence fields and approved model
-recipient. Do not place provider credentials in agent context. Keep account,
-project, repository, lease, and action scope explicit. A missing provider
+Reuse the tenant investigate permission and external-recipient records from
+[Phase 7.7](phase-7-mithril-control-and-detection-packages/phase-7-7-agent-investigation-and-classification.md).
+Do not add column or target ACLs to SQL. Provider actions require separate
+authorization for the exact operation and target. Do not place provider
+credentials in agent context. Keep account, project, repository, lease, and
+action scope explicit. A missing provider
 capability stays Unsupported even if another action from that provider passed.
 
 Repeat the shared local-defender and console loop with each advertised typed
@@ -95,6 +109,13 @@ typed actuator with authoritative readback. Named CI enforcement remains
 unallocated.
 
 ## Required Tests And Fixtures
+
+Implement all acceptance scenarios in `crates/mithril-e2e`. Follow the
+[scenario maintainability rules](../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small Rust platform tests and the shared fixture tooling. Keep setup,
+production calls, actions, assertions, and cleanup visible. The linked test
+guide defines coverage and execution instructions; it is not a second manual
+acceptance suite.
 
 - `EDGE-ARTIFACT-CONSUMER-005`, `EDGE-AWS-SHARED-001`,
   `EDGE-CONNECTOR-FORWARD-004`, `EDGE-GITHUB-SHARED-003`, and
@@ -125,20 +146,3 @@ unallocated.
 
 Named CI runner adapters, arbitrary provider actions, TLS interception, and
 Phase 12 optional surfaces.
-
-## Phase Result
-
-```text
-State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
-Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only rewrite.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: not yet measured.
-Remaining work in this phase: all deliverables.
-Next phase not authorized: yes.
-```

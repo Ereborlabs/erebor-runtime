@@ -225,18 +225,19 @@ cargo test -p mithril-control discovery_ -- --nocapture
 bash packaging/mithril/helm/tests/verify.sh
 ```
 
-Implement `review-publish` in `crates/mithril-e2e/src/discovery/` and register
-it in `src/bin/mithril_discovery_test.rs`. Use production gRPC, proposal,
+Implement `review-publish` coverage as small standard Rust tests in
+`crates/mithril-e2e/src/discovery/`. Follow the
+[scenario maintainability rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use `platform_test` for physical cases. Use production gRPC, proposal,
 approval, publication and rollout owner APIs. The Kubernetes API double can
 lose a reply or change resourceVersion; it cannot make the approval decision.
 Require one conditional source change, the exact reviewed digest, and distinct
 source-accepted versus per-target-active states. Test denied self-approval,
 source UID replacement, stale preview, lost reply and partial activation.
-Run this lightweight case before the paired physical publication test.
-
-```sh
-cargo run -p mithril-e2e --bin mithril_discovery_test -- --case review-publish --output-directory /tmp/araphor-publication
-```
+Run the lightweight cases before their Kubernetes platform tests. Keep the
+same actions and assertions in Rust. Document exact test names, platforms,
+lifecycles, commands, and expected results under the
+[shared command contract](../manual-testing/README.md#command-contract).
 
 From `ui/mithril-console`, run `npm run check`, `npm test`, `npm run build`,
 and `npm run test:e2e`. Browser tests must cover keyboard-only review, a scope

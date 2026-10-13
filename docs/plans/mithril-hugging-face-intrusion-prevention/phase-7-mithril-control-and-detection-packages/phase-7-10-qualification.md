@@ -16,7 +16,7 @@ no inherited pass or unsupported prevention claim.
 Engineer runs a reviewed qualification case
   -> lightweight case calls supported production owner APIs
   -> case records profile, proposal, review, source, and result fields
-  -> paired physical harness runs the same decisions on the target platform
+  -> platform fixture runs the same Rust scenario on the target platform
   -> comparison checks matching transitions and semantic result fields
   -> result records exact source revision, platform, and evidence artifacts
 
@@ -27,16 +27,23 @@ Physical case exposes a missing condition
   -> both layers run again
 
 Resource, security, or operator gate fails
-  -> release excludes the affected capability or stops
+  -> release stops if the failed case is required
+  -> affected capability remains unqualified
   -> prior active policies remain unchanged
   -> result states the exact remaining work and new approval boundary
 ```
 
 ## Scope and owners
 
-Lightweight cases live in `crates/mithril-e2e/src`; command entry points live in
-`src/bin`. Physical harnesses live in `crates/mithril-e2e/harness`; automated
-inputs live in `fixtures`. Automated tests must not read `examples/`.
+Acceptance scenarios live in `crates/mithril-e2e/src` and use the standard Rust
+test harness. Follow the
+[scenario maintainability rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small `platform_test` functions for the applicable environments. Keep
+owner calls, actions, assertions, and cleanup visible in the test body.
+The common platform fixture owns placement and lifecycle mechanics.
+Harnesses in `crates/mithril-e2e/harness` prepare the environment and invoke
+the exact Rust tests. Inputs live in `fixtures`. Do not add scenario logic to
+shell scripts or new custom test dispatchers. Tests must not read `examples/`.
 Control and console owners fix their own defects. Qualification does not add
 an alternative implementation of those owners.
 
@@ -50,14 +57,23 @@ deterministic findings, escalation, and exact policy review/publication with
 activation results. It excludes exception requests, cross-node causality,
 response execution, and provider actions. Test their Unsupported states.
 
+Require the approved Phase 7.5 package runtime and algorithm results. Rerun
+[7.5.7 package qualification](phase-7-5-graphs-findings-and-notifications/phase-7-5-7-package-qualification.md)
+and the required 7.5.8 and 7.5.9 algorithm cases on the release revision.
+Record package digests, execution targets, input coverage, and case results.
+Include the approved SQL, Wasm, and native targets. Include Python only when
+advertised. Package-runtime qualification alone does not complete the two
+algorithm phases. Recorded-input results do not qualify live external sources.
+
 Require Observability 3 for the query/trace client and execution contracts.
 Rerun its applicable `OBS-*` cases on the release revision; do not inherit an
 earlier physical pass. The optional Trace CRD is advertised only if
 Observability 4 passes on that revision. Its absence does not block CLI release.
 
 Freeze required capabilities and cases in the fixture manifest before running
-tests. `--case all` must run all cases required by that declared set; it must
-not infer a smaller set from unavailable services. A failed required capability
+tests. Map each required case to its exact Rust test names and platforms. Run
+the complete required set; do not reduce it because a service is unavailable.
+A failed required capability
 blocks this release. A deterministic-only release leaves assisted defense
 unqualified; model absence cannot silently remove its cases.
 
@@ -66,18 +82,18 @@ when they add exception, response, and provider capabilities. Mithril 11 reruns
 the complete advertised set on its release revision. This phase can close its
 bounded scope before those increments; it cannot claim their physical results.
 
-1. Complete `crates/mithril-e2e/src/discovery.rs`, its
-   `src/bin/mithril_discovery_test.rs` entry point, and
-   `fixtures/discovery/manifest.json`. Map every required case in
-   [verification.md](verification.md) to an executable assertion and expected
-   result for the frozen capability set. Missing required cases fail the
-   qualification summary. Later positive actuation cases remain assigned to
-   their Mithril owner phase; unavailable-action rejection is required now.
-2. Add `harness/vm/discovery.sh` using the existing owned two-node environment
-   and cleanup contract. Reuse its images, OIDC fixture, and production Helm
-   chart; do not add another VM provider. Require a passing lightweight result
-   from the same revision before the physical case. Compare semantic fields;
-   only environment identities and timestamps can differ.
+1. Implement small Rust scenarios in the existing `src/discovery/` family.
+   Map every required case in [verification.md](verification.md) to its
+   standard Rust test names, assertions, and expected result. Keep this mapping
+   in `fixtures/discovery/manifest.json`; it records coverage, not test dispatch.
+   Missing required cases fail qualification. Positive actuation cases remain
+   with their owning phase; unavailable-action rejection is required here.
+2. Reuse the shared VM and Kubernetes platform tooling. Keep image, OIDC,
+   cluster, and binary preparation in the launcher. Use the production Helm
+   chart. Keep actions and assertions in Rust. Run one lifecycle and platform
+   per test process. Require the passing lightweight result from the same
+   revision before Kubernetes. Compare decisions and semantic fields; only
+   environment identities and timestamps can differ.
 3. Prove valid startup, probes, normal work, restart, shutdown, and approved
    maintenance for the stated fixture. Prove forbidden effects separately.
 4. Run 7.9 embedded/remote parity and placement transfer if remote mode is
@@ -142,10 +158,11 @@ bounded scope before those increments; it cannot claim their physical results.
     not disable prevention or mandatory escalation. Run optional MCP checks
     only if that adapter is part of the declared release.
 
-Add `all` to the existing discovery binary. It must enumerate the frozen
-required cases from verification.md, fail on unknown/missing cases, and report
-nonzero assertion counts. Reuse `harness/observability/` for physical trace
-cases; do not duplicate its backend lifecycle runner.
+Use standard Rust test discovery to check the frozen required set. Fail on
+missing or unknown mapped cases and zero executed tests. A compatibility
+artifact writer may retain the existing result schema; it must not execute a
+hidden scenario. Reuse shared observability fixtures for capture tests. Keep
+backend actions and assertions in Rust, not in a second shell runner.
 
 Complete this subphase after the required core Phase 7 gates pass. Phase 7.7
 completion does not depend on a live model. Optional client compatibility
@@ -171,25 +188,26 @@ This result closes Phase 7; it does not require a prior Phase 7 Done result.
 - Store a bounded reproducible evidence bundle and its retention/expiry state.
 - Document unsupported source families and policy semantics prominently.
 
-Add these final entry points and record their output digests in this phase:
+Build and list the standard tests before qualification:
 
 ```sh
-cargo run -p mithril-e2e --bin mithril_discovery_test -- \
-  --case all --output-directory /tmp/araphor-discovery-lightweight
-bash crates/mithril-e2e/harness/vm/discovery.sh \
-  --environment /tmp/mithril-two-node/retained-environment.json \
-  --lightweight-result /tmp/araphor-discovery-lightweight/result.json \
-  --output-directory /tmp/araphor-discovery-physical
-bash .github/scripts/verify-rust-ci.sh
+cargo test -p mithril-e2e --lib --no-run
+cargo test -p mithril-e2e --lib -- --list
 ```
 
-The first two commands are proposed interfaces. The harness must validate
-environment ownership before mutation and retain `result.json` plus cleanup
-results on failure. Also run the package and UI commands from Phase 7.8 after
-the final edit. No model adoption is required for the deterministic release.
+Document each exact test command, platform, lifecycle, expected result, and
+artifact path under the [shared command contract](../manual-testing/README.md#command-contract).
+Run applicable Host, direct-runc, and Kubernetes tests in that order. The
+launcher must validate environment ownership and retain failure diagnostics.
+Build and list commands do not qualify a scenario. After the final Rust edit,
+run `bash .github/scripts/verify-rust-ci.sh`. Also run the required package and
+UI checks. No model adoption is required for the deterministic release.
 
 ## Exclusions and stop point
 
-Do not add cloud/IAM mutation, external policy export, Wasm extensions, or new
-agent enforcement to satisfy a release checklist. Each needs its own approved
-implementation and qualification. Stop at the tested native scope.
+Include the approved Phase 7.5 execution targets and computation-only policy
+candidate exports. Those exports do not apply policy to an external system.
+Do not add cloud/IAM mutation, external policy application, new execution
+targets, or new agent enforcement to satisfy a release checklist. Additional
+capabilities need their own approved implementation and qualification. Stop
+at the declared capability set and its tested limits.

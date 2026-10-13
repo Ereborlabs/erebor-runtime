@@ -1,6 +1,6 @@
-# How To Manually Accept Phase 9
+# Platform Tests For Phase 9
 
-Status: Proposed runbook; no Phase 9 implementation or test has been run.
+Status: Required platform test coverage.
 
 Phase: [Local And Distributed Response](../phase-9-local-and-distributed-response.md)  
 Setup: [`TWO-NODE`](./environment-setup.md)
@@ -12,15 +12,21 @@ discloses and authorizes its real blast radius, survives retry/restart, and
 reports success only after an authoritative physical postcondition and healthy
 watch. No PID-only, raw-command, or free-form provider response is accepted.
 
-## Automated Companion
+## Test implementation
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 9 response authorization,
-simulation, local/Kubernetes actuator, transaction recovery, blast-radius,
-postcondition, healthy-watch, and live two-node suites.
-```
+Implement the behaviors below as small Rust scenarios in `crates/mithril-e2e`.
+Follow the [scenario maintainability rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules)
+and the shared [platform test requirements](README.md#platform-test-shape).
+Use the applicable platform cases from one test body. Keep the production
+calls, action, assertions, and cleanup visible. The steps below specify Rust
+test behavior; they are not a separate manual acceptance procedure.
 
-## Procedure
+## Scenario requirements
+
+Rerun the applicable Phase 7.10 and Observability 3 client cases with the real
+response owners. If a case needs diagnostic capture, use TraceOwner and retain
+its output, coverage, and cleanup result. Check response authorization and the
+physical postcondition separately. A trace grant or receipt cannot satisfy them.
 
 1. Complete the two-node setup and capture the exact task, process, pidfd,
    task-cookie, start-time, cgroup, Pod UID, object UID, resourceVersion, and
@@ -38,7 +44,7 @@ postcondition, healthy-watch, and live two-node suites.
 
 ## First-Owned Fixture Matrix
 
-| Fixture | Operator stimulus | Required oracle and control |
+| Fixture | Rust test action | Required oracle and control |
 | --- | --- | --- |
 | `HF-GRAN-CAPTURE-001` | attempt to contain a captured/stale process coordinate, then the exact live target | stale or replaced coordinate cannot actuate; exact authorized target reaches its named physical state; unrelated process continues |
 | `HF-GRAN-RESPAWN-001` | contain a Pod/process managed by a recreating controller | plan exposes replacement blast radius and follows only the authorized workload/object contract; an unapproved replacement remains an open branch |
@@ -50,7 +56,7 @@ postcondition, healthy-watch, and live two-node suites.
 Run each advertised actuator against an isolated target and a legitimate
 control:
 
-| Operation | Required manual proof |
+| Operation | Required assertions |
 | --- | --- |
 | restrict process/native family | new prohibited effect fails for the exact family; unrelated family remains allowed |
 | freeze or kill exact cgroup lineage | exact cgroup task state changes; sibling cgroup continues |
@@ -81,6 +87,12 @@ precondition must fail closed. `verified` is valid only when the exact named
 postcondition and healthy interval are present; otherwise the result is
 `partial`, `failed`, or `unknown` with remaining branches.
 
+## Execution and results
+
+Map each required case to its exact Rust test name, platform, and lifecycle.
+Document its command and expected result under the shared
+[command contract](README.md#command-contract).
+
 ## Required Artifacts And Pass Rule
 
 Retain authorization and simulation revisions, exact target coordinates,
@@ -98,4 +110,3 @@ advertised actuator must agree with their physical oracle.
   it; report the replacement branch unless it was explicitly authorized.
 - If readback cannot distinguish replacement from the original target, return
   `unknown`; do not infer success from a dispatch acknowledgment.
-

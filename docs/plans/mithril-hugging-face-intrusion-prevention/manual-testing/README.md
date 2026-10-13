@@ -1,21 +1,19 @@
-# Mithril Manual Acceptance Index
+# Mithril Platform Test Requirements
 
-Status: Operator runbooks. The Phase 6 guide contains an executed acceptance
-record. Other guides retain their own stated status.
+All acceptance scenarios belong in `crates/mithril-e2e`. Follow the
+[binding acceptance rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules),
+including scenario shape, shared fixtures, lifecycle, and verification order.
+Use the current TODO as the test-writing contract.
 
-These documents turn each phase's automated fixtures into a human-reviewable
-live acceptance procedure. They supplement, but never replace, the committed
-Rust tests, deterministic fixtures, and qualification artifacts required by
-the phase plan.
-
-The Phase 6 record refers to evidence in `/tmp`. It records SHA-256 values so
-an operator can identify the exact files. The evidence files are not
-repository or release artifacts.
+These guides specify the required behaviors, assertions, and commands for
+those Rust tests. An operator runs the same tests and inspects their results.
+Do not implement a second manual procedure or shell-owned scenario. Keep
+existing qualification evidence in its result records.
 
 Start with [environment setup](./environment-setup.md). Then use the guide for
 the approved phase:
 
-| Phase | Manual acceptance guide |
+| Phase | Test requirements and execution guide |
 | ---: | --- |
 | 0 | [Feasibility, source, ABI, and fixture closure](./phase-0-manual-acceptance.md) |
 | 1 | [Shared Interceptor, node, Control, and boot lifecycle](./phase-1-manual-acceptance.md) |
@@ -33,85 +31,77 @@ the approved phase:
 | 11 | [Production installation and final conformance](./phase-11-manual-acceptance.md) |
 | 12 | [Optional-surface evaluations](./phase-12-manual-acceptance.md) |
 
-## Current-Source Privileged Lane
+## Physical Environment
 
-Use the [repository-owned VM harness](../../../../crates/mithril-e2e/harness/vm/README.md)
-for the current kernel, identity, effect-observation, and local-enforcement
-physical probes:
+Use the [shared VM setup](../../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-vm)
+and the [environment requirements](environment-setup.md). The launcher
+prepares VMs, runtimes, images, and the compiled test executable. It must not
+own scenario actions or assertions. Run the exact Rust tests in that prepared
+environment. A successful environment setup does not qualify a scenario.
 
-```sh
-crates/mithril-e2e/harness/vm/run.sh --with-k3s \
-  --output-directory /tmp/mithril-vm-evidence
-```
-
-The harness creates one disposable Ubuntu 24.04 libvirt guest, verifies the
-qualified kernel features, runs the current binaries, copies the evidence, and
-destroys the guest. The optional Kubernetes lane uses the K3s distribution.
-It proves Pod and CRI facts, creates an exact Mithril CRI binding, and records
-restricted direct CRI exec, non-TTY and TTY `kubectl exec`, and `kubectl cp`
-roots. It also records an identical native child with its parent lineage and
-role. The lifecycle-sleep extension records that the native Kubernetes sleep
-action creates no extra task in the container cgroup. The network-probe
-extension records the same task-absence result for HTTP, TCP, and gRPC
-readiness probes. The container-identity extension records separate roots and
-execution sets for a regular init, native sidecar, and application in one Pod.
-The ephemeral extension records a separate root, process, execution set, and
-profile for a targeted ephemeral container in the application's PID namespace.
-The exec-probe extension records concurrent startup, readiness, and liveness
-exec probes together with probe-identical native, `kubectl exec`, and direct
-CRI entries. It keeps native lineage separate from restricted external roots.
-The PreStop extension holds a real exec hook during Pod deletion and records
-unchanged application identity, a fresh restricted hook root, and exact task-
-reference release.
-It does not prove approved administrative exec, shared-resource or network-flow
-policy, multi-node propagation, or complete Kubernetes protection.
-
-For a retained guest that runs manual shells, use the [manual retained-VM
-procedure](../../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm).
-The controller mounts the current source read-only at `/mnt/mithril-source`.
-Use its `start`, `ssh`, and `destroy` commands. Keep all fixture, binding,
-pin, lease, and output paths in the guest.
-
-## How To Read A Manual Case
+## How To Read A Test Case
 
 Each guide contains a fixture matrix. Every row names:
 
 - the exact fixture or phase-owned test;
-- the action an operator initiates;
-- the physical oracle that must be inspected; and
+- the action the Rust scenario performs;
+- the physical result the Rust test must assert; and
 - the legitimate control that must still work.
 
-Some races, saturation conditions, packet rewrites, and kernel transitions
-cannot be produced reliably by typing shell commands. Those rows are marked
-`operator + harness`: the committed fixture harness injects the condition, and
-the operator independently reviews the physical result and retained artifacts.
-Calling such a row “manual” never permits replacing the deterministic harness
-with timing guesses.
+Keep failure injection and security assertions in the Rust scenario. Shared
+fixtures own only reusable environment and lifecycle mechanics. The launcher
+prepares the environment and invokes the standard Rust test. An operator's
+observation cannot replace an assertion or a missing physical test.
+
+## Platform Test Shape
+
+Write one small behavior in its `mithril-e2e/src` scenario module. Use a generic
+`Platform` parameter and `#[platform_test(...)]` for the applicable platforms.
+Put `#[lifecycle = name]` below the attribute. Keep setup, owner calls, actor
+actions, assertions, and cleanup visible. Do not branch on the platform in
+the scenario or reproduce production operations in a helper.
+
+Follow the TODO's file-size, actor, fixture, and lifecycle rules. Reuse one
+actor input for the same behavior across platforms. A file with one test must
+stay below 100 lines. Do not hide assertions to meet that limit. Place inputs
+under `fixtures/` and reuse the common platform implementations. Use ordinary
+Rust tests for the lightweight checks that need no physical platform.
+
+Use the standard Rust test harness. Do not add a custom case dispatcher or
+replacement test registry. A fixture-ID map records coverage; it does not run
+the scenarios. Keep VM, cluster, image, and binary preparation in `harness/`.
+The shared Kubernetes fixture must supply real nodes for a multi-node case.
+A provider case must use its required provider sandbox. A Host result cannot
+replace either prerequisite.
 
 ## Standard Run Workflow
 
 1. Create an isolated run using the environment guide and record its manifest.
 2. Confirm the exact phase is approved and every dependency phase is `Done`.
-3. Run the phase's automated test suite from the final source state.
-4. Execute every applicable manual matrix row, including its legitimate
-   control and one missing-prerequisite variant.
-5. Inspect the physical effect, not only Mithril telemetry.
+3. Build and list the standard `mithril-e2e` Rust tests from the final source.
+4. Run the exact tests for each required row. Run Host, then direct `runc`,
+   then Kubernetes when those platforms apply. Include the legitimate control
+   and the required failure variants in the Rust assertions.
+5. Run one lifecycle and one platform per platform-test process. Check physical results,
+   coverage, and cleanup through the test assertions.
 6. Save the required artifacts under one run ID and calculate their digest.
-7. Copy the exact fixture results, commands, platform manifest, failures, and
-   artifact digest into the phase's `Phase Result` block.
+7. Record fixture IDs, exact test names, commands, platform, failures, and
+   artifact digests in the separate phase result file.
 
 ## Command Contract
 
-A guide for a surface that has no implementation may use this marker:
+For each required case, document its Rust source, exact generated test name,
+platform, lifecycle, prerequisites, command, and expected result. Use
+`cargo test -p mithril-e2e --lib --no-run` to build and
+`cargo test -p mithril-e2e --lib -- --list` to inspect registration. Follow the
+[shared scenario instructions](../../../../crates/mithril-e2e/README.md#add-and-run-a-shared-scenario)
+for exact execution in the prepared environment.
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: <owner and intended operation>
-```
-
-That marker is a blocking documentation contract. The implementing phase must
-replace it with a copy-pastable command and expected machine-readable result
-before the phase can be `Done`. An operator must not substitute an ad-hoc
-command and treat the row as qualified.
+Privileged tests use `--exact --ignored --nocapture --test-threads=1` and an
+explicit ignore reason. Tests that need no privileges remain non-ignored. Require a
+nonzero test count and successful cleanup. A phase cannot be Done while a
+required scenario or its exact execution instructions are absent. Existing
+test names in other result records do not prove a new case.
 
 ## Shared Result Rule
 
@@ -119,7 +109,7 @@ A row passes only when all of these agree:
 
 ```text
 automated fixture result
-manual operator observation
+Rust scenario assertions
 physical syscall/packet/object/provider postcondition
 coverage and capability state
 legitimate control result
@@ -138,7 +128,7 @@ phase and deliverable IDs
 fixture/test ID and activation condition
 candidate and platform-manifest digests
 automated command and result
-manual stimulus and operator
+Rust source, exact test name, platform, and lifecycle
 expected and observed physical result
 coverage/capability state
 legitimate control result

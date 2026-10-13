@@ -1,10 +1,11 @@
 # Phase 8: Kubernetes Distributed Causality
 
-Status: Proposed; depends on Phase 7 `Done`.
+Status: Proposed; depends on the bounded Phase 7.10 release `Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
-Manual acceptance: [Phase 8 runbook](./manual-testing/phase-8-manual-acceptance.md)  
+Platform tests: [Phase 8 test requirements](./manual-testing/phase-8-manual-acceptance.md)
+
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
@@ -20,7 +21,7 @@ Chapters 7-8, 23, 25, and 30-31; Appendices A.9-A.10 and A.15.3.
 ## Deliverables
 
 In the [combined Araphor order](phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order),
-start after the bounded Phase 7.7 release. The existing query, assessment,
+start after the bounded Phase 7.10 release. The existing query, assessment,
 console, and policy workflow are inputs, not work to repeat.
 
 ### D8.1 — Kubernetes source adapters and coverage
@@ -39,6 +40,12 @@ Implement registered edges for API request to object revision, controller/
 owner reference, scheduler binding, Pod/container/cgroup/runtime root, and node
 observation. Preserve fan-out, retries, replacement controllers, deletion,
 name reuse, late events, and contradictions as explicit branches.
+
+Extend the installed analysis packages and graph contracts from
+[Phase 7.5](phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/README.md).
+Use the existing package SDK, execution owners, and graph store. Package tests
+with recorded inputs do not qualify live Kubernetes sources or cross-node
+causality. Keep those source and physical tests in this phase.
 
 ### D8.3 — Cross-node causal package
 
@@ -77,10 +84,13 @@ records to the existing discovery context and query views. Preserve exact
 request/object/binding references, cross-node branches, and coverage gaps.
 Extend the existing investigation screens; add no separate incident store.
 
-Add `request_exception(grant_id, target, bounds, reason)` through the shared
-HTTP/MCP contract after the existing exception owner has a qualified public
-request/approval method. The first adapter requests an exact precompiled
-bounded file grant. It cannot create a privileged-root exception, approve
+Add `request_exception(grant_id, target, bounds, reason)` through the existing
+ClientGrpcOwner after the exception owner has a qualified public request and
+approval method. Use native gRPC for clients and gRPC-Web for the console.
+An optional stdio MCP adapter calls the same owner methods. Reuse the
+[Observability 3 transport](../araphor-observability/phase-3-cli-api-and-console.md);
+add no second listener or JSON business API. The first adapter requests an
+exact precompiled bounded file grant. It cannot create a privileged-root exception, approve
 itself, or infer authority from an assessment. Keep D8.4's separately signed
 privileged exceptions distinct. Bind requests to target, use count, expiry,
 reviewer, and revocation state; follow the existing owner's result through
@@ -100,6 +110,13 @@ facts, and the privileged/unmatched workload branch has a measured physical
 admission or node-floor result on the two-node fixture.
 
 ## Required Tests And Fixtures
+
+Implement all acceptance scenarios in `crates/mithril-e2e`. Follow the
+[scenario maintainability rules](../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small Rust platform tests and the shared fixture tooling. Keep setup,
+production calls, actions, assertions, and cleanup visible. The linked test
+guide defines coverage and execution instructions; it is not a second manual
+acceptance suite.
 
 - `EDGE-K8S-SHARED-002`, `HF-GRAN-CLUSTER-SHARED-001`,
   `HF-GRAN-HOSTPATH-001`, `NODE-FLOOR-EXCEPTION-002`, and
@@ -131,20 +148,3 @@ admission or node-floor result on the two-node fixture.
 ## Excluded
 
 Provider-specific audit semantics and response actuation.
-
-## Phase Result
-
-```text
-State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
-Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only rewrite.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: not yet measured.
-Remaining work in this phase: all deliverables.
-Next phase not authorized: yes.
-```

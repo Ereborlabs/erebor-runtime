@@ -394,6 +394,15 @@ does not block the embedded SQL/trace release.
 Component tests check each changed owner. Lightweight end-to-end tests call
 production owners without Kubernetes; run a physical case only where listed.
 
+Implement acceptance scenarios in `crates/mithril-e2e` under the
+[scenario maintainability rules](../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Use small Rust platform tests for physical behavior. Keep owner calls, actions,
+assertions, and cleanup visible. Shared fixtures own platform mechanics;
+launchers prepare the environment and invoke exact standard Rust tests.
+Use ordinary non-ignored Rust tests for lightweight cases without a physical
+platform. Case names below identify coverage. Do not add a second manual suite
+or a custom test dispatcher.
+
 | Phase | Component tests | End-to-end and physical tests |
 | --- | --- | --- |
 | 1 | Check source limits, process supervision, output bounds and cleanup. | Run `backend-lifecycle` with a process double, then run the paired real-bpftrace case. |

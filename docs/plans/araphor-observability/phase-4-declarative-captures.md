@@ -70,23 +70,31 @@ write, controller restart between intent/dispatch/status, deletion during
 attach, forced deletion, unavailable node, and watch relist. Verify one
 execution identity through API, CLI resume, console, and CR status.
 
-Add owner-level `observability_crd_` tests and a paired physical Kubernetes
-case under the existing e2e harness. Lightweight cases run first. Verify CRD
+Add owner-level `observability_crd_` tests and Rust acceptance scenarios in
+`mithril-e2e`. Follow the
+[scenario maintainability rules](../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules).
+Run the lightweight cases before their Kubernetes platform tests. Verify CRD
 schema and RBAC with `bash packaging/mithril/helm/tests/verify.sh`, then run
 the full Rust CI gate after source changes. Do not mark deletion complete
 solely because an API accepted a cancellation request.
 
 ### End-to-end deliverable
 
-Add `trace-crd` to `crates/mithril-e2e/src/bin/mithril_observability_test.rs`.
-Implement the case in the existing `src/observability.rs` module family.
+Implement the `trace-crd` coverage as small standard Rust tests in the existing
+`mithril-e2e/src/observability.rs` module family. Use `platform_test` for the
+physical cases and the existing shared Kubernetes fixture. Add no custom
+dispatcher or shell-owned scenario.
 Use the production
 reconciler and TraceOwner with a Kubernetes API double for lightweight proof.
 Repeat create/watch/status/delete events, lose the dispatch reply, restart
 the reconciler, then force deletion. Require one execution identity, independent
-read grants and local expiry. Run the same sequence through the existing
-physical harness with actual Kubernetes resources. The result must retain
+read grants and local expiry. Run the same behavior through the Kubernetes
+platform with actual resources. Keep actions and assertions in Rust. Retain
 resource UID, spec digest, trace ID, execution count and cleanup result.
+
+Document the exact Rust test names, lifecycle, setup, commands, expected
+results, and cleanup checks in the test guide. A build or test-list command
+does not satisfy the physical case.
 
 ## Stop point
 

@@ -1,6 +1,6 @@
-# How To Manually Accept Phase 8
+# Platform Tests For Phase 8
 
-Status: Proposed runbook; no Phase 8 implementation or test has been run.
+Status: Required platform test coverage.
 
 Phase: [Kubernetes Distributed Causality](../phase-8-kubernetes-distributed-causality.md)  
 Setup: [`TWO-NODE`](./environment-setup.md)
@@ -11,15 +11,20 @@ Prove `HF-XNODE-001` only through authenticated Kubernetes/runtime bridges and
 physically reject or restrict the attacker-created privileged/unmatched
 workload branch without inventing process ancestry or purpose.
 
-## Automated Companion
+## Test implementation
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 8 Kubernetes source/coverage,
-graph edge, fan-out/reuse/contradiction, admission/node-floor, purpose matrix,
-HF-XNODE, and live two-node suites.
-```
+Implement the behaviors below as small Rust scenarios in `crates/mithril-e2e`.
+Follow the [scenario maintainability rules](../../../../crates/mithril-e2e/SCENARIO_MAINTAINABILITY_TODO.md#binding-acceptance-rules)
+and the shared [platform test requirements](README.md#platform-test-shape).
+Use the applicable platform cases from one test body. Keep the production
+calls, action, assertions, and cleanup visible. The steps below specify Rust
+test behavior; they are not a separate manual acceptance procedure.
 
-## Procedure
+## Scenario requirements
+
+Require the bounded Phase 7.10 result before this procedure. Use installed
+analysis packages for the graph checks. Recorded-input package results do not
+replace live Kubernetes source or two-node proof.
 
 1. Complete the environment preflight and record different boot IDs for both
    workers.
@@ -32,10 +37,15 @@ HF-XNODE, and live two-node suites.
    objects through validating admission and the node hard floor.
 6. Run exact signed bounded exceptions at N/N+1, expiry, concurrency, and
    restart.
+7. Request a precompiled bounded file grant through the shared native gRPC
+   client and gRPC-Web console. Verify independent approval, use-count
+   consumption, expiry, revocation, and duplicate or lost replies. Test stdio
+   MCP only if advertised. Keep this request separate from the signed
+   privileged exceptions in step 6; it cannot create or approve them.
 
 ## First-Owned Fixture Matrix
 
-| Fixture | Operator stimulus | Required oracle and control |
+| Fixture | Rust test action | Required oracle and control |
 | --- | --- | --- |
 | `EDGE-K8S-SHARED-002` | two concurrent local actors share ServiceAccount while one creates object | object/API result exact; local task edge contextual unless unique proof; legitimate controller action succeeds |
 | `HF-GRAN-CLUSTER-SHARED-001` | use one credential in two isolated clusters | each cluster operation exact; local cause remains contextual without per-request ID |
@@ -45,7 +55,7 @@ HF-XNODE, and live two-node suites.
 
 ## Exact Entry-Matrix Rerun
 
-| Fixtures | Manual focus |
+| Fixtures | Required assertions |
 | --- | --- |
 | `ENTRY-BINDING-GAP-001`, `ENTRY-START-001`, `ENTRY-STOCK-HOOK-FAILURE-002` | first-effect behavior when admission/binding evidence is missing or fails |
 | `ENTRY-CONTAINERS-001`, `ENTRY-EPHEMERAL-001` | independent roots despite Pod/shared namespaces/resources |
@@ -59,7 +69,7 @@ Each ID uses its full Phase 2 procedure; grouping here does not merge results.
 
 ## `HF-XNODE-001` Bridge Checklist
 
-The operator must retain and inspect:
+The Rust test must retain and assert these links:
 
 ```text
 node-A task/socket/credential fact
@@ -74,6 +84,12 @@ node-B entry and Linux execution
 
 Remove each bridge one at a time. The missing bridge must become a named open
 branch. No graph revision may use a cross-node native parent edge.
+
+## Execution and results
+
+Map each required case to its exact Rust test name, platform, and lifecycle.
+Document its command and expected result under the shared
+[command contract](README.md#command-contract).
 
 ## Required Artifacts And Pass Rule
 
