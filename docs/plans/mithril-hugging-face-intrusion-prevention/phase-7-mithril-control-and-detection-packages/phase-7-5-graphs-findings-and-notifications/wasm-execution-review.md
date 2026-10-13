@@ -792,8 +792,9 @@ captures source `1f6b434` and its normal executable. The fresh v53 installed
 package case exits zero and reports `PASS`. The real client installs the SDK
 detector without a host rebuild. Restart, retry, and revocation checks pass.
 The fresh context case also passes. Installed transport preserves identity,
-revision, coverage, and the host-selected cutoff. Two fresh complete cases and
-final workspace verification remain required
+revision, coverage, and the host-selected cutoff. The fresh profile restart
+case also passes. Live profiles persist and late context resolves after reopen.
+The complete graph case and final workspace verification remain required
 after the last Rust edit. The historical dispatch order remains unmet.
 
 The following records retain their original source boundaries.

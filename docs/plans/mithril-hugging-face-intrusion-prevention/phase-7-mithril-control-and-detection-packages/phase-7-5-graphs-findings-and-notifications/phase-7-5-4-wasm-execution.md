@@ -127,8 +127,8 @@ All four fresh v43 cases pass on the corrected source `6cce92d1`. Final
 workspace verification remains required after these Rust edits. The requested
 focused-test and repeated-work corrections are implemented and have focused
 proof. The final source is `1f6b434`. Its fresh v53 installed-package case
-passes. Its fresh context case also passes. Two complete cases and final CI
-remain required on this source.
+passes. Its fresh context and profile restart cases also pass. The complete
+graph case and final CI remain required on this source.
 The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
@@ -2069,9 +2069,16 @@ cursor 1. The installed component preserves identities, revision, and coverage.
 The selected window retains one record. The earlier cutoff excludes that
 record and reports gapped coverage. Context selection remains on the host.
 
-The fresh `profile-restart` and `graph-notification` cases remain required
-with this executable. The exact shared Rust procedure must run after all four
-complete cases. The historical dispatch order remains
+The fresh `profile-restart` case exits zero and reports `PASS`.
+Its proof is `/tmp/araphor-wasm-profile-restart-proof-v53.json`, with SHA-256
+`b2b370f8cc5f544a6d28f30c5522a60b41f6534b33ec1b45ecd2024bc6d86f39`.
+The case retains deterministic profiles, persisted live profiles, late-context
+resolution after reopen, signed context, original kernel sequence 101, and
+durable cursor 1. Physical profile qualification remains false.
+
+The fresh complete `graph-notification` case remains required with this
+executable. The exact shared Rust procedure must run after all four complete
+cases. The historical dispatch order remains
 unmet. The phase result stays **Not done**. This record makes no performance
 or physical-prevention claim.
 
