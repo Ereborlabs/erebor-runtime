@@ -127,7 +127,8 @@ All four fresh v43 cases pass on the corrected source `6cce92d1`. Final
 workspace verification remains required after these Rust edits. The requested
 focused-test and repeated-work corrections are implemented and have focused
 proof. The final source is `1f6b434`. Its fresh v53 installed-package case
-passes. Three complete cases and final CI remain required on this source.
+passes. Its fresh context case also passes. Two complete cases and final CI
+remain required on this source.
 The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
@@ -2060,9 +2061,17 @@ checkpoint 4, restart and retry equality, current and historical revocation
 checks, correction, empty replacement, failed upgrade, rollback, removal,
 and credential renewal. It attempts no physical action.
 
-The fresh `context-roundtrip`, `profile-restart`, and `graph-notification`
-cases remain required with this executable. The exact shared Rust procedure
-must run after all four complete cases. The historical dispatch order remains
+The fresh `context-roundtrip` case exits zero and reports `PASS`.
+Its proof is `/tmp/araphor-wasm-context-roundtrip-proof-v53.json`, with SHA-256
+`58c13c20cd4e319e03c4a32888ccb6c17d5b83aa82872fe26f3af299ee4ef3a4`.
+It retains signed context resolution, original kernel sequence 101, and durable
+cursor 1. The installed component preserves identities, revision, and coverage.
+The selected window retains one record. The earlier cutoff excludes that
+record and reports gapped coverage. Context selection remains on the host.
+
+The fresh `profile-restart` and `graph-notification` cases remain required
+with this executable. The exact shared Rust procedure must run after all four
+complete cases. The historical dispatch order remains
 unmet. The phase result stays **Not done**. This record makes no performance
 or physical-prevention claim.
 
