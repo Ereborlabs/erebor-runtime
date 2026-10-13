@@ -8,8 +8,9 @@ algorithms without a Python dependency; speed claims require measurements.
 
 A package can carry both `algorithm.wasm` and a platform-specific native artifact
 for one named export. The same source library, parameters, dataset schemas,
-evidence rules, and state contract serve both targets. Selection is explicit,
-compatible with the host, and recorded in each result.
+evidence rules, and state contract serve both targets. Execution follows the
+installed plugin type. Check host compatibility and record the actual artifact
+in each result. Add no global target preference or operator target option.
 The user selected Rust native calls in Araphor's process. This decision replaces
 the earlier isolated-worker requirement. Reuse the current builtin execution
 model and retain the existing package and data owners.
@@ -17,21 +18,21 @@ model and retain the existing package and data owners.
 ## Implementation flow
 
 ```text
-Admission evaluates a requested native target
+Admission evaluates an installed native plugin
   -> the package owner checks platform, CPU, system libraries, and ABI requirements
   -> the package owner validates the admitted native library and its dependencies
-  -> the package owner stages the requested implementation before evaluation
+  -> the package owner uses the plugin's declared native implementation
 
 The scheduler invokes the export
   -> the package owner supplies authorized typed batches to the Rust native adapter
   -> the SDK adapter calls the compiled algorithm through the native interface
   -> the adapter returns bounded outputs and its next checkpoint
   -> host validation submits the result through the existing atomic commit path
-  -> AnalysisStore commits the selected implementation, result, and checkpoint together
+  -> AnalysisStore commits the result and checkpoint together
 
 Native computation returns an error or finishes after cancellation
   -> the package owner rejects its output and releases evaluation resources
-  -> AnalysisStore retains the prior selected target and committed state
+  -> AnalysisStore retains the prior active revision and committed state
   -> retry uses the same declared implementation and operation identity
 
 A native fault terminates Araphor
@@ -66,13 +67,13 @@ Cross-target parity is required for every export that advertises both targets.
   or callbacks after evaluation. Hold the library and operation permit while
   native code is running. Cancellation is cooperative; reject a late completion
   but do not claim that a stalled native call can be forcibly terminated.
-- Check output and checkpoint parity before switching between declared targets.
+- Check output and checkpoint parity for builds from the same computation.
   Specify numeric and ordering behavior in fixtures. Incompatible state needs
   the checked conversion or rebuild path. Never switch targets after a trap,
   partial result, or timeout. Missing compatible artifacts return Unsupported.
-- Prefer the default Wasm target unless a selected package requirement or an
-  approved measurement justifies native selection. Keep all selection policy in
-  the package owner; do not add a second native package system.
+- Execute the installed plugin's declared type: native runs native; Wasm runs
+  Wasm. Keep execution under the package owner. Add no global target preference,
+  operator target option, or second native package system.
 
 ## Acceptance and verification
 
@@ -108,8 +109,8 @@ The [native decision proposal](native-execution-design.md) records source
 and qualification requirements. D1 is resolved: native execution must work
 wherever Araphor can compile. D2 is approved for all current portable exports.
 D5 is approved for execution in Araphor's process without isolation. D3 uses
-Rust artifacts with the existing SDK binary interface. D4 adds no separate
-state workflow: keep one target option and the existing package lifecycle.
+Rust artifacts with the existing SDK binary interface. D4 is resolved:
+execution follows the installed plugin type. Keep the existing package lifecycle.
 The user approved D6 options with
 disabled defaults. No cap values are required before native admission,
 execution, or qualification. The host capability query reports Landlock ABI 4
@@ -126,7 +127,7 @@ checks pass; do not defer its commit until final qualification.
 The user selected Rust artifacts and native calls in Araphor's process.
 The SDK supplies the existing versioned binary interface. Authors implement
 Rust computation; they do not implement C adapters. D4 adds no separate state
-workflow. Keep Wasm as the default and add one explicit target option. Reuse
+workflow. Execute the installed plugin's declared type. Reuse
 the existing package version, checkpoint, update, and rollback rules. Remove
 the proposed public `rebuild` option.
 
@@ -139,9 +140,9 @@ the proposed public `rebuild` option.
 - [ ] Add native admission and loading under AnalysisPackageOwner. Keep library
   code loaded through all calls and release callbacks. Preserve host-owned
   output, authorization checks, and existing query accounting.
-- [ ] Add target selection and actual artifact identity to the existing request,
-  activation, result, and CLI paths. Commit a changed selection only with its
-  validated output and checkpoint. Preserve historical encodings and retries.
+- [ ] Execute the declared plugin type and record actual artifact identity in
+  results and receipts. Remove the incomplete request target and stored target
+  preference drafts. Preserve historical encodings, retries, and atomic commits.
 - [ ] Define disabled native memory and CPU settings. Reject an enabled hard
   per-library cap with Unsupported when the shared process cannot enforce it.
   Do not change process-wide limits or silently ignore an enabled setting.
@@ -149,7 +150,7 @@ the proposed public `rebuild` option.
   lifecycle changes. Run the final Rust gate and update the review guide.
 
 - [x] **1. Resolve native design decisions.** Use Rust artifacts and the existing
-  SDK binary interface. Keep one explicit target option and the existing state
+  SDK binary interface. Execute the declared plugin type and keep the existing state
   lifecycle. Reject enabled hard per-library caps with Unsupported in the shared
   process. Preserve D1, approved D2, in-process D5, and disabled D6 defaults.
   Record the applicable
@@ -167,9 +168,9 @@ the proposed public `rebuild` option.
   Preserve authority, expiry, revocation, concurrency, returned-error cleanup,
   and stale-completion rejection. Support cooperative cancellation. Do not add
   a native worker or claim fault isolation or forced termination.
-- [ ] **4. Integrate compatibility, selection, and provenance.** Validate platform,
-  CPU, system libraries, ABI, and dependency closure at admission. Add explicit
-  selection through existing requests, CLI, and agent interfaces. Record actual
+- [ ] **4. Integrate compatibility and provenance.** Validate platform,
+  CPU, system libraries, ABI, and dependency closure at admission. Execute the
+  declared plugin type through the existing owner and interfaces. Record actual
   artifact revisions. Preserve SQL/Wasm encoding, immutable history, and retry
   identity. Require compatible output and state contracts before switching.
   Never use failure fallback.
@@ -182,11 +183,11 @@ the proposed public `rebuild` option.
   transitions, assertions, and cleanup visible. Cover invalid ABI values,
   malformed batches and outputs, returned errors, Rust panics, host faults,
   cancellation, expiry, revocation, stale completion, resource failures,
-  restart, retry, upgrade, rollback, removal, and target switching. Include large
+  restart, retry, upgrade, rollback, removal, and package type changes. Include large
   selected graph inputs without reducing workload or deadlines. Prove that
   returned failure preserves the prior output and checkpoint, releases resources,
   and produces no fallback. Check restart after a fatal native host fault.
-  Test Wasm-to-native and native-to-Wasm switches.
+  Test package updates between Wasm and native builds in both directions.
 - [ ] **7. Qualify installed production execution and final CI.** Extend
   `analysis-packages` with a real source-built SDK dual-target detector. Install
   and run it without rebuilding Araphor. Prove target parity and actual artifact
@@ -267,10 +268,61 @@ updated without implementing those later phases. No Rust source, Cargo file,
 test, CI configuration, or verification script changed. Native execution and
 enabled-resource semantics remain Not done.
 
+### Plugin-type decision correction TODO
+
+- [x] Record D4 as explicitly approved: a native plugin runs native;
+  a Wasm plugin runs Wasm. Remove the proposed global Wasm default, operator
+  target option, stored target preference, and runtime target-switch workflow.
+  Keep shared-source builds, parity fixtures, artifact compatibility, actual
+  artifact identity, and the existing package lifecycle. Correct the parent
+  records. Preserve the incomplete source drafts. Resume work only after the
+  user's explicit approval.
+
+### Explicit approvals and resumed corrections
+
+The user explicitly approved D4 with `D4 approved.`. Execution follows the
+installed plugin type. The user then explicitly approved `libloading 0.9.0`,
+direct use of the locked `object 0.40.0`, and the configured-cap behavior.
+An enabled hard native memory or CPU cap returns Unsupported for native
+execution. SQL and Wasm remain usable. Work resumes under these approvals.
+
+- [ ] Remove the draft Run target option and stored target preference. Dispatch
+  the implementation declared by the plugin and record its actual artifact.
+- [ ] Keep native cap checks on native admission and execution. Do not reject
+  package-owner construction or SQL/Wasm execution for an enabled native cap.
+- [ ] Remove the draft blanket rejection of loader environment variables.
+  Validate the declared library files and use scoped loading.
+- [ ] Check dependency names, symbols, versions, and content throughout the
+  native closure. Add the missing native loader and failure tests.
+- [ ] Reuse the existing SDK SensitiveAccess test fixture. Remove its duplicate
+  module declaration and retain native exchange and release assertions.
+- [ ] Preserve native loader error codes in package readiness and Control
+  package-operation details. Account for native qualification and dependency
+  storage in retained package snapshots.
+- [ ] Map returned native SDK errors to the matching package error code and
+  retain their source. Report a Failed computation as Incomplete, as the Wasm
+  execution path does. Keep invalid output distinct from execution failure.
+- [ ] Check host cancellation and deadline after every native call, including
+  a returned SDK error. Preserve the host cancellation or deadline error before
+  reporting a late native completion.
+- [ ] Compile the new parity fixtures with the shared test error type and
+  existing EvidenceRecord conversions. Preserve complete input and output
+  comparisons.
+- [ ] Check cancellation after native compatibility inspection and before each
+  library load or accessor call. Reject work outside the active control lifetime.
+- [ ] Select the graph parity fixture's credential fact by its typed value.
+  Do not depend on its position in a sorted vector. Compare Gapped coverage
+  with the same detector fixtures.
+- [ ] Correct the new running-expiry fixture. Its one-second grant expires
+  during native package admission, before activation. Use a five-second test
+  grant to reach native computation. Keep the existing five-second activation,
+  task, and cleanup deadlines. Retain separate rejection proof for an already
+  expired native grant.
+
 ## End scope and example
 
 Complete when qualified native Rust artifacts execute in Araphor's process under the
-same package contract, with explicit target selection and failure recovery.
+same package contract, with execution by plugin type and failure recovery.
 Each export that advertises Wasm and native execution passes output and state
 parity. This proves package compatibility; it establishes no isolation or speed gain.
 

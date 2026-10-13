@@ -14,7 +14,7 @@ The [extensible security packages design](extensible-security-packages-design.md
 retains researched examples and evidence and authority requirements.
 The [algorithm and detector extension evaluation](algorithm-and-detection-extension-evaluation.md)
 compares runtime choices. The approved [7.5 child phases](phase-7-5-graphs-findings-and-notifications/README.md#approved-extension-and-child-phases)
-select one SDK and package contract, default Wasm execution for compiled code,
+select one SDK and package contract, execution by the installed plugin type,
 existing SQL, native execution, and optional Python. The portable contract and
 Rust author SDK and current-algorithm conversion are **Done**. Read the
 [migration acceptance record](phase-7-5-graphs-findings-and-notifications/phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).

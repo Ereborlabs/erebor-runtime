@@ -52,8 +52,8 @@ The completed graph and notification results remain below; those results do not
 qualify package execution.
 
 Use one versioned analysis contract for typed inputs, parameters, named outputs,
-evidence, and checkpoints. Supply a Rust SDK first. Use Wasm components with
-Wasmtime as the default compiled target. Keep SQL on the existing evaluator.
+evidence, and checkpoints. Supply a Rust SDK first. Execute the installed
+plugin's declared type. Run Wasm components with Wasmtime. Keep SQL on the existing evaluator.
 Supply a native target for qualified workloads and dependencies. Python is an
 optional target; compiled algorithms do not require it. The SDK hides transport
 bindings. Host owners enforce authorization, limits, validation, and commits.

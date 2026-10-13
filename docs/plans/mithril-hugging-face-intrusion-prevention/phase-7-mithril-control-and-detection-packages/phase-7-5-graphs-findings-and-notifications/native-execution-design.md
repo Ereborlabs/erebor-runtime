@@ -5,24 +5,25 @@ This record supplies the decisions required by
 D1 is **Resolved** by the user's platform requirement. D2 and D5 are
 **Approved**: qualify all current portable exports and use native calls in
 Araphor's process. Rust artifacts are approved for D3. The SDK supplies its
-existing binary interface. D4 uses the target choice in the original task and
-adds no separate state workflow. D6 native
-resource options and disabled defaults are **Approved**. Configured resource
-semantics must reflect the shared process. Source baseline: `2b9384ec`.
+existing binary interface. D4 is **Approved**: execution follows the installed
+plugin type. D6 native
+resource options and disabled defaults are **Approved**. The user explicitly
+approved both Rust libraries and native-only Unsupported for an enabled hard
+native cap. SQL and Wasm remain usable. Source baseline: `2b9384ec`.
 
 ## Intended end state
 
 An author builds Wasm and native artifacts from the same SDK computation.
-An operator installs the built folder and selects native execution through
-AnalysisPackageOwner. The Rust native adapter returns the same output and
+An operator installs a native plugin through AnalysisPackageOwner. The package
+owner runs its declared native implementation. The Rust native adapter returns the same output and
 checkpoint meaning in Araphor's process.
 The host retains authorization, evidence checks, storage, and atomic commits.
 A returned native error commits no partial result and causes no target fallback.
 
 ## Current source and approval boundary
 
-The approved direction supplies one SDK, one package owner, Wasm as the default,
-and native execution in Araphor's process. The user removed the earlier worker
+The approved direction supplies one SDK, one package owner, execution by plugin
+type, and native execution in Araphor's process. The user removed the earlier worker
 and isolation requirements. Reuse Arrow C interfaces at the native library
 boundary, locked source builds, and admission without a compiler or installation
 hook. Native execution requires no process transport.
@@ -30,8 +31,8 @@ hook. Native execution requires no process transport.
 The current source has no executable native adapter or native execution owner.
 The user approved the complete current portable export inventory and native
 execution like the existing builtins. The SDK supplies binary compatibility
-metadata and the existing v1 adapter interface. Keep one explicit target
-option and the existing state lifecycle.
+metadata and the existing v1 adapter interface. Use the plugin's declared
+implementation and the existing state lifecycle.
 The user requires native execution on every platform where Araphor can compile.
 The user approved optional native resource settings with disabled defaults after
 the original proposal. D6 records that correction.
@@ -61,7 +62,7 @@ bytes can be declared, but the owner cannot select or load them. Native returns
 Unsupported. Installed Wasm execution from 7.5.4 does not supply a native loader.
 
 This phase adds the SDK native ABI adapter, built native artifact and dependency
-closure, native library loading, explicit target selection, and native parity
+closure, native library loading, execution by plugin type, and native parity
 and recovery proof. It reuses the algorithms and package lifecycle. An operator
 must be able to install the separately built native package without rebuilding
 Araphor. Do not repeat algorithm migration or copy computation implementations.
@@ -98,7 +99,7 @@ the same contract and owner.
 | HF-PROC-001 | `detect` | Exact identities, relationships, findings, evidence, reasons, and coverage. |
 | HF-DW-001 | `detect` | Credential findings, exact references, reasons, coverage, and replay. |
 | HF-XNODE-001 | `detect` | Kubernetes joins, exact references, reasons, coverage, and replay. |
-| SDK detector example | Existing BurstDetector export | Findings, evidence, checkpoint meaning, restart, retry, and explicit switching. |
+| SDK detector example | Existing BurstDetector export | Findings, evidence, checkpoint meaning, restart, retry, and package updates. |
 
 AR-04 context selection remains with the trusted host context owner. It is not
 a native package export. This proposal does not repeat algorithm migration or
@@ -165,7 +166,16 @@ Keep generated native and Wasm binaries out of commits. Preserve the current
 32 MiB serialized package bound. If a complete dual-target closure exceeds that
 bound, report the measured size and obtain approval before changing the bound.
 
-## D4: Artifact metadata and target selection
+## D4: Execution by plugin type
+
+Approved rule: a native plugin runs native; a Wasm plugin runs Wasm.
+Explicit approval: the user wrote `D4 approved.`.
+The installed plugin declaration determines the execution type. Add no global
+Wasm or native preference and no operator target option. The user's rule
+replaces the earlier default and runtime target-switch proposal.
+
+Both artifacts can be built from the same Rust computation. Shared-source
+builds and parity fixtures do not require an operator choice at runtime.
 
 Proposal: extend only the native implementation declaration with an export list,
 optional input bindings, artifact identity, compatibility requirements, and
@@ -187,65 +197,49 @@ absent qualification object retains the legacy digest and means Unsupported
 for execution. Qualified declarations use the same artifact bytes plus the
 new object; reject conflicting export declarations.
 
-Add explicit per-export target selection to the existing package requests and
-CLI. Persist selection in activation metadata only with a successful prepared
-result. Initial installation without a target uses the current Wasm-then-SQL
-behavior. Later requests without a target retain the stored selection.
-Updates and rollback retain that selection when a compatible artifact exists;
-otherwise they fail without changing the prior active revision. Add optional
-provenance fields to results and
-receipts for the actual target, artifact digest, closure digest, and platform.
+Execute the implementation declared by the installed plugin. Keep the existing
+package requests and CLI. Add optional provenance fields to results and receipts
+for the actual execution type, artifact digest, closure digest, and platform.
 Historical records retain their original target and have absent new provenance.
-The existing JSON transport needs no new Control protobuf message. The Run
-request adds one optional target. An operator can select a named export.
-Installation retains its current request format and default selection.
+The existing JSON transport needs no new Control protobuf message or Run target
+field. Installation retains its current request format.
 
-Bind native evaluation identity and retry checks to the selected artifact and
-closure. Stage a requested selection before evaluation. Use the existing
-activation generation and authority commit checks to commit the new selection,
-output, and checkpoint together after success. Failure retains the previous
-active selection and committed state. Reuse of an operation ID with a different
-target or closure returns
-Conflict. A selection change must cause evaluation even when input revisions
-are unchanged. For the qualified dual-target inventory, identical output and
-checkpoint contracts plus parity fixtures permit a switch. Reject an incompatible
-checkpoint before evaluation. Use the existing update and rollback rebuild
-behavior when a package changes its state contract. Add no public rebuild
-option or automatic state converter. Missing retained input produces incomplete
-coverage through the existing owner.
-Never switch targets after a crash, timeout, partial output, or malformed result.
+Bind native evaluation identity and retry checks to the declared artifact and
+closure. Use the existing activation generation and authority commit checks.
+Commit output and checkpoint together after success. Failure retains the
+previous active revision and committed state. Reuse of an operation ID with a
+different artifact or closure returns Conflict. Use the existing package update
+and rollback behavior when an installed plugin changes. Check its output and
+state contracts. Add no public rebuild option or automatic state converter.
+Missing retained input produces incomplete coverage through the existing owner.
+Never change execution type after a crash, timeout, partial output, or malformed
+result.
 
-### D4 example: install, select, and switch
+### D4 example: run the installed plugin
 
-An author builds revision `r8` of detector A from one Rust source library. Its
-folder contains a Wasm artifact and a native artifact for the operator's host.
-Both artifacts declare the same named export and data contract.
+An author builds detector A from one Rust source library. The author can produce
+a native plugin and a Wasm plugin. Both builds use the same named export and
+data contract.
 
 ```text
-The operator installs detector A, revision r8
-  -> AnalysisPackageOwner validates and retains the complete built package
-  -> the export uses Wasm when no target is selected
-
-The operator selects native for the installed export
-  -> AnalysisPackageOwner validates the artifact against the host
-  -> the package owner stages the requested native selection
+The operator installs the native plugin
+  -> AnalysisPackageOwner validates and retains the declared native artifact
+  -> the package owner checks native compatibility with the host
   -> a compatible saved state is supplied to the native adapter
   -> Araphor calls the adapter in its own process
   -> the existing host owners validate the complete result
-  -> AnalysisStore commits the selection, result, and checkpoint together
-  -> later runs use the recorded native selection
+  -> AnalysisStore commits the result and checkpoint together
 
-The operator selects Wasm again
-  -> the same state contract permits reuse of the committed saved state
-  -> an incompatible state rejects the target switch
-  -> failure preserves the previous committed result and selection
+The operator installs the Wasm plugin
+  -> AnalysisPackageOwner validates and retains the declared Wasm artifact
+  -> Araphor runs that artifact through the existing Wasm owner
 
 The operator retries an operation
-  -> the same operation and selection return the original receipt
-  -> a changed target or artifact under the same operation ID returns Conflict
+  -> the same operation and artifact return the original receipt
+  -> a changed artifact under the same operation ID returns Conflict
 ```
 
-A result identifies revision `r8`, its actual Wasm or native artifact, its input
+A result identifies its package revision, actual Wasm or native artifact, input
 revisions, and its saved-state version. A native error does not select Wasm.
 The existing package update and rollback paths handle a changed package state
 contract. They cannot reconstruct input that has expired.
@@ -339,8 +333,8 @@ Qualification must cover ABI errors, malformed buffers, first and repeated
 release, unwind-panic handling, malformed outputs, incompatible hosts,
 constructor failures, shared-host crash and restart, late completion, cancellation,
 expiry, revocation, stale completion, resource failures, restart, retries,
-upgrades, rollback, removal, and compatible switches in both directions between
-Wasm and native. Check checkpoint meaning and retry identity after each switch.
+upgrades, rollback, removal, and package changes between Wasm and native builds.
+Check checkpoint meaning and retry identity after each package change.
 Every returned error must preserve the prior committed output and checkpoint,
 release owned resources, and produce no Wasm fallback. Fatal native faults require
 host restart proof against the last durable commit; they have no worker recovery.
@@ -370,8 +364,12 @@ D1 is **Resolved**: native execution must work wherever Araphor can compile.
 D2 is **Approved** for all current portable exports and the SDK detector example.
 D5 is **Approved** for execution in Araphor's process with no isolation.
 Rust artifacts are approved for D3. The SDK supplies its existing versioned
-binary interface. D4 uses the original explicit target requirement and the
-existing package state lifecycle. It adds no separate rebuild command.
+binary interface. D4 is **Approved**: execution follows the installed plugin
+type. Add no global target preference, operator target option, or separate
+rebuild command.
 D6 options retain disabled defaults. An enabled hard per-library cap returns
 Unsupported in the shared process. Native implementation and qualification
-remain **Not done**. Proceed with the recorded implementation corrections.
+remain **Not done**. The user explicitly approved both Rust libraries and
+native-only Unsupported for an enabled hard cap. Development has resumed.
+The SDK, builder, loader, and production qualification must supply their own
+current proof before completion.
