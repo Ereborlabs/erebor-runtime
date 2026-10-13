@@ -79,7 +79,10 @@ native target reuses the migrated source; it does not defer or repeat migration.
 Add no in-process third-party library loading, Python bridge, or copied native
 algorithm. Native execution does not establish a throughput or latency gain.
 Any benchmark needs separate approval with its workload, runtime, and limits.
-Stop at a qualified native target; advertise only verified host platforms.
+Qualify the applicable native targets; advertise only verified host platforms.
+Native execution must work on every platform where Araphor can compile.
+Derive that target set from source and build records. Do not impose a separate
+Linux x86-64 product restriction or claim qualification from compilation alone.
 
 ## Result
 
@@ -88,9 +91,11 @@ Stop at a qualified native target; advertise only verified host platforms.
 ### Design decision record
 
 The [native decision proposal](native-execution-design.md) records source
-`2b9384ec`, existing owner contracts, five unresolved decisions, mandatory
-controls, configurable limits, and qualification requirements. D1 through D5
-are **Not approved**. The user approved D6 native memory and CPU options with
+`2b9384ec`, existing owner contracts, four unresolved decisions, mandatory
+controls, configurable limits, and qualification requirements. D1 is resolved:
+native execution must work wherever Araphor can compile. D2 through D5 are
+**Not approved**. The proposed Linux isolation backend does not restrict product
+platform coverage. The user approved D6 native memory and CPU options with
 disabled defaults. No cap values are required before native admission,
 execution, or qualification. The host capability query reports Landlock ABI 4
 and seccomp support. That query does not prove worker isolation.
@@ -102,8 +107,9 @@ deliverables in order. Commit each implementation deliverable after its focused
 checks pass; do not defer its commit until final qualification.
 
 - [ ] **1. Resolve native design decisions.** Obtain approval for unresolved
-  D1 through D5 in the decision record. Preserve the approved D6 optional limits
-  and disabled defaults. Record the supported platform, native export inventory,
+  D2 through D5 in the decision record. Preserve the D1 platform requirement and
+  the approved D6 optional limits and disabled defaults. Record the applicable
+  compilation targets, native export inventory,
   ABI and dependency changes, artifact metadata, isolation and deployment
   requirements, and native resource defaults before dependent implementation.
 - [ ] **2. Complete the native SDK and source builds.** Reuse the v1 C table,
@@ -170,11 +176,30 @@ isolation qualification, production case, or performance test ran.
   transport validation, and existing owner deadlines. Record D6 as approved
   without changing the approval status of D1 through D5.
 
-The corrected JSON configuration specifies disabled memory and CPU limits.
-The documentation check passes for two Markdown files, 13 local links, code
+At resource-default correction commit `88c6c2c7`, the corrected JSON configuration
+specified disabled memory and CPU limits. The documentation check passed for
+two Markdown files, 13 local links, code
 fences, JSON defaults, approved D6, five pending decisions, and eight ordered
-deliverables. `git diff --check` passes. These checks cover the records only;
+deliverables. `git diff --check` passed. These checks covered the records only;
 native configuration code, execution, and qualification remain Not done.
+
+### Platform-contract correction TODO
+
+- [x] Replace the proposed Linux x86-64 product restriction with the user's
+  requirement: native execution must work on every platform where Araphor can
+  compile. Derive the applicable package-owner targets from source and build
+  records. Do not claim platform qualification from successful compilation.
+  Keep artifact compatibility checks and required worker isolation. Mark the
+  Linux isolation proposal as one platform implementation. Record D1 as resolved
+  and explain the existing Rust computation and the missing installed native
+  artifact execution. Do not repeat algorithm migration.
+
+The documentation check passes for two Markdown files, 14 local links, code
+fences, disabled JSON resource defaults, resolved D1, approved D6, four pending
+decisions, and eight ordered deliverables. Source review confirms the installed
+SQL/Wasm dispatch and missing native artifact execution. `git diff --check`
+passes. No Rust source or configuration changed. No native build or additional
+platform qualification ran.
 
 ## End scope and example
 

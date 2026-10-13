@@ -2,9 +2,10 @@
 
 This record supplies the decisions required by
 [the native execution phase](phase-7-5-5-native-execution.md).
-D1 through D5 are **Not approved**. D6 native resource options and their disabled
-defaults are **Approved** by the user. Do not implement a dependent change until
-the user approves its unresolved decision. Source baseline: `2b9384ec`.
+D1 is **Resolved** by the user's platform requirement. D2 through D5 are
+**Not approved**. D6 native resource options and their disabled defaults are
+**Approved** by the user. Do not implement a dependent change until the user
+approves its unresolved decision. Source baseline: `2b9384ec`.
 
 ## Intended end state
 
@@ -22,8 +23,9 @@ inside the worker, bounded IPC between processes, locked source builds, and no
 compiler or installation hook at admission. These decisions need no new approval.
 
 The current source has no executable native adapter or native execution owner.
-No concrete native platform, export inventory, compatibility metadata, isolation
-mechanism, or deployment requirement is approved in the inspected phase records.
+The export inventory, compatibility metadata, isolation mechanism, and deployment
+requirements remain proposals in the inspected phase records.
+The user requires native execution on every platform where Araphor can compile.
 The user approved optional native resource settings with disabled defaults after
 the original proposal. D6 records that correction.
 
@@ -39,26 +41,50 @@ the original proposal. D6 records that correction.
 | [Builder](../../../../../crates/araphor-component-build/src/workspace.rs) | Builds the current components from source with locked dependencies. Its manifest contains Wasm artifacts. |
 | [Header test](../../../../../crates/araphor-analysis-sdk/src/bindings/tests.rs) | Checks C syntax. It does not execute the example or prove release behavior. |
 
+## Existing computation and missing native package execution
+
+The [package lifecycle result](phase-7-5-3-package-lifecycle.md#qualified-boundary)
+records installed SQL execution. At that source, the current discovery and
+graph algorithms execute through shared trusted Rust calls from 7.5.2. Those
+algorithms are compiled into Araphor. Their computation is already implemented.
+
+The current production adapters use InstalledAnalysis. PackageArtifactV1 selects
+Wasm or SQL, and AnalysisPackageOwner evaluates those targets. Native artifact
+bytes can be declared, but the owner cannot select or load them. Native returns
+Unsupported. Installed Wasm execution from 7.5.4 does not supply a native loader.
+
+This phase adds the SDK native ABI adapter, built native artifact and dependency
+closure, isolated package loading, explicit target selection, and native parity
+and recovery proof. It reuses the algorithms and package lifecycle. An operator
+must be able to install the separately built native package without rebuilding
+Araphor. Do not repeat algorithm migration or copy computation implementations.
+
 ## D1: Supported platform
 
-Proposal: qualify `x86_64-unknown-linux-gnu`, little-endian ELF64, with the
-baseline x86-64 CPU instruction set. Do not use `target-cpu=native` in author
-builds. Record the compiler target, required CPU features, native contract
-version, isolation profile, and required system-library symbols.
+Resolved requirement: native execution must work on every platform where Araphor
+can compile. Do not add a separate Linux x86-64 product restriction. Derive the
+applicable package-owner target set from current source and build records.
+Compilation and runtime qualification are separate evidence.
 
-Check the host CPU and required library symbols before native activation.
-The library requirements come from the built artifact; do not guess a minimum
-glibc version. The qualification host has glibc 2.39. That observation does not
-qualify every glibc 2.39 host or an older glibc host.
+For each platform, build its native artifact and worker with the shared SDK.
+Record the target triple, required CPU features, native contract version,
+isolation profile, and required system-library symbols. Check these requirements
+against the host before activation. Artifact compatibility metadata describes
+the built artifact; it does not define a narrower product platform list.
 
-Other operating systems, architectures, musl targets, GPU runtimes, and native
-dependencies that require threads or child processes remain unsupported by this
-profile. Their declarations must produce typed Unsupported results.
+The current qualification host is Linux x86-64 with glibc 2.39. This observation
+does not qualify other targets or other host-library versions. Required isolation
+must have an implementation for each applicable compilation platform. Reject an
+environment where a mandatory isolation facility is unavailable; do not load
+native package code without isolation.
 
 ## D2: Native export inventory
 
 Proposal: qualify all seven current portable exports and the existing SDK
 detector example. Reuse their existing computation source and fixtures.
+This is the qualification inventory, not an execution allowlist. The SDK must
+also let authors build and operators install new native package exports through
+the same contract and owner.
 
 | Package | Native exports | Required parity |
 | --- | --- | --- |
@@ -91,7 +117,7 @@ return or supply a verified no-throw interface. An exception cannot unwind
 through a C or Rust frame. An abort is a worker failure. The adapter must release
 owned output on success and failure. Repeated release must have no effect.
 
-Use these libraries rather than implement new ELF parsers or syscall wrappers:
+Use these libraries rather than implement new artifact parsers or syscall wrappers:
 
 | Proposed dependency | Purpose | Existing lock state |
 | --- | --- | --- |
@@ -99,17 +125,24 @@ Use these libraries rather than implement new ELF parsers or syscall wrappers:
 | `seccompiler = "=0.5.0"`, without JSON support | Compile the Rust syscall allowlist and apply it. | New dependency. |
 | `libloading = "=0.9.0"` | Load a verified library only inside the isolated worker. | New dependency. |
 | `libc = "=0.2.186"` | Linux syscall numbers and narrow process controls. | Version is already locked; direct use requires approval. |
-| `object = "=0.40.0"`, ELF read features only | Inspect ELF imports, versions, and dependency requirements without loading code. | Version is already locked; direct use requires approval. |
+| `object = "=0.40.0"`, required native-format read features only | Inspect imports, versions, and dependency requirements without loading code. ELF read features serve the proposed Linux backend. | Version is already locked; direct use requires approval. |
+
+Landlock and seccompiler are Linux backend proposals. Keep platform dependencies
+conditional so they do not remove an existing Araphor compilation target. D5
+must resolve isolation for the applicable target set before this dependency list
+can define the complete worker implementation.
 
 Extend the existing builder for `--locked --release` native source builds.
 The built folder contains the native artifact and all non-system runtime
-dependencies, each with a digest. The standard loader, libc, libm, and libgcc
-requirements are explicit platform requirements. Admission validates the full
+dependencies, each with a digest. For Linux, the standard loader, libc, libm,
+and libgcc requirements are explicit platform requirements. Other targets must
+declare their required system libraries. Admission validates the full
 closure and the host-provided system libraries. It runs no package code,
 compiler, downloader, or installation hook.
 Resolve every imported library and required symbol version throughout the
 closure. Clear inherited loader search configuration. Reject undeclared or
-ambiguous dependencies and uncontrolled RPATH/RUNPATH entries. Account for the
+ambiguous dependencies and uncontrolled loader search paths. The Linux ELF
+checks include RPATH/RUNPATH entries. Account for the
 trusted worker's already loaded system libraries. Bind admission checks,
 isolation rules, and loading to the same immutable retained file identities;
 a path or digest checked before a later file replacement is insufficient.
@@ -127,8 +160,9 @@ content digest, and declared library identity. Reject path traversal, duplicate
 identities, changed content, and an incomplete closure.
 
 Native compatibility contains the target triple, endianness, CPU requirements,
-system-library requirements, contract version, and `single_thread_v1` isolation
-profile. Check declared requirements against the ELF artifact as well as the
+system-library requirements, contract version, and qualified isolation profile.
+The Linux proposal uses `single_thread_v1`. Check declared requirements against
+the platform's native artifact format, including ELF on Linux, as well as the
 host. Record the artifact and closure digests in admitted metadata.
 
 Keep the SDK computation contract at version 1. Preserve the canonical encoding
@@ -165,9 +199,13 @@ Never switch targets after a crash, timeout, partial output, or malformed result
 
 ## D5: Worker isolation and deployment
 
-Proposal: run one fresh, trusted, single-thread worker per evaluation under
-AnalysisPackageOwner. This requires no worker cache, second service, scheduler,
-or durable store. No scope or package revision shares transient worker state.
+Linux backend proposal: run one fresh, trusted, single-thread worker per
+evaluation under AnalysisPackageOwner. This requires no worker cache, second
+service, scheduler, or durable store. No scope or package revision shares
+transient worker state.
+Landlock and seccomp supply Linux controls only. This proposal is not a complete
+platform coverage decision. D5 must specify equivalent required isolation for
+every applicable Araphor compilation platform to satisfy D1.
 The deployment supplies the worker executable with Araphor. Operators need no
 Python, author toolchain, namespace privilege, or delegated cgroup for this profile.
 Before native activation, verify that the trusted worker executable is available
@@ -292,7 +330,9 @@ No native result or speed gain is proven by this proposal.
 
 ## Decision status
 
-D1 through D5 are **Not approved**. The user approved D6 native memory and CPU
-configuration options with disabled defaults. Native implementation and
+D1 is **Resolved**: native execution must work wherever Araphor can compile.
+D2 through D5 are **Not approved**. D5 must satisfy D1 instead of restricting
+the product to its proposed Linux backend. The user approved D6 native memory
+and CPU configuration options with disabled defaults. Native implementation and
 qualification remain **Not done**. Await only the unresolved user decisions
 before dependent implementation.
