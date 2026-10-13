@@ -109,7 +109,7 @@ impl Dataset {
         })
     }
 
-    fn owned_batch(batch: &RecordBatch, limit: u64) -> Result<RecordBatch> {
+    pub(crate) fn owned_batch(batch: &RecordBatch, limit: u64) -> Result<RecordBatch> {
         let arrays = batch
             .columns()
             .iter()

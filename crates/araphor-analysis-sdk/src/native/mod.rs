@@ -12,6 +12,8 @@ pub use abi::*;
 use decode::Decoder;
 use exchange::Exchange;
 
+const MAX_ERROR_BYTES: u64 = 1024;
+
 type Cancellation = (unsafe extern "C" fn(*mut c_void) -> i32, *mut c_void);
 thread_local! { static CANCELLATION: Cell<Option<Cancellation>> = const { Cell::new(None) }; }
 
@@ -53,8 +55,12 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
     /// # Safety
     /// The table and callbacks must be valid until this call returns.
     /// The producer must obey the v1 pointer and ownership contract.
-    pub unsafe fn call(mut self, api: &Api) -> Result<Output> {
+    pub unsafe fn call(mut self, api: &Api, output_limits: crate::Limits) -> Result<Output> {
         api.validate()?;
+        output_limits.validate()?;
+        if !self.evaluation.context.limits.permits(&output_limits) {
+            return Err(Error::contract(ErrorCode::Limit, "native output limits"));
+        }
         if (self.cancelled)() {
             return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
         }
@@ -86,10 +92,10 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
                 _ => return Err(Error::contract(ErrorCode::Invalid, "native error code")),
             };
             let field = guard.response.error.field;
-            if field.size > context.limits.max_bytes
-                || field.size > isize::MAX as u64
-                || (field.size > 0 && field.data.is_null())
-            {
+            if field.size > MAX_ERROR_BYTES || field.size > context.limits.max_bytes {
+                return Err(Error::contract(ErrorCode::Limit, "native error field"));
+            }
+            if field.size > 0 && field.data.is_null() {
                 return Err(Error::contract(ErrorCode::Invalid, "native error field"));
             }
             let bytes = if field.size == 0 {
@@ -102,7 +108,7 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
             return Err(Error::contract(code, field));
         }
         catch_unwind(AssertUnwindSafe(|| unsafe {
-            Decoder::output(self.package, self.evaluation, guard.response)
+            Decoder::output(self.package, self.evaluation, guard.response, output_limits)
         }))
         .map_err(|_| Error::contract(ErrorCode::Invalid, "native output"))?
     }
@@ -179,17 +185,21 @@ unsafe extern "C" fn evaluate<G: crate::guest::Guest>(
         .unwrap_or_else(|_| Err(Error::contract(ErrorCode::Failed, "native panic")));
     let (code, mut owned) = match result {
         Ok(owned) => (0, owned),
-        Err(error) => (
-            error.code() as u32,
-            Box::new(OwnedResponse {
-                _output: None,
-                exchange: None,
-                field: match &error {
-                    Error::Contract { field, .. } => field.clone(),
-                    _ => "native evaluation".into(),
-                },
-            }),
-        ),
+        Err(error) => {
+            let mut error = crate::wire::EvaluationError::from(error);
+            if error.field.len() as u64 > MAX_ERROR_BYTES {
+                error.code = ErrorCode::Limit;
+                error.field = "native error field".into();
+            }
+            (
+                error.code as u32,
+                Box::new(OwnedResponse {
+                    _output: None,
+                    exchange: None,
+                    field: error.field,
+                }),
+            )
+        }
     };
     let target = unsafe { &mut *response };
     if let Some(frame) = &mut owned.exchange {
@@ -227,10 +237,8 @@ unsafe fn evaluate_guest<G: crate::guest::Guest>(
     if cancelled() {
         return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
     }
-    let output = Box::new(
-        crate::wire::Output::encode(&package, &evaluation, &output)?
-            .decode(&package, &evaluation)?,
-    );
+    package.validate_output(&evaluation, &output)?;
+    let output = Box::new(output);
     let model = package.validator(&evaluation)?.model;
     let exchange = Exchange::output(model, &output)?;
     Ok(Box::new(OwnedResponse {

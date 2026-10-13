@@ -240,6 +240,71 @@ also passes.
   and activation generation checks. Add no resident bundle cache. Run dependency
   authority tests and the native interruption qualification after this change.
 
+### Installed native production qualification TODO
+
+- [ ] Extend the existing `analysis-packages` scenario with an explicit native
+  qualification entry point. Require source-built artifacts. Use the existing
+  builder to make a BurstDetector folder, then install and run it through the
+  production package owner. Preserve the SQL and Wasm scenario and all detector
+  checks. Qualify the migrated native graph exports with retained graph inputs in
+  a separate store when their immutable revisions match the Wasm bootstrap.
+  Run with Python absent from PATH. Run the affected context, profile restart,
+  and complete graph notification cases without changing workloads or deadlines.
+- [ ] Return a typed scenario error when Python is available. Do not use
+  `expect_err` in the qualification owner. Compare recorded native artifact and
+  closure identities with the authored bytes. Apply Burst parameters only to its
+  bundle. Compare the actual nested graph fields and label the native case in
+  its result. Keep scenario actions on the existing qualification owner.
+- [ ] Qualify a 185-record selected graph input through the actual native Process
+  library. Use the existing graph window size and graph input adapter. Give each
+  record an exact cursor, task, and time identity. Compare the complete native,
+  Wasm, and trusted outputs, evidence, reasons, and checkpoint. Keep the existing
+  deadline and query limits. This is a functional transport test, not a benchmark.
+
+### Native host-fault proof TODO
+
+- [ ] Add native-only panic and abort modes to the source-built SDK test guest.
+  Prove that an unwind panic returns a typed failure through the loaded library.
+  Use a child test host for a fatal native abort. Install and commit state before
+  the fault, close the parent's store handles, then reopen after child exit.
+  Check the prior complete output, checkpoint, activation, retry, and absence of
+  Wasm fallback. The child is a test host; production native execution stays in
+  Araphor's process. Reuse the fixture's store and owner setup for a retained path.
+
+### Native buffer-accounting correction TODO
+
+- [ ] Account for native host transport storage through the existing query
+  budget. Reuse SDK array validation and owned-array copies. Keep the native
+  data contract separate from optional Wasm quotas. Apply the existing host output
+  capacity before host output copies. Bound native error fields before copying
+  them with the existing 1,024-byte component error transport limit.
+
+The SDK copy correction passed 62 native SDK tests and clippy with warnings denied.
+It uses the shared owned-array copy and validates arrays before allocation. The
+host supplies output limits through the Rust invocation API; the input context
+keeps its declared limits. One byte budget covers output metadata, data, reasons,
+and checkpoint copies. Native output no longer requires the two IPC round trips.
+The oversized error test checks the length before dereference and checks release.
+These focused SDK checks do not qualify the corrected loader or built libraries.
+
+- [ ] Release the new parity test's replay output guards after their assertions
+  and before a separate graph derivation. The first consolidated run returned
+  `AnalysisBusy: query output capacity` because the test retained the prior
+  outputs during the next full reservation. Preserve every parity assertion and
+  the production query capacity.
+
+### Native file-identity correction TODO
+
+- [ ] Use the existing `rustix` file API to retain sealed root and package
+  dependency files on Linux. Link these retained files into the private package
+  directory so `$ORIGIN` resolves the same dependency bytes. Hold file and library
+  handles through every release. Open each system file once for compatibility
+  inspection. Check the device and inode of an already loaded system image before
+  package initialization. Reject a changed loaded identity with Conflict.
+  Validate the selected closure and file identities before the accessor call.
+  Add tests for replacement and seals. Add no dependency, namespace, process,
+  environment restriction, or isolation claim.
+
 ### Preparation verification
 
 At preparation commit `3764c005`, the documentation check passed for both changed

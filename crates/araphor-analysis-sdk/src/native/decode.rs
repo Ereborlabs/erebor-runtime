@@ -30,7 +30,7 @@ impl Decoder {
         if request.context.has_seed > 1 {
             return Err(Error::contract(ErrorCode::Invalid, "native seed flag"));
         }
-        let mut inputs = Vec::new();
+        let mut inputs = decoder.vector(request.input_count)?;
         for input in unsafe { decoder.slice(request.inputs, request.input_count)? } {
             let data = unsafe { decoder.dataset(&input.data, &model.inputs)? };
             let window = if input.revision.window.is_null() {
@@ -49,7 +49,7 @@ impl Decoder {
                 2 => crate::CoverageState::Unknown,
                 _ => return Err(Error::contract(ErrorCode::Invalid, "native coverage")),
             };
-            let mut reasons = Vec::new();
+            let mut reasons = decoder.vector(input.coverage.limit_count)?;
             for reason in
                 unsafe { decoder.slice(input.coverage.limits, input.coverage.limit_count)? }
             {
@@ -83,7 +83,7 @@ impl Decoder {
                 seed: (request.context.has_seed == 1).then_some(request.context.seed),
                 limits,
             },
-            checkpoint: unsafe { decoder.checkpoint(request.checkpoint, model)? },
+            checkpoint: unsafe { decoder.checkpoint(request.checkpoint, model, false)? },
         };
         package.validate_evaluation(&evaluation)?;
         Ok(evaluation)
@@ -93,22 +93,23 @@ impl Decoder {
         package: &Package,
         evaluation: &Evaluation,
         response: &abi::Response,
+        output_limits: Limits,
     ) -> Result<Output> {
         let validator = package.validator(evaluation)?;
         let model = validator.model;
-        let mut decoder = Self::new(evaluation.context.limits);
-        let mut datasets = Vec::new();
+        let mut decoder = Self::new(output_limits);
+        let mut datasets = decoder.vector(response.dataset_count)?;
         for data in unsafe { decoder.slice(response.datasets, response.dataset_count)? } {
             datasets.push(unsafe { decoder.dataset(data, &model.outputs)? });
         }
-        let mut evidence = Vec::new();
+        let mut evidence = decoder.vector(response.evidence_count)?;
         for link in unsafe { decoder.slice(response.evidence, response.evidence_count)? } {
             evidence.push(crate::EvidenceLink {
                 output: unsafe { decoder.reference(&link.output)? },
                 input: unsafe { decoder.reference(&link.input)? },
             });
         }
-        let mut reasons = Vec::new();
+        let mut reasons = decoder.vector(response.reason_count)?;
         for reason in unsafe { decoder.slice(response.reasons, response.reason_count)? } {
             let code = unsafe { decoder.text(reason.code)? };
             let spec = model
@@ -126,10 +127,13 @@ impl Decoder {
             datasets,
             evidence,
             reasons,
-            checkpoint: unsafe { decoder.checkpoint(response.checkpoint, model)? },
+            checkpoint: unsafe { decoder.checkpoint(response.checkpoint, model, true)? },
         };
-        // The IPC decoder copies arrays before producer callbacks can be unloaded.
-        crate::wire::Output::encode(package, evaluation, &output)?.decode(package, evaluation)
+        package.validate_output(evaluation, &output)?;
+        if output.allocated_bytes() as u64 > output_limits.max_bytes {
+            return Err(Error::contract(ErrorCode::Limit, "native output bytes"));
+        }
+        Ok(output)
     }
 
     unsafe fn dataset(
@@ -157,6 +161,9 @@ impl Decoder {
         if batches.len() != 1 || batches[0].num_rows() != 1 {
             return Err(Error::contract(ErrorCode::Invalid, "native single row"));
         }
+        self.bytes = self.bytes.saturating_sub(
+            (batches.capacity() * std::mem::size_of::<crate::RecordBatch>()) as u64,
+        );
         Ok(batches.remove(0))
     }
 
@@ -164,6 +171,7 @@ impl Decoder {
         &mut self,
         pointer: *const abi::Checkpoint,
         model: &Model,
+        aggregate: bool,
     ) -> Result<Option<crate::Checkpoint>> {
         if pointer.is_null() {
             return Ok(None);
@@ -180,12 +188,21 @@ impl Decoder {
             ));
         }
         let mut decoder = Self::new(Limits {
-            max_bytes: self.limits.max_checkpoint_bytes,
+            max_bytes: if aggregate {
+                self.limits
+                    .max_checkpoint_bytes
+                    .min(self.remaining().max_bytes)
+            } else {
+                self.limits.max_checkpoint_bytes
+            },
             ..self.limits
         });
-        let mut datasets = Vec::new();
+        let mut datasets = decoder.vector(value.dataset_count)?;
         for data in unsafe { decoder.slice(value.datasets, value.dataset_count)? } {
             datasets.push(unsafe { decoder.dataset(data, &spec.datasets)? });
+        }
+        if aggregate {
+            self.charge(decoder.bytes)?;
         }
         Ok(Some(crate::Checkpoint {
             version: value.version,
@@ -207,6 +224,7 @@ impl Decoder {
     }
 
     unsafe fn bytes<'a>(&mut self, value: abi::Bytes) -> Result<&'a [u8]> {
+        self.charge(value.size)?;
         unsafe { self.slice(value.data, value.size) }
     }
 
@@ -221,11 +239,9 @@ impl Decoder {
             .checked_mul(std::mem::size_of::<T>())
             .filter(|bytes| *bytes <= isize::MAX as usize)
             .ok_or_else(|| Error::contract(ErrorCode::Limit, "native count"))?;
-        self.bytes = self
-            .bytes
-            .checked_add(bytes as u64)
-            .filter(|bytes| *bytes <= self.limits.max_bytes)
-            .ok_or_else(|| Error::contract(ErrorCode::Limit, "native bytes"))?;
+        if bytes as u64 > self.limits.max_bytes {
+            return Err(Error::contract(ErrorCode::Limit, "native count"));
+        }
         if count == 0 {
             return Ok(&[]);
         }
@@ -244,15 +260,37 @@ impl Decoder {
         }
     }
 
-    fn account(&mut self, batches: &[crate::RecordBatch]) -> Result<()> {
-        let bytes = batches.iter().fold(0_u64, |bytes, batch| {
-            bytes.saturating_add(batch.get_array_memory_size() as u64)
-        });
+    fn charge(&mut self, bytes: u64) -> Result<()> {
         self.bytes = self
             .bytes
             .checked_add(bytes)
             .filter(|bytes| *bytes <= self.limits.max_bytes)
             .ok_or_else(|| Error::contract(ErrorCode::Limit, "native bytes"))?;
+        Ok(())
+    }
+
+    fn vector<T>(&mut self, count: u64) -> Result<Vec<T>> {
+        let count = usize::try_from(count)
+            .map_err(|_| Error::contract(ErrorCode::Limit, "native count"))?;
+        let bytes = count
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| Error::contract(ErrorCode::Limit, "native count"))?;
+        self.charge(bytes as u64)?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(|_| Error::contract(ErrorCode::Limit, "native allocation"))?;
+        Ok(values)
+    }
+
+    fn account(&mut self, batches: &Vec<crate::RecordBatch>) -> Result<()> {
+        let bytes = batches.iter().fold(
+            batches
+                .capacity()
+                .saturating_mul(std::mem::size_of::<crate::RecordBatch>()),
+            |bytes, batch| bytes.saturating_add(crate::Dataset::batch_allocation(batch)),
+        );
+        self.charge(bytes as u64)?;
         for batch in batches {
             self.rows = self
                 .rows

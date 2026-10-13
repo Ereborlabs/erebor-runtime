@@ -203,7 +203,7 @@ impl Dataset {
         bytes
     }
 
-    fn batch_allocation(batch: &RecordBatch) -> usize {
+    pub(crate) fn batch_allocation(batch: &RecordBatch) -> usize {
         batch
             .get_array_memory_size()
             .saturating_add(

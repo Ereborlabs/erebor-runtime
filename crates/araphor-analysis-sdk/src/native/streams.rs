@@ -123,7 +123,9 @@ pub(super) unsafe fn read(
     let mut rows = 0_u64;
     for batch in reader {
         let batch = batch?;
-        bytes = bytes.saturating_add(batch.get_array_memory_size() as u64);
+        bytes = bytes
+            .saturating_add(crate::Dataset::batch_allocation(&batch) as u64)
+            .saturating_add(std::mem::size_of::<RecordBatch>() as u64);
         rows = rows.saturating_add(batch.num_rows() as u64);
         if bytes > limits.max_bytes
             || rows > limits.max_rows
@@ -131,9 +133,15 @@ pub(super) unsafe fn read(
         {
             return Err(Error::contract(ErrorCode::Limit, "native stream data"));
         }
-        for array in batch.columns() {
-            array.to_data().validate_full()?;
-        }
+        let batch = crate::wire::Dataset::owned_batch(
+            &batch,
+            limits.max_bytes.saturating_sub(
+                bytes.saturating_sub(crate::Dataset::batch_allocation(&batch) as u64),
+            ),
+        )?;
+        batches
+            .try_reserve_exact(1)
+            .map_err(|_| Error::contract(ErrorCode::Limit, "native allocation"))?;
         batches.push(batch);
     }
     Ok(batches)
