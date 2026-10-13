@@ -31,6 +31,7 @@ impl Detector {
         let mut findings = Rows::port::<Finding>("findings", "graph.finding-candidate.v1");
         findings.kind = sdk::OutputKind::Findings;
         findings.evidence_required = true;
+        let details = findings.schema.clone();
         let mut subjects = Rows::port::<Subject>("subjects", "graph.subject-selection.v1");
         subjects.kind = sdk::OutputKind::Subjects;
         let mut relationships =
@@ -42,7 +43,7 @@ impl Detector {
             .iter()
             .map(|reason| sdk::Reason {
                 code: format!("{}.{}", self.id(), reason),
-                details: Rows::port::<Finding>("details", "graph.finding-candidate.v1").schema,
+                details: details.clone(),
             })
             .collect();
         model.checkpoint = Some(sdk::CheckpointSpec {

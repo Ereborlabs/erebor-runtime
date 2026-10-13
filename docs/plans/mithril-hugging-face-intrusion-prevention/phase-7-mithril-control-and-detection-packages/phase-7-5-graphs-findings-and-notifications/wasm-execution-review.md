@@ -212,6 +212,22 @@ The [SDK reference](../../../../../crates/araphor-analysis-sdk/README.md)
 lists supported Arrow types. Encoding and decoding make bounded copies.
 This implementation does not claim zero-copy exchange.
 
+Each [wire evaluation](../../../../../crates/araphor-analysis-sdk/src/wire/evaluation.rs)
+and [wire output](../../../../../crates/araphor-analysis-sdk/src/wire/output.rs)
+operation uses one private
+[contract validator](../../../../../crates/araphor-analysis-sdk/src/validation.rs).
+The operation validates the immutable descriptor and selects its model once.
+Encoding checks typed input and output before IPC serialization. Decoding checks
+the descriptor and limits before IPC, then checks the decoded input and output.
+The two entry paths preserve the original export and limit error order.
+Independent host, guest, and algorithm calls retain their own validation.
+The [codec boundary tests](../../../../../crates/araphor-analysis-sdk/src/tests/codec.rs)
+check exact error codes, changed descriptors, malformed IPC, missing inputs,
+and required output evidence. The
+[detector descriptor](../../../../../crates/araphor-analysis-builtins/src/graph/contract.rs)
+also reuses its Finding schema for reason details within one construction.
+It does not regenerate the same schema for each reason.
+
 [Package::allocated_bytes](../../../../../crates/araphor-analysis-sdk/src/memory.rs)
 counts descriptor capacities, port schemas, reasons, and checkpoints.
 `wire::Evaluation::allocated_bytes` counts retained IPC capacities and metadata.
@@ -804,6 +820,14 @@ complete. The user approved the
 on 2026-10-12. It requires current installed equivalence and preserves the
 earlier dispatch-order error as history. Production cost isolation, any
 confirmed corrections, and terminal final CI remain required.
+
+The subsequent descriptor and codec correction passes 14 algorithm tests and
+54 SDK tests. The SDK all-features command passes 55 tests, including generated
+bindings. These counts overlap. They are not separate algorithm corpora.
+The [correction proof](phase-7-5-4-wasm-execution.md#descriptor-and-codec-correction-proof)
+records the commands and preserved validation order. These focused results do
+not qualify the changed guest artifacts or establish a production speed
+improvement. Affected production cases and final workspace CI remain required.
 
 The following records retain their original source boundaries.
 The isolation fixture now issues trace authority after service startup. Its

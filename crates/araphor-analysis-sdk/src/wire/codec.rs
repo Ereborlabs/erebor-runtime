@@ -6,7 +6,7 @@ use arrow_buffer::Buffer;
 use arrow_data::transform::MutableArrayData;
 use arrow_ipc::{reader::StreamDecoder, writer::StreamWriter};
 
-use crate::{Error, ErrorCode, Limits, Model, Package, RecordBatch, Result, Schema};
+use crate::{Error, ErrorCode, Limits, RecordBatch, Result, Schema};
 
 use super::Dataset;
 
@@ -182,24 +182,6 @@ impl Codec {
             rows: 0,
             batches: 0,
         }
-    }
-
-    pub(super) fn model<'a>(
-        package: &'a Package,
-        export: &str,
-        limits: Limits,
-    ) -> Result<&'a Model> {
-        package.validate()?;
-        limits.validate()?;
-        let model = package
-            .exports
-            .iter()
-            .find(|model| model.name == export)
-            .ok_or_else(|| Error::contract(ErrorCode::Incompatible, "export"))?;
-        if !model.limits.permits(&limits) {
-            return Err(Error::contract(ErrorCode::Limit, "evaluation limits"));
-        }
-        Ok(model)
     }
 
     fn remaining(&self) -> Limits {

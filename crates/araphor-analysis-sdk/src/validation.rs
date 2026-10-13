@@ -21,24 +21,35 @@ impl Package {
 
     pub(crate) fn validator(&self, evaluation: &Evaluation) -> Result<ContractValidator<'_>> {
         self.validate()?;
+        self.select_validator(&evaluation.export, evaluation.context.limits)
+    }
+
+    pub(crate) fn wire_validator(
+        &self,
+        export: &str,
+        limits: Limits,
+    ) -> Result<ContractValidator<'_>> {
+        self.validate()?;
+        limits.validate()?;
+        self.select_validator(export, limits)
+    }
+
+    fn select_validator(&self, export: &str, limits: Limits) -> Result<ContractValidator<'_>> {
         let model = self
             .exports
             .iter()
-            .find(|model| model.name == evaluation.export)
+            .find(|model| model.name == export)
             .ok_or_else(|| Error::contract(ErrorCode::Incompatible, "export"))?;
-        evaluation.context.limits.validate()?;
-        if !model.limits.permits(&evaluation.context.limits) {
+        limits.validate()?;
+        if !model.limits.permits(&limits) {
             return Err(Error::contract(ErrorCode::Limit, "evaluation limits"));
         }
-        Ok(ContractValidator {
-            model,
-            limits: evaluation.context.limits,
-        })
+        Ok(ContractValidator { model, limits })
     }
 }
 
 pub(crate) struct ContractValidator<'a> {
-    model: &'a Model,
+    pub(crate) model: &'a Model,
     limits: Limits,
 }
 

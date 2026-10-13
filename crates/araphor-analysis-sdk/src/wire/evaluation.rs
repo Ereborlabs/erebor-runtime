@@ -5,9 +5,10 @@ use super::{Checkpoint, Evaluation, Input};
 
 impl Evaluation {
     pub fn encode(package: &Package, evaluation: &crate::Evaluation) -> Result<Self> {
-        package.validate_evaluation(evaluation)?;
+        let validator = package.validator(evaluation)?;
+        validator.input(evaluation)?;
         let limits = evaluation.context.limits;
-        let model = Codec::model(package, &evaluation.export, limits)?;
+        let model = validator.model;
         let mut codec = Codec::new(limits);
         let inputs = evaluation
             .inputs
@@ -51,7 +52,8 @@ impl Evaluation {
 
     pub fn decode(&self, package: &Package) -> Result<crate::Evaluation> {
         let limits = self.context.limits;
-        let model = Codec::model(package, &self.export_name, limits)?;
+        let validator = package.wire_validator(&self.export_name, limits)?;
+        let model = validator.model;
         let mut codec = Codec::new(limits);
         let inputs = self
             .inputs
@@ -80,7 +82,7 @@ impl Evaluation {
                 .map(|checkpoint| checkpoint.decode(model, limits))
                 .transpose()?,
         };
-        package.validate_evaluation(&evaluation)?;
+        validator.input(&evaluation)?;
         Ok(evaluation)
     }
 }

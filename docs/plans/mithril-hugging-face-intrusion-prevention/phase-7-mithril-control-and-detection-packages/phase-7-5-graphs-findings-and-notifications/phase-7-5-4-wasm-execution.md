@@ -147,6 +147,13 @@ from source `1f6b434` and its four passing production cases. Preserve completed
 work unless a specific defect or necessary simplification requires a change.
 The earlier six-deliverable reviews below retain their historical boundaries.
 
+The replacement completion goal keeps these contracts and makes the remaining
+order explicit. Commit the pending SDK correction after its focused checks.
+Verify and commit graph diagnostics separately. Measure production costs and
+resolve the startup deadline failure before final qualification. Preserve the
+complete graph case, native windows, and test isolation. Finish with the four
+affected production cases, final shared Rust CI, and the implementation review.
+
 - [ ] Confirm the current SDK, build, installation, and AR-01 through AR-07
   proof against the source. Reuse valid evidence for unchanged behavior.
 - [ ] Confirm the six disabled optional quotas and explicit-limit checks.
@@ -188,15 +195,15 @@ again for every reason. Wire encoding validates the package and then calls
 `Codec::model`, which validates the same package again. These repetitions are
 confirmed in source. Their share of the full graph duration is not measured.
 
-- [ ] Reuse the Finding output schema for reason details within one descriptor
+- [x] Reuse the Finding output schema for reason details within one descriptor
   construction. Preserve every reason, schema, and descriptor byte contract.
 - [ ] Extend the existing graph DEBUG timings to separate replay fixture setup,
   replay derivation, graph processing, and snapshot reads. Keep the original
   calls, loops, error returns, and assertions. Add no dependency or threshold.
-- [ ] Reuse the existing private contract validator and selected model within
+- [x] Reuse the existing private contract validator and selected model within
   each wire operation. Preserve package, input, output, evidence, checkpoint,
   and allocation checks at each independent host and guest boundary.
-- [ ] Run the unchanged focused SDK and algorithm tests before and after the
+- [x] Run the unchanged focused SDK and algorithm tests before and after the
   correction. Add a focused rejection check only if existing coverage misses
   a changed validation boundary. Keep workload, limits, and profile unchanged.
 - [ ] Review the connected callers, commit the correction, then rerun affected
@@ -211,6 +218,37 @@ It exits 1 during startup after 127.120 seconds with `AnalysisReadDeadline` at
 active at the same time. This is a possible factor, not a proven cause. No
 workload, compiler limit, test assertion, or production source changed for this
 run. The earlier passing cases retain their original source boundaries.
+
+### Descriptor and codec correction proof
+
+The correction validates the descriptor once per wire operation and reuses the
+selected model. It retains input, output, evidence, reason, checkpoint, and
+allocation checks. Typed entry points check the export before limits. Wire
+decoding checks limits before the export. Three new Rust tests preserve this
+error order and reject missing input, malformed IPC, missing evidence, and
+changed schemas. Independent host, guest, and algorithm validation remains.
+Detector reasons use the existing Finding output schema.
+
+The unchanged baseline command passes 14 algorithm and 51 SDK tests:
+
+```sh
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test --locked -p araphor-analysis-sdk -p araphor-analysis-builtins --lib
+```
+
+The same command on the correction passes 14 algorithm and 54 SDK tests.
+The three additional tests cover the changed validation path. The proof is
+`/tmp/araphor-codec-reuse-proof-v56.json`. The SDK generated-binding check also
+passes all 55 tests, with no failed or ignored tests:
+
+```sh
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --locked -p araphor-analysis-sdk --all-features --lib
+```
+
+Source hashes still match the focused proof. Scoped formatting and connected
+caller review pass. No existing assertion, workload, quota, or build profile
+changes. These checks qualify the correction for its own commit. Generated
+guest builds, affected production qualification, and final workspace CI remain
+required. The result remains **Not done**. No speed improvement is claimed.
 
 ### Goal deliverable review
 

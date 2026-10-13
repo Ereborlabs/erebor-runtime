@@ -9,9 +9,11 @@ impl Output {
         evaluation: &crate::Evaluation,
         output: &crate::Output,
     ) -> Result<Self> {
-        package.validate_output(evaluation, output)?;
+        let validator = package.validator(evaluation)?;
+        validator.input(evaluation)?;
+        validator.output(evaluation, output)?;
         let limits = evaluation.context.limits;
-        let model = Codec::model(package, &evaluation.export, limits)?;
+        let model = validator.model;
         let mut codec = Codec::new(limits);
         let datasets = output
             .datasets
@@ -59,7 +61,8 @@ impl Output {
         evaluation: &crate::Evaluation,
     ) -> Result<crate::Output> {
         let limits = evaluation.context.limits;
-        let model = Codec::model(package, &evaluation.export, limits)?;
+        let validator = package.wire_validator(&evaluation.export, limits)?;
+        let model = validator.model;
         let mut codec = Codec::new(limits);
         let datasets = self
             .datasets
@@ -92,7 +95,8 @@ impl Output {
                 .map(|checkpoint| checkpoint.decode(model, limits))
                 .transpose()?,
         };
-        package.validate_output(evaluation, &output)?;
+        validator.input(evaluation)?;
+        validator.output(evaluation, &output)?;
         Ok(output)
     }
 }
