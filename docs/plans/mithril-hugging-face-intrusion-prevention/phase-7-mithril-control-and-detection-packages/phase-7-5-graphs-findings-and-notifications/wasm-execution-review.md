@@ -794,8 +794,11 @@ detector without a host rebuild. Restart, retry, and revocation checks pass.
 The fresh context case also passes. Installed transport preserves identity,
 revision, coverage, and the host-selected cutoff. The fresh profile restart
 case also passes. Live profiles persist and late context resolves after reopen.
-The complete graph case and final workspace verification remain required
-after the last Rust edit. The historical dispatch order remains unmet.
+The complete graph case also passes with all 12 cards, 257 notification
+obligations, and both native windows. Its recorded duration is 1,995.544 seconds.
+All four fresh cases use the same captured source and executable. Final
+workspace verification remains required after these cases. The historical
+dispatch order remains unmet.
 
 The following records retain their original source boundaries.
 The isolation fixture now issues trace authority after service startup. Its

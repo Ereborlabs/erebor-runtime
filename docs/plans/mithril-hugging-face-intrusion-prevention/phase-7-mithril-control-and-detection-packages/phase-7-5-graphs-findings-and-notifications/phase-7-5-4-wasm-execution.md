@@ -127,8 +127,8 @@ All four fresh v43 cases pass on the corrected source `6cce92d1`. Final
 workspace verification remains required after these Rust edits. The requested
 focused-test and repeated-work corrections are implemented and have focused
 proof. The final source is `1f6b434`. Its fresh v53 installed-package case
-passes. Its fresh context and profile restart cases also pass. The complete
-graph case and final CI remain required on this source.
+passes. All four fresh v53 production cases now pass with the same captured
+source and normal executable. Final CI remains required on this source.
 The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
@@ -2076,10 +2076,37 @@ The case retains deterministic profiles, persisted live profiles, late-context
 resolution after reopen, signed context, original kernel sequence 101, and
 durable cursor 1. Physical profile qualification remains false.
 
-The fresh complete `graph-notification` case remains required with this
-executable. The exact shared Rust procedure must run after all four complete
-cases. The historical dispatch order remains
-unmet. The phase result stays **Not done**. This record makes no performance
+The fresh complete `graph-notification` case exits zero and reports `PASS`.
+Its proof is `/tmp/araphor-wasm-graph-notification-proof-v53.json`, with SHA-256
+`082bde53af1d0e241c5616c4e42b9afd7aa6b30927225f630684e04ee1e7709a`.
+The case preserves all 12 incident cards, 257 current findings and persisted
+notification obligations, and 33 retained source windows. It preserves ACKs
+`[null, null, 2, 2]`, accepted cursors `[0, 0, 2, 2]`, failed-commit recovery,
+canonical replay, authorization rejection after restart, and original human
+deadlines. The native windows retain 64 records with 192 relationships in one
+SQL chunk and 185 records with 370 relationships in two SQL chunks. Their
+original traversal limits, subject/version joins, evidence, and coverage remain.
+Cross-node causality and provider issuance remain unqualified.
+
+The whole correctness case takes 1,995.544 seconds, including shutdown and
+cleanup. The step record is `/tmp/araphor-graph-step-timings-proof-v53.json`,
+with SHA-256
+`5dddd71045397d884d39d91fd89ef27f73dc40f9b0d3eb3c2d813290901ee5bb`.
+Incident cards take 905.689 seconds. Read, policy, and node contracts take
+635.914 seconds. Notification density takes 165.309 seconds. The native
+windows take 44.055 and 52.044 seconds. These are verification durations.
+No workload, limit, deadline, compiler profile, or timing threshold changes.
+
+Source review finds 36 temporary analysis-store and package initializations
+in `check_replay`. Compiled fixture code is shared. Replay derives from supplied
+input and each invocation creates a fresh Wasm instance. Sharing the committed
+execution owner would remove the current empty-store isolation check and could
+change its query control. The fixture remains unchanged. Setup cost is not
+isolated by these stage timings. Fixture reuse remains an unmeasured opportunity.
+
+All four complete cases now pass on the captured source and executable.
+The exact shared Rust procedure remains required after these cases.
+The historical dispatch order remains unmet. The phase result stays **Not done**. This record makes no performance
 or physical-prevention claim.
 
 ### Implementation TODOs
