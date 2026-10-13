@@ -1977,15 +1977,15 @@ the complete CLI and the new focused tests. One input owner prevents these
 paths from changing independently. The graph operations and assertions stay
 in their current callers. This correction changes no algorithm or architecture.
 
-- [ ] Put the existing input methods under one normal `ReplayQualification`
+- [x] Put the existing input methods under one normal `ReplayQualification`
   input module family. Use the CLI error type. Do not depend on the test-only
   platform module. Share the incident-card loader and exact context inputs.
-- [ ] Share read input construction with an explicit operation and optional
+- [x] Share read input construction with an explicit operation and optional
   result/byte pair. Preserve all nine read variants and all completion identity
   checks. Snapshot reads still precede late authority insertion.
-- [ ] Share send input construction. Preserve all five send variants and source
+- [x] Share send input construction. Preserve all five send variants and source
   identities. Only the provider-write variant receives the provider fact.
-- [ ] Reuse policy contradiction and partial-node input methods. Keep process,
+- [x] Reuse policy contradiction and partial-node input methods. Keep process,
   refresh, snapshot, history, derive, and assertions visible in both callers.
 - [ ] Verify the changed callers with all 17 focused tests. Compare the original
   and shared input fields. Commit this deliverable. Capture a new final source,
@@ -2008,6 +2008,33 @@ restart, retry, revocation, correction, empty replacement, upgrade rejection,
 rollback, removal, and renewal. This proof does not cover the later shared-input
 correction. Fresh complete cases and final CI remain required after that edit.
 The phase result stays **Not done**.
+
+### Shared fixture input correction proof
+
+The CLI and focused tests use one `ReplayQualification` input family.
+Its root has five lines. Card, read, and send input files have 98, 111, and
+65 lines. The complete replay file changes from 1,322 to 1,121 lines.
+Three duplicate test input files are removed. The Rust change removes 187 lines
+overall. The input modules contain no graph processing, refresh, snapshot,
+derivation, or assertion sequence. The modules use the existing CLI error type.
+
+Independent review compares the new callers with committed `7b4c558`.
+All 12 card inputs, nine read tuples, five send tuples, context anchors, policy
+acknowledgements, and partial-node fields remain exact. Read completion uses
+the original optional result and byte pair. The initial snapshot still precedes
+late authority insertion. The canonicalizer seed and CPU route remain unchanged.
+All original CLI assertion tokens and deadline values remain unchanged.
+The focused caller changes preserve every assertion, workload, and deadline.
+
+The normal test build passes in 1 minute 12 seconds. All 17 focused tests pass
+with zero failures and no ignored tests in 1,093.82 seconds. Workspace formatting
+and the diff whitespace check pass. The proof is
+`/tmp/araphor-shared-graph-inputs-proof-v52.json`, with SHA-256
+`972a54ad508452cb7ab3020a15a379d534b39292978a66f2d0220c47ccbb0f09`.
+This duration records verification work. It is not a performance result.
+The input-sharing correction is qualified by these focused checks. Four fresh
+complete cases and final workspace verification remain required for the final
+source. The phase result stays **Not done**.
 
 ### Implementation TODOs
 

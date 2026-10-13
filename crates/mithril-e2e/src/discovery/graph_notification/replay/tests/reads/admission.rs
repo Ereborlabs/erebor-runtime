@@ -19,7 +19,7 @@ fn admission_keeps_bytes_unproven() -> crate::platform::TestResult<()> {
     ] {
         let fixture = ReplayQualification::new(now)?;
         let (read, network, authority) =
-            fixture.completion_inputs(source_id, name, path, operation, false)?;
+            fixture.completion_inputs(source_id, name, path, operation, None)?;
         assert_eq!(read.decode()?.operation, operation as u32);
         let source = &read.id.stream;
         let graph = &fixture.graph;

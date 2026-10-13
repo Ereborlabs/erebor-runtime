@@ -1,17 +1,17 @@
-use super::super::*;
+use super::*;
 
 impl ReplayQualification {
-    pub(super) fn incident_cards() -> crate::platform::TestResult<Vec<Card>> {
+    pub(in super::super) fn incident_cards() -> std::result::Result<Vec<Card>, Box<dyn StdError>> {
         Ok(serde_json::from_slice(include_bytes!(
             "../../../../../fixtures/discovery/incident-cards-v1.json"
         ))?)
     }
 
-    pub(super) fn card_input(
+    pub(in super::super) fn card_input(
         &self,
         card: &Card,
         source_id: u8,
-    ) -> crate::platform::TestResult<EvidenceIntakeIdentityV1> {
+    ) -> std::result::Result<EvidenceIntakeIdentityV1, Box<dyn StdError>> {
         let mut denied = GraphNotificationQualification::native(1, true);
         denied.effect_family = card.family;
         denied.operation = card.operation;
@@ -52,11 +52,11 @@ impl ReplayQualification {
         Ok(source)
     }
 
-    pub(super) fn contradiction_input(
+    pub(in super::super) fn contradiction_input(
         &self,
         record: &DiscoveryRecordV1,
         value: PolicyObservationProvenanceV1,
-    ) -> crate::platform::TestResult<()> {
+    ) -> std::result::Result<(), Box<dyn StdError>> {
         self.inputs.insert(
             GraphFactV1 {
                 record_id: record.id.clone(),
@@ -68,11 +68,11 @@ impl ReplayQualification {
         Ok(())
     }
 
-    pub(super) fn partial_node_input(
+    pub(in super::super) fn partial_node_input(
         &self,
         source: &EvidenceIntakeIdentityV1,
         remote: &EvidenceIntakeIdentityV1,
-    ) -> crate::platform::TestResult<()> {
+    ) -> std::result::Result<(), Box<dyn StdError>> {
         self.inputs.insert(
             GraphFactV1 {
                 record_id: self.record(source, 1)?.id,

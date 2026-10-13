@@ -1,11 +1,10 @@
 use super::super::*;
 
-mod inputs;
-
 #[test]
 fn provider_write_needs_bridge() -> crate::platform::TestResult<()> {
     let fixture = ReplayQualification::new(1_791_400_000_000_000_000)?;
-    let (record, provider) = fixture.publication_input()?;
+    let (record, provider) = fixture.send_input(123, "provider-write", false)?;
+    let provider = provider.ok_or("recorded provider result absent")?;
     let source = &record.id.stream;
     assert!(matches!(
         &provider.value,

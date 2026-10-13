@@ -773,6 +773,25 @@ returns an error after Tokio shutdown. Existing assertions and workloads remain.
 ## Verification record
 
 **Not done.** This guide describes the implementation under qualification.
+Later corrections retain live compiled-code charges in prepared handles and
+returned trap errors. Their focused proof passes 41 tests. Seventeen focused
+graph tests also pass before the shared-input correction. Eighteen existing
+graph/query tests pass on the corrected Data source. The duplicate aggregate
+Rust invocation is removed. The complete CLI and large workloads remain.
+The [shared input owner](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/inputs.rs)
+now supplies card, read, and send inputs to both CLI and focused callers.
+Its children prepare inputs only. Graph operations and assertions stay in the
+callers. The normal test build passes. All 17 focused runtime checks pass for
+this correction in 1,093.82 seconds, with zero failures and no ignored tests.
+The change removes 187 Rust lines overall. Its reviewed proof is
+`/tmp/araphor-shared-graph-inputs-proof-v52.json`, with SHA-256
+`972a54ad508452cb7ab3020a15a379d534b39292978a66f2d0220c47ccbb0f09`.
+The v51 installed-package case passes on its earlier
+captured source. That pass does not qualify the later input correction.
+Four fresh complete cases and final workspace verification remain required
+after the last Rust edit. The historical dispatch order remains unmet.
+
+The following records retain their original source boundaries.
 The isolation fixture now issues trace authority after service startup. Its
 existing case passes in 88.81 seconds. The
 [query fixture](../../../../../crates/mithril-e2e/src/observability/query.rs)

@@ -1,14 +1,15 @@
 use super::*;
 
 impl ReplayQualification {
-    pub(super) fn completion_inputs(
+    pub(in super::super) fn completion_inputs(
         &self,
         source_id: u8,
         name: &str,
         path: GraphReadPathV1,
         operation: KernelEffectOperationV1,
-        has_completion: bool,
-    ) -> crate::platform::TestResult<(DiscoveryRecordV1, DiscoveryRecordV1, GraphFactV1)> {
+        completion: Option<(i64, u64)>,
+    ) -> std::result::Result<(DiscoveryRecordV1, DiscoveryRecordV1, GraphFactV1), Box<dyn StdError>>
+    {
         let mut raw = GraphNotificationQualification::native(1, false);
         raw.operation = operation as u16;
         let mut channel = GraphNotificationQualification::native(2, false);
@@ -28,7 +29,7 @@ impl ReplayQualification {
                     object_id: object,
                     expected_access: false,
                     reviewed_policy_revision: "recorded-reviewed-source".into(),
-                    completion: has_completion.then(|| GraphReadCompletionV1 {
+                    completion: completion.map(|(result, byte_count)| GraphReadCompletionV1 {
                         admission_record: read.id.clone(),
                         owner: "recorded-read-completion".into(),
                         completion_id: name.into(),
@@ -37,8 +38,8 @@ impl ReplayQualification {
                         object_id: object,
                         file_description_id: "fd-lifetime".into(),
                         path,
-                        result: 1,
-                        byte_count: 1,
+                        result,
+                        byte_count,
                         credential_lease_id: Some("recorded-lease".into()),
                         principal_id: Some("principal".into()),
                     }),
@@ -87,11 +88,11 @@ impl ReplayQualification {
         Ok((read, network, authority))
     }
 
-    pub(super) fn borrowed_completion(
+    pub(in super::super) fn borrowed_completion(
         input: &GraphReplayInputV1,
         admission: &DiscoveryRecordIdV1,
         process: [u8; 16],
-    ) -> crate::platform::TestResult<GraphReplayInputV1> {
+    ) -> std::result::Result<GraphReplayInputV1, Box<dyn StdError>> {
         let mut input = input.clone();
         for context in &mut input.facts {
             let mut fact = GraphFactV1::try_from(&*context)?;

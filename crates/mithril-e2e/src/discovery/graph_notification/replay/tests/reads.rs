@@ -1,7 +1,6 @@
 use super::super::*;
 
 mod admission;
-mod inputs;
 mod memory;
 
 #[test]
@@ -17,7 +16,7 @@ fn read_completion_keeps_scope() -> crate::platform::TestResult<()> {
             name,
             path,
             KernelEffectOperationV1::Read,
-            true,
+            Some((1, 1)),
         )?;
         let source = &read.id.stream;
         let graph = &fixture.graph;

@@ -2,6 +2,7 @@ use super::*;
 use serde::Deserialize;
 
 mod authority;
+mod inputs;
 #[cfg(test)]
 mod lifetime;
 mod window;
@@ -30,9 +31,7 @@ pub(super) async fn run(now: u64) -> std::result::Result<serde_json::Value, Box<
     let started = Instant::now();
     debug!(step = "replay_startup", "graph qualification step started");
     let fixture = ReplayQualification::new(now)?;
-    let cards: Vec<Card> = serde_json::from_slice(include_bytes!(
-        "../../../fixtures/discovery/incident-cards-v1.json"
-    ))?;
+    let cards = ReplayQualification::incident_cards()?;
     assert_eq!(cards.len(), 12);
     debug!(
         step = "replay_startup",
@@ -586,43 +585,8 @@ impl ReplayQualification {
         card: &Card,
         source_id: u8,
     ) -> std::result::Result<serde_json::Value, Box<dyn StdError>> {
-        let mut raw = GraphNotificationQualification::native(1, true);
-        raw.effect_family = card.family;
-        raw.operation = card.operation;
-        let mut control = GraphNotificationQualification::native(2, false);
-        control.effect_family = card.family;
-        control.operation = card.operation;
-        let source = self.accept(source_id, &[raw, control])?;
+        let source = self.card_input(card, source_id)?;
         let anchor = self.record(&source, 2)?;
-        for (index, (action, classification)) in card.contexts.iter().enumerate() {
-            self.inputs.insert(
-                GraphFactV1 {
-                    record_id: anchor.id.clone(),
-                    value: GraphFactValueV1::Context {
-                        subject: GraphSubjectKeyV1 {
-                            tenant_id: source.tenant_id,
-                            authority: GraphSubjectAuthorityV1::External {
-                                authority_id: format!("{}-context", card.id),
-                            },
-                            kind: GraphSubjectKindV1::External,
-                            identity: action.as_bytes().to_vec(),
-                        },
-                        action_id: action.clone(),
-                        classification: *classification,
-                        proof_quality: ProofQualityV1 {
-                            source_authority: SourceAuthorityV1::AuthenticatedMeasurement,
-                            local_subject_binding: LocalSubjectBindingV1::None,
-                            remote_subject_binding: RemoteSubjectBindingV1::Contextual,
-                            operation_result_authority: OperationResultAuthorityV1::Contextual,
-                            temporal_coverage: TemporalCoverageV1::Unknown,
-                            integrity: ProofIntegrityV1::AuthenticatedChannel,
-                        },
-                    },
-                },
-                &format!("context-{source_id}-{index}"),
-                1,
-            )?;
-        }
         let snapshot = self.snapshot(&source)?;
         let native = snapshot
             .findings
@@ -747,14 +711,7 @@ impl ReplayQualification {
             .clone();
         contradiction.state = PolicyProvenanceStateV1::Contradicted;
         contradiction.limits = vec!["RECORDED_ACTIVATION_CONTRADICTION".into()];
-        self.inputs.insert(
-            GraphFactV1 {
-                record_id: record.id,
-                value: GraphFactValueV1::Policy(contradiction),
-            },
-            "contradictory-policy",
-            1,
-        )?;
+        self.contradiction_input(&record, contradiction)?;
         assert!(graph.refresh(source, self.now + 300_000_000_001)?);
         let contradicted = self.result_snapshot(graph, source, &original.package_id)?;
         let conflict = contradicted
@@ -846,27 +803,7 @@ impl ReplayQualification {
                 ..
             })
         ));
-        let record = self.record(&local, 1)?;
-        self.inputs.insert(
-            GraphFactV1 {
-                record_id: record.id,
-                value: GraphFactValueV1::Kubernetes(KubernetesStageProofV1 {
-                    cluster_id: "recorded-cluster".into(),
-                    carried_request_id: Some("recorded-cross-node-request".into()),
-                    audit_id: Some("recorded-cross-node-audit".into()),
-                    object_uid: Some("recorded-object".into()),
-                    resource_version: Some("recorded-version".into()),
-                    owner_uid: Some("recorded-owner".into()),
-                    pod_uid: Some("recorded-pod".into()),
-                    node_id: Some(remote.node_id.clone()),
-                    full_container_id: None,
-                    remote_admission_id: None,
-                    proof_quality: Self::proof(),
-                }),
-            },
-            "cross-node-scheduled",
-            1,
-        )?;
+        self.partial_node_input(&local, &remote)?;
         let graph = &self.graph;
         assert!(graph.refresh(&local, self.now + 1)?);
         let partial = self.result_snapshot(graph, &local, "HF-XNODE-001")?;
@@ -972,97 +909,28 @@ impl ReplayQualification {
         .into_iter()
         .enumerate()
         {
-            let mut raw = GraphNotificationQualification::native(1, false);
-            raw.operation = if name == "open-admission" {
-                KernelEffectOperationV1::OpenRead as u16
+            let operation = if name == "open-admission" {
+                KernelEffectOperationV1::OpenRead
             } else if path == GraphReadPathV1::Mmap {
-                KernelEffectOperationV1::MmapRead as u16
+                KernelEffectOperationV1::MmapRead
             } else {
-                KernelEffectOperationV1::Read as u16
+                KernelEffectOperationV1::Read
             };
-            let mut channel = GraphNotificationQualification::native(2, false);
-            channel.effect_family = KernelEffectFamilyV1::Network as u16;
-            channel.operation = KernelEffectOperationV1::Send as u16;
-            let source = self.accept(u8::try_from(index + 100)?, &[raw, channel])?;
-            let read = self.record(&source, 1)?;
-            let network = self.record(&source, 2)?;
-            let object: [u8; 16] = read.decode()?.exact_object_id.as_ref().try_into()?;
-            let socket: [u8; 16] = network.decode()?.exact_object_id.as_ref().try_into()?;
-            self.policy(&read)?;
-            self.policy(&network)?;
-            self.inputs.insert(
-                GraphFactV1 {
-                    record_id: read.id.clone(),
-                    value: GraphFactValueV1::Credential {
-                        object_id: object,
-                        expected_access: false,
-                        reviewed_policy_revision: "recorded-reviewed-source".into(),
-                        completion: if name == "open-admission" || path == GraphReadPathV1::Mmap {
-                            None
-                        } else {
-                            Some(GraphReadCompletionV1 {
-                                admission_record: read.id.clone(),
-                                owner: "recorded-read-completion".into(),
-                                completion_id: name.into(),
-                                task_cookie: 7,
-                                process_instance_id: [8; 16],
-                                object_id: object,
-                                file_description_id: "fd-lifetime".into(),
-                                path,
-                                result,
-                                byte_count: bytes,
-                                credential_lease_id: Some("recorded-lease".into()),
-                                principal_id: Some("principal".into()),
-                            })
-                        },
-                        proof_quality: Self::proof(),
-                        principal_id: Some("principal".into()),
-                    },
-                },
-                "credential",
-                1,
+            let completion = if name == "open-admission" || path == GraphReadPathV1::Mmap {
+                None
+            } else {
+                Some((result, bytes))
+            };
+            let (read, network, authority) = self.completion_inputs(
+                u8::try_from(index + 100)?,
+                name,
+                path,
+                operation,
+                completion,
             )?;
-            self.inputs.insert(
-                GraphFactV1 {
-                    record_id: network.id.clone(),
-                    value: GraphFactValueV1::Channel {
-                        task_cookie: 7,
-                        process_instance_id: [8; 16],
-                        socket_object_id: socket,
-                        authority_id: "recorded-provider".into(),
-                        carried_request_id: "request".into(),
-                        credential_lease_id: "recorded-lease".into(),
-                        principal_id: "principal".into(),
-                        operation_id: "write".into(),
-                        proof_quality: Self::proof(),
-                    },
-                },
-                "channel",
-                1,
-            )?;
+            let source = read.id.stream.clone();
             let earlier = self.snapshot(&source)?;
-            let authority = GraphFactValueV1::AuthorityUse {
-                authority_id: "recorded-provider".into(),
-                process_instance_id: Some([8; 16]),
-                task_cookie: Some(7),
-                credential_object_id: Some(object),
-                socket_object_id: Some(socket),
-                request_id: Some("request".into()),
-                credential_lease_id: Some("recorded-lease".into()),
-                principal_id: "principal".into(),
-                operation_id: "write".into(),
-                outside_reviewed_behavior: true,
-                proof_quality: Self::proof(),
-                workload_binding: None,
-            };
-            self.inputs.insert(
-                GraphFactV1 {
-                    record_id: network.id.clone(),
-                    value: authority.clone(),
-                },
-                "late-authority",
-                1,
-            )?;
+            self.inputs.insert(authority.clone(), "late-authority", 1)?;
             let graph = &self.graph;
             assert!(graph.refresh(&source, self.now + 300_000_000_000)?);
             let snapshot = self.result_snapshot(graph, &source, "HF-DW-001")?;
@@ -1102,22 +970,11 @@ impl ReplayQualification {
                 GraphReadPathV1::InheritedFd | GraphReadPathV1::IoUring
             ) {
                 for name in ["other-admission", "other-process"] {
-                    let mut borrowed = input.clone();
-                    for context in &mut borrowed.facts {
-                        let mut fact = GraphFactV1::try_from(&*context)?;
-                        if let GraphFactValueV1::Credential {
-                            completion: Some(completion),
-                            ..
-                        } = &mut fact.value
-                        {
-                            if name == "other-admission" {
-                                completion.admission_record = network.id.clone();
-                            } else {
-                                completion.process_instance_id = [88; 16];
-                            }
-                            context.body = serde_json::to_vec(&fact)?;
-                        }
-                    }
+                    let borrowed = if name == "other-admission" {
+                        Self::borrowed_completion(&input, &network.id, [8; 16])?
+                    } else {
+                        Self::borrowed_completion(&input, &read.id, [88; 16])?
+                    };
                     if name == "other-admission" {
                         assert!(matches!(
                             GraphAndFindingOwner::derive(&borrowed, &self.execution),
@@ -1140,18 +997,11 @@ impl ReplayQualification {
             }
             let mut contradicted = input.clone();
             let mut authority = authority;
-            if let GraphFactValueV1::AuthorityUse { proof_quality, .. } = &mut authority {
+            if let GraphFactValueV1::AuthorityUse { proof_quality, .. } = &mut authority.value {
                 proof_quality.operation_result_authority =
                     OperationResultAuthorityV1::AuthoritativeDenied;
             }
-            self.inputs.insert(
-                GraphFactV1 {
-                    record_id: network.id.clone(),
-                    value: authority,
-                },
-                "contradicted-authority",
-                1,
-            )?;
+            self.inputs.insert(authority, "contradicted-authority", 1)?;
             contradicted.facts = self
                 .inputs
                 .facts(&read)?
@@ -1187,59 +1037,8 @@ impl ReplayQualification {
         .into_iter()
         .enumerate()
         {
-            let mut raw = GraphNotificationQualification::native(1, denied);
-            raw.effect_family = KernelEffectFamilyV1::Network as u16;
-            raw.operation = KernelEffectOperationV1::Send as u16;
-            let source = self.accept(u8::try_from(120 + index)?, &[raw])?;
-            let record = self.record(&source, 1)?;
-            if !denied {
-                self.policy(&record)?;
-                self.inputs.insert(
-                    GraphFactV1 {
-                        record_id: record.id.clone(),
-                        value: GraphFactValueV1::Baseline {
-                            role_id: 1,
-                            state_id: 1,
-                            outside_reviewed_baseline: true,
-                            reviewed_policy_revision: "recorded-reviewed-source".into(),
-                        },
-                    },
-                    "network-baseline",
-                    1,
-                )?;
-            }
-            let provider = if name == "provider-write" {
-                let fact = GraphFactV1 {
-                    record_id: record.id.clone(),
-                    value: GraphFactValueV1::AuthorityUse {
-                        authority_id: "recorded-provider".into(),
-                        process_instance_id: None,
-                        task_cookie: None,
-                        credential_object_id: None,
-                        socket_object_id: None,
-                        request_id: Some("recorded-publication-43".into()),
-                        credential_lease_id: None,
-                        principal_id: "recorded-publisher".into(),
-                        operation_id: "publication.write".into(),
-                        outside_reviewed_behavior: true,
-                        proof_quality: ProofQualityV1 {
-                            source_authority: SourceAuthorityV1::AuthoritativeProvider,
-                            local_subject_binding: LocalSubjectBindingV1::None,
-                            remote_subject_binding: RemoteSubjectBindingV1::ExactRequest,
-                            operation_result_authority:
-                                OperationResultAuthorityV1::AuthoritativeSucceeded,
-                            temporal_coverage: TemporalCoverageV1::Complete,
-                            integrity: ProofIntegrityV1::Signed,
-                        },
-                        workload_binding: None,
-                    },
-                };
-                self.inputs
-                    .insert(fact.clone(), "provider-publication-result", 1)?;
-                Some(fact)
-            } else {
-                None
-            };
+            let (record, provider) = self.send_input(u8::try_from(120 + index)?, name, denied)?;
+            let source = record.id.stream.clone();
             let snapshot = self.snapshot(&source)?;
             let finding = snapshot
                 .findings
@@ -1310,7 +1109,6 @@ mod tests {
     mod notifications;
     mod provider;
     mod reads;
-    mod recorded;
     mod transport;
 
     #[tokio::test]

@@ -8,7 +8,7 @@ fn resident_memory_stays_contextual() -> crate::platform::TestResult<()> {
         "resident-memory",
         GraphReadPathV1::Memory,
         KernelEffectOperationV1::Read,
-        true,
+        Some((1, 1)),
     )?;
     let source = &read.id.stream;
     let graph = &fixture.graph;
