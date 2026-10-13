@@ -132,8 +132,8 @@ proof. The last source with four passing lightweight production cases is
 passes. All four fresh v53 production cases now pass with the same captured
 source and normal executable. The descriptor and codec correction in `9f8f5da2`
 has focused proof. Its normal source build and fresh v57 installed-package case
-pass. Context, profile, and complete graph qualification remain required on
-that source. Final CI remains required after the current source changes.
+pass. Fresh v57 context and profile cases also pass with that executable.
+Complete graph qualification and final CI remain required on the current source.
 The dispatch change preceded the required complete equivalence proof. Preserve
 that historical error. The user-approved completion goal replaces the past
 ordering gate with current installed-component equivalence. Performance cause
@@ -280,6 +280,23 @@ reports 290.045 seconds, including its polling delay. This is no performance
 comparison. The other three production cases, diagnostic execution, startup
 failure diagnosis, and final workspace CI remain required.
 
+### Context and profile qualification after the codec correction
+
+The fresh v57 `context-roundtrip` and `profile-restart` cases pass with the
+same captured source and executable as the installed-package case. Context
+selection preserves identities, metadata, revision, and coverage. A cutoff
+before the record excludes it and retains the omission and coverage limits.
+The restart case retains the live profile, durable cursor 1, original kernel
+sequence 101, and signed and late context resolution.
+
+The records are `/tmp/araphor-wasm-context-roundtrip-proof-v57.json` and
+`/tmp/araphor-wasm-profile-restart-proof-v57.json`. Their wrappers report
+16.403 and 218.722 seconds. A single-job quota-test dependency build was active.
+These are correctness results, with no performance comparison. The input is
+synthetic kernel evidence. They prove no new physical action or production
+authority. Complete graph qualification, the timeout test, cost diagnosis,
+and final workspace CI remain required.
+
 ### Explicit timeout proof TODO
 
 The recovery test enables fuel and the optional Wasm timeout together. Fuel
@@ -315,6 +332,32 @@ The existing E2E executable already uses that workspace library. Standalone
 Data consumers would gain its tracing dependencies. Approval is pending for
 `/tmp/araphor-install-timing-proposal.patch`. The existing graph diagnostics
 and normal build can proceed without this change.
+
+### Installation bundle reuse investigation TODOs
+
+`install` has already admitted and validated the bundle. Its final `inspect`
+loads and validates the same immutable closure for each export, then reads the
+artifact again to build each export status. The lifecycle lock remains held
+through this response. Standalone inspection has no such retained bundle.
+
+- [ ] Measure setup and derivation in the unchanged complete graph case. Use
+  the existing installation retry tests to record an installation baseline.
+  Retain workload, assertions, profile, limits, and source identities.
+- [ ] Extend the existing Wasm and mixed SQL retry tests to compare the full
+  install response with standalone Inspect after install, retry, and reopen.
+  Preserve stored-byte equality and changed-artifact rejection. Use the same
+  stronger tests before and after any production correction.
+- [ ] If measurements establish material setup cost, reuse the admitted bundle
+  only during its locked installation response. Match root, package, and
+  revision. Retain stored reads for other roots and standalone operations.
+  Keep fresh activation, result, grant, dependency, and cancellation checks.
+- [ ] Compare the same existing tests and graph case after the correction.
+  Record remaining costs and commit this correction independently.
+
+This is an investigation candidate. It has no applied production change or
+measured improvement. Reuse depends on successful transactional writes and
+immutable revision checks. It cannot replace the stored reads that detect
+later corruption. The separate telemetry dependency remains unapproved.
 
 ### Goal deliverable review
 

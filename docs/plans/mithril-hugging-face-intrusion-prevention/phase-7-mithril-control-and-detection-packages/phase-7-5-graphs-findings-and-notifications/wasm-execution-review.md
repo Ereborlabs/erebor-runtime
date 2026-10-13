@@ -130,9 +130,11 @@ restart and explicit package upgrades do not prove automatic host-build migratio
 The fresh v57 `analysis-packages` case passes after SDK correction `9f8f5da2`.
 It uses the normal executable and source-built components. The installed
 example preserves typed reasons, evidence, retry, restart, and trust revocation.
-Its proof is `/tmp/araphor-wasm-analysis-packages-proof-v57.json`. This case does
-not qualify the remaining graph, context, and profile cases or final workspace
-CI. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
+Its proof is `/tmp/araphor-wasm-analysis-packages-proof-v57.json`. Fresh v57
+context and profile cases also pass with the same executable. Their records
+are `/tmp/araphor-wasm-context-roundtrip-proof-v57.json` and
+`/tmp/araphor-wasm-profile-restart-proof-v57.json`. Complete graph qualification
+and final workspace CI remain required. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
 records the exact source and executable.
 
 ## Execution owners
