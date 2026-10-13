@@ -134,7 +134,9 @@ source and normal executable. The descriptor and codec correction in `9f8f5da2`
 has focused proof. Its normal source build and fresh v57 installed-package case
 pass. All four fresh v57 production cases now pass with that executable.
 The complete graph case also verifies the pending diagnostic changes.
-The installation cost correction and final CI remain required.
+The installation cost correction in `c145e7b8` has focused proof and three
+fresh passing production cases. Its complete graph case and final CI remain
+required.
 The dispatch change preceded the required complete equivalence proof. Preserve
 that historical error. The user-approved completion goal replaces the past
 ordering gate with current installed-component equivalence. Performance cause
@@ -485,6 +487,31 @@ after header acquisition to fail. An unchanged source notice cannot replace
 that check. Detector input preparation repeats, but each selected model has
 its own schema and limits. Its cost is not separated from execution in this
 record. Do not bypass those model checks or introduce a persistent cache.
+
+### Final installed lifecycle qualification
+
+The normal build passes on `c145e7b8` in 151.688 seconds. The captured source
+digest is `51e4e7cea19881ef97db9f429314a2feb92118fb135fde380701bbfe63fb65a3`.
+The executable digest is
+`f92d0fdc50462fe2eb882e69957f14d5cfac615e7c81fdbe3d3cb8d21c8fe801`.
+All six generated components match the v57 baseline. Debug sections remain.
+The capture is `/tmp/araphor-wasm-production-capture-v59.json`.
+
+Three fresh production cases pass with this executable:
+
+| Case | Seconds | Proof |
+| --- | ---: | --- |
+| `analysis-packages` | 289.756 | `/tmp/araphor-wasm-analysis-packages-proof-v59.json` |
+| `context-roundtrip` | 16.294 | `/tmp/araphor-wasm-context-roundtrip-proof-v59.json` |
+| `profile-restart` | 215.500 | `/tmp/araphor-wasm-profile-restart-proof-v59.json` |
+
+The installed SDK detector retains its typed reason, evidence, checkpoint,
+restart, retry, and trust-revocation checks. Context selection retains exact
+identity and cutoff omissions. Restart retains the unresolved profile,
+sealed revision change, and durable source state. All 1,613 captured source
+files, the executable, and the six component hashes match. These results
+make no physical-prevention or performance claim. The full graph case and
+final shared Rust procedure remain required.
 
 ### Goal deliverable review
 

@@ -162,6 +162,13 @@ no speed improvement. The installation correction and final workspace CI
 remain required. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
 records the exact source and executable.
 
+The installation correction is committed in `c145e7b8`. Its normal build
+passes, with all six component artifacts equal to the v57 baseline. Fresh
+v59 installed-package, context, and profile-restart cases pass. The
+[final installed lifecycle record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
+contains their source, executable, durations, and proof paths. The complete
+graph case and final shared Rust procedure remain required on this source.
+
 ## Execution owners
 
 ```mermaid
