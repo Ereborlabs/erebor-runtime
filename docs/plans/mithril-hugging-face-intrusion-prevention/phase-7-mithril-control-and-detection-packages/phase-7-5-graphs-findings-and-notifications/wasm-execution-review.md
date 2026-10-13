@@ -116,6 +116,25 @@ The [public client](../../../../../crates/erebor-runtime-client/src/araphor/pack
 uses the package message limit on this API.
 The ordinary query API retains its existing limit.
 
+[Required package startup](../../../../../crates/araphor-data/src/package/required.rs)
+keeps existing activations. It does not replace their code after a host rebuild.
+The [Control authority](../../../../../crates/mithril-control/src/service/packages.rs)
+admits internal packages against the current executable's bundle pins. Changed
+component bytes need an explicit package transition; different bytes cannot
+replace the same immutable revision. An authorized client can use the existing
+install or update operation to assign its grant to an activation. The client
+must trust each required bundle digest. Historical replay uses the current
+activation grant and still requires trust in the historical bundle. Same-artifact
+restart and explicit package upgrades do not prove automatic host-build migration.
+
+The fresh v57 `analysis-packages` case passes after SDK correction `9f8f5da2`.
+It uses the normal executable and source-built components. The installed
+example preserves typed reasons, evidence, retry, restart, and trust revocation.
+Its proof is `/tmp/araphor-wasm-analysis-packages-proof-v57.json`. This case does
+not qualify the remaining graph, context, and profile cases or final workspace
+CI. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
+records the exact source and executable.
+
 ## Execution owners
 
 ```mermaid

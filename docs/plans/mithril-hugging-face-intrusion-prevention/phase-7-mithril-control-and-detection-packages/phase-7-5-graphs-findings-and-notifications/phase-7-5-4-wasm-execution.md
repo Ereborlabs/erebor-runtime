@@ -127,9 +127,13 @@ query-upload tests. The two fixture corrections now pass their focused cases.
 All four fresh v43 cases pass on the corrected source `6cce92d1`. Final
 workspace verification remains required after these Rust edits. The requested
 focused-test and repeated-work corrections are implemented and have focused
-proof. The final source is `1f6b434`. Its fresh v53 installed-package case
+proof. The last source with four passing lightweight production cases is
+`1f6b434`. Its fresh v53 installed-package case
 passes. All four fresh v53 production cases now pass with the same captured
-source and normal executable. Final CI remains required on this source.
+source and normal executable. The descriptor and codec correction in `9f8f5da2`
+has focused proof. Its normal source build and fresh v57 installed-package case
+pass. Context, profile, and complete graph qualification remain required on
+that source. Final CI remains required after the current source changes.
 The dispatch change preceded the required complete equivalence proof. Preserve
 that historical error. The user-approved completion goal replaces the past
 ordering gate with current installed-component equivalence. Performance cause
@@ -249,6 +253,68 @@ caller review pass. No existing assertion, workload, quota, or build profile
 changes. These checks qualify the correction for its own commit. Generated
 guest builds, affected production qualification, and final workspace CI remain
 required. The result remains **Not done**. No speed improvement is claimed.
+
+### Installed-package qualification after the codec correction
+
+Commit `9f8f5da2` contains the descriptor and codec correction. The normal
+build passes with the unchanged development profile and debug information:
+
+```sh
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo build --locked -p mithril-e2e --bin mithril_discovery_test
+```
+
+The captured executable passes the fresh `analysis-packages` case. The real
+client installs the SDK detector folder without a host rebuild. The result
+retains three matching evidence records, the typed `example-burst.THRESHOLD`
+reason, threshold 3, and checkpoint 4. Restart and identical retry return the
+same result. Trust revocation denies current computation and historical
+replay, and preserves the retained result. Dependency replacement, empty
+replacement, failed upgrade, rollback, removal, and credential renewal pass.
+
+The proof is `/tmp/araphor-wasm-analysis-packages-proof-v57.json`. It records
+source digest `1cbfd9432557696f660ef97dd15854ba9929efe41a86f0f10915a08352dd4945`
+and executable digest
+`188b178a7ea4e97c9fedb02d14c9de1703b3393fbf5a8bc6760dc259c396016b`.
+The capture includes the six source-built component identities. The wrapper
+reports 290.045 seconds, including its polling delay. This is no performance
+comparison. The other three production cases, diagnostic execution, startup
+failure diagnosis, and final workspace CI remain required.
+
+### Explicit timeout proof TODO
+
+The recovery test enables fuel and the optional Wasm timeout together. Fuel
+exhaustion can satisfy its error assertion before the timeout applies. The
+caller-deadline test uses disabled Wasm quotas. Neither test isolates the
+configured Wasm timeout from the caller deadline.
+
+- [ ] Add one focused real-component test with only the Wasm timeout enabled
+  and a longer caller deadline. Require `AnalysisReadDeadline` from a looping
+  component, then require a successful fresh execution. Preserve existing tests.
+- [ ] Run the focused quota tests and commit the proof separately. This test
+  adds no production limit, timing benchmark, or performance threshold.
+
+### Installation cost diagnostic TODOs
+
+The failed startup samples record 54.48 parent CPU seconds and 58.88 reaped
+child CPU seconds by 126.1 elapsed seconds. These samples show material parent
+work between compiler exits. They do not identify the operation that consumes
+that time. Installation also reads and validates stored artifacts during its
+final inspection. Source review alone does not establish that cost.
+
+- [ ] Add DEBUG durations at existing installation stage boundaries: admission,
+  revision preparation, store and activation, and final inspection. Add the
+  compiler duration at its existing cache call. Preserve calls, error order,
+  cleanup, limits, and result values. Add no timing helper or new dependency.
+- [ ] Build the normal executable and run existing qualification with these
+  diagnostics. Separate compiler time from parent admission and storage work.
+  Keep the diagnostic change separate from any later production correction.
+
+The prepared installation diagnostic patch needs a direct `erebor-telemetry`
+dependency in `araphor-data`. This dependency is not approved or applied.
+The existing E2E executable already uses that workspace library. Standalone
+Data consumers would gain its tracing dependencies. Approval is pending for
+`/tmp/araphor-install-timing-proposal.patch`. The existing graph diagnostics
+and normal build can proceed without this change.
 
 ### Goal deliverable review
 
