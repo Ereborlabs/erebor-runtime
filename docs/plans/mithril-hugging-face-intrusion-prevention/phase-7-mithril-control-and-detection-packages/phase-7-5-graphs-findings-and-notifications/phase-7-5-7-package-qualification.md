@@ -56,7 +56,7 @@ Neither upstream phase is a prerequisite for this runtime qualification.
 | General computation | Exercise graph traversal, multiple inputs, variable output counts, and a native dependency. Record exactly which upstream algorithms are covered; do not claim whole-product parity. |
 | Switch execution targets | The same Rust source passes Wasm/native output, evidence, checkpoint, cancellation, and replay fixtures. Python parity applies only if advertised. No silent failure fallback. |
 | Recover and update | Interrupt before and after commit. Check identical receipts, changed-retry rejection, state/output agreement, empty replacements, failed upgrade, rollback, and expired rebuild input. |
-| Enforce isolation | Reject undeclared reads and external effects. Check malformed outputs, resource exhaustion, grant revocation, worker crash, and cleanup with real execution adapters. |
+| Enforce the selected execution boundary | Isolated targets reject undeclared reads and external effects. Native Rust runs in Araphor's process without isolation. Check malformed outputs, resource failures, grant revocation, returned errors, and cleanup with real execution adapters. Native fatal-fault proof checks host restart and the last complete durable commit. |
 | Preserve mandatory detection | Disable optional discovery, fail a required package, and restore it. Check protected progress, coverage, retention, notifications, and unchanged human deadlines. |
 | Hugging Face incident | Run the existing incident fixtures through the installed detector. Map each claimed observation and pre-effect guard to its acceptance case. Assert physical prevention only where the enforcement owner blocks the action before its effect. |
 

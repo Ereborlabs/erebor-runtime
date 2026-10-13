@@ -10,25 +10,34 @@ A package can carry both `algorithm.wasm` and a platform-specific native artifac
 for one named export. The same source library, parameters, dataset schemas,
 evidence rules, and state contract serve both targets. Selection is explicit,
 compatible with the host, and recorded in each result.
+The user selected Rust native calls in Araphor's process. This decision replaces
+the earlier isolated-worker requirement. Reuse the current builtin execution
+model and retain the existing package and data owners.
 
 ## Implementation flow
 
 ```text
 Admission evaluates a requested native target
   -> the package owner checks platform, CPU, system libraries, and ABI requirements
-  -> the execution owner verifies that required worker isolation is available
-  -> the package owner records the selected implementation before evaluation
+  -> the package owner validates the admitted native library and its dependencies
+  -> the package owner stages the requested implementation before evaluation
 
 The scheduler invokes the export
-  -> the supervisor supplies a worker with its package and authorized batches
+  -> the package owner supplies authorized typed batches to the Rust native adapter
   -> the SDK adapter calls the compiled algorithm through the native interface
-  -> the worker returns bounded outputs and its next checkpoint
+  -> the adapter returns bounded outputs and its next checkpoint
   -> host validation submits the result through the existing atomic commit path
+  -> AnalysisStore commits the selected implementation, result, and checkpoint together
 
-The worker crashes or ignores cancellation
-  -> the supervisor terminates the worker and releases its resources
-  -> the package owner records failure and retains the prior committed state
+Native computation returns an error or finishes after cancellation
+  -> the package owner rejects its output and releases evaluation resources
+  -> AnalysisStore retains the prior selected target and committed state
   -> retry uses the same declared implementation and operation identity
+
+A native fault terminates Araphor
+  -> the process cannot perform worker recovery
+  -> restart restores the prior complete durable commit
+  -> the package owner does not select Wasm as a fallback
 ```
 
 ## Scope and owners
@@ -42,19 +51,21 @@ dependency is permitted when the package declares that target requirement. Such
 an export must pass its semantic fixtures; it cannot claim Wasm compatibility.
 Cross-target parity is required for every export that advertises both targets.
 
-- Use Arrow C Data/Stream interfaces inside the worker and bounded Arrow IPC
-  across the process boundary. Process-local pointers cannot cross that boundary.
-  Share exchange validation with the Wasm path where the contract is the same.
-- Run outside Control's address space, without its credentials, database files,
-  or network access. Require qualified OS isolation and the existing host
-  authorization, output accounting, and deadlines. Native memory and CPU limits
-  are optional configuration settings and are disabled by default. Apply each
-  native limit only when configured. A subprocess alone is not a sandbox.
-  Reject the target if required isolation is unavailable; do not silently load
-  it in Control.
-- Reuse workers only within a compatible authorization scope, package revision,
-  and dependency closure. Reset transient state between evaluations. Shared
-  algorithm libraries contain computation; AnalysisStore owns durable state.
+- Use Arrow C Data/Stream interfaces at the native library boundary inside
+  Araphor's process. Native requires no process transport. Reuse SDK validation
+  where its contract matches. Keep the library loaded until all producer-owned
+  buffers and release callbacks are finished. Keep it loaded while package-created
+  threads or tasks can execute its code.
+- Run native code in Araphor's process, like the current builtins. Add no worker
+  or isolation layer. Native shares Araphor's privileges and failure domain.
+  Retain host authorization, input/output accounting, and stale-result checks.
+  Native memory and CPU options remain disabled by default. Process-wide OS
+  limits cannot represent per-evaluation native limits; resolve enabled semantics
+  before implementing those options.
+- Keep durable state in AnalysisStore. Do not retain borrowed request pointers
+  or callbacks after evaluation. Hold the library and operation permit while
+  native code is running. Cancellation is cooperative; reject a late completion
+  but do not claim that a stalled native call can be forcibly terminated.
 - Check output and checkpoint parity before switching between declared targets.
   Specify numeric and ordering behavior in fixtures. Incompatible state needs
   the checked conversion or rebuild path. Never switch targets after a trap,
@@ -67,8 +78,9 @@ Cross-target parity is required for every export that advertises both targets.
 
 Build the same Rust algorithm for Wasm and native execution. Check findings,
 datasets, evidence, state, and replay with identical fixtures. Test incompatible
-platforms, unavailable isolation, invalid ABI values, buffer release, worker
-crashes, stale completion, and cancellation. Run a migrated graph or discovery algorithm
+platforms, invalid ABI values, buffer release, returned errors, recoverable Rust
+panics, fatal host faults and restart, stale completion, and cancellation.
+Run a migrated graph or discovery algorithm
 with Python unavailable. Extend `analysis-packages`; run the final Rust gate.
 Apply target parity to each native artifact selected from the current
 [migration inventory](algorithm-coverage.md#current-araphor-algorithms). A
@@ -76,8 +88,9 @@ native target reuses the migrated source; it does not defer or repeat migration.
 
 ## Exclusions and stop point
 
-Add no in-process third-party library loading, Python bridge, or copied native
-algorithm. Native execution does not establish a throughput or latency gain.
+Add no separate native process, isolation layer, Python bridge, or copied
+algorithm. Load admitted native Rust packages in Araphor's process.
+Native execution does not establish a throughput or latency gain.
 Any benchmark needs separate approval with its workload, runtime, and limits.
 Qualify the applicable native targets; advertise only verified host platforms.
 Native execution must work on every platform where Araphor can compile.
@@ -91,14 +104,15 @@ Linux x86-64 product restriction or claim qualification from compilation alone.
 ### Design decision record
 
 The [native decision proposal](native-execution-design.md) records source
-`2b9384ec`, existing owner contracts, four unresolved decisions, mandatory
-controls, configurable limits, and qualification requirements. D1 is resolved:
-native execution must work wherever Araphor can compile. D2 through D5 are
-**Not approved**. The proposed Linux isolation backend does not restrict product
-platform coverage. The user approved D6 native memory and CPU options with
+`2b9384ec`, existing owner contracts, current decisions, configurable limits,
+and qualification requirements. D1 is resolved: native execution must work
+wherever Araphor can compile. D2 is approved for all current portable exports.
+D5 is approved for execution in Araphor's process without isolation. D3 uses Rust;
+its binary interface and dependency details remain proposals. D4 needs approval
+after its installation and target-switch examples. The user approved D6 options with
 disabled defaults. No cap values are required before native admission,
 execution, or qualification. The host capability query reports Landlock ABI 4
-and seccomp support. That query does not prove worker isolation.
+and seccomp support. The current direction does not use that isolation proposal.
 
 ### Ordered correction TODOs
 
@@ -107,10 +121,11 @@ deliverables in order. Commit each implementation deliverable after its focused
 checks pass; do not defer its commit until final qualification.
 
 - [ ] **1. Resolve native design decisions.** Obtain approval for unresolved
-  D2 through D5 in the decision record. Preserve the D1 platform requirement and
-  the approved D6 optional limits and disabled defaults. Record the applicable
+  D3 and D4 details in the decision record. Resolve the enabled-resource semantics
+  that D5 changes. Preserve D1, approved D2, in-process D5, and disabled D6 defaults.
+  Record the applicable
   compilation targets, native export inventory,
-  ABI and dependency changes, artifact metadata, isolation and deployment
+  ABI and dependency changes, artifact metadata, library loading and deployment
   requirements, and native resource defaults before dependent implementation.
 - [ ] **2. Complete the native SDK and source builds.** Reuse the v1 C table,
   `Guest` computation, Arrow C Data/Stream, and SDK wire validation. Complete
@@ -118,11 +133,11 @@ checks pass; do not defer its commit until final qualification.
   checkpoints, errors, cancellation, and owned release. Test failure and repeated
   release. Build the native artifact and locked dependency closure from source.
   Keep generated binaries out of commits.
-- [ ] **3. Add isolated native execution to the package owner.** Apply every
-  approved control before package loading or dependency initialization. Return
-  typed Unsupported when a required control is unavailable. Preserve authority,
-  expiry, revocation, concurrency, cleanup, and stale-completion rejection.
-  Terminate and reap the complete owned worker scope.
+- [ ] **3. Add in-process native execution to the package owner.** Load the
+  admitted Rust library and hold it through every array and release callback.
+  Preserve authority, expiry, revocation, concurrency, returned-error cleanup,
+  and stale-completion rejection. Support cooperative cancellation. Do not add
+  a native worker or claim fault isolation or forced termination.
 - [ ] **4. Integrate compatibility, selection, and provenance.** Validate platform,
   CPU, system libraries, ABI, and dependency closure at admission. Add explicit
   selection through existing requests, CLI, and agent interfaces. Record actual
@@ -136,12 +151,13 @@ checks pass; do not defer its commit until final qualification.
   missing coverage, and existing Wasm quota and compiled-code accounting.
 - [ ] **6. Complete failure and lifecycle tests.** Keep production actions,
   transitions, assertions, and cleanup visible. Cover invalid ABI values,
-  malformed transport and outputs, unavailable isolation, forbidden access, crashes,
+  malformed batches and outputs, returned errors, Rust panics, host faults,
   cancellation, expiry, revocation, stale completion, resource failures,
   restart, retry, upgrade, rollback, removal, and target switching. Include large
-  selected graph transport without reducing workload or deadlines. Prove that
-  failure preserves the prior output and checkpoint, releases resources, and
-  produces no fallback. Test Wasm-to-native and native-to-Wasm switches.
+  selected graph inputs without reducing workload or deadlines. Prove that
+  returned failure preserves the prior output and checkpoint, releases resources,
+  and produces no fallback. Check restart after a fatal native host fault.
+  Test Wasm-to-native and native-to-Wasm switches.
 - [ ] **7. Qualify installed production execution and final CI.** Extend
   `analysis-packages` with a real source-built SDK dual-target detector. Install
   and run it without rebuilding Araphor. Prove target parity and actual artifact
@@ -201,14 +217,37 @@ SQL/Wasm dispatch and missing native artifact execution. `git diff --check`
 passes. No Rust source or configuration changed. No native build or additional
 platform qualification ran.
 
+### In-process execution correction TODO
+
+- [x] Record all current portable exports as the approved native qualification
+  inventory. Record Rust as the authoring language. Replace isolated workers
+  with native library calls in Araphor's process, as the user requires. Remove
+  worker, isolation, process-transport, and process-limit requirements from the
+  active native scope. Retain host authorization, semantic validation, atomic
+  commits, and explicit target selection. Explain D4 with installation, saved
+  state, retry, and target-switch examples. State library lifetime, cooperative
+  cancellation, shared-process failure, and configured-resource limits precisely.
+  Do not claim that native faults are isolated or that a stalled call can be killed.
+
+The documentation check passes for six Markdown files, 14 checked local links,
+code fences, disabled JSON defaults, D2/D5 approval status, Rust authoring,
+staged target selection, and library lifetime requirements. SDK and owner
+reviews checked the same boundaries. `git diff --check` passes. The parent
+native row, Python supervisor reference, and later qualification boundary are
+updated without implementing those later phases. No Rust source, Cargo file,
+test, CI configuration, or verification script changed. Native execution and
+enabled-resource semantics remain Not done.
+
 ## End scope and example
 
-Complete when qualified native artifacts execute in isolated workers under the
+Complete when qualified native Rust artifacts execute in Araphor's process under the
 same package contract, with explicit target selection and failure recovery.
 Each export that advertises Wasm and native execution passes output and state
-parity. This proves compatibility and isolation; it establishes no speed gain.
+parity. This proves package compatibility; it establishes no isolation or speed gain.
 
 Example at completion: build the migrated behavior-aggregation algorithm once
 for Wasm and once for the qualified native platform. The same input produces
 the same counts, evidence, and checkpoint meaning; each receipt names its actual
-target. A native crash commits no partial result and triggers no Wasm fallback.
+target. A returned native error commits no partial result and triggers no Wasm
+fallback. A fatal native fault can stop Araphor; restart restores its last
+complete durable commit.

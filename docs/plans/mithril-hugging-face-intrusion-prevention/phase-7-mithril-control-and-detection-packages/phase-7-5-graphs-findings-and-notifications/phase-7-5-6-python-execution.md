@@ -31,7 +31,9 @@ Import, evaluation, or cancellation fails
 
 ## Scope and owners
 
-Reuse the native worker supervisor and batch transport from 7.5.5. Add a Python
+Reuse the analysis package contract and SDK batch codec from 7.5.5. That phase
+adds no native worker supervisor. Resolve Python worker supervision when this
+optional phase is authorized. Add a Python
 SDK binding to the same descriptor and state contract. Keep Python imports out
 of Control; descriptor inspection must not execute decorators in Control.
 

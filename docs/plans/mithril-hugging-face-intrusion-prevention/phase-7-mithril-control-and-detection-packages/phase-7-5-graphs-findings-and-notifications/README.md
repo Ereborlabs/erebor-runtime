@@ -64,7 +64,7 @@ bindings. Host owners enforce authorization, limits, validation, and commits.
 | [7.5.2 Analysis contract and SDK](phase-7-5-2-analysis-contract-and-sdk.md) | Portable SDK and contract inventory; migrate current discovery, context integration, and HF-PROC/HF-DW/HF-XNODE computation into shared SDK code used by existing Rust callers. | 7.5.1. |
 | [7.5.3 Package lifecycle](phase-7-5-3-package-lifecycle.md) | Local SQL installation, dependency evaluation, atomic state, updates, and CLI/agent inspection. | 7.5.2, including algorithm equivalence, and Observability 3. |
 | [7.5.4 Wasm execution](phase-7-5-4-wasm-execution.md) | Embedded Wasmtime, installed execution of the shared algorithms, runtime equivalence, and production dispatch replacement. | 7.5.3. |
-| [7.5.5 Native execution](phase-7-5-5-native-execution.md) | Isolated compiled workers under the same model and package contract. | 7.5.4. |
+| [7.5.5 Native execution](phase-7-5-5-native-execution.md) | Installed Rust native artifacts in Araphor's process under the same model and package contract. | 7.5.4. |
 | [7.5.6 Optional Python execution](phase-7-5-6-python-execution.md) | A bundled interpreter and locked dependencies when Python support is selected. | 7.5.5; optional for the core release. |
 | [7.5.7 Package qualification](phase-7-5-7-package-qualification.md) | Integrated current-algorithm migration, package installation, replay, isolation, and paired incident proof. | 7.5.5; also 7.5.6 if Python is advertised. |
 | [7.5.8 Discovery Engine algorithms](phase-7-5-8-discovery-engine-algorithms.md) | All pinned upstream system/network discovery, aggregation, summaries, recommendations, and candidate-conversion algorithms as packages. | 7.5.7. |
