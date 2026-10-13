@@ -304,11 +304,21 @@ exhaustion can satisfy its error assertion before the timeout applies. The
 caller-deadline test uses disabled Wasm quotas. Neither test isolates the
 configured Wasm timeout from the caller deadline.
 
-- [ ] Add one focused real-component test with only the Wasm timeout enabled
+- [x] Add one focused real-component test with only the Wasm timeout enabled
   and a longer caller deadline. Require `AnalysisReadDeadline` from a looping
   component, then require a successful fresh execution. Preserve existing tests.
-- [ ] Run the focused quota tests and commit the proof separately. This test
+- [x] Run the focused quota tests and commit the proof separately. This test
   adds no production limit, timing benchmark, or performance threshold.
+
+The new timeout-only test and all three existing quota tests pass. The command
+is `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test --locked -p araphor-data --lib package::wasm::tests::runtime::quotas::`.
+There are four passes, no failures, and no ignored tests. Test execution takes
+118.41 seconds, including real component preparation. The preceding cold
+dependency build takes 32 minutes 2 seconds. The proof is
+`/tmp/araphor-wasm-quotas-proof-v57.json`. This is no performance comparison.
+The test checks the caller control after the guest timeout, then requires a
+fresh `echo` result of 42 from the same runtime. No quota default, production
+limit, prior test, or existing assertion changes.
 
 ### Installation cost diagnostic TODOs
 
@@ -317,6 +327,17 @@ child CPU seconds by 126.1 elapsed seconds. These samples show material parent
 work between compiler exits. They do not identify the operation that consumes
 that time. Installation also reads and validates stored artifacts during its
 final inspection. Source review alone does not establish that cost.
+
+The source and sample bounds identify the shared startup deadline. The second
+child was not reaped at 86.073 seconds and was reaped by 88.075 seconds. The
+compiler lock serializes these children. Thus the third child's 45-second
+limit cannot expire before 131.073 seconds. The complete failed process ended
+at 128.100 seconds. Startup supplies one 120-second control after initial
+bundle digests and owner setup; its grant has no expiry. Startup has no other
+production subprocess path. These facts exclude the local compiler deadline.
+They do not identify which child failed: failure cleanup also kills and reaps
+a child. Parent stage costs and the cause of increased CPU time remain open.
+The concurrent build is not an established cause. Keep both limits unchanged.
 
 - [ ] Add DEBUG durations at existing installation stage boundaries: admission,
   revision preparation, store and activation, and final inspection. Add the

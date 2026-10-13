@@ -65,6 +65,40 @@ fn explicit_fuel_exhausts_component() -> TestResult {
 }
 
 #[test]
+fn explicit_timeout_interrupts_component() -> TestResult {
+    let runtime = WasmExecution::new(WasmLimits {
+        timeout: Some(Duration::from_secs(1)),
+        ..WasmLimits::default()
+    })?;
+    runtime.admit(
+        COMPONENT,
+        &AnalysisReadControl::with_timeout(Duration::from_secs(30))?,
+    )?;
+    let package = package();
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let result = runtime.evaluate(
+        &package,
+        &evaluation(&package, "loop", 0)?,
+        COMPONENT,
+        &control,
+    );
+    assert!(
+        matches!(result, Err(Error::AnalysisReadDeadline { .. })),
+        "{result:?}"
+    );
+    control.check()?;
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let output = runtime.evaluate(
+        &package,
+        &evaluation(&package, "echo", 42)?,
+        COMPONENT,
+        &control,
+    )?;
+    assert_eq!(value(&output)?, 42);
+    Ok(())
+}
+
+#[test]
 fn fixture_modes_keep_quotas() -> TestResult {
     let unlimited = WasmExecution::fixture_code(WasmLimits::default())?;
     let quota = WasmLimits {
