@@ -687,13 +687,31 @@ impl GraphNotificationQualification {
         input: &GraphReplayInputV1,
         snapshot: &GraphSnapshotV1,
     ) -> std::result::Result<(), Box<dyn StdError>> {
-        let execution = InstalledAnalysis::testing(None, input.source.tenant_id)?;
+        let started = Instant::now();
+        debug!(step = "replay_fixture", "graph qualification step started");
+        let execution = InstalledAnalysis::testing(None, input.source.tenant_id);
+        debug!(
+            step = "replay_fixture",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = execution.is_ok(),
+            "graph qualification step finished"
+        );
+        let execution = execution?;
         let mut reordered = input.clone();
         reordered.records.reverse();
         reordered.records.extend(input.records.clone());
         reordered.facts.reverse();
         reordered.facts.extend(input.facts.clone());
-        let replay = GraphAndFindingOwner::derive(&reordered, &execution)?;
+        let started = Instant::now();
+        debug!(step = "replay_derive", "graph qualification step started");
+        let replay = GraphAndFindingOwner::derive(&reordered, &execution);
+        debug!(
+            step = "replay_derive",
+            elapsed_ms = %started.elapsed().as_millis(),
+            success = replay.is_ok(),
+            "graph qualification step finished"
+        );
+        let replay = replay?;
         assert_eq!(replay.graph, snapshot.graph);
         assert_eq!(replay.findings, snapshot.findings);
         assert_eq!(

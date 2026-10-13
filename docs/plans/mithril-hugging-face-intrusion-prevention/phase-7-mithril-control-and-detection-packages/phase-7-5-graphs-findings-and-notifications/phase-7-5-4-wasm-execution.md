@@ -132,8 +132,9 @@ proof. The last source with four passing lightweight production cases is
 passes. All four fresh v53 production cases now pass with the same captured
 source and normal executable. The descriptor and codec correction in `9f8f5da2`
 has focused proof. Its normal source build and fresh v57 installed-package case
-pass. Fresh v57 context and profile cases also pass with that executable.
-Complete graph qualification and final CI remain required on the current source.
+pass. All four fresh v57 production cases now pass with that executable.
+The complete graph case also verifies the pending diagnostic changes.
+The installation cost correction and final CI remain required.
 The dispatch change preceded the required complete equivalence proof. Preserve
 that historical error. The user-approved completion goal replaces the past
 ordering gate with current installed-component equivalence. Performance cause
@@ -201,7 +202,7 @@ confirmed in source. Their share of the full graph duration is not measured.
 
 - [x] Reuse the Finding output schema for reason details within one descriptor
   construction. Preserve every reason, schema, and descriptor byte contract.
-- [ ] Extend the existing graph DEBUG timings to separate replay fixture setup,
+- [x] Extend the existing graph DEBUG timings to separate replay fixture setup,
   replay derivation, graph processing, and snapshot reads. Keep the original
   calls, loops, error returns, and assertions. Add no dependency or threshold.
 - [x] Reuse the existing private contract validator and selected model within
@@ -296,6 +297,43 @@ These are correctness results, with no performance comparison. The input is
 synthetic kernel evidence. They prove no new physical action or production
 authority. Complete graph qualification, the timeout test, cost diagnosis,
 and final workspace CI remain required.
+
+### Complete graph diagnostic proof
+
+The fresh v57 `graph-notification` case passes in 2,272.799 seconds. It uses
+the captured normal executable and all six source-built components. The
+proof is `/tmp/araphor-wasm-graph-notification-proof-v57.json`. The only source
+change since capture is an extension of the metadata retry tests. That test
+module is absent from the production executable. All production sources and
+generated artifacts still match the capture.
+
+All 12 incident cards retain equal duplicate and reordered replay. The case
+retains 257 findings and 257 notification obligations with the original
+deadline. Native windows retain 64 records and 192 returned relationships,
+and 185 records and 370 returned relationships. Both windows retain exact
+version selection and equal results after reopen. This is lightweight proof;
+it adds no physical-prevention or cross-node qualification claim.
+
+The record `/tmp/araphor-wasm-graph-costs-v57.json` contains stage durations,
+process samples, source identities, and artifact hashes. Startup takes 62.522
+seconds. The first replay fixture takes 69.776 seconds and starts five
+compiler children. The next 35 fixtures reuse compiled code but create
+independent stores and installation state. They take 658.770 seconds in total,
+with a median of 18.990 seconds. No compiler child remains after 140.367
+seconds. Thus the later setup cost is not cold component compilation.
+
+The 36 replay derivations take 171.422 seconds. The 64 instrumented graph
+processing calls take 376.148 seconds; their snapshot reads take 2.949 seconds.
+These stages overlap other stage totals. Do not add all totals together.
+The measurements do not separate every query, validation, or durable write.
+No concurrent Cargo build was started for this run. Host CPU pressure reaches
+1.81 percent and memory pressure reaches 0.87 percent in the recorded samples.
+The earlier v53 run has different source and artifacts. This comparison does
+not establish a speed improvement or regression.
+
+The diagnostic change keeps every production call, input, loop, assertion,
+deadline, and result. The normal build and complete case qualify it for its
+separate commit. Final shared Rust CI remains required.
 
 ### Explicit timeout proof TODO
 

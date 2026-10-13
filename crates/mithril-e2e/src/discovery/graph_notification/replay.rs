@@ -530,8 +530,26 @@ impl ReplayQualification {
     ) -> std::result::Result<GraphSnapshotV1, Box<dyn StdError>> {
         let graph = &self.graph;
         for _ in 0..32 {
-            graph.process(self.now)?;
-            if let Some(snapshot) = graph.snapshot(source)? {
+            let started = Instant::now();
+            debug!(step = "graph_process", "graph qualification step started");
+            let processed = graph.process(self.now);
+            debug!(
+                step = "graph_process",
+                elapsed_ms = %started.elapsed().as_millis(),
+                success = processed.is_ok(),
+                "graph qualification step finished"
+            );
+            processed?;
+            let started = Instant::now();
+            debug!(step = "graph_snapshot", "graph qualification step started");
+            let snapshot = graph.snapshot(source);
+            debug!(
+                step = "graph_snapshot",
+                elapsed_ms = %started.elapsed().as_millis(),
+                success = snapshot.is_ok(),
+                "graph qualification step finished"
+            );
+            if let Some(snapshot) = snapshot? {
                 return Ok(snapshot);
             }
         }

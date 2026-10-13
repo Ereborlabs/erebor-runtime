@@ -134,7 +134,14 @@ Its proof is `/tmp/araphor-wasm-analysis-packages-proof-v57.json`. Fresh v57
 context and profile cases also pass with the same executable. Their records
 are `/tmp/araphor-wasm-context-roundtrip-proof-v57.json` and
 `/tmp/araphor-wasm-profile-restart-proof-v57.json`. Complete graph qualification
-and final workspace CI remain required. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
+also passes with that executable in 2,272.799 seconds. Its proof is
+`/tmp/araphor-wasm-graph-notification-proof-v57.json`; the stage record is
+`/tmp/araphor-wasm-graph-costs-v57.json`. All incident cards, notification
+obligations, and both native windows remain in the case. Warm fixture setup
+uses independent state and takes a median of 18.990 seconds across 35 calls.
+This is the baseline for the installation cost investigation. It establishes
+no speed improvement. The installation correction and final workspace CI
+remain required. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
 records the exact source and executable.
 
 ## Execution owners
