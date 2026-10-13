@@ -796,9 +796,14 @@ revision, coverage, and the host-selected cutoff. The fresh profile restart
 case also passes. Live profiles persist and late context resolves after reopen.
 The complete graph case also passes with all 12 cards, 257 notification
 obligations, and both native windows. Its recorded duration is 1,995.544 seconds.
-All four fresh cases use the same captured source and executable. Final
-workspace verification remains required after these cases. The historical
-dispatch order remains unmet.
+All four fresh cases use the same captured source and executable. The final
+workspace procedure stopped at the user's request with exit 130 after
+formatting, workspace check, and strict Clippy passed. Workspace tests did not
+complete. The user approved the
+[revised completion goal](phase-7-5-4-wasm-execution.md#approved-completion-goal-and-remaining-todos)
+on 2026-10-12. It requires current installed equivalence and preserves the
+earlier dispatch-order error as history. Production cost isolation, any
+confirmed corrections, and terminal final CI remain required.
 
 The following records retain their original source boundaries.
 The isolation fixture now issues trace authority after service startup. Its

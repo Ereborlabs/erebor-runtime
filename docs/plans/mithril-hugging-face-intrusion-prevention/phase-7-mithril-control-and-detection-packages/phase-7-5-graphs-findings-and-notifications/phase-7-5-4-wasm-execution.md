@@ -47,9 +47,9 @@ Keep the Wasmtime adapter under the `araphor-data` package execution owner.
 The SDK owns generated component bindings, not permissions or durable state.
 Pin and qualify the Wasmtime, component, and binding versions together.
 Complete the SDK component artifact build and generated bindings in this phase.
-Connect the descriptors from 7.5.2 to the admission owner from 7.5.3. Replace
-fixed graph package dispatch and its ID allowlist only after the built-in
-packages pass installed-component equivalence checks. Reuse the production
+Connect the descriptors from 7.5.2 to the admission owner from 7.5.3. Require
+installed-component equivalence for all current algorithms. The approved
+completion goal below replaces the past dispatch-order requirement. Reuse the production
 input/output adapters from 7.5.2. Existing host validation remains mandatory.
 General package results must retain declared namespaced reason codes and typed
 details. The current eleven-reason enum is a compatibility mapping for existing
@@ -62,9 +62,10 @@ Preserve historical finding JSON and all host evidence and authority checks.
 - Use bounded typed batches, with Arrow IPC for table payloads and WIT for
   lifecycle and control values. Specify the supported Arrow types. Account for
   copies, decoding, input, output, and checkpoint memory; claim no zero-copy path.
-- Bound compilation, linear memory, tables, CPU work, wall time, host calls,
-  output, state, and concurrency. Wasmtime fuel and interruption do not replace
-  limits on work performed by host imports.
+- Keep the six optional Wasm quotas disabled by default: fuel, guest memory,
+  analysis data, execution time, allocation, and host calls. Explicit quotas
+  must work. Preserve mandatory compiler, compiled-code cache, SDK transfer,
+  shared query, concurrency, cancellation, and authority controls.
 - Cache compiled code by exact artifact and compatible host configuration under
   a bounded cache. Do not share mutable evaluation state across scopes. Treat
   precompiled artifacts as host-generated executable material with checked origin.
@@ -86,8 +87,8 @@ Package code owns reusable computation. `DiscoveryOwner` and
 `GraphAndFindingOwner` retain input authorization, identity, coverage and proof
 validation, graph assembly, and output checks. AnalysisStore retains commits.
 Do not put these trust decisions under package control. Share the existing
-computation code between SDK targets and remove the built-in production dispatch
-after installed-component equivalence checks pass. Keep module and function
+computation code between SDK targets. Require installed-component equivalence
+and no silent built-in fallback. Keep module and function
 boundaries focused. Runtime migration adds no new physical or causal proof.
 
 ## Acceptance and verification
@@ -129,13 +130,55 @@ focused-test and repeated-work corrections are implemented and have focused
 proof. The final source is `1f6b434`. Its fresh v53 installed-package case
 passes. All four fresh v53 production cases now pass with the same captured
 source and normal executable. Final CI remains required on this source.
-The dispatch change
-preceded the required complete equivalence proof. This historical order
-requirement remains unmet. The TODOs below retain the corrections and proof.
+The dispatch change preceded the required complete equivalence proof. Preserve
+that historical error. The user-approved completion goal replaces the past
+ordering gate with current installed-component equivalence. Performance cause
+isolation, any confirmed corrections, and final workspace verification remain
+required. The TODOs below retain the corrections and proof.
 
 The approved optional resource policy below supersedes earlier fixed data,
 fuel, memory, and guest-time statements. Earlier proof retains its original
 source and limits. It does not qualify the current source or generated build.
+
+### Approved completion goal and remaining TODOs
+
+The user approved the revised eight-deliverable goal on 2026-10-12. Continue
+from source `1f6b434` and its four passing production cases. Preserve completed
+work unless a specific defect or necessary simplification requires a change.
+The earlier six-deliverable reviews below retain their historical boundaries.
+
+- [ ] Confirm the current SDK, build, installation, and AR-01 through AR-07
+  proof against the source. Reuse valid evidence for unchanged behavior.
+- [ ] Confirm the six disabled optional quotas and explicit-limit checks.
+  Keep the compiled-code cache at 80 MiB and 16 entries. Count prepared,
+  executing, cached, and error-retained code until its last owner releases it.
+- [ ] Isolate the expensive stages in the existing graph qualification.
+  Separate setup, compilation, input preparation, execution, queries,
+  validation, and durable writes where required to identify the cause.
+- [ ] Fix confirmed avoidable production work at its existing owner. Record
+  each concrete correction before implementation. Compare unchanged workloads,
+  assertions, profiles, and limits before and after each performance change.
+- [ ] Preserve complete end-to-end checks, both native graph windows, failure
+  cases, identities, evidence, recovery, and notification deadlines. Keep small
+  Rust tests and visible production operations. Do not implement the separate
+  scenario-maintainability migration or share away an isolation boundary.
+- [ ] Run the checks affected by each correction. Run the exact shared Rust
+  procedure to a terminal result after the final Rust, Cargo, or CI edit.
+  Do not repeat expensive checks for documentation-only changes.
+- [ ] Review correctness, completeness, and simplicity. Update this result
+  and the review guide with source-bound evidence. Commit each deliverable.
+
+The final v53 CI attempt stopped at the user's request with exit 130.
+Formatting, workspace check, and strict Clippy passed. Workspace tests did not
+complete. The log is `/tmp/araphor-wasm-rust-ci-ordered-v53.log`. This is not a
+workspace pass. The unchanged full graph case took 1,995.544 seconds. Its stage
+timings do not yet isolate a production cost or prove a speed improvement.
+
+The revised goal permits no new architecture, dependency, quota policy,
+benchmark, or performance threshold without user approval. Use the supplied
+main checkout. Create no worktree and commit no generated Wasm binary. Native,
+Python, OCI, upstream algorithm ports, and new physical claims remain outside
+this phase. The result remains **Not done**.
 
 ### Goal deliverable review
 
@@ -2124,7 +2167,7 @@ The current source has these required changes:
   to the existing host adapters. Support declared reason codes and typed details
   without a new host enum entry for each detector.
 - [ ] Build the shared AR-01 through AR-07 computations as components. Prove
-  installed equivalence before removing fixed production dispatch. Keep AR-04
+  current installed equivalence under the revised completion goal. Keep AR-04
   selection on the host and retain current HF-XNODE causality limits.
 - [ ] Verify dependency evaluation, corrections, empty replacements, retries,
   checkpoints, restart, stale results, updates, rollback, removal, concurrent
