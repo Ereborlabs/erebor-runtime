@@ -5,6 +5,7 @@ use clap::{CommandFactory as _, Parser, ValueEnum};
 #[derive(Clone, PartialEq, ValueEnum)]
 enum Case {
     AnalysisPackages,
+    AnalysisPackagesNative,
     OfflineExact,
     StorageContract,
     EvidenceRestart,
@@ -83,6 +84,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let result = match cli.case {
+        Case::AnalysisPackagesNative => {
+            mithril_e2e::AnalysisPackageQualification::new(cli.output_directory)
+                .run_native()
+                .await
+        }
         Case::AnalysisPackages => {
             mithril_e2e::AnalysisPackageQualification::new(cli.output_directory)
                 .run()

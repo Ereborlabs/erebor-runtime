@@ -262,7 +262,7 @@ commands and terminal results.
 | Four discovery exports | [native discovery tests](../../../../../crates/araphor-data/src/discovery/sdk/native.rs): populated atoms, merge, groups, compare, reordered inputs, missing context, and coverage. | Both tests pass with the final SDK, loader, and libraries. |
 | Three graph exports | [native graph tests](../../../../../crates/araphor-data/src/graph/derive/adapter/tests/native.rs): complete and gapped inputs, trusted Rust/Wasm/native wire output, evidence, reasons, checkpoints, and derived results. | Complete parity and graph derivation pass after the new test releases its earlier output guards. |
 | Large native Arrow input | [large process test](../../../../../crates/araphor-data/src/graph/derive/adapter/tests/native/large.rs): 185 typed records, retained identities, full output and checkpoint parity through the actual native library. | The final 185-record proof passes. No benchmark or speed claim follows from this case. |
-| Installed production APIs | [native qualification](../../../../../crates/mithril-e2e/src/discovery/packages/native.rs) and [case owner](../../../../../crates/mithril-e2e/src/discovery/packages.rs): authored BurstDetector folder, no Python, native graph packages, exact artifact references, and restart. | New case execution and the unchanged context, profile-restart, and complete graph-notification cases remain pending. |
+| Installed production APIs | [native qualification](../../../../../crates/mithril-e2e/src/discovery/packages/native.rs) and [case owner](../../../../../crates/mithril-e2e/src/discovery/packages.rs): authored BurstDetector folder, no Python, native graph packages, exact artifact references, and restart. | Native analysis-packages, context-roundtrip, and profile-restart pass with the retained binary. The complete graph-notification case remains pending. |
 
 The final artifact directory is `/tmp/araphor-native-built-20261013-final`.
 The author build log is `/tmp/araphor-native-build-20261013-final.log`. These
@@ -277,13 +277,54 @@ The combined final owner and parity cut returns 33 passed and 0 failed in
 phase verification record. The separate host-fault test returns 1 passed and
 0 failed in 169.55 seconds.
 
+### Retained production case evidence
+
+The retained binary is
+`/tmp/araphor-native-qualified-bin-20261013/mithril_discovery_test`.
+Its verified SHA-256 digest is
+`d47ab672fa750273eef03080f054cc9494fee561f44f07f750e93c6821b82c02`.
+The source capture contains the installed native owner and qualification case
+described above. Later CLI help and builder test changes are outside this binary
+capture. This binary does not prove those later changes.
+
+| Case | Retained result | Observed result and limit |
+| --- | --- | --- |
+| `analysis-packages-native` | `/tmp/araphor-native-qualified-analysis-packages-20261013/result.json`; session 43003, terminal exit 0 | `PASS`. The case retains the original SQL and Wasm assertions. The real client installs the native BurstDetector folder over the existing authenticated transport. Python is unavailable. No host rebuild occurs. The result records native target, artifact, closure, and platform identities. |
+| `context-roundtrip` | `/tmp/araphor-native-qualified-context-20261013/result.json`; session 33660 | `PASS`. Exact retained context, restart, installed context computation, identities, revision, coverage, and cutoff omissions pass. The selected input has one record; the excluded input has zero records and one omission. Coverage remains gapped. This unchanged case does not assert a native discovery target. |
+| `profile-restart` | `/tmp/araphor-native-qualified-profile-20261013/result.json`; session 2806 | `PASS`. The live profile persists. Restart replay, late-context refresh, immutable sealed revision, frozen replay, and installed context assertions pass. The result records deterministic profile qualification. Physical profile qualification and production authority remain false. |
+
+The native BurstDetector result records four input records, three matching
+evidence records, threshold 3, checkpoint `4`, and typed reason
+`example-burst.THRESHOLD`. Restart and retry preserve the result. Trust
+revocation denies current computation and historical replay while preserving
+the retained result. The native artifact digest is
+`5339df988e70c185bb253af3bcaa1d20f414643fba2fec8e0aad2f3ef0cae1ca`.
+Its closure digest is
+`c08c105c33d8fa1b4889f7de3be325e3a7ac33b0f876458e4c67552dea7e50f9`.
+The platform is `x86_64-unknown-linux-gnu`.
+
+The same native case executes `HF-PROC-001.detect`, `HF-DW-001.detect`, and
+`HF-XNODE-001.detect` through installed production owners. The retained result
+records equal same-input findings, relationships, replay, and checkpoint
+meaning. Each native reference retains its actual artifact and closure digest.
+This proof does not replace the separate four-export discovery parity tests.
+
+All three results use lightweight synthetic inputs. No physical action occurs.
+The analysis case records `cross_node_qualified: false`. The context and profile
+cases record `physical_profiles_qualified: false` and
+`production_authority: false`. These results do not qualify a physical
+Kubernetes deployment, a new native platform, process isolation, or performance.
+The complete graph-notification case remains live in session 76075.
+Final continuous integration remains pending. Session 95891 stopped at two
+builder-test `unwrap` calls; that cut is not a passing CI record.
+
 ## Source state and verification limits
 
 This guide covers base commit `09b354f9a9a226747043c98a29534af6d2463bd1`
 and the native loader, installed owner, parity, and production qualification
 changes present in the working tree on 2026-10-13. Some linked tests are not
 committed at this source cut. The document review does not build or execute
-code. Production cases, final continuous integration, and
+code. The complete graph-notification case, final continuous integration, and
 the eight-deliverable acceptance review remain **Not done**. Existing Wasm
 acceptance does not qualify native execution. No performance, native isolation,
 or forced hard-cap enforcement result is claimed.

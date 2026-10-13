@@ -13,6 +13,7 @@ use crate::control_fixture::{oidc::OidcFixture, MtlsFixture};
 
 mod bundle;
 mod fixture;
+mod native;
 mod wasm;
 
 use bundle::Denials;
@@ -30,6 +31,33 @@ impl AnalysisPackageQualification {
     }
 
     pub async fn run(&self) -> Result<()> {
+        self.run_case(false).await
+    }
+
+    pub async fn run_native(&self) -> Result<()> {
+        self.run_case(true).await
+    }
+
+    async fn run_case(&self, native: bool) -> Result<()> {
+        if native {
+            for executable in ["python", "python3"] {
+                let error = match std::process::Command::new(executable)
+                    .arg("--version")
+                    .output()
+                {
+                    Err(error) => error,
+                    Ok(_) => {
+                        return Err(
+                            "native qualification requires Python unavailable on PATH".into()
+                        )
+                    }
+                };
+                self.check(
+                    error.kind() == std::io::ErrorKind::NotFound,
+                    "Python availability check did not return NotFound",
+                )?;
+            }
+        }
         self.check(
             !self.output.exists(),
             "the qualification output already exists",
@@ -54,10 +82,18 @@ impl AnalysisPackageQualification {
             Denials::bundle("2", 2, false),
         ];
         let wasm_bundle = wasm::bundle();
+        let native_bundle = native.then(native::detector_bundle).transpose()?;
+        let native_bundles = if native {
+            native::bundles()?
+        } else {
+            Vec::new()
+        };
         let required = araphor_data::AnalysisPackageOwner::required_bundles();
         config.package_trust = bundles
             .iter()
             .chain(std::iter::once(&wasm_bundle))
+            .chain(native_bundle.iter())
+            .chain(native_bundles.iter())
             .chain(required.iter())
             .map(|bundle| {
                 Ok(PackageTrustPinV1 {
@@ -74,8 +110,24 @@ impl AnalysisPackageQualification {
             auth.clone(),
             &wasm_bundle,
             &config,
+            self,
         )
         .await?;
+        let native_detector = if let Some(bundle) = &native_bundle {
+            Some(
+                wasm::run(
+                    &tls.path().join("native-control"),
+                    &tls,
+                    auth.clone(),
+                    bundle,
+                    &config,
+                    self,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
         let first = self.initial(&root, auth.clone(), &bundles[0]).await?;
         let original = Self::result_id(&first)?;
         // The token fixture sets expiry in whole seconds.
@@ -97,11 +149,13 @@ impl AnalysisPackageQualification {
         super::write_json(
             &self.output.join("result.json"),
             &json!({
-                "schema_version":1,"case":"analysis-packages","result":"PASS","mode":"LIGHTWEIGHT",
+                "schema_version":1,"case":if native {"analysis-packages-native"} else {"analysis-packages"},"result":"PASS","mode":"LIGHTWEIGHT",
                 "production_owners":["AraphorClient","ClientAuth","ClientListener","ClientGrpcOwner","AnalysisPackageOwner","QueryOwner","AnalysisStore","EffectObservationStore","EvidenceIntakeOwner","GraphAndFindingOwner"],
                 "offline_directory_digest":bundles[0].digest()?,"original_result":original,
                 "initial":first,"corrected":corrected,"empty":empty,
                 "installed_wasm_detector":wasm,
+                "installed_native_detector":native_detector,
+                "python_unavailable":native,
                 "restart_retry_receipt_equal":true,"credential_renewal_advances_activation":true,"stale_source_visible":true,"automatic_source_replacement":true,
                 "checkpoint_runs":{"initial":2,"restart_retry":2,"corrected":1},
                 "failed_upgrade_preserved_active":true,

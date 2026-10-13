@@ -51,6 +51,7 @@ pub(super) async fn run(
     auth: Arc<ClientAuth>,
     bundle: &PackageBundleV1,
     config: &ClientAuthConfig,
+    qualification: &super::AnalysisPackageQualification,
 ) -> Result<serde_json::Value> {
     DetectorQualification {
         root,
@@ -58,6 +59,7 @@ pub(super) async fn run(
         auth,
         bundle,
         config,
+        qualification,
     }
     .run()
     .await
@@ -69,6 +71,7 @@ struct DetectorQualification<'a> {
     auth: Arc<ClientAuth>,
     bundle: &'a PackageBundleV1,
     config: &'a ClientAuthConfig,
+    qualification: &'a super::AnalysisPackageQualification,
 }
 
 struct SavedResult {
@@ -96,6 +99,27 @@ impl DetectorQualification<'_> {
         let graph = self
             .reopen(&fixture, &saved)
             .map_err(|error| format!("detector replay: {error}"))?;
+        let migrated = if self.bundle.artifacts[0].implementations[0].target() == "native" {
+            let data = fixture
+                .control
+                .analysis_store()
+                .ok_or("native retained data absent")?;
+            let replay =
+                GraphNotificationQualification::replay(&data, &saved.source, &saved.snapshot)?;
+            Some(
+                self.qualification
+                    .native_algorithms(
+                        self.root,
+                        self.auth.clone(),
+                        self.bundle,
+                        &replay,
+                        &saved.snapshot,
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
         self.revoke(&fixture, &graph, &saved)
             .map_err(|error| format!("detector trust removal: {error}"))?;
         Ok(json!({
@@ -109,12 +133,32 @@ impl DetectorQualification<'_> {
             "trust_revocation_denied_historical_replay":true, "trust_revocation_denied_current_compute":true,
             "trust_revocation_preserved_retained_result":true,
             "physical_action_attempted":false,
+            "execution_target":self.bundle.artifacts[0].implementations[0].target(),
+            "artifact":saved.references.iter().find(|reference| reference.package_id == "example-burst").and_then(|reference| reference.artifact.as_ref()),
+            "migrated_native_algorithms":migrated,
         }))
     }
 
     async fn install(&self, fixture: &Fixture) -> Result<(serde_json::Value, usize)> {
         let directory = self.root.join("detector-package");
-        ComponentBuilder::package_component(&BurstDetector::package(), COMPONENT, &directory)?;
+        match &self.bundle.artifacts[0].implementations[0] {
+            PackageImplementationV1::Wasm { .. } => ComponentBuilder::package_component(
+                &BurstDetector::package(),
+                COMPONENT,
+                &directory,
+            )?,
+            PackageImplementationV1::Native {
+                artifact,
+                qualification: Some(qualification),
+                ..
+            } => ComponentBuilder::package_native(
+                &BurstDetector::package(),
+                artifact,
+                serde_json::to_value(qualification)?,
+                &directory,
+            )?,
+            _ => return Err("detector implementation is not qualified".into()),
+        }
         let local = PackageBundleV1::read(&directory)?;
         assert_eq!(local.digest()?, self.bundle.digest()?);
         let parameters = json!({"example-burst":{"detect":{"threshold":3}}});
@@ -187,6 +231,30 @@ impl DetectorQualification<'_> {
             .find(|reference| reference.package_id == "example-burst")
             .ok_or("detector reference is absent")?;
         assert_eq!(reference.parameters, Some(parameters));
+        if self.bundle.artifacts[0].implementations[0].target() == "native" {
+            assert_eq!(reference.target.as_deref(), Some("native"));
+            let identity = reference
+                .artifact
+                .as_ref()
+                .ok_or("native detector artifact identity absent")?;
+            let PackageImplementationV1::Native {
+                artifact,
+                qualification: Some(qualification),
+                ..
+            } = &self.bundle.artifacts[0].implementations[0]
+            else {
+                return Err("native detector artifact absent".into());
+            };
+            assert_eq!(
+                identity.digest,
+                araphor_data::native::Qualification::digest(artifact)
+            );
+            assert_eq!(
+                identity.closure_digest,
+                Some(qualification.closure_digest(artifact)?)
+            );
+            assert_eq!(identity.platform.as_ref(), Some(&qualification.target));
+        }
         assert!(!graph.refresh(&source, now + 1)?);
         assert_eq!(graph.snapshot(&source)?, Some(snapshot.clone()));
         Ok(SavedResult {

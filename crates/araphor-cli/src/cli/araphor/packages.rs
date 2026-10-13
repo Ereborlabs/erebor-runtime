@@ -24,7 +24,7 @@ pub(crate) struct PackageArgs {
 enum PackageCommand {
     /// Read the digest used in Control package trust pins.
     Digest { path: PathBuf },
-    /// Admit a built JSON file or directory and activate its SQL exports.
+    /// Admit a built JSON file or directory and activate its supported exports.
     Install {
         path: PathBuf,
         #[arg(long)]

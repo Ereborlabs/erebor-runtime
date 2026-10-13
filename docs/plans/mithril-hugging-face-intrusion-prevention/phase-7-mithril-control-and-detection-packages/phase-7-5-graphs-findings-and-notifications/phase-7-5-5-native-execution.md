@@ -101,7 +101,9 @@ Linux x86-64 product restriction or claim qualification from compilation alone.
 
 ## Result
 
-**Not done.** Native execution and target parity are unqualified.
+**Not done.** Native SDK exchange, installed execution, export parity, lifecycle,
+and host-fault restart checks pass on the recorded Linux x86-64 host. The complete
+graph notification case and final workspace CI remain pending.
 
 ### Design decision record
 
@@ -158,29 +160,29 @@ the proposed public `rebuild` option.
   compilation targets, native export inventory,
   ABI and dependency changes, artifact metadata, library loading and deployment
   requirements, and native resource defaults before dependent implementation.
-- [ ] **2. Complete the native SDK and source builds.** Reuse the v1 C table,
+- [x] **2. Complete the native SDK and source builds.** Reuse the v1 C table,
   `Guest` computation, Arrow C Data/Stream, and SDK wire validation. Complete
   typed inputs, parameters, recorded time and seed, outputs, evidence, reasons,
   checkpoints, errors, cancellation, and owned release. Test failure and repeated
   release. Build the native artifact and locked dependency closure from source.
   Keep generated binaries out of commits.
-- [ ] **3. Add in-process native execution to the package owner.** Load the
+- [x] **3. Add in-process native execution to the package owner.** Load the
   admitted Rust library and hold it through every array and release callback.
   Preserve authority, expiry, revocation, concurrency, returned-error cleanup,
   and stale-completion rejection. Support cooperative cancellation. Do not add
   a native worker or claim fault isolation or forced termination.
-- [ ] **4. Integrate compatibility and provenance.** Validate platform,
+- [x] **4. Integrate compatibility and provenance.** Validate platform,
   CPU, system libraries, ABI, and dependency closure at admission. Execute the
   declared plugin type through the existing owner and interfaces. Record actual
   artifact revisions. Preserve SQL/Wasm encoding, immutable history, and retry
   identity. Require compatible output and state contracts before switching.
   Never use failure fallback.
-- [ ] **5. Prove export parity and host guarantees.** Qualify every approved export
+- [x] **5. Prove export parity and host guarantees.** Qualify every approved export
   with identical fixtures. Reuse the migrated algorithms, authorized extraction,
   selected native reads, and traversal. Close durable readers before computation.
   Preserve host context, domain validation, atomic commits, notifications,
   missing coverage, and existing Wasm quota and compiled-code accounting.
-- [ ] **6. Complete failure and lifecycle tests.** Keep production actions,
+- [x] **6. Complete failure and lifecycle tests.** Keep production actions,
   transitions, assertions, and cleanup visible. Cover invalid ABI values,
   malformed batches and outputs, returned errors, Rust panics, host faults,
   cancellation, expiry, revocation, stale completion, resource failures,
@@ -271,9 +273,50 @@ passes after those guards are released. Two direct preparation launches also
 returned ENOENT during concurrent test-binary replacement. The final Cargo
 launch passes both preparation tests and the shared dependency regression.
 
-Installed SDK example qualification, the affected production cases, and final
-workspace CI remain Not done. This result makes no platform or speed claim
-beyond the recorded Linux x86-64 host and semantic checks.
+The installed SDK example, context round trip, and profile restart cases pass.
+The complete graph notification case and final workspace CI remain Not done.
+This result makes no platform or speed claim beyond the recorded Linux x86-64
+host and semantic checks.
+
+### Installed native production verification
+
+The retained production binary is
+`/tmp/araphor-native-qualified-bin-20261013/mithril_discovery_test`. Its SHA-256 is
+`d47ab672fa750273eef03080f054cc9494fee561f44f07f750e93c6821b82c02`.
+The source and binary record is `/tmp/araphor-native-production-source-20261013.json`.
+It covers owner commit `a38dec4` and the native qualification source changes.
+The later CLI help and builder test error-path edits do not change this runtime.
+
+Each case uses `PATH=/tmp/araphor-no-python`,
+`ARAPHOR_NATIVE_DIR=/tmp/araphor-native-built-20261013-final`, and
+`ARAPHOR_NATIVE_TARGET=x86_64-unknown-linux-gnu`.
+Run the retained binary with `--case CASE --output-directory DIRECTORY`.
+
+| Case | Output directory under `/tmp` | Terminal result |
+| --- | --- | --- |
+| `analysis-packages-native` | `araphor-native-qualified-analysis-packages-20261013` | Session 43003, exit 0, PASS. |
+| `context-roundtrip` | `araphor-native-qualified-context-20261013` | Session 33660, exit 0, PASS. |
+| `profile-restart` | `araphor-native-qualified-profile-20261013` | Session 2806, exit 0, PASS. |
+| `graph-notification` | `araphor-native-qualified-graph-20261013` | Session 76075 remains live. |
+
+Each output directory contains `result.json`. The adjacent `.log` file retains
+the case log. These cases use supported production owners with synthetic inputs.
+They do not establish a physical Kubernetes result.
+
+The native case retains the original SQL and Wasm checks. The real client installs
+a source-built BurstDetector folder without a host rebuild. Native execution
+returns three matching evidence records from four inputs, threshold 3, the
+`example-burst.THRESHOLD` reason, and checkpoint `4`. The result records the native
+artifact digest, dependency closure digest, and platform. Restart, retry, and
+trust revocation checks pass. The three installed migrated graph exports return
+the same findings, graph records, package state, and repeated replay result.
+Python is unavailable on PATH. No performance claim or physical action occurs.
+
+The builder test correction returns clock and file-read errors through the
+existing error owner. All file and dependency assertions remain. Its final
+focused tests returned 6 passed and 0 failed; strict all-target clippy returned
+exit 0. Logs are `/tmp/araphor-native-builder-test-final-20261013.log` and
+`/tmp/araphor-native-builder-clippy-final-20261013.log`.
 
 ### Bundle-read correction TODO
 
@@ -283,6 +326,20 @@ beyond the recorded Linux x86-64 host and semantic checks.
   Preserve grant checks, authority admission, commit authorization, retry identity,
   and activation generation checks. Add no resident bundle cache. Run dependency
   authority tests and the native interruption qualification after this change.
+
+### Package help correction TODO
+
+- [ ] Replace the install help's SQL-only export description with the supported
+  package export behavior. Keep request parsing and execution unchanged. Verify
+  the CLI through the final Rust gate.
+
+### Builder test error-path correction TODO
+
+- [x] Return the two errors from the new native folder test instead of calling
+  `unwrap`. The first final CI process passed formatting and workspace check,
+  then returned exit 101 at strict clippy. Preserve the file and dependency
+  assertions. Run focused builder tests and strict clippy, then restart the final
+  repository CI procedure after this last test edit.
 
 ### Installed native production qualification TODO
 

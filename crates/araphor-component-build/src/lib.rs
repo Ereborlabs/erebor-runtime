@@ -260,7 +260,10 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .map_err(std::io::Error::other)
+                .context(error::IoSnafu {
+                    path: std::env::temp_dir(),
+                })?
                 .as_nanos()
         ));
         let qualification = serde_json::json!({"exports":["evaluate"], "dependencies":[{"name":"helper.so", "artifact":[7,8], "digest":"test"}]});
@@ -274,7 +277,11 @@ mod tests {
         assert_eq!(implementations[0]["target"], "native");
         assert_eq!(implementations[0]["artifact"], serde_json::json!([2, 3]));
         assert!(!directory.join("detector.wasm").exists());
-        assert_eq!(std::fs::read(directory.join("helper.so")).unwrap(), [7, 8]);
+        let helper = directory.join("helper.so");
+        assert_eq!(
+            std::fs::read(&helper).context(error::IoSnafu { path: &helper })?,
+            [7, 8]
+        );
         let invalid = serde_json::json!({"exports":["evaluate"], "dependencies":[{"name":"../escape", "artifact":[1]}]});
         assert!(ComponentBuilder::package_native(&package, &[1], invalid, &directory).is_err());
         let mismatch = serde_json::json!({"exports":["other"], "dependencies":[]});
