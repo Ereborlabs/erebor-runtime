@@ -238,9 +238,9 @@ and checks a successful next call. The v25 shared suite has 14 passes.
 The earlier build proof records six equal component pairs under
 `direct_builder_correction` and `inline_writer_correction`.
 The `buffered_writer_correction` record has 14 native passes and six equal
-component pairs from two builds. The original graph split assertion and
-production fuel limit remain unchanged. Installed runtime qualification
-remains open.
+component pairs from two builds. At the v25 record, the original graph split
+assertion and production fuel limit were unchanged. Installed runtime
+qualification remained open.
 
 [Computation::authorities](../../../../../crates/araphor-analysis-builtins/src/graph/credential/join.rs)
 indexes each qualified fact identity by its position in one vector. The first
@@ -687,8 +687,9 @@ Review these boundary tests with the algorithm cases:
   retains combined-source checks, all read and send records, and large inputs.
   The aggregate Rust invocation is removed after the focused proofs pass.
   The existing-output test retains its rejection assertion. The supported CLI
-  still runs the complete case. Production source before the test module,
-  density, both native windows, and large Data traversal remain byte-identical.
+  still runs the complete case. At v50, production source before the test
+  module, density, both native windows, and large Data traversal were
+  byte-identical.
   The library test build passes after removal. Standard test registration proof
   is `/tmp/araphor-graph-aggregate-retirement-proof-v50.json`, with SHA-256
   `8f3ad02fcefab1e40d0d113253cd6057e3c40cc5a0896cced6061ce78d78d8aa`.
@@ -786,9 +787,11 @@ this correction in 1,093.82 seconds, with zero failures and no ignored tests.
 The change removes 187 Rust lines overall. Its reviewed proof is
 `/tmp/araphor-shared-graph-inputs-proof-v52.json`, with SHA-256
 `972a54ad508452cb7ab3020a15a379d534b39292978a66f2d0220c47ccbb0f09`.
-The v51 installed-package case passes on its earlier
-captured source. That pass does not qualify the later input correction.
-Four fresh complete cases and final workspace verification remain required
+The [final source record](phase-7-5-4-wasm-execution.md#final-source-qualification-record)
+captures source `1f6b434` and its normal executable. The fresh v53 installed
+package case exits zero and reports `PASS`. The real client installs the SDK
+detector without a host rebuild. Restart, retry, and revocation checks pass.
+Three fresh complete cases and final workspace verification remain required
 after the last Rust edit. The historical dispatch order remains unmet.
 
 The following records retain their original source boundaries.

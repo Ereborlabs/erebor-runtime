@@ -126,7 +126,9 @@ query-upload tests. The two fixture corrections now pass their focused cases.
 All four fresh v43 cases pass on the corrected source `6cce92d1`. Final
 workspace verification remains required after these Rust edits. The requested
 focused-test and repeated-work corrections are implemented and have focused
-proof. New complete cases must qualify the final source. The dispatch change
+proof. The final source is `1f6b434`. Its fresh v53 installed-package case
+passes. Three complete cases and final CI remain required on this source.
+The dispatch change
 preceded the required complete equivalence proof. This historical order
 requirement remains unmet. The TODOs below retain the corrections and proof.
 
@@ -1987,9 +1989,10 @@ in their current callers. This correction changes no algorithm or architecture.
   identities. Only the provider-write variant receives the provider fact.
 - [x] Reuse policy contradiction and partial-node input methods. Keep process,
   refresh, snapshot, history, derive, and assertions visible in both callers.
-- [ ] Verify the changed callers with all 17 focused tests. Compare the original
-  and shared input fields. Commit this deliverable. Capture a new final source,
-  run all four complete cases, then run the exact shared Rust procedure.
+- [x] Verify the changed callers with all 17 focused tests. Compare the original
+  and shared input fields. Commit this deliverable. The focused proof is v52.
+- [ ] Capture a new final source, run all four complete cases, then run the
+  exact shared Rust procedure.
 
 The v51 normal build passes in 34.09 seconds. Its source has 1,611 files and
 source SHA-256
@@ -2035,6 +2038,33 @@ This duration records verification work. It is not a performance result.
 The input-sharing correction is qualified by these focused checks. Four fresh
 complete cases and final workspace verification remain required for the final
 source. The phase result stays **Not done**.
+
+### Final source qualification record
+
+The final Rust source is `1f6b434`. The v53 normal build passes without
+warnings in 32.11 seconds. The source manifest contains 1,612 files and has
+source SHA-256
+`1a71a865e04d83cbb841cbfa432e8da1a57800f005158626a70a69f57841cabf`.
+All 24 component and core artifact hashes match the retained build record.
+The saved normal executable retains its debug sections. Its SHA-256 is
+`20b86bea85de90b5a3852f0b7ab2f0e342679e638ec1a8abff9dc5a99405d7ed`.
+The capture is `/tmp/araphor-wasm-production-capture-v53.json`, with SHA-256
+`bdb32062d2b12159074ece6f195344a928c0beeb0ebea9103ab9a2592a0a3ed1`.
+
+The fresh `analysis-packages` case exits zero and reports `PASS`.
+Its proof is `/tmp/araphor-wasm-analysis-packages-proof-v53.json`, with SHA-256
+`78a3e260f5d1bef266a1a021ae8c00cbf12148167290d5495b2168a00c75b3ec`.
+The real client installs the built detector over TLS without a host rebuild.
+The case retains four inputs, three matching evidence records, threshold 3,
+checkpoint 4, restart and retry equality, current and historical revocation
+checks, correction, empty replacement, failed upgrade, rollback, removal,
+and credential renewal. It attempts no physical action.
+
+The fresh `context-roundtrip`, `profile-restart`, and `graph-notification`
+cases remain required with this executable. The exact shared Rust procedure
+must run after all four complete cases. The historical dispatch order remains
+unmet. The phase result stays **Not done**. This record makes no performance
+or physical-prevention claim.
 
 ### Implementation TODOs
 
