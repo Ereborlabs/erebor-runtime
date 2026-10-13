@@ -43,7 +43,7 @@ impl AnalysisPackageOwner {
                 self.remove_closure(grant, scope, &bundle, true, control)
             })?;
         }
-        self.inspect(grant, scope, package, control)
+        self.inspect(grant, scope, package, None, control)
     }
 
     pub(super) fn prune_package(

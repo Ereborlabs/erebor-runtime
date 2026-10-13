@@ -30,7 +30,7 @@ impl AnalysisPackageOwner {
         let context: InstalledContext = Self::decode(&active.metadata)?;
         let bundle = self.load_bundle(grant.selection.tenant_id, &context.root)?;
         self.authority.admit(grant, &bundle)?;
-        let mut response = self.inspect(grant, scope, package, control)?;
+        let mut response = self.inspect(grant, scope, package, None, control)?;
         for artifact in bundle
             .artifacts
             .iter()

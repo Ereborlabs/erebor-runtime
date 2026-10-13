@@ -130,7 +130,7 @@ impl AnalysisPackageOwner {
             PackageRequestV1::Inspect {
                 scope_id,
                 package_id,
-            } => self.inspect(&grant, &scope_id, &package_id, control),
+            } => self.inspect(&grant, &scope_id, &package_id, None, control),
             PackageRequestV1::Run {
                 scope_id,
                 package_id,

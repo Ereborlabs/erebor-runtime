@@ -105,7 +105,7 @@ impl AnalysisPackageOwner {
                 receipts.push((active.key.export, active.key.package_id, receipt));
             }
         }
-        let mut response = self.inspect(grant, scope, package, control)?;
+        let mut response = self.inspect(grant, scope, package, None, control)?;
         for (export, _, receipt) in receipts
             .into_iter()
             .filter(|(_, owner, _)| owner == package)

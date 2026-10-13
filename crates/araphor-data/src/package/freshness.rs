@@ -7,7 +7,8 @@ use crate::{AnalysisReadControl, Result};
 use super::evaluation::ResultContext;
 use super::owner::InstalledContext;
 use super::{
-    AnalysisPackageOwner, PackageActionV1, PackageArtifactV1, PackageGrantV1, PackageRefV1,
+    AnalysisPackageOwner, PackageActionV1, PackageArtifactV1, PackageBundleV1, PackageGrantV1,
+    PackageRefV1,
 };
 
 impl AnalysisPackageOwner {
@@ -16,13 +17,21 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         scope: &str,
         package: &str,
+        admitted: Option<&PackageBundleV1>,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         let mut seen = BTreeSet::new();
         for installed in self.activations(grant.selection.tenant_id, scope, package)? {
             let context: InstalledContext = Self::decode(&installed.metadata)?;
             Self::permits(grant, &context.grant)?;
-            let bundle = self.load_bundle(installed.key.tenant_id, &context.root)?;
+            let loaded;
+            let bundle = match admitted.filter(|bundle| bundle.root == context.root) {
+                Some(bundle) => bundle,
+                None => {
+                    loaded = self.load_bundle(installed.key.tenant_id, &context.root)?;
+                    &loaded
+                }
+            };
             let root = PackageRefV1 {
                 package_id: package.into(),
                 revision: installed.revision.clone(),

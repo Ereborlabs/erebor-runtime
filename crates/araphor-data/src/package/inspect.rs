@@ -3,9 +3,9 @@ use crate::{AnalysisReadControl, Result};
 
 use super::owner::InstalledContext;
 use super::{
-    AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageDatasetV1,
-    PackageErrorCodeV1 as Code, PackageExportStatusV1, PackageGrantV1, PackageOutputV1,
-    PackageReceiptV1, PackageResponseV1,
+    AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageBundleV1,
+    PackageDatasetV1, PackageErrorCodeV1 as Code, PackageExportStatusV1, PackageGrantV1,
+    PackageOutputV1, PackageReceiptV1, PackageResponseV1,
 };
 
 pub(super) struct PackageQuery<'a> {
@@ -37,19 +37,34 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         scope: &str,
         package: &str,
+        admitted: Option<&PackageBundleV1>,
         control: &AnalysisReadControl,
     ) -> Result<PackageResponseV1> {
         self.check(grant, Action::Inspect)?;
-        self.refresh_package(grant, scope, package, control)?;
+        self.refresh_package(grant, scope, package, admitted, control)?;
         let mut exports = Vec::new();
         for active in self.activations(grant.selection.tenant_id, scope, package)? {
             let context: InstalledContext = Self::decode(&active.metadata)?;
             Self::permits(grant, &context.grant)?;
-            let stored = self
-                .store
-                .package_revision(active.key.tenant_id, package, &active.revision)?
-                .ok_or_else(|| Code::Missing.error("installed artifact"))?;
-            let artifact: PackageArtifactV1 = Self::decode(&stored.artifact)?;
+            let loaded;
+            let artifact = match admitted
+                .filter(|bundle| bundle.root == context.root)
+                .and_then(|bundle| {
+                    bundle.artifacts.iter().find(|artifact| {
+                        artifact.descriptor.id == package
+                            && artifact.descriptor.revision == active.revision
+                    })
+                }) {
+                Some(artifact) => artifact,
+                None => {
+                    let stored = self
+                        .store
+                        .package_revision(active.key.tenant_id, package, &active.revision)?
+                        .ok_or_else(|| Code::Missing.error("installed artifact"))?;
+                    loaded = Self::decode::<PackageArtifactV1>(&stored.artifact)?;
+                    &loaded
+                }
+            };
             let model = artifact
                 .descriptor
                 .exports
@@ -77,7 +92,7 @@ impl AnalysisPackageOwner {
                 context.readiness
             };
             exports.push(PackageExportStatusV1::new(
-                &artifact, model, &active, readiness, results,
+                artifact, model, &active, readiness, results,
             ));
         }
         self.check(grant, Action::Inspect)?;
@@ -153,7 +168,7 @@ impl AnalysisPackageOwner {
             .or(active.result_id.as_deref())
             .ok_or_else(|| Code::Missing.error("package result"))?;
         if active.result_id.as_deref() == Some(id) {
-            self.refresh_package(grant, scope, package, control)?;
+            self.refresh_package(grant, scope, package, None, control)?;
         }
         let stored = self
             .store

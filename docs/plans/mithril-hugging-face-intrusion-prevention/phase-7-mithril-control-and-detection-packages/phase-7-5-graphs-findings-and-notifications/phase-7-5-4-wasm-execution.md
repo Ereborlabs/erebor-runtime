@@ -374,8 +374,9 @@ at 128.100 seconds. Startup supplies one 120-second control after initial
 bundle digests and owner setup; its grant has no expiry. Startup has no other
 production subprocess path. These facts exclude the local compiler deadline.
 They do not identify which child failed: failure cleanup also kills and reaps
-a child. Parent stage costs and the cause of increased CPU time remain open.
-The concurrent build is not an established cause. Keep both limits unchanged.
+a child. The old samples do not identify parent stage costs or the cause of
+increased CPU time. The concurrent build is not an established cause. Keep
+both limits unchanged.
 
 - [ ] Add DEBUG durations at existing installation stage boundaries: admission,
   revision preparation, store and activation, and final inspection. Add the
@@ -385,12 +386,36 @@ The concurrent build is not an established cause. Keep both limits unchanged.
   diagnostics. Separate compiler time from parent admission and storage work.
   Keep the diagnostic change separate from any later production correction.
 
+These additional internal timings remain an optional investigation proposal.
+They are not part of the selected correction. The existing graph stages and
+unchanged metadata tests supply its before-and-after measurements.
 The prepared installation diagnostic patch needs a direct `erebor-telemetry`
 dependency in `araphor-data`. This dependency is not approved or applied.
 The existing E2E executable already uses that workspace library. Standalone
 Data consumers would gain its tracing dependencies. Approval is pending for
 `/tmp/araphor-install-timing-proposal.patch`. The existing graph diagnostics
 and normal build can proceed without this change.
+
+### Startup deadline recheck
+
+The exact saved v53 executable passes the complete existing `profile-restart`
+case in 212.507 seconds. Its digest remains
+`20b86bea85de90b5a3852f0b7ab2f0e342679e638ec1a8abff9dc5a99405d7ed`.
+The record is `/tmp/araphor-startup-recheck-proof-v58.json`. This case starts
+the same four required components under the original shared 120-second
+control and 45-second compiler limit. First node authentication gives a
+startup upper bound of 58.330 seconds from launch. The four compiler children
+consume 30.28 CPU seconds. Parent CPU at that boundary is between 28.63 and
+29.84 seconds. The complete restart assertions pass.
+
+The failure mechanism is intermittent exhaustion of the cumulative startup
+deadline. The unchanged artifact does not fail in this recheck. No current
+startup defect is reproduced. The old samples cannot establish why CPU costs
+were higher, and no new run can recover those missing measurements. This is
+an evidence limit, not a proved host fault. The installation correction is
+absent from this saved executable and cannot explain this pass. Final current
+qualification must retain both original deadlines. Do not claim that the
+correction prevents recurrence of the historical failure.
 
 ### Installation bundle reuse investigation TODOs
 
@@ -406,15 +431,14 @@ through this response. Standalone inspection has no such retained bundle.
   install response with standalone Inspect after install, retry, and reopen.
   Preserve stored-byte equality and changed-artifact rejection. Use the same
   stronger tests before and after any production correction.
-- [ ] If measurements establish material setup cost, reuse the admitted bundle
+- [x] If measurements establish material setup cost, reuse the admitted bundle
   only during its locked installation response. Match root, package, and
   revision. Retain stored reads for other roots and standalone operations.
   Keep fresh activation, result, grant, dependency, and cancellation checks.
 - [ ] Compare the same existing tests and graph case after the correction.
   Record remaining costs and commit this correction independently.
 
-This is an investigation candidate. It has no applied production change or
-measured improvement. Reuse depends on successful transactional writes and
+Reuse depends on successful transactional writes and
 immutable revision checks. It cannot replace the stored reads that detect
 later corruption. The separate telemetry dependency remains unapproved.
 
@@ -426,6 +450,41 @@ The record `/tmp/araphor-install-baseline-proof-v58.json` includes the source
 and test executable hashes. Keep these test actions, retry counts, assertions,
 profile, and limits unchanged for the production correction. The test extension
 qualifies for a separate commit. Graph diagnostics are committed in `0c35e0ca`.
+
+The same four metadata tests pass after the correction in 169.09 seconds.
+The measured reduction is 46.73 seconds, or 21.7 percent. The comparison
+excludes compilation and keeps the same workload, assertions, limits, and
+unoptimized test profile. It is one run per source, not a performance
+guarantee. The record is `/tmp/araphor-install-comparison-v59.json`.
+
+Nine affected lifecycle tests also pass in 113.40 seconds, with no failures
+or ignored tests. They cover failed upgrade, failed-readiness renewal, missing
+dependencies, shared parameters, busy-result retention, cancellation, changed
+retry, Wasm dependency replacement, and installed Wasm lifecycle. The command
+and terminal result are in `/tmp/araphor-install-lifecycle-v59.json` and its
+log. These focused checks qualify the production correction for its own
+commit. Final production cases and shared Rust CI remain required.
+
+The strengthened tests are committed in `208e58cf`. The selected production
+correction borrows the admitted bundle only for the final locked installation
+response. Standalone Inspect, Run, Query, Test, and Remove keep their stored
+reads. Root, package, and revision must match before reuse. Current activation,
+result, grant, dependency, and cancellation checks remain. Code review finds
+no new owner, cache, dependency, or schema. Focused tests pass. The unchanged
+complete graph case must still qualify this correction.
+
+The correction depends on the successful transaction and immutable revision
+comparison. It removes the immediate artifact readback for the installation
+response. Corruption outside the supported store API between commit and that
+response is detected by a later stored read. It does not remove checks from
+standalone inspection or computation.
+
+The other source candidates remain unselected. Native snapshot byte checks
+run at separate access points. `native_rows_integrity` requires a changed row
+after header acquisition to fail. An unchanged source notice cannot replace
+that check. Detector input preparation repeats, but each selected model has
+its own schema and limits. Its cost is not separated from execution in this
+record. Do not bypass those model checks or introduce a persistent cache.
 
 ### Goal deliverable review
 

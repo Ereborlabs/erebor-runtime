@@ -109,6 +109,24 @@ descriptor, artifact, and dependency comparison.
 Arrow metadata map order cannot change a component digest or an identical
 installation record after decode or restart.
 
+The [installation response correction](../../../../../crates/araphor-data/src/package/lifecycle.rs)
+passes its admitted bundle to
+[inspection](../../../../../crates/araphor-data/src/package/inspect.rs) and
+[freshness checks](../../../../../crates/araphor-data/src/package/freshness.rs)
+while the lifecycle lock remains held. The root, package, and revision select
+the borrowed artifact. Other roots and standalone operations read storage.
+Activations, results, grants, and dependency inputs remain current. Successful
+transactional storage and immutable revision checks replace immediate artifact
+readback for this response only. Later reads retain corruption detection.
+The [metadata retry tests](../../../../../crates/araphor-data/src/package/tests/wasm/metadata.rs)
+compare complete Install and Inspect responses after installation, retry, and
+reopen. The same four metadata tests pass before and after the correction.
+Test time falls from 215.82 to 169.09 seconds, with compilation excluded.
+This is one run per source with the same workload, profile, assertions, and
+limits. The proof is `/tmp/araphor-install-comparison-v59.json`. Nine affected
+lifecycle checks also pass. Final production qualification and shared CI
+remain required.
+
 [ClientGrpcOwner](../../../../../crates/mithril-control/src/client_grpc/packages.rs)
 checks the current permission before it decodes the operation.
 Mutation requires the package grant and exact bundle trust pin.

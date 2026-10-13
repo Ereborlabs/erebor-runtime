@@ -83,7 +83,8 @@ impl AnalysisPackageOwner {
                 self.prune_package(grant, scope, &prior, control)
             })?;
         }
-        self.inspect(grant, scope, &bundle.root.package_id, control)
+        // The lifecycle lock prevents package replacement during this inspection.
+        self.inspect(grant, scope, &bundle.root.package_id, Some(bundle), control)
     }
 
     fn install_model(

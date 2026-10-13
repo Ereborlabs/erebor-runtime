@@ -31,6 +31,7 @@ async fn failed_upgrade_preserves_state() -> TestResult {
         &fixture.grant,
         "test",
         "test.model",
+        None,
         &AnalysisReadControl::default(),
     )?;
     assert_eq!(response.exports[0].revision, "1");

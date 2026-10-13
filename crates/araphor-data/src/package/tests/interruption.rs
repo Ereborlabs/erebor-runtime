@@ -96,7 +96,7 @@ async fn package_busy_preserves_result() -> TestResult {
         assert!(matches!(
             fixture
                 .owner
-                .inspect(&fixture.grant, "test", "test.model", &control),
+                .inspect(&fixture.grant, "test", "test.model", None, &control),
             Err(crate::Error::AnalysisBusy { .. })
         ));
         assert!(matches!(
@@ -123,7 +123,7 @@ async fn package_busy_preserves_result() -> TestResult {
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let status = fixture
         .owner
-        .inspect(&fixture.grant, "test", "test.model", &control)?;
+        .inspect(&fixture.grant, "test", "test.model", None, &control)?;
     assert!(status.exports[0].results.iter().any(|result| !result.stale));
     Ok(())
 }
