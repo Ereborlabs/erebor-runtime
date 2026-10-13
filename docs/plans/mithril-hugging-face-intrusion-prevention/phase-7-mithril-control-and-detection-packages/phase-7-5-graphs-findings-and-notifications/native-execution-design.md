@@ -2,8 +2,9 @@
 
 This record supplies the decisions required by
 [the native execution phase](phase-7-5-5-native-execution.md).
-The proposals are **Not approved**. Do not implement a dependent change until
-the user approves its decision. Source baseline: `2b9384ec`.
+D1 through D5 are **Not approved**. D6 native resource options and their disabled
+defaults are **Approved** by the user. Do not implement a dependent change until
+the user approves its unresolved decision. Source baseline: `2b9384ec`.
 
 ## Intended end state
 
@@ -22,8 +23,9 @@ compiler or installation hook at admission. These decisions need no new approval
 
 The current source has no executable native adapter or native execution owner.
 No concrete native platform, export inventory, compatibility metadata, isolation
-mechanism, deployment requirement, or native resource default is approved in
-the inspected phase records.
+mechanism, or deployment requirement is approved in the inspected phase records.
+The user approved optional native resource settings with disabled defaults after
+the original proposal. D6 records that correction.
 
 | Current owner | Source-backed fact |
 | --- | --- |
@@ -191,7 +193,7 @@ must complete all of these controls:
   privilege controls or resource limits.
 - Restrict arguments for multipurpose syscalls such as `fcntl`, `prctl`, and
   `mmap`. Deny filesystem metadata mutation that Landlock does not mediate.
-- Apply the required configured native resource limits. Confirm successful isolation
+- Apply enabled native resource limits. Confirm successful isolation
   before opening the evaluation path.
 
 Require Landlock filesystem rights through ABI 3 and installed seccomp filters.
@@ -217,9 +219,12 @@ The proposed bindings are documented by
 
 ## D6: Mandatory controls and configurable limits
 
-Proposal: retain the existing SDK data limits, host input/output accounting,
-operation permits, cancellation, grant expiry, and effective owner deadline.
+Approved resource policy: native memory and CPU limits are optional configuration
+settings and are disabled by default. Retain the existing SDK data limits, host
+input/output accounting, operation permits, cancellation, grant expiry, and
+effective owner deadline.
 Native does not inherit any optional Wasm quota or Wasm compiler-process limit.
+The worker isolation profile remains the D5 proposal.
 
 | Control | Proposed requirement and default |
 | --- | --- |
@@ -229,15 +234,28 @@ Native does not inherit any optional Wasm quota or Wasm compiler-process limit.
 | SDK output and checkpoint | Existing declared SDK limits and host accounting always apply. SDK defaults are 1,024 batches, 1,000,000 rows, 64 MiB data, and 16 MiB checkpoint data. |
 | Host buffers | Existing query defaults: 64 MiB input bytes, 128 MiB input capacity, and 16 MiB output capacity. Effective limits can be lower than the SDK declaration. |
 | Time | Mandatory effective AnalysisReadControl deadline, QueryLimits evaluation timeout, and grant expiry. The query evaluation timeout defaults to one second; automatic package reconciliation supplies a 30-second outer control. Preserve caller settings and use the earliest applicable deadline. |
-| Native address space | Require operator-supplied `memory_bytes`. Configuration defaults to `None`, which makes native execution unavailable. Apply a checked OS address-space limit before package loading. |
-| Native CPU | Require operator-supplied `cpu_seconds`. Configuration defaults to `None`, which makes native execution unavailable. Apply a checked OS CPU-time limit before package loading. |
+| Native address space | Optional `memory_bytes`, in bytes. Default `None` disables this limit. When configured, apply a checked OS address-space limit before package loading. |
+| Native CPU | Optional `cpu_seconds`, in seconds. Default `None` disables this limit. When configured, apply a checked OS CPU-time limit before package loading. |
 | Wasm quotas and compiled code | Preserve the six optional quotas as disabled by default and the 80 MiB, 16-entry accounting for all live compiled Wasm code. |
 
-This proposal retains the phase requirement for memory and CPU limits without
-inventing numeric defaults. The operator must supply both values before native
-execution. A missing or invalid policy produces a typed rejection before package
-loading. The user must approve this policy and supply the qualification values.
-The same wall deadline still applies when a CPU-time limit is configured.
+Define these options in the existing query configuration under `native`:
+
+```json
+{
+  "native": {
+    "memory_bytes": null,
+    "cpu_seconds": null
+  }
+}
+```
+
+Each option is an optional unsigned 64-bit integer. An omitted option or `null`
+disables that limit. A configured value must be positive and valid for the
+qualified OS limit. Reject an invalid configured value with a typed error before
+package loading. Do not reject native admission, execution, or qualification
+because a cap is absent. No numeric cap value is required from the user.
+Existing owner deadlines, grant expiry, transport bounds, and isolation checks
+still apply. Configured resource-failure tests remain required.
 
 ## Ordered implementation and proof
 
@@ -274,5 +292,7 @@ No native result or speed gain is proven by this proposal.
 
 ## Decision status
 
-D1 through D6 are **Not approved**. Native implementation and qualification
-remain **Not done**. Await the user decisions before dependent implementation.
+D1 through D5 are **Not approved**. The user approved D6 native memory and CPU
+configuration options with disabled defaults. Native implementation and
+qualification remain **Not done**. Await only the unresolved user decisions
+before dependent implementation.

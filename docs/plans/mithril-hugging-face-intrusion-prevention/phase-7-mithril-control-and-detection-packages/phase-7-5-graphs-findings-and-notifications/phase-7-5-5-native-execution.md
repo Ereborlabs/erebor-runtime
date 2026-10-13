@@ -46,9 +46,12 @@ Cross-target parity is required for every export that advertises both targets.
   across the process boundary. Process-local pointers cannot cross that boundary.
   Share exchange validation with the Wasm path where the contract is the same.
 - Run outside Control's address space, without its credentials, database files,
-  or network access. Enforce process, memory, CPU, output, and time limits through
-  qualified OS isolation. A subprocess alone is not a sandbox. Reject the target
-  if required isolation is unavailable; do not silently load it in Control.
+  or network access. Require qualified OS isolation and the existing host
+  authorization, output accounting, and deadlines. Native memory and CPU limits
+  are optional configuration settings and are disabled by default. Apply each
+  native limit only when configured. A subprocess alone is not a sandbox.
+  Reject the target if required isolation is unavailable; do not silently load
+  it in Control.
 - Reuse workers only within a compatible authorization scope, package revision,
   and dependency closure. Reset transient state between evaluations. Shared
   algorithm libraries contain computation; AnalysisStore owns durable state.
@@ -85,10 +88,12 @@ Stop at a qualified native target; advertise only verified host platforms.
 ### Design decision record
 
 The [native decision proposal](native-execution-design.md) records source
-`2b9384ec`, existing owner contracts, six unresolved decisions, mandatory
-controls, configurable limits, and qualification requirements. D1 through D6
-are **Not approved**. The host capability query reports Landlock ABI 4 and
-seccomp support. That query does not prove worker isolation.
+`2b9384ec`, existing owner contracts, five unresolved decisions, mandatory
+controls, configurable limits, and qualification requirements. D1 through D5
+are **Not approved**. The user approved D6 native memory and CPU options with
+disabled defaults. No cap values are required before native admission,
+execution, or qualification. The host capability query reports Landlock ABI 4
+and seccomp support. That query does not prove worker isolation.
 
 ### Ordered correction TODOs
 
@@ -96,8 +101,9 @@ Record a new concrete correction here before its implementation. Keep these
 deliverables in order. Commit each implementation deliverable after its focused
 checks pass; do not defer its commit until final qualification.
 
-- [ ] **1. Resolve native design decisions.** Obtain approval for D1 through D6
-  in the decision record. Record the supported platform, native export inventory,
+- [ ] **1. Resolve native design decisions.** Obtain approval for unresolved
+  D1 through D5 in the decision record. Preserve the approved D6 optional limits
+  and disabled defaults. Record the supported platform, native export inventory,
   ABI and dependency changes, artifact metadata, isolation and deployment
   requirements, and native resource defaults before dependent implementation.
 - [ ] **2. Complete the native SDK and source builds.** Reuse the v1 C table,
@@ -146,13 +152,29 @@ checks pass; do not defer its commit until final qualification.
 
 ### Preparation verification
 
-The documentation check passes for both changed Markdown files, 13 local links,
-balanced code fences, six pending decisions, and eight ordered TODOs. It confirms
-that the original phase text is preserved exactly. `git diff --check` passes.
+At preparation commit `3764c005`, the documentation check passed for both changed
+Markdown files, 13 local links, balanced code fences, six pending decisions,
+and eight ordered TODOs. It confirmed that the original phase text was preserved
+exactly. `git diff --check` passed.
 Three Sol 6.1 reviews checked the SDK, owner, and qualification boundaries.
 Their concrete corrections are in the proposal. No Rust source, Cargo file,
 test, CI configuration, or verification script changed. No native build,
 isolation qualification, production case, or performance test ran.
+
+### Resource-default correction TODO
+
+- [x] Correct the native resource decision records for the approved policy. Define
+  `memory_bytes` and `cpu_seconds` as configuration options with disabled
+  defaults. Remove the requirement to supply cap values before native admission,
+  execution, or qualification. Keep mandatory isolation, authorization,
+  transport validation, and existing owner deadlines. Record D6 as approved
+  without changing the approval status of D1 through D5.
+
+The corrected JSON configuration specifies disabled memory and CPU limits.
+The documentation check passes for two Markdown files, 13 local links, code
+fences, JSON defaults, approved D6, five pending decisions, and eight ordered
+deliverables. `git diff --check` passes. These checks cover the records only;
+native configuration code, execution, and qualification remain Not done.
 
 ## End scope and example
 
