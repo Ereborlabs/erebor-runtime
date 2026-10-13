@@ -23,6 +23,7 @@ async fn package_historical_scope() -> TestResult {
     narrow.artifacts[0].implementations = vec![crate::package::PackageImplementationV1::Native {
         export: "count".into(),
         artifact: vec![0, 97, 115, 109],
+        qualification: None,
     }];
     let response = fixture.install(narrow, None).await?;
     assert!(response.exports[0].results.is_empty());

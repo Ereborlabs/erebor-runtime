@@ -61,6 +61,7 @@ async fn startup_releases_unreferenced_admissions() -> TestResult {
     inactive.artifacts[0].implementations = vec![PackageImplementationV1::Native {
         export: "count".into(),
         artifact: vec![0],
+        qualification: None,
     }];
     fixture.install(inactive, None).await?;
     let revisions = fixture.store.package_revisions([1; 16])?;

@@ -43,8 +43,13 @@ impl Output {
                 let coverage = serde_json::to_string(&result.coverage).context(EncodeSnafu)?;
                 let _ = writeln!(
                     text,
-                    "result\t{}\tstale={}\tcoverage={}",
+                    "result\t{}\ttarget={}\tartifact={}\tstale={}\tcoverage={}",
                     Self::text(&result.result_id),
+                    Self::text(&result.target),
+                    result
+                        .artifact
+                        .as_ref()
+                        .map_or("", |artifact| artifact.digest.as_str()),
                     result.stale,
                     Self::text(&coverage)
                 );

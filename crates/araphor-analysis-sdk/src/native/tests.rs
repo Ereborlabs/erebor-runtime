@@ -356,3 +356,36 @@ fn caller_output_capacity_is_independent_of_input_limits() -> TestResult {
     assert_eq!(value.context.limits, original);
     Ok(())
 }
+
+struct ErrorField<const SIZE: usize>;
+
+impl<const SIZE: usize> Guest for ErrorField<SIZE> {
+    fn package() -> Package {
+        Detector::package()
+    }
+
+    fn evaluate(_evaluation: &Evaluation) -> Result<Output> {
+        Err(Error::contract(ErrorCode::Failed, "x".repeat(SIZE)))
+    }
+}
+
+#[test]
+fn producer_error_field_uses_existing_transport_bound() -> TestResult {
+    let package = Detector::package();
+    let value = evaluation()?;
+    let boundary = unsafe {
+        Invocation::new(&package, &value, || false)?
+            .call(&Api::for_guest::<ErrorField<1024>>(), value.context.limits)
+    }
+    .err()
+    .ok_or("error accepted")?;
+    assert_eq!(boundary.code(), ErrorCode::Failed);
+    let oversized = unsafe {
+        Invocation::new(&package, &value, || false)?
+            .call(&Api::for_guest::<ErrorField<1025>>(), value.context.limits)
+    }
+    .err()
+    .ok_or("oversized error accepted")?;
+    assert_eq!(oversized.code(), ErrorCode::Limit);
+    Ok(())
+}

@@ -1,6 +1,6 @@
 use super::*;
 
-fn bundle() -> TestResult<PackageBundleV1> {
+pub(in crate::package::tests) fn bundle() -> TestResult<PackageBundleV1> {
     let mut package = component("1");
     let artifact = &mut package.artifacts[0];
     let schema = artifact.descriptor.exports[0].outputs[0].schema.clone();
@@ -28,7 +28,7 @@ fn bundle() -> TestResult<PackageBundleV1> {
     Ok(package)
 }
 
-fn run(id: &str) -> PackageRequestV1 {
+pub(in crate::package::tests) fn run(id: &str) -> PackageRequestV1 {
     PackageRequestV1::Run {
         scope_id: "test".into(),
         package_id: "runtime-fixture".into(),

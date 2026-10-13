@@ -86,7 +86,7 @@ impl AnalysisPackageOwner {
                 let stage = control.clone();
                 let mut run = tokio::task::spawn_blocking(move || {
                     let _permit = permit;
-                    owner.evaluate_active(&active, "automatic", true, &stage)
+                    owner.evaluate_active(&active, "automatic", true, Some(&bundle), &stage)
                 });
                 tokio::select! {
                     result = &mut run => { let _result = result.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?; }
@@ -100,7 +100,9 @@ impl AnalysisPackageOwner {
     pub(super) fn failed(&self, active: &PackageActivationV1, error: &crate::Error) -> Result<()> {
         let mut context: InstalledContext = Self::decode(&active.metadata)?;
         let code = match error {
-            crate::Error::Package { code, .. } | crate::Error::PackageWasm { code, .. } => *code,
+            crate::Error::Package { code, .. }
+            | crate::Error::PackageWasm { code, .. }
+            | crate::Error::PackageNative { code, .. } => *code,
             crate::Error::QueryLimit { .. } | crate::Error::AnalysisInputTooLarge { .. } => {
                 Code::Limit
             }

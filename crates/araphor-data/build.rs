@@ -2,6 +2,10 @@ use std::io;
 use std::path::PathBuf;
 
 fn main() -> Result<(), io::Error> {
+    println!(
+        "cargo:rustc-env=ARAPHOR_NATIVE_TARGET={}",
+        std::env::var("TARGET").map_err(io::Error::other)?
+    );
     let proto = PathBuf::from("proto/erebor/mithril/control/v1/evidence.proto");
     println!("cargo:rerun-if-changed={}", proto.display());
     prost_build::Config::new()

@@ -42,7 +42,7 @@ async fn automatic_clock_ticks() -> TestResult {
             };
             let prepared = fixture
                 .owner
-                .prepare_at(&active, request, &control)?
+                .prepare_at(&active, &package, request, &control)?
                 .ok_or("clock evaluation")?;
             let tick = AnalysisPackageOwner::clock_tick(now);
             assert_eq!(prepared.created_utc_ns, tick);
@@ -71,7 +71,7 @@ async fn automatic_clock_ticks() -> TestResult {
             };
             assert!(fixture
                 .owner
-                .prepare_at(&active, repeated, &control)?
+                .prepare_at(&active, &package, repeated, &control)?
                 .is_none());
             assert_eq!(
                 fixture.store.package_activation(&active.key)?.as_ref(),
@@ -101,9 +101,8 @@ async fn automatic_clock_ticks() -> TestResult {
 #[tokio::test]
 async fn unchanged_model_stays_current() -> TestResult {
     let fixture = Fixture::new()?;
-    fixture
-        .install(bundle("1", "SELECT 3::UBIGINT AS count"), None)
-        .await?;
+    let package = bundle("1", "SELECT 3::UBIGINT AS count");
+    fixture.install(package.clone(), None).await?;
     let active = fixture.store.package_activation_page(None)?.remove(0);
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let request = RunPreparation {
@@ -114,7 +113,7 @@ async fn unchanged_model_stays_current() -> TestResult {
     };
     assert!(fixture
         .owner
-        .prepare_at(&active, request, &control)?
+        .prepare_at(&active, &package, request, &control)?
         .is_none());
     let request = RunPreparation {
         id: "manual",
@@ -124,7 +123,7 @@ async fn unchanged_model_stays_current() -> TestResult {
     };
     let manual = fixture
         .owner
-        .prepare_at(&active, request, &control)?
+        .prepare_at(&active, &package, request, &control)?
         .ok_or("manual")?;
     let metadata: ResultContext = AnalysisPackageOwner::decode(&manual.metadata)?;
     assert_eq!(metadata.context.time_utc_ns, (START + 123) as i64);

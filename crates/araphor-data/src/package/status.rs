@@ -52,6 +52,7 @@ impl TryFrom<&PackageResultV1> for PackageReceiptV1 {
         let metadata: ResultContext = AnalysisPackageOwner::decode(&result.metadata)?;
         Ok(Self {
             target: metadata.target,
+            artifact: metadata.artifact,
             result_id: result.result_id.clone(),
             commit_revision: result.commit_revision,
             input_revisions: metadata.inputs,

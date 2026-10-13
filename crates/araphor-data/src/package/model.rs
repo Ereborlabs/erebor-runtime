@@ -26,6 +26,24 @@ impl PackageErrorCodeV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct PackageArtifactIdentityV1 {
+    pub digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+}
+
+impl PackageArtifactIdentityV1 {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.digest.capacity()
+            + self.closure_digest.as_ref().map_or(0, String::capacity)
+            + self.platform.as_ref().map_or(0, String::capacity)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageGrantV1 {
     pub principal: String,
     pub revision: u64,
@@ -176,6 +194,8 @@ pub enum PackageReadinessV1 {
 #[serde(deny_unknown_fields)]
 pub struct PackageReceiptV1 {
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<PackageArtifactIdentityV1>,
     pub result_id: String,
     pub commit_revision: u64,
     pub input_revisions: Vec<sdk::Revision>,

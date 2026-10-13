@@ -104,6 +104,7 @@ async fn missing_dependency_target_status() -> TestResult {
     upstream.implementations = vec![PackageImplementationV1::Native {
         export: "count".into(),
         artifact: vec![0, 97, 115, 109],
+        qualification: None,
     }];
     let root = &mut package.artifacts[0];
     let mut input = root.descriptor.exports[0].outputs[0].clone();
@@ -240,6 +241,34 @@ async fn shared_dependency_parameter_comparison() -> TestResult {
         )?
         .json_rows()?;
     assert_eq!(output["rows"], serde_json::json!([{"count":5}]));
+    let evaluated = fixture
+        .execute(PackageRequestV1::Run {
+            scope_id: "test".into(),
+            package_id: "test.second".into(),
+            export: None,
+            evaluation_id: "shared-root".into(),
+            parameters: None,
+        })
+        .await?;
+    let output = fixture.owner.read_output(
+        &fixture.grant,
+        "test",
+        "test.second",
+        "count",
+        &evaluated.exports[0].results[0].result_id,
+    )?;
+    assert_eq!(
+        output.json_rows()?["rows"],
+        serde_json::json!([{"count":5}])
+    );
+    let shared = fixture
+        .store
+        .package_activation_page(None)?
+        .into_iter()
+        .find(|active| active.key.package_id == "test.shared")
+        .ok_or("shared activation")?;
+    let context: super::InstalledContext = super::AnalysisPackageOwner::decode(&shared.metadata)?;
+    assert_eq!(context.root.package_id, "test.first");
     assert!(fixture
         .install(
             second,

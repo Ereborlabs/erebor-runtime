@@ -126,6 +126,7 @@ async fn removal_releases_unused_artifacts() -> TestResult {
         artifact.implementations = vec![PackageImplementationV1::Native {
             export: "count".into(),
             artifact: vec![0],
+            qualification: None,
         }];
     }
     fixture.install(package.clone(), None).await?;

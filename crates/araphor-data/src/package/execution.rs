@@ -55,6 +55,41 @@ impl AnalysisPackageOwner {
                     },
                 )
             }
+            PackageImplementationV1::Native {
+                artifact: bytes,
+                qualification: Some(qualification),
+                ..
+            } => self.query.evaluate_native(
+                tenant,
+                &artifact.descriptor,
+                evaluation,
+                control,
+                |control, limits| {
+                    let output_limits = sdk::Limits {
+                        max_bytes: evaluation
+                            .context
+                            .limits
+                            .max_bytes
+                            .min(limits.output_capacity as u64),
+                        max_checkpoint_bytes: evaluation
+                            .context
+                            .limits
+                            .max_checkpoint_bytes
+                            .min(limits.output_capacity as u64),
+                        ..evaluation.context.limits
+                    };
+                    let output = self.native.evaluate(
+                        &artifact.descriptor,
+                        evaluation,
+                        bytes,
+                        qualification,
+                        output_limits,
+                        control,
+                    )?;
+                    let bytes = output.allocated_bytes();
+                    Ok((output, bytes))
+                },
+            ),
             _ => Err(Code::Unsupported.error("model target")),
         }
     }
@@ -73,6 +108,11 @@ impl AnalysisPackageOwner {
                 Ok(PackageImplementationV1::Wasm { artifact, .. }) => {
                     self.wasm.admit(artifact, control)?;
                 }
+                Ok(PackageImplementationV1::Native {
+                    artifact,
+                    qualification: Some(qualification),
+                    ..
+                }) => self.native.admit(artifact, qualification)?,
                 Err(crate::Error::Package {
                     code: Code::Unsupported,
                     ..

@@ -148,8 +148,39 @@ impl BundleMemory {
                 }
                 self.vector(artifact)
             }
-            PackageImplementationV1::Native { export, artifact }
-            | PackageImplementationV1::Python { export, artifact } => {
+            PackageImplementationV1::Native {
+                export,
+                artifact,
+                qualification,
+            } => {
+                self.add(export.capacity())?;
+                self.vector(artifact)?;
+                if let Some(qualification) = qualification {
+                    self.vector(&qualification.exports)?;
+                    self.strings(&qualification.exports)?;
+                    self.add(qualification.target.capacity())?;
+                    self.vector(&qualification.cpu_features)?;
+                    self.strings(&qualification.cpu_features)?;
+                    if let Some(inputs) = &qualification.inputs {
+                        self.bindings(inputs)?;
+                    }
+                    self.vector(&qualification.dependencies)?;
+                    for dependency in &qualification.dependencies {
+                        self.strings([&dependency.name, &dependency.digest])?;
+                        self.vector(&dependency.artifact)?;
+                    }
+                    self.vector(&qualification.system_libraries)?;
+                    for library in &qualification.system_libraries {
+                        self.add(library.name.capacity())?;
+                        self.vector(&library.symbols)?;
+                        self.strings(&library.symbols)?;
+                        self.vector(&library.versions)?;
+                        self.strings(&library.versions)?;
+                    }
+                }
+                Ok(())
+            }
+            PackageImplementationV1::Python { export, artifact } => {
                 self.add(export.capacity())?;
                 self.vector(artifact)
             }

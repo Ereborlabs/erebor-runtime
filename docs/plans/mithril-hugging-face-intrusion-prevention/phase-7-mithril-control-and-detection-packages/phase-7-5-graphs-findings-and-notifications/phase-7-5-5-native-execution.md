@@ -6,8 +6,9 @@ algorithms without a Python dependency; speed claims require measurements.
 
 ## Intended end state
 
-A package can carry both `algorithm.wasm` and a platform-specific native artifact
-for one named export. The same source library, parameters, dataset schemas,
+An author can build `algorithm.wasm` and a platform-specific native artifact
+from one source. An installed export declares one supported execution type.
+The same source library, parameters, dataset schemas,
 evidence rules, and state contract serve both targets. Execution follows the
 installed plugin type. Check host compatibility and record the actual artifact
 in each result. Add no global target preference or operator target option.
@@ -131,19 +132,19 @@ workflow. Execute the installed plugin's declared type. Reuse
 the existing package version, checkpoint, update, and rollback rules. Remove
 the proposed public `rebuild` option.
 
-- [ ] Add the Rust native adapter and export macro beside the existing SDK
+- [x] Add the Rust native adapter and export macro beside the existing SDK
   guest adapter. Complete typed exchange, cancellation, panic handling, and
   release tests through the existing v1 table.
-- [ ] Extend source builds and the current guest crates to emit native libraries
+- [x] Extend source builds and the current guest crates to emit native libraries
   from the same computation. Record artifact and host requirements in the
   existing package manifest. Install no compiler, hook, or downloader.
-- [ ] Add native admission and loading under AnalysisPackageOwner. Keep library
+- [x] Add native admission and loading under AnalysisPackageOwner. Keep library
   code loaded through all calls and release callbacks. Preserve host-owned
   output, authorization checks, and existing query accounting.
-- [ ] Execute the declared plugin type and record actual artifact identity in
+- [x] Execute the declared plugin type and record actual artifact identity in
   results and receipts. Remove the incomplete request target and stored target
   preference drafts. Preserve historical encodings, retries, and atomic commits.
-- [ ] Define disabled native memory and CPU settings. Reject an enabled hard
+- [x] Define disabled native memory and CPU settings. Reject an enabled hard
   per-library cap with Unsupported when the shared process cannot enforce it.
   Do not change process-wide limits or silently ignore an enabled setting.
 - [ ] Qualify shared-source export parity, installed execution, failures, and
@@ -204,6 +205,11 @@ the proposed public `rebuild` option.
 
 ### Native SDK and source-build verification
 
+The SDK and builder source commit is `d65db26`. The SDK host-copy correction
+commit is `09b354f`. The added error-bound test returned 63 passed and 0 failed;
+the strict all-target clippy command also returned exit 0. These checks cover
+the same SDK production code as `09b354f` and the added test.
+
 The SDK native adapter uses the existing `Guest` implementation and v1 function
 table. It supplies typed Arrow streams, context, parameters, evidence, reasons,
 checkpoints, cancellation, and bounded output. Tests check Rust unwind handling,
@@ -230,6 +236,44 @@ This proof covers the adapter and source build. It does not qualify package
 admission, installed execution, export parity, production cases, or final CI.
 The complete deliverable remains Not done until built-folder installation proof
 also passes.
+
+### Native owner and parity verification
+
+The final source-built libraries are in
+`/tmp/araphor-native-built-20261013-final`. The locked release build returned
+exit 0. Artifact digests, build inputs, host, and command are in
+`/tmp/araphor-native-build-20261013-final-proof.json`.
+
+The final focused owner command returned exit 0, with 33 passed and 0 failed:
+
+```sh
+ARAPHOR_NATIVE_DIR=/tmp/araphor-native-built-20261013-final cargo test --locked -p araphor-data --lib -- --include-ignored --nocapture --skip native_host_fault_restart package::native package::tests::native discovery::sdk::native graph::derive::adapter::tests::native package::evaluation::preparation::tests shared_dependency_parameter_comparison native_leases_keep_limits
+```
+
+The log is `/tmp/araphor-native-final-focused-20261013.log`. The source record is
+`/tmp/araphor-native-final-source-20261013.json`. The cut includes 18 loader tests,
+seven installed lifecycle tests, all seven migrated export parity checks, the
+185-record Process input, two preparation tests, the shared dependency root,
+and native host buffer accounting. The native and Wasm fixtures compare complete
+data, evidence, reasons, context, coverage, checkpoint, and replay results.
+Enabled native caps leave SQL and Wasm usable and reject native execution.
+
+The separate `package::tests::native::restart::native_host_fault_restart`
+command returned exit 0, with 1 passed and 0 failed in 169.55 seconds. The test
+uses the same final native libraries. A real Rust panic returns through the SDK
+and the child host then runs native again. A real abort returns SIGABRT. Restart
+restores the exact prior activation, stored output, checkpoint, and metadata.
+Retry and subsequent native execution pass. No target fallback occurs.
+
+The first broad native cut returned 67 passed and 1 failed. The failed new graph
+test retained output guards during a later reservation. The final focused cut
+passes after those guards are released. Two direct preparation launches also
+returned ENOENT during concurrent test-binary replacement. The final Cargo
+launch passes both preparation tests and the shared dependency regression.
+
+Installed SDK example qualification, the affected production cases, and final
+workspace CI remain Not done. This result makes no platform or speed claim
+beyond the recorded Linux x86-64 host and semantic checks.
 
 ### Bundle-read correction TODO
 
@@ -270,6 +314,9 @@ also passes.
   Check the prior complete output, checkpoint, activation, retry, and absence of
   Wasm fallback. The child is a test host; production native execution stays in
   Araphor's process. Reuse the fixture's store and owner setup for a retained path.
+- [ ] Supply the existing temporary directory to `Fixture::open`. The first
+  host-fault test returned ENOENT before any native action because its new parent
+  directory did not exist. Preserve all fault, state, and restart assertions.
 
 ### Native buffer-accounting correction TODO
 
@@ -304,6 +351,27 @@ These focused SDK checks do not qualify the corrected loader or built libraries.
   Validate the selected closure and file identities before the accessor call.
   Add tests for replacement and seals. Add no dependency, namespace, process,
   environment restriction, or isolation claim.
+- [ ] Check a declared package dependency's ELF SONAME when it is present.
+  Require that name to match the declared dependency name. Reject aliases that
+  can select the root or a system library. Preserve valid files without SONAME
+  and the existing declaration schema.
+- [ ] Derive Linux system-library directory names from the exact build target,
+  including i386, ARM ABI, little-endian PowerPC and MIPS, and x32 names. Retain
+  standard library directory fallbacks. Check the artifact's pointer class as
+  well as its format, architecture, and endianness. Add no platform allowlist.
+- [ ] Use a valid 52-byte ELF32 header without sections for the new synthetic
+  pointer-class fixture. Its first run returned Invalid during parsing because
+  its section table had no valid string-table index. Preserve the incompatible
+  class assertion and production validation. Add no unnecessary section table.
+- [ ] Validate symbol availability against the root's reachable dependency
+  closure. An extra declared file cannot supply an unreachable symbol. Check
+  transitive system requirements before package initialization. Use the existing
+  artifact parser and typed compatibility errors. Add a missing or unreachable
+  dependency fixture; preserve valid declared closures.
+- [ ] Map native function-table validation errors through the native error owner.
+  Preserve the SDK source and operation. An incompatible version returns
+  Unsupported; malformed table values retain their typed code. Add a real
+  wrong-version library fixture. Do not classify every ABI failure as Invalid.
 
 ### Preparation verification
 

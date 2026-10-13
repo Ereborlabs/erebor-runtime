@@ -30,6 +30,7 @@ impl sdk::guest::Guest for RuntimeFixture {
     }
 
     fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
+        Self::native_fault()?;
         let package = Self::package();
         Self::execute(sdk::wire::Evaluation::encode(&package, evaluation)?)?
             .decode(&package, evaluation)
@@ -40,6 +41,31 @@ impl sdk::guest::Guest for RuntimeFixture {
 sdk::export_native!(RuntimeFixture);
 
 impl RuntimeFixture {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::panic)]
+    fn native_fault() -> sdk::Result<()> {
+        let Some(mode) = std::env::var_os("ARAPHOR_NATIVE_FIXTURE_FAULT") else {
+            return Ok(());
+        };
+        let marker = std::env::var_os("ARAPHOR_NATIVE_FIXTURE_MARKER")
+            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "fault marker"))?;
+        let marker = std::path::PathBuf::from(marker);
+        if marker.exists() {
+            return Ok(());
+        }
+        let mode = mode
+            .to_str()
+            .filter(|mode| matches!(*mode, "panic" | "abort"))
+            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "fault mode"))?;
+        std::fs::write(marker, mode)
+            .map_err(|_| sdk::Error::contract(sdk::ErrorCode::Failed, "fault marker"))?;
+        match mode {
+            "panic" => panic!("native fixture panic"),
+            "abort" => std::process::abort(),
+            _ => Err(sdk::Error::contract(sdk::ErrorCode::Invalid, "fault mode")),
+        }
+    }
+
     fn execute(input: sdk::wire::Evaluation) -> sdk::Result<sdk::wire::Output> {
         if input.export_name == "echo-inputs" {
             return Self::echo_inputs(input);

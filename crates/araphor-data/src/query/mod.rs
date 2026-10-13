@@ -38,6 +38,7 @@ mod plan;
 mod tests;
 mod wasm;
 
+pub use crate::package::native::NativeLimits;
 pub use admission::{QueryBinding, QuerySql};
 pub use analysis::GraphAnalysisInputsV1;
 use authorization::QuerySession;
@@ -61,6 +62,7 @@ pub use wasm::WasmLimits;
 #[serde(default, deny_unknown_fields)]
 pub struct QueryLimits {
     pub wasm: WasmLimits,
+    pub native: NativeLimits,
     pub scan_bytes: usize,
     pub input_bytes: usize,
     pub output_rows: usize,
@@ -82,6 +84,7 @@ impl Default for QueryLimits {
     fn default() -> Self {
         Self {
             wasm: WasmLimits::default(),
+            native: NativeLimits::default(),
             scan_bytes: 256 * 1024 * 1024,
             input_bytes: 64 * 1024 * 1024,
             output_rows: 200,
@@ -204,6 +207,10 @@ impl Drop for QueryTask {
 }
 
 impl QueryOwner {
+    pub(crate) fn native_limits(&self) -> NativeLimits {
+        self.limits.native
+    }
+
     pub(crate) fn wasm_limits(&self) -> &WasmLimits {
         &self.limits.wasm
     }

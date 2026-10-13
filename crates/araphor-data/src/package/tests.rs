@@ -2,7 +2,8 @@ mod admission;
 mod fixture;
 mod interruption;
 mod lifecycle;
+mod native;
 mod wasm;
 mod wire;
 
-pub(super) use fixture::*;
+pub(crate) use fixture::*;

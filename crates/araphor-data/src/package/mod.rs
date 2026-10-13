@@ -13,6 +13,7 @@ mod inspect;
 mod installed;
 mod lifecycle;
 mod model;
+pub mod native;
 mod output;
 mod owner;
 mod removal;
@@ -34,7 +35,8 @@ pub struct AnalysisPackageOwner {
     operations: Arc<tokio::sync::Semaphore>,
     lifecycle: Arc<std::sync::Mutex<()>>,
     wasm: wasm::WasmExecution,
+    native: native::NativeExecution,
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

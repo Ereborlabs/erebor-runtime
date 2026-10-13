@@ -281,3 +281,5 @@ fn declared_reason(package_id: &str, reason: &str) -> TestResult {
     }
     Ok(())
 }
+
+mod native;

@@ -62,6 +62,8 @@ pub enum PackageImplementationV1 {
     Native {
         export: String,
         artifact: Vec<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        qualification: Option<super::native::Qualification>,
     },
     Python {
         export: String,
@@ -74,13 +76,18 @@ impl PackageImplementationV1 {
         match self {
             Self::Sql { inputs, .. } => Some(inputs),
             Self::Wasm { inputs, .. } => inputs.as_ref(),
-            Self::Native { .. } | Self::Python { .. } => None,
+            Self::Native { qualification, .. } => qualification.as_ref()?.inputs.as_ref(),
+            Self::Python { .. } => None,
         }
     }
 
     pub fn exports(&self) -> &[String] {
         match self {
             Self::Wasm { exports, .. } => exports,
+            Self::Native {
+                qualification: Some(qualification),
+                ..
+            } => &qualification.exports,
             Self::Sql { export, .. }
             | Self::Native { export, .. }
             | Self::Python { export, .. } => std::slice::from_ref(export),
@@ -99,13 +106,41 @@ impl PackageImplementationV1 {
             Self::Python { .. } => "python",
         }
     }
+
+    pub(crate) fn identity(&self) -> Result<Option<super::PackageArtifactIdentityV1>> {
+        let identity = match self {
+            Self::Wasm { artifact, .. } => super::PackageArtifactIdentityV1 {
+                digest: super::native::Qualification::digest(artifact),
+                closure_digest: None,
+                platform: None,
+            },
+            Self::Native {
+                artifact,
+                qualification: Some(qualification),
+                ..
+            } => super::PackageArtifactIdentityV1 {
+                digest: super::native::Qualification::digest(artifact),
+                closure_digest: Some(qualification.closure_digest(artifact)?),
+                platform: Some(qualification.target.clone()),
+            },
+            _ => return Ok(None),
+        };
+        Ok(Some(identity))
+    }
 }
 
 impl PackageArtifactV1 {
     fn has_component(&self) -> bool {
-        self.implementations
-            .iter()
-            .any(|implementation| matches!(implementation, PackageImplementationV1::Wasm { .. }))
+        self.implementations.iter().any(|implementation| {
+            matches!(
+                implementation,
+                PackageImplementationV1::Wasm { .. }
+                    | PackageImplementationV1::Native {
+                        qualification: Some(_),
+                        ..
+                    }
+            )
+        })
     }
 
     pub(super) fn encoding(&self, canonical: bool) -> Result<ArtifactEncoding<'_>> {
@@ -126,21 +161,38 @@ impl PackageArtifactV1 {
     }
 
     pub(crate) fn implementation(&self, export: &str) -> Result<&PackageImplementationV1> {
-        self.implementations
+        let mut implementations = self
+            .implementations
             .iter()
-            .find(|entry| entry.implements(export) && entry.target() == "wasm")
-            .or_else(|| {
-                self.implementations
-                    .iter()
-                    .find(|entry| entry.implements(export) && entry.target() == "sql")
-            })
-            .ok_or_else(|| Code::Unsupported.error("model target"))
+            .filter(|entry| entry.implements(export))
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    PackageImplementationV1::Sql { .. }
+                        | PackageImplementationV1::Wasm { .. }
+                        | PackageImplementationV1::Native {
+                            qualification: Some(_),
+                            ..
+                        }
+                )
+            });
+        let implementation = implementations
+            .next()
+            .ok_or_else(|| Code::Unsupported.error("model target"))?;
+        if implementations.next().is_some() {
+            return Err(Code::Invalid.error("plugin execution type"));
+        }
+        Ok(implementation)
     }
 
     pub(crate) fn prepared(&self, export: &str) -> bool {
         matches!(
             self.implementation(export),
             Ok(PackageImplementationV1::Wasm { inputs: None, .. })
+        ) || matches!(
+            self.implementation(export),
+            Ok(PackageImplementationV1::Native { qualification: Some(qualification), .. })
+                if qualification.inputs.is_none()
         )
     }
 
@@ -154,7 +206,9 @@ impl PackageArtifactV1 {
     pub(crate) fn uses_clock(&self, model: &sdk::Model) -> Result<bool> {
         match self.implementation(&model.name)? {
             PackageImplementationV1::Sql { program, .. } => program.uses_clock(model),
-            PackageImplementationV1::Wasm { .. } => Ok(true),
+            PackageImplementationV1::Wasm { .. } | PackageImplementationV1::Native { .. } => {
+                Ok(true)
+            }
             _ => Err(Code::Unsupported.error("model target")),
         }
     }

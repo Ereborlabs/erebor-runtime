@@ -12,12 +12,12 @@ use crate::{
     SqlModelV1,
 };
 
-pub(in crate::package) type TestResult<T = ()> =
+pub(crate) type TestResult<T = ()> =
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 type CommitObserver = Box<dyn FnMut() -> Result<()> + Send>;
 
-pub(in crate::package) struct Authority {
+pub(crate) struct Authority {
     revision: AtomicU64,
     changes: watch::Sender<u64>,
     pub after_commit: Mutex<Option<CommitObserver>>,
@@ -69,13 +69,14 @@ impl PackageAuthorization for Authority {
     }
 }
 
-pub(in crate::package) struct Fixture {
+pub(crate) struct Fixture {
     pub store: Arc<AnalysisStore>,
     pub owner: Arc<AnalysisPackageOwner>,
     pub grant: PackageGrantV1,
     pub authority: Arc<Authority>,
     limits: QueryLimits,
-    _directory: tempfile::TempDir,
+    root: std::path::PathBuf,
+    _directory: Option<tempfile::TempDir>,
 }
 
 impl Fixture {
@@ -89,7 +90,27 @@ impl Fixture {
 
     pub fn new_limits(limits: QueryLimits) -> TestResult<Self> {
         let directory = tempfile::tempdir()?;
-        let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
+        Self::open_resources(directory.path().to_path_buf(), limits, Some(directory))
+    }
+
+    pub fn open(root: std::path::PathBuf) -> TestResult<Self> {
+        Self::open_resources(
+            root,
+            QueryLimits {
+                extract_timeout: Duration::from_secs(30),
+                evaluate_timeout: Duration::from_secs(30),
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    fn open_resources(
+        root: std::path::PathBuf,
+        limits: QueryLimits,
+        directory: Option<tempfile::TempDir>,
+    ) -> TestResult<Self> {
+        let store = Arc::new(AnalysisStore::open(root.join("analysis"))?);
         let authority = Arc::new(Authority {
             revision: AtomicU64::new(1),
             changes: watch::channel(1).0,
@@ -101,6 +122,7 @@ impl Fixture {
             owner,
             authority,
             limits,
+            root,
             _directory: directory,
             grant: PackageGrantV1 {
                 principal: "fixture".into(),
@@ -130,11 +152,12 @@ impl Fixture {
             grant,
             authority,
             limits,
+            root,
             _directory,
         } = self;
         drop(owner);
         drop(store);
-        let store = Arc::new(AnalysisStore::open(_directory.path().join("analysis"))?);
+        let store = Arc::new(AnalysisStore::open(root.join("analysis"))?);
         let owner = Self::owner(store.clone(), authority.clone(), limits.clone())?;
         Ok(Self {
             store,
@@ -142,6 +165,7 @@ impl Fixture {
             grant,
             authority,
             limits,
+            root,
             _directory,
         })
     }

@@ -197,6 +197,16 @@ impl PackageArtifactV1 {
         }
         let mut implementations = BTreeSet::new();
         for implementation in &self.implementations {
+            if let super::PackageImplementationV1::Native {
+                export,
+                qualification: Some(qualification),
+                ..
+            } = implementation
+            {
+                if !qualification.exports.contains(export) {
+                    return Err(Code::Invalid.error("native export declaration"));
+                }
+            }
             if implementation.exports().is_empty() || implementation.exports().len() > 256 {
                 return Err(Code::Invalid.error("implementation export count"));
             }
@@ -220,11 +230,15 @@ impl PackageArtifactV1 {
             {
                 return Err(Code::Missing.error("export implementation"));
             }
-            let Some(sources) = self
-                .implementation(&model.name)
-                .ok()
-                .and_then(|entry| entry.bindings())
-            else {
+            let implementation = match self.implementation(&model.name) {
+                Ok(implementation) => implementation,
+                Err(crate::Error::Package {
+                    code: Code::Unsupported,
+                    ..
+                }) => continue,
+                Err(error) => return Err(error),
+            };
+            let Some(sources) = implementation.bindings() else {
                 continue;
             };
             let dependencies: BTreeSet<_> = self

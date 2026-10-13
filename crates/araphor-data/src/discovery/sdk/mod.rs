@@ -12,6 +12,8 @@ use crate::{AnalysisContractSnafu, DiscoveryEncodingSnafu, Result};
 mod atoms;
 mod compare;
 mod context;
+#[cfg(test)]
+mod native;
 mod pages;
 mod project;
 mod snapshot;

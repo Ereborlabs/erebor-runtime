@@ -6,6 +6,33 @@ use crate::{AnalysisReadControl, QueryOwner, Result};
 use super::SqlModelOutputV1;
 
 impl QueryOwner {
+    pub(crate) fn evaluate_native(
+        &self,
+        tenant: [u8; 16],
+        package: &sdk::Package,
+        evaluation: &sdk::Evaluation,
+        control: &AnalysisReadControl,
+        execute: impl FnOnce(
+            &AnalysisReadControl,
+            &super::super::QueryLimits,
+        ) -> Result<(sdk::Output, usize)>,
+    ) -> Result<SqlModelOutputV1> {
+        let retained = evaluation.allocated_bytes();
+        let preflight = self.exchange_preflight(package, evaluation)?;
+        self.evaluate_model_reserved(
+            package,
+            evaluation,
+            control,
+            |capacity| self.budget.component(tenant, capacity, preflight),
+            |control, host, lease| {
+                control.check()?;
+                let output = execute(control, host)?;
+                lease.shrink_input(retained)?;
+                Ok(output)
+            },
+        )
+    }
+
     pub(crate) fn evaluate_component(
         &self,
         tenant: [u8; 16],
@@ -60,7 +87,16 @@ impl QueryOwner {
             }
             .fail();
         }
-        // Reserve retained arrays, IPC copies, and vector growth before encoding.
+        self.exchange_preflight(package, evaluation)
+    }
+
+    fn exchange_preflight(
+        &self,
+        package: &sdk::Package,
+        evaluation: &sdk::Evaluation,
+    ) -> Result<usize> {
+        self.check_analysis_input(evaluation)?;
+        // Reserve retained arrays, transport copies, and vector growth before execution.
         let scratch = evaluation
             .encoding_scratch_bytes()
             .context(crate::AnalysisContractSnafu)?;

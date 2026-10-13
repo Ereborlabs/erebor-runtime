@@ -17,6 +17,8 @@ mod preparation;
 pub(super) struct ResultContext {
     #[serde(default = "ResultContext::sql_target")]
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<super::PackageArtifactIdentityV1>,
     pub context: sdk::EvaluationContext,
     pub inputs: Vec<sdk::Revision>,
     pub input_coverage: Vec<sdk::Coverage>,
@@ -101,7 +103,9 @@ impl AnalysisPackageOwner {
                     )
                 })?;
             }
-            if let Some(receipt) = self.evaluate_active(&active, id, false, control)? {
+            if let Some(receipt) =
+                self.evaluate_active(&active, id, false, Some(&bundle), control)?
+            {
                 receipts.push((active.key.export, active.key.package_id, receipt));
             }
         }
@@ -130,19 +134,32 @@ impl AnalysisPackageOwner {
         active: &PackageActivationV1,
         id: &str,
         automatic: bool,
+        known: Option<&super::PackageBundleV1>,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageResultRefV1>> {
         let context: InstalledContext = Self::decode(&active.metadata)?;
-        let bundle = self.load_bundle(active.key.tenant_id, &context.root)?;
+        control.check()?;
+        let loaded;
+        let bundle = match known.filter(|bundle| bundle.root == context.root) {
+            Some(bundle) => bundle,
+            None => {
+                loaded = self.load_bundle(active.key.tenant_id, &context.root)?;
+                &loaded
+            }
+        };
         self.check(&context.grant, Action::Run)?;
-        self.authority.admit(&context.grant, &bundle)?;
+        self.authority.admit(&context.grant, bundle)?;
         if !automatic {
             let result_id = Self::result_id(active, id)?;
             if let Some(previous) = self
                 .store
                 .package_result(active.key.tenant_id, &result_id)?
             {
-                if previous.request != Self::request(active, id, &context)? {
+                let artifact = bundle.artifact(&super::PackageRefV1 {
+                    package_id: active.key.package_id.clone(),
+                    revision: active.revision.clone(),
+                })?;
+                if previous.request != Self::request(active, id, &context, artifact)? {
                     return Err(Code::Conflict.error("evaluation retry"));
                 }
                 control.check()?;
@@ -153,7 +170,7 @@ impl AnalysisPackageOwner {
                 }));
             }
         }
-        let result = self.prepare_run(active, id, false, automatic, control);
+        let result = self.prepare_run(active, bundle, id, false, automatic, control);
         let prepared = match result {
             Ok(Some(prepared)) => prepared,
             Ok(None) => return Ok(None),
@@ -163,7 +180,7 @@ impl AnalysisPackageOwner {
                 return Err(error);
             }
         };
-        let receipt = self.authorize_commit(&context.grant, Action::Run, &bundle, || {
+        let receipt = self.authorize_commit(&context.grant, Action::Run, bundle, || {
             self.store.commit_package(&prepared, || control.check())
         })?;
         Ok(Some(receipt))
@@ -172,11 +189,12 @@ impl AnalysisPackageOwner {
     pub(super) fn prepare(
         &self,
         active: &PackageActivationV1,
+        bundle: &super::PackageBundleV1,
         id: &str,
         rebuild: bool,
         control: &AnalysisReadControl,
     ) -> Result<PackageCommitV1> {
-        self.prepare_run(active, id, rebuild, false, control)?
+        self.prepare_run(active, bundle, id, rebuild, false, control)?
             .ok_or_else(|| Code::Conflict.error("prepared evaluation"))
     }
 
@@ -192,7 +210,20 @@ impl AnalysisPackageOwner {
         active: &PackageActivationV1,
         id: &str,
         context: &InstalledContext,
+        artifact: &super::PackageArtifactV1,
     ) -> Result<Vec<u8>> {
+        let implementation = artifact.implementation(&active.key.export)?;
+        if implementation.target() == "native" {
+            return Self::encode(&(
+                &active.key,
+                &active.revision,
+                id,
+                &context.grant.selection,
+                &context.parameters,
+                implementation.target(),
+                implementation.identity()?,
+            ));
+        }
         Self::encode(&(
             &active.key,
             &active.revision,

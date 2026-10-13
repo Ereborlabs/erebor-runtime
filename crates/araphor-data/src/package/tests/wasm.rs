@@ -5,7 +5,7 @@ use araphor_analysis_sdk as sdk;
 use super::{Fixture, TestResult};
 use crate::package::*;
 
-mod checkpoint;
+pub(super) mod checkpoint;
 mod flow;
 mod interruption;
 mod lifecycle;
@@ -70,7 +70,7 @@ fn oversized_input_precedes_compilation() -> TestResult {
     Ok(())
 }
 
-fn component(revision: &str) -> PackageBundleV1 {
+pub(super) fn component(revision: &str) -> PackageBundleV1 {
     let mut model = sdk::Model::new(
         "evaluate",
         Vec::new(),
@@ -102,11 +102,11 @@ fn component(revision: &str) -> PackageBundleV1 {
     }
 }
 
-fn parameters(mode: &str) -> serde_json::Value {
+pub(super) fn parameters(mode: &str) -> serde_json::Value {
     serde_json::json!({"runtime-fixture": {"evaluate": {"mode": mode, "amount": 7}}})
 }
 
-fn evaluate(id: &str) -> PackageRequestV1 {
+pub(super) fn evaluate(id: &str) -> PackageRequestV1 {
     PackageRequestV1::Run {
         scope_id: "test".into(),
         package_id: "runtime-fixture".into(),

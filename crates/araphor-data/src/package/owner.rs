@@ -47,6 +47,7 @@ impl AnalysisPackageOwner {
             store.collect_package_admissions()?;
         }
         let wasm = super::wasm::WasmExecution::new(*query.wasm_limits())?;
+        let native = super::native::NativeExecution::new(query.native_limits())?;
         Ok(Self {
             lifecycle: store.package_lifecycle.clone(),
             store,
@@ -54,6 +55,7 @@ impl AnalysisPackageOwner {
             authority,
             operations: Arc::new(tokio::sync::Semaphore::new(4)),
             wasm,
+            native,
         })
     }
 

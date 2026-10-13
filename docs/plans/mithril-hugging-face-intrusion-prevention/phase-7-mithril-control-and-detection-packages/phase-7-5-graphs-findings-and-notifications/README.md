@@ -48,6 +48,8 @@ Installed Wasm qualification in 7.5.4 is **Done**. Read the
 [qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
 Child phases 7.5.5 through 7.5.9 remain **Not done**.
+Read the [native implementation review](native-execution-review.md) for the
+current source route, ABI release rules, and pending qualification limits.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 

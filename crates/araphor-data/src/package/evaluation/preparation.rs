@@ -32,6 +32,7 @@ impl AnalysisPackageOwner {
     pub(super) fn prepare_run(
         &self,
         active: &PackageActivationV1,
+        bundle: &PackageBundleV1,
         id: &str,
         rebuild: bool,
         automatic: bool,
@@ -39,6 +40,7 @@ impl AnalysisPackageOwner {
     ) -> Result<Option<PackageCommitV1>> {
         self.prepare_at(
             active,
+            bundle,
             RunPreparation {
                 id,
                 rebuild,
@@ -52,6 +54,7 @@ impl AnalysisPackageOwner {
     fn prepare_at(
         &self,
         active: &PackageActivationV1,
+        bundle: &PackageBundleV1,
         request: RunPreparation<'_>,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageCommitV1>> {
@@ -61,9 +64,12 @@ impl AnalysisPackageOwner {
             automatic,
             now,
         } = request;
+        control.check()?;
         let context: InstalledContext = Self::decode(&active.metadata)?;
-        let bundle = self.load_bundle(active.key.tenant_id, &context.root)?;
-        let run = ModelRun::new(active, &context, &bundle, id)?;
+        if bundle.root != context.root {
+            return Err(Code::Conflict.error("activation package root"));
+        }
+        let run = ModelRun::new(active, &context, bundle, id)?;
         let now = if automatic {
             Self::clock_tick(now)
         } else {
@@ -86,6 +92,7 @@ impl AnalysisPackageOwner {
             .implementation(&run.model.name)?
             .target()
             .into();
+        metadata.artifact = run.artifact.implementation(&run.model.name)?.identity()?;
         if metadata.target == "wasm" {
             metadata.context.limits = self.query.component_limits(metadata.context.limits);
         }
@@ -243,7 +250,12 @@ impl<'a> ModelRun<'a> {
             expected_checkpoint_revision: self.active.checkpoint_revision,
             window_id: "snapshot".into(),
             result_id,
-            request: AnalysisPackageOwner::request(self.active, self.id, self.context)?,
+            request: AnalysisPackageOwner::request(
+                self.active,
+                self.id,
+                self.context,
+                self.artifact,
+            )?,
             metadata: AnalysisPackageOwner::encode(&metadata)?,
             datasets: AnalysisPackageOwner::encode(&packet)?,
             checkpoint,
@@ -268,6 +280,7 @@ impl ResultContext {
             .collect();
         Self {
             target: "sql".into(),
+            artifact: None,
             context: sdk::EvaluationContext {
                 id: id.into(),
                 time_utc_ns: now as i64,

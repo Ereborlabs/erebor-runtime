@@ -102,7 +102,7 @@ async fn package_busy_preserves_result() -> TestResult {
         assert!(matches!(
             fixture
                 .owner
-                .evaluate_active(&before, "automatic", true, &control),
+                .evaluate_active(&before, "automatic", true, None, &control),
             Err(crate::Error::AnalysisBusy { .. })
         ));
         assert_eq!(

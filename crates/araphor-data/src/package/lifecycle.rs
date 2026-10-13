@@ -132,6 +132,7 @@ impl AnalysisPackageOwner {
             } else {
                 Some(self.prepare(
                     &active,
+                    bundle,
                     &format!(
                         "upgrade:{}:{}",
                         previous.as_ref().map_or(0, |old| old.generation),
@@ -184,6 +185,7 @@ impl AnalysisPackageOwner {
             active,
             &format!("install:{}", active.generation),
             false,
+            Some(bundle),
             control,
         ) {
             let crate::Error::Package {

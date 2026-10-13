@@ -69,11 +69,18 @@ impl ClientGrpcOwner {
     }
 
     fn package_failure(error: araphor_data::Error) -> Status {
-        if let araphor_data::Error::Package { code, field, .. } = &error {
-            let (code, field) = (*code, *field);
-            return Self::package_status(Self::failure(error), code, field);
+        let details = match &error {
+            araphor_data::Error::Package { code, field, .. } => Some((*code, *field)),
+            araphor_data::Error::PackageNative {
+                code, operation, ..
+            } => Some((*code, *operation)),
+            _ => None,
+        };
+        let status = Self::failure(error);
+        match details {
+            Some((code, field)) => Self::package_status(status, code, field),
+            None => status,
         }
-        Self::failure(error)
     }
 
     fn package_status(status: Status, code: PackageErrorCodeV1, field: &str) -> Status {

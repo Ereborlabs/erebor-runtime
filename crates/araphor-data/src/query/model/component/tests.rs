@@ -14,6 +14,56 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Syn
 
 mod nested;
 
+#[test]
+fn native_leases_keep_limits() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let mut limits = QueryLimits::default();
+    limits.wasm.data_bytes = Some(1);
+    let query = fixture.owner(limits.clone())?;
+    let (package, evaluation) = input(schema())?;
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    let preflight = query.exchange_preflight(&package, &evaluation)?;
+    assert!(query.component_preflight(&package, &evaluation).is_err());
+    let failed = query.evaluate_native([1; 16], &package, &evaluation, &control, |_, _| {
+        let rest = query.retain_analysis_input(limits.input_capacity - preflight)?;
+        assert!(query.retain_analysis_input(1).is_err());
+        drop(rest);
+        crate::QueryInvalidSnafu {
+            field: "test native failure",
+        }
+        .fail()
+    });
+    assert!(matches!(
+        failed,
+        Err(crate::Error::QueryInvalid {
+            field: "test native failure",
+            ..
+        })
+    ));
+    drop(query.retain_analysis_input(limits.input_capacity)?);
+    let output = query.evaluate_native([1; 16], &package, &evaluation, &control, |_, host| {
+        assert_eq!(
+            host.output_capacity,
+            evaluation.context.limits.max_bytes as usize
+        );
+        let output = sdk::Output {
+            datasets: vec![sdk::Dataset {
+                name: "data".into(),
+                batches: evaluation.inputs[0].data.batches.clone(),
+            }],
+            ..Default::default()
+        };
+        let bytes = output.allocated_bytes();
+        Ok((output, bytes))
+    })?;
+    let rest = query.retain_analysis_input(limits.input_capacity - evaluation.allocated_bytes())?;
+    assert!(query.retain_analysis_input(1).is_err());
+    drop(rest);
+    drop(output);
+    drop(query.retain_analysis_input(limits.input_capacity)?);
+    Ok(())
+}
+
 fn input(schema: sdk::Schema) -> sdk::Result<(sdk::Package, sdk::Evaluation)> {
     let model = sdk::Model::new(
         "evaluate",

@@ -26,6 +26,10 @@ pub struct InstalledRefV1 {
     pub generation: u64,
     pub root: super::PackageRefV1,
     pub parameters: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<super::PackageArtifactIdentityV1>,
 }
 
 #[derive(Clone)]
@@ -42,6 +46,8 @@ pub struct InstalledAnalysis {
 pub struct InstalledEvaluation {
     pub descriptor: sdk::Package,
     pub revision: String,
+    pub target: String,
+    pub artifact: Option<super::PackageArtifactIdentityV1>,
     pub evaluation: sdk::Evaluation,
     pub output: sdk::Output,
     _lease: crate::query::QueryLease,
@@ -94,6 +100,7 @@ impl InstalledAnalysis {
                 artifact.descriptor.id == package && artifact.descriptor.revision == active.revision
             })
             .ok_or_else(|| Code::Missing.error("installed artifact"))?;
+        let implementation = artifact.implementation(&evaluation.export)?;
         if !artifact.prepared(&evaluation.export) {
             return Err(Code::Unsupported.error("host-prepared target"));
         }
@@ -104,7 +111,9 @@ impl InstalledAnalysis {
             .find(|model| model.name == evaluation.export)
             .ok_or_else(|| Code::Missing.error("installed export"))?;
         let mut effective = evaluation.clone();
-        effective.context.limits = self.owner.query.component_limits(effective.context.limits);
+        if implementation.target() == "wasm" {
+            effective.context.limits = self.owner.query.component_limits(effective.context.limits);
+        }
         effective.parameters = crate::QueryOwner::model_parameters(
             &model.parameters,
             AnalysisPackageOwner::parameter_values(
@@ -124,15 +133,27 @@ impl InstalledAnalysis {
         self.owner.authority.admit(&context.grant, &bundle.value)?;
         control.check()?;
         let (output, lease) = result?.into_parts();
+        let target = implementation.target().to_owned();
+        let identity = implementation.identity()?;
         let bytes = artifact
             .descriptor
             .allocated_bytes()
             .checked_add(active.revision.capacity())
+            .and_then(|bytes| bytes.checked_add(target.capacity()))
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    identity
+                        .as_ref()
+                        .map_or(0, super::PackageArtifactIdentityV1::allocated_bytes),
+                )
+            })
             .ok_or_else(|| Code::Limit.error("installed result memory"))?;
         let metadata = self.owner.query.retain_analysis_input(bytes)?;
         Ok(InstalledEvaluation {
             descriptor: artifact.descriptor.clone(),
             revision: active.revision,
+            target,
+            artifact: identity,
             evaluation: effective,
             output,
             _lease: lease,

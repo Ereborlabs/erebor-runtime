@@ -19,6 +19,12 @@ impl InstalledAnalysis {
             .iter()
             .map(|pin| {
                 let context: InstalledContext = AnalysisPackageOwner::decode(&pin.metadata)?;
+                let bundle = snapshot.bundle(&context.root)?;
+                let artifact = bundle.value.artifact(&super::super::PackageRefV1 {
+                    package_id: pin.key.package_id.clone(),
+                    revision: pin.revision.clone(),
+                })?;
+                let implementation = artifact.implementation(&pin.key.export)?;
                 Ok(InstalledRefV1 {
                     package_id: pin.key.package_id.clone(),
                     export: pin.key.export.clone(),
@@ -26,6 +32,8 @@ impl InstalledAnalysis {
                     generation: pin.generation,
                     root: context.root,
                     parameters: context.parameters,
+                    target: Some(implementation.target().into()),
+                    artifact: implementation.identity()?,
                 })
             })
             .collect()
@@ -92,6 +100,19 @@ impl InstalledAnalysis {
                 .iter()
                 .find(|model| model.name == reference.export)
                 .ok_or_else(|| Code::Missing.error("historical export declaration"))?;
+            let implementation = artifact.implementation(&reference.export)?;
+            let identity = implementation.identity()?;
+            if reference
+                .target
+                .as_deref()
+                .is_some_and(|target| target != implementation.target())
+                || reference
+                    .artifact
+                    .as_ref()
+                    .is_some_and(|recorded| identity.as_ref() != Some(recorded))
+            {
+                return Err(Code::Conflict.error("historical installed artifact"));
+            }
             crate::QueryOwner::model_parameters(
                 &model.parameters,
                 AnalysisPackageOwner::parameter_values(
