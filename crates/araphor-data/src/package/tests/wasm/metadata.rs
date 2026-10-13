@@ -46,7 +46,17 @@ async fn wasm_metadata_install_retry() -> TestResult {
         .into_iter()
         .find(|bundle| bundle.root.package_id == crate::DISCOVERY_PROCESSOR)
         .ok_or("discovery component absent")?;
-    fixture.install(package.clone(), None).await?;
+    let installed = fixture.install(package.clone(), None).await?;
+    let inspected = fixture
+        .execute(PackageRequestV1::Inspect {
+            scope_id: "test".into(),
+            package_id: package.root.package_id.clone(),
+        })
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&installed)?,
+        serde_json::to_value(&inspected)?
+    );
     let before = fixture.store.package_revision(
         [1; 16],
         &package.root.package_id,
@@ -56,6 +66,16 @@ async fn wasm_metadata_install_retry() -> TestResult {
         package = PackageBundleV1::from_bytes(&package.encode()?)?;
         let installed = fixture.install(package.clone(), None).await?;
         assert!(installed.exports.iter().all(|export| export.active));
+        let inspected = fixture
+            .execute(PackageRequestV1::Inspect {
+                scope_id: "test".into(),
+                package_id: package.root.package_id.clone(),
+            })
+            .await?;
+        assert_eq!(
+            serde_json::to_value(&installed)?,
+            serde_json::to_value(&inspected)?
+        );
         assert_eq!(
             fixture.store.package_revision(
                 [1; 16],
@@ -66,9 +86,19 @@ async fn wasm_metadata_install_retry() -> TestResult {
         );
     }
     let fixture = fixture.reopen()?;
-    fixture
+    let installed = fixture
         .install(PackageBundleV1::from_bytes(&package.encode()?)?, None)
         .await?;
+    let inspected = fixture
+        .execute(PackageRequestV1::Inspect {
+            scope_id: "test".into(),
+            package_id: package.root.package_id.clone(),
+        })
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&installed)?,
+        serde_json::to_value(&inspected)?
+    );
     assert_eq!(
         fixture.store.package_revision(
             [1; 16],
@@ -117,20 +147,50 @@ async fn mixed_metadata_install_retry() -> TestResult {
         installed.exports[0].readiness,
         PackageReadinessV1::MissingInput { .. }
     ));
+    let inspected = fixture
+        .execute(PackageRequestV1::Inspect {
+            scope_id: "test".into(),
+            package_id: package.root.package_id.clone(),
+        })
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&installed)?,
+        serde_json::to_value(&inspected)?
+    );
     let retained = fixture.store.package_revision([1; 16], "sql.rows", "1")?;
     for _ in 0..8 {
         package = PackageBundleV1::from_bytes(&package.encode()?)?;
         assert_eq!(package.digest()?, digest);
-        fixture.install(package.clone(), None).await?;
+        let installed = fixture.install(package.clone(), None).await?;
+        let inspected = fixture
+            .execute(PackageRequestV1::Inspect {
+                scope_id: "test".into(),
+                package_id: package.root.package_id.clone(),
+            })
+            .await?;
+        assert_eq!(
+            serde_json::to_value(&installed)?,
+            serde_json::to_value(&inspected)?
+        );
         assert_eq!(
             fixture.store.package_revision([1; 16], "sql.rows", "1")?,
             retained
         );
     }
     let fixture = fixture.reopen()?;
-    fixture
+    let installed = fixture
         .install(PackageBundleV1::from_bytes(&package.encode()?)?, None)
         .await?;
+    let inspected = fixture
+        .execute(PackageRequestV1::Inspect {
+            scope_id: "test".into(),
+            package_id: package.root.package_id.clone(),
+        })
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&installed)?,
+        serde_json::to_value(&inspected)?
+    );
     assert_eq!(
         fixture.store.package_revision([1; 16], "sql.rows", "1")?,
         retained

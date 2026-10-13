@@ -399,10 +399,10 @@ loads and validates the same immutable closure for each export, then reads the
 artifact again to build each export status. The lifecycle lock remains held
 through this response. Standalone inspection has no such retained bundle.
 
-- [ ] Measure setup and derivation in the unchanged complete graph case. Use
+- [x] Measure setup and derivation in the unchanged complete graph case. Use
   the existing installation retry tests to record an installation baseline.
   Retain workload, assertions, profile, limits, and source identities.
-- [ ] Extend the existing Wasm and mixed SQL retry tests to compare the full
+- [x] Extend the existing Wasm and mixed SQL retry tests to compare the full
   install response with standalone Inspect after install, retry, and reopen.
   Preserve stored-byte equality and changed-artifact rejection. Use the same
   stronger tests before and after any production correction.
@@ -417,6 +417,15 @@ This is an investigation candidate. It has no applied production change or
 measured improvement. Reuse depends on successful transactional writes and
 immutable revision checks. It cannot replace the stored reads that detect
 later corruption. The separate telemetry dependency remains unapproved.
+
+The unchanged production implementation passes the four metadata tests with
+the stronger response assertions. Test execution takes 215.82 seconds after
+67 seconds of compilation. The command is
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test --locked -p araphor-data --lib package::tests::wasm::metadata::`.
+The record `/tmp/araphor-install-baseline-proof-v58.json` includes the source
+and test executable hashes. Keep these test actions, retry counts, assertions,
+profile, and limits unchanged for the production correction. The test extension
+qualifies for a separate commit. Graph diagnostics are committed in `0c35e0ca`.
 
 ### Goal deliverable review
 
