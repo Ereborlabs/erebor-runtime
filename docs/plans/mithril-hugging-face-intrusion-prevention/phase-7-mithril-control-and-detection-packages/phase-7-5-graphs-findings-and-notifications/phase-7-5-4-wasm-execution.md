@@ -134,9 +134,9 @@ source and normal executable. The descriptor and codec correction in `9f8f5da2`
 has focused proof. Its normal source build and fresh v57 installed-package case
 pass. All four fresh v57 production cases now pass with that executable.
 The complete graph case also verifies the pending diagnostic changes.
-The installation cost correction in `c145e7b8` has focused proof and three
-fresh passing production cases. Its complete graph case and final CI remain
-required.
+The installation cost correction in `c145e7b8` has focused proof and all four
+fresh passing production cases. Its complete graph case passes in 1,981.221
+seconds. Final CI remains required.
 The dispatch change preceded the required complete equivalence proof. Preserve
 that historical error. The user-approved completion goal replaces the past
 ordering gate with current installed-component equivalence. Performance cause
@@ -437,7 +437,7 @@ through this response. Standalone inspection has no such retained bundle.
   only during its locked installation response. Match root, package, and
   revision. Retain stored reads for other roots and standalone operations.
   Keep fresh activation, result, grant, dependency, and cancellation checks.
-- [ ] Compare the same existing tests and graph case after the correction.
+- [x] Compare the same existing tests and graph case after the correction.
   Record remaining costs and commit this correction independently.
 
 Reuse depends on successful transactional writes and
@@ -472,8 +472,8 @@ correction borrows the admitted bundle only for the final locked installation
 response. Standalone Inspect, Run, Query, Test, and Remove keep their stored
 reads. Root, package, and revision must match before reuse. Current activation,
 result, grant, dependency, and cancellation checks remain. Code review finds
-no new owner, cache, dependency, or schema. Focused tests pass. The unchanged
-complete graph case must still qualify this correction.
+no new owner, cache, dependency, or schema. Focused tests and the unchanged
+complete graph case pass on this correction.
 
 The correction depends on the successful transaction and immutable revision
 comparison. It removes the immediate artifact readback for the installation
@@ -497,21 +497,57 @@ The executable digest is
 All six generated components match the v57 baseline. Debug sections remain.
 The capture is `/tmp/araphor-wasm-production-capture-v59.json`.
 
-Three fresh production cases pass with this executable:
+All four fresh production cases pass with this executable:
 
 | Case | Seconds | Proof |
 | --- | ---: | --- |
 | `analysis-packages` | 289.756 | `/tmp/araphor-wasm-analysis-packages-proof-v59.json` |
 | `context-roundtrip` | 16.294 | `/tmp/araphor-wasm-context-roundtrip-proof-v59.json` |
 | `profile-restart` | 215.500 | `/tmp/araphor-wasm-profile-restart-proof-v59.json` |
+| `graph-notification` | 1,981.221 | `/tmp/araphor-wasm-graph-notification-proof-v59.json` |
 
 The installed SDK detector retains its typed reason, evidence, checkpoint,
 restart, retry, and trust-revocation checks. Context selection retains exact
 identity and cutoff omissions. Restart retains the unresolved profile,
 sealed revision change, and durable source state. All 1,613 captured source
 files, the executable, and the six component hashes match. These results
-make no physical-prevention or performance claim. The full graph case and
-final shared Rust procedure remain required.
+make no physical-prevention claim. The final shared Rust procedure remains
+required. It is running from the captured source with one process and log:
+`/tmp/araphor-wasm-rust-ci-ordered-v59.log`.
+
+### Final complete graph qualification and cost comparison
+
+The complete v59 graph case passes with the captured executable and all six
+unchanged components. It retains all 12 incident cards, duplicate and reordered
+replay, 257 findings and notification obligations, original human deadlines,
+and native graph windows with 64 and 185 records and 192 and 370 relationships.
+Reopen preserves the committed version. The proof is
+`/tmp/araphor-wasm-graph-notification-proof-v59.json`. The stage record is
+`/tmp/araphor-wasm-graph-costs-v59.json`.
+
+| Measured operation | v57 seconds | v59 seconds |
+| --- | ---: | ---: |
+| Complete case | 2,272.799 | 1,981.221 |
+| 35 fresh-state fixtures with compiled code available | 658.770 | 260.690 |
+| Median of those fixtures | 18.990 | 7.332 |
+| First fixture, including cold compilation | 69.776 | 51.962 |
+| 36 replay derivations | 171.422 | 202.727 |
+| 64 graph processing calls | 376.148 | 436.052 |
+| 64 snapshot reads | 2.949 | 3.637 |
+
+Both runs retain the same workload, assertions, normal unoptimized profile,
+limits, and component bytes. Each fixture retains independent durable state.
+Stages overlap; their durations cannot be added to produce the complete case
+time. An unrelated Rust and C++ build started during v59. The observation is
+`/tmp/araphor-v59-concurrent-build-observation.json`. These durations describe
+the measured runs. They do not isolate the correction's effect on the complete
+case or establish production-wide performance.
+
+Fixture setup still includes package installation and durable writes. Replay
+derivation and graph processing remain material costs. This change removes
+repeated immutable bundle reads during the locked installation response. It
+does not change graph validation, detector inputs, test isolation, or deadlines.
+The focused installation comparison above provides the same-test measurement.
 
 ### Goal deliverable review
 

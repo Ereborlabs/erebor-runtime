@@ -124,8 +124,8 @@ reopen. The same four metadata tests pass before and after the correction.
 Test time falls from 215.82 to 169.09 seconds, with compilation excluded.
 This is one run per source with the same workload, profile, assertions, and
 limits. The proof is `/tmp/araphor-install-comparison-v59.json`. Nine affected
-lifecycle checks also pass. Final production qualification and shared CI
-remain required.
+lifecycle checks also pass. All four final production cases pass. Shared CI
+remains required.
 
 [ClientGrpcOwner](../../../../../crates/mithril-control/src/client_grpc/packages.rs)
 checks the current permission before it decodes the operation.
@@ -164,10 +164,15 @@ records the exact source and executable.
 
 The installation correction is committed in `c145e7b8`. Its normal build
 passes, with all six component artifacts equal to the v57 baseline. Fresh
-v59 installed-package, context, and profile-restart cases pass. The
+v59 installed-package, context, profile-restart, and complete graph cases pass. The
 [final installed lifecycle record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
-contains their source, executable, durations, and proof paths. The complete
-graph case and final shared Rust procedure remain required on this source.
+contains their source, executable, durations, and proof paths. The
+[complete graph comparison](phase-7-5-4-wasm-execution.md#final-complete-graph-qualification-and-cost-comparison)
+retains the incident corpus, 257 notification obligations, and both native
+windows. Warm fixture setup takes 260.690 seconds across 35 independent states,
+compared with 658.770 seconds in v57. Other processing stages increase. An
+unrelated concurrent build prevents an isolated complete-case comparison.
+The final shared Rust procedure remains required on this source.
 
 ## Execution owners
 
