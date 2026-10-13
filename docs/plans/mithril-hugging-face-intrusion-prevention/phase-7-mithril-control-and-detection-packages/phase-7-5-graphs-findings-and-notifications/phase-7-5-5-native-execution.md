@@ -202,6 +202,44 @@ the proposed public `rebuild` option.
   platforms, and limits. Keep the result Not done while required proof or a
   confirmed defect remains open.
 
+### Native SDK and source-build verification
+
+The SDK native adapter uses the existing `Guest` implementation and v1 function
+table. It supplies typed Arrow streams, context, parameters, evidence, reasons,
+checkpoints, cancellation, and bounded output. Tests check Rust unwind handling,
+invalid ABI values, borrowed input ownership, error cleanup, and repeated release.
+The builder emits native libraries from the same six guest crates as Wasm.
+Generated libraries are not committed.
+
+Focused commands passed on `x86_64-unknown-linux-gnu`:
+
+```sh
+cargo test --locked -p araphor-analysis-sdk --features native --lib
+cargo clippy --locked -p araphor-analysis-sdk --features native --all-targets -- -D warnings
+cargo test --locked -p araphor-component-build --lib
+CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo run --locked -p araphor-component-build --example workspace -- . target/analysis-native /tmp/araphor-native-built-20261013 --native
+```
+
+The SDK tests returned 61 passed and 0 failed. Clippy returned exit 0. Builder
+tests returned 6 passed and 0 failed. The locked release build returned exit 0
+and exported the v1 accessor from all six libraries. Its artifact record is
+`/tmp/araphor-native-build-20261013-proof.json`; its log is
+`/tmp/araphor-native-build-20261013.log`. Builder source digests are in
+`/tmp/araphor-native-builder-proof-20261013.json`.
+This proof covers the adapter and source build. It does not qualify package
+admission, installed execution, export parity, production cases, or final CI.
+The complete deliverable remains Not done until built-folder installation proof
+also passes.
+
+### Bundle-read correction TODO
+
+- [ ] Reuse the already loaded immutable bundle during installation, explicit
+  evaluation, and preparation. Reuse it only when its root matches the activation
+  root. Load the activation's own root for an independently installed dependency.
+  Preserve grant checks, authority admission, commit authorization, retry identity,
+  and activation generation checks. Add no resident bundle cache. Run dependency
+  authority tests and the native interruption qualification after this change.
+
 ### Preparation verification
 
 At preparation commit `3764c005`, the documentation check passed for both changed

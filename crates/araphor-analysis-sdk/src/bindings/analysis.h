@@ -148,6 +148,8 @@ typedef struct {
     void (*release)(araphor_analysis_response_v1 *response);
 } araphor_analysis_api_v1;
 
+const araphor_analysis_api_v1 *araphor_analysis_get_api_v1(void);
+
 #ifdef __cplusplus
 }
 #endif

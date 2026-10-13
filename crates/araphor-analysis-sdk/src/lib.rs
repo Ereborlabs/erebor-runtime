@@ -11,6 +11,10 @@ pub mod wire;
 #[cfg(feature = "guest")]
 pub mod guest;
 
+#[cfg(feature = "native")]
+#[allow(unsafe_code)]
+pub mod native;
+
 pub use arrow_array;
 pub use arrow_array::RecordBatch;
 pub use arrow_schema::{DataType, Field, Schema, TimeUnit};

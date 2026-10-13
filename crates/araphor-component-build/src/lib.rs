@@ -32,6 +32,95 @@ impl ComponentBuilder {
         Self::write_manifest(package, artifact.to_vec(), directory)
     }
 
+    pub fn package_native(
+        package: &araphor_analysis_sdk::Package,
+        native: &[u8],
+        qualification: serde_json::Value,
+        directory: &Path,
+    ) -> Result<()> {
+        let mut bundle = serde_json::json!({
+            "schema_version": 1,
+            "root": {"package_id": package.id, "revision": package.revision},
+            "artifacts": [{"descriptor": package, "implementations": [{
+                "target": "native", "export": package.exports.first().map(|model| &model.name),
+                "artifact": native, "qualification": qualification,
+            }], "fixtures": []}],
+        });
+        let exports = package
+            .exports
+            .iter()
+            .map(|model| &model.name)
+            .collect::<Vec<_>>();
+        if qualification.get("exports") != Some(&serde_json::json!(exports)) {
+            return Err(
+                error::ContractSnafu.into_error(araphor_analysis_sdk::Error::contract(
+                    araphor_analysis_sdk::ErrorCode::Invalid,
+                    "native exports",
+                )),
+            );
+        }
+        let mut dependencies: Vec<(String, Vec<u8>)> = Vec::new();
+        let declared = qualification
+            .get("dependencies")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                error::ContractSnafu.into_error(araphor_analysis_sdk::Error::contract(
+                    araphor_analysis_sdk::ErrorCode::Invalid,
+                    "native dependencies",
+                ))
+            })?;
+        for dependency in declared {
+            let name = dependency
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|name| {
+                    !name.is_empty()
+                        && *name != "."
+                        && *name != ".."
+                        && !name.contains(['/', '\\'])
+                        && ![
+                            "descriptor.json",
+                            "analysis.wit",
+                            "analysis.h",
+                            "package.json",
+                            "detector.wasm",
+                        ]
+                        .contains(name)
+                        && *name != format!("detector{}", std::env::consts::DLL_SUFFIX)
+                        && !dependencies.iter().any(|(prior, _)| prior == name)
+                })
+                .ok_or_else(|| {
+                    error::ContractSnafu.into_error(araphor_analysis_sdk::Error::contract(
+                        araphor_analysis_sdk::ErrorCode::Invalid,
+                        "native dependency name",
+                    ))
+                })?;
+            let artifact: Vec<u8> =
+                serde_json::from_value(dependency.get("artifact").cloned().unwrap_or_default())
+                    .context(error::EncodingSnafu)?;
+            dependencies.push((name.to_owned(), artifact));
+        }
+        bundle.sort_all_objects();
+        let bytes = serde_json::to_vec(&bundle).context(error::EncodingSnafu)?;
+        if bytes.len() > 32 * 1024 * 1024 {
+            return Err(
+                error::ContractSnafu.into_error(araphor_analysis_sdk::Error::contract(
+                    araphor_analysis_sdk::ErrorCode::Limit,
+                    "package bytes",
+                )),
+            );
+        }
+        package.build(directory).context(error::ContractSnafu)?;
+        let library = directory.join(format!("detector{}", std::env::consts::DLL_SUFFIX));
+        std::fs::write(&library, native).context(error::IoSnafu { path: library })?;
+        for (name, artifact) in dependencies {
+            let path = directory.join(name);
+            std::fs::write(&path, artifact).context(error::IoSnafu { path })?;
+        }
+        let path = directory.join("package.json");
+        std::fs::write(&path, bytes).context(error::IoSnafu { path })
+    }
+
     fn write_manifest(
         package: &araphor_analysis_sdk::Package,
         artifact: Vec<u8>,
@@ -150,5 +239,47 @@ mod tests {
             manifest["artifacts"][0]["implementations"][0]["artifact"],
             serde_json::json!([0, 1, 2])
         );
+    }
+    #[test]
+    fn native_package_declares_target() -> Result<()> {
+        use araphor_analysis_sdk::{Model, Package};
+        let package = Package::new(
+            "example",
+            "1",
+            vec![Model::new(
+                "evaluate",
+                Vec::new(),
+                vec![araphor_analysis_sdk::Port::new(
+                    "data",
+                    araphor_analysis_sdk::Schema::empty(),
+                )],
+            )],
+        );
+        let directory = std::env::temp_dir().join(format!(
+            "araphor-native-builder-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let qualification = serde_json::json!({"exports":["evaluate"], "dependencies":[{"name":"helper.so", "artifact":[7,8], "digest":"test"}]});
+        ComponentBuilder::package_native(&package, &[2, 3], qualification, &directory)?;
+        let path = directory.join("package.json");
+        let bytes = std::fs::read(&path).context(error::IoSnafu { path: &path })?;
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&bytes).context(error::EncodingSnafu)?;
+        let implementations = &manifest["artifacts"][0]["implementations"];
+        assert_eq!(implementations.as_array().map(Vec::len), Some(1));
+        assert_eq!(implementations[0]["target"], "native");
+        assert_eq!(implementations[0]["artifact"], serde_json::json!([2, 3]));
+        assert!(!directory.join("detector.wasm").exists());
+        assert_eq!(std::fs::read(directory.join("helper.so")).unwrap(), [7, 8]);
+        let invalid = serde_json::json!({"exports":["evaluate"], "dependencies":[{"name":"../escape", "artifact":[1]}]});
+        assert!(ComponentBuilder::package_native(&package, &[1], invalid, &directory).is_err());
+        let mismatch = serde_json::json!({"exports":["other"], "dependencies":[]});
+        assert!(ComponentBuilder::package_native(&package, &[1], mismatch, &directory).is_err());
+        std::fs::remove_dir_all(&directory).context(error::IoSnafu { path: directory })?;
+        Ok(())
     }
 }

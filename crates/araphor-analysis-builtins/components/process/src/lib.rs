@@ -14,3 +14,6 @@ impl sdk::guest::Guest for ProcessComponent {
 
 #[cfg(target_arch = "wasm32")]
 sdk::export_component!(ProcessComponent);
+
+#[cfg(not(target_arch = "wasm32"))]
+sdk::export_native!(ProcessComponent);

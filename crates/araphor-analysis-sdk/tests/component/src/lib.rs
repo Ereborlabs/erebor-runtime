@@ -23,6 +23,22 @@ impl Guest for RuntimeFixture {
 #[cfg(target_arch = "wasm32")]
 sdk::guest::bindings::export!(RuntimeFixture with_types_in sdk::guest::bindings);
 
+#[cfg(not(target_arch = "wasm32"))]
+impl sdk::guest::Guest for RuntimeFixture {
+    fn package() -> sdk::Package {
+        Self::package()
+    }
+
+    fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
+        let package = Self::package();
+        Self::execute(sdk::wire::Evaluation::encode(&package, evaluation)?)?
+            .decode(&package, evaluation)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+sdk::export_native!(RuntimeFixture);
+
 impl RuntimeFixture {
     fn execute(input: sdk::wire::Evaluation) -> sdk::Result<sdk::wire::Output> {
         if input.export_name == "echo-inputs" {
@@ -62,10 +78,10 @@ impl RuntimeFixture {
                 std::hint::black_box(amount);
             },
             "hostcalls" => loop {
-                sdk::guest::bindings::araphor::analysis::host::cancelled();
+                Self::cancelled();
             },
             "cancel" => {
-                while !sdk::guest::bindings::araphor::analysis::host::cancelled() {
+                while !Self::cancelled() {
                     for value in 0..100_000 {
                         std::hint::black_box(value);
                     }
@@ -226,6 +242,17 @@ impl RuntimeFixture {
                 sdk::Field::new("coverage", sdk::DataType::Utf8, false),
             ]),
         )
+    }
+
+    fn cancelled() -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            sdk::guest::bindings::araphor::analysis::host::cancelled()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            sdk::native::cancelled()
+        }
     }
 
     fn sum(data: &sdk::Dataset) -> sdk::Result<u64> {

@@ -19,6 +19,7 @@ wit-bindgen = { version = "=0.61.1", optional = true, default-features = false, 
 
 [features]
 guest = ["dep:wit-bindgen"]
+native = ["guest", "arrow-array/ffi"]
 
 [dev-dependencies]
 flatbuffers = "=25.12.19"

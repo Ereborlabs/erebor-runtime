@@ -14,3 +14,6 @@ impl sdk::guest::Guest for KubernetesComponent {
 
 #[cfg(target_arch = "wasm32")]
 sdk::export_component!(KubernetesComponent);
+
+#[cfg(not(target_arch = "wasm32"))]
+sdk::export_native!(KubernetesComponent);

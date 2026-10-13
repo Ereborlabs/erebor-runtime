@@ -9,7 +9,7 @@ mod semantics;
 mod files_count;
 
 #[path = "../examples/sensitive_access.rs"]
-mod sensitive_access;
+pub(crate) mod sensitive_access;
 
 use std::sync::Arc;
 

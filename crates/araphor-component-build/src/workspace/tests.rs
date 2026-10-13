@@ -92,3 +92,21 @@ fn workspace_inputs_complete() {
         .iter()
         .all(|path| path.extension() != Some(OsStr::new("wasm"))));
 }
+
+#[test]
+fn native_command_uses_host() {
+    let command = ComponentBuilder::target_command(
+        Path::new("/workspace"),
+        Path::new("/native"),
+        "x86_64-unknown-linux-gnu",
+    );
+    let args = command.get_args().collect::<Vec<_>>();
+    assert!(args.windows(2).any(|pair| pair
+        == [
+            OsStr::new("--target"),
+            OsStr::new("x86_64-unknown-linux-gnu")
+        ]));
+    assert!(args.contains(&OsStr::new("--locked")));
+    assert!(args.contains(&OsStr::new("--release")));
+    assert!(!args.contains(&OsStr::new(TARGET)));
+}

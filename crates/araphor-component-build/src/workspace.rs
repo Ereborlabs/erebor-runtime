@@ -69,6 +69,64 @@ impl ComponentBuilder {
         Ok(())
     }
 
+    pub fn workspace_native(root: &Path, target: &Path, output: &Path) -> Result<()> {
+        let root = root.canonicalize().context(error::IoSnafu { path: root })?;
+        let target = Self::workspace_path(&root, target);
+        let output = Self::workspace_path(&root, output);
+        let triple = Self::host_target()?;
+        let status = Self::target_command(&root, &target, &triple)
+            .status()
+            .context(error::BuildSnafu { path: &root })?;
+        if !status.success() {
+            return error::BuildFailedSnafu {
+                path: &root,
+                status,
+            }
+            .fail();
+        }
+        std::fs::create_dir_all(&output).context(error::IoSnafu { path: &output })?;
+        for &(package, _, filename) in GUESTS {
+            let library = format!(
+                "{}{}{}",
+                std::env::consts::DLL_PREFIX,
+                package.replace('-', "_"),
+                std::env::consts::DLL_SUFFIX
+            );
+            let source = target.join(&triple).join("release").join(library);
+            let destination = output
+                .join(filename)
+                .with_extension(std::env::consts::DLL_EXTENSION);
+            std::fs::copy(&source, &destination).context(error::IoSnafu { path: &source })?;
+        }
+        Ok(())
+    }
+
+    pub fn host_target() -> Result<String> {
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let output = Command::new(&rustc)
+            .arg("-vV")
+            .output()
+            .context(error::BuildSnafu {
+                path: Path::new(&rustc),
+            })?;
+        if !output.status.success() {
+            return error::BuildFailedSnafu {
+                path: Path::new(&rustc),
+                status: output.status,
+            }
+            .fail();
+        }
+        let target = std::str::from_utf8(&output.stdout)
+            .ok()
+            .and_then(|text| text.lines().find_map(|line| line.strip_prefix("host: ")))
+            .filter(|target| !target.is_empty())
+            .ok_or_else(|| std::io::Error::other("rustc did not report a host target"))
+            .context(error::IoSnafu {
+                path: Path::new(&rustc),
+            })?;
+        Ok(target.to_owned())
+    }
+
     pub fn inputs(root: &Path) -> Vec<PathBuf> {
         let mut paths = vec![root.join("Cargo.toml"), root.join("Cargo.lock")];
         for directory in SHARED
@@ -106,6 +164,10 @@ impl ComponentBuilder {
     }
 
     fn workspace_command(root: &Path, target: &Path) -> Command {
+        Self::target_command(root, target, TARGET)
+    }
+
+    fn target_command(root: &Path, target: &Path, triple: &str) -> Command {
         let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
         command.current_dir(root).args([
             "build",
@@ -113,7 +175,7 @@ impl ComponentBuilder {
             "--lib",
             "--release",
             "--target",
-            TARGET,
+            triple,
             "--jobs",
             "1",
             "--target-dir",

@@ -24,6 +24,9 @@ impl sdk::guest::Guest for BurstDetector {
 #[cfg(target_arch = "wasm32")]
 sdk::export_component!(BurstDetector);
 
+#[cfg(not(target_arch = "wasm32"))]
+sdk::export_native!(BurstDetector);
+
 impl BurstDetector {
     pub fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
         let package = Self::package();

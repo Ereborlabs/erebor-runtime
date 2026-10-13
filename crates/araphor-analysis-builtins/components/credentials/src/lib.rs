@@ -14,3 +14,6 @@ impl sdk::guest::Guest for CredentialsComponent {
 
 #[cfg(target_arch = "wasm32")]
 sdk::export_component!(CredentialsComponent);
+
+#[cfg(not(target_arch = "wasm32"))]
+sdk::export_native!(CredentialsComponent);

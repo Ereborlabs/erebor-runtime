@@ -14,3 +14,6 @@ impl sdk::guest::Guest for DiscoveryComponent {
 
 #[cfg(target_arch = "wasm32")]
 sdk::export_component!(DiscoveryComponent);
+
+#[cfg(not(target_arch = "wasm32"))]
+sdk::export_native!(DiscoveryComponent);

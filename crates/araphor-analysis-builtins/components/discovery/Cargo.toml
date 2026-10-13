@@ -14,3 +14,6 @@ araphor-analysis-builtins = { path = "../.." }
 
 [lints]
 workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+araphor-analysis-sdk = { path = "../../../araphor-analysis-sdk", features = ["native"] }
