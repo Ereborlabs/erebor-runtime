@@ -44,8 +44,10 @@ algorithm migration in 7.5.2 is also **Done**; read its
 [acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
 The local SQL package lifecycle in 7.5.3 is **Done**; read its
 [acceptance record](phase-7-5-3-package-lifecycle.md#verification-record).
-The installed Wasm adapters in 7.5.4 are implemented. Their final qualification
-is **Not done**. Child phases 7.5.5 through 7.5.9 remain **Not done**.
+Installed Wasm qualification in 7.5.4 is **Done**. Read the
+[qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
+and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
+Child phases 7.5.5 through 7.5.9 remain **Not done**.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 

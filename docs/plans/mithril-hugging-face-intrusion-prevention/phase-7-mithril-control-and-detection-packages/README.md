@@ -20,8 +20,10 @@ Rust author SDK and current-algorithm conversion are **Done**. Read the
 [migration acceptance record](phase-7-5-graphs-findings-and-notifications/phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
 The local SQL package lifecycle is **Done**. Read its
 [acceptance record](phase-7-5-graphs-findings-and-notifications/phase-7-5-3-package-lifecycle.md#verification-record).
-Installed Wasm adapters are implemented. Their final qualification remains
-**Not done**. Native and Python execution remain later work. The child results
+Installed Wasm qualification is **Done**. Read the
+[qualification record](phase-7-5-graphs-findings-and-notifications/phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
+and [completion review](phase-7-5-graphs-findings-and-notifications/phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
+Native and Python execution remain later work. The child results
 record their implementation and qualification.
 
 ## Intended end state

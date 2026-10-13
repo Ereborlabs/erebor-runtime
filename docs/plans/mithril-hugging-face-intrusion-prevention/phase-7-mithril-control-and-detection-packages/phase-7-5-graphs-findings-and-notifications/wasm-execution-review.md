@@ -90,7 +90,8 @@ The [builder input inventory](../../../../../crates/araphor-component-build/src/
 supplies the source-change watches. Generated component files are not source
 inputs. The [source-build proof](wasm-component-build-proof.json) records two
 equal builds and matching ordinary Cargo outputs under `source_build_correction`.
-Installed execution and final qualification remain required.
+The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
+records final installed execution and workspace qualification.
 
 A built folder contains `package.json` and `detector.wasm`.
 `package.json` embeds the component bytes and complete artifact closure.
@@ -124,8 +125,8 @@ reopen. The same four metadata tests pass before and after the correction.
 Test time falls from 215.82 to 169.09 seconds, with compilation excluded.
 This is one run per source with the same workload, profile, assertions, and
 limits. The proof is `/tmp/araphor-install-comparison-v59.json`. Nine affected
-lifecycle checks also pass. All four final production cases pass. Shared CI
-remains required.
+lifecycle checks also pass. All four final production cases and shared CI pass.
+Read the [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) for the final source and proof.
 
 [ClientGrpcOwner](../../../../../crates/mithril-control/src/client_grpc/packages.rs)
 checks the current permission before it decodes the operation.
@@ -158,8 +159,8 @@ also passes with that executable in 2,272.799 seconds. Its proof is
 obligations, and both native windows remain in the case. Warm fixture setup
 uses independent state and takes a median of 18.990 seconds across 35 calls.
 This is the baseline for the installation cost investigation. It establishes
-no speed improvement. The installation correction and final workspace CI
-remain required. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
+no speed improvement. At this baseline, the installation correction and final
+workspace CI remained required. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
 records the exact source and executable.
 
 The installation correction is committed in `c145e7b8`. Its normal build
@@ -172,7 +173,8 @@ retains the incident corpus, 257 notification obligations, and both native
 windows. Warm fixture setup takes 260.690 seconds across 35 independent states,
 compared with 658.770 seconds in v57. Other processing stages increase. An
 unrelated concurrent build prevents an isolated complete-case comparison.
-The final shared Rust procedure remains required on this source.
+The final shared Rust procedure passes on this source. Read the
+[final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) for the terminal record.
 
 ## Execution owners
 
@@ -295,7 +297,8 @@ The [allocation tests](../../../../../crates/araphor-analysis-sdk/src/memory/tes
 check unused capacity, nested metadata, all schema positions, and wire growth.
 The SDK suite has 51 passes. The build proof records equal bytes from two
 independent builds of all six components under `memory_accounting_correction`.
-The current production owner qualification remains open.
+This is the historical memory-accounting proof. The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
+records current production and workspace qualification.
 
 [Rows](../../../../../crates/araphor-analysis-builtins/src/rows.rs) buffers JSON
 with the standard Rust `BufWriter`. The buffer uses at most 8 KiB per row.
@@ -397,7 +400,8 @@ checks mixed exports and complete graph equality. Both pass in
 `235cd00d6beb8fde6c39832569687ba81f50cc52fedf8996f0d7dbf8b1116ddb`.
 The [phase result](phase-7-5-4-wasm-execution.md#multi-export-descriptor-correction-todos)
 records the defect reproduction, fixture lifetime correction, and source hashes.
-Fresh production qualification and final workspace verification remain required.
+These focused results retain their original source boundary. The
+[final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) records final qualification.
 
 [Adapter](../../../../../crates/araphor-data/src/discovery/sdk/mod.rs)
 executes atoms, merge, groups, and compare through installed components.
@@ -518,7 +522,7 @@ report for an unrelated interval runs the guest even when manifest coverage
 keys stay empty. The six focused notice tests pass. Disabling the shortcut
 makes the skip test fail because the guest enters. The existing activation and
 revocation group has two passes. At the initial v39 focused record, a new normal
-build, four fresh production cases, and final workspace verification remain
+build, four fresh production cases, and final workspace verification remained
 required.
 
 When a changed notice produces the same graph,
@@ -548,8 +552,8 @@ The bounds read validates the selected header without reconstructing its rows.
 decides exact overlap before the owner reconstructs rows. A page retains its
 continuation ID when the candidate does not overlap.
 The [window read tests](../../../../../crates/araphor-data/src/analysis/graph/windows/tests.rs)
-check selection, continuation, history, and corruption. Current-source
-qualification remains pending.
+check selection, continuation, history, and corruption. The
+[final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) records final qualification.
 
 [AnalysisReadControl::run and AnalysisStore::read_snapshot](../../../../../crates/araphor-data/src/analysis/read.rs)
 carry the native caller location into the existing deadline error. This location
@@ -567,8 +571,8 @@ selects the checked conversion for each supported version.
 The [migration tests](../../../../../crates/araphor-data/src/analysis/graph_migration/tests/notices.rs)
 check retained versions, package references, reopen, restore, quota, retry, and
 unchanged originals after rejection. The focused notice checks and the exact
-installed lifecycle check pass. The full current group and final shared Rust
-procedure remain required. See the [correction record](phase-7-5-4-wasm-execution.md#completed-graph-check-reuse)
+installed lifecycle check pass in the focused record. The
+[final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) records final workspace verification. See the [correction record](phase-7-5-4-wasm-execution.md#completed-graph-check-reuse)
 for source hashes and failed attempts.
 
 The generic package commit retains result, checkpoint, input references,
@@ -618,7 +622,8 @@ The parent and compiler engines enable instruction metering only when `fuel`
 is set. Each call applies its configured fuel budget. The same configuration
 path applies in production and tests. Resource-failure tests set the quotas
 they check. The earlier 32 MiB data and 100 million fuel settings are historical
-configurations. Current-source qualification remains pending.
+configurations. The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
+records current-source qualification.
 
 Mandatory guards remain. Each store permits one memory, four tables,
 16,384 elements per table, and 16 instances. The engine uses a 512 KiB Wasm
@@ -654,8 +659,8 @@ The focused v44 runs pass 40 tests with zero failures. Four private compiler
 workers remain ignored in the parent harness. The proof is
 `/tmp/araphor-live-code-proof-v44.json`, with SHA-256
 `bd1c71ec2f6a2fe747f938fb1b6e5554397a56e53b48d2f43bf742ad5cc08fad`.
-The five current component charges total 66,333,163 bytes. The complete cases
-and final workspace procedure remain required after the last Rust edit.
+At v44, the five component charges total 66,333,163 bytes. This is a historical
+charge record; it does not state the final component sizes.
 The [execution error](../../../../../crates/araphor-data/src/package/wasm/execution.rs)
 also retains a charged handle. Wasmtime backtrace frames retain compiled modules.
 The original error source drops before the handle. The host classifies the
@@ -667,7 +672,8 @@ the last charge. The v45 focused runs pass 41 tests with zero failures and four
 ignored private worker entries. The reviewed proof is
 `/tmp/araphor-retained-trap-reviewed-proof-v45.json`, with SHA-256
 `8a096e939a8fcf0e68581f4ac17a7775aa7384926c72d00c8f073116e4eb5799`.
-Complete qualification and final workspace verification remain required.
+The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
+records complete qualification and final workspace verification.
 The code charge excludes engine metadata, allocator overhead, and Arrow buffers.
 Query accounting and evaluation limits bound input and output separately. The
 code limit is not a total process memory limit.
@@ -732,8 +738,8 @@ fixture. Both corrected tests pass. Their proof is
 `/tmp/araphor-graph-owner-proof-v44.json`, with SHA-256
 `285008d9497bf605c6eea26b765288883bc4c505ee7bad5e01fdb44bec40e3c5`.
 The complete CLI case has static DEBUG step timings and an INFO whole-case
-duration. These diagnostics add no timing threshold. The four complete cases
-and final workspace procedure remain required for the final source.
+duration. These diagnostics add no timing threshold. The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
+records the four final cases and terminal workspace procedure.
 
 Review these boundary tests with the algorithm cases:
 
@@ -767,14 +773,15 @@ Review these boundary tests with the algorithm cases:
   The library test build passes after removal. Standard test registration proof
   is `/tmp/araphor-graph-aggregate-retirement-proof-v50.json`, with SHA-256
   `8f3ad02fcefab1e40d0d113253cd6057e3c40cc5a0896cced6061ce78d78d8aa`.
-  Four fresh complete cases and final workspace verification remain required.
+  At v50, four fresh complete cases and final workspace verification remained
+  required.
 - [Installed guest overlap](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
   uses the shipped Discovery `groups` component for two tenants. Both tenant
   snapshots retain the same installed owner. The test checks separate
   evaluation IDs, group keys, and sample identities. It checks member indexes
   `[0, 1]` and aggregate counts 5 and 18. Each output has no checkpoint,
   evidence, or reason. The focused overlap test and the existing cancellation
-  test pass on the v12 source. Final qualification remains pending.
+  test pass on the v12 source. Final qualification remained pending at v12.
 - [Multiple input batches](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/batches.rs)
   includes an empty batch and verifies the computed total.
 - [Checkpoint recovery](../../../../../crates/araphor-data/src/package/tests/wasm/checkpoint.rs)
@@ -791,7 +798,9 @@ Review these boundary tests with the algorithm cases:
   256 records and retain 255 native findings and one contextual credential
   finding with exact evidence. Each stored result must stay within 4 MiB.
   The v23 run exhausts guest fuel before the aggregate error. Evidence recovery
-  passes. Current production-limit graph splitting remains open.
+  passes in that historical record. The final v59 workspace run passes
+  `output_bytes_split` with the retained workload and production limits. Its
+  terminal record is `/tmp/araphor-wasm-rust-ci-ordered-v59.json`.
 - [Domain commit fences](../../../../../crates/araphor-data/src/package/installed/commit/tests/changes.rs)
   verify that Run renewal and supervisor suspension cannot change an activation
   during the commit callback.
@@ -847,7 +856,19 @@ returns an error after Tokio shutdown. Existing assertions and workloads remain.
 
 ## Verification record
 
-**Not done.** This guide describes the implementation under qualification.
+**Done.** The four final production cases pass on source `c145e7b8`. The final
+shared Rust procedure passes in 9,147.416 seconds: 2,080 tests pass, zero fail,
+and 555 remain ignored. Ignored tests do not supply qualification evidence.
+The final proof is `/tmp/araphor-wasm-rust-ci-proof-v59.json`.
+Its terminal record is `/tmp/araphor-wasm-rust-ci-ordered-v59.json`;
+its log is `/tmp/araphor-wasm-rust-ci-ordered-v59.log`. The
+[final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) records the eight deliverables and remaining scope limits.
+The dispatch change preceded complete equivalence proof. This historical error
+remains; final qualification proves current installed-component equivalence.
+
+### Earlier verification records
+
+The records below retain their source boundaries and results at each stage.
 Later corrections retain live compiled-code charges in prepared handles and
 returned trap errors. Their focused proof passes 41 tests. Seventeen focused
 graph tests also pass before the shared-input correction. Eighteen existing

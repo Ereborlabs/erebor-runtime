@@ -119,6 +119,39 @@ runtime, and limits before a performance test is added. Stop before native work.
 
 ## Result
 
+**Done.** The approved eight-deliverable goal is complete on the source and
+components recorded in the final qualification table below. An author can
+build an SDK detector. An operator can install its built folder and run it
+without rebuilding Araphor. The host retains authorization, evidence checks,
+native graph reads, atomic commits, lifecycle state, and notifications.
+All four final production cases and the final shared Rust procedure pass.
+The final CI record is `/tmp/araphor-wasm-rust-ci-ordered-v59.json`; its log is
+`/tmp/araphor-wasm-rust-ci-ordered-v59.log`. The procedure finishes in
+9,147.416 seconds with 2,080 passed, zero failed, and 555 ignored tests.
+Ignored tests do not supply qualification evidence. The final proof is
+`/tmp/araphor-wasm-rust-ci-proof-v59.json`. It verifies all 1,613 captured source
+files, the saved executable, and the six component hashes.
+
+The six optional Wasm quotas default to `None`. Explicit quotas retain their
+checks. Mandatory compiler, SDK transfer, shared query, concurrency,
+cancellation, and authority controls remain. The compiled-code cache remains
+80 MiB and 16 entries. Prepared, executing, cached, pinned, and error-retained
+code remains charged until the last owner releases it.
+
+The startup investigation identifies accumulated exhaustion of the shared
+120-second deadline. The unchanged saved artifact passes the complete recheck
+under the original limits. The cause of the historical CPU-cost variation
+remains unknown. No correction is claimed to prevent that historical failure.
+Performance evidence applies only to the measured workloads below. The graph
+stages overlap, and an unrelated build prevents an isolated whole-case
+comparison. No new physical-prevention or cross-node-causality claim is made.
+
+### Historical result before final closure
+
+The following result retains the source, limits, failures, and open gates of
+its original checks. It does not replace the current result above. Later proof
+cannot satisfy the original dispatch-order requirement retroactively.
+
 **Not done.** The component runtime, installed domain adapters, production
 dispatch change, and Rust qualification cases are implemented. All four fresh
 v41 lightweight production cases pass on source `b14ffb2` with the same
@@ -153,6 +186,7 @@ The user approved the revised eight-deliverable goal on 2026-10-12. Continue
 from source `1f6b434` and its four passing production cases. Preserve completed
 work unless a specific defect or necessary simplification requires a change.
 The earlier six-deliverable reviews below retain their historical boundaries.
+The checked items record completion against the final evidence below.
 
 The replacement completion goal keeps these contracts and makes the remaining
 order explicit. Commit the pending SDK correction after its focused checks.
@@ -161,25 +195,25 @@ resolve the startup deadline failure before final qualification. Preserve the
 complete graph case, native windows, and test isolation. Finish with the four
 affected production cases, final shared Rust CI, and the implementation review.
 
-- [ ] Confirm the current SDK, build, installation, and AR-01 through AR-07
+- [x] Confirm the current SDK, build, installation, and AR-01 through AR-07
   proof against the source. Reuse valid evidence for unchanged behavior.
-- [ ] Confirm the six disabled optional quotas and explicit-limit checks.
+- [x] Confirm the six disabled optional quotas and explicit-limit checks.
   Keep the compiled-code cache at 80 MiB and 16 entries. Count prepared,
   executing, cached, and error-retained code until its last owner releases it.
-- [ ] Isolate the expensive stages in the existing graph qualification.
+- [x] Isolate the expensive stages in the existing graph qualification.
   Separate setup, compilation, input preparation, execution, queries,
   validation, and durable writes where required to identify the cause.
-- [ ] Fix confirmed avoidable production work at its existing owner. Record
+- [x] Fix confirmed avoidable production work at its existing owner. Record
   each concrete correction before implementation. Compare unchanged workloads,
   assertions, profiles, and limits before and after each performance change.
-- [ ] Preserve complete end-to-end checks, both native graph windows, failure
+- [x] Preserve complete end-to-end checks, both native graph windows, failure
   cases, identities, evidence, recovery, and notification deadlines. Keep small
   Rust tests and visible production operations. Do not implement the separate
   scenario-maintainability migration or share away an isolation boundary.
-- [ ] Run the checks affected by each correction. Run the exact shared Rust
+- [x] Run the checks affected by each correction. Run the exact shared Rust
   procedure to a terminal result after the final Rust, Cargo, or CI edit.
   Do not repeat expensive checks for documentation-only changes.
-- [ ] Review correctness, completeness, and simplicity. Update this result
+- [x] Review correctness, completeness, and simplicity. Update this result
   and the review guide with source-bound evidence. Commit each deliverable.
 
 The final v53 CI attempt stopped at the user's request with exit 130.
@@ -192,7 +226,8 @@ The revised goal permits no new architecture, dependency, quota policy,
 benchmark, or performance threshold without user approval. Use the supplied
 main checkout. Create no worktree and commit no generated Wasm binary. Native,
 Python, OCI, upstream algorithm ports, and new physical claims remain outside
-this phase. The result remains **Not done**.
+this phase. The current result is recorded above. The earlier source results
+remain historical.
 
 ### Descriptor and codec repetition TODOs
 
@@ -213,7 +248,7 @@ confirmed in source. Their share of the full graph duration is not measured.
 - [x] Run the unchanged focused SDK and algorithm tests before and after the
   correction. Add a focused rejection check only if existing coverage misses
   a changed validation boundary. Keep workload, limits, and profile unchanged.
-- [ ] Review the connected callers, commit the correction, then rerun affected
+- [x] Review the connected callers, commit the correction, then rerun affected
   installed qualification and final workspace CI. Report measured durations
   without claiming that this correction explains the whole graph cost.
 
@@ -511,9 +546,12 @@ restart, retry, and trust-revocation checks. Context selection retains exact
 identity and cutoff omissions. Restart retains the unresolved profile,
 sealed revision change, and durable source state. All 1,613 captured source
 files, the executable, and the six component hashes match. These results
-make no physical-prevention claim. The final shared Rust procedure remains
-required. It is running from the captured source with one process and log:
-`/tmp/araphor-wasm-rust-ci-ordered-v59.log`.
+make no physical-prevention claim. The final shared Rust procedure passes
+on this source after the last Rust edit. Its duration is 9,147.416
+seconds, with 2,080 passing tests. The terminal record and log
+are `/tmp/araphor-wasm-rust-ci-ordered-v59.json` and
+`/tmp/araphor-wasm-rust-ci-ordered-v59.log`. Documentation-only closure does not
+change the qualified executable or components.
 
 ### Final complete graph qualification and cost comparison
 
@@ -549,7 +587,33 @@ repeated immutable bundle reads during the locked installation response. It
 does not change graph validation, detector inputs, test isolation, or deadlines.
 The focused installation comparison above provides the same-test measurement.
 
+### Final eight-deliverable review
+
+The review uses the user-approved eight-deliverable goal. The final source and
+component hashes are in the qualification table and capture above. Each row
+identifies the completed change and its proof. The final CI result covers the
+last Rust edit; the earlier failed and interrupted runs remain below.
+
+| Deliverable | Completed source and proof |
+| --- | --- |
+| 1. Pending production correction | `9f8f5da2` reuses descriptor validation within each wire operation and the Finding schema within each detector descriptor. The focused SDK and algorithm checks pass. `0c35e0ca` adds graph stage diagnostics. The complete v57 and v59 graph cases verify those diagnostics. Independent host and guest checks remain. |
+| 2. Production costs and startup | `208e58cf` adds the stronger retry-response assertions used before and after `c145e7b8`. The four unchanged metadata tests take 215.82 seconds before and 169.09 seconds after the locked installation-response correction. The v58 unchanged-artifact startup recheck passes. The shared startup deadline explains the failure mechanism; the historical CPU-cost cause remains unknown. Graph comparisons retain the overlap and concurrent-build limits above. |
+| 3. SDK, package, and runtime contracts | Generated WIT bindings, six source-built components, typed inputs and outputs, reasons, checkpoints, and the SDK detector example remain. The v59 package case installs and runs the built folder without a host rebuild. Optional quotas default to `None`; explicit quotas and mandatory controls remain. `ec31f7e` verifies an explicit execution timeout and runtime recovery. The 80 MiB, 16-entry cache charges all live code until its last owner releases it. |
+| 4. Current algorithms and lifecycle | Current installed-component proof covers AR-01 through AR-07. AR-04 selection remains host-owned. The final context, profile, package, and graph cases retain identity, evidence, coverage, revisions, historical finding JSON, and notification behavior. `881bea5a` records the final lifecycle proof. The earlier dispatch-order failure remains historical. |
+| 5. Test strength and maintenance | `208e58cf` preserves retry, changed-artifact rejection, stored-byte equality, and response checks. The complete graph case retains 12 incident cards, both native windows, 257 obligations, and original human deadlines. Focused tests retain visible production actions. No scenario migration, shared mutable fixture, new test framework, or increased limit is included. |
+| 6. Final installed qualification | All four v59 production cases pass with the captured source and executable above. All 1,613 source files, the saved executable, and all six components match their captures. `2305e0f` records the complete graph proof. No generated Wasm binary is committed. |
+| 7. Final repository verification | `bash .github/scripts/verify-rust-ci.sh` passes after the last Rust edit. Formatting, workspace check, strict Clippy, and the full workspace test suite reach a terminal result. Duration: 9,147.416 seconds. Passing tests: 2,080. Record: `/tmp/araphor-wasm-rust-ci-ordered-v59.json`. Log: `/tmp/araphor-wasm-rust-ci-ordered-v59.log`. |
+| 8. Review and commits | The connected-code review and [review guide](wasm-execution-review.md) retain the existing package, validation, storage, and computation owners. The implementation is committed in independently reviewed changes listed above. This result records completion and preserves the earlier failed checks, source boundaries, and dispatch-order error. |
+
+The optional installation telemetry proposal remains unapproved and unchecked.
+It adds no completion requirement. Native and Python execution, OCI delivery,
+upstream algorithm ports, and new physical-prevention claims remain excluded.
+
 ### Goal deliverable review
+
+This is the historical six-deliverable review. Its open gates and results
+refer to the recorded source versions. Use the final eight-deliverable review
+above for the current completion result.
 
 The review uses all six approved goal deliverables. A source commit does not
 close a verification gate. The phase remains **Not done**.

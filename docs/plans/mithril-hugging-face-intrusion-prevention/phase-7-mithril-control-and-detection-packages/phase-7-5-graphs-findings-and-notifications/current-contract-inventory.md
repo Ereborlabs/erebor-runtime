@@ -22,8 +22,10 @@ computation, production adapters, and migration verification. The seven captured
 baseline tests passed without changes to their expected results. The prior
 production and workspace checks passed on `53f7674`; read the
 [acceptance record](phase-7-5-2-analysis-contract-and-sdk.md#migration-verification).
-Installed Wasm adapters are implemented. Their final qualification remains
-**Not done**. The qualified native binding remains later work in 7.5.5.
+Installed Wasm qualification is **Done**. Read the
+[qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
+and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
+The qualified native binding remains later work in 7.5.5.
 The host context selector remains a host operation.
 
 ## Current implementation map

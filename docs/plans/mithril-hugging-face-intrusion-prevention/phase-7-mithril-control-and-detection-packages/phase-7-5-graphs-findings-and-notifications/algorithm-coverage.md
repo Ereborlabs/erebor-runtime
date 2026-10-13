@@ -2,9 +2,10 @@
 
 Track the algorithms that must run through the SDK and package system. This
 inventory supports [7.5](README.md); the linked child phases own implementation.
-Review date: 2026-10-11. SDK computation, production adapters, and direct Rust
-migration verification are **Done**. Installed Wasm adapters and dispatch
-replacement are implemented. Their final qualification is **Not done**.
+Review date: 2026-10-13. SDK computation, production adapters, and direct Rust
+migration verification are **Done**. Installed Wasm qualification is **Done**;
+read the [qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
+and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
 Upstream ports remain **Not done**.
 
 ## Source boundaries
@@ -54,7 +55,8 @@ the phase. A scope reduction needs an explicit recorded decision.
 SDK conversion, production adapters, and equivalence through direct Rust calls
 were qualified in 7.5.2. That result is **Done**. The current production adapters
 use installed components. Installed equivalence and dispatch replacement belong
-to 7.5.4; their qualification remains **Not done**.
+to 7.5.4; their current qualification is **Done**. The completion review retains
+the earlier dispatch ordering error.
 For AR-04, migration means integration with the shared host selector through the
 SDK input contract. Authorization and trusted selection stay in that host owner.
 
