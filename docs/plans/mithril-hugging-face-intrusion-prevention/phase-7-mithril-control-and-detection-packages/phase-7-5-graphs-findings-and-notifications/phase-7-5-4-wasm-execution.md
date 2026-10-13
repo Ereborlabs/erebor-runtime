@@ -180,6 +180,38 @@ main checkout. Create no worktree and commit no generated Wasm binary. Native,
 Python, OCI, upstream algorithm ports, and new physical claims remain outside
 this phase. The result remains **Not done**.
 
+### Descriptor and codec repetition TODOs
+
+Source review finds repeated work within one immutable operation.
+`Detector::descriptor` generates the Finding schema once for the output and
+again for every reason. Wire encoding validates the package and then calls
+`Codec::model`, which validates the same package again. These repetitions are
+confirmed in source. Their share of the full graph duration is not measured.
+
+- [ ] Reuse the Finding output schema for reason details within one descriptor
+  construction. Preserve every reason, schema, and descriptor byte contract.
+- [ ] Extend the existing graph DEBUG timings to separate replay fixture setup,
+  replay derivation, graph processing, and snapshot reads. Keep the original
+  calls, loops, error returns, and assertions. Add no dependency or threshold.
+- [ ] Reuse the existing private contract validator and selected model within
+  each wire operation. Preserve package, input, output, evidence, checkpoint,
+  and allocation checks at each independent host and guest boundary.
+- [ ] Run the unchanged focused SDK and algorithm tests before and after the
+  correction. Add a focused rejection check only if existing coverage misses
+  a changed validation boundary. Keep workload, limits, and profile unchanged.
+- [ ] Review the connected callers, commit the correction, then rerun affected
+  installed qualification and final workspace CI. Report measured durations
+  without claiming that this correction explains the whole graph cost.
+
+The v54 diagnostic runs the unchanged saved v53 executable and graph case.
+It exits 1 during startup after 127.120 seconds with `AnalysisReadDeadline` at
+`package/wasm/compiler.rs:206`. The terminal record is
+`/tmp/araphor-graph-profile-v54-status.json`; the log is
+`/tmp/araphor-graph-profile-v54.log`. An editor-owned Cargo and guest build was
+active at the same time. This is a possible factor, not a proven cause. No
+workload, compiler limit, test assertion, or production source changed for this
+run. The earlier passing cases retain their original source boundaries.
+
 ### Goal deliverable review
 
 The review uses all six approved goal deliverables. A source commit does not
