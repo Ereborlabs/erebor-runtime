@@ -107,9 +107,10 @@ The [native decision proposal](native-execution-design.md) records source
 `2b9384ec`, existing owner contracts, current decisions, configurable limits,
 and qualification requirements. D1 is resolved: native execution must work
 wherever Araphor can compile. D2 is approved for all current portable exports.
-D5 is approved for execution in Araphor's process without isolation. D3 uses Rust;
-its binary interface and dependency details remain proposals. D4 needs approval
-after its installation and target-switch examples. The user approved D6 options with
+D5 is approved for execution in Araphor's process without isolation. D3 uses
+Rust artifacts with the existing SDK binary interface. D4 adds no separate
+state workflow: keep one target option and the existing package lifecycle.
+The user approved D6 options with
 disabled defaults. No cap values are required before native admission,
 execution, or qualification. The host capability query reports Landlock ABI 4
 and seccomp support. The current direction does not use that isolation proposal.
@@ -120,9 +121,37 @@ Record a new concrete correction here before its implementation. Keep these
 deliverables in order. Commit each implementation deliverable after its focused
 checks pass; do not defer its commit until final qualification.
 
-- [ ] **1. Resolve native design decisions.** Obtain approval for unresolved
-  D3 and D4 details in the decision record. Resolve the enabled-resource semantics
-  that D5 changes. Preserve D1, approved D2, in-process D5, and disabled D6 defaults.
+### Decision simplification and implementation corrections
+
+The user selected Rust artifacts and native calls in Araphor's process.
+The SDK supplies the existing versioned binary interface. Authors implement
+Rust computation; they do not implement C adapters. D4 adds no separate state
+workflow. Keep Wasm as the default and add one explicit target option. Reuse
+the existing package version, checkpoint, update, and rollback rules. Remove
+the proposed public `rebuild` option.
+
+- [ ] Add the Rust native adapter and export macro beside the existing SDK
+  guest adapter. Complete typed exchange, cancellation, panic handling, and
+  release tests through the existing v1 table.
+- [ ] Extend source builds and the current guest crates to emit native libraries
+  from the same computation. Record artifact and host requirements in the
+  existing package manifest. Install no compiler, hook, or downloader.
+- [ ] Add native admission and loading under AnalysisPackageOwner. Keep library
+  code loaded through all calls and release callbacks. Preserve host-owned
+  output, authorization checks, and existing query accounting.
+- [ ] Add target selection and actual artifact identity to the existing request,
+  activation, result, and CLI paths. Commit a changed selection only with its
+  validated output and checkpoint. Preserve historical encodings and retries.
+- [ ] Define disabled native memory and CPU settings. Reject an enabled hard
+  per-library cap with Unsupported when the shared process cannot enforce it.
+  Do not change process-wide limits or silently ignore an enabled setting.
+- [ ] Qualify shared-source export parity, installed execution, failures, and
+  lifecycle changes. Run the final Rust gate and update the review guide.
+
+- [x] **1. Resolve native design decisions.** Use Rust artifacts and the existing
+  SDK binary interface. Keep one explicit target option and the existing state
+  lifecycle. Reject enabled hard per-library caps with Unsupported in the shared
+  process. Preserve D1, approved D2, in-process D5, and disabled D6 defaults.
   Record the applicable
   compilation targets, native export inventory,
   ABI and dependency changes, artifact metadata, library loading and deployment

@@ -4,8 +4,9 @@ This record supplies the decisions required by
 [the native execution phase](phase-7-5-5-native-execution.md).
 D1 is **Resolved** by the user's platform requirement. D2 and D5 are
 **Approved**: qualify all current portable exports and use native calls in
-Araphor's process. Rust authoring is approved for D3; its library interface
-and dependency details remain proposals. D4 is **Not approved**. D6 native
+Araphor's process. Rust artifacts are approved for D3. The SDK supplies its
+existing binary interface. D4 uses the target choice in the original task and
+adds no separate state workflow. D6 native
 resource options and disabled defaults are **Approved**. Configured resource
 semantics must reflect the shared process. Source baseline: `2b9384ec`.
 
@@ -28,9 +29,9 @@ hook. Native execution requires no process transport.
 
 The current source has no executable native adapter or native execution owner.
 The user approved the complete current portable export inventory and native
-execution like the existing builtins. Compatibility metadata and target-selection
-details remain proposals. The implementation and dependency details for the
-Rust native library adapter also remain proposals.
+execution like the existing builtins. The SDK supplies binary compatibility
+metadata and the existing v1 adapter interface. Keep one explicit target
+option and the existing state lifecycle.
 The user requires native execution on every platform where Araphor can compile.
 The user approved optional native resource settings with disabled defaults after
 the original proposal. D6 records that correction.
@@ -109,7 +110,7 @@ Approved language: authors implement the shared computation and SDK interface in
 Rust. The native adapter, builder, and execution owner also use Rust. Authors
 must not write C adapter code.
 
-Proposed binary boundary: keep the current v1 C table layout behind a Rust SDK
+Binary boundary: keep the current v1 C table layout behind a Rust SDK
 export macro. This is a calling convention, not the authoring language. Declare
 one exported accessor:
 `const araphor_analysis_api_v1 *araphor_analysis_get_api_v1(void)`.
@@ -130,10 +131,10 @@ owned output on success and failure. Repeated release must have no effect.
 
 Use these libraries rather than implement new artifact parsers or syscall wrappers:
 
-| Proposed dependency | Purpose | Existing lock state |
+| Rust dependency | Purpose | Existing lock state |
 | --- | --- | --- |
 | `libloading = "=0.9.0"` | Load the verified Rust native library in Araphor's process. | New dependency. |
-| `object = "=0.40.0"`, required native-format read features only | Inspect imports, versions, and dependency requirements without loading code. ELF read features serve the proposed Linux backend. | Version is already locked; direct use requires approval. |
+| `object = "=0.40.0"`, required native-format read features only | Inspect imports, versions, and dependency requirements without loading code. | Version is already locked. |
 
 Landlock, seccompiler, and a new direct libc dependency for worker controls are
 removed from this proposal. Use platform support in the selected Rust loader and
@@ -195,9 +196,9 @@ otherwise they fail without changing the prior active revision. Add optional
 provenance fields to results and
 receipts for the actual target, artifact digest, closure digest, and platform.
 Historical records retain their original target and have absent new provenance.
-The existing JSON transport needs no new Control protobuf message. The proposed
-Run request adds an optional target and an explicit `rebuild` flag whose default
-is false. Install and update requests accept per-export target selections.
+The existing JSON transport needs no new Control protobuf message. The Run
+request adds one optional target. An operator can select a named export.
+Installation retains its current request format and default selection.
 
 Bind native evaluation identity and retry checks to the selected artifact and
 closure. Stage a requested selection before evaluation. Use the existing
@@ -208,14 +209,10 @@ target or closure returns
 Conflict. A selection change must cause evaluation even when input revisions
 are unchanged. For the qualified dual-target inventory, identical output and
 checkpoint contracts plus parity fixtures permit a switch. Reject an incompatible
-checkpoint before evaluation unless the caller requests `rebuild`. That request
-uses the existing supported owner input preparation with proposed explicit
-rebuild semantics. It clears the input checkpoint, recomputes only when the
-retained authorized input can reconstruct the required state, and commits the
-selected implementation,
-new output, and new checkpoint together. Missing retained input produces
-incomplete coverage. The current public request has no rebuild field; this
-proposal requires that addition. Add no automatic state converter.
+checkpoint before evaluation. Use the existing update and rollback rebuild
+behavior when a package changes its state contract. Add no public rebuild
+option or automatic state converter. Missing retained input produces incomplete
+coverage through the existing owner.
 Never switch targets after a crash, timeout, partial output, or malformed result.
 
 ### D4 example: install, select, and switch
@@ -240,7 +237,7 @@ The operator selects native for the installed export
 
 The operator selects Wasm again
   -> the same state contract permits reuse of the committed saved state
-  -> an incompatible state requires an explicit retained-input rebuild
+  -> an incompatible state rejects the target switch
   -> failure preserves the previous committed result and selection
 
 The operator retries an operation
@@ -250,8 +247,8 @@ The operator retries an operation
 
 A result identifies revision `r8`, its actual Wasm or native artifact, its input
 revisions, and its saved-state version. A native error does not select Wasm.
-A requested rebuild clears the input checkpoint and recomputes from authorized
-retained inputs. It cannot reconstruct input that has expired.
+The existing package update and rollback paths handle a changed package state
+contract. They cannot reconstruct input that has expired.
 
 ## D5: In-process native execution
 
@@ -305,8 +302,8 @@ The approved D5 direction uses no process isolation.
 | SDK output and checkpoint | Existing declared SDK limits and host accounting always apply. SDK defaults are 1,024 batches, 1,000,000 rows, 64 MiB data, and 16 MiB checkpoint data. |
 | Host buffers | Existing query defaults: 64 MiB input bytes, 128 MiB input capacity, and 16 MiB output capacity. Effective limits can be lower than the SDK declaration. |
 | Time | Mandatory effective AnalysisReadControl deadline, QueryLimits evaluation timeout, and grant expiry. The query evaluation timeout defaults to one second; automatic package reconciliation supplies a 30-second outer control. Preserve caller settings and use the earliest applicable deadline. |
-| Native address space | Optional `memory_bytes`, in bytes. Default `None` disables this option. A process-wide OS limit cannot bound only one native evaluation; configured semantics remain unresolved. |
-| Native CPU | Optional `cpu_seconds`, in seconds. Default `None` disables this option. A process-wide OS limit would affect Araphor; configured semantics remain unresolved. |
+| Native address space | Optional `memory_bytes`, in bytes. Default `None` disables this option. An enabled hard per-library cap returns Unsupported because the shared process cannot enforce it. |
+| Native CPU | Optional `cpu_seconds`, in seconds. Default `None` disables this option. An enabled hard per-library cap returns Unsupported because the shared process cannot enforce it. |
 | Wasm quotas and compiled code | Preserve the six optional quotas as disabled by default and the 80 MiB, 16-entry accounting for all live compiled Wasm code. |
 
 Define these options in the existing query configuration under `native`:
@@ -328,9 +325,9 @@ because a cap is absent. No numeric cap value is required from the user.
 Existing owner deadlines, grant expiry, SDK data bounds, and host output accounting
 still apply. They reject late or oversized results; they cannot stop arbitrary
 native CPU use or establish a per-library heap limit. Do not set a process-wide
-OS limit and describe it as a native evaluation limit. Resolve configured native
-resource semantics before implementing enabled options. No cap values are needed
-for the approved disabled defaults.
+OS limit and describe it as a native evaluation limit. Reject an enabled hard
+per-library cap with Unsupported before loading native code. No cap values are
+needed for the approved disabled defaults.
 
 ## Ordered implementation and proof
 
@@ -372,8 +369,9 @@ No native result or speed gain is proven by this proposal.
 D1 is **Resolved**: native execution must work wherever Araphor can compile.
 D2 is **Approved** for all current portable exports and the SDK detector example.
 D5 is **Approved** for execution in Araphor's process with no isolation.
-Rust authoring is approved for D3; the private binary interface and remaining
-Rust dependency additions are proposals. D4 target and state rules are
-**Not approved**. D6 options remain approved with disabled defaults; enabled
-semantics must account for D5. Native implementation and qualification remain
-**Not done**. Await the unresolved decisions before dependent implementation.
+Rust artifacts are approved for D3. The SDK supplies its existing versioned
+binary interface. D4 uses the original explicit target requirement and the
+existing package state lifecycle. It adds no separate rebuild command.
+D6 options retain disabled defaults. An enabled hard per-library cap returns
+Unsupported in the shared process. Native implementation and qualification
+remain **Not done**. Proceed with the recorded implementation corrections.
