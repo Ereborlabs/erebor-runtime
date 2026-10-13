@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_preserve_typed_codes() {
+    fn failures_preserve_typed_codes() -> std::result::Result<(), Box<dyn std::error::Error>> {
         for (sdk_code, code) in [
             (sdk::ErrorCode::Invalid, Code::Invalid),
             (sdk::ErrorCode::Incompatible, Code::Unsupported),
@@ -184,7 +184,7 @@ mod tests {
                 ..
             } = error
             else {
-                panic!("wrong native error owner");
+                return Err("wrong native error owner".into());
             };
             assert_eq!(actual, code);
             assert_eq!(
@@ -192,6 +192,7 @@ mod tests {
                 Some(sdk_code)
             );
         }
+        Ok(())
     }
 
     impl LibraryFixture {
@@ -514,7 +515,7 @@ mod tests {
             ..
         } = error
         else {
-            panic!("wrong native error owner");
+            return Err("wrong native error owner".into());
         };
         assert_eq!(code, Code::Unsupported);
         assert_eq!(operation, "ABI table");

@@ -320,7 +320,7 @@ exit 0. Logs are `/tmp/araphor-native-builder-test-final-20261013.log` and
 
 ### Bundle-read correction TODO
 
-- [ ] Reuse the already loaded immutable bundle during installation, explicit
+- [x] Reuse the already loaded immutable bundle during installation, explicit
   evaluation, and preparation. Reuse it only when its root matches the activation
   root. Load the activation's own root for an independently installed dependency.
   Preserve grant checks, authority admission, commit authorization, retry identity,
@@ -341,6 +341,22 @@ exit 0. Logs are `/tmp/araphor-native-builder-test-final-20261013.log` and
   assertions. Run focused builder tests and strict clippy, then restart the final
   repository CI procedure after this last test edit.
 
+### Loader test assertion correction TODO
+
+- [x] Replace two explicit panic branches in native loader tests with assertions
+  on the native error owner and code. Final CI session 51562 passed formatting
+  and workspace check, then returned exit 101 at strict clippy. Preserve the
+  incompatible ABI, error-code, and source assertions. Run the focused loader
+  tests and strict clippy, then restart final CI after the last test edit.
+
+The correction returns a test error when the native error owner does not match.
+It preserves the separate code, operation, and SDK source assertions. The
+focused loader command returned 18 passed and 0 failed. Strict all-target,
+all-feature clippy for `araphor-data` returned exit 0. Logs are
+`/tmp/araphor-native-loader-test-final-20261013.log` and
+`/tmp/araphor-native-loader-clippy-final-20261013.log`. No production statement
+changed; the retained native artifacts and production binary remain applicable.
+
 ### Installed native production qualification TODO
 
 - [ ] Extend the existing `analysis-packages` scenario with an explicit native
@@ -351,12 +367,12 @@ exit 0. Logs are `/tmp/araphor-native-builder-test-final-20261013.log` and
   a separate store when their immutable revisions match the Wasm bootstrap.
   Run with Python absent from PATH. Run the affected context, profile restart,
   and complete graph notification cases without changing workloads or deadlines.
-- [ ] Return a typed scenario error when Python is available. Do not use
+- [x] Return a typed scenario error when Python is available. Do not use
   `expect_err` in the qualification owner. Compare recorded native artifact and
   closure identities with the authored bytes. Apply Burst parameters only to its
   bundle. Compare the actual nested graph fields and label the native case in
   its result. Keep scenario actions on the existing qualification owner.
-- [ ] Qualify a 185-record selected graph input through the actual native Process
+- [x] Qualify a 185-record selected graph input through the actual native Process
   library. Use the existing graph window size and graph input adapter. Give each
   record an exact cursor, task, and time identity. Compare the complete native,
   Wasm, and trusted outputs, evidence, reasons, and checkpoint. Keep the existing
@@ -364,20 +380,20 @@ exit 0. Logs are `/tmp/araphor-native-builder-test-final-20261013.log` and
 
 ### Native host-fault proof TODO
 
-- [ ] Add native-only panic and abort modes to the source-built SDK test guest.
+- [x] Add native-only panic and abort modes to the source-built SDK test guest.
   Prove that an unwind panic returns a typed failure through the loaded library.
   Use a child test host for a fatal native abort. Install and commit state before
   the fault, close the parent's store handles, then reopen after child exit.
   Check the prior complete output, checkpoint, activation, retry, and absence of
   Wasm fallback. The child is a test host; production native execution stays in
   Araphor's process. Reuse the fixture's store and owner setup for a retained path.
-- [ ] Supply the existing temporary directory to `Fixture::open`. The first
+- [x] Supply the existing temporary directory to `Fixture::open`. The first
   host-fault test returned ENOENT before any native action because its new parent
   directory did not exist. Preserve all fault, state, and restart assertions.
 
 ### Native buffer-accounting correction TODO
 
-- [ ] Account for native host transport storage through the existing query
+- [x] Account for native host transport storage through the existing query
   budget. Reuse SDK array validation and owned-array copies. Keep the native
   data contract separate from optional Wasm quotas. Apply the existing host output
   capacity before host output copies. Bound native error fields before copying
@@ -391,7 +407,7 @@ and checkpoint copies. Native output no longer requires the two IPC round trips.
 The oversized error test checks the length before dereference and checks release.
 These focused SDK checks do not qualify the corrected loader or built libraries.
 
-- [ ] Release the new parity test's replay output guards after their assertions
+- [x] Release the new parity test's replay output guards after their assertions
   and before a separate graph derivation. The first consolidated run returned
   `AnalysisBusy: query output capacity` because the test retained the prior
   outputs during the next full reservation. Preserve every parity assertion and
@@ -399,7 +415,7 @@ These focused SDK checks do not qualify the corrected loader or built libraries.
 
 ### Native file-identity correction TODO
 
-- [ ] Use the existing `rustix` file API to retain sealed root and package
+- [x] Use the existing `rustix` file API to retain sealed root and package
   dependency files on Linux. Link these retained files into the private package
   directory so `$ORIGIN` resolves the same dependency bytes. Hold file and library
   handles through every release. Open each system file once for compatibility
@@ -408,24 +424,24 @@ These focused SDK checks do not qualify the corrected loader or built libraries.
   Validate the selected closure and file identities before the accessor call.
   Add tests for replacement and seals. Add no dependency, namespace, process,
   environment restriction, or isolation claim.
-- [ ] Check a declared package dependency's ELF SONAME when it is present.
+- [x] Check a declared package dependency's ELF SONAME when it is present.
   Require that name to match the declared dependency name. Reject aliases that
   can select the root or a system library. Preserve valid files without SONAME
   and the existing declaration schema.
-- [ ] Derive Linux system-library directory names from the exact build target,
+- [x] Derive Linux system-library directory names from the exact build target,
   including i386, ARM ABI, little-endian PowerPC and MIPS, and x32 names. Retain
   standard library directory fallbacks. Check the artifact's pointer class as
   well as its format, architecture, and endianness. Add no platform allowlist.
-- [ ] Use a valid 52-byte ELF32 header without sections for the new synthetic
+- [x] Use a valid 52-byte ELF32 header without sections for the new synthetic
   pointer-class fixture. Its first run returned Invalid during parsing because
   its section table had no valid string-table index. Preserve the incompatible
   class assertion and production validation. Add no unnecessary section table.
-- [ ] Validate symbol availability against the root's reachable dependency
+- [x] Validate symbol availability against the root's reachable dependency
   closure. An extra declared file cannot supply an unreachable symbol. Check
   transitive system requirements before package initialization. Use the existing
   artifact parser and typed compatibility errors. Add a missing or unreachable
   dependency fixture; preserve valid declared closures.
-- [ ] Map native function-table validation errors through the native error owner.
+- [x] Map native function-table validation errors through the native error owner.
   Preserve the SDK source and operation. An incompatible version returns
   Unsupported; malformed table values retain their typed code. Add a real
   wrong-version library fixture. Do not classify every ABI failure as Invalid.
@@ -514,34 +530,34 @@ direct use of the locked `object 0.40.0`, and the configured-cap behavior.
 An enabled hard native memory or CPU cap returns Unsupported for native
 execution. SQL and Wasm remain usable. Work resumes under these approvals.
 
-- [ ] Remove the draft Run target option and stored target preference. Dispatch
+- [x] Remove the draft Run target option and stored target preference. Dispatch
   the implementation declared by the plugin and record its actual artifact.
-- [ ] Keep native cap checks on native admission and execution. Do not reject
+- [x] Keep native cap checks on native admission and execution. Do not reject
   package-owner construction or SQL/Wasm execution for an enabled native cap.
-- [ ] Remove the draft blanket rejection of loader environment variables.
+- [x] Remove the draft blanket rejection of loader environment variables.
   Validate the declared library files and use scoped loading.
-- [ ] Check dependency names, symbols, versions, and content throughout the
+- [x] Check dependency names, symbols, versions, and content throughout the
   native closure. Add the missing native loader and failure tests.
-- [ ] Reuse the existing SDK SensitiveAccess test fixture. Remove its duplicate
+- [x] Reuse the existing SDK SensitiveAccess test fixture. Remove its duplicate
   module declaration and retain native exchange and release assertions.
-- [ ] Preserve native loader error codes in package readiness and Control
+- [x] Preserve native loader error codes in package readiness and Control
   package-operation details. Account for native qualification and dependency
   storage in retained package snapshots.
-- [ ] Map returned native SDK errors to the matching package error code and
+- [x] Map returned native SDK errors to the matching package error code and
   retain their source. Report a Failed computation as Incomplete, as the Wasm
   execution path does. Keep invalid output distinct from execution failure.
-- [ ] Check host cancellation and deadline after every native call, including
+- [x] Check host cancellation and deadline after every native call, including
   a returned SDK error. Preserve the host cancellation or deadline error before
   reporting a late native completion.
-- [ ] Compile the new parity fixtures with the shared test error type and
+- [x] Compile the new parity fixtures with the shared test error type and
   existing EvidenceRecord conversions. Preserve complete input and output
   comparisons.
-- [ ] Check cancellation after native compatibility inspection and before each
+- [x] Check cancellation after native compatibility inspection and before each
   library load or accessor call. Reject work outside the active control lifetime.
-- [ ] Select the graph parity fixture's credential fact by its typed value.
+- [x] Select the graph parity fixture's credential fact by its typed value.
   Do not depend on its position in a sorted vector. Compare Gapped coverage
   with the same detector fixtures.
-- [ ] Correct the new running-expiry fixture. Its one-second grant expires
+- [x] Correct the new running-expiry fixture. Its one-second grant expires
   during native package admission, before activation. Use a five-second test
   grant to reach native computation. Keep the existing five-second activation,
   task, and cleanup deadlines. Retain separate rejection proof for an already
