@@ -82,6 +82,78 @@ Stop at a qualified native target; advertise only verified host platforms.
 
 **Not done.** Native execution and target parity are unqualified.
 
+### Design decision record
+
+The [native decision proposal](native-execution-design.md) records source
+`2b9384ec`, existing owner contracts, six unresolved decisions, mandatory
+controls, configurable limits, and qualification requirements. D1 through D6
+are **Not approved**. The host capability query reports Landlock ABI 4 and
+seccomp support. That query does not prove worker isolation.
+
+### Ordered correction TODOs
+
+Record a new concrete correction here before its implementation. Keep these
+deliverables in order. Commit each implementation deliverable after its focused
+checks pass; do not defer its commit until final qualification.
+
+- [ ] **1. Resolve native design decisions.** Obtain approval for D1 through D6
+  in the decision record. Record the supported platform, native export inventory,
+  ABI and dependency changes, artifact metadata, isolation and deployment
+  requirements, and native resource defaults before dependent implementation.
+- [ ] **2. Complete the native SDK and source builds.** Reuse the v1 C table,
+  `Guest` computation, Arrow C Data/Stream, and SDK wire validation. Complete
+  typed inputs, parameters, recorded time and seed, outputs, evidence, reasons,
+  checkpoints, errors, cancellation, and owned release. Test failure and repeated
+  release. Build the native artifact and locked dependency closure from source.
+  Keep generated binaries out of commits.
+- [ ] **3. Add isolated native execution to the package owner.** Apply every
+  approved control before package loading or dependency initialization. Return
+  typed Unsupported when a required control is unavailable. Preserve authority,
+  expiry, revocation, concurrency, cleanup, and stale-completion rejection.
+  Terminate and reap the complete owned worker scope.
+- [ ] **4. Integrate compatibility, selection, and provenance.** Validate platform,
+  CPU, system libraries, ABI, and dependency closure at admission. Add explicit
+  selection through existing requests, CLI, and agent interfaces. Record actual
+  artifact revisions. Preserve SQL/Wasm encoding, immutable history, and retry
+  identity. Require compatible output and state contracts before switching.
+  Never use failure fallback.
+- [ ] **5. Prove export parity and host guarantees.** Qualify every approved export
+  with identical fixtures. Reuse the migrated algorithms, authorized extraction,
+  selected native reads, and traversal. Close durable readers before computation.
+  Preserve host context, domain validation, atomic commits, notifications,
+  missing coverage, and existing Wasm quota and compiled-code accounting.
+- [ ] **6. Complete failure and lifecycle tests.** Keep production actions,
+  transitions, assertions, and cleanup visible. Cover invalid ABI values,
+  malformed transport and outputs, unavailable isolation, forbidden access, crashes,
+  cancellation, expiry, revocation, stale completion, resource failures,
+  restart, retry, upgrade, rollback, removal, and target switching. Include large
+  selected graph transport without reducing workload or deadlines. Prove that
+  failure preserves the prior output and checkpoint, releases resources, and
+  produces no fallback. Test Wasm-to-native and native-to-Wasm switches.
+- [ ] **7. Qualify installed production execution and final CI.** Extend
+  `analysis-packages` with a real source-built SDK dual-target detector. Install
+  and run it without rebuilding Araphor. Prove target parity and actual artifact
+  identity in each result. Run a migrated algorithm with Python unavailable
+  and affected existing production cases.
+  Record exact source, artifacts, platform, configuration, commands, and terminal
+  results. After the last covered source edit, run one final
+  `bash .github/scripts/verify-rust-ci.sh` process to its terminal result.
+- [ ] **8. Review connected source and close the records.** Review callers,
+  duplication, ownership, and validation. Update the result and implementation
+  review guide with completed deliverables, commits, exact proof, supported
+  platforms, and limits. Keep the result Not done while required proof or a
+  confirmed defect remains open.
+
+### Preparation verification
+
+The documentation check passes for both changed Markdown files, 13 local links,
+balanced code fences, six pending decisions, and eight ordered TODOs. It confirms
+that the original phase text is preserved exactly. `git diff --check` passes.
+Three Sol 6.1 reviews checked the SDK, owner, and qualification boundaries.
+Their concrete corrections are in the proposal. No Rust source, Cargo file,
+test, CI configuration, or verification script changed. No native build,
+isolation qualification, production case, or performance test ran.
+
 ## End scope and example
 
 Complete when qualified native artifacts execute in isolated workers under the
