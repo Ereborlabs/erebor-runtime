@@ -28,7 +28,10 @@ and isolation requirements. Reuse Arrow C interfaces at the native library
 boundary, locked source builds, and admission without a compiler or installation
 hook. Native execution requires no process transport.
 
-The current source has no executable native adapter or native execution owner.
+At baseline `2b9384ec`, the source has no executable native adapter or native
+execution owner. The table below records that baseline. Read the
+[implementation review](native-execution-review.md) for the implemented owners
+and qualification results.
 The user approved the complete current portable export inventory and native
 execution like the existing builtins. The SDK supplies binary compatibility
 metadata and the existing v1 adapter interface. Use the plugin's declared
@@ -37,7 +40,7 @@ The user requires native execution on every platform where Araphor can compile.
 The user approved optional native resource settings with disabled defaults after
 the original proposal. D6 records that correction.
 
-| Current owner | Source-backed fact |
+| Baseline owner | Source-backed fact |
 | --- | --- |
 | [Native header](../../../../../crates/araphor-analysis-sdk/src/bindings/analysis.h) | Defines the v1 function table and typed request, output, release, error, and cancellation fields. No table accessor symbol is declared. |
 | [SDK guest](../../../../../crates/araphor-analysis-sdk/src/guest.rs) | Supplies the shared `Guest` computation interface and Wasm export adapter. |
@@ -56,7 +59,7 @@ records installed SQL execution. At that source, the current discovery and
 graph algorithms execute through shared trusted Rust calls from 7.5.2. Those
 algorithms are compiled into Araphor. Their computation is already implemented.
 
-The current production adapters use InstalledAnalysis. PackageArtifactV1 selects
+At that baseline, production adapters use InstalledAnalysis. PackageArtifactV1 selects
 Wasm or SQL, and AnalysisPackageOwner evaluates those targets. Native artifact
 bytes can be declared, but the owner cannot select or load them. Native returns
 Unsupported. Installed Wasm execution from 7.5.4 does not supply a native loader.

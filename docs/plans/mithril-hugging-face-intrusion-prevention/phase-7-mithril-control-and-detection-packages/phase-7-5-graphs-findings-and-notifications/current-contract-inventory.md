@@ -6,6 +6,8 @@ The [SDK migration](phase-7-5-2-analysis-contract-and-sdk.md#current-algorithm-m
 implements these exports and their production adapters through direct Rust
 calls. [Wasm execution](phase-7-5-4-wasm-execution.md) then runs that same code
 through installed packages.
+The [native implementation review](native-execution-review.md) records the
+same shared computation through installed Rust native plugins.
 
 ## Source and result
 
@@ -25,7 +27,12 @@ production and workspace checks passed on `53f7674`; read the
 Installed Wasm qualification is **Done**. Read the
 [qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
-The qualified native binding remains later work in 7.5.5.
+The native SDK binding and installed owner are implemented. Focused native
+parity and lifecycle proof passes. Read the
+[native proof route](native-execution-review.md#proof-route-and-current-status)
+and [qualification record](phase-7-5-5-native-execution.md). Final native
+qualification remains **Not done** until the complete graph-notification case,
+final workspace checks, and acceptance review pass.
 The host context selector remains a host operation.
 
 ## Current implementation map
@@ -33,7 +40,8 @@ The host context selector remains a host operation.
 The [shared computation crate](../../../../../crates/araphor-analysis-builtins/src/lib.rs)
 depends on the portable SDK. It has no dependency on DuckDB, Control, or the
 host store. The components and portable fixtures call the same computation
-functions. Production adapters invoke the installed component evaluator.
+functions. Production adapters invoke the installed evaluator for the plugin's
+declared type. Native and Wasm plugins remain separate installed artifacts.
 The host adapters validate source types before normalization and validate
 domain results after computation.
 
@@ -171,10 +179,47 @@ Graph test symbols and fixtures are under [graph tests](../../../../../crates/ar
 and [processing tests](../../../../../crates/araphor-data/src/graph/tests/processing.rs).
 The implementation map above adds the SDK conversion paths and test mappings.
 The prior SDK migration checks passed through shared Rust computation.
-The current discovery and graph fixtures install required components through
-`InstalledAnalysis::testing`. Their installed execution results and the final
-workspace checks remain under qualification. Direct Rust tests alone do not
-prove installed execution.
+The discovery and graph fixtures install required components through
+`InstalledAnalysis::testing`. Installed Wasm execution is qualified in its
+acceptance record. Native parity tests use actual source-built libraries and
+the supported installed owner APIs. Direct Rust tests alone do not prove
+installed execution.
+
+### Native execution proof
+
+The [native SDK](../../../../../crates/araphor-analysis-sdk/src/native/mod.rs)
+uses Arrow C interfaces. The
+[native package owner](../../../../../crates/araphor-data/src/package/native/mod.rs)
+checks the declared artifact and dependency closure before execution.
+[Discovery parity](../../../../../crates/araphor-data/src/discovery/sdk/native.rs)
+passes for atoms, merge, groups, and compare.
+[Graph parity](../../../../../crates/araphor-data/src/graph/derive/adapter/tests/native.rs)
+passes for `HF-PROC-001.detect`, `HF-DW-001.detect`, and
+`HF-XNODE-001.detect`. The tests compare trusted Rust, Wasm, and native results
+for the same inputs, including evidence, reasons, coverage, and checkpoints.
+The [185-record process case](../../../../../crates/araphor-data/src/graph/derive/adapter/tests/native/large.rs)
+passes through the actual native Arrow boundary. The separate
+[host-fault restart case](../../../../../crates/araphor-data/src/package/tests/native/restart.rs)
+passes for a returned panic and process abort without changing the prior
+complete durable commit.
+
+The [installed production case](../../../../../crates/mithril-e2e/src/discovery/packages/native.rs)
+passes with Python unavailable. It installs the authored native BurstDetector
+folder without a host rebuild. It also executes the three graph exports and
+checks findings, relationships, replay, and checkpoint meaning. The case
+retains the original SQL and Wasm assertions. Source is committed through
+`d88f7280`; the loader test fixture correction is `26ada6bc`. Read the
+[retained production evidence](native-execution-review.md#retained-production-case-evidence)
+for exact binary, artifact, and closure digests.
+
+These results concern lightweight Linux x86-64 GNU execution. They do not
+qualify physical Kubernetes actions, cross-node causality, every native
+platform, native process isolation, or performance. AR-04 remains host-owned.
+The complete graph-notification case and final workspace tests remain pending.
+The current CI cut passes formatting, workspace checks, and workspace clippy.
+Workspace tests remain in progress. The prior cut failed at the original SQL
+dependency refresh check; the unchanged isolated case then passed. These
+partial results do not close native qualification.
 
 ## Shared operations that remain host-owned
 

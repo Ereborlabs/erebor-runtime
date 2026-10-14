@@ -7,12 +7,16 @@ migration verification are **Done**. Installed Wasm qualification is **Done**;
 read the [qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
 Upstream ports remain **Not done**.
+Native SDK, owner, and focused installed execution proof are present. Final
+native qualification remains **Not done**; read the
+[native implementation review](native-execution-review.md) and
+[qualification record](phase-7-5-5-native-execution.md).
 
 ## Source boundaries
 
 | Source | Local revision examined | Development owner |
 | --- | --- | --- |
-| Current Araphor | `1b08236077223bb1e9b32ae36df78778a674c4cf` | [7.5.2 SDK migration](phase-7-5-2-analysis-contract-and-sdk.md#current-algorithm-migration); [7.5.4 installed Wasm execution](phase-7-5-4-wasm-execution.md#current-algorithm-migration) |
+| Current Araphor | `1b08236077223bb1e9b32ae36df78778a674c4cf` | [7.5.2 SDK migration](phase-7-5-2-analysis-contract-and-sdk.md#current-algorithm-migration); [7.5.4 installed Wasm execution](phase-7-5-4-wasm-execution.md#current-algorithm-migration); [7.5.5 native execution](phase-7-5-5-native-execution.md) |
 | Discovery Engine | `0b5b73425c5aec89b803e737b188b2a331d0e218` | [7.5.8 algorithm packages](phase-7-5-8-discovery-engine-algorithms.md) |
 | OpenSearch Security Analytics | `e33c62506efcb15ae795847484357704b539bcf1` | [7.5.9 algorithm packages](phase-7-5-9-security-analytics-algorithms.md) |
 
@@ -75,6 +79,25 @@ AR-04 uses [`DiscoveryOwner::context_input`](../../../../../crates/araphor-data/
 after the existing trusted selector. The host retains complete original records
 and validates references from normalized SDK rows. This execution change gives
 packages no additional authority.
+
+The [native proof map](current-contract-inventory.md#native-execution-proof)
+records passing parity for the four discovery exports and three graph exports
+through actual source-built libraries. The 185-record Arrow input case and
+separate panic/abort restart case pass. The installed production case passes
+for an authored native BurstDetector and the three graph exports with Python
+unavailable and no host rebuild. These source changes are committed through
+`d88f7280`; `26ada6bc` corrects a loader test fixture. Read the
+[retained proof](native-execution-review.md#retained-production-case-evidence)
+for the binary and artifact identities. The complete graph-notification case
+and final workspace tests remain pending. Passing formatting, checks, and
+clippy in the current CI cut does not complete those gates.
+
+The runtime executes the installed plugin's declared type. Separate native and
+Wasm artifacts reuse the shared source. Native execution runs in Araphor's
+process. The current proof covers lightweight Linux x86-64 GNU cases. It does
+not claim native isolation, forced hard-cap enforcement, performance, physical
+Kubernetes qualification, or cross-node causal proof. No upstream algorithm
+port is qualified by these current Araphor results.
 
 The prior Rust migration passed seven captured baseline tests with unchanged
 expected results from `2e49839a`. Those tests compared 24 outputs across these
@@ -165,8 +188,9 @@ and exact source/package revisions. Record numerical tolerances and intended
 security differences explicitly. Reuse one implementation when an upstream
 family matches an existing algorithm; record the mapping and test it.
 For current algorithms, record 7.5.2 computation equivalence separately from
-7.5.4 installed execution and 7.5.7 integrated qualification. Completing the
-SDK conversion alone does not close installed-package coverage.
+7.5.4 installed Wasm execution, 7.5.5 native execution, and 7.5.7 integrated
+qualification. Completing the SDK conversion alone does not close
+installed-package coverage.
 
 Upstream HTTP, gRPC, OpenSearch storage, schedulers, installers, cluster clients,
 and dashboards are not additional services to port. Existing Araphor owners

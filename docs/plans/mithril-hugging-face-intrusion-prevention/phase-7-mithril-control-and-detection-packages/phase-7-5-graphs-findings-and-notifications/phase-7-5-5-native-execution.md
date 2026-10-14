@@ -104,7 +104,8 @@ Linux x86-64 product restriction or claim qualification from compilation alone.
 **Not done.** Native SDK exchange, installed execution, export parity, lifecycle,
 and host-fault restart checks pass on the recorded Linux x86-64 host. The complete
 graph notification case failed at a package read deadline. Final workspace CI
-remains pending; the graph failure is under investigation.
+failed at the existing SQL dependency refresh case. Both failures remain under
+investigation; final qualification is incomplete.
 
 ### Design decision record
 
@@ -446,6 +447,68 @@ The corrected null and sibling diagnostics pass the full-feature loader cut:
 18 passed and 0 failed, session 66984, exit 0. The log is
 `/tmp/araphor-native-ci-loader-diagnostics-20261014.log`. The assertions and
 one-second controls are unchanged.
+
+### SQL dependency refresh qualification investigation
+
+Final CI session 63882 returned exit 101 at source `913c73e4`. Its log is
+`/tmp/araphor-native-rust-ci-qualified-final-20261014.log`. The source record is
+`/tmp/araphor-native-final-ci-source-qualified-20261014.json`. Formatting,
+workspace check, and strict all-target, all-feature clippy passed. The data
+crate returned 612 passed, 0 failed, and 19 ignored in 2,314.95 seconds. All
+five failures from session 56085 passed, with their original workloads and
+deadlines. The Control crate returned 188 passed, 0 failed, and 2 ignored.
+
+The `mithril-e2e` crate returned 190 passed, 1 failed, and 528 ignored in
+862.16 seconds. `discovery::packages::tests::analysis_packages_contract`
+failed at automatic source replacement. The upstream `count` result was fresh
+at revision 31. The dependent `repeated` result remained stale at revision 24
+through the existing 120-second wait. Later workspace tests did not run.
+This CI command used `RUST_TEST_THREADS=4`; it did not change product limits,
+test deadlines, assertions, or internal concurrency checks.
+
+The retained passing native case includes the same SQL replacement checks.
+That case committed fresh `repeated` revision 32 from upstream revision 31.
+Source review found no native artifact identity work in SQL execution. The
+worker remained active in the failed case. Existing diagnostics do not show
+whether scheduling, a read, evaluation, or commit prevented the next result.
+No cause is confirmed. Do not change the scheduler or test deadline from this
+timeout alone.
+
+- [x] Run the unchanged original `analysis-packages` case without a concurrent
+  build or qualification job. Use the retained production binary, a fresh output
+  directory, and existing debug logs. Record its terminal result before any
+  source correction.
+- [ ] Obtain a passing final repository CI result and a passing complete graph
+  notification result. Keep every test, input, assertion, and product deadline.
+
+The quiet original case returned exit 0, session 96577. Its log is
+`/tmp/araphor-native-qualified-analysis-packages-20261014-retry.log`; its output
+directory is `/tmp/araphor-native-qualified-analysis-packages-20261014-retry`.
+It uses the same retained binary and native artifact environment as the other
+production cases. `RUST_LOG=info,araphor_data::package=debug` selects existing
+logs. The original SQL and Wasm checks pass. Fresh `repeated` revision 32 uses
+upstream revision 31. The result and binary digests, source reference, command
+configuration, and terminal status are in
+`/tmp/araphor-native-qualified-analysis-packages-20261014-retry-proof.json`.
+This original case does not execute the native detector. Its pass does not
+prove the cause of the preceding CI timeout.
+
+Final CI session 5646 runs the same covered source with `RUST_TEST_THREADS=1`.
+Its log is `/tmp/araphor-native-rust-ci-serial-final-20261014.log`. The source
+record is `/tmp/araphor-native-final-ci-source-serial-20261014.json` and includes
+SHA-256 values for 1,392 tracked Rust, Cargo, toolchain, and CI files. The runner
+uses one test worker. It retains all tests, internal concurrency, workloads,
+assertions, and product deadlines. Its terminal result remains pending. Run
+the complete graph production retry after this process finishes.
+
+Three Sol 6.1 reviewers checked the connected SDK, native owner, and proof
+records. No new source defect was found. Library handles remain held through
+producer release and host output copies. Typed compatibility errors and actual
+artifact provenance remain consistent with the installed plugin type. The
+supporting inventory and design records distinguish the baseline from the
+implemented native path. They retain the Linux x86-64 GNU proof boundary and
+the pending workspace and complete graph gates. This review does not replace
+those terminal results.
 
 ### Installed native production qualification TODO
 

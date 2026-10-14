@@ -23,8 +23,13 @@ The local SQL package lifecycle is **Done**. Read its
 Installed Wasm qualification is **Done**. Read the
 [qualification record](phase-7-5-graphs-findings-and-notifications/phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 and [completion review](phase-7-5-graphs-findings-and-notifications/phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
-Native and Python execution remain later work. The child results
-record their implementation and qualification.
+The native SDK and installed execution owner are implemented. Native parity,
+lifecycle, and focused production checks pass on the recorded Linux x86-64 GNU
+host. Final native qualification remains **Not done**. Read its
+[implementation review](phase-7-5-graphs-findings-and-notifications/native-execution-review.md)
+and [result](phase-7-5-graphs-findings-and-notifications/phase-7-5-5-native-execution.md#result).
+Python execution remains later work. The child results record their
+implementation and qualification.
 
 ## Intended end state
 
