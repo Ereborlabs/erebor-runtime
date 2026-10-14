@@ -493,13 +493,97 @@ configuration, and terminal status are in
 This original case does not execute the native detector. Its pass does not
 prove the cause of the preceding CI timeout.
 
-Final CI session 5646 runs the same covered source with `RUST_TEST_THREADS=1`.
+Final CI session 5646 ran the same covered source with `RUST_TEST_THREADS=1`.
 Its log is `/tmp/araphor-native-rust-ci-serial-final-20261014.log`. The source
 record is `/tmp/araphor-native-final-ci-source-serial-20261014.json` and includes
 SHA-256 values for 1,392 tracked Rust, Cargo, toolchain, and CI files. The runner
 uses one test worker. It retains all tests, internal concurrency, workloads,
-assertions, and product deadlines. Its terminal result remains pending. Run
-the complete graph production retry after this process finishes.
+assertions, and product deadlines. It returned exit 101. The data crate returned
+612 passed, 0 failed, and 19 ignored in 5,031.11 seconds. Control returned
+188 passed, 0 failed, and 2 ignored in 243.84 seconds. The end-to-end crate
+returned 190 passed, 1 failed, and 528 ignored in 2,147.35 seconds. The same SQL
+replacement case failed with fresh upstream revision 31 and stale dependent
+revision 24. Later workspace tests did not run. Test parallelism alone does not
+explain this repeated failure. Do not run another full workspace cut before
+focused diagnosis and correction.
+
+### SQL replacement diagnostic TODO
+
+- [x] Temporarily return the automatic evaluation error that reconciliation
+  currently discards. Run only the original current-thread SQL case. Keep its
+  inputs, assertions, and deadlines. Record the error and remove the temporary
+  behavior before final qualification. Add no dependency or product option.
+- [x] Record automatic evaluation outcomes through the complete original wait.
+  The first diagnostic returned `AnalysisBusy: query evaluation capacity` in
+  263.13 seconds, session 86203, exit 101. Its log is
+  `/tmp/araphor-sql-focused-diagnostic-20261014.log`. One returned Busy error does
+  not prove sustained starvation. Preserve the original retry behavior while
+  collecting bounded package, export, duration, and error-resource fields.
+- The normal-retry diagnostic returned 1 passed and 0 failed in 305.50 seconds,
+  session 40336, exit 0. The log is
+  `/tmp/araphor-sql-focused-outcomes-20261014.log`. Eight outcome records show
+  one upstream commit, three dependent capacity conflicts, three unchanged
+  upstream evaluations, and one dependent commit. This pass does not explain
+  the repeated full-CI failure.
+- [x] Confirm whether synchronous admission on the runtime thread causes the
+  failure. The test uses a current-thread runtime; the passing production CLI
+  uses a multithread runtime. The supervisor reads and decodes bundles and checks
+  admission before it dispatches evaluation to a blocking task. This path existed
+  before native execution. The diagnostic measures its duration during failure.
+  Temporarily measure bundle loading, admission, prepared-export skips, worker
+  queue time, and the original Inspect wait. Use bounded fields and retain the
+  original runtime, retries, inputs, assertions, limits, and deadlines. Remove
+  the diagnostic before final qualification.
+- The workspace-feature focused case returned exit 101 in 379.44 seconds,
+  session 12126. Its log is
+  `/tmp/araphor-sql-workspace-focused-timing-20261014.log`; bounded timing is in
+  `/tmp/araphor-sql-preparation-timing-20261014.jsonl`. During the original
+  replacement wait, preparation consumed 111,518 milliseconds. All nine
+  dependent evaluations returned query evaluation capacity errors. Inspect
+  completion was delayed by the synchronous preparation work. The final
+  Inspect returned Unavailable after the unchanged 120-second window.
+- [x] Move supervisor preparation into its existing blocking task. Keep the
+  operation permit until that task exits. Establish cancellation and authority
+  observation before dispatch. Check control after admission and before state
+  changes. Preserve package admission, prepared-export skips, typed failures,
+  grant expiry, revocation, and the existing 30-second operation deadline.
+  Add a deterministic stop-during-admission test with the existing authority
+  fixture. Assert event order and unchanged retained state. Add no benchmark,
+  quota, dependency, or new scheduler. Remove all temporary timing code.
+- [x] Pass the operation control to the shared failure-status commit check.
+  A cancelled blocking task must not write failure metadata or stale result
+  heads after it obtains the writer. Preserve error classification and the
+  active-generation comparison. Update both callers of the failure owner.
+- [x] Give the admission-stop fixture an explicit UInt64 SQL result. The first
+  focused run returned two passed and one failed, session 8601, exit 101.
+  The new fixture used an integer literal that did not match its UInt64 port.
+  Preserve production schema validation and the event-order assertions.
+
+The corrected interruption cut returned 3 passed and 0 failed in 46.53 seconds,
+session 59051, exit 0. Its log is
+`/tmp/araphor-supervisor-correction-focused-20261014-retry.log`. It checks
+existing busy and running-stop behavior plus stop during admission. The latter
+checks stop before admission release, retained operation capacity until task
+exit, and unchanged activation and complete result records.
+The unchanged original SQL case returned 1 passed and 0 failed in 296.44
+seconds with workspace features, session 13933, exit 0. Its log is
+`/tmp/araphor-sql-owner-correction-workspace-focused-20261014.log`; the source
+record is
+`/tmp/araphor-sql-owner-correction-workspace-focused-source-20261014.json`.
+The source guard confirms all 1,390 recorded source and configuration hashes.
+The affected native and Wasm cut returned 5 passed and 0 failed in 174.68
+seconds, session 52507, exit 0. Its log is
+`/tmp/araphor-supervisor-native-wasm-cancellation-focused-20261014.log`.
+It includes the new cancelled-failure commit regression, real-library native
+cancellation, revocation, expiry and typed failures, plus existing Wasm
+cancellation and all four Wasm fault modes. The tests retain the original
+assertions and deadlines. No temporary diagnostic code remains.
+Formatting passes, session 29137, exit 0. Strict workspace all-target,
+all-feature clippy passes with warnings denied in 65 seconds, session 81331,
+exit 0. Its log is `/tmp/araphor-supervisor-correction-clippy-20261014.log`.
+No new full CI process has started. Final qualification remains Not done.
+- [x] Correct the confirmed cause in its owner, preserve the complete original
+  case, and pass focused verification before another full workspace cut.
 
 Three Sol 6.1 reviewers checked the connected SDK, native owner, and proof
 records. No new source defect was found. Library handles remain held through

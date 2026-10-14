@@ -20,6 +20,7 @@ type CommitObserver = Box<dyn FnMut() -> Result<()> + Send>;
 pub(crate) struct Authority {
     revision: AtomicU64,
     changes: watch::Sender<u64>,
+    pub before_admit: Mutex<Option<CommitObserver>>,
     pub after_commit: Mutex<Option<CommitObserver>>,
 }
 
@@ -40,6 +41,14 @@ impl PackageAuthorization for Authority {
     }
 
     fn admit(&self, grant: &PackageGrantV1, _: &PackageBundleV1) -> Result<()> {
+        let observer = self
+            .before_admit
+            .lock()
+            .map_err(|_| PackageErrorCodeV1::Incomplete.error("fixture admission observer"))?
+            .take();
+        if let Some(mut observer) = observer {
+            observer()?;
+        }
         self.check(grant, PackageActionV1::Run)
     }
 
@@ -114,6 +123,7 @@ impl Fixture {
         let authority = Arc::new(Authority {
             revision: AtomicU64::new(1),
             changes: watch::channel(1).0,
+            before_admit: Mutex::new(None),
             after_commit: Mutex::new(None),
         });
         let owner = Self::owner(store.clone(), authority.clone(), limits.clone())?;

@@ -45,40 +45,7 @@ impl AnalysisPackageOwner {
                 };
                 let context: InstalledContext = Self::decode(&active.metadata)?;
                 let owner = self.clone();
-                let check = self.check(&context.grant, Action::Run).and_then(|()| {
-                    let bundle = self.load_bundle(active.key.tenant_id, &context.root)?;
-                    self.authority.admit(&context.grant, &bundle)?;
-                    Ok(bundle)
-                });
-                let bundle = match check {
-                    Ok(bundle) => bundle,
-                    Err(error) => {
-                        self.failed(&active, &error)?;
-                        if error.status_code() == StatusCode::PermissionDenied {
-                            let _lifecycle = self
-                                .lifecycle
-                                .lock()
-                                .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
-                            self.store.suspend_package(
-                                &active.key,
-                                active.generation,
-                                || Ok(()),
-                            )?;
-                        }
-                        continue;
-                    }
-                };
-                if bundle
-                    .artifact(&super::PackageRefV1 {
-                        package_id: active.key.package_id.clone(),
-                        revision: active.revision.clone(),
-                    })?
-                    .prepared(&active.key.export)
-                {
-                    continue;
-                }
                 let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(30))?);
-                let control = Self::grant_control(&context.grant, control)?;
                 let _task = PackageTask {
                     control: control.clone(),
                 };
@@ -86,6 +53,43 @@ impl AnalysisPackageOwner {
                 let stage = control.clone();
                 let mut run = tokio::task::spawn_blocking(move || {
                     let _permit = permit;
+                    stage.check()?;
+                    let check = owner.check(&context.grant, Action::Run).and_then(|()| {
+                        let bundle = owner.load_bundle(active.key.tenant_id, &context.root)?;
+                        stage.check()?;
+                        owner.authority.admit(&context.grant, &bundle)?;
+                        stage.check()?;
+                        Ok(bundle)
+                    });
+                    let bundle = match check {
+                        Ok(bundle) => bundle,
+                        Err(error) => {
+                            stage.check()?;
+                            owner.failed(&active, &error, &stage)?;
+                            if error.status_code() == StatusCode::PermissionDenied {
+                                let _lifecycle = owner
+                                    .lifecycle
+                                    .lock()
+                                    .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
+                                owner.store.suspend_package(
+                                    &active.key,
+                                    active.generation,
+                                    || stage.check(),
+                                )?;
+                            }
+                            return Ok(None);
+                        }
+                    };
+                    if bundle
+                        .artifact(&super::PackageRefV1 {
+                            package_id: active.key.package_id.clone(),
+                            revision: active.revision.clone(),
+                        })?
+                        .prepared(&active.key.export)
+                    {
+                        return Ok(None);
+                    }
+                    let stage = Self::grant_control(&context.grant, stage)?;
                     owner.evaluate_active(&active, "automatic", true, Some(&bundle), &stage)
                 });
                 tokio::select! {
@@ -97,7 +101,12 @@ impl AnalysisPackageOwner {
         Ok(())
     }
 
-    pub(super) fn failed(&self, active: &PackageActivationV1, error: &crate::Error) -> Result<()> {
+    pub(super) fn failed(
+        &self,
+        active: &PackageActivationV1,
+        error: &crate::Error,
+        control: &AnalysisReadControl,
+    ) -> Result<()> {
         let mut context: InstalledContext = Self::decode(&active.metadata)?;
         let code = match error {
             crate::Error::Package { code, .. }
@@ -128,6 +137,6 @@ impl AnalysisPackageOwner {
         };
         context.status_checkpoint = active.checkpoint_revision;
         self.store
-            .fail_package(active, &Self::encode(&context)?, || Ok(()))
+            .fail_package(active, &Self::encode(&context)?, || control.check())
     }
 }

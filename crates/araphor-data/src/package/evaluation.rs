@@ -176,7 +176,7 @@ impl AnalysisPackageOwner {
             Ok(None) => return Ok(None),
             Err(error @ crate::Error::AnalysisBusy { .. }) => return Err(error),
             Err(error) => {
-                self.failed(active, &error)?;
+                self.failed(active, &error, control)?;
                 return Err(error);
             }
         };

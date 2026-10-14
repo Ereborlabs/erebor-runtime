@@ -99,6 +99,25 @@ preserve the exact target and artifact when those fields are available. Read
 [history](../../../../../crates/araphor-data/src/package/installed/history.rs)
 for the legacy reference rules and mismatch rejection.
 
+## Supervisor preparation and cancellation
+
+[The supervisor](../../../../../crates/araphor-data/src/package/supervision.rs)
+loads bundles, checks admission, and skips prepared exports inside its existing
+blocking task. These operations do not block the async runtime thread. The
+supervisor creates the 30-second control, cancellation guard, and authority
+subscription before dispatch. The task retains its operation permit until it
+exits. A stop request cancels the control; it does not terminate a blocking task.
+Control checks after bundle loading and admission reject a late completion.
+
+The same owner passes the operation control to the failure-status transaction.
+The transaction checks cancellation before commit. A cancelled failure cannot
+change readiness metadata or mark retained results stale. Successful result
+commits retain their existing authorization and generation checks.
+[The interruption tests](../../../../../crates/araphor-data/src/package/tests/interruption.rs)
+check stop before admission release, permit retention until task exit, and
+unchanged activation and complete result records. A separate test cancels the
+failure control and checks the exact cancellation error and unchanged state.
+
 ## Evaluation and Arrow ownership
 
 ```mermaid
@@ -383,19 +402,35 @@ The serial final CI run is session 5646 on the same Rust source commit
 `bash .github/scripts/verify-rust-ci.sh`. Its log is
 `/tmp/araphor-native-rust-ci-serial-final-20261014.log`.
 All tests, deadlines, and internal concurrency remain unchanged. This CI run
-remains live at this record. No final CI PASS is claimed.
+returned exit 101. Data returned 612 passed and 19 ignored; Control returned
+188 passed and 2 ignored; Mithril end-to-end returned 190 passed, 1 failed, and
+528 ignored. The same SQL source replacement case failed. No final CI PASS is
+claimed.
+
+Focused diagnostics then measured 111,518 milliseconds of synchronous
+preparation during the original 120-second replacement wait. All nine dependent
+attempts returned query evaluation capacity errors. The supervisor correction
+moves this preparation into the existing blocking task. The unchanged SQL case
+passes with workspace features: 1 passed, 0 failed, session 13933, exit 0,
+296.44 seconds. Its exact source and binary hashes are in
+`/tmp/araphor-sql-owner-correction-workspace-focused-source-20261014.json`.
+The affected native and Wasm cut returns 5 passed, 0 failed, session 52507,
+exit 0, 174.68 seconds. It uses the source-built native library and preserves
+the cancellation, expiry, revocation, failure-state, and capacity assertions.
 
 ## Source state and verification limits
 
 This guide covers SDK source commit `d65db26`, host-copy correction `09b354f`,
 native owner commit `a38dec4`, installed qualification commit `d88f7280`, and
-loader test correction `26ada6bc`. The current committed source is `913c73e4`.
+loader test correction `26ada6bc`. The earlier full CI covers Rust source
+`913c73e4`.
 That commit amends the earlier `931fff` test correction. The 33 native owner
-and parity tests, host-fault test, 63 SDK tests, six source-built artifacts,
-and three retained production case results remain applicable to the unchanged
-native production implementation.
-All linked implementation and test files are committed. The document review
-does not build or execute code. The complete graph-notification case, final
+and parity tests, host-fault test, 63 SDK tests, and six source-built artifacts
+remain retained evidence. The SDK, loader, computation, and build sources are
+unchanged. The supervisor and failure-commit correction
+has new focused proof. The retained production cases require a new affected
+qualification binary. The document review does not build or execute code.
+The complete graph-notification case, final
 continuous integration, and
 the eight-deliverable acceptance review remain **Not done**. Existing Wasm
 acceptance does not qualify native execution. No performance, native isolation,

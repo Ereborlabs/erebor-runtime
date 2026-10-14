@@ -7,6 +7,100 @@ use crate::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisReadControl, ContextSensitivityV1,
 };
 
+#[tokio::test(flavor = "current_thread")]
+async fn package_supervisor_stop_during_admission() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture
+        .install(bundle("1", "SELECT 1::UBIGINT AS count"), None)
+        .await?;
+    let before = fixture
+        .owner
+        .activations([1; 16], "test", "test.model")?
+        .pop()
+        .ok_or("activation absent")?;
+    let results = fixture.store.package_results(&before.key)?;
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (held, admission) = mpsc::channel();
+    let (release, resumed) = mpsc::channel();
+    let mut entered = Some(entered);
+    *fixture
+        .authority
+        .before_admit
+        .lock()
+        .map_err(|_| "fixture admission observer")? = Some(Box::new(move || {
+        if let Some(entered) = entered.take() {
+            let _sent = entered.send(());
+        }
+        let _held = held.send(());
+        resumed.recv().map_err(|_| {
+            crate::package::PackageErrorCodeV1::Incomplete.error("fixture admission release")
+        })?;
+        Ok(())
+    }));
+    let (stopped, observed) = mpsc::channel();
+    let controller = std::thread::spawn(move || {
+        let stopped_before_release = admission.recv_timeout(Duration::from_secs(5)).is_ok()
+            && observed.recv_timeout(Duration::from_secs(5)).is_ok();
+        let _released = release.send(());
+        stopped_before_release
+    });
+    let (stop, receiver) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(fixture.owner.clone().serve(receiver));
+    ready.await?;
+    stop.send(true)?;
+    worker.await??;
+    let retained_permit = fixture.owner.operations.available_permits() == 3;
+    let _acknowledged = stopped.send(());
+    let stopped_before_release = tokio::task::spawn_blocking(move || {
+        controller
+            .join()
+            .map_err(|_| "admission controller panicked")
+    })
+    .await??;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.owner.operations.available_permits() != 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(stopped_before_release);
+    assert!(retained_permit);
+    let after = fixture
+        .store
+        .package_activation(&before.key)?
+        .ok_or("activation absent")?;
+    assert_eq!(after, before);
+    assert_eq!(fixture.store.package_results(&before.key)?, results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn package_cancelled_failure_preserves_state() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture
+        .install(bundle("1", "SELECT 1::UBIGINT AS count"), None)
+        .await?;
+    let before = fixture
+        .owner
+        .activations([1; 16], "test", "test.model")?
+        .pop()
+        .ok_or("activation absent")?;
+    let results = fixture.store.package_results(&before.key)?;
+    let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    control.cancel()?;
+    let error = crate::package::PackageErrorCodeV1::Incomplete.error("fixture failure");
+    assert!(matches!(
+        fixture.owner.failed(&before, &error, &control),
+        Err(crate::Error::AnalysisReadCancelled { .. })
+    ));
+    assert_eq!(
+        fixture.store.package_activation(&before.key)?,
+        Some(before.clone())
+    );
+    assert_eq!(fixture.store.package_results(&before.key)?, results);
+    Ok(())
+}
+
 #[tokio::test]
 async fn package_running_stop() -> TestResult {
     for revoke in [false, true] {
