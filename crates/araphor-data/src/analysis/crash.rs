@@ -41,14 +41,34 @@ fn discovery_profile_commit_crashes() -> std::result::Result<(), Box<dyn std::er
         interval_records: if sealed { 1 } else { 2 },
         ..Default::default()
     };
+    let mut expected = crate::AnalysisPackageOwner::required_bundles()
+        .into_iter()
+        .map(|bundle| bundle.root)
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(expected.len(), 4);
+    let check_packages = |installed: &crate::InstalledAnalysis| -> Result<()> {
+        let mut roots = installed
+            .snapshot(input.tenant_id)?
+            .refs()?
+            .into_iter()
+            .map(|reference| reference.root)
+            .collect::<Vec<_>>();
+        roots.sort();
+        roots.dedup();
+        assert_eq!(roots, expected);
+        Ok(())
+    };
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
         let store = Arc::new(AnalysisStore::open(PathBuf::from(root))?);
         let sealed = std::env::var("ARAPHOR_DISCOVERY_SEALED")? == "true";
+        let installed = crate::InstalledAnalysis::testing_existing(store.clone(), input.tenant_id)?;
+        check_packages(&installed)?;
         let owner = DiscoveryOwner::new(
             store.clone(),
             Arc::new(MissingContext),
             config(sealed),
-            crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
+            installed,
         )?;
         assert_eq!(owner.process(10)?, 1);
         store.crash_at("profile.returned");
@@ -58,7 +78,7 @@ fn discovery_profile_commit_crashes() -> std::result::Result<(), Box<dyn std::er
         for point in ["result.before", "result.after", "profile.returned"] {
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("data");
-            let store = AnalysisStore::open(&root)?;
+            let store = Arc::new(AnalysisStore::open(&root)?);
             store.accept_validated_batch(
                 record.id.stream.clone(),
                 ValidatedEvidenceBatchV1 {
@@ -71,6 +91,11 @@ fn discovery_profile_commit_crashes() -> std::result::Result<(), Box<dyn std::er
                 },
             )?;
             let receipt = store.source_receipt(&record.id.stream)?;
+            let installed =
+                crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?;
+            check_packages(&installed)?;
+            assert_eq!(store.source_receipt(&record.id.stream)?, receipt);
+            drop(installed);
             drop(store);
             let status = std::process::Command::new(std::env::current_exe()?)
                 .args([
@@ -83,11 +108,14 @@ fn discovery_profile_commit_crashes() -> std::result::Result<(), Box<dyn std::er
                 .status()?;
             assert_eq!(status.code(), Some(73), "{point}, sealed={sealed}");
             let store = Arc::new(AnalysisStore::open(&root)?);
+            let installed =
+                crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?;
+            check_packages(&installed)?;
             let owner = DiscoveryOwner::new(
                 store.clone(),
                 Arc::new(MissingContext),
                 config(sealed),
-                crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
+                installed,
             )?;
             let recovered = owner.profile(&record.id.stream)?;
             let committed = point != "result.before";
@@ -123,11 +151,14 @@ fn discovery_profile_commit_crashes() -> std::result::Result<(), Box<dyn std::er
             drop(owner);
             drop(store);
             let store = Arc::new(AnalysisStore::open(&root)?);
+            let installed =
+                crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?;
+            check_packages(&installed)?;
             let owner = DiscoveryOwner::new(
                 store.clone(),
                 Arc::new(MissingContext),
                 config(sealed),
-                crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
+                installed,
             )?;
             assert_eq!(owner.profile(&record.id.stream)?, Some(profile));
             assert_eq!(owner.process(13)?, 0);

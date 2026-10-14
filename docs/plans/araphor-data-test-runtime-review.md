@@ -241,3 +241,33 @@ Qualification is pending after this bound correction.
 The earlier 111-case Data run passed retry collision and candidate-error
 precedence checks. The limit correction and added regression require the
 focused record `/tmp/araphor-f-retry-focused.json`. That run is in progress.
+
+## F5 Discovery crash preparation
+
+[Discovery crash case](../../crates/araphor-data/src/analysis/crash.rs) The parent creates the original evidence
+  -> [InstalledAnalysis::testing](../../crates/araphor-data/src/package/required/testing.rs) install the four required durable packages
+  -> [package reference checks](../../crates/araphor-data/src/analysis/crash.rs) check roots, revisions, and the unchanged source receipt
+  -> [child launch](../../crates/araphor-data/src/analysis/crash.rs) release installed and store handles before starting the child
+
+[InstalledAnalysis::testing_existing](../../crates/araphor-data/src/package/required/testing.rs) The child opens the prepared store
+  -> [fixture_owner](../../crates/araphor-data/src/package/required/testing.rs) create the same authority and query limits without eager code preparation or package installation
+  -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) read and check the four durable package roots and revisions
+  -> [DiscoveryOwner](../../crates/araphor-data/src/analysis/crash.rs) process the original record through production lazy Discovery admission
+  -> [AnalysisStore::crash_path](../../crates/araphor-data/src/analysis/crash.rs) exit with code 73 at the original crash point
+
+[Discovery crash recovery](../../crates/araphor-data/src/analysis/crash.rs) The parent reopens the store after each child exit
+  -> [existing fixture constructor](../../crates/araphor-data/src/package/required/testing.rs) retain the original parent recovery setup
+  -> [recovery assertions](../../crates/araphor-data/src/analysis/crash.rs) check package roots, profile state, retries, source receipt, and raw records
+  -> [second reopen](../../crates/araphor-data/src/analysis/crash.rs) close and reopen again to check the recovered profile and idle processing
+
+The test still covers two sealing modes and three crash points. The child
+reference check loads metadata and computes identities; the check does not
+compile Wasm code. The child compiles Discovery when processing requires that
+library. No native replacement or machine-code cache is added. The constructor
+exists only under the existing test or `test-fixtures` module gate.
+
+Review `analysis::crash::discovery_profile_commit_crashes` for all six exits and
+recovery boundaries. Dedicated cold installation, compiler failure, eviction,
+and five-library capacity tests retain their original paths. Focused crash
+qualification passed in `/tmp/araphor-f-final-focused.json`. All six children
+returned the required exit code. Final repository CI is pending.

@@ -67,6 +67,29 @@ impl InstalledAnalysis {
         Self::testing_tenants(store, &[tenant])
     }
 
+    pub fn testing_existing(store: Arc<AnalysisStore>, tenant: [u8; 16]) -> Result<Self> {
+        let owner = Arc::new(Self::fixture_owner(store, &[tenant])?);
+        Self::new(owner, AnalysisPackageOwner::DOMAIN_SCOPE)
+    }
+
+    fn fixture_owner(
+        store: Arc<AnalysisStore>,
+        tenants: &[[u8; 16]],
+    ) -> Result<AnalysisPackageOwner> {
+        let query = Arc::new(QueryOwner::new(
+            store.clone(),
+            QueryLimits {
+                evaluate_timeout: Duration::from_secs(30),
+                ..Default::default()
+            },
+        )?);
+        let authority = Arc::new(FixtureAuthority {
+            tenants: tenants.iter().copied().collect(),
+            changes: tokio::sync::watch::channel(1).0,
+        });
+        AnalysisPackageOwner::new(store, query, authority)
+    }
+
     pub fn testing_tenants(
         store: Option<Arc<AnalysisStore>>,
         tenants: &[[u8; 16]],
@@ -87,18 +110,7 @@ impl InstalledAnalysis {
                 (store, Some(Arc::new(directory)))
             }
         };
-        let query = Arc::new(QueryOwner::new(
-            store.clone(),
-            QueryLimits {
-                evaluate_timeout: Duration::from_secs(30),
-                ..Default::default()
-            },
-        )?);
-        let authority = Arc::new(FixtureAuthority {
-            tenants: tenants.iter().copied().collect(),
-            changes: tokio::sync::watch::channel(1).0,
-        });
-        let mut owner = AnalysisPackageOwner::new(store, query, authority)?;
+        let mut owner = Self::fixture_owner(store, tenants)?;
         owner.prepare_test_code()?;
         let owner = Arc::new(owner);
         for tenant in tenants {

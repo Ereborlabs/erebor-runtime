@@ -530,3 +530,27 @@ Qualification is pending after this bound correction.
 The earlier 111-case Data run passed retry collision and candidate-error
 precedence checks. The limit correction and added regression require the
 focused record `/tmp/araphor-f-retry-focused.json`. That run is in progress.
+
+### F5 implementation
+
+The Discovery crash case installs the four required packages after it creates
+the original evidence. The parent checks the package roots and revisions and
+the unchanged source receipt. The parent releases installed and store handles
+before it starts each child.
+
+Each child uses `InstalledAnalysis::testing_existing`. The constructor keeps
+the existing authority and query limits. It does not prepare the five-library
+fixture cache or install packages. Package reference checks read durable
+metadata without compilation. Discovery processing compiles Discovery through
+the existing production admission path.
+
+All six sealing-mode and crash-point combinations retain exit code 73. The
+case retains cold reopens, recovery, retry, profile, receipt, and raw-record
+assertions. Both parent recovery stages check the original four package roots
+and revisions. Dedicated cold installation and compiler/cache tests are
+unchanged.
+
+Focused proof: `analysis::crash::discovery_profile_commit_crashes`.
+**Done** for implementation and focused qualification. The six crash exits
+and recovery assertions passed in the 111-case Data run. The record is
+`/tmp/araphor-f-final-focused.json`. **Not done** for final repository CI.
