@@ -125,3 +125,9 @@ opt-level = 2
 
 [profile.dev.package.wasmparser]
 opt-level = 2
+
+[profile.test.package.araphor-data]
+opt-level = 1
+
+[profile.test.package.araphor-analysis-sdk]
+opt-level = 1

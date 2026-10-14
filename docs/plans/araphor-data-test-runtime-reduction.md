@@ -316,9 +316,10 @@ Suggested commit message: `Reduce repeated Data test preparation`.
 ## Further reduction proposal
 
 The user requested more analysis after the complete Data run reached
-1,390.41 seconds. This request approves analysis and proposals only.
-The changes below, test-profile changes, concurrency changes, and new timed
-comparisons are not approved. The completed source remains unchanged.
+1,390.41 seconds. The user subsequently approved implementation of F1 through
+F7 and a separate commit for each deliverable. The F1 comparison uses the
+workload and runtime allowances below. The F7 concurrency comparison still
+requires its concrete workload and runtime approval.
 
 ### Current evidence
 
@@ -406,5 +407,50 @@ corpora, and a native replacement for Wasm qualification are not proposed.
 The existing measurements do not justify prioritizing builtin descriptor
 template caching or SQL connection pooling.
 
-**Done** for further source analysis and this proposal. **Not done** for F1–F7
-implementation or new timed comparison. The qualified Rust source is unchanged.
+**Done** for further source analysis and this proposal. F1 through F7 are
+approved for implementation. Implementation and final qualification are in
+progress. The qualified baseline is commit `4d0758cf`.
+
+## Implementation results
+
+### F1: Test build profile
+
+The matching nine-case comparison passed with four threads in both runs.
+The baseline harness took 473.97 seconds. Data and SDK optimization level 1
+took 442.83 seconds. The reduction is 31.14 seconds, or 6.57 percent.
+All nine assertions passed. The complete 633-test inventories are identical.
+Only `Cargo.toml` differs between the recorded original sources. Both test
+executables and instrumented source hashes remained unchanged during execution.
+
+Both runs retained debug assertions and overflow checks. Wasmtime and Cranelift
+remain at their existing optimization levels. Guest compiler settings are
+unchanged. Seven process files retain completed parent and child spans in each
+run. Both runs recorded 35 library compilations. Encoding spans decreased from
+131.40 to 95.91 elapsed worker-seconds. Exclusive bundle-load spans remained
+166.04 seconds in the level-1 run. Spans overlap across workers. These spans
+are not additive suite durations or CPU measurements. Dataset decode markers
+had no completed calls in this workload. Bundle loading includes JSON decode
+and durable reads; those costs are not separated by this diagnostic.
+
+The final configuration has no serialization or hashing dependency override.
+A temporary `serde_json` level-1 override invalidated DuckDB build dependencies
+and started a new C++ build. That build was stopped before tests ran. The JSON
+override was removed. The diagnostic does not separate JSON decode from other
+load costs. The evidence does not justify this extra build cost. The measured
+exclusive digest spans also do not justify another profile setting.
+
+The baseline incremental build took 228.07 seconds. The first level-1 build
+failed during `mithril-policy` linking because the filesystem was full.
+The failed log interval is approximately 1,073 seconds. Cleanup removed only
+old generated incremental caches. The successful retry took 48.42 seconds
+with completed artifacts retained. These results do not establish a clean
+build-cost comparison. The configuration change can increase build cost.
+
+The records are `/tmp/araphor-f1-baseline.json`,
+`/tmp/araphor-f1-opt1.json`, and their `-costs.json` reports. The failed build
+log is `/tmp/araphor-f1-opt1-failed-build.log`. Temporary markers are removed.
+No performance framework or timing test enters the repository.
+
+**Done** for the matching Data and SDK comparison and profile implementation.
+**Not done** for final configuration qualification until the focused and
+repository checks below complete.

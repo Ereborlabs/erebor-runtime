@@ -141,3 +141,20 @@ Read the [source record](/tmp/araphor-data-final-ci-source.json) and
 results. **Done** for approved changes 1 through 5. Diagnostic child-stage
 attribution remains incomplete. No complete-suite speed claim depends on
 those missing child records.
+
+## Test profile correction
+
+[Cargo test overrides](../../Cargo.toml) An engineer builds the Data tests
+  -> [Data and SDK overrides](../../Cargo.toml) compile Data and SDK test code at optimization level 1
+  -> [repository procedure](../../.github/scripts/verify-rust-ci.sh) retain the existing features, assertions, overflow checks, and test selection
+
+The profile change does not change guest compiler settings. The matching
+nine-case comparison covers the Data and SDK overrides. Both runs passed.
+The recorded harness duration changed from 473.97 to 442.83 seconds.
+There is no JSON or hashing dependency override. The temporary JSON override
+started a new DuckDB C++ build and was removed before execution qualification.
+A full filesystem blocked the first optimized build. The successful retry
+reused completed artifacts.
+Read [the implementation record](araphor-data-test-runtime-reduction.md#f1-test-build-profile)
+for the exact measurements and limits. These temporary diagnostics are manual
+evidence. They do not add committed timing tests.
