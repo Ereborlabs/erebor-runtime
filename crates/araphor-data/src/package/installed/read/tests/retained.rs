@@ -179,13 +179,19 @@ fn result_metadata_keeps_lease() -> TestResult {
         .iter()
         .find(|artifact| artifact.descriptor.id == "runtime-fixture")
         .ok_or("retained artifact")?;
-    let metadata = artifact.descriptor.allocated_bytes() + "1".len();
     let result = snapshot.evaluate(
         [1; 16],
         "runtime-fixture",
         &evaluation(&fixture.selected)?,
         &AnalysisReadControl::with_timeout(Duration::from_secs(60))?,
     )?;
+    let metadata = artifact.descriptor.allocated_bytes()
+        + result.revision.capacity()
+        + result.target.capacity()
+        + result
+            .artifact
+            .as_ref()
+            .map_or(0, crate::PackageArtifactIdentityV1::allocated_bytes);
     let retained = result.evaluation.allocated_bytes() + metadata;
     drop(snapshot);
     let capacity = QueryLimits::default().input_capacity;

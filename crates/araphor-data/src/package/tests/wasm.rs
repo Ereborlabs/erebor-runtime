@@ -148,17 +148,7 @@ async fn wasm_failure_retains_state() -> TestResult {
             evaluate_timeout: std::time::Duration::from_secs(30),
             ..Default::default()
         })?;
-        let mut package = component("1");
-        package.artifacts[0]
-            .implementations
-            .push(PackageImplementationV1::Sql {
-                export: "evaluate".into(),
-                inputs: BTreeMap::new(),
-                program: crate::SqlModelV1 {
-                    outputs: BTreeMap::from([("data".into(), "SELECT 7::UBIGINT AS value".into())]),
-                    ..Default::default()
-                },
-            });
+        let package = component("1");
         assert!(fixture
             .install(package, Some(parameters(mode)))
             .await
@@ -176,5 +166,38 @@ async fn wasm_failure_retains_state() -> TestResult {
         let fixture = fixture.reopen()?;
         assert!(fixture.execute(evaluate("retry-trap")).await.is_err());
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ambiguous_type_rejects_activation() -> TestResult {
+    let fixture = Fixture::new()?;
+    let mut package = component("1");
+    package.artifacts[0]
+        .implementations
+        .push(PackageImplementationV1::Sql {
+            export: "evaluate".into(),
+            inputs: BTreeMap::new(),
+            program: crate::SqlModelV1 {
+                outputs: BTreeMap::from([("data".into(), "SELECT 7::UBIGINT AS value".into())]),
+                ..Default::default()
+            },
+        });
+    assert!(matches!(
+        fixture.install(package, Some(parameters("echo"))).await,
+        Err(crate::Error::Package {
+            code: PackageErrorCodeV1::Invalid,
+            field: "plugin execution type",
+            ..
+        })
+    ));
+    assert!(fixture
+        .owner
+        .activations([1; 16], "test", "runtime-fixture")?
+        .is_empty());
+    assert!(fixture
+        .store
+        .package_revision([1; 16], "runtime-fixture", "1")?
+        .is_none());
     Ok(())
 }

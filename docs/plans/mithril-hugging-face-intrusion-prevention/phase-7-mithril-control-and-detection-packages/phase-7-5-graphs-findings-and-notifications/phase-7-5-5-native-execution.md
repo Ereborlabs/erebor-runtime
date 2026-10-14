@@ -62,8 +62,8 @@ Cross-target parity is required for every export that advertises both targets.
   or isolation layer. Native shares Araphor's privileges and failure domain.
   Retain host authorization, input/output accounting, and stale-result checks.
   Native memory and CPU options remain disabled by default. Process-wide OS
-  limits cannot represent per-evaluation native limits; resolve enabled semantics
-  before implementing those options.
+  limits cannot represent per-evaluation native limits. An enabled hard native
+  cap returns Unsupported before native loading. SQL and Wasm remain usable.
 - Keep durable state in AnalysisStore. Do not retain borrowed request pointers
   or callbacks after evaluation. Hold the library and operation permit while
   native code is running. Cancellation is cooperative; reject a late completion
@@ -103,7 +103,8 @@ Linux x86-64 product restriction or claim qualification from compilation alone.
 
 **Not done.** Native SDK exchange, installed execution, export parity, lifecycle,
 and host-fault restart checks pass on the recorded Linux x86-64 host. The complete
-graph notification case and final workspace CI remain pending.
+graph notification case failed at a package read deadline. Final workspace CI
+remains pending; the graph failure is under investigation.
 
 ### Design decision record
 
@@ -297,10 +298,11 @@ Run the retained binary with `--case CASE --output-directory DIRECTORY`.
 | `analysis-packages-native` | `araphor-native-qualified-analysis-packages-20261013` | Session 43003, exit 0, PASS. |
 | `context-roundtrip` | `araphor-native-qualified-context-20261013` | Session 33660, exit 0, PASS. |
 | `profile-restart` | `araphor-native-qualified-profile-20261013` | Session 2806, exit 0, PASS. |
-| `graph-notification` | `araphor-native-qualified-graph-20261013` | Session 76075 remains live. |
+| `graph-notification` | `araphor-native-qualified-graph-20261013` | Session 76075, exit 1, AnalysisReadDeadline. |
 
-Each output directory contains `result.json`. The adjacent `.log` file retains
-the case log. These cases use supported production owners with synthetic inputs.
+Each passing output directory contains `result.json`. The graph case failed
+before it created its output directory. The adjacent `.log` file retains each
+case log. These cases use supported production owners with synthetic inputs.
 They do not establish a physical Kubernetes result.
 
 The native case retains the original SQL and Wasm checks. The real client installs
@@ -311,6 +313,17 @@ artifact digest, dependency closure digest, and platform. Restart, retry, and
 trust revocation checks pass. The three installed migrated graph exports return
 the same findings, graph records, package state, and repeated replay result.
 Python is unavailable on PATH. No performance claim or physical action occurs.
+
+The first complete graph case returned exit 1 after 1,460.056 seconds. The error
+is `AnalysisReadDeadline`, with caller `analysis/packages/read.rs:16`.
+`AnalysisStore::package_revision` uses a fresh one-second default read control.
+This is not an overall graph timeout. The graph case executes the unchanged
+required Wasm packages. The store reader and original graph workload did not
+change. The info log places the failure inside replay qualification but does
+not identify its exact step or package. Concurrent build load is a hypothesis,
+not a proven cause. Run the same retained binary after final CI finishes, with
+the existing graph debug logs and a fresh output directory. Keep all deadlines
+and inputs unchanged. Do not change source without a confirmed cause.
 
 The builder test correction returns clock and file-read errors through the
 existing error owner. All file and dependency assertions remain. Its final
@@ -356,6 +369,83 @@ all-feature clippy for `araphor-data` returned exit 0. Logs are
 `/tmp/araphor-native-loader-test-final-20261013.log` and
 `/tmp/araphor-native-loader-clippy-final-20261013.log`. No production statement
 changed; the retained native artifacts and production binary remain applicable.
+
+### Workspace graph qualification investigation
+
+Final CI session 56085 reports a failure in
+`graph::tests::control_graph_context_and_result_bounds_keep_required_progress`.
+The process remains live. The test uses 256 records, three large context facts
+per record, and checks complete progress, 256 findings, result byte bounds, and
+context bounds. Its full failure detail is pending the terminal test output.
+Keep the test inputs, assertions, byte bounds, and deadlines unchanged. Check
+the exact failure and connected source before a correction or isolated rerun.
+
+The terminal result is exit 101: 606 passed, 5 failed, and 19 ignored in the
+data crate. The two graph errors are read deadlines. The other failures are
+the retained metadata capacity check, the sealed sibling loader assertion,
+and the Wasm failure fixture's empty export receipt. No later workspace crate
+test ran in this cut.
+
+### Final CI correction TODOs
+
+- [x] Include actual retained target and artifact metadata in the lease test's
+  expected byte count. Use the production metadata accounting contract. Keep
+  the exact capacity boundary and drop-release assertions. Change production
+  accounting only if its held bytes do not match its retained values.
+- [x] Replace the Wasm failure fixture's two declared implementations with one
+  declared Wasm implementation. Test ambiguous admission separately. Preserve
+  all four fault modes, their exact error codes, empty committed results,
+  restart, and failed retry checks. Keep the approved plugin-type rule and
+  absence of execution fallback.
+- [x] Reproduce the sealed sibling loader assertion with the full error value.
+  Preserve the real sibling dependency and accessor call. Correct the assertion
+  only after identifying whether its error owner, code, or control failed.
+- [x] Run the two unchanged graph deadline cases without concurrent build or
+  qualification load. Preserve 256 records, large traversal, every assertion,
+  and the existing deadlines. Record the result before changing source.
+
+The two unchanged graph cases pass in isolation: 2 passed and 0 failed in
+390.33 seconds, session 86044, exit 0. The command used the original full-feature
+test executable, `--test-threads=1`, and the two exact test filters. The log is
+`/tmp/araphor-native-ci-graph-isolated-20261013.log`. The 256-record bounds and
+large traversal inputs, assertions, byte limits, and deadlines are unchanged.
+The sibling loader case also passes without concurrent load.
+
+The first isolated attempt used a copied executable outside a `deps` directory.
+The existing compiler dispatcher did not recognize that path as a test binary;
+both graph cases failed before graph computation with compiler process exit 101.
+The original executable fixes that launch error. It is not a native or graph
+implementation change. The copied attempt is not qualification evidence.
+
+The corrected full-feature focused command returns 21 passed and 0 failed in
+109.28 seconds, session 19394, exit 0. It covers 18 loader checks, the exact
+retained metadata boundary, ambiguous admission, and all four Wasm fault modes.
+The log is `/tmp/araphor-native-ci-corrections-focused-20261013.log`.
+The metadata test now counts owned revision, target, and artifact allocation.
+Production already holds those allocations. The fault fixture uses one Wasm
+declaration. A separate test checks exact ambiguity rejection before activation
+or revision storage. The sibling test preserves the expected invalid null ABI
+result and adds its full unexpected error to the assertion diagnostic.
+These changes affect tests only. Native production code and retained production
+artifacts remain unchanged.
+
+Run the final repository CI procedure with `RUST_TEST_THREADS=4` to reduce host
+contention. This changes test scheduling, not product limits or test coverage.
+Keep internal concurrency checks, original deadlines, and all workloads. Run
+the complete graph production case after that CI process reaches its terminal
+result. Use its existing debug logs and a fresh output directory.
+
+CI session 23876 was stopped with exit 143 before its workspace tests. The
+loader diagnostic had first been added to the null-accessor test instead of the
+sibling test. The correction gives both tests their exact diagnostic and keeps
+both assertions unchanged. This source edit requires a new final CI run. The
+stop was for that source correction, not a polling timeout. Its log remains
+`/tmp/araphor-native-rust-ci-qualified-20261014.log`.
+
+The corrected null and sibling diagnostics pass the full-feature loader cut:
+18 passed and 0 failed, session 66984, exit 0. The log is
+`/tmp/araphor-native-ci-loader-diagnostics-20261014.log`. The assertions and
+one-second controls are unchanged.
 
 ### Installed native production qualification TODO
 

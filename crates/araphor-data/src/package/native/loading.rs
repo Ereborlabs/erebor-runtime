@@ -254,18 +254,24 @@ mod tests {
     fn loading_rejects_null_accessor() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let fixture = LibraryFixture::build("#[no_mangle] pub extern \"C\" fn araphor_analysis_get_api_v1() -> *const u8 { std::ptr::null() }")?;
         fixture.qualification.validate(&fixture.bytes)?;
-        assert!(matches!(
-            NativeLibrary::load(
-                &fixture.bytes,
-                &fixture.qualification,
-                &AnalysisReadControl::default()
+        let error = NativeLibrary::load(
+            &fixture.bytes,
+            &fixture.qualification,
+            &AnalysisReadControl::default(),
+        )
+        .err()
+        .ok_or("null ABI loaded")?;
+        assert!(
+            matches!(
+                error,
+                crate::Error::Package {
+                    code: Code::Invalid,
+                    field: "native ABI table",
+                    ..
+                }
             ),
-            Err(crate::Error::Package {
-                code: Code::Invalid,
-                field: "native ABI table",
-                ..
-            })
-        ));
+            "{error:?}"
+        );
         Ok(())
     }
 
@@ -426,18 +432,24 @@ mod tests {
                 artifact: dependency.bytes,
             });
         fixture.qualification.validate(&fixture.bytes)?;
-        assert!(matches!(
-            NativeLibrary::load(
-                &fixture.bytes,
-                &fixture.qualification,
-                &AnalysisReadControl::default()
+        let error = NativeLibrary::load(
+            &fixture.bytes,
+            &fixture.qualification,
+            &AnalysisReadControl::default(),
+        )
+        .err()
+        .ok_or("sibling ABI loaded")?;
+        assert!(
+            matches!(
+                error,
+                crate::Error::Package {
+                    code: Code::Invalid,
+                    field: "native ABI table",
+                    ..
+                }
             ),
-            Err(crate::Error::Package {
-                code: Code::Invalid,
-                field: "native ABI table",
-                ..
-            })
-        ));
+            "{error:?}"
+        );
         Ok(())
     }
     #[cfg(target_os = "linux")]
