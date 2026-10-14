@@ -284,3 +284,65 @@ when the case ends. The shared fixture constructor remains unpinned. Tests that
 change package activations, tenants, history, expiry, or authority retain their
 existing owners. No query case changes. Both live cases passed in
 `/tmp/araphor-f-final-focused.json`. Final repository CI is pending.
+
+## Independent fixture execution flow
+
+[Execution factories](../../crates/araphor-data/src/graph/tests.rs) A Discovery or graph case requests execution
+  -> [InstalledAnalysis::testing](../../crates/araphor-data/src/package/required/testing.rs) create a store, query budget, authority, and package owner for the case
+  -> [Existing Wasm fixture](../../crates/araphor-data/src/package/wasm/fixtures.rs) share compiled code and retain private execution state
+  -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) retain installed references and memory guards
+  -> [CommitFixture](../../crates/araphor-data/src/graph/tests/native_storage.rs) reuse that case execution for later windows
+
+
+The [Discovery test factory](../../crates/araphor-data/src/discovery/derive.rs)
+and [graph test factory](../../crates/araphor-data/src/graph/tests.rs) call
+`InstalledAnalysis::testing(None, tenant)` for each case. The
+[constructor](../../crates/araphor-data/src/package/required/testing.rs)
+opens a new temporary store, creates a query owner and fixture authority,
+creates a package owner, and installs the required packages. It uses the
+[existing compiled-code fixture](../../crates/araphor-data/src/package/wasm/fixtures.rs).
+That facility shares immutable compiled code. It does not share the case's
+query usage, grant owner, or guest execution state.
+
+The factory then calls
+[InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs).
+The snapshot records the tenant and installed activation references. Its
+[bundle and snapshot guards](../../crates/araphor-data/src/package/installed/snapshot.rs)
+retain input-memory leases on that case's query budget. Clones retain these
+guards. A pinned snapshot does not remove evaluation authorization checks.
+
+```mermaid
+sequenceDiagram
+    participant Case as Test case
+    participant Factory as execution()
+    participant Installed as InstalledAnalysis
+    participant Store as AnalysisStore
+    participant Query as QueryOwner
+    participant Package as AnalysisPackageOwner
+    participant Code as WasmExecution
+    Case->>Factory: execution()
+    Factory->>Installed: testing(None, tenant)
+    Installed->>Store: open(temporary path)
+    Installed->>Query: new(store, limits)
+    Installed->>Package: new(store, query, authority)
+    Installed->>Package: prepare_test_code()
+    Package->>Code: fixture_code(limits)
+    Code-->>Package: Shared code, private running state
+    Installed->>Package: ensure_required(grant, control)
+    Factory->>Installed: snapshot(tenant)
+    Installed->>Query: retain_analysis_input(bytes)
+    Installed-->>Factory: Pinned references and memory guards
+    Factory-->>Case: Independent case execution
+```
+
+[CommitFixture::new](../../crates/araphor-data/src/graph/tests/native_storage.rs)
+keeps that execution in its graph owner. `next_window` and
+[TraversalFixture::commit_window](../../crates/araphor-data/src/graph/tests/traversal/fixtures.rs)
+clone the same case execution. They retain all original window computations,
+inputs, witnesses, and commits. `add_packages` remains a separate operation:
+it creates an unpinned owner on the fixture store and reads current references.
+
+The new owner-identity test rejects a shared factory result. That test and
+connected parallel functional cases passed in the 111-case Data run recorded
+in `/tmp/araphor-f-final-focused.json`. The approved nine-case comparison
+uses four then eight test threads, with 900 seconds for each run. The comparison is pending. The final CI default remains four threads.

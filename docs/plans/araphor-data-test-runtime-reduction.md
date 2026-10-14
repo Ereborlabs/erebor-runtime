@@ -568,3 +568,39 @@ their original execution paths. No query test was changed.
 **Done** for implementation and focused qualification. Both live cases passed
 in the 111-case Data run recorded in `/tmp/araphor-f-final-focused.json`.
 **Not done** for final repository CI. No separate saving is measured.
+
+### F7: Independent execution fixtures
+
+The [Discovery factory](../../crates/araphor-data/src/discovery/derive.rs) and
+[graph factory](../../crates/araphor-data/src/graph/tests.rs) now return a new
+pinned execution for each case. These factories replace their global execution
+mutexes. They call
+[InstalledAnalysis::testing](../../crates/araphor-data/src/package/required/testing.rs)
+to create a separate store, package owner, query budget, and fixture authority.
+They then call `snapshot` to retain the installed package references and their
+memory leases. A clone of the old shared owner is not used for this separation.
+
+[The existing compiled-code fixture](../../crates/araphor-data/src/package/wasm/fixtures.rs)
+still shares its engine, linker, epoch, and compiled cache. Each execution keeps
+its own running count and compiler state. Guest stores and checkpoints remain
+separate. Quotas are unchanged.
+
+[CommitFixture](../../crates/araphor-data/src/graph/tests/native_storage.rs)
+creates one execution for a graph case. Its next window and
+[traversal windows](../../crates/araphor-data/src/graph/tests/traversal/fixtures.rs)
+reuse that case's execution. They do not create another store for each window.
+The `add_packages` helper still replaces execution with an unpinned owner on
+the fixture store and reads its current package references.
+
+The new `graph_execution_owners_are_independent` test checks that two factory
+results have different package owner identities. Constructor review establishes
+the separate store and query budget allocations. Connected functional tests
+must establish the unchanged results and lifecycle behavior.
+
+**Done** for implementation and focused qualification. The owner-identity
+test and connected Discovery, graph, traversal, and recovery cases passed
+in `/tmp/araphor-f-final-focused.json`. **Not done** for the
+four-versus-eight thread comparison and final repository CI. The user approved nine existing cases,
+first with four test threads and then with eight, with a 900-second allowance
+for each run. The runs remain pending. The final CI configuration remains four
+test threads. No timing improvement is established yet.

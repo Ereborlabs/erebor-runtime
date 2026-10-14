@@ -50,7 +50,7 @@ impl TraversalFixture {
         let mut snapshot = if window == 0 {
             self.native.snapshot.clone()
         } else {
-            let execution = execution()?;
+            let execution = self.native.owner.execution.clone();
             let mut event = wire(cursor, DeniedBeforeEffect, 2, 2, [20; 16]);
             event.task_cookie = if window == 16 { first } else { first + 1 };
             let observation = record(cursor, &event)?;

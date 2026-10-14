@@ -8,20 +8,20 @@ use crate::*;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-pub(crate) fn execution() -> TestResult<std::sync::MutexGuard<'static, crate::InstalledAnalysis>> {
-    static EXECUTION: std::sync::LazyLock<crate::Result<Mutex<crate::InstalledAnalysis>>> =
-        std::sync::LazyLock::new(|| {
-            let tenant = source().tenant_id;
-            crate::InstalledAnalysis::testing(None, tenant)?
-                .snapshot(tenant)
-                .map(Mutex::new)
-        });
-    match EXECUTION.as_ref() {
-        Ok(execution) => execution
-            .lock()
-            .map_err(|_| "installed fixture lock poisoned".into()),
-        Err(error) => Err(error.into()),
-    }
+pub(crate) fn execution() -> TestResult<crate::InstalledAnalysis> {
+    let tenant = source().tenant_id;
+    Ok(crate::InstalledAnalysis::testing(None, tenant)?.snapshot(tenant)?)
+}
+
+#[test]
+fn graph_execution_owners_are_independent() -> TestResult {
+    let first = execution()?;
+    let second = execution()?;
+    assert!(!Arc::ptr_eq(
+        &first.testing_owner(),
+        &second.testing_owner()
+    ));
+    Ok(())
 }
 
 mod baseline;

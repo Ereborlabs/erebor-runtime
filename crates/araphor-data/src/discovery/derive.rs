@@ -173,21 +173,9 @@ mod tests {
 
     type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-    fn execution() -> TestResult<std::sync::MutexGuard<'static, crate::InstalledAnalysis>> {
-        static EXECUTION: std::sync::LazyLock<
-            crate::Result<std::sync::Mutex<crate::InstalledAnalysis>>,
-        > = std::sync::LazyLock::new(|| {
-            let tenant = input()?.tenant_id;
-            crate::InstalledAnalysis::testing(None, tenant)?
-                .snapshot(tenant)
-                .map(std::sync::Mutex::new)
-        });
-        match EXECUTION.as_ref() {
-            Ok(execution) => execution
-                .lock()
-                .map_err(|_| "installed fixture lock poisoned".into()),
-            Err(error) => Err(error.into()),
-        }
+    fn execution() -> TestResult<crate::InstalledAnalysis> {
+        let tenant = input()?.tenant_id;
+        Ok(crate::InstalledAnalysis::testing(None, tenant)?.snapshot(tenant)?)
     }
 
     pub(super) fn input() -> crate::Result<DiscoveryInputManifestV1> {

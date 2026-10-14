@@ -17,7 +17,7 @@ impl CommitFixture {
         input.coverage[0].coverage_revision = 2;
         input.coverage_keys[0].report_revision = 2;
         input.coverage_keys[0].interval_revision = 2;
-        let execution = execution()?;
+        let execution = self.owner.execution.clone();
         let mut snapshot = GraphAndFindingOwner::derive(&input, &execution)?;
         snapshot.witness_deadline_utc_ns = self.snapshot.witness_deadline_utc_ns;
         let request = AnalysisResultCommitV1 {
