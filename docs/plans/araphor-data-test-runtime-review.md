@@ -271,3 +271,16 @@ recovery boundaries. Dedicated cold installation, compiler failure, eviction,
 and five-library capacity tests retain their original paths. Focused crash
 qualification passed in `/tmp/araphor-f-final-focused.json`. All six children
 returned the required exit code. Final repository CI is pending.
+
+## Local package pins
+
+[Live Discovery tests](../../crates/araphor-data/src/discovery/live.rs) A case creates an owner with fixed package revisions
+  -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) retain installed references and charged memory guards
+  -> [DiscoveryOwner::process](../../crates/araphor-data/src/discovery/live.rs) process the original transaction and source-window inputs
+
+Only `discovery_live_transaction` and the first owner in
+`discovery_live_boundaries` use this local pin. Each owner releases the snapshot
+when the case ends. The shared fixture constructor remains unpinned. Tests that
+change package activations, tenants, history, expiry, or authority retain their
+existing owners. No query case changes. Both live cases passed in
+`/tmp/araphor-f-final-focused.json`. Final repository CI is pending.

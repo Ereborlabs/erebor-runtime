@@ -554,3 +554,17 @@ Focused proof: `analysis::crash::discovery_profile_commit_crashes`.
 **Done** for implementation and focused qualification. The six crash exits
 and recovery assertions passed in the 111-case Data run. The record is
 `/tmp/araphor-f-final-focused.json`. **Not done** for final repository CI.
+
+### F6: Local package pins
+
+The [live tests](../../crates/araphor-data/src/discovery/live.rs) pin installed
+packages in `discovery_live_transaction` and the first owner in
+`discovery_live_boundaries`. Each case keeps its store and owner. Source inputs
+and transaction outcomes still change through the original production calls.
+The shared owner helper remains unpinned. The package activation case can still
+observe an update. Multi-tenant, historical, expiry, and authority cases retain
+their original execution paths. No query test was changed.
+
+**Done** for implementation and focused qualification. Both live cases passed
+in the 111-case Data run recorded in `/tmp/araphor-f-final-focused.json`.
+**Not done** for final repository CI. No separate saving is measured.

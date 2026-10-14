@@ -1363,7 +1363,8 @@ mod tests {
     fn discovery_live_transaction() -> TestResult {
         let fixture = DiscoveryFixture::new(Default::default())?;
         fixture.accept(1)?;
-        let owner = fixture.owner(Default::default())?;
+        let mut owner = fixture.owner(Default::default())?;
+        owner.execution = owner.execution.snapshot(fixture.source.tenant_id)?;
         fixture
             .store
             .set_commit_hook(AnalysisCommitStage::BeforeResultCommit, || {
@@ -1430,7 +1431,8 @@ mod tests {
             input_bytes: fixture.frame.len() + 1,
             ..Default::default()
         };
-        let owner = fixture.owner(config)?;
+        let mut owner = fixture.owner(config)?;
+        owner.execution = owner.execution.snapshot(fixture.source.tenant_id)?;
         assert_eq!(owner.process(10)?, 1);
         let first = owner.profile(&fixture.source)?.ok_or("profile absent")?;
         assert!(first.sealed);
