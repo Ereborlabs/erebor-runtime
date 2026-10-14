@@ -205,3 +205,39 @@ digest equality, and descriptor rejection. The existing
 `package::tests::wasm::metadata::sql_bundle_encoding_unchanged` test checks the
 compact SQL bytes. Focused qualification passed. The source record is
 `/tmp/araphor-f-final-focused.json`. Final repository CI is pending.
+
+## Installation retry encoding
+
+[AnalysisPackageOwner::install_revision](../../crates/araphor-data/src/package/lifecycle/revisions.rs) Installation prepares one immutable revision
+  -> [AnalysisPackageOwner::revision_encoding](../../crates/araphor-data/src/package/lifecycle/revisions.rs) construct the descriptor and sorted dependency fields
+  -> [AnalysisStore::package_revision](../../crates/araphor-data/src/analysis/packages/read.rs) read the saved record and retain its result
+  -> [ArtifactEncoding::check_encoding](../../crates/araphor-data/src/package/bundle.rs) check the candidate bound on a saved-record hit
+  -> [semantic comparison](../../crates/araphor-data/src/package/lifecycle/revisions.rs) return the identical saved record or encode the candidate bytes
+  -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) retain the existing collision and transaction checks
+
+The record lookup is read-only. Installation holds the existing lifecycle
+lock. The owner does not return a saved lookup or decode error until candidate
+serialization succeeds. A missing record or lookup error uses byte encoding
+instead of size checking, so cold installation serializes once. A different
+existing record can require both operations. Descriptor and artifact comparisons
+retain the legacy semantic rules. No cache, durable identity, or transaction
+owner changes.
+
+Read `package::lifecycle::revisions::tests::revision_retry_and_collision` and
+`revision_candidate_error_precedes_saved_decode` in
+[the revision owner](../../crates/araphor-data/src/package/lifecycle/revisions.rs).
+The tests cover identical retries, conflicting records, unchanged durable
+state, and candidate-limit errors before malformed saved artifact decoding.
+Focused qualification and final CI are pending.
+
+The internal revision serializer and size check both use the existing 64 MiB
+analysis record limit. Public bundle encoding and validation retain the 32 MiB
+bundle limit. The test
+`package::lifecycle::revisions::tests::revision_retry_preserves_encoding_bound`
+checks an internal revision between those limits and an identical retry.
+The candidate-limit precedence test retains rejection above the record limit.
+Qualification is pending after this bound correction.
+
+The earlier 111-case Data run passed retry collision and candidate-error
+precedence checks. The limit correction and added regression require the
+focused record `/tmp/araphor-f-retry-focused.json`. That run is in progress.

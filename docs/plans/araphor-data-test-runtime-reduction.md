@@ -497,3 +497,36 @@ legacy SQL bytes and canonical digest checks.
 run passed both new Data encoding tests, existing metadata cases, and all
 66 SDK tests. The record is `/tmp/araphor-f-final-focused.json`.
 **Not done** for final repository CI. No elapsed-time saving is established for this correction.
+
+### F4 installation retry encoding
+
+Revision preparation constructs the same descriptor and sorted dependencies.
+The owner captures the immutable record lookup result without returning its
+error. A missing record or lookup error uses one bounded serialization to an
+owned vector. An existing record uses bounded size checking first.
+
+Candidate serialization errors precede saved lookup and decode errors. An
+identical saved descriptor, dependencies, and artifact return the saved record
+through the existing semantic comparison. A different artifact produces the
+candidate record for the existing transaction collision checks. No store write
+occurs before candidate validation. Legacy SQL comparison remains semantic.
+
+An existing record that differs can require size checking and byte encoding.
+Cold installation uses one byte encoding. The added tests are
+`package::lifecycle::revisions::tests::{revision_retry_and_collision,
+revision_candidate_error_precedes_saved_decode}`.
+
+**Done** for implementation. **Not done** for focused qualification and final
+repository CI. No elapsed-time saving is established for this correction.
+
+The internal revision serializer and size check both use the existing 64 MiB
+analysis record limit. Public bundle encoding and validation retain the 32 MiB
+bundle limit. The test
+`package::lifecycle::revisions::tests::revision_retry_preserves_encoding_bound`
+checks an internal revision between those limits and an identical retry.
+The candidate-limit precedence test retains rejection above the record limit.
+Qualification is pending after this bound correction.
+
+The earlier 111-case Data run passed retry collision and candidate-error
+precedence checks. The limit correction and added regression require the
+focused record `/tmp/araphor-f-retry-focused.json`. That run is in progress.

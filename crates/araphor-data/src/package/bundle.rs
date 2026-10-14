@@ -45,6 +45,16 @@ pub(super) struct ArtifactEncoding<'a> {
     fixtures: &'a [PackageFixtureV1],
 }
 
+impl ArtifactEncoding<'_> {
+    pub(super) fn check_encoding(&self) -> Result<()> {
+        let mut writer = super::wire::PackageBuffer::from_writer(
+            io::sink(),
+            crate::analysis::MAX_PACKAGE_BYTES as u64,
+        );
+        serde_json::to_writer(&mut writer, self).context(PackageEncodingSnafu)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "target", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageImplementationV1 {
