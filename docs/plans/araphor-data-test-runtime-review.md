@@ -158,3 +158,22 @@ reused completed artifacts.
 Read [the implementation record](araphor-data-test-runtime-reduction.md#f1-test-build-profile)
 for the exact measurements and limits. These temporary diagnostics are manual
 evidence. They do not add committed timing tests.
+
+## Admitted bundle inspection
+
+[AnalysisPackageOwner::run](../../crates/araphor-data/src/package/evaluation.rs) Run completes the selected evaluations
+  -> [AnalysisPackageOwner::inspect](../../crates/araphor-data/src/package/inspect.rs) inspect with the admitted bundle
+  -> [AnalysisPackageOwner::refresh_package](../../crates/araphor-data/src/package/freshness.rs) read current activations and calculate freshness
+  -> [artifact selection](../../crates/araphor-data/src/package/inspect.rs) use the matching root and revision or load current stored data
+
+Run owns the borrowed bundle until inspection returns. Inspection does not
+retain that borrow. Authority, activation, receipt, and scope checks remain in
+their existing owners. Replacement can make the admitted root obsolete. The
+existing fallback then reads the current artifact. This correction adds no
+shared decoded package state or memory lease.
+
+Read `package::lifecycle::tests::admitted_inspection_tracks_replacement` in
+[the lifecycle tests](../../crates/araphor-data/src/package/lifecycle/tests.rs).
+The test covers matching roots, replacement, fallback, scope, and authority.
+Focused qualification passed in the 111-case Data run. The source record is
+`/tmp/araphor-f-final-focused.json`. Final repository CI is pending.

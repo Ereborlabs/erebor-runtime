@@ -10,6 +10,64 @@ mod admissions;
 mod recovery;
 
 #[tokio::test]
+async fn admitted_inspection_tracks_replacement() -> TestResult {
+    let fixture = Fixture::new()?;
+    let original = bundle("1", "SELECT 3::UBIGINT AS count");
+    fixture.install(original.clone(), None).await?;
+    let control = crate::AnalysisReadControl::default();
+    let response = fixture.owner.inspect(
+        &fixture.grant,
+        "test",
+        "test.model",
+        Some(&original),
+        &control,
+    )?;
+    assert_eq!(response.exports[0].revision, "1");
+    assert_eq!(response.exports[0].results.len(), 1);
+    let replacement = bundle("2", "SELECT 4::UBIGINT AS count");
+    fixture
+        .execute(PackageRequestV1::Update {
+            scope_id: "test".into(),
+            bundle: replacement.clone(),
+        })
+        .await?;
+    for admitted in [&original, &replacement] {
+        let response = fixture.owner.inspect(
+            &fixture.grant,
+            "test",
+            "test.model",
+            Some(admitted),
+            &control,
+        )?;
+        assert_eq!(response.exports[0].revision, "2");
+        assert!(!response.exports[0].results.is_empty());
+        assert!(fixture
+            .owner
+            .inspect(
+                &fixture.grant,
+                "other",
+                "test.model",
+                Some(admitted),
+                &control,
+            )?
+            .exports
+            .is_empty());
+    }
+    let mut denied = fixture.grant.clone();
+    denied.revision += 1;
+    assert!(matches!(
+        fixture
+            .owner
+            .inspect(&denied, "test", "test.model", Some(&replacement), &control,),
+        Err(crate::Error::Package {
+            code: crate::package::PackageErrorCodeV1::Denied,
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn parameters_checked_before_installation() -> TestResult {
     let fixture = Fixture::new()?;
     let mut package = bundle("1", "SELECT 3::UBIGINT AS count");

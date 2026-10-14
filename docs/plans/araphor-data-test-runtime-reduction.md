@@ -454,3 +454,22 @@ No performance framework or timing test enters the repository.
 **Done** for the matching Data and SDK comparison and profile implementation.
 **Not done** for final configuration qualification until the focused and
 repository checks below complete.
+
+### F2 admitted bundle inspection
+
+The Run owner passes its admitted bundle to final inspection. Inspection uses
+that bundle only when the installed root matches. Artifact selection also
+checks the installed revision. A changed root uses the existing store loading
+path. Inspection still reads current activations, checks authority, calculates
+freshness, and selects current receipts. No production cache is added.
+
+The added test is
+`package::lifecycle::tests::admitted_inspection_tracks_replacement`.
+The test covers a matching root, replacement, old-root fallback, scope, and
+rejected authority. Existing lifecycle and Wasm replacement tests retain their
+original operations and assertions.
+
+**Done** for implementation and focused qualification. The feature-unified
+run passed 111 Data cases in 598.77 seconds and all 66 SDK tests. The record
+is `/tmp/araphor-f-final-focused.json`. Covered source hashes remained
+unchanged. **Not done** for final repository CI. No elapsed-time saving is established for this correction.
