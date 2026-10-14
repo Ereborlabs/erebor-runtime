@@ -23,13 +23,15 @@ The local SQL package lifecycle is **Done**. Read its
 Installed Wasm qualification is **Done**. Read the
 [qualification record](phase-7-5-graphs-findings-and-notifications/phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 and [completion review](phase-7-5-graphs-findings-and-notifications/phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
-The native SDK and installed execution owner are implemented. Native parity,
-lifecycle, and focused production checks pass on the recorded Linux x86-64 GNU
-host. Final native qualification remains **Not done**. Read its
+Native execution qualification is **Done** on Linux x86-64 GNU with glibc 2.39.
+SDK, seven-export parity, lifecycle, installed production checks, and the final
+Rust CI gate pass. Read its
 [implementation review](phase-7-5-graphs-findings-and-notifications/native-execution-review.md)
 and [result](phase-7-5-graphs-findings-and-notifications/phase-7-5-5-native-execution.md#result).
-Python execution remains later work. The child results record their
-implementation and qualification.
+The final CI covers source `5e9364543093e3e18da03e4d51e6dd28cc057982`.
+Python execution, integrated package qualification, and upstream ports remain
+**Not done**. The complete package scope remains **Not done**. The child
+results record their implementation and qualification limits.
 
 ## Intended end state
 

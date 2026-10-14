@@ -27,12 +27,12 @@ production and workspace checks passed on `53f7674`; read the
 Installed Wasm qualification is **Done**. Read the
 [qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
-The native SDK binding and installed owner are implemented. Focused native
-parity and lifecycle proof passes. Read the
+Native execution qualification is **Done** on Linux x86-64 GNU with glibc 2.39.
+The native SDK, installed owner, seven-export parity, lifecycle, production
+checks, and final Rust CI gate pass. Read the
 [native proof route](native-execution-review.md#proof-route-and-current-status)
-and [qualification record](phase-7-5-5-native-execution.md). Final native
-qualification remains **Not done** until the complete graph-notification case,
-final workspace checks, and acceptance review pass.
+and [qualification record](phase-7-5-5-native-execution.md). This result does not
+close the later integrated package qualification or upstream port scope.
 The host context selector remains a host operation.
 
 ## Current implementation map
@@ -215,11 +215,24 @@ for exact binary, artifact, and closure digests.
 These results concern lightweight Linux x86-64 GNU execution. They do not
 qualify physical Kubernetes actions, cross-node causality, every native
 platform, native process isolation, or performance. AR-04 remains host-owned.
-The complete graph-notification case and final workspace tests remain pending.
-The current CI cut passes formatting, workspace checks, and workspace clippy.
-Workspace tests remain in progress. The prior cut failed at the original SQL
-dependency refresh check; the unchanged isolated case then passed. These
-partial results do not close native qualification.
+The installed native production case and complete graph-notification case pass
+in sessions 8227 and 64467 on source `b50107eb`. Their exact source, binary,
+artifact, and result records remain in the qualification record. The graph case
+uses its declared Wasm plugins; its traversal label does not prove native plugin
+execution. Session 8227 supplies that separate native proof.
+
+The later joined-shutdown correction has focused proof. Final CI session 25541
+passes with terminal exit 0 on
+`5e9364543093e3e18da03e4d51e6dd28cc057982`. Formatting, workspace checks,
+strict clippy, and all workspace tests pass. Data returns 614 passed and 19
+ignored; Control returns 188 passed and 2 ignored; Mithril end-to-end returns
+191 passed and 528 ignored. The original SQL replacement and upload/reopen cases
+both pass. The source record verifies all 1,390 covered source and configuration
+hashes: `/tmp/araphor-native-final-ci-joined-shutdown-source-20261014.json`.
+The SDK, loader, computation, and artifacts remain unchanged from their retained
+proof cuts. Earlier failed CI records remain historical evidence; they do not
+replace this final passing gate. Native qualification is **Done** within the
+stated platform and runtime limits.
 
 ## Shared operations that remain host-owned
 

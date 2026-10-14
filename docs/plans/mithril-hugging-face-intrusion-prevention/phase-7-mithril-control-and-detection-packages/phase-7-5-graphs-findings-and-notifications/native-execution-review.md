@@ -14,7 +14,9 @@ inputs. The same shared computation produces the same datasets, evidence,
 reasons, coverage, and checkpoints as its trusted Rust and Wasm forms. A failed
 or cancelled evaluation cannot commit a partial result. Restart restores the
 last complete durable commit. Native execution does not select Wasm as a
-fallback. Final qualification remains **Not done**.
+fallback. Qualification is **Done** on the recorded Linux x86-64 GNU host with
+glibc 2.39. Read the [final acceptance](phase-7-5-5-native-execution.md#final-eight-deliverable-acceptance)
+for exact source cuts, terminal proof, and limits.
 
 ## Implementation review flow
 
@@ -106,16 +108,22 @@ loads bundles, checks admission, and skips prepared exports inside its existing
 blocking task. These operations do not block the async runtime thread. The
 supervisor creates the 30-second control, cancellation guard, and authority
 subscription before dispatch. The task retains its operation permit until it
-exits. A stop request cancels the control; it does not terminate a blocking task.
-Control checks after bundle loading and admission reject a late completion.
+exits. Stop requests and authority changes cancel the control, then join the
+dispatched blocking task before `serve` returns. Activation-page reads and
+orphan pruning are also awaited. ClientListener already awaits `serve` before
+store reopen. Cancellation does not terminate a blocking task; a stalled native
+call can delay shutdown. Control checks after bundle loading and admission
+reject a late completion.
 
 The same owner passes the operation control to the failure-status transaction.
 The transaction checks cancellation before commit. A cancelled failure cannot
 change readiness metadata or mark retained results stale. Successful result
 commits retain their existing authorization and generation checks.
 [The interruption tests](../../../../../crates/araphor-data/src/package/tests/interruption.rs)
-check stop before admission release, permit retention until task exit, and
-unchanged activation and complete result records. A separate test cancels the
+poll after stop and check responsive cancellation before admission release,
+a pending shutdown join, three available operation permits while admission is
+held, four after task exit, and unchanged activation and complete result records.
+The test distinguishes prompt cancellation from completed service shutdown. A separate test cancels the
 failure control and checks the exact cancellation error and unchanged state.
 
 ## Evaluation and Arrow ownership
@@ -274,13 +282,13 @@ commands and terminal results.
 | Proof | Source and required observations | Current limit |
 | --- | --- | --- |
 | Source build and folder | [builder tests](../../../../../crates/araphor-component-build/src/lib.rs): separate native manifest, exact exports, dependency paths, size rejection, and preserved Wasm encoding. | Six final native libraries compile. Compilation does not prove installed execution. |
-| ABI | [SDK tests](../../../../../crates/araphor-analysis-sdk/src/native/tests.rs): complete typed output, malformed output release, cancellation, panic, and layout. | 63 SDK tests and strict all-target clippy pass. Workspace CI remains pending. |
-| Loader closure | [artifact](../../../../../crates/araphor-data/src/package/native/artifact.rs) and [loading tests](../../../../../crates/araphor-data/src/package/native/loading.rs): platform, symbol versions, reachable providers, sibling loading, sealed files, replacement, SONAME, and typed ABI rejection. | The 18-test gate passes. The later diagnostic fixture correction also passes 18 tests in session 66984. Final source clippy remains in the CI gate. Installed runtime proof remains separate. |
+| ABI | [SDK tests](../../../../../crates/araphor-analysis-sdk/src/native/tests.rs): complete typed output, malformed output release, cancellation, panic, and layout. | 63 SDK tests and strict all-target clippy pass. Final workspace CI session 25541 passes. |
+| Loader closure | [artifact](../../../../../crates/araphor-data/src/package/native/artifact.rs) and [loading tests](../../../../../crates/araphor-data/src/package/native/loading.rs): platform, symbol versions, reachable providers, sibling loading, sealed files, replacement, SONAME, and typed ABI rejection. | The 18-test gate passes. The later diagnostic fixture correction also passes 18 tests in session 66984. Final source clippy passes in session 25541. Installed runtime proof remains separate. |
 | Lifecycle | [native tests](../../../../../crates/araphor-data/src/package/tests/native/mod.rs): install, update, rollback, removal, checkpoint, denial, cancellation, and restart. | Seven lifecycle tests pass in the final 33-test cut. The separate real panic and SIGABRT restart test also passes with the final artifacts. |
 | Four discovery exports | [native discovery tests](../../../../../crates/araphor-data/src/discovery/sdk/native.rs): populated atoms, merge, groups, compare, reordered inputs, missing context, and coverage. | Both tests pass with the final SDK, loader, and libraries. |
 | Three graph exports | [native graph tests](../../../../../crates/araphor-data/src/graph/derive/adapter/tests/native.rs): complete and gapped inputs, trusted Rust/Wasm/native wire output, evidence, reasons, checkpoints, and derived results. | Complete parity and graph derivation pass after the new test releases its earlier output guards. |
 | Large native Arrow input | [large process test](../../../../../crates/araphor-data/src/graph/derive/adapter/tests/native/large.rs): 185 typed records, retained identities, full output and checkpoint parity through the actual native library. | The final 185-record proof passes. No benchmark or speed claim follows from this case. |
-| Installed production APIs | [native qualification](../../../../../crates/mithril-e2e/src/discovery/packages/native.rs) and [case owner](../../../../../crates/mithril-e2e/src/discovery/packages.rs): authored BurstDetector folder, no Python, native graph packages, exact artifact references, and restart. | Native analysis-packages, context-roundtrip, and profile-restart pass with the retained binary. The complete graph-notification case remains pending. |
+| Installed production APIs | [native qualification](../../../../../crates/mithril-e2e/src/discovery/packages/native.rs) and [case owner](../../../../../crates/mithril-e2e/src/discovery/packages.rs): authored BurstDetector folder, no Python, native graph packages, exact artifact references, and restart. | Native analysis-packages, context-roundtrip, and profile-restart pass with the retained binary. The complete graph-notification case passes in session 64467. Its packages retain their declared Wasm type; actual native plugins pass separately in session 8227. |
 
 The final artifact directory is `/tmp/araphor-native-built-20261013-final`.
 The author build log is `/tmp/araphor-native-build-20261013-final.log`. These
@@ -304,8 +312,10 @@ Its verified SHA-256 digest is
 The source capture contains the installed native owner and qualification case
 described above. Later CLI help and builder test changes are outside this binary
 capture. Later loader and package test corrections also remain outside this
-capture. Native production code, SDK computation, and artifact bytes remain
-unchanged. This binary does not prove the later test corrections.
+capture. Those later test edits did not change native production code, SDK
+computation, or artifact bytes. The subsequent production owner correction has
+its own binary and result below. This earlier binary does not prove that
+correction or the later test corrections.
 
 | Case | Retained result | Observed result and limit |
 | --- | --- | --- |
@@ -342,8 +352,65 @@ The read creates a fresh one-second deadline for each package revision. It
 does not retain a whole-case deadline. The unchanged case executes required
 Wasm plugins. Existing information-level logs do not identify the failing
 package or calling substep. Contention remains a hypothesis. An unchanged
-binary retry with existing debug logging and a fresh output directory is queued
-after final CI finishes. No retry result exists at this cut.
+binary retry with existing debug logging and a fresh output directory was queued
+after final CI at that cut. The owner-correction graph run below uses a new
+binary. No passing complete graph result existed at that earlier cut.
+
+### Production proof after the owner correction
+
+The production build at source
+`b50107eb3551e61c405b6b15f5b5cdb093b1c8f2` returned exit 0 in session 4718,
+in 45.89 seconds. Its retained binary is
+`/tmp/araphor-native-qualified-bin-20261014-owner-correction/mithril_discovery_test`.
+Its SHA-256 is
+`2b441e15d843083dd6eb7c7ef25e98aad6634e1e4eb5055bb54bd0da1e0186a8`.
+The source record is
+`/tmp/araphor-native-production-owner-correction-source-20261014.json`.
+
+Session 8227 returned exit 0 for `analysis-packages-native`. Its result is
+`/tmp/araphor-native-qualified-analysis-packages-20261014-owner-correction/result.json`.
+Its proof and log are
+`/tmp/araphor-native-qualified-analysis-packages-20261014-owner-correction-proof.json`
+and `/tmp/araphor-native-qualified-analysis-packages-20261014-owner-correction.log`.
+The proof records source, binary, result hashes, command, configuration, and
+Linux x86-64 GNU host. It uses the unchanged final source-built native libraries.
+
+The result records `PASS`, Python unavailable, and real client installation of
+the native BurstDetector folder without a host rebuild. Artifact and closure
+identities match the authored bytes. Four inputs produce three matching evidence
+records, threshold 3, checkpoint `4`, and reason `example-burst.THRESHOLD`.
+Restart, retry, and trust revocation pass. All three migrated graph exports
+record equal findings, relationships, checkpoint meaning, and replay. The
+original SQL and Wasm assertions pass, including fresh dependent revision 32
+from upstream revision 31. No physical or performance result is claimed.
+
+The complete graph notification case returned exit 0 in session 64467.
+The `whole_case` log records 1,754,425 milliseconds. It uses the same source
+`b50107eb3551e61c405b6b15f5b5cdb093b1c8f2` and binary SHA-256
+`2b441e15d843083dd6eb7c7ef25e98aad6634e1e4eb5055bb54bd0da1e0186a8`.
+Its result is
+`/tmp/araphor-native-qualified-graph-20261014-owner-correction/result.json`.
+Its proof and log are
+`/tmp/araphor-native-qualified-graph-20261014-owner-correction-proof.json`
+and `/tmp/araphor-native-qualified-graph-20261014-owner-correction.log`.
+
+The command selects `--case graph-notification` and output directory
+`/tmp/araphor-native-qualified-graph-20261014-owner-correction`.
+It uses `PATH=/tmp/araphor-no-python`, the final native library directory,
+`ARAPHOR_NATIVE_TARGET=x86_64-unknown-linux-gnu`, and
+`RUST_LOG=info,mithril_e2e::discovery::graph_notification=debug`.
+All 12 incident cards, replay contracts, notification density, 64-record and
+185-record windows, notification, restart, and notification resume pass.
+Workloads, assertions, and deadlines are unchanged. The result records
+canonical replay equality and lightweight qualification. It makes no physical,
+provider issuance, cross-node, or performance claim.
+
+This graph case uses its existing declared-Wasm plugins. The traversal label
+`native` describes native evidence and storage. It does not qualify execution
+of native plugins; session 8227 supplies that separate proof. The graph PASS
+does not prove that the owner correction resolved the earlier independent
+one-second package-read failure. Final CI and acceptance were open at that
+production cut; the final acceptance record below closes those gates.
 
 ### Workspace and correction gates
 
@@ -428,10 +495,103 @@ That commit amends the earlier `931fff` test correction. The 33 native owner
 and parity tests, host-fault test, 63 SDK tests, and six source-built artifacts
 remain retained evidence. The SDK, loader, computation, and build sources are
 unchanged. The supervisor and failure-commit correction
-has new focused proof. The retained production cases require a new affected
-qualification binary. The document review does not build or execute code.
-The complete graph-notification case, final
-continuous integration, and
-the eight-deliverable acceptance review remain **Not done**. Existing Wasm
-acceptance does not qualify native execution. No performance, native isolation,
+has new focused proof. Production source `b50107eb` has a new binary and a
+passing installed native case, recorded above. The earlier context and profile
+results retain their historical source cuts. The new complete graph case passes
+in session 64467. The document review does not build or execute code.
+Final continuous integration and the eight-deliverable acceptance review are
+**Done** for the qualified host. Read the
+[acceptance record](phase-7-5-5-native-execution.md#final-eight-deliverable-acceptance).
+Existing Wasm acceptance alone does not qualify native execution. No performance, native isolation,
 or forced hard-cap enforcement result is claimed.
+
+### Owner-correction CI cut and shutdown verification
+
+Session 80004 returns terminal exit 101 for source
+`b50107eb3551e61c405b6b15f5b5cdb093b1c8f2`. Its log is
+`/tmp/araphor-native-rust-ci-owner-correction-final-20261014.log`.
+Its source record is
+`/tmp/araphor-native-final-ci-owner-correction-source-20261014.json`.
+The command uses `CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=4` with
+`bash .github/scripts/verify-rust-ci.sh`. Formatting passes. Workspace check
+passes in 13.22 seconds; strict clippy passes in 0.52 seconds. Data tests return
+614 passed, 0 failed, and 19 ignored in 2,122.55 seconds. Control tests return
+188 passed, 0 failed, and 2 ignored in 119.38 seconds. Session 80004 returns
+terminal exit 101. The end-to-end crate returns 190 passed, 1 failed, and
+528 ignored in 726.33 seconds. The original SQL replacement case passes.
+`observability::query::tests::observability_query_upload` fails. Later workspace
+tests did not run. No final CI PASS is recorded.
+
+The unchanged upload test reproduces the same failure from the exact CI binary
+in session 86054: exit 101 in 45.30 seconds. Both failures report WouldBlock
+when AnalysisStore obtains its writer lock. ClientListener already awaits
+`serve`. At the failed source cut, supervisor stop dropped reconciliation while
+its blocking task still retained the owner and store. Reopen could race that
+detached work.
+The shutdown correction cancels and joins supervisor blocking work for stop
+requests and authority changes before service return. Activation-page reads and
+orphan pruning are awaited. The revised admission-stop test distinguishes
+responsive stop from pending shutdown completion. It retains event order, the
+held operation permit until task exit, and unchanged state. All original
+scenario inputs, assertions, bounds, and deadlines remain unchanged.
+
+The exact previously failed upload test passes with the workspace feature union:
+1 passed, 0 failed, and 0 ignored in 48.70 seconds, session 1402, exit 0.
+The build took 2 minutes 14 seconds. Its log is
+`/tmp/araphor-observability-query-upload-corrected-20261014.log`.
+The 1,390-file source capture is
+`/tmp/araphor-native-supervisor-shutdown-source-20261014.json`.
+It records base commit `b50107eb`, correction commit
+`5e9364543093e3e18da03e4d51e6dd28cc057982`, exact test binary SHA-256 values,
+and focused results. The correction changes three source files with 60 additions
+and 18 removals.
+
+The owner cut returns 5 passed and 0 failed in 45 seconds, session 36210, exit 0.
+Its log is `/tmp/araphor-supervisor-joined-shutdown-focused-20261014.log`.
+The original SQL case returns 1 passed and 0 failed in 263.79 seconds, session
+60496, exit 0. Its log is `/tmp/araphor-sql-joined-shutdown-focused-20261014.log`.
+Formatting returns exit 0 in session 46958. Strict clippy returns exit 0 in
+66 seconds, session 5111. Its log is
+`/tmp/araphor-supervisor-joined-shutdown-clippy-20261014.log`.
+A stalled native call can delay shutdown while the owner waits for its task.
+
+The SDK, loader, algorithms, and native artifacts are unchanged. Retained parity,
+real host-fault, and current-library control checks keep their exact source cuts.
+Sessions 8227 and 64467 remain native production and complete graph proof at
+`b50107eb`. They do not qualify a new shutdown production binary. The corrected
+upload, five owner checks, and original SQL case prove affected cleanup behavior.
+
+### Current final CI cut
+
+Sole final CI session 25541 returns terminal exit 0 at
+`2026-10-14T07:50:20.175975+00:00` for source
+`5e9364543093e3e18da03e4d51e6dd28cc057982`.
+Its log is `/tmp/araphor-native-rust-ci-joined-shutdown-final-20261014.log`.
+Its proof is `/tmp/araphor-native-final-ci-joined-shutdown-source-20261014.json`.
+The proof records `PASS` and verifies all 1,390 source and configuration hashes
+unchanged after the run.
+
+The command is `CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=4 bash .github/scripts/verify-rust-ci.sh`.
+Formatting passes. Workspace check passes in 13.22 seconds; strict all-target,
+all-feature clippy passes in 0.47 seconds. SDK tests return 63 passed, 0 failed,
+and 0 ignored in 0.34 seconds. CLI tests return 62 passed, 0 failed, and 1 ignored
+in 0.04 seconds. Builder tests return 6 passed and 0 failed. Data returns
+614 passed, 0 failed, and 19 ignored in 2,157.82 seconds. Control returns
+188 passed, 0 failed, and 2 ignored in 119.39 seconds. End-to-end returns
+191 passed, 0 failed, and 528 ignored in 737.61 seconds. Node returns 282 passed,
+0 failed, and 1 ignored in 2.62 seconds. All workspace test stages pass.
+The original SQL replacement and query upload cases both pass.
+
+The [eight-deliverable acceptance](phase-7-5-5-native-execution.md#final-eight-deliverable-acceptance)
+records completion for Linux x86-64 GNU with glibc 2.39. Separate opt-in parity,
+native library, and fatal host proof remain exact retained results; ignored
+workspace tests are not counted as executed qualification. The unchanged
+`b50107eb` native production and complete graph proof is retained with the
+focused affected cleanup and final CI proof at `5e936454`. No new production
+binary or native artifact result is inferred from this CI cut.
+
+Final qualification and acceptance are Done within that scope. Native remains
+in-process with cooperative cancellation and a shared failure domain. Hard
+per-library caps remain disabled by default and return Unsupported when enabled.
+No speed, physical Kubernetes, cross-node causality, or additional platform
+qualification is claimed.

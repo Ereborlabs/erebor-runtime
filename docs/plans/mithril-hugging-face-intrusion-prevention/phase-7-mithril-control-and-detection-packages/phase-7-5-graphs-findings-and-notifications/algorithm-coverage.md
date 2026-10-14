@@ -7,8 +7,8 @@ migration verification are **Done**. Installed Wasm qualification is **Done**;
 read the [qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
 Upstream ports remain **Not done**.
-Native SDK, owner, and focused installed execution proof are present. Final
-native qualification remains **Not done**; read the
+Native execution qualification is **Done** on Linux x86-64 GNU with glibc 2.39.
+Read the
 [native implementation review](native-execution-review.md) and
 [qualification record](phase-7-5-5-native-execution.md).
 
@@ -88,9 +88,16 @@ for an authored native BurstDetector and the three graph exports with Python
 unavailable and no host rebuild. These source changes are committed through
 `d88f7280`; `26ada6bc` corrects a loader test fixture. Read the
 [retained proof](native-execution-review.md#retained-production-case-evidence)
-for the binary and artifact identities. The complete graph-notification case
-and final workspace tests remain pending. Passing formatting, checks, and
-clippy in the current CI cut does not complete those gates.
+for the binary and artifact identities. The installed native and complete graph
+cases pass in sessions 8227 and 64467 on source `b50107eb`. The graph case uses
+its existing declared Wasm plugins. The later joined-shutdown correction has
+focused proof and final CI passes in session 25541 with exit 0 on source
+`5e9364543093e3e18da03e4d51e6dd28cc057982`. Formatting, workspace checks,
+strict clippy, and all workspace tests pass, including the original SQL
+replacement and upload/reopen cases. Read the qualification record for exact
+commands, source hashes, results, and unchanged behavior retained from earlier
+proof cuts. Integrated package qualification and all upstream ports remain
+**Not done**.
 
 The runtime executes the installed plugin's declared type. Separate native and
 Wasm artifacts reuse the shared source. Native execution runs in Araphor's

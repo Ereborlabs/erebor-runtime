@@ -47,9 +47,13 @@ The local SQL package lifecycle in 7.5.3 is **Done**; read its
 Installed Wasm qualification in 7.5.4 is **Done**. Read the
 [qualification record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
 and [completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review).
-Child phases 7.5.5 through 7.5.9 remain **Not done**.
+Native execution in 7.5.5 is **Done** on Linux x86-64 GNU with glibc 2.39.
+The final Rust CI gate passes on
+`5e9364543093e3e18da03e4d51e6dd28cc057982`. Read its
+[qualification record](phase-7-5-5-native-execution.md).
+Child phases 7.5.6 through 7.5.9 remain **Not done**.
 Read the [native implementation review](native-execution-review.md) for the
-current source route, ABI release rules, and pending qualification limits.
+current source route, ABI release rules, retained proof, and platform limits.
 The completed graph and notification results remain below; those results do not
 qualify package execution.
 
@@ -66,7 +70,7 @@ bindings. Host owners enforce authorization, limits, validation, and commits.
 | [7.5.2 Analysis contract and SDK](phase-7-5-2-analysis-contract-and-sdk.md) | Portable SDK and contract inventory; migrate current discovery, context integration, and HF-PROC/HF-DW/HF-XNODE computation into shared SDK code used by existing Rust callers. | 7.5.1. |
 | [7.5.3 Package lifecycle](phase-7-5-3-package-lifecycle.md) | Local SQL installation, dependency evaluation, atomic state, updates, and CLI/agent inspection. | 7.5.2, including algorithm equivalence, and Observability 3. |
 | [7.5.4 Wasm execution](phase-7-5-4-wasm-execution.md) | Embedded Wasmtime, installed execution of the shared algorithms, runtime equivalence, and production dispatch replacement. | 7.5.3. |
-| [7.5.5 Native execution](phase-7-5-5-native-execution.md) | Installed Rust native artifacts in Araphor's process under the same model and package contract. | 7.5.4. |
+| [7.5.5 Native execution](phase-7-5-5-native-execution.md) | **Done** on the recorded Linux x86-64 GNU host: installed Rust native artifacts in Araphor's process under the same model and package contract. | 7.5.4. |
 | [7.5.6 Optional Python execution](phase-7-5-6-python-execution.md) | A bundled interpreter and locked dependencies when Python support is selected. | 7.5.5; optional for the core release. |
 | [7.5.7 Package qualification](phase-7-5-7-package-qualification.md) | Integrated current-algorithm migration, package installation, replay, isolation, and paired incident proof. | 7.5.5; also 7.5.6 if Python is advertised. |
 | [7.5.8 Discovery Engine algorithms](phase-7-5-8-discovery-engine-algorithms.md) | All pinned upstream system/network discovery, aggregation, summaries, recommendations, and candidate-conversion algorithms as packages. | 7.5.7. |
@@ -224,8 +228,9 @@ Status: **Not done** for the complete package scope. Native graph storage,
 traversal, the portable analysis contract, Rust SDK, and current-algorithm
 conversion are **Done**. The
 [SDK and migration result](phase-7-5-2-analysis-contract-and-sdk.md#result) records
-the source, tests, and limits. Package lifecycle and installed execution remain
-pending.
+the source, tests, and limits. SQL package lifecycle and installed Wasm and native
+execution are **Done** within their recorded qualification limits. Integrated
+package qualification, optional Python, and the upstream ports remain **Not done**.
 The nine review corrections are **Done**. They pass the focused Rust checks,
 final shared Rust procedure, and fresh lightweight and paired physical
 incidents at `6beb143d`. The owned qualification VM is removed.
