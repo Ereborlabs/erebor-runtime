@@ -267,9 +267,9 @@ impl AnalysisPackageOwner {
             if *stop.borrow() {
                 return Ok(());
             }
-            tokio::select! {
-                result = self.reconcile() => { result?; }
-                changed = stop.changed() => { if changed.is_err() || *stop.borrow() { return Ok(()); } }
+            self.reconcile_until(&mut stop).await?;
+            if *stop.borrow() || stop.has_changed().is_err() {
+                return Ok(());
             }
             tokio::select! {
                 changed = stop.changed() => { if changed.is_err() { return Ok(()); } }

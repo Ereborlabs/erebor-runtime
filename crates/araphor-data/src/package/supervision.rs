@@ -13,9 +13,21 @@ use super::{
 };
 
 impl AnalysisPackageOwner {
+    #[cfg(test)]
     pub(super) async fn reconcile(self: &Arc<Self>) -> Result<()> {
+        let (_stop, mut receiver) = tokio::sync::watch::channel(false);
+        self.reconcile_until(&mut receiver).await
+    }
+
+    pub(super) async fn reconcile_until(
+        self: &Arc<Self>,
+        stop: &mut tokio::sync::watch::Receiver<bool>,
+    ) -> Result<()> {
         let mut after = None;
         loop {
+            if *stop.borrow() || stop.has_changed().is_err() {
+                return Ok(());
+            }
             let store = self.store.clone();
             let cursor = after.clone();
             let page =
@@ -27,6 +39,9 @@ impl AnalysisPackageOwner {
             }
             after = page.last().map(|active| active.key.clone());
             for active in page {
+                if *stop.borrow() || stop.has_changed().is_err() {
+                    return Ok(());
+                }
                 let owner = self.clone();
                 let Some(active) =
                     tokio::task::spawn_blocking(move || owner.prune_orphans(&active))
@@ -35,6 +50,9 @@ impl AnalysisPackageOwner {
                 else {
                     continue;
                 };
+                if *stop.borrow() || stop.has_changed().is_err() {
+                    return Ok(());
+                }
                 if !active.active {
                     continue;
                 }
@@ -94,7 +112,19 @@ impl AnalysisPackageOwner {
                 });
                 tokio::select! {
                     result = &mut run => { let _result = result.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?; }
-                    _changed = changes.changed() => { control.cancel()?; }
+                    _changed = stop.changed() => {
+                        let cancelled = control.cancel();
+                        let _result = run.await.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?;
+                        cancelled?;
+                        if *stop.borrow() || stop.has_changed().is_err() {
+                            return Ok(());
+                        }
+                    }
+                    _changed = changes.changed() => {
+                        let cancelled = control.cancel();
+                        let _result = run.await.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?;
+                        cancelled?;
+                    }
                 }
             }
         }

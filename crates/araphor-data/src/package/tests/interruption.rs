@@ -37,34 +37,46 @@ async fn package_supervisor_stop_during_admission() -> TestResult {
         })?;
         Ok(())
     }));
-    let (stopped, observed) = mpsc::channel();
+    let (checked, observed) = mpsc::channel();
     let controller = std::thread::spawn(move || {
-        let stopped_before_release = admission.recv_timeout(Duration::from_secs(5)).is_ok()
+        let responsive_before_release = admission.recv_timeout(Duration::from_secs(5)).is_ok()
             && observed.recv_timeout(Duration::from_secs(5)).is_ok();
         let _released = release.send(());
-        stopped_before_release
+        responsive_before_release
     });
     let (stop, receiver) = tokio::sync::watch::channel(false);
-    let worker = tokio::spawn(fixture.owner.clone().serve(receiver));
-    ready.await?;
+    let mut worker = Box::pin(fixture.owner.clone().serve(receiver));
+    tokio::select! {
+        entered = ready => { entered?; }
+        result = &mut worker => {
+            result?;
+            return Err("supervisor stopped before admission".into());
+        }
+    }
     stop.send(true)?;
-    worker.await??;
+    let completion = std::future::poll_fn(|context| {
+        std::task::Poll::Ready(std::future::Future::poll(worker.as_mut(), context))
+    })
+    .await;
+    let shutdown_pending = completion.is_pending();
     let retained_permit = fixture.owner.operations.available_permits() == 3;
-    let _acknowledged = stopped.send(());
-    let stopped_before_release = tokio::task::spawn_blocking(move || {
+    let _acknowledged = checked.send(());
+    let responsive_before_release = tokio::task::spawn_blocking(move || {
         controller
             .join()
             .map_err(|_| "admission controller panicked")
     })
     .await??;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while fixture.owner.operations.available_permits() != 4 {
-            tokio::task::yield_now().await;
+    match completion {
+        std::task::Poll::Ready(result) => result?,
+        std::task::Poll::Pending => {
+            tokio::time::timeout(Duration::from_secs(5), worker).await??;
         }
-    })
-    .await?;
-    assert!(stopped_before_release);
+    }
+    assert!(responsive_before_release);
+    assert!(shutdown_pending);
     assert!(retained_permit);
+    assert_eq!(fixture.owner.operations.available_permits(), 4);
     let after = fixture
         .store
         .package_activation(&before.key)?
