@@ -21,6 +21,10 @@ master plan invented for them.
 
 ## Proposed Master Plans
 
+- [Araphor Data test runtime reduction](araphor-data-test-runtime-reduction.md) —
+  investigate fixture lock waits and repeated package/store preparation; propose
+  ordered reductions that preserve the complete test inventory and owner proof.
+  Diagnostic timing and implementation require explicit approval.
 - [Araphor observability](araphor-observability/README.md) — CLI-first SQL and
   bpftrace capture, shared console APIs, and optional finite Trace CRD. Reuses
   shared segment-backed data and DuckDB query facilities and existing execution owners.

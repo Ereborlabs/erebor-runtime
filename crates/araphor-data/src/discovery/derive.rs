@@ -177,7 +177,10 @@ mod tests {
         static EXECUTION: std::sync::LazyLock<
             crate::Result<std::sync::Mutex<crate::InstalledAnalysis>>,
         > = std::sync::LazyLock::new(|| {
-            crate::InstalledAnalysis::testing(None, input()?.tenant_id).map(std::sync::Mutex::new)
+            let tenant = input()?.tenant_id;
+            crate::InstalledAnalysis::testing(None, tenant)?
+                .snapshot(tenant)
+                .map(std::sync::Mutex::new)
         });
         match EXECUTION.as_ref() {
             Ok(execution) => execution
@@ -612,6 +615,7 @@ mod tests {
     fn case_input(case: &Case, split: &Split) -> TestResult<DiscoveryInputManifestV1> {
         let mut input = input()?;
         let seed = input.records[0].clone();
+        let seed_wire = seed.decode()?;
         let mut binding = input.contexts[0].clone();
         binding.subject_revision = format!("{}/revision-1", split.workload_id);
         binding.static_key.workload_selector_id = split.workload_id.clone();
@@ -626,7 +630,7 @@ mod tests {
                 let mut record = seed.clone();
                 record.id.durable_cursor = cursor;
                 record.original_kernel_sequence = Some(cursor + 100);
-                let mut wire = seed.decode()?;
+                let mut wire = seed_wire.clone();
                 wire.observed_boottime_ns = cursor + 1000;
                 wire.ingested_utc_ns = split
                     .start_utc_ns

@@ -45,23 +45,23 @@ impl TraversalFixture {
     }
 
     fn commit_window(&mut self, window: u64, large: bool) -> TestResult {
-        let execution = execution()?;
         let cursor = window + 1;
         let first = window * 1024;
-        let mut event = wire(cursor, DeniedBeforeEffect, 2, 2, [20; 16]);
-        if window != 0 {
+        let mut snapshot = if window == 0 {
+            self.native.snapshot.clone()
+        } else {
+            let execution = execution()?;
+            let mut event = wire(cursor, DeniedBeforeEffect, 2, 2, [20; 16]);
             event.task_cookie = if window == 16 { first } else { first + 1 };
-        }
-        let observation = record(cursor, &event)?;
-        if window != 0 {
+            let observation = record(cursor, &event)?;
             accept(&self.native.store, std::slice::from_ref(&observation))?;
             coverage(&self.native.store, cursor, cursor, "HEALTHY")?;
-        }
-        let mut replay = input(vec![observation]);
-        replay.coverage[0].coverage_revision = cursor;
-        replay.coverage_keys[0].report_revision = cursor;
-        replay.coverage_keys[0].interval_revision = cursor;
-        let mut snapshot = GraphAndFindingOwner::derive(&replay, &execution)?;
+            let mut replay = input(vec![observation]);
+            replay.coverage[0].coverage_revision = cursor;
+            replay.coverage_keys[0].report_revision = cursor;
+            replay.coverage_keys[0].interval_revision = cursor;
+            GraphAndFindingOwner::derive(&replay, &execution)?
+        };
         snapshot.witness_deadline_utc_ns = 10 + cursor + GRAPH_WITNESS_TTL_NS;
         snapshot.graph.subjects = Self::subjects(window, large);
         snapshot.graph.edges = Self::edges(&snapshot, window, large);

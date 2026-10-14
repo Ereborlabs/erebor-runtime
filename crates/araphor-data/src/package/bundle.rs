@@ -146,9 +146,8 @@ impl PackageArtifactV1 {
     pub(super) fn encoding(&self, canonical: bool) -> Result<ArtifactEncoding<'_>> {
         let descriptor = if canonical || self.has_component() {
             self.descriptor
-                .interfaces()
+                .inspect()
                 .context(crate::AnalysisContractSnafu)?
-                .descriptor_json
         } else {
             serde_json::to_string(&self.descriptor).context(PackageEncodingSnafu)?
         };

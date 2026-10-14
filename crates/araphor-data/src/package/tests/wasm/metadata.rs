@@ -13,9 +13,16 @@ fn package_metadata_digest_stable() -> TestResult {
                 ]
                 .into(),
             )]);
+    let artifact = &package.artifacts[0];
+    let descriptor = artifact.descriptor.interfaces()?.descriptor_json;
+    assert_eq!(artifact.encoding(false)?.descriptor.get(), descriptor);
+    assert_eq!(artifact.encoding(true)?.descriptor.get(), descriptor);
+    let encoded = package.encode()?;
     let digest = package.digest()?;
     for _ in 0..8 {
-        package = PackageBundleV1::from_bytes(&package.encode()?)?;
+        let bytes = package.encode()?;
+        assert_eq!(bytes, encoded);
+        package = PackageBundleV1::from_bytes(&bytes)?;
         assert_eq!(package.digest()?, digest);
     }
     Ok(())

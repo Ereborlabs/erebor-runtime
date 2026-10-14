@@ -11,7 +11,10 @@ type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub(crate) fn execution() -> TestResult<std::sync::MutexGuard<'static, crate::InstalledAnalysis>> {
     static EXECUTION: std::sync::LazyLock<crate::Result<Mutex<crate::InstalledAnalysis>>> =
         std::sync::LazyLock::new(|| {
-            crate::InstalledAnalysis::testing(None, source().tenant_id).map(Mutex::new)
+            let tenant = source().tenant_id;
+            crate::InstalledAnalysis::testing(None, tenant)?
+                .snapshot(tenant)
+                .map(Mutex::new)
         });
     match EXECUTION.as_ref() {
         Ok(execution) => execution

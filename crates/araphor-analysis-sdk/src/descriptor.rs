@@ -72,7 +72,14 @@ impl Package {
     }
 
     pub fn inspect(&self) -> Result<String> {
-        Ok(self.interfaces()?.descriptor_json)
+        serde_json::to_string_pretty(&self.descriptor_value()?).context(crate::EncodingSnafu)
+    }
+
+    pub(crate) fn descriptor_value(&self) -> Result<serde_json::Value> {
+        self.validate()?;
+        let mut descriptor = serde_json::to_value(self).context(crate::EncodingSnafu)?;
+        descriptor.sort_all_objects();
+        Ok(descriptor)
     }
 
     pub fn build(&self, directory: &Path) -> Result<()> {

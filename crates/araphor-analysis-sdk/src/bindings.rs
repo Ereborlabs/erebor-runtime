@@ -14,9 +14,7 @@ pub struct InterfaceDeclarations {
 
 impl Package {
     pub fn interfaces(&self) -> Result<InterfaceDeclarations> {
-        self.validate()?;
-        let mut descriptor = serde_json::to_value(self).context(crate::EncodingSnafu)?;
-        descriptor.sort_all_objects();
+        let descriptor = self.descriptor_value()?;
         let descriptor_json =
             serde_json::to_string_pretty(&descriptor).context(crate::EncodingSnafu)?;
         let descriptor = serde_json::to_string(&descriptor).context(crate::EncodingSnafu)?;

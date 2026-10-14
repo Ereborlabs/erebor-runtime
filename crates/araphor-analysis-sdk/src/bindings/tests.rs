@@ -35,6 +35,7 @@ fn declarations_share_descriptor() -> TestResult {
         .clone()
         .with_metadata(metadata);
     let declarations = package.interfaces()?;
+    assert_eq!(package.inspect()?, declarations.descriptor_json);
     let expected = serde_json::to_value(&package)?;
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&declarations.descriptor_json)?,
@@ -55,7 +56,16 @@ fn declarations_share_descriptor() -> TestResult {
     assert_eq!(decoded.interfaces()?, declarations);
     let mut invalid = package;
     invalid.contract_version += 1;
-    assert!(invalid.interfaces().is_err());
+    for result in [
+        invalid.interfaces().map(|_| ()),
+        invalid.inspect().map(|_| ()),
+    ] {
+        let error = result.err().ok_or("invalid descriptor accepted")?;
+        assert_eq!(error.code(), ErrorCode::Incompatible);
+        assert!(
+            matches!(error, crate::Error::Contract { field, .. } if field == "contract version")
+        );
+    }
     Ok(())
 }
 
@@ -91,6 +101,7 @@ fn descriptor_size_is_bounded() -> TestResult {
     for result in [
         package.validate(),
         package.inspect().map(|_| ()),
+        package.interfaces().map(|_| ()),
         package.build(&rejected),
     ] {
         assert_eq!(

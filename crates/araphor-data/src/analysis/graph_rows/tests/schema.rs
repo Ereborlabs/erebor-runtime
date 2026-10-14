@@ -36,6 +36,9 @@ fn native_schema_integrity() -> TestResult {
     GraphRows::validate_tables(&writer)?;
     writer.execute_batch("ALTER TABLE graph_subjects ADD COLUMN extra INTEGER")?;
     assert!(GraphRows::validate_tables(&writer).is_err());
+    let other = Connection::open_in_memory()?;
+    other.execute_batch(GraphRows::SCHEMA)?;
+    GraphRows::validate_tables(&other)?;
     Ok(())
 }
 

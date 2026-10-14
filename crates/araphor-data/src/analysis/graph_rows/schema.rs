@@ -1,5 +1,6 @@
 use duckdb::Connection;
 use snafu::ResultExt as _;
+use std::sync::OnceLock;
 
 use super::GraphRows;
 use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, Result};
@@ -54,19 +55,29 @@ impl GraphRows {
         PRIMARY KEY (result_id, ordinal), UNIQUE (result_id, finding_id));";
 
     pub(in crate::analysis) fn validate_tables(writer: &Connection) -> Result<()> {
-        let expected = super::super::AnalysisStore::open_native(std::path::Path::new(":memory:"))?;
-        expected
-            .execute_batch(Self::SCHEMA)
-            .context(AnalysisDatabaseSnafu {
-                operation: "create expected native graph schema",
-            })?;
-        if Self::schema_shape(writer)? != Self::schema_shape(&expected)? {
+        let expected = Self::expected_shape()?;
+        if Self::schema_shape(writer)?.as_slice() != expected {
             return GraphInvalidSnafu {
                 field: "native graph schema",
             }
             .fail();
         }
         Ok(())
+    }
+
+    fn expected_shape() -> Result<&'static [(String, String)]> {
+        static EXPECTED: OnceLock<Vec<(String, String)>> = OnceLock::new();
+        if let Some(shape) = EXPECTED.get() {
+            return Ok(shape);
+        }
+        let expected = super::super::AnalysisStore::open_native(std::path::Path::new(":memory:"))?;
+        expected
+            .execute_batch(Self::SCHEMA)
+            .context(AnalysisDatabaseSnafu {
+                operation: "create expected native graph schema",
+            })?;
+        let shape = Self::schema_shape(&expected)?;
+        Ok(EXPECTED.get_or_init(|| shape))
     }
 
     fn schema_shape(writer: &Connection) -> Result<Vec<(String, String)>> {
