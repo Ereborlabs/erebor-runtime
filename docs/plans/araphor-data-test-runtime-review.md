@@ -249,8 +249,8 @@ focused record `/tmp/araphor-f-retry-focused.json`. That run is in progress.
   -> [package reference checks](../../crates/araphor-data/src/analysis/crash.rs) check roots, revisions, and the unchanged source receipt
   -> [child launch](../../crates/araphor-data/src/analysis/crash.rs) release installed and store handles before starting the child
 
-[InstalledAnalysis::testing_existing](../../crates/araphor-data/src/package/required/testing.rs) The child opens the prepared store
-  -> [fixture_owner](../../crates/araphor-data/src/package/required/testing.rs) create the same authority and query limits without eager code preparation or package installation
+[AnalysisStore::open](../../crates/araphor-data/src/analysis/crash.rs) The child opens the prepared store
+  -> [InstalledAnalysis::testing_existing](../../crates/araphor-data/src/package/required/testing.rs) create the same authority and query limits without eager code preparation or package installation
   -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) read and check the four durable package roots and revisions
   -> [DiscoveryOwner](../../crates/araphor-data/src/analysis/crash.rs) process the original record through production lazy Discovery admission
   -> [AnalysisStore::crash_path](../../crates/araphor-data/src/analysis/crash.rs) exit with code 73 at the original crash point
@@ -346,3 +346,44 @@ The new owner-identity test rejects a shared factory result. That test and
 connected parallel functional cases passed in the 111-case Data run recorded
 in `/tmp/araphor-f-final-focused.json`. The approved nine-case comparison
 uses four then eight test threads, with 900 seconds for each run. The comparison is pending. The final CI default remains four threads.
+
+## Corrected source qualification
+
+The five final encoding tests passed in 49.79 seconds. All 66 SDK tests passed.
+The run covers commit `e31b033e`. Covered source hashes remained unchanged.
+Read `/tmp/araphor-f-retry-focused.json` for commands and hashes. That record
+names the two files changed after the earlier 111-case Data run. The complete
+Data inventory retains every existing test and adds seven regressions.
+
+The earlier focused results remain valid for the other unchanged source files.
+The thread comparison and final repository CI are pending. These records do
+not establish a complete-suite speed improvement.
+
+## Thread comparison evidence
+
+The approved nine-case comparison passed with four and eight test threads.
+The recorded harness durations are 360.39 and 394.92 seconds. Eight threads
+increased elapsed time by 9.58 percent for this workload. The configuration
+retains four threads. Both runs cover commit `e31b033e` with the same binary.
+Source and executable hashes remained unchanged. Other host load and file-system
+caches were not controlled. Read `/tmp/araphor-f7-comparison.json` for the
+selected cases, commands, and terminal results. Full repository CI is pending.
+
+## Final source acceptance
+
+The final repository procedure passed for commit
+`e31b033ebf95224e8210c73cec5abed4e8149def`. All 1,392 covered source hashes
+remained unchanged. The 90 parent harnesses reported 2,122 passed, zero failed,
+and 568 ignored. Data reported 621 passed and the same 19 ignored cases in
+1,471.15 seconds. The complete procedure took 2,679.10 seconds.
+
+Read `/tmp/araphor-f-final-ci-source.json`, `/tmp/araphor-f-final-ci.log`, and
+`/tmp/araphor-f-final-report.json`. The result parser excludes child summaries
+from parent totals and checks the original test and ignored inventories.
+**Done** for all seven implementations and final functional qualification.
+The whole-suite timings have uncontrolled host load and file-system caches.
+Their difference does not establish a production speed change.
+
+The production architecture proposals are separate from this accepted source.
+No proposed typed commit, package storage format, or composed SQL operation
+is implemented by the seven commits.

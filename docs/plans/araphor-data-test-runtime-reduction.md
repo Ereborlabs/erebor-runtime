@@ -418,7 +418,7 @@ progress. The qualified baseline is commit `4d0758cf`.
 The matching nine-case comparison passed with four threads in both runs.
 The baseline harness took 473.97 seconds. Data and SDK optimization level 1
 took 442.83 seconds. The reduction is 31.14 seconds, or 6.57 percent.
-All nine assertions passed. The complete 633-test inventories are identical.
+All nine test cases passed. The complete 633-test inventories are identical.
 Only `Cargo.toml` differs between the recorded original sources. Both test
 executables and instrumented source hashes remained unchanged during execution.
 
@@ -604,3 +604,90 @@ four-versus-eight thread comparison and final repository CI. The user approved n
 first with four test threads and then with eight, with a 900-second allowance
 for each run. The runs remain pending. The final CI configuration remains four
 test threads. No timing improvement is established yet.
+
+### Corrected encoding qualification
+
+The final retry-bound run passed all five selected Data tests in 49.79 seconds.
+The run passed all 66 SDK tests. The Data tests cover bundle bytes and digest
+equality, descriptor rejection, identical retries, collision rejection, the
+64 MiB revision limit, and candidate errors before saved-record decoding.
+The final source is commit `e31b033e`. The source hashes remained unchanged.
+The record is `/tmp/araphor-f-retry-focused.json`.
+
+The earlier run passed 111 Data cases in 598.77 seconds and all 66 SDK tests.
+Only the two encoding-owner files differ from that covered source. The later
+run checks those two files after the bound correction. The complete Data
+inventory retains all 633 existing tests and adds seven regression tests.
+The SDK adds three writer tests. No original test is removed.
+
+**Done** for focused qualification of F1 through F7. The approved thread
+comparison and final repository procedure remain **Not done**.
+
+### F7: Approved thread comparison result
+
+Both runs passed the same nine existing cases with commit `e31b033e`.
+The four-thread harness took 360.39 seconds. The eight-thread harness took
+394.92 seconds. Eight threads increased duration by 34.53 seconds, or
+9.58 percent. Both runs finished within their 900-second allowances.
+All assertions passed. There was no speed pass/fail threshold.
+
+Both runs used the same binary. Source and executable hashes remained
+unchanged. Each run started new parent and crash-child processes. Existing
+build artifacts remained available. File-system caches and other host load
+were not controlled. This result covers the selected workload. The final
+repository configuration retains four test threads.
+
+Read `/tmp/araphor-f7-comparison.json`, `/tmp/araphor-f7-4.log`, and
+`/tmp/araphor-f7-8.log` for the commands, selected cases, and terminal results.
+No timing test or alternate runner is added to the repository.
+
+**Done** for the approved thread comparison. **Not done** for final repository
+qualification. That procedure is running on the same committed Rust source.
+
+### Final functional qualification
+
+The final repository procedure passed with exit 0 at
+2026-10-14 21:22:34.631003 UTC. The covered Rust source is commit
+`e31b033ebf95224e8210c73cec5abed4e8149def`. All 1,392 covered Rust, Cargo,
+and CI file hashes remained unchanged. Formatting, workspace checking, strict
+clippy, and all workspace test harnesses passed.
+
+The 90 parent harnesses reported 2,122 passed, zero failed, and 568 ignored.
+Data passed 621 cases with the same 19 ignored cases. Its complete inventory
+contains all 633 original cases and seven added regressions. SDK has three
+added writer regressions. No original case or assertion was removed.
+
+| Recorded run | Data seconds | Data inventory |
+| --- | --- | --- |
+| Original qualified source | 2,157.82 | 633 |
+| Earlier preparation corrections | 1,390.41 | 633 |
+| Current qualified source | 1,471.15 | 640 |
+
+The current Data duration is 24 minutes 31.15 seconds. The complete procedure
+took 2,679.10 seconds: 44 minutes 39.10 seconds. Workspace checking took
+54.57 seconds. Strict clippy took 246 seconds. The cached test build took
+1.21 seconds. Host load and file-system caches were not controlled between
+the complete runs. Their difference does not establish that a source change
+makes production execution slower or faster. No causal saving is claimed.
+
+Read `/tmp/araphor-f-final-ci-source.json`, `/tmp/araphor-f-final-ci.log`,
+and `/tmp/araphor-f-final-report.json` for terminal and inventory evidence.
+The four/eight thread comparison remains the selected nine-case result above.
+A clean build-cost comparison remains unmeasured. Temporary diagnostics and
+comparison wrappers are not repository test infrastructure.
+
+| Deliverable | Code commit |
+| --- | --- |
+| F1 | `d1b4b507` |
+| F2 | `b2522b4e` |
+| F3 | `c405170d` |
+| F4 | `245e3527` |
+| F5 | `7a67f700` |
+| F6 | `98bf337a` |
+| F7 | `e31b033e` |
+
+**Done** for all seven approved implementations, focused proof, the approved
+thread comparison, and final functional qualification. A controlled complete
+production performance comparison is **Not done**. The user now requests
+structural simplification in production. That work requires its own concrete
+architecture and qualification scope.
