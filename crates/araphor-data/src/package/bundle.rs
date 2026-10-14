@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::Read as _;
+use std::io::{self, Read as _, Write};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::Path;
 
@@ -249,6 +249,18 @@ impl PackageBundleV1 {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>> {
+        let mut bytes = super::wire::PackageBuffer::new(MAX_PACKAGE_BYTES as u64);
+        self.encode_into(&mut bytes)?;
+        Ok(bytes.finish())
+    }
+
+    pub(super) fn check_encoding(&self) -> Result<()> {
+        let mut writer =
+            super::wire::PackageBuffer::from_writer(io::sink(), MAX_PACKAGE_BYTES as u64);
+        self.encode_into(&mut writer)
+    }
+
+    fn encode_into(&self, writer: &mut impl Write) -> Result<()> {
         let canonical = self.artifacts.iter().any(PackageArtifactV1::has_component);
         let mut artifacts: Vec<_> = self.artifacts.iter().collect();
         artifacts.sort_by_key(|artifact| artifact.reference());
@@ -262,9 +274,8 @@ impl PackageBundleV1 {
             root: &'a PackageRefV1,
             artifacts: Vec<ArtifactEncoding<'a>>,
         }
-        let mut bytes = super::wire::PackageBuffer::new(MAX_PACKAGE_BYTES as u64);
         serde_json::to_writer(
-            &mut bytes,
+            writer,
             &Ordered {
                 schema_version: self.schema_version,
                 root: &self.root,
@@ -272,13 +283,16 @@ impl PackageBundleV1 {
             },
         )
         .context(PackageEncodingSnafu)?;
-        Ok(bytes.finish())
+        Ok(())
     }
 
     pub fn digest(&self) -> Result<String> {
         let mut digest = Sha256::new();
         digest.update(b"ARAPHOR-ANALYSIS-PACKAGE-V1\0");
-        digest.update(self.encode()?);
+        self.encode_into(&mut super::wire::PackageBuffer::from_writer(
+            &mut digest,
+            MAX_PACKAGE_BYTES as u64,
+        ))?;
         Ok(format!("{:x}", digest.finalize()))
     }
 
@@ -287,5 +301,66 @@ impl PackageBundleV1 {
             .iter()
             .find(|artifact| artifact.reference() == *reference)
             .ok_or_else(|| Code::Missing.error("locked package revision"))
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+    use crate::package::tests::{bundle, TestResult};
+
+    #[test]
+    fn bundle_writer_digest_matches_bytes() -> TestResult {
+        let sql = bundle("1", "SELECT 1::UBIGINT AS count");
+        let mut component = sql.clone();
+        component.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
+            exports: vec!["count".into()],
+            inputs: None,
+            artifact: vec![0, 1, 255],
+        }];
+        for package in [sql, component] {
+            let bytes = package.encode()?;
+            let mut digest = Sha256::new();
+            digest.update(b"ARAPHOR-ANALYSIS-PACKAGE-V1\0");
+            digest.update(&bytes);
+            assert_eq!(package.digest()?, format!("{:x}", digest.finalize()));
+            package.check_encoding()?;
+            let mut exact =
+                super::super::wire::PackageBuffer::from_writer(io::sink(), bytes.len() as u64);
+            package.encode_into(&mut exact)?;
+            let mut short =
+                super::super::wire::PackageBuffer::from_writer(io::sink(), bytes.len() as u64 - 1);
+            let error = package
+                .encode_into(&mut short)
+                .err()
+                .ok_or("over-limit encoding accepted")?;
+            assert!(matches!(error, crate::Error::PackageEncoding { source, .. }
+                if source.io_error_kind() == Some(io::ErrorKind::FileTooLarge)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bundle_writer_descriptor_errors() -> TestResult {
+        let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
+        package.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
+            exports: vec!["count".into()],
+            inputs: None,
+            artifact: Vec::new(),
+        }];
+        package.artifacts[0].descriptor.id.clear();
+        assert!(matches!(
+            package.encode(),
+            Err(crate::Error::AnalysisContract { .. })
+        ));
+        assert!(matches!(
+            package.digest(),
+            Err(crate::Error::AnalysisContract { .. })
+        ));
+        assert!(matches!(
+            package.check_encoding(),
+            Err(crate::Error::AnalysisContract { .. })
+        ));
+        Ok(())
     }
 }

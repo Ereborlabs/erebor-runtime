@@ -473,3 +473,27 @@ original operations and assertions.
 run passed 111 Data cases in 598.77 seconds and all 66 SDK tests. The record
 is `/tmp/araphor-f-final-focused.json`. Covered source hashes remained
 unchanged. **Not done** for final repository CI. No elapsed-time saving is established for this correction.
+
+### F3 bounded encoding sinks
+
+Bundle encoding uses one ordered serializer for byte output, size checking,
+and digest calculation. The SDK `BoundedBuffer` owns the byte limit for all
+three sinks. The buffer counts bytes that the sink accepts and forwards flush
+calls. The existing byte-output constructor and result remain unchanged.
+
+Validation writes to a bounded discard sink. Digest calculation writes to a
+bounded SHA-256 sink after the existing digest domain. These paths do not
+allocate a complete encoded bundle. Both paths still serialize every artifact
+byte. Component descriptors retain sorted, formatted JSON. SQL-only bundles
+retain their existing compact descriptor encoding.
+
+The added tests are `wire::codec::buffer_tests::{bounded_partial_writes,
+bounded_writer_errors,bounded_writer_overflow}` in the SDK and
+`package::bundle::encoding_tests::{bundle_writer_digest_matches_bytes,
+bundle_writer_descriptor_errors}` in Data. Existing metadata tests retain exact
+legacy SQL bytes and canonical digest checks.
+
+**Done** for implementation and focused qualification. The feature-unified
+run passed both new Data encoding tests, existing metadata cases, and all
+66 SDK tests. The record is `/tmp/araphor-f-final-focused.json`.
+**Not done** for final repository CI. No elapsed-time saving is established for this correction.

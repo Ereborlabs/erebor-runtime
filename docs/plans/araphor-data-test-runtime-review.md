@@ -177,3 +177,31 @@ Read `package::lifecycle::tests::admitted_inspection_tracks_replacement` in
 The test covers matching roots, replacement, fallback, scope, and authority.
 Focused qualification passed in the 111-case Data run. The source record is
 `/tmp/araphor-f-final-focused.json`. Final repository CI is pending.
+
+## Bounded encoding sinks
+
+[PackageBundleV1::encode](../../crates/araphor-data/src/package/bundle.rs) A caller requests bundle bytes
+  -> [PackageBundleV1::encode_into](../../crates/araphor-data/src/package/bundle.rs) order artifacts and serialize the existing descriptor representation
+  -> [BoundedBuffer](../../crates/araphor-analysis-sdk/src/wire/codec.rs) reject a write beyond the byte limit and forward accepted writes
+
+[PackageBundleV1::validate](../../crates/araphor-data/src/package/admission.rs) Validation checks the encoded size
+  -> [PackageBundleV1::check_encoding](../../crates/araphor-data/src/package/bundle.rs) use a bounded discard sink with the same serializer
+
+[PackageBundleV1::digest](../../crates/araphor-data/src/package/bundle.rs) A caller requests the digest
+  -> [PackageBundleV1::encode_into](../../crates/araphor-data/src/package/bundle.rs) write the same bytes to the bounded SHA-256 sink after the existing domain
+
+Each call owns its temporary writer. Byte encoding returns the owned vector.
+Size checking discards accepted bytes. Digest calculation retains only the hash
+state. The SDK writer advances its count only after a successful write and uses
+the sink's accepted byte count. The writer forwards flush errors. The writer
+rejects arithmetic overflow and preserves the existing limit error text.
+
+Read the new `wire::codec::buffer_tests` in
+[the SDK codec](../../crates/araphor-analysis-sdk/src/wire/codec.rs) and
+`package::bundle::encoding_tests` in
+[the bundle owner](../../crates/araphor-data/src/package/bundle.rs).
+The tests cover partial writes, write and flush errors, overflow, exact limits,
+digest equality, and descriptor rejection. The existing
+`package::tests::wasm::metadata::sql_bundle_encoding_unchanged` test checks the
+compact SQL bytes. Focused qualification passed. The source record is
+`/tmp/araphor-f-final-focused.json`. Final repository CI is pending.

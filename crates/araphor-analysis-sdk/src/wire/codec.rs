@@ -132,36 +132,51 @@ impl Dataset {
     }
 }
 
-pub struct BoundedBuffer {
-    bytes: Vec<u8>,
+pub struct BoundedBuffer<W = Vec<u8>> {
+    writer: W,
+    written: u64,
     limit: u64,
 }
 
 impl BoundedBuffer {
     pub fn new(limit: u64) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-        }
-    }
-    pub fn finish(self) -> Vec<u8> {
-        self.bytes
+        Self::from_writer(Vec::new(), limit)
     }
 }
 
-impl Write for BoundedBuffer {
+impl<W> BoundedBuffer<W> {
+    pub fn from_writer(writer: W, limit: u64) -> Self {
+        Self {
+            writer,
+            written: 0,
+            limit,
+        }
+    }
+
+    pub fn finish(self) -> W {
+        self.writer
+    }
+}
+
+impl<W: Write> Write for BoundedBuffer<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if (self.bytes.len() as u64).saturating_add(bytes.len() as u64) > self.limit {
+        if self
+            .written
+            .checked_add(bytes.len() as u64)
+            .is_none_or(|size| size > self.limit)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::FileTooLarge,
                 "package encoding byte limit",
             ));
         }
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
+        let written = self.writer.write(bytes)?;
+        self.written += written as u64;
+        Ok(written)
     }
+
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        self.writer.flush()
     }
 }
 
@@ -239,5 +254,84 @@ impl Codec {
             .find(|port| port.name == name)
             .map(|port| &port.schema)
             .ok_or_else(|| Error::contract(ErrorCode::Invalid, "dataset name"))
+    }
+}
+
+#[cfg(test)]
+mod buffer_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct PartialWriter {
+        failed: bool,
+        flushed: bool,
+    }
+
+    impl Write for PartialWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.failed {
+                return Err(io::Error::other("writer failure"));
+            }
+            Ok(usize::from(!bytes.is_empty()))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.failed {
+                return Err(io::Error::other("flush failure"));
+            }
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn bounded_partial_writes() -> io::Result<()> {
+        let mut writer = BoundedBuffer::from_writer(PartialWriter::default(), 3);
+        assert_eq!(writer.write(b"abc")?, 1);
+        assert_eq!(writer.write(b"bc")?, 1);
+        assert_eq!(writer.write(b"c")?, 1);
+        assert_eq!(
+            writer.write(b"d").err().map(|error| error.kind()),
+            Some(io::ErrorKind::FileTooLarge)
+        );
+        writer.flush()?;
+        assert!(writer.finish().flushed);
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_writer_errors() -> io::Result<()> {
+        let mut writer = BoundedBuffer::from_writer(PartialWriter::default(), 2);
+        assert_eq!(writer.write(b"a")?, 1);
+        writer.writer.failed = true;
+        assert_eq!(
+            writer.write(b"b").err().map(|error| error.kind()),
+            Some(io::ErrorKind::Other)
+        );
+        assert_eq!(
+            writer.flush().err().map(|error| error.kind()),
+            Some(io::ErrorKind::Other)
+        );
+        assert_eq!(writer.written, 1);
+        writer.writer.failed = false;
+        assert_eq!(writer.write(b"b")?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_writer_overflow() -> io::Result<()> {
+        let mut writer = BoundedBuffer::from_writer(io::sink(), u64::MAX);
+        writer.written = u64::MAX - 1;
+        assert_eq!(
+            writer.write(b"ab").err().map(|error| error.kind()),
+            Some(io::ErrorKind::FileTooLarge)
+        );
+        assert_eq!(writer.written, u64::MAX - 1);
+        assert_eq!(writer.write(b"a")?, 1);
+        assert_eq!(
+            writer.write(b"b").err().map(|error| error.to_string()),
+            Some("package encoding byte limit".into())
+        );
+        Ok(())
     }
 }

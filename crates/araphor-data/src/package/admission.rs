@@ -75,7 +75,7 @@ impl PackageBundleV1 {
             return Err(Code::Invalid.error("unreferenced package artifact"));
         }
         self.order()?;
-        self.encode()?;
+        self.check_encoding()?;
         Ok(())
     }
 
