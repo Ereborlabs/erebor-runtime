@@ -7,6 +7,7 @@ pub(super) struct FindingKey {
     pub(super) result: String,
     pub(super) finding: String,
     pub(super) bytes: u64,
+    pub(super) header_bytes: u64,
 }
 
 #[derive(Default)]
@@ -67,9 +68,11 @@ impl AnalysisStore {
         }
         drop(results);
         for key in &mut selection.keys {
-            key.bytes = *charges
+            let (header_bytes, revision_bytes) = *charges
                 .get(&key.result)
                 .ok_or_else(|| self.state_error("the selected graph bounds are absent"))?;
+            key.bytes = key.bytes.saturating_add(revision_bytes);
+            key.header_bytes = header_bytes;
         }
         Ok(selection)
     }
@@ -105,7 +108,10 @@ impl AnalysisStore {
             keys.push(FindingKey {
                 result,
                 finding,
-                bytes: 0,
+                bytes: row.get(2).context(AnalysisDatabaseSnafu {
+                    operation: "decode selected native finding bytes",
+                })?,
+                header_bytes: 0,
             });
         }
         Ok(keys)
@@ -117,7 +123,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         ids: &[&str],
         headers: &mut FindingHeaders,
-        charges: &mut BTreeMap<String, u64>,
+        charges: &mut BTreeMap<String, (u64, u64)>,
     ) -> Result<()> {
         let maximum = MAX_READ_BYTES as u64;
         let header_bytes = GraphHeader::MAX_BYTES as u64;
@@ -161,8 +167,14 @@ impl AnalysisStore {
                 operation: "decode selected native graph bytes",
             })?;
             header.check_bytes(&id, stored)?;
+            let header_bytes: u64 = row.get(7).context(AnalysisDatabaseSnafu {
+                operation: "decode selected native header bytes",
+            })?;
+            let revision_bytes = serde_json::to_vec(&header.snapshot.input_manifest)
+                .context(crate::GraphEncodingSnafu)?
+                .len() as u64;
             headers.insert(id.clone(), header);
-            charges.insert(id, stored);
+            charges.insert(id, (header_bytes.saturating_add(384), revision_bytes));
         }
         for id in ids {
             if !charges.contains_key(*id) {

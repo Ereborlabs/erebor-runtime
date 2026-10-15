@@ -55,6 +55,34 @@ fn native_finding_batches() -> std::result::Result<(), Box<dyn std::error::Error
     fixture.add_findings(257)?;
     fixture.store.commit_graph(&fixture.request, true)?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
+    fixture.store.read_snapshot(|snapshot| {
+        let selection = fixture.store.preflight_findings(
+            snapshot,
+            tenant,
+            params![
+                tenant.as_slice(),
+                GRAPH_PROCESSOR,
+                GRAPH_SCHEMA_VERSION,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                None::<String>,
+                i64::MAX
+            ],
+        )?;
+        assert_eq!(FindingKey::batch_end(&selection.keys, 0), 256);
+        let stored: u64 = snapshot
+            .query_row(
+                &format!("SELECT sum(bytes)::UBIGINT FROM ({})", GraphRows::CHARGES),
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "check selected finding row charge",
+            })?;
+        assert!(selection.keys.iter().all(|key| key.bytes < stored));
+        Ok(())
+    })?;
     let expected = fixture
         .snapshot
         .findings
@@ -81,6 +109,19 @@ fn native_finding_batches() -> std::result::Result<(), Box<dyn std::error::Error
         expected[256..]
     );
     Ok(())
+}
+
+#[test]
+fn finding_shared_header_batch() {
+    let keys = ["first", "first", "second"].map(|result| FindingKey {
+        result: result.into(),
+        finding: "finding".into(),
+        bytes: MAX_READ_BYTES as u64 / 8,
+        header_bytes: MAX_READ_BYTES as u64 / 2,
+    });
+    assert_eq!(FindingKey::batch_end(&keys, 0), 2);
+    assert_eq!(FindingKey::batch_end(&keys, 1), 2);
+    assert_eq!(FindingKey::batch_end(&keys, 2), 3);
 }
 
 #[test]

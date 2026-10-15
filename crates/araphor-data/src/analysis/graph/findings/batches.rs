@@ -35,20 +35,28 @@ impl FindingOutput {
 }
 
 impl FindingKey {
-    fn batch_end(keys: &[Self], first: usize) -> usize {
+    pub(super) fn batch_end(keys: &[Self], first: usize) -> usize {
         let mut bytes = 0_u64;
+        let mut results = std::collections::BTreeSet::new();
         let mut end = first;
         for key in keys[first..]
             .iter()
             .take(crate::analysis::MAX_ANALYSIS_PAGE_RECORDS)
         {
+            let header_bytes = if results.contains(&key.result) {
+                0
+            } else {
+                key.header_bytes
+            };
             let charge = key
                 .bytes
+                .saturating_add(header_bytes)
                 .saturating_add((key.result.len() + key.finding.len() + 32) as u64);
             if bytes.saturating_add(charge) > MAX_READ_BYTES as u64 {
                 break;
             }
             bytes += charge;
+            results.insert(&key.result);
             end += 1;
         }
         end

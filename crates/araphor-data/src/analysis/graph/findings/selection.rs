@@ -10,7 +10,17 @@ impl AnalysisStore {
                 PARTITION BY stream_key, first_cursor
                 ORDER BY commit_revision DESC, result_id DESC) = 1
          ), current_findings AS (
-            SELECT finding.result_id, finding.finding_id
+            SELECT finding.result_id, finding.finding_id,
+                (256 + octet_length(encode(finding.result_id))
+                + octet_length(finding.tenant_id) + octet_length(encode(finding.finding_id))
+                + octet_length(encode(finding.package_id)) + octet_length(finding.subject_id)
+                + octet_length(encode(finding.state)) + octet_length(finding.evidence)
+                + octet_length(finding.required_coverage_interval_ids)
+                + octet_length(finding.policy_provenance) + octet_length(finding.effects)
+                + octet_length(encode(finding.reason)) + octet_length(encode(finding.severity))
+                + octet_length(encode(finding.sensitivity))
+                + coalesce(octet_length(encode(finding.required_action)), 0)
+                + octet_length(finding.limits))::UBIGINT AS finding_bytes
             FROM graph_findings finding JOIN heads USING (result_id)
             QUALIFY ROW_NUMBER() OVER (
                 PARTITION BY finding_id
@@ -18,7 +28,8 @@ impl AnalysisStore {
          )
          SELECT CASE WHEN octet_length(encode(result_id)) BETWEEN 1 AND 256
                 THEN result_id END,
-            CASE WHEN octet_length(encode(finding_id)) <= 4096 THEN finding_id END
+            CASE WHEN octet_length(encode(finding_id)) <= 4096 THEN finding_id END,
+            finding_bytes
          FROM current_findings
          WHERE (? IS NULL OR finding_id > ?) AND (? IS NULL OR finding_id = ?)
          ORDER BY finding_id LIMIT ?"
@@ -49,7 +60,8 @@ impl AnalysisStore {
                 CASE WHEN headers.included AND octet_length(metadata.stream_key) <= ?
                     THEN metadata.stream_key END AS graph_stream,
                 metadata.method_version, metadata.first_cursor,
-                coalesce(charges.stored_bytes, 0)::UBIGINT, headers.included
+                coalesce(charges.stored_bytes, 0)::UBIGINT, headers.included,
+                octet_length(metadata.body)::UBIGINT
              FROM main.analysis_results metadata JOIN requested USING (result_id)
              LEFT JOIN charges USING (result_id) CROSS JOIN headers
              ORDER BY metadata.result_id",
