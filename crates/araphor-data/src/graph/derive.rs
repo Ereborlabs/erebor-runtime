@@ -30,10 +30,12 @@ impl GraphAndFindingOwner {
     ) -> Result<GraphSnapshotV1> {
         let execution = execution.snapshot(input.source.tenant_id)?;
         let input = input.normalized()?;
-        Self::derive_selected(&input, &execution)
+        let snapshot = Self::derive_candidate(&input, &execution)?;
+        finish::WindowBytes::check(&snapshot)?;
+        Ok(snapshot)
     }
 
-    pub(super) fn derive_selected(
+    pub(super) fn derive_candidate(
         input: &GraphReplayInputV1,
         execution: &crate::InstalledAnalysis,
     ) -> Result<GraphSnapshotV1> {

@@ -54,7 +54,7 @@ impl GraphAndFindingOwner {
                 }
             }
         }
-        let mut snapshot = match Self::derive_selected(&input, &execution) {
+        let mut snapshot = match Self::derive_candidate(&input, &execution) {
             Ok(snapshot) => snapshot,
             Err(crate::Error::GraphInvalid {
                 field: "graph output bytes",
@@ -89,10 +89,17 @@ impl GraphAndFindingOwner {
             return Ok(Some(false));
         }
         snapshot.previous_result_id = previous.as_ref().map(|row| row.0.clone());
-        let prepared = crate::analysis::graph_rows::CanonicalGraph::new(snapshot)?;
-        if prepared.body().len() > GRAPH_WINDOW_BYTES.min(crate::analysis::MAX_RESULT_BYTES) {
-            return Ok(None);
-        }
+        let prepared = match crate::analysis::graph_rows::CanonicalGraph::bounded(
+            snapshot,
+            GRAPH_WINDOW_BYTES.min(crate::analysis::MAX_RESULT_BYTES),
+        ) {
+            Ok(prepared) => prepared,
+            Err(crate::Error::GraphInvalid {
+                field: "graph output bytes",
+                ..
+            }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
         execution.authorize(
             input.source.tenant_id,
             &Self::package_revisions(&installed),

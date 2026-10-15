@@ -159,24 +159,20 @@ impl GraphDerivation<'_> {
             witness_deadline_utc_ns: 0,
         };
         snapshot.validate()?;
-        WindowBytes::check(&snapshot)?;
         Ok(snapshot)
     }
 }
 
-struct WindowBytes {
-    remaining: usize,
-    exceeded: bool,
-}
+pub(super) struct WindowBytes;
 
 impl WindowBytes {
-    fn check(snapshot: &GraphSnapshotV1) -> Result<()> {
-        let mut writer = Self {
-            remaining: GRAPH_WINDOW_BYTES,
-            exceeded: false,
-        };
+    pub(super) fn check(snapshot: &GraphSnapshotV1) -> Result<()> {
+        let mut writer = araphor_analysis_sdk::wire::BoundedBuffer::from_writer(
+            std::io::sink(),
+            GRAPH_WINDOW_BYTES as u64,
+        );
         if let Err(source) = serde_json::to_writer(&mut writer, snapshot) {
-            if writer.exceeded {
+            if source.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) {
                 return GraphInvalidSnafu {
                     field: "graph output bytes",
                 }
@@ -184,25 +180,6 @@ impl WindowBytes {
             }
             return Err(source).context(GraphEncodingSnafu);
         }
-        Ok(())
-    }
-}
-
-impl std::io::Write for WindowBytes {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let Some(remaining) = self.remaining.checked_sub(bytes.len()) else {
-            self.exceeded = true;
-            return Err(std::io::Error::other("graph output bytes"));
-        };
-        self.remaining = remaining;
-        Ok(bytes.len())
-    }
-
-    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
-        self.write(bytes).map(|_| ())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }

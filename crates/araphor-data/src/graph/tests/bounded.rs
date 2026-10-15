@@ -109,6 +109,39 @@ fn output_bytes_split() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn final_header_bounds() -> TestResult {
+    use crate::analysis::graph_rows::CanonicalGraph;
+
+    let fixture = super::native_storage::CommitFixture::new()?;
+    let mut snapshot = fixture.snapshot;
+    snapshot.previous_result_id = None;
+    snapshot.context_notice_revision = 0;
+    snapshot.witness_deadline_utc_ns = 0;
+    snapshot.input_positions.clear();
+    let body = serde_json::to_vec(&snapshot)?;
+    let prepared = CanonicalGraph::bounded(snapshot.clone(), body.len())?;
+    assert_eq!(prepared.body(), body);
+    let before = fixture.store.meta()?;
+    snapshot.previous_result_id = Some(format!("graph:{}", "x".repeat(128)));
+    snapshot.context_notice_revision = u64::MAX;
+    snapshot.witness_deadline_utc_ns = u64::MAX;
+    snapshot.validate()?;
+    assert!(matches!(
+        CanonicalGraph::bounded(snapshot.clone(), body.len()),
+        Err(Error::GraphInvalid {
+            field: "graph output bytes",
+            ..
+        })
+    ));
+    assert_eq!(fixture.store.meta()?, before);
+    let final_body = serde_json::to_vec(&snapshot)?;
+    assert!(final_body.len() > body.len());
+    let prepared = CanonicalGraph::bounded(snapshot, final_body.len())?;
+    assert_eq!(prepared.body(), final_body);
+    Ok(())
+}
+
 fn dense_input() -> TestResult<GraphReplayInputV1> {
     let mut records = vec![record(1, &wire(1, UnknownAfterPreEffect, 2, 4, [20; 16]))?];
     for cursor in 2..=256 {

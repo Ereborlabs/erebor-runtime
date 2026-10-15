@@ -34,16 +34,36 @@ pub(crate) struct CanonicalGraph {
 }
 
 impl CanonicalGraph {
+    #[cfg(test)]
     pub(crate) fn new(snapshot: GraphSnapshotV1) -> Result<Self> {
+        Self::bounded(snapshot, GraphRows::MAX_CANONICAL_BYTES)
+    }
+
+    pub(crate) fn bounded(snapshot: GraphSnapshotV1, limit: usize) -> Result<Self> {
         snapshot.validate()?;
-        let body = GraphRows::json(&snapshot)?;
-        Ok(Self { snapshot, body })
+        let mut writer = araphor_analysis_sdk::wire::BoundedBuffer::new(
+            limit.min(GraphRows::MAX_CANONICAL_BYTES) as u64,
+        );
+        if let Err(source) = serde_json::to_writer(&mut writer, &snapshot) {
+            if source.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) {
+                return GraphInvalidSnafu {
+                    field: "graph output bytes",
+                }
+                .fail();
+            }
+            return Err(source).context(GraphEncodingSnafu);
+        }
+        Ok(Self {
+            snapshot,
+            body: writer.finish(),
+        })
     }
 
     pub(crate) fn snapshot(&self) -> &GraphSnapshotV1 {
         &self.snapshot
     }
 
+    #[cfg(test)]
     pub(crate) fn body(&self) -> &[u8] {
         &self.body
     }
