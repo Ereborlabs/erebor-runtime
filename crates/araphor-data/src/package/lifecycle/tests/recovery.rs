@@ -23,10 +23,7 @@ async fn suspended_package_renewal_restart() -> TestResult {
     }
     let installed = fixture.install(package.clone(), None).await?;
     let original = &installed.exports[0].results[0];
-    let historical = fixture
-        .store
-        .package_result([1; 16], &original.result_id)?
-        .ok_or("original result is absent")?;
+    let historical = fixture.result(&original.result_id)?;
     assert!(!historical.checkpoint.is_empty());
 
     fixture.authority.set_revision(0);
@@ -44,29 +41,23 @@ async fn suspended_package_renewal_restart() -> TestResult {
     assert_ne!(export.results[0].result_id, original.result_id);
     let current = fixture.store.package_activation_page(None)?.remove(0);
     assert!(current.checkpoint_revision > suspended.checkpoint_revision);
-    let output = fixture.owner.read_output(
-        &fixture.grant,
-        "test",
+    let output = fixture.output(
         "test.model",
         "count",
         current.result_id.as_deref().ok_or("new result is absent")?,
     )?;
     let checkpoint = output.checkpoint.ok_or("new checkpoint is absent")?;
-    let state = crate::PackageOutputV1 {
+    let state = crate::AnalysisPackageOwner::output_rows(&sdk::wire::Output {
         datasets: checkpoint.datasets,
         ..Default::default()
-    }
-    .json_rows()?;
+    })?;
     assert_eq!(state["state"], serde_json::json!([{"runs":1}]));
     let later = fixture.execute(run("resumed")).await?;
     assert_ne!(
         later.exports[0].results[0].result_id,
         export.results[0].result_id
     );
-    let retained = fixture
-        .store
-        .package_result([1; 16], &original.result_id)?
-        .ok_or("historical result is absent")?;
+    let retained = fixture.result(&original.result_id)?;
     assert_eq!(retained.checkpoint, historical.checkpoint);
     assert_eq!(retained.datasets, historical.datasets);
     Ok(())

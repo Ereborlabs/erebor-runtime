@@ -114,7 +114,7 @@ impl Rows {
         Ok(output)
     }
 
-    pub(crate) fn input<T: DeserializeOwned>(
+    pub fn input<T: DeserializeOwned>(
         checked: &sdk::CheckedEvaluation<'_>,
         name: &str,
     ) -> sdk::Result<Vec<T>> {

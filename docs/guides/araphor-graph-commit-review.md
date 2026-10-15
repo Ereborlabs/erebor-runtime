@@ -201,56 +201,9 @@ Read `native_finding_batches`, `finding_shared_header_batch`, and
 `native_finding_fallback` in
 [finding tests](../../crates/araphor-data/src/analysis/graph/findings/tests.rs).
 The current test routes cover final metadata growth, batch accounting,
-shared headers, output pagination, and fallback. Current focused and final CI
-results pass.
+shared headers, output pagination, and fallback. Read the current verification before treating these test routes as passed.
 
-**Done** for the subsequent graph and finding source, focused checks, and final
-CI. Refreshed native Data and exact E2E retry qualification also pass.
-
-### Current qualification at `ab6b5da3`
-
-The final Rust procedure exits 0 in 1,848.31 seconds. Formatting, workspace
-check, strict clippy, and all 90 outer harnesses pass: 2,138 passed, zero failed,
-and 568 existing ignored cases. Data has 632 passes and 19 ignored cases in
-921.16 seconds. Covered source hashes remain unchanged. The capture starts
-at HEAD `cee3ecc9`; this same tested source was committed through `ab6b5da3`
-while the procedure ran.
-
-Read `/tmp/araphor-oci-deliverable-commits.json`,
-`/tmp/araphor-oci-final-ci-source.json`, `/tmp/araphor-oci-final-ci-report.json`,
-and `/tmp/araphor-oci-final-ci.log`. The
-[current plan record](../plans/araphor-production-dataflow-simplification.md#current-verification-record)
-records all focused checks, separate commits, and earlier corrected attempts.
-The 43-case focused Data run passes in 264.61 seconds. No deadline, quota, or
-workload was reduced.
-
-Six refreshed native libraries build in 29.11 seconds with matching hashes
-across the two builds. All 12 native Data cases pass with zero failures and
-zero ignored cases in 254.19 seconds on Linux x86_64 GNU with glibc 2.39.
-The native detector E2E case fails in 368.16 seconds with
-`automatic source replacement did not finish`: count revision 31 has
-`stale=false`, while repeated revision 24 has `stale=true`. It uses an empty
-`PATH` and target `x86_64-unknown-linux-gnu`. Source, binaries, and artifacts
-remain stable; the record has `qualified=false`. The failure cause is not
-established. That first attempt does not qualify native E2E; full Rust
-CI remains passed. Read
-`/tmp/araphor-oci-native-build2.json`, `/tmp/araphor-oci-native-build2.log`,
-`/tmp/araphor-oci-native-qualification.json`, and
-`/tmp/araphor-oci-native-qualification.log`.
-
-The exact native E2E retry passes with one passed, zero failed, and zero
-ignored in 281.10 seconds; runner time is 281.12 seconds. It uses the same
-`ab6b5da3` source, binary, artifacts, and empty `PATH`. The retry record confirms
-unchanged source, and its binary hash matches the first run. Read
-`/tmp/araphor-oci-native-e2e-retry1.json` and
-`/tmp/araphor-oci-native-e2e-retry1.log`. Both outcomes remain retained.
-Source qualification, including the native retry, passes. The unresolved
-E2E reproducibility issue is **Not done**; no root cause or fix is claimed.
-
-The Data target below ten minutes is not met. Ordinary functional times do
-not establish a causal speed improvement or regression. No saving is measured.
-
-### Retained verification at `cffde410`
+## Verification
 
 Existing Rust cases in [native storage tests](../../crates/araphor-data/src/graph/tests/native_storage.rs)
 cover immutable retry, rollback, exact encoding, and replacement removal.
@@ -268,63 +221,13 @@ fields and omitted row arrays. `graph_native_commit_rollback` retains the existi
 `graph_appender_constraint_rollback` checks rollback after an appender
 constraint failure. `native_header_read_budget` checks that the cache retains
 two headers whose combined charge exceeds one result's canonical bound.
-Current row, canonical-byte, header, rollback, recovery,
-and real crash cases pass. The combined focused Data qualification covers
-71 distinct cases: 70 pass in the first run, and the corrected SQL parity
-fixture passes in its exact retry. All 66 selected SDK cases pass.
 
-Evidence: `/tmp/araphor-production-fresh-focused-araphor_data.log`,
-`/tmp/araphor-production-final-focused.json`,
-`/tmp/araphor-production-final-focused-araphor_data.log`, and
-`/tmp/araphor-production-final-focused-araphor_analysis_sdk.log`.
-The evidence records the tested working-tree source before the original
-production commits `6b6d5ebb`, `efac8911`, and `78f80579`.
-
-The first full Rust procedure at `78f80579` reports 616 Data passes, three
-failures, and 19 ignored cases. The first attempt's logs and source capture
-remain retained. Correction `9b3cbab8` restores the original 32 MiB finding
-read budgets separately from the 16 MiB canonical result bound. Correction
-`9f1f4ffa` fixes the retained-memory fixture. Correction `cffde410` makes the
-query fixture use current canonical graph bytes.
-
-Seven targeted correction cases pass in 214.15 seconds. The targeted clippy
-check passes in 17.53 seconds. The unified workspace test build passes in
-469.20 seconds. The source remains unchanged during those checks. Evidence:
-`/tmp/araphor-production-targeted-fixes.json` and
-`/tmp/araphor-production-targeted-fixes-tests.log`. The original graph bounds
-case reproduces its default read-deadline failure in isolation, then passes
-after the read-budget correction. These checks use the existing deadlines.
-The committed source head is `cffde410`. The final Rust procedure passes with
-90 outer test harnesses: 2,121 passed, zero failed, and 568 existing ignored.
-The source remains unchanged. Total elapsed time is 1,666.48 seconds. Data has
-620 passes and 19 ignored cases in 889.53 seconds. SDK has 66 passes. Control
-has 188 passes and two ignored cases in 106.65 seconds. E2e has 191 passes and
-528 ignored cases in 488.20 seconds. Node has 282 passes and one ignored case
-in 7.46 seconds. These are ordinary functional run times. They do not prove
-a speed change caused by this implementation.
-
-Final evidence: `/tmp/araphor-production-final-ci-source.json`,
-`/tmp/araphor-production-final-ci.log`, and
-`/tmp/araphor-production-final-ci-report.json`.
-
-**Done** for source implementation, focused qualification, the final Rust
-procedure, and source-built native artifact parity qualification.
-
-At `cffde410`, six Rust libraries build in 30.79 seconds under
-`/tmp/araphor-production-native-current`. All 12 parent qualification cases
-pass with zero failures and zero ignored cases in 255.98 seconds. The runner
-records 256.00 seconds. Eight package cases execute actual stored ELF artifacts
-and cover installation, lifecycle, checkpoint, overflow, errors, configured
-caps, cancellation, revocation, expiry, and host-fault restart. Two Discovery
-cases and two graph detector parity and large-input cases also pass. The
-source remains unchanged.
-
-The qualified native platform is Linux x86_64 GNU with glibc 2.39. This result
-does not qualify another platform. Evidence:
-`/tmp/araphor-production-native-qualification.json`,
-`/tmp/araphor-production-native-qualification-build.log`, and
-`/tmp/araphor-production-native-qualification-tests.log`.
-
-No speed benchmark is run. No speed improvement
-is measured by this guide. This change adds no kernel program, ABI, backend
-trait, or long-lived runtime owner.
+These are source test routes. The
+[current verification](../plans/araphor-performance-simplification-todo.md)
+records results for the deletion work. Complete earlier receipts remain at
+`7b7b407adf347d389984553a4d212bfce37b75b5:docs/guides/araphor-graph-commit-review.md`.
+They include failed and interrupted attempts and their corrections. The earlier
+native proof covers Linux x86_64 GNU with glibc 2.39. Its exact E2E retry passes;
+the original failure has no established cause. Other native platforms and a
+causal runtime speed improvement remain unqualified. No kernel program, ABI,
+backend trait, or durable owner is added by this change.

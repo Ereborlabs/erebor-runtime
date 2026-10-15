@@ -29,10 +29,10 @@ impl Package {
     ) -> Result<FixtureReport> {
         Self::text(&fixture.implementation)?;
         Self::text(&fixture.revision)?;
-        let validator = self.validator(&fixture.evaluation)?;
-        validator.input(&fixture.evaluation)?;
+        let model = self.validator(&fixture.evaluation)?;
+        model.input(&fixture.evaluation)?;
         let output = algorithm(&fixture.evaluation)?;
-        validator.output(&fixture.evaluation, &output)?;
+        model.output(&fixture.evaluation, &output)?;
         Ok(FixtureReport {
             package_id: self.id.clone(),
             package_revision: self.revision.clone(),

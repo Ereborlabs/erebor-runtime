@@ -3,16 +3,12 @@ use araphor_analysis_sdk as sdk;
 
 pub struct CredentialsComponent;
 
-impl sdk::guest::Guest for CredentialsComponent {
+impl sdk::Guest for CredentialsComponent {
     fn package() -> sdk::Package {
         Detector::Credentials.descriptor()
     }
-    fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        Detector::Credentials.evaluate(evaluation)
-    }
-
-    fn evaluate_checked(checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
-        Detector::Credentials.evaluate_checked(checked)
+    fn compute(checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        Detector::Credentials.compute(checked)
     }
 }
 

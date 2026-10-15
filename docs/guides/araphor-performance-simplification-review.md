@@ -3,7 +3,10 @@
 Review the production changes in the [approved TODO](../plans/araphor-performance-simplification-todo.md).
 These changes remove repeated reads, decoding, validation, and input preparation.
 The source basis is `aa390d9f647c304ef212396433824a6b9c560982` plus the working tree.
-All 17 changes passed the final verification recorded below.
+The earlier source passed the verification recorded below. The deletion work
+requires the current verification in the TODO. The user requires relevant
+builds and tests for each iteration. The production Rust deletion target is
+6,000 nonblank lines; tests and documents do not count toward it.
 
 ## Intended end state
 
@@ -134,17 +137,19 @@ reader reservation. Nonempty references retain exact revision checks.
 ## Guest validation and ABI: item 15
 
 [CheckedEvaluation](../../crates/araphor-analysis-sdk/src/validation.rs) borrows
-the package, model, and accepted evaluation. The internal path reuses the
-accepted contract validator. [Rows::input](../../crates/araphor-analysis-builtins/src/rows.rs)
+the package, model, and accepted evaluation. One checked contract supplies input
+and output validation. [Rows::input](../../crates/araphor-analysis-builtins/src/rows.rs)
 accepts this value. Public standalone decode and validation methods still
 check their inputs. JavaScript Object Notation (JSON) parsing still checks each
 requested typed row.
 
 The [component wrapper](../../crates/araphor-analysis-sdk/src/guest.rs) and
 [native wrapper](../../crates/araphor-analysis-sdk/src/native/mod.rs) call the
-checked guest hook. The default hook calls the existing guest method. Built-in
-guests and the [detector example](../../crates/araphor-detector-example/src/lib.rs)
-override the hook. [Wire import](../../crates/araphor-analysis-sdk/src/wire/evaluation.rs)
+required `Guest::compute` hook. Built-in guests and the
+[detector example](../../crates/araphor-detector-example/src/lib.rs) implement
+that hook. Standalone `Guest::evaluate` validates input and output around the
+same hook. The forwarding hook and separate contract validator are removed.
+[Wire import](../../crates/araphor-analysis-sdk/src/wire/evaluation.rs)
 and native import retain framing and input checks. Output checks still cover
 schemas, bounds, evidence, reasons, and checkpoints before export or host use.
 The application binary interface (ABI) and its release function do not change.
@@ -164,7 +169,8 @@ guest; graph, discovery, and example tests cover the generic checked guest hook.
 128 retained dispatches and two active capture slots. Admission verifies the
 dispatch and target lifetime. Durable intent precedes worker spawn. Recovery
 checks stored identities and complete frames once. Recovery records a terminal
-result without another spawn. Idle retained reads use the owned dispatch map.
+result without another spawn. One retained entry owns its dispatch, cursor,
+and optional worker. Idle retained reads use that entry.
 
 The same owner retains a checked spool sequence and byte offset. A backward
 cursor or reopen requires replay checks. Active reads stop at the synced
@@ -186,10 +192,17 @@ executor cannot prevent that thread from receiving an authority change.
 ## Durable context, capacity, retention, and quota: items 3, 9, 16, and 17
 
 [commit](../../crates/mithril-control/src/store.rs) updates
-[ContextChanges](../../crates/mithril-control/src/store/context.rs) after durable
-replacement and before change publication. Startup replays stored facts.
-Later cycles select changed source keys and process at most 16 entries per
-call. A failed data-store write keeps the cursor. A serialization error skips
+[ContextIndex](../../crates/mithril-control/src/store/context.rs) after durable
+replacement and before change publication. The authoritative transaction
+application returns changed keys; a second transaction interpreter is removed.
+One `ContextIndex` retains ordered source keys and their revisions. One cursor
+holds the source and optional target/fact position. A target snapshot has one
+index entry regardless of its fact count. Startup rebuilds this index from
+admitted Control state and replays stored facts. Distinct sources remain
+distinct even when they produce the same public context key.
+Later cycles visit ordered source keys and serialize only changed records.
+Each call visits at most 16 entries, including unchanged keys. Each source selects its own tenant. Only global trust records repeat for
+each admitted tenant. The owner does not scan every source for each tenant. A failed data-store write keeps the cursor. A serialization error skips
 that record once. A new commit selects that key again. Unrelated commits do
 not replay old context bodies. These positions are not durable authority data.
 Coverage commits use the analysis owner and can progress while policy priority
@@ -225,6 +238,14 @@ use actual stored artifact bytes. Decimal JSON byte counting, its frame field,
 and `encoded_bytes` are removed. Schema 22 has no older-format reader.
 The quota-unit change does not replace executable hashing or current trust.
 
+[SDK wire types](../../crates/araphor-analysis-sdk/src/wire/model.rs) own the
+dataset, input, output, reason, and checkpoint representations used by package
+fixtures, OCI layers, and stored results. Data's second wire type family is
+removed. [Package output](../../crates/araphor-data/src/package/output.rs) keeps
+Data's existing per-port row/batch limits, aggregate encoded/decoded byte limits,
+checkpoint checks, and error classes. These policies differ from the ABI's
+aggregate budget. Sharing a representation does not replace either boundary.
+
 ## Functional review checks
 
 These are source test routes. This table does not report a passed run.
@@ -238,39 +259,16 @@ These are source test routes. This table does not report a passed run.
 | 10, 11 | [Capture tests](../../crates/araphor-observability/src/capture.rs): `observability_recovery_preserves_all_pages_and_never_respawns`, `observability_spool_seeks_forward_and_checks_replay`, `observability_recovery_uploads_only_the_synced_prefix`. |
 | 12, 15 | [Read tests](../../crates/araphor-data/src/analysis/read.rs): `read_monitor_store_reuse`, `read_monitor_stage_cleanup`, cancellation and deadline cases. [Authority tests](../../crates/araphor-data/src/package/installed/control.rs): direct and blocked-runtime cancellation. [SDK tests](../../crates/araphor-analysis-sdk/src/native/tests.rs): `checked_guest_keeps_output_boundary`, `invalid_abi_values_are_errors`. [Contract tests](../../crates/araphor-analysis-sdk/src/tests/boundaries.rs): `checked_output_keeps_contract`. |
 | 16 | [Context tests](../../crates/mithril-control/src/store/context.rs): `control_context_bounded_replay`, `control_context_retries_write`, `control_context_preserves_changed_body_conflicts`, `control_context_empty_tenants_stay_idle`. [Coverage priority proof](../../crates/mithril-e2e/src/control_tls/partition.rs): `coverage_progresses_during_priority`. [Store wake proof](../../crates/mithril-control/src/store.rs): `final_priority_release_wakes_evidence`. |
+| Package transport | [SDK codec tests](../../crates/araphor-analysis-sdk/src/tests/codec.rs): `wire_contract_boundaries`. [Data output tests](../../crates/araphor-data/src/package/tests/wire.rs): `package_ipc_limits`. [OCI tests](../../crates/araphor-data/src/package/oci/tests.rs) check raw reason and checkpoint layers, canonical identity, and invalid slots. [Memory tests](../../crates/araphor-data/src/package/installed/snapshot/memory/tests.rs): `fixture_capacity_is_charged`. |
 
 ## Verification state
 
-Result: **Done**. The final source passed verification on 2026-10-15.
-The source manifest has 1,401 input files. Its SHA-256 is:
+Read the [current TODO](../plans/araphor-performance-simplification-todo.md#verification-and-result)
+for source-bound commands and terminal results. The earlier passing source is
+`7b7b407adf347d389984553a4d212bfce37b75b5`. Its complete receipt remains in that
+revision of this guide. It does not qualify the deletion work.
 
-`0f23272581240d3a2e1cb92ac9421ff10b4fec95136bca3f1d642f3a35a62612`
-
-The manifest is the sorted JSON map of input paths to their SHA-256 values.
-The JSON encoding uses comma and colon separators without extra spaces.
-Documentation-only completion edits do not change this source manifest.
-
-| Check | Result |
-| --- | --- |
-| `bash .github/scripts/verify-rust-ci.sh` | Formatting, compilation, Clippy, and tests passed. All 90 test harnesses completed. There were 2,172 passed tests, zero failed tests, and 568 ignored tests. |
-| Araphor Data | 653 passed, zero failed, and 19 ignored. This result includes the clock, no-op input, capacity, retention, quota, and recovery checks. |
-| Mithril Control | 191 passed, zero failed, and two ignored. This result includes context replay and the final priority-release wake. |
-| Mithril end-to-end | 191 passed, zero failed, and 528 ignored. This result includes coverage during priority and the native append fault/reopen checks. |
-| Native build | Six current libraries passed the locked release build. All 98 build inputs and all six library hashes matched at qualification. |
-| Native Data | All 12 selected cases passed. They cover native and Wasm parity, large input, checkpoints, bounds, errors, cancellation, revocation, expiry, lifecycle, and host-fault restart. |
-| [Installed native detector](../../crates/mithril-e2e/src/discovery/packages/native/tests.rs) | Passed with `PATH` empty. The test requires three matching evidence records, checkpoint `4`, no host rebuild, replay equality, and an unchanged result after a duplicate-output denial. |
-
-The native run used the Data and end-to-end test binaries from the passing
-workspace run. Source, library, and test binary hashes remained unchanged.
-The qualification target was Linux, `x86_64-unknown-linux-gnu`, with glibc 2.39.
-Other native targets and physical Kubernetes cases were not qualified.
-
-The local records are `/tmp/araphor-performance-final-ci4.json`,
-`/tmp/araphor-performance-final-ci4-report.json`,
-`/tmp/araphor-performance-native-build.json`, and
-`/tmp/araphor-performance-native-qualification.json`. The records contain the
-commands, source manifests, artifact identities, platform, and results. The
-paired `.log` files contain the command output.
-
-No performance test, latency measurement, or benchmark is part of this record.
-These results qualify behavior. They do not measure a production speed increase.
+No benchmark or physical Kubernetes qualification is part of this change.
+Functional results do not establish a production speed increase. Native proof
+requires source-built artifacts and separately selected execution cases; ordinary
+CI does not run those ignored cases.

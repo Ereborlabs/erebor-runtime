@@ -22,14 +22,13 @@ mod status;
 pub(crate) mod storage;
 mod supervision;
 pub(super) mod wasm;
-mod wire;
 
 pub use bundle::*;
 pub(crate) use evaluation::ResultContext;
+pub use fixtures::PackageFixtureV1;
 pub use installed::{InstalledAnalysis, InstalledEvaluation, InstalledRefV1};
 pub use model::*;
 pub(crate) use owner::InstalledContext;
-pub use wire::*;
 
 pub struct AnalysisPackageOwner {
     store: Arc<AnalysisStore>,

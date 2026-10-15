@@ -1022,9 +1022,9 @@ impl NodeChassis {
                     .build()
                 })?;
                 owner.reap()?;
-                let retained = owner.retained()?;
+                let retained = owner.retained();
                 let mut exchange = mithril_control::TraceExchangeV1 {
-                    retained: retained.iter().map(|(id, _)| *id).collect(),
+                    retained: retained.clone().map(|(id, _)| id).collect(),
                     resolved: pending,
                     output: None,
                 };

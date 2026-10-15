@@ -20,7 +20,7 @@ fn declaration_clones_keep_ports() -> TestResult {
     other.id = "other".into();
     let checked = other.check_evaluation(&fixture.evaluation)?;
     assert!(
-        matches!(Discovery::evaluate_checked(&checked), Err(sdk::Error::Contract {
+        matches!(<Discovery as sdk::Guest>::compute(&checked), Err(sdk::Error::Contract {
         code: sdk::ErrorCode::Incompatible, field, ..
     }) if field == "discovery package")
     );
@@ -40,7 +40,7 @@ fn checked_input_keeps_json_errors() -> TestResult {
     )?];
     let checked = package.check_evaluation(&fixture.evaluation)?;
     assert!(matches!(
-        Discovery::evaluate_checked(&checked),
+        <Discovery as sdk::Guest>::compute(&checked),
         Err(sdk::Error::Encoding { .. })
     ));
     Ok(())
@@ -239,23 +239,25 @@ fn sdk_conflicting_record() -> TestResult {
 #[test]
 fn sdk_bounded_derivation() -> TestResult {
     let mut fixture = fixture()?;
-    fixture.evaluation.context.limits.max_rows = 1;
-    assert!(matches!(
-        Discovery::evaluate(&fixture.evaluation),
-        Err(sdk::Error::Contract {
-            code: sdk::ErrorCode::Limit,
-            ..
-        })
-    ));
-    fixture.evaluation.context.limits = Discovery::limits();
-    fixture.evaluation.context.limits.max_bytes = 64;
-    assert!(matches!(
-        Discovery::evaluate(&fixture.evaluation),
-        Err(sdk::Error::Contract {
-            code: sdk::ErrorCode::Limit,
-            ..
-        })
-    ));
+    for bounds in [
+        sdk::Limits {
+            max_rows: 1,
+            ..Discovery::limits()
+        },
+        sdk::Limits {
+            max_bytes: 64,
+            ..Discovery::limits()
+        },
+    ] {
+        fixture.evaluation.context.limits = bounds;
+        assert!(matches!(
+            Discovery::evaluate(&fixture.evaluation),
+            Err(sdk::Error::Contract {
+                code: sdk::ErrorCode::Limit,
+                ..
+            })
+        ));
+    }
     let port = Discovery::port::<Record>("records");
     let schema = &port.schema.field(0).metadata()["araphor.json_schema"];
     assert!(schema.contains("original_sequence"));

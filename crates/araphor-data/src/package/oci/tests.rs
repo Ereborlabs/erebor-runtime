@@ -1,5 +1,6 @@
 use super::*;
 use crate::package::tests::{bundle, TestResult};
+use araphor_analysis_sdk as sdk;
 
 #[test]
 fn oci_package_identity() -> TestResult {
@@ -28,23 +29,40 @@ fn oci_package_identity() -> TestResult {
         inputs: Vec::new(),
         parameters: None,
         checkpoint: None,
-        expected: PackageOutputV1 {
-            datasets: vec![PackageDatasetV1 {
+        expected: sdk::wire::Output {
+            datasets: vec![sdk::wire::Dataset {
                 name: "rows".into(),
-                ipc: vec![0, 255, 1],
+                arrow_ipc: vec![0, 255, 1],
             }],
+            reasons: vec![sdk::wire::ReasonValue {
+                output: sdk::RowRef {
+                    dataset: "rows".into(),
+                    row: 0,
+                },
+                code: "opaque".into(),
+                details: vec![1, 0, 254],
+            }],
+            checkpoint: Some(sdk::wire::Checkpoint {
+                version: 9,
+                datasets: vec![sdk::wire::Dataset {
+                    name: "opaque-state".into(),
+                    arrow_ipc: vec![255, 0],
+                }],
+            }),
             ..Default::default()
         },
     });
     let bytes = package.encode()?;
     let content = oci::Content::from_bytes(&bytes)?;
-    assert_eq!(content.layers.len(), 3);
+    assert_eq!(content.layers.len(), 5);
     assert_eq!(content.layers[0].media_type, oci::NATIVE_MEDIA_TYPE);
     assert_eq!(
         content.layers[1].media_type,
         oci::NATIVE_DEPENDENCY_MEDIA_TYPE
     );
-    assert_eq!(content.layers[2].media_type, oci::ARROW_IPC_MEDIA_TYPE);
+    for layer in &content.layers[2..] {
+        assert_eq!(layer.media_type, oci::ARROW_IPC_MEDIA_TYPE);
+    }
     let metadata: PackageBundleV1 = content.package()?;
     let PackageImplementationV1::Native {
         artifact,
@@ -57,7 +75,18 @@ fn oci_package_identity() -> TestResult {
     assert!(artifact.is_empty());
     assert!(qualification.dependencies[0].artifact.is_empty());
     assert!(metadata.artifacts[0].fixtures[0].expected.datasets[0]
-        .ipc
+        .arrow_ipc
+        .is_empty());
+    assert!(metadata.artifacts[0].fixtures[0].expected.reasons[0]
+        .details
+        .is_empty());
+    assert!(metadata.artifacts[0].fixtures[0]
+        .expected
+        .checkpoint
+        .as_ref()
+        .ok_or("checkpoint metadata")?
+        .datasets[0]
+        .arrow_ipc
         .is_empty());
     let decoded = PackageBundleV1::from_bytes(&bytes)?;
     assert_eq!(decoded.artifacts, package.artifacts);

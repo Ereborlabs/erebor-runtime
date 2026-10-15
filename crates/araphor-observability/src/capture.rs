@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{BufRead as _, BufReader, Read as _, Seek as _, SeekFrom, Write as _},
     os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
@@ -121,12 +121,26 @@ pub struct NodeTraceOwner {
     storage_reserve_bytes: u64,
     backend: TraceBackend,
     reader: KernelStateReader,
-    active: BTreeMap<[u8; 16], ActiveTrace>,
-    retained: BTreeMap<[u8; 16], TraceDispatchV1>,
-    cursors: Mutex<BTreeMap<[u8; 16], SpoolCursor>>,
+    retained: BTreeMap<[u8; 16], RetainedTrace>,
     recovery_pending: bool,
     #[cfg(any(test, feature = "test-support"))]
     intent_hook: Option<Box<dyn FnOnce() + Send>>,
+}
+
+struct RetainedTrace {
+    dispatch: TraceDispatchV1,
+    active: Option<ActiveTrace>,
+    cursor: Mutex<SpoolCursor>,
+}
+
+impl RetainedTrace {
+    fn new(dispatch: TraceDispatchV1) -> Self {
+        Self {
+            dispatch,
+            active: None,
+            cursor: Mutex::new(SpoolCursor::default()),
+        }
+    }
 }
 
 struct TraceSpool {
@@ -244,9 +258,7 @@ impl NodeTraceOwner {
             storage_reserve_bytes,
             backend,
             reader,
-            active: BTreeMap::new(),
             retained: BTreeMap::new(),
-            cursors: Mutex::new(BTreeMap::new()),
             recovery_pending: true,
             #[cfg(any(test, feature = "test-support"))]
             intent_hook: None,
@@ -281,9 +293,9 @@ impl NodeTraceOwner {
         if !self.recovery_pending {
             return Ok(());
         }
-        self.retained = self.read_retained()?;
-        for (id, dispatch) in self.retained()? {
-            if !self.active.contains_key(&id) && self.terminal(id)?.is_none() {
+        self.read_retained()?;
+        for (id, _) in self.retained() {
+            if self.running(id).is_none() && self.terminal(id)?.is_none() {
                 let mut last_sequence = 0;
                 let mut output_bytes = 0;
                 loop {
@@ -310,10 +322,10 @@ impl NodeTraceOwner {
                     forced_kill: false,
                     cleanup: TraceCleanupV1::Unknown,
                 };
-                let mut spool = TraceSpool::existing(self.path(id), dispatch)?;
+                let mut spool = TraceSpool::existing(self.path(id))?;
                 spool.complete(&terminal)?;
             }
-            if !self.active.contains_key(&id) {
+            if self.running(id).is_none() {
                 let root = self.path(id);
                 File::open(&root)
                     .and_then(|file| file.sync_all())
@@ -327,16 +339,24 @@ impl NodeTraceOwner {
         Ok(())
     }
 
-    pub fn retained(&self) -> Result<Vec<([u8; 16], &TraceDispatchV1)>> {
-        Ok(self
-            .retained
+    pub fn retained(&self) -> impl ExactSizeIterator<Item = ([u8; 16], &TraceDispatchV1)> + Clone {
+        self.retained
             .iter()
-            .map(|(id, dispatch)| (*id, dispatch))
-            .collect())
+            .map(|(id, trace)| (*id, &trace.dispatch))
     }
 
-    fn read_retained(&self) -> Result<BTreeMap<[u8; 16], TraceDispatchV1>> {
-        let mut records = BTreeMap::new();
+    fn running(&self, id: [u8; 16]) -> Option<&ActiveTrace> {
+        self.retained.get(&id)?.active.as_ref()
+    }
+
+    fn active(&self) -> impl Iterator<Item = (&[u8; 16], &ActiveTrace)> {
+        self.retained
+            .iter()
+            .filter_map(|(id, trace)| trace.active.as_ref().map(|active| (id, active)))
+    }
+
+    fn read_retained(&mut self) -> Result<()> {
+        let mut records = BTreeSet::new();
         for entry in fs::read_dir(&self.root).context(IoSnafu { path: &self.root })? {
             let entry = entry.context(IoSnafu { path: &self.root })?;
             if matches!(
@@ -377,13 +397,20 @@ impl NodeTraceOwner {
                 }
             );
             ensure!(
-                records.insert(id, dispatch).is_none(),
+                records.insert(id)
+                    && self
+                        .retained
+                        .get(&id)
+                        .is_none_or(|trace| trace.dispatch == dispatch),
                 IdentityStateSnafu {
-                    reason: "diagnostic execution has duplicate directories"
+                    reason: "diagnostic intent is duplicated or changed"
                 }
             );
+            self.retained
+                .entry(id)
+                .or_insert_with(|| RetainedTrace::new(dispatch));
         }
-        Ok(records)
+        Ok(())
     }
 
     pub fn admit(
@@ -419,7 +446,7 @@ impl NodeTraceOwner {
         self.expire_acknowledged(now)?;
         if let Some(prior) = self.retained.get(&id) {
             ensure!(
-                *prior == dispatch,
+                prior.dispatch == dispatch,
                 AuthorizationSnafu {
                     reason: "duplicate diagnostic changed its dispatch"
                 }
@@ -442,7 +469,7 @@ impl NodeTraceOwner {
             .filter(|id| !self.path(**id).join("ack.json").exists())
             .count();
         ensure!(
-            occupied < 2 && self.retained.len() < 128 && self.active.len() < 2,
+            occupied < 2 && self.retained.len() < 128 && self.active().count() < 2,
             IdentityStateSnafu {
                 reason: "the two diagnostic slots are occupied"
             }
@@ -471,7 +498,10 @@ impl NodeTraceOwner {
                 return Err(error);
             }
         };
-        self.retained.insert(id, dispatch.clone());
+        let trace = self
+            .retained
+            .entry(id)
+            .or_insert_with(|| RetainedTrace::new(dispatch.clone()));
         #[cfg(any(test, feature = "test-support"))]
         if let Some(callback) = self.intent_hook.take() {
             callback();
@@ -503,32 +533,32 @@ impl NodeTraceOwner {
                 Self::capture(spool, backend, dispatch, target, reader, signal, deadline)
             })
             .context(IoSnafu { path: &self.root })?;
-        self.active.insert(
-            id,
-            ActiveTrace {
-                cancel,
-                committed,
-                worker,
-            },
-        );
+        trace.active = Some(ActiveTrace {
+            cancel,
+            committed,
+            worker,
+        });
         Ok(id)
     }
 
     pub fn cancel(&self, id: [u8; 16]) {
-        if let Some(active) = self.active.get(&id) {
+        if let Some(active) = self.running(id) {
             active.cancel.store(true, Ordering::Release);
         }
     }
 
     pub fn reap(&mut self) -> Result<()> {
         let finished: Vec<_> = self
-            .active
-            .iter()
+            .active()
             .filter(|(_, active)| active.worker.is_finished())
             .map(|(id, _)| *id)
             .collect();
         for id in finished {
-            if let Some(active) = self.active.remove(&id) {
+            if let Some(active) = self
+                .retained
+                .get_mut(&id)
+                .and_then(|trace| trace.active.take())
+            {
                 self.recovery_pending = true;
                 active.worker.join().map_err(|_| {
                     IdentityStateSnafu {
@@ -542,7 +572,7 @@ impl NodeTraceOwner {
     }
 
     pub fn frames(&self, id: [u8; 16], after: u64) -> Result<Vec<TraceFrameV1>> {
-        let through = if let Some(active) = self.active.get(&id) {
+        let through = if let Some(active) = self.running(id) {
             let through = active.committed.load(Ordering::Acquire);
             if through <= after {
                 return Ok(Vec::new());
@@ -555,25 +585,26 @@ impl NodeTraceOwner {
         if through <= after {
             return Ok(Vec::new());
         }
-        let mut cursors = self.cursors.lock().map_err(|_| {
+        let Some(trace) = self.retained.get(&id) else {
+            return TraceSpool::frames(&self.path(id), after, through, &mut SpoolCursor::default());
+        };
+        let mut saved = trace.cursor.lock().map_err(|_| {
             IdentityStateSnafu {
                 reason: "diagnostic cursor lock failed",
             }
             .build()
         })?;
-        let mut cursor = cursors.get(&id).copied().unwrap_or_default();
+        let mut cursor = *saved;
         if after < cursor.sequence || through < cursor.sequence {
             cursor = SpoolCursor::default();
         }
         let frames = TraceSpool::frames(&self.path(id), after, through, &mut cursor)?;
-        if cursors.len() < 128 || cursors.contains_key(&id) {
-            cursors.insert(id, cursor);
-        }
+        *saved = cursor;
         Ok(frames)
     }
 
     pub fn terminal(&self, id: [u8; 16]) -> Result<Option<TraceTerminalV1>> {
-        if self.active.contains_key(&id) {
+        if self.running(id).is_some() {
             return Ok(None);
         }
         let path = self.path(id).join("terminal.json");
@@ -636,38 +667,22 @@ impl NodeTraceOwner {
                 }
             );
         } else {
-            let pending = self.path(id).join("ack.pending");
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-                .open(&pending)
-                .context(IoSnafu { path: &path })?;
             let bytes = serde_json::to_vec(terminal).context(JsonSnafu { path: &path })?;
-            file.write_all(&bytes)
-                .and_then(|()| file.sync_all())
-                .context(IoSnafu { path: &path })?;
-            fs::rename(&pending, &path).context(IoSnafu { path: &path })?;
-            File::open(self.path(id))
-                .and_then(|file| file.sync_all())
-                .context(IoSnafu { path: &path })?;
+            TraceSpool::replace(&path, &bytes)?;
         }
         let output = self.path(id).join("output.jsonl");
         let file = TraceSpool::open_file(&output, true)?;
         file.set_len(0)
             .and_then(|()| file.sync_all())
             .context(IoSnafu { path: &output })?;
-        self.cursors
-            .get_mut()
-            .map_err(|_| {
+        if let Some(trace) = self.retained.get_mut(&id) {
+            *trace.cursor.get_mut().map_err(|_| {
                 IdentityStateSnafu {
                     reason: "diagnostic cursor lock failed",
                 }
                 .build()
-            })?
-            .remove(&id);
+            })? = SpoolCursor::default();
+        }
         Ok(())
     }
 
@@ -675,10 +690,10 @@ impl NodeTraceOwner {
         let retained: Vec<_> = self
             .retained
             .iter()
-            .map(|(id, dispatch)| (*id, dispatch.accepted.deadline_unix_ns))
+            .map(|(id, trace)| (*id, trace.dispatch.accepted.deadline_unix_ns))
             .collect();
         for (id, deadline) in retained {
-            if !self.active.contains_key(&id)
+            if self.running(id).is_none()
                 && deadline <= now
                 && self.path(id).join("ack.json").exists()
             {
@@ -697,35 +712,10 @@ impl NodeTraceOwner {
                     0
                 };
                 if prior < deadline {
-                    let pending = self.root.join("retired-before.pending");
-                    let mut file = OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .mode(0o600)
-                        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-                        .open(&pending)
-                        .context(IoSnafu { path: &pending })?;
-                    let bytes = deadline.to_string();
-                    file.write_all(bytes.as_bytes())
-                        .and_then(|()| file.sync_all())
-                        .context(IoSnafu { path: &pending })?;
-                    fs::rename(&pending, &floor_path).context(IoSnafu { path: &pending })?;
-                    File::open(&self.root)
-                        .and_then(|file| file.sync_all())
-                        .context(IoSnafu { path: &self.root })?;
+                    TraceSpool::replace(&floor_path, deadline.to_string().as_bytes())?;
                 }
                 TraceSpool::remove(&self.path(id))?;
                 self.retained.remove(&id);
-                self.cursors
-                    .get_mut()
-                    .map_err(|_| {
-                        IdentityStateSnafu {
-                            reason: "diagnostic cursor lock failed",
-                        }
-                        .build()
-                    })?
-                    .remove(&id);
             }
         }
         Ok(())
@@ -864,16 +854,40 @@ impl NodeTraceOwner {
 
 impl Drop for NodeTraceOwner {
     fn drop(&mut self) {
-        for active in self.active.values() {
+        for (_, active) in self.active() {
             active.cancel.store(true, Ordering::Release);
         }
-        for (_, active) in std::mem::take(&mut self.active) {
+        for active in self
+            .retained
+            .values_mut()
+            .filter_map(|trace| trace.active.take())
+        {
             let _result = active.worker.join();
         }
     }
 }
 
 impl TraceSpool {
+    fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
+        let pending = path.with_extension("pending");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+            .open(&pending)
+            .context(IoSnafu { path })?;
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .context(IoSnafu { path })?;
+        fs::rename(&pending, path).context(IoSnafu { path })?;
+        let root = path.parent().unwrap_or(path);
+        File::open(root)
+            .and_then(|directory| directory.sync_all())
+            .context(IoSnafu { path: root })
+    }
+
     fn remove(root: &Path) -> Result<()> {
         Self::directory(root)?;
         for name in [
@@ -1009,7 +1023,7 @@ impl TraceSpool {
         })
     }
 
-    fn existing(root: PathBuf, _dispatch: &TraceDispatchV1) -> Result<Self> {
+    fn existing(root: PathBuf) -> Result<Self> {
         Ok(Self {
             output: Self::open_file(&root.join("output.jsonl"), true)?,
             terminal: Self::open_file(&root.join("terminal.pending"), true)?,
@@ -1162,6 +1176,19 @@ mod tests {
         TraceRequestV1, TraceTargetV1, WorkloadTargetFactV1,
     };
 
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    fn open(root: &Path) -> Result<NodeTraceOwner> {
+        NodeTraceOwner::open(
+            root,
+            [1; 16],
+            "node-a".into(),
+            [2; 16],
+            config(),
+            KernelStateReader::new(root),
+        )
+    }
+
     fn dispatch() -> std::result::Result<TraceDispatchV1, Box<dyn std::error::Error>> {
         let fact = WorkloadTargetFactV1 {
             node_id: "node-a".into(),
@@ -1251,7 +1278,7 @@ mod tests {
     }
 
     #[test]
-    fn observability_qualification_digest() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_qualification_digest() -> TestResult {
         let valid = config();
         valid.validate()?;
         let mut encoded = serde_json::to_value(&valid)?;
@@ -1270,8 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn observability_target_rejects_unqualified_overhead_and_missing_lifetime_once(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_target_rejects_unqualified_overhead_and_missing_lifetime_once() -> TestResult {
         let mut invalid = config();
         invalid.qualification.pairs[0].trace_on_p99_ns = 111;
         assert!(invalid.validate().is_err());
@@ -1282,38 +1308,24 @@ mod tests {
         invalid.qualification.pairs.pop();
         assert!(invalid.validate().is_err());
         let directory = tempfile::tempdir()?;
-        let mut owner = NodeTraceOwner::open(
-            directory.path(),
-            [1; 16],
-            "node-a".into(),
-            [2; 16],
-            config(),
-            KernelStateReader::new(directory.path()),
-        )?;
+        let mut owner = open(directory.path())?;
         let dispatch = dispatch()?;
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
         let id = owner.admit(dispatch.clone(), None, &key, 2)?;
         assert_eq!(owner.admit(dispatch, None, &key, 3)?, id);
         let terminal = owner.terminal(id)?.ok_or("missing terminal")?;
         assert_eq!(terminal.reason, TraceTerminalReasonV1::TargetChanged);
-        assert!(owner.active.is_empty());
-        assert_eq!(owner.retained()?.len(), 1);
+        assert!(owner.active().next().is_none());
+        assert_eq!(owner.retained().len(), 1);
         Ok(())
     }
 
     #[test]
     #[ignore = "subprocess helper; run through observability_intent_crash"]
-    fn observability_intent_crash_child() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_intent_crash_child() -> TestResult {
         let root =
             PathBuf::from(std::env::var_os("ARAPHOR_TRACE_CRASH_ROOT").ok_or("missing root")?);
-        let mut owner = NodeTraceOwner::open(
-            &root,
-            [1; 16],
-            "node-a".into(),
-            [2; 16],
-            config(),
-            KernelStateReader::new(&root),
-        )?;
+        let mut owner = open(&root)?;
         owner.set_intent_hook(|| std::process::exit(73))?;
         assert!(owner.set_intent_hook(|| {}).is_err());
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
@@ -1322,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    fn observability_intent_crash() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_intent_crash() -> TestResult {
         let directory = tempfile::tempdir()?;
         let status = std::process::Command::new(std::env::current_exe()?)
             .args([
@@ -1333,14 +1345,7 @@ mod tests {
             .env("ARAPHOR_TRACE_CRASH_ROOT", directory.path())
             .status()?;
         assert_eq!(status.code(), Some(73));
-        let mut owner = NodeTraceOwner::open(
-            directory.path(),
-            [1; 16],
-            "node-a".into(),
-            [2; 16],
-            config(),
-            KernelStateReader::new(directory.path()),
-        )?;
+        let mut owner = open(directory.path())?;
         let dispatch = dispatch()?;
         let id = dispatch.accepted.execution_id(0)?;
         let terminal = owner.terminal(id)?.ok_or("missing recovered terminal")?;
@@ -1349,8 +1354,8 @@ mod tests {
         assert!(terminal.output_incomplete);
         assert_eq!(terminal.last_sequence, 0);
         assert_eq!(terminal.output_bytes, 0);
-        assert!(owner.active.is_empty());
-        assert_eq!(owner.retained()?, vec![(id, &dispatch)]);
+        assert!(owner.active().next().is_none());
+        assert!(owner.retained().eq([(id, &dispatch)]));
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
         owner.set_intent_hook(|| {})?;
         assert_eq!(owner.admit(dispatch, None, &key, 3)?, id);
@@ -1360,8 +1365,7 @@ mod tests {
     }
 
     #[test]
-    fn observability_recovery_preserves_all_pages_and_never_respawns(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_recovery_preserves_all_pages_and_never_respawns() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("diagnostics");
         TraceSpool::directory(&root)?;
@@ -1402,7 +1406,7 @@ mod tests {
         assert_eq!(owner.frames(id, 0)?.len(), 200);
         assert_eq!(owner.frames(id, 200)?.len(), 200);
         assert_eq!(owner.frames(id, 400)?.len(), 1);
-        assert!(owner.active.is_empty());
+        assert!(owner.active().next().is_none());
         assert!(!owner.recovery_pending);
         let terminal_path = owner.path(id).join("terminal.json");
         let saved = directory.path().join("saved-terminal.json");
@@ -1441,9 +1445,9 @@ mod tests {
         fs::remove_dir(unavailable)?;
         owner.acknowledge(id, &terminal)?;
         assert!(owner.next_batch(id, 0)?.is_none());
-        assert_eq!(owner.retained()?.len(), 1);
+        assert_eq!(owner.retained().len(), 1);
         owner.expire_acknowledged(2)?;
-        assert_eq!(owner.retained()?.len(), 1);
+        assert_eq!(owner.retained().len(), 1);
         drop(owner);
         let mut owner = NodeTraceOwner::open(
             directory.path(),
@@ -1455,15 +1459,14 @@ mod tests {
         )?;
         assert_eq!(owner.terminal(id)?, Some(terminal));
         owner.expire_acknowledged(16_000_000_001)?;
-        assert!(owner.retained()?.is_empty());
+        assert!(owner.retained().next().is_none());
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
         assert!(owner.admit(dispatch, None, &key, 2).is_err());
         Ok(())
     }
 
     #[test]
-    fn observability_spool_seeks_forward_and_checks_replay(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_spool_seeks_forward_and_checks_replay() -> TestResult {
         let directory = tempfile::tempdir()?;
         let dispatch = dispatch()?;
         let id = dispatch.accepted.execution_id(0)?;
@@ -1479,14 +1482,7 @@ mod tests {
             })?;
         }
         drop(spool);
-        let owner = NodeTraceOwner::open(
-            directory.path(),
-            [1; 16],
-            "node-a".into(),
-            [2; 16],
-            config(),
-            KernelStateReader::new(directory.path()),
-        )?;
+        let owner = open(directory.path())?;
         assert_eq!(owner.frames(id, 0)?[0].sequence, 1);
         let path = owner.path(id).join("output.jsonl");
         let mut file = TraceSpool::open_file(&path, true)?;
@@ -1504,32 +1500,17 @@ mod tests {
         file.sync_data()?;
         assert_eq!(owner.frames(id, 0)?[0].sequence, 1);
         drop(owner);
-        let owner = NodeTraceOwner::open(
-            directory.path(),
-            [1; 16],
-            "node-a".into(),
-            [2; 16],
-            config(),
-            KernelStateReader::new(directory.path()),
-        )?;
-        assert_eq!(owner.retained()?, vec![(id, &dispatch)]);
+        let owner = open(directory.path())?;
+        assert!(owner.retained().eq([(id, &dispatch)]));
         assert_eq!(owner.frames(id, 2)?[0].sequence, 3);
         Ok(())
     }
 
     #[test]
-    fn observability_recovery_retries_transitions(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_recovery_retries_transitions() -> TestResult {
         for worker_failure in [false, true] {
             let directory = tempfile::tempdir()?;
-            let mut owner = NodeTraceOwner::open(
-                directory.path(),
-                [1; 16],
-                "node-a".into(),
-                [2; 16],
-                config(),
-                KernelStateReader::new(directory.path()),
-            )?;
+            let mut owner = open(directory.path())?;
             assert!(!owner.recovery_pending);
             let dispatch = dispatch()?;
             let id = dispatch.accepted.execution_id(0)?;
@@ -1561,14 +1542,15 @@ mod tests {
                 while !worker.is_finished() {
                     std::thread::yield_now();
                 }
-                owner.active.insert(
-                    id,
-                    ActiveTrace {
-                        cancel: Arc::new(AtomicBool::new(false)),
-                        committed,
-                        worker,
-                    },
-                );
+                owner
+                    .retained
+                    .entry(id)
+                    .or_insert_with(|| RetainedTrace::new(dispatch.clone()))
+                    .active = Some(ActiveTrace {
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    committed,
+                    worker,
+                });
                 owner.reap()
             } else {
                 let path = fault.clone();
@@ -1584,7 +1566,7 @@ mod tests {
                 Err(crate::Error::Io { source, .. })
                     if source.kind() == std::io::ErrorKind::IsADirectory));
             assert!(owner.recovery_pending);
-            assert!(owner.active.is_empty());
+            assert!(owner.active().next().is_none());
             assert!(matches!(
                 owner.reap(),
                 Err(crate::Error::IdentityState { .. })
@@ -1599,30 +1581,22 @@ mod tests {
             assert_eq!(terminal.output_bytes, u64::from(worker_failure) * 5);
             assert!(terminal.output_incomplete);
             assert_eq!(terminal.cleanup, TraceCleanupV1::Unknown);
-            assert_eq!(owner.retained()?, vec![(id, &dispatch)]);
+            assert!(owner.retained().eq([(id, &dispatch)]));
             owner.set_intent_hook(|| {})?;
             assert_eq!(owner.admit(dispatch, None, &key, 3)?, id);
             assert!(owner.intent_hook.is_some());
             owner.reap()?;
             assert!(!owner.recovery_pending);
-            assert!(owner.active.is_empty());
+            assert!(owner.active().next().is_none());
             assert_eq!(owner.terminal(id)?, Some(terminal));
         }
         Ok(())
     }
 
     #[test]
-    fn observability_recovery_uploads_only_the_synced_prefix(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_recovery_uploads_only_the_synced_prefix() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let mut owner = NodeTraceOwner::open(
-            directory.path(),
-            [1; 16],
-            "node-a".into(),
-            [2; 16],
-            config(),
-            KernelStateReader::new(directory.path()),
-        )?;
+        let mut owner = open(directory.path())?;
         let dispatch = dispatch()?;
         let id = dispatch.accepted.execution_id(0)?;
         let mut spool = TraceSpool::create(owner.path(id), &dispatch)?;
@@ -1641,14 +1615,15 @@ mod tests {
         let mut bytes = serde_json::to_vec(&second)?;
         bytes.push(b'\n');
         spool.output.write_all(&bytes)?;
-        owner.active.insert(
-            id,
-            ActiveTrace {
-                cancel: Arc::new(AtomicBool::new(false)),
-                committed: spool.committed.clone(),
-                worker: std::thread::spawn(|| Ok(())),
-            },
-        );
+        owner
+            .retained
+            .entry(id)
+            .or_insert_with(|| RetainedTrace::new(dispatch.clone()))
+            .active = Some(ActiveTrace {
+            cancel: Arc::new(AtomicBool::new(false)),
+            committed: spool.committed.clone(),
+            worker: std::thread::spawn(|| Ok(())),
+        });
         assert_eq!(owner.frames(id, 0)?, vec![frame.clone()]);
         spool.output.seek(SeekFrom::Start(spool.offset))?;
         spool.output.write_all(b"!")?;
@@ -1680,32 +1655,23 @@ mod tests {
     }
 
     #[test]
-    fn observability_recovery_discards_only_preintent_allocations(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_recovery_discards_only_preintent_allocations() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("diagnostics");
         TraceSpool::directory(&root)?;
         let pending = root.join(format!("pending-{}", hex::encode([7; 16])));
         TraceSpool::directory(&pending)?;
         fs::write(pending.join("output.jsonl"), b"incomplete allocation")?;
-        let owner = NodeTraceOwner::open(
-            directory.path(),
-            [1; 16],
-            "node-a".into(),
-            [2; 16],
-            config(),
-            KernelStateReader::new(directory.path()),
-        )?;
-        assert!(owner.retained()?.is_empty());
+        let owner = open(directory.path())?;
+        assert!(owner.retained().next().is_none());
         assert!(!pending.exists());
-        assert!(owner.active.is_empty());
+        assert!(owner.active().next().is_none());
         Ok(())
     }
 
     #[test]
     #[ignore = "requires the task-owned, empty 384 MiB tmpfs"]
-    fn observability_recovery_disk_full_retains_unacknowledged_terminal(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_recovery_disk_full_retains_unacknowledged_terminal() -> TestResult {
         let root = PathBuf::from(std::env::var("MITHRIL_TEST_TRACE_DISK")?);
         assert!(root
             .to_string_lossy()
@@ -1713,14 +1679,7 @@ mod tests {
         // TMPFS_MAGIC from linux/magic.h. Never fill another filesystem.
         assert_eq!(rustix::fs::statfs(&root)?.f_type, 0x0102_1994);
         let directory = tempfile::tempdir_in(&root)?;
-        let mut owner = NodeTraceOwner::open(
-            directory.path(),
-            [1; 16],
-            "node-a".into(),
-            [2; 16],
-            config(),
-            KernelStateReader::new(directory.path()),
-        )?;
+        let mut owner = open(directory.path())?;
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
         let id = owner.admit(dispatch()?, None, &key, 2)?;
         let terminal = owner
@@ -1747,8 +1706,7 @@ mod tests {
     }
 
     #[test]
-    fn observability_recovery_preserves_evidence_reserve_before_intent(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn observability_recovery_preserves_evidence_reserve_before_intent() -> TestResult {
         let directory = tempfile::tempdir()?;
         let mut config = config();
         config.storage_reserve_bytes = u64::MAX;
@@ -1762,8 +1720,8 @@ mod tests {
         )?;
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
         assert!(owner.admit(dispatch()?, None, &key, 2).is_err());
-        assert!(owner.retained()?.is_empty());
-        assert!(owner.active.is_empty());
+        assert!(owner.retained().next().is_none());
+        assert!(owner.active().next().is_none());
         Ok(())
     }
 }

@@ -278,9 +278,8 @@ mod tests {
             tenant_id: [tenant; 16],
             node_id: format!("node-{tenant}"),
             node_boot_id: [tenant; 16],
-            label_epoch: 1,
             source_id: [source; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         }
     }
 

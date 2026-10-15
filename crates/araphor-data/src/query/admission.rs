@@ -115,7 +115,7 @@ impl QuerySql {
         };
         let dependencies = std::mem::take(&mut binder.dependencies);
         let clocks = binder.clocks;
-        let event_fields = Self::event_fields_for(&query, operation, clocks);
+        let event_fields = Self::event_fields_for(&query, clocks);
         let event_operation = event_fields.as_ref().and_then(|_| {
             let (select, alias) = TimeTest::direct_events(&query)?;
             Self::event_operation_for(select.selection.as_ref()?, &alias, &parameters)
@@ -146,14 +146,9 @@ impl QuerySql {
         self.event_operation
     }
 
-    fn event_fields_for(
-        query: &Query,
-        operation: QueryOperation,
-        clocks: usize,
-    ) -> Option<BTreeSet<String>> {
-        let (select, alias) = TimeTest::direct_events(query)?;
-        if clocks != 0 || (operation != QueryOperation::Append && !Self::count_shape(query, select))
-        {
+    fn event_fields_for(query: &Query, clocks: usize) -> Option<BTreeSet<String>> {
+        let (_, alias) = TimeTest::direct_events(query)?;
+        if clocks != 0 || !Self::append_shape(query) {
             return None;
         }
         let mut fields = BTreeSet::from(["commit_revision".into(), "ordinal".into()]);
@@ -168,30 +163,6 @@ impl QuerySql {
             ControlFlow::<()>::Continue(())
         });
         Some(fields)
-    }
-
-    fn count_shape(query: &Query, select: &Select) -> bool {
-        if query.order_by.is_some()
-            || query.limit_clause.is_some()
-            || select.distinct.is_some()
-            || select.having.is_some()
-            || !matches!(&select.group_by, GroupByExpr::Expressions(items, _) if items.is_empty())
-        {
-            return false;
-        }
-        let [item] = select.projection.as_slice() else {
-            return false;
-        };
-        let expr = match item {
-            SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => expr,
-            _ => return false,
-        };
-        matches!(expr, Expr::Function(function)
-            if Binder::name(&function.name).is_ok_and(|name| name == "count")
-                && function.over.is_none() && function.filter.is_none()
-                && matches!(&function.args, FunctionArguments::List(args)
-                    if args.duplicate_treatment.is_none() && args.clauses.is_empty()
-                        && matches!(args.args.as_slice(), [FunctionArg::Unnamed(FunctionArgExpr::Wildcard)])))
     }
 
     fn event_operation_for(expr: &Expr, alias: &str, parameters: &[Value]) -> Option<u32> {

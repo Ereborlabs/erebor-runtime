@@ -54,13 +54,7 @@ async fn removal_releases_exclusive_models() -> TestResult {
         .package_activations([1; 16], "test", None)?
         .is_empty());
     for activation in prior {
-        let result = fixture
-            .store
-            .package_result(
-                [1; 16],
-                activation.result_id.as_deref().ok_or("result absent")?,
-            )?
-            .ok_or("historical result absent")?;
+        let result = fixture.result(activation.result_id.as_deref().ok_or("result absent")?)?;
         assert!(result.stale);
         assert!(fixture
             .store
@@ -80,6 +74,26 @@ async fn removal_retains_shared_models() -> TestResult {
     fixture
         .install(consumer("test.second", &dependency), None)
         .await?;
+    let shared = fixture.activation("test.model")?;
+    let context: InstalledContext = serde_json::from_slice(&shared.metadata)?;
+    assert_eq!(context.root.package_id, "test.first");
+    let response = fixture
+        .execute(PackageRequestV1::Run {
+            scope_id: "test".into(),
+            package_id: "test.second".into(),
+            export: Some("count".into()),
+            evaluation_id: "shared-root".into(),
+            parameters: None,
+        })
+        .await?;
+    assert_eq!(
+        crate::AnalysisPackageOwner::output_rows(&fixture.output(
+            "test.second",
+            "count",
+            &response.exports[0].results[0].result_id
+        )?)?["rows"],
+        serde_json::json!([{"count":1}])
+    );
     remove(&fixture, "test.first").await?;
     let retained = fixture
         .store

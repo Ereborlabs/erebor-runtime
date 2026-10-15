@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::Path;
@@ -94,53 +95,100 @@ impl AnalysisStore {
         raw.select_ranges(&identity.clone().into(), first, last, revision, None, limit)
     }
 
-    pub(super) fn remove_segment(
+    pub(super) fn remove_segments(
         writer: &mut Connection,
         root: &Path,
         raw: &super::raw::RawJournal,
-        segment_id: u64,
+        ids: &BTreeSet<u64>,
     ) -> Result<()> {
-        let removable: bool = writer.query_row(
-            "SELECT EXISTS(SELECT 1 FROM segments s WHERE s.segment_id = ? AND s.state = 'Deleting'
-                AND NOT EXISTS (SELECT 1 FROM evidence_refs r WHERE r.segment_id = s.segment_id)
-                AND EXISTS (SELECT 1 FROM expired_ranges x WHERE x.segment_id = s.segment_id
-                    AND x.stream_key = s.stream_key AND x.tenant_id = s.tenant_id))",
-            params![segment_id], |row| row.get(0),
-        ).context(AnalysisDatabaseSnafu { operation: "check recorded segment removal" })?;
-        if !removable {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let encoded = serde_json::to_string(ids).context(crate::JsonSnafu { path: root })?;
+        let removals = writer
+            .prepare(
+                "SELECT s.segment_id, s.file_name, s.tenant_id,
+                 (256 + octet_length(s.stream_key) + s.committed_end + octet_length(encode(s.identity_json)))::BIGINT
+                 FROM segments s WHERE s.segment_id IN (SELECT unnest(CAST(? AS UBIGINT[])))
+                 AND s.state = 'Deleting'
+                 AND NOT EXISTS (SELECT 1 FROM evidence_refs r WHERE r.segment_id = s.segment_id)
+                 AND EXISTS (SELECT 1 FROM expired_ranges x WHERE x.segment_id = s.segment_id
+                     AND x.stream_key = s.stream_key AND x.tenant_id = s.tenant_id)
+                 ORDER BY s.segment_id",
+            )
+            .context(AnalysisDatabaseSnafu { operation: "prepare recorded segment removals" })?
+            .query_map(params![encoded], |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?, row.get::<_, i64>(3)?))
+            })
+            .context(AnalysisDatabaseSnafu { operation: "check recorded segment removal" })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(AnalysisDatabaseSnafu { operation: "decode recorded segment removals" })?;
+        if removals.len() != ids.len() {
             return Self::reject_path(root, "the segment has no complete removal authorization");
         }
+        let mut expiry = writer
+            .prepare(
+                "SELECT EXISTS(SELECT 1 FROM expired_ranges WHERE segment_id = ? AND stream_key = ?
+             AND tenant_id = ? AND first_cursor <= ? AND last_cursor >= ?)",
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare segment expiry coverage",
+            })?;
         for entry in raw
             .entries
             .values()
-            .filter(|entry| entry.reference.id == segment_id)
+            .filter(|entry| ids.contains(&entry.reference.id))
         {
             for span in &entry.commit.spans {
-                let expired: bool = writer.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM expired_ranges WHERE segment_id = ? AND stream_key = ?
-                        AND tenant_id = ? AND first_cursor <= ? AND last_cursor >= ?)",
-                    params![segment_id, entry.identity.key().as_slice(), entry.identity.tenant().as_slice(),
-                        span.first, span.last], |row| row.get(0)
-                ).context(AnalysisDatabaseSnafu { operation: "check segment expiry coverage" })?;
+                let expired: bool = expiry
+                    .query_row(
+                        params![
+                            entry.reference.id,
+                            entry.identity.key().as_slice(),
+                            entry.identity.tenant().as_slice(),
+                            span.first,
+                            span.last
+                        ],
+                        |row| row.get(0),
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "check segment expiry coverage",
+                    })?;
                 if !expired {
                     return Self::reject_path(root, "the removed segment has unrecorded expiry");
                 }
             }
         }
-        let path = super::raw::RawJournal::catalog_path(writer, root, segment_id)?;
+        drop(expiry);
         let current = raw.segments.directory_current()?;
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) => {
-                if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-                    return Self::reject_path(root, "the removable segment is not a private file");
+        let mut charges = BTreeMap::<_, i64>::new();
+        for (_, name, tenant, bytes) in removals {
+            let path = super::raw::RawJournal::file_path(root, &name)?;
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) => {
+                    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+                        return Self::reject_path(
+                            root,
+                            "the removable segment is not a private file",
+                        );
+                    }
+                    fs::remove_file(&path).context(IoSnafu { path: &path })?;
                 }
-                fs::remove_file(&path).context(IoSnafu { path: &path })?;
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => return Err(source).context(IoSnafu { path: &path }),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => return Err(source).context(IoSnafu { path: &path }),
+            let charge = charges.entry(tenant).or_default();
+            *charge = charge.checked_add(bytes).ok_or_else(|| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the removed segment charge overflows",
+                }
+                .build()
+            })?;
+            #[cfg(test)]
+            Self::crash_path(root, "retention.unlinked");
         }
-        #[cfg(test)]
-        Self::crash_path(root, "retention.unlinked");
         let directory = root.join("segments");
         File::open(&directory)
             .context(IoSnafu { path: &directory })?
@@ -150,25 +198,13 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin segment cleanup",
         })?;
-        let (tenant, bytes): (Vec<u8>, i64) = transaction
-            .query_row(
-                "SELECT tenant_id, (256 + octet_length(stream_key) + committed_end + octet_length(encode(identity_json)))::BIGINT
-                FROM segments WHERE segment_id = ? AND state = 'Deleting'",
-                params![segment_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read removed segment charge",
-            })?;
-        transaction
-            .execute(
-                "DELETE FROM segments WHERE segment_id = ? AND state = 'Deleting'",
-                params![segment_id],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "remove expired segment metadata",
-            })?;
-        super::quota::UsageChange::from(-bytes).apply(&transaction, &tenant)?;
+        transaction.execute(
+            "DELETE FROM segments WHERE segment_id IN (SELECT unnest(CAST(? AS UBIGINT[]))) AND state = 'Deleting'",
+            params![encoded],
+        ).context(AnalysisDatabaseSnafu { operation: "remove expired segment metadata" })?;
+        for (tenant, bytes) in charges {
+            super::quota::UsageChange::from(-bytes).apply(&transaction, &tenant)?;
+        }
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit segment cleanup",
         })?;
@@ -188,13 +224,64 @@ mod tests {
 
     fn source() -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "segment-node".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         }
+    }
+
+    #[test]
+    fn segment_batch_requires_full_expiry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        for epoch in 1..=2 {
+            store.accept_validated_batch(
+                EvidenceIntakeIdentityV1 {
+                    source_epoch: epoch,
+                    ..source()
+                },
+                ValidatedEvidenceBatchV1 {
+                    cpu_id: 0,
+                    first_cursor: 1,
+                    last_cursor: epoch,
+                    intake_utc_ns: 100,
+                    framed_records: vec![7; epoch as usize].into(),
+                    frame_ends: (1..=epoch as usize).collect(),
+                },
+            )?;
+        }
+        let mut guard = store.maintenance_writer()?;
+        let writer = guard.get_mut()?;
+        let raw = store.raw.lock().map_err(|_| "raw lock poisoned")?;
+        let files = [raw.segments.file_path(1)?, raw.segments.file_path(2)?];
+        let original = [fs::read(files[0])?, fs::read(files[1])?];
+        let charge: u64 =
+            writer.query_row("SELECT logical_bytes FROM tenant_usage", [], |row| {
+                row.get(0)
+            })?;
+        writer.execute_batch(
+            "UPDATE segments SET state = 'Deleting';
+             INSERT INTO expired_ranges
+             SELECT segment_id, stream_key, tenant_id, 1, 1, 1 FROM segments",
+        )?;
+        assert!(matches!(
+            AnalysisStore::remove_segments(writer, &store.root, &raw, &BTreeSet::from([1, 2])),
+            Err(crate::Error::AnalysisState { reason, .. })
+                if reason == "the removed segment has unrecorded expiry"
+        ));
+        for (file, bytes) in files.iter().zip(original) {
+            assert_eq!(fs::read(file)?, bytes);
+        }
+        assert_eq!(
+            writer.query_row("SELECT logical_bytes FROM tenant_usage", [], |row| row
+                .get::<_, u64>(0))?,
+            charge
+        );
+        assert_eq!(
+            writer.query_row("SELECT COUNT(*) FROM segments", [], |row| row
+                .get::<_, u64>(0))?,
+            2
+        );
+        Ok(())
     }
 
     #[test]
@@ -319,20 +406,14 @@ mod tests {
         };
         store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
             consumed_cursor: 4096,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "pin-first-segment".into(),
-            body: b"finding".to_vec(),
             created_utc_ns: 101,
             witnesses: vec![AnalysisWitnessV1 {
                 identity: identity.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 300,
             }],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "pin-first-segment".into())
         })?;
         let retention = EvidenceRetentionOwner::new(&store);
         let removed = retention.retain(&identity, 201)?;
@@ -388,20 +469,13 @@ mod tests {
         };
         store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "pin".into(),
-            body: b"finding".to_vec(),
             created_utc_ns: 101,
             witnesses: vec![AnalysisWitnessV1 {
                 identity: identity.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 300,
             }],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "pin".into())
         })?;
         let before = store.meta()?;
         let next = ValidatedEvidenceBatchV1 {

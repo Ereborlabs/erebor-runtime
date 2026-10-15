@@ -119,7 +119,7 @@ impl super::super::operation::ModelOperation<'_> {
         let mut executor =
             ModelExecution::new(connection, &stage, time, request.model.limits, &host);
         let result = stage.query_run(connection, || {
-            input.register_scoped(connection, sources)?;
+            input.register(connection, sources)?;
             executor.query(sql, &port.schema)
         });
         let cleanup = sources.clear(connection);

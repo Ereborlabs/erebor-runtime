@@ -29,11 +29,7 @@ async fn native_errors_commit_no_output() -> TestResult {
         assert_eq!(fixture.owner.operations.available_permits(), 4);
         let fixture = fixture.reopen()?;
         assert!(fixture.execute(evaluate("retry-error")).await.is_err());
-        let active = fixture
-            .owner
-            .activations([1; 16], "test", "runtime-fixture")?
-            .pop()
-            .ok_or("failed activation absent")?;
+        let active = fixture.activation("runtime-fixture")?;
         assert!(active.result_id.is_none());
         assert_eq!(active.checkpoint_revision, 0);
     }
@@ -74,11 +70,7 @@ async fn native_caps_leave_other_targets_available() -> TestResult {
             ..
         })
     ));
-    let unchanged = fixture
-        .owner
-        .activations([1; 16], "test", "runtime-fixture")?
-        .pop()
-        .ok_or("Wasm activation absent")?;
+    let unchanged = fixture.activation("runtime-fixture")?;
     assert_eq!(unchanged.revision, "1");
     assert_eq!(
         unchanged.result_id.as_deref(),

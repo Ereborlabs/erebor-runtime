@@ -9,6 +9,42 @@ This file extends the
 [production data flow plan](araphor-production-dataflow-simplification.md).
 Earlier source and verification records in that plan remain historical.
 
+## Approved deletion work
+
+The user requires at least 6,000 real net deleted lines. Count nonblank lines
+and report Rust, tests, and documents separately. Report both `7b7b407a` and
+`aa390d9f` as comparison points. Do not count blank-line removal, code movement,
+or compressed formatting as simplification. Consolidated tests must retain
+every distinct input, fault, boundary, and assertion.
+
+| Owner | Required deletion |
+| --- | --- |
+| Query | One table registration and SQL execution path. Keep the existing native adapter and remove duplicate plan classification. |
+| Package | One input/freshness comparison. Remove optional admitted-bundle loading and per-export task handoff. Wait on changes and actual deadlines. |
+| SDK and built-ins | One checked computation entry. Keep standalone, import, and host boundary checks. |
+| Control context | The authoritative transaction application identifies changed keys. Remove the second transaction interpreter. |
+| Capture | One retained execution entry owns dispatch, cursor, and optional worker. |
+| Storage | One selected-set cleanup validates expiry, synchronizes removal, and commits quota changes. Remove per-segment global scans. |
+| Documentation | One current source route per contract. Remove repeated implementation and verification prose. |
+
+The benchmark remains on hold. The user requires relevant builds and tests
+for each iteration. This instruction replaces the general full-workspace CI
+rule for this work.
+
+### Component redesign
+
+The user accepts the deletion work and requires simpler complete components.
+Documentation and test consolidation do not establish that result.
+
+| Component | Required replacement | Result |
+| --- | --- | --- |
+| Control context | One ordered source index and one replay cursor replace separate change maps and domain cursors. Preserve distinct-source conflicts, bounded replay, and retry after a failed durable write. | Not done |
+| Package transport | SDK wire types own datasets, inputs, reasons, outputs, and checkpoints. Remove Data's second wire model. Keep each boundary's current limits and error classes. | Not done |
+
+Do not replace native pointer checks with IPC copies or remove the supported
+graph traversal contract to obtain a line count. Reuse must remove an owner or
+representation without moving the same duplicate implementation elsewhere.
+
 ## Intended end state
 
 Owners check relevant changes and due deadlines before they load payloads.
@@ -50,38 +86,48 @@ Change an item to `Done` only after its source and functional checks pass.
 
 | ID | Status | Change and owner | Required proof |
 | --- | --- | --- | --- |
-| 1 | Done | Package owner groups reconciliation by installation, reuses immutable closures, and checks relevant dependency changes before source preparation. Remove repeated orphan scans and unconditional input reconstruction. | Upgrade orphan repair, activation changes, authority revocation, required clock ticks, exact dependency revisions, restart, and unchanged-input behavior. |
-| 2 | Done | Graph owner checks headers, notices, exact heads, and witness deadlines before it loads retained graph rows. | Notice changes, expiry without new data, overlap replacement, package changes, restart, and exact result parity. |
-| 3 | Done | Store owner maintains owned file and segment totals at file changes. Remove a full directory walk from each raw batch. Rebuild totals during recovery. | Capacity denial, disk reserve, rotation, deletion, database growth, restart, and ACK after durable commit. |
-| 4 | Done | Graph derivation prepares common records, facts, revision, coverage, and datasets once per window. | Native and Wasm parity, per-model bounds, original input revisions, evidence ordinals, and exact outputs. |
-| 5 | Done | Built-in graph computation indexes original facts by record once per evaluation. | Missing and conflicting facts, original ordering, exact evidence references, and detector parity. |
-| 6 | Done | Follow retains its checked store revision and dependency selection. Remove dependency history scans when both remain unchanged. | Append replay, moving-window expiry, coverage changes, quiet revocation, and unrelated commits. |
-| 7 | Done | Query owner constructs required event columns and applies supported simple predicates during extraction. Keep a complete fallback for complex statements. | Full row mapping, query parity, scope denial, evidence capture before pruning, empty append progress, and joins, ordering, and aggregate semantics. |
-| 8 | Done | Installed package owner retains verified identities with immutable bundles. Authority checks current trust membership without rebuilding OCI layouts. | Changed-content denial, trust revocation, exact installed exports, native closure identity, and commit authorization. |
-| 9 | Done | Retention uses the existing source index and removes a bounded eligible set per visit. Remove repeated global entry scans. | Current pin and required-progress checks, pressure, replay floors, recovery, and physical reuse. |
-| 10 | Done | Capture owner retains verified immutable dispatches after recovery or admission. Remove intent file reads from idle diagnostic polls. | Durable intent before spawn, duplicate rejection, lease expiry, retirement floors, and recovery without a second spawn. |
-| 11 | Done | Capture owner retains the verified spool cursor byte offset. Rebuild the offset once after reopen. | Replay, cursor changes, sequence denial, torn tails, and upload of the synced prefix only. |
-| 12 | Done | Operation owners observe authority changes through events and reuse deadline monitoring. Remove per-read thread creation and authority polling. | Direct synchronous calls, shorter stage deadlines, cancellation, closed authority channels, cleanup, and commit checks. |
-| 13 | Done | Query owner registers admitted built-in relations only. Store provenance methods return empty values for empty references after validation. | Hidden-source denial, alias provenance, cleanup, exact nonempty references, and empty input results. |
-| 14 | Done | Built-ins reuse immutable declarations and their ports. Remove schema generation during computation. | Canonical descriptor and schema metadata, wire round trips, and native and Wasm parity. |
-| 15 | Done | Guest invocation reuses validated inputs internally. Remove repeated contract passes inside one invocation. | Framing and FFI validation, checked standalone APIs, host output checks, evidence validation, cleanup, and error precedence. |
-| 16 | Done | Control context owner projects committed changes and serializes a new record once. Retain startup replay. | Exact retries, failed-write retry, bounded replay, current revisions, and restart. |
-| 17 | Done | Package store charges actual current encoded bytes. Remove decimal JSON size counting, its retained frame field, and obsolete quota bookkeeping. | Current format integrity, quota accounting, identical install retry, native dependencies, corruption, backup, restore, and recovery. |
+| 1 | Not done | Package owner groups reconciliation by installation, reuses immutable closures, and checks relevant dependency changes before source preparation. Remove repeated orphan scans and unconditional input reconstruction. | Upgrade orphan repair, activation changes, authority revocation, required clock ticks, exact dependency revisions, restart, and unchanged-input behavior. |
+| 2 | Not done | Graph owner checks headers, notices, exact heads, and witness deadlines before it loads retained graph rows. | Notice changes, expiry without new data, overlap replacement, package changes, restart, and exact result parity. |
+| 3 | Not done | Store owner maintains owned file and segment totals at file changes. Remove a full directory walk from each raw batch. Rebuild totals during recovery. | Capacity denial, disk reserve, rotation, deletion, database growth, restart, and ACK after durable commit. |
+| 4 | Not done | Graph derivation prepares common records, facts, revision, coverage, and datasets once per window. | Native and Wasm parity, per-model bounds, original input revisions, evidence ordinals, and exact outputs. |
+| 5 | Not done | Built-in graph computation indexes original facts by record once per evaluation. | Missing and conflicting facts, original ordering, exact evidence references, and detector parity. |
+| 6 | Not done | Follow retains its checked store revision and dependency selection. Remove dependency history scans when both remain unchanged. | Append replay, moving-window expiry, coverage changes, quiet revocation, and unrelated commits. |
+| 7 | Not done | Query owner constructs required event columns and applies supported simple predicates during extraction. Keep a complete fallback for complex statements. | Full row mapping, query parity, scope denial, evidence capture before pruning, empty append progress, and joins, ordering, and aggregate semantics. |
+| 8 | Not done | Installed package owner retains verified identities with immutable bundles. Authority checks current trust membership without rebuilding OCI layouts. | Changed-content denial, trust revocation, exact installed exports, native closure identity, and commit authorization. |
+| 9 | Not done | Retention uses the existing source index and removes a bounded eligible set per visit. Remove repeated global entry scans. | Current pin and required-progress checks, pressure, replay floors, recovery, and physical reuse. |
+| 10 | Not done | Capture owner retains verified immutable dispatches after recovery or admission. Remove intent file reads from idle diagnostic polls. | Durable intent before spawn, duplicate rejection, lease expiry, retirement floors, and recovery without a second spawn. |
+| 11 | Not done | Capture owner retains the verified spool cursor byte offset. Rebuild the offset once after reopen. | Replay, cursor changes, sequence denial, torn tails, and upload of the synced prefix only. |
+| 12 | Not done | Operation owners observe authority changes through events and reuse deadline monitoring. Remove per-read thread creation and authority polling. | Direct synchronous calls, shorter stage deadlines, cancellation, closed authority channels, cleanup, and commit checks. |
+| 13 | Not done | Query owner registers admitted built-in relations only. Store provenance methods return empty values for empty references after validation. | Hidden-source denial, alias provenance, cleanup, exact nonempty references, and empty input results. |
+| 14 | Not done | Built-ins reuse immutable declarations and their ports. Remove schema generation during computation. | Canonical descriptor and schema metadata, wire round trips, and native and Wasm parity. |
+| 15 | Not done | Guest invocation reuses validated inputs internally. Remove repeated contract passes inside one invocation. | Framing and FFI validation, checked standalone APIs, host output checks, evidence validation, cleanup, and error precedence. |
+| 16 | Not done | Control context owner projects committed changes and serializes a new record once. Retain startup replay. | Exact retries, failed-write retry, bounded replay, current revisions, and restart. |
+| 17 | Not done | Package store charges actual current encoded bytes. Remove decimal JSON size counting, its retained frame field, and obsolete quota bookkeeping. | Current format integrity, quota accounting, identical install retry, native dependencies, corruption, backup, restore, and recovery. |
 
 ## Verification and result
 
-Use owner-local functional tests during implementation. Run
-`bash .github/scripts/verify-rust-ci.sh` after the final relevant source edit.
-Qualify current source-built native packages and the installed native detector
+Use owner-local functional tests and build the affected callers for each
+iteration. Qualify current source-built native packages and the installed native detector
 through the existing proof route. Preserve all current format and ABI checks.
 
 No new performance test or benchmark is approved. Do not infer speed gains
 from changed test-suite durations. Record removed work from the final source.
 Measure latency only after approval of a specific workload and its limits.
 
-Result: **Done**. All 17 changes are implemented and verified.
+Result: **Not done**. The first deletion iteration removes 272 nonblank
+production Rust lines from `7b7b407a`. It does not meet the 6,000-line target.
+Continue component refactoring. Do not use documentation or test deletion to
+close this result.
 
-The final check ran on 2026-10-15. The source manifest contains 1,401 input
+The current iteration passed the workspace test build, strict Clippy, and all
+170 selected functional cases. Its source did not change during these checks.
+The records are `/tmp/araphor-deletion-build5.json`,
+`/tmp/araphor-deletion-clippy2.json`, and
+`/tmp/araphor-components-focused2.json`. The broader CI run was interrupted
+at the user's request to use relevant checks per iteration. It is not a passing
+CI receipt. Current native artifact qualification remains pending.
+
+The previous check at `7b7b407a` ran on 2026-10-15. The source manifest contains 1,401 input
 files. Its SHA-256 is:
 
 `0f23272581240d3a2e1cb92ac9421ff10b4fec95136bca3f1d642f3a35a62612`

@@ -69,15 +69,12 @@ async fn query_reads_later_output() -> TestResult {
         let receipt = &status.results[0];
         assert_eq!(receipt.target, "sql");
         assert!(!receipt.stale);
-        let packet = fixture.owner.read_output(
-            &fixture.grant,
-            "test",
-            "test.model",
-            "count",
-            &receipt.result_id,
-        )?;
-        assert_eq!(packet.json_rows()?["rows"], expected);
-        let output = packet.decode(&status.descriptor)?;
+        let packet = fixture.output("test.model", "count", &receipt.result_id)?;
+        assert_eq!(
+            crate::AnalysisPackageOwner::output_rows(&packet)?["rows"],
+            expected
+        );
+        let output = crate::AnalysisPackageOwner::decode_output(&packet, &status.descriptor)?;
         assert_eq!(output.datasets[0].name, "rows");
         assert!(output.datasets[0]
             .batches
@@ -103,10 +100,7 @@ async fn query_reads_later_output() -> TestResult {
                 window: None,
             }
         );
-        let stored = fixture
-            .store
-            .package_result([1; 16], &receipt.result_id)?
-            .ok_or("package result absent")?;
+        let stored = fixture.result(&receipt.result_id)?;
         assert_eq!(
             stored.dependencies,
             vec![PackageResultRefV1 {
@@ -265,13 +259,7 @@ async fn alias_import_budget() -> TestResult {
         });
     let installed = fixture.install(package, None).await?;
     let receipt = &installed.exports[0].results[0];
-    let packet = fixture.owner.read_output(
-        &fixture.grant,
-        "test",
-        "test.model",
-        "count",
-        &receipt.result_id,
-    )?;
+    let packet = fixture.output("test.model", "count", &receipt.result_id)?;
     let data = packet.datasets[0].decode(&schema, sdk::Limits::default())?;
     let rows: usize = data.batches.iter().map(sdk::RecordBatch::num_rows).sum();
     let arrow: usize = data
@@ -334,7 +322,7 @@ async fn alias_import_budget() -> TestResult {
                     ),
                 },
             ];
-            let limit = (arrow * 2).max(packet.datasets[0].ipc.len()) + 1024;
+            let limit = (arrow * 2).max(packet.datasets[0].arrow_ipc.len()) + 1024;
             assert!(arrow * 2 <= limit);
             assert!(physical <= limit && physical * 2 > limit);
             (limit, "model input bytes")

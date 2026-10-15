@@ -15,7 +15,7 @@ impl AnalysisStore {
         now: u64,
         changed: bool,
         control: &crate::AnalysisReadControl,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<(Vec<u8>, u64)>> {
         let Some(id) = &active.result_id else {
             return Ok(None);
         };
@@ -41,8 +41,10 @@ impl AnalysisStore {
             if metadata.witnesses.iter().any(|witness| witness.expires_utc_ns <= now) {
                 return Ok(None);
             }
+            let deadline = metadata.witnesses.iter().map(|witness| witness.expires_utc_ns)
+                .min().unwrap_or(u64::MAX);
             if !changed {
-                return Ok(Some(body));
+                return Ok(Some((body, deadline)));
             }
             for (relation, captured) in &metadata.source_revisions {
                 control.check()?;
@@ -79,7 +81,7 @@ impl AnalysisStore {
                 ).context(AnalysisDatabaseSnafu { operation: "read package context notice" })?;
                 if !current { return Ok(None); }
             }
-            Ok(Some(body))
+            Ok(Some((body, deadline)))
         })
     }
 

@@ -29,11 +29,11 @@ pub(super) struct ScopedSources {
 }
 
 impl ScopedSources {
-    fn register(
+    pub(super) fn register(
         &mut self,
         connection: &Connection,
         table: &Arc<InputTable>,
-        function: &'static str,
+        function: &str,
         view: &'static str,
     ) -> Result<()> {
         table.validate(function, view).map_err(|reason| {
@@ -43,12 +43,12 @@ impl ScopedSources {
             }
             .build()
         })?;
-        if let std::collections::btree_map::Entry::Vacant(entry) = self.sources.entry(function) {
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.sources.entry(view) {
             let source = InputSource::new();
             source.register(connection, function)?;
             entry.insert(source);
         }
-        self.sources[function].replace(Some(table.clone()))?;
+        self.sources[view].replace(Some(table.clone()))?;
         connection
             .execute_batch(&format!(
                 "CREATE TEMP VIEW \"{view}\" AS SELECT * FROM \"{function}\"()"
@@ -1944,55 +1944,14 @@ impl InputRelations {
         self.bytes
     }
 
-    pub(super) fn register(&self, connection: &Connection) -> Result<()> {
-        self.register_into(connection, None)
-    }
-
-    pub(super) fn register_scoped(
+    pub(super) fn register(
         &self,
         connection: &Connection,
         sources: &mut ScopedSources,
     ) -> Result<()> {
-        self.register_into(connection, Some(sources))
-    }
-
-    fn register_into(
-        &self,
-        connection: &Connection,
-        mut sources: Option<&mut ScopedSources>,
-    ) -> Result<()> {
         for (table, schema) in self.tables.iter().zip(&self.schemas) {
-            let function = match schema.name {
-                "events" => "_query_events",
-                "coverage" => "_query_coverage",
-                "context_versions" => "_query_contexts",
-                "catalog" => "_query_catalog",
-                "traces" => "_query_traces",
-                "trace_output" => "_query_trace_output",
-                "trace_measurements" => "_query_trace_measurements",
-                "targets" => "_query_targets",
-                "trace_recipes" => "_query_trace_recipes",
-                "behaviors" => "_query_behaviors",
-                "context" => "_query_discovery_context",
-                "findings" => "_query_findings",
-                "relationships" => "_query_relationships",
-                "graph_subjects" => "_query_graph_subjects",
-                "graph_branches" => "_query_graph_branches",
-                "correlation_packages" => "_query_correlation_packages",
-                "policy_observations" => "_query_policy_observations",
-                "notifications" => "_query_notifications",
-                _ => {
-                    return crate::QueryInvalidSnafu {
-                        field: "query relation",
-                    }
-                    .fail();
-                }
-            };
-            if let Some(sources) = sources.as_deref_mut() {
-                sources.register(connection, table, function, schema.name)?;
-            } else {
-                table.register(connection, function, schema.name)?;
-            }
+            let function = format!("_query_{}", schema.name);
+            sources.register(connection, table, &function, schema.name)?;
             if schema.name == "findings" {
                 connection.execute_batch(
                     "CREATE OR REPLACE TEMP VIEW findings AS SELECT * FROM _query_findings()
@@ -2213,7 +2172,7 @@ mod tests {
         assert_eq!(blob, &vec![42; 8192]);
         assert_eq!(input.tables[0].rows[0].len(), EVENTS.columns.len() + 2);
         let connection = Connection::open_in_memory()?;
-        input.register(&connection)?;
+        input.register(&connection, &mut ScopedSources::default())?;
         let values = connection.query_row(
             "SELECT operation, __araphor_commit_revision, __araphor_ordinal FROM events",
             [],
@@ -2522,7 +2481,7 @@ mod tests {
             &QueryTemplate::Events { operation: None },
         )?;
         let connection = Connection::open_in_memory()?;
-        input.register(&connection)?;
+        input.register(&connection, &mut ScopedSources::default())?;
         let mut query = connection.prepare("SELECT * FROM events")?;
         let result = query.query_row([], |row| {
             (0..row.as_ref().column_count())
@@ -2879,7 +2838,7 @@ mod tests {
             assert!(input.tables.is_empty());
             let connection = Connection::open_in_memory()?;
             let mut sources = ScopedSources::default();
-            input.register_scoped(&connection, &mut sources)?;
+            input.register(&connection, &mut sources)?;
             assert!(sources.sources.is_empty());
             assert!(sources.views.is_empty());
             assert!(connection.prepare("SELECT * FROM catalog").is_err());
@@ -2987,7 +2946,7 @@ mod tests {
             assert!(TRACE_OUTPUT.columns.iter().any(|field| field.0 == name));
         }
         let connection = Connection::open_in_memory()?;
-        input.register(&connection)?;
+        input.register(&connection, &mut ScopedSources::default())?;
         assert!(connection
             .prepare("SELECT count(*) FROM trace_output")
             .is_err());

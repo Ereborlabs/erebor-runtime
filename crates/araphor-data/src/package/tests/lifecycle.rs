@@ -27,15 +27,24 @@ async fn package_historical_scope() -> TestResult {
     }];
     let response = fixture.install(narrow, None).await?;
     assert!(response.exports[0].results.is_empty());
-    let result = fixture.owner.read_output(
-        &fixture.grant,
-        "test",
-        "test.model",
-        "count",
-        &receipt.result_id,
-    );
+    let result = fixture.output("test.model", "count", &receipt.result_id);
     assert!(matches!(
         result,
+        Err(crate::Error::Package {
+            code: Code::Denied,
+            ..
+        })
+    ));
+    assert!(matches!(
+        fixture
+            .execute(Request::Query {
+                scope_id: "test".into(),
+                package_id: "test.model".into(),
+                export: "count".into(),
+                result_id: Some(receipt.result_id.clone()),
+                sql: "SELECT * FROM rows".into(),
+            })
+            .await,
         Err(crate::Error::Package {
             code: Code::Denied,
             ..
@@ -53,7 +62,7 @@ async fn package_historical_scope() -> TestResult {
         .await?;
     assert_eq!(response.exports[0].results[0].result_id, receipt.result_id);
     assert_eq!(
-        response.output.ok_or("query output")?.json_rows()?["query"],
+        crate::AnalysisPackageOwner::output_rows(&response.output.ok_or("query output")?)?["query"],
         serde_json::json!([{"count":3}])
     );
     Ok(())
@@ -99,7 +108,7 @@ async fn package_retry_revision() -> TestResult {
         .await?;
     assert_eq!(response.exports[0].revision, "1");
     assert_eq!(
-        response.output.ok_or("query output")?.json_rows()?["query"],
+        crate::AnalysisPackageOwner::output_rows(&response.output.ok_or("query output")?)?["query"],
         serde_json::json!([{"count":3}])
     );
     Ok(())

@@ -1,4 +1,5 @@
 use super::*;
+use araphor_analysis_sdk as sdk;
 
 #[tokio::test]
 async fn wasm_installed_lifecycle() -> TestResult {
@@ -99,9 +100,9 @@ async fn wasm_installed_lifecycle() -> TestResult {
         ));
     }
     assert_receipt(&returned, &receipt)?;
-    let output: PackageOutputV1 = AnalysisPackageOwner::decode(&committed.datasets)?;
+    let output: sdk::wire::Output = AnalysisPackageOwner::decode(&committed.datasets)?;
     assert_eq!(
-        output.json_rows()?["data"],
+        crate::AnalysisPackageOwner::output_rows(&output)?["data"],
         serde_json::json!([{"value":7}])
     );
     let fixture = fixture.reopen()?;

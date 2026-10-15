@@ -161,7 +161,7 @@ struct OwnedResponse {
 }
 
 impl Api {
-    pub const fn for_guest<G: crate::guest::Guest>() -> Self {
+    pub const fn for_guest<G: crate::Guest>() -> Self {
         Self {
             contract_version: CONTRACT_VERSION,
             struct_size: std::mem::size_of::<Self>() as u64,
@@ -171,7 +171,7 @@ impl Api {
     }
 }
 
-unsafe extern "C" fn evaluate<G: crate::guest::Guest>(
+unsafe extern "C" fn evaluate<G: crate::Guest>(
     request: *const Request,
     response: *mut Response,
 ) -> u32 {
@@ -219,9 +219,7 @@ unsafe extern "C" fn evaluate<G: crate::guest::Guest>(
     code
 }
 
-unsafe fn evaluate_guest<G: crate::guest::Guest>(
-    request: *const Request,
-) -> Result<Box<OwnedResponse>> {
+unsafe fn evaluate_guest<G: crate::Guest>(request: *const Request) -> Result<Box<OwnedResponse>> {
     if request.is_null() || !(request as usize).is_multiple_of(std::mem::align_of::<Request>()) {
         return Err(Error::contract(ErrorCode::Invalid, "native request"));
     }
@@ -232,9 +230,9 @@ unsafe fn evaluate_guest<G: crate::guest::Guest>(
         return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
     }
     let package = G::package();
-    let (evaluation, validator) = unsafe { Decoder::evaluation(&package, request)? };
-    let checked = validator.checked(&evaluation);
-    let output = G::evaluate_checked(&checked)?;
+    let (evaluation, model) = unsafe { Decoder::evaluation(&package, request)? };
+    let checked = crate::CheckedEvaluation::new(&package, model, &evaluation);
+    let output = G::compute(&checked)?;
     if cancelled() {
         return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
     }

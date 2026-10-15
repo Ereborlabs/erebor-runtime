@@ -1,389 +1,87 @@
 # Araphor Data Test Runtime Review
 
-Review the changes in items 2–5 of the
-[runtime reduction plan](araphor-data-test-runtime-reduction.md). The changes
-remove repeated fixture preparation and descriptor work. They preserve the
-existing test inputs, assertions, production owner calls, and deadlines.
+The [runtime plan](araphor-data-test-runtime-reduction.md) owns approved changes,
+comparisons, and their terminal receipts. The
+[current performance review](../guides/araphor-performance-simplification-review.md)
+owns later production changes. This guide owns the fixture source route.
 
 ## Intended end state
 
-The complete Data suite runs faster with the same profile and test concurrency.
-The complete suite still proves its original contracts. The current source
-implements the changes below. Final qualification passed. The complete Data
-duration decreased by 767.41 seconds, or 35.56 percent.
+Tests use the standard Rust runner and supported production owner APIs. Reuse
+immutable preparation; preserve every workload, input, fault, assertion,
+deadline, authority boundary, and independent durable state.
 
 ## Implementation review flow
 
-[/tmp/araphor-data-diagnostic.json](/tmp/araphor-data-diagnostic.json) An engineer starts the approved diagnostic run
-  -> [diagnostic record](/tmp/araphor-data-diagnostic.json) record the source, test binary, host, profile, and selected test names
-  -> [cost report](/tmp/araphor-data-cost-report.json) distinguish lock wait from fixture setup and actual evaluation
-  -> Partial [cost report](/tmp/araphor-data-cost-report.json) record parent and child costs without counting child time twice
-  -> [cost report](/tmp/araphor-data-cost-report.json) rank repeated work by measured cost
+[Execution factory](../../crates/araphor-data/src/package/required/testing.rs)
+creates a temporary store, query owner, authority, and installed packages
+  -> [Wasm fixture](../../crates/araphor-data/src/package/wasm/fixtures.rs) shares immutable compiled code and keeps private running state
+  -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) retains exact tenant references and charged leases
+  -> [Graph fixture](../../crates/araphor-data/src/graph/tests/native_storage.rs) reuses that case's execution across its original windows
+  -> [Traversal fixture](../../crates/araphor-data/src/graph/tests/traversal/fixtures.rs) reuses the first already-derived graph and commits every window
 
-[Discovery fixture](../../crates/araphor-data/src/discovery/derive.rs) An engineer changes one read-only fixture
-  -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) reuse the existing installed snapshot and compiled code facilities
-  -> [TraversalFixture](../../crates/araphor-data/src/graph/tests/traversal/fixtures.rs) retain each original computation, input variant, and assertion
-  -> [package fixtures](../../crates/araphor-data/src/package/tests/fixture.rs) keep mutable lifecycle and cold-start cases on their original paths
-  -> [focused record](/tmp/araphor-data-focused.json) run the affected existing cases before another full workspace run
+The [Discovery corpus](../../crates/araphor-data/src/discovery/derive/tests/corpus.rs)
+decodes one seed per case and clones it for original records. Record clocks,
+identities, variants, and encoding stay in the loop. Traversal retains witness
+deadline changes, request construction, and distinct later-window derivations.
+A snapshot clone shares leases; it does not create an independent query budget.
+A pin does not bypass current authority. Update, expiry, history, replacement,
+and revocation cases keep their unpinned owner paths.
 
-[focused record](/tmp/araphor-data-focused.json) A fixture change passes focused verification
-  -> [descriptor encoding](../../crates/araphor-data/src/package/bundle.rs) select the next correction from the measured cost report
-  -> [InstalledSnapshot](../../crates/araphor-data/src/package/installed/snapshot.rs) retain separate authorization, memory accounting, and durable-state owners
-  -> [scope boundary](araphor-data-test-runtime-reduction.md) stop if the correction requires a new ownership or trust-boundary design
+[Discovery crash qualification](../../crates/araphor-data/src/analysis/crash.rs)
+prepares durable packages in the parent, drops handles, and launches the child.
+The child opens the store, checks exact package roots and revisions, and lazily
+admits the Discovery component. It exits at the original crash point. The parent
+checks recovery, retries, receipts, raw records, and a second reopen. All six
+exit scenarios remain. Cold installation, compiler failure, eviction, and full
+cache-capacity cases keep separate proof. The fixture constructor is gated by
+test or test-fixtures; there is no additional production service.
 
-[current changes](araphor-data-test-runtime-reduction.md) The approved implementation is ready for qualification
-  -> [CI source record](/tmp/araphor-data-final-ci-source.json) run the repository Rust CI procedure after the last covered edit
-  -> [CI log](/tmp/araphor-data-final-ci.log) obtain the new Data duration from that run
-  -> [focused inventory record](/tmp/araphor-data-focused.json) compare the complete test inventory, results, and configuration
-  -> [measured result](araphor-data-test-runtime-reduction.md#complete-data-qualification) record the measured improvement and any remaining slow cases
-
-## Owners and lifecycle
-
-The [Discovery fixture](../../crates/araphor-data/src/discovery/derive.rs) and
-[graph fixture](../../crates/araphor-data/src/graph/tests.rs) create one pinned
-installed snapshot for their immutable package stores. Both fixtures retain
-their existing mutexes. The snapshot retains bundles and pins through charged
-[query leases](../../crates/araphor-data/src/package/installed/snapshot.rs).
-Clones share those leases. Normal evaluation still checks authority and control.
-Package update, revocation, freshness, and lifecycle tests keep their separate
-fixtures. The changes do not alter quotas or durable store ownership.
-
-```mermaid
-sequenceDiagram
-    participant Fixture
-    participant InstalledAnalysis
-    participant QueryOwner
-    Fixture->>InstalledAnalysis: snapshot(tenant)
-    InstalledAnalysis->>QueryOwner: retain_analysis_input(bytes)
-    QueryOwner-->>InstalledAnalysis: charged leases
-    InstalledAnalysis-->>Fixture: pinned snapshot
-    Fixture->>InstalledAnalysis: clone pinned snapshot
-```
-
-The corpus fixture decodes one seed per case, then clones the seed for every
-original record. Per-record clocks, identities, variants, and encoding remain
-in the loop. The traversal fixture reuses the graph snapshot that
-[CommitFixture::new](../../crates/araphor-data/src/graph/tests/native_storage.rs)
-already derives for window zero. Traversal still sets the window witness
-deadline, replaces subjects and edges, creates the request, and commits every
-window. Later windows still derive their distinct inputs.
+## Descriptor and schema reuse
 
 [Package::descriptor_value](../../crates/araphor-analysis-sdk/src/descriptor.rs)
-validates the descriptor and sorts its JSON objects. Both `inspect` and
-[interfaces](../../crates/araphor-analysis-sdk/src/bindings.rs) use that value.
-Runtime bundle encoding calls `inspect`; author interface generation still
-produces WIT and native headers. Descriptor copies remain owned by callers.
-Immutable builtin template reuse is not implemented in this slice.
+validates and sorts the descriptor for runtime inspection. Author builds still
+generate WIT and native headers through the SDK bindings. Copies remain owned
+by callers. The later immutable builtin declaration cache uses the same
+canonical descriptor contract.
 
 [GraphRows::expected_shape](../../crates/araphor-data/src/analysis/graph_rows/schema.rs)
-creates the expected schema with the existing SQL and DuckDB library. A
-process-local `OnceLock` stores only successfully decoded immutable rows.
-Initialization errors do not enter the cache. Concurrent first callers can
-repeat construction. Temporary expected connections close after construction.
-Every validation still reads the actual connection and compares its columns
-and constraints. Actual store state and validation results are never cached.
+derives expected schema rows from the existing SQL and DuckDB version.
+OnceLock retains only successful immutable results. A transient error is not
+cached. Concurrent first callers can repeat construction. Every validation
+reads actual columns and constraints again. Actual store data and a successful
+store-validation result are never cached.
 
 ## Existing proof route
 
-| Change | Existing Rust tests |
+| Contract | Rust test route |
 | --- | --- |
-| Pinned fixture and seed reuse | `discovery::derive::tests::discovery_derivation_corpus_parity`; the complete Discovery derivation family |
-| First traversal window | `graph::tests::traversal::native_traversal_large_graph`; `graph::tests::traversal::recovery::native_traversal_replacement_history`; the traversal family |
-| Descriptor encoding | `bindings::tests::declarations_share_descriptor`; `bindings::tests::descriptor_size_is_bounded` in the SDK; `package::tests::wasm::metadata::package_metadata_digest_stable` in Data |
-| Expected schema cache | `analysis::graph_rows::tests::schema::native_schema_integrity`; `analysis::graph_rows::tests::schema::native_schema_reopen`; `analysis::graph_migration::tests::recovery::native_recovery_rejects_corruption` |
+| Corpus and seed reuse | `discovery::derive::tests::discovery_derivation_corpus_parity` and the complete derivation family |
+| Traversal windows | `graph::tests::traversal::native_traversal_large_graph` and `graph::tests::traversal::recovery::native_traversal_replacement_history` |
+| Descriptor bytes | SDK `bindings::tests::declarations_share_descriptor` and `bindings::tests::descriptor_size_is_bounded`; Data `package::tests::wasm::metadata::package_metadata_digest_stable` |
+| Actual schema integrity | `analysis::graph_rows::tests::schema::native_schema_integrity` and `native_schema_reopen`; `analysis::graph_rows::tests::recovery::native_recovery_rejects_corruption` |
+| Crash boundaries | `analysis::crash::discovery_profile_commit_crashes`: two sealing modes, three points, six exits |
+| Independent state | Graph and Discovery factory identity checks; original owner-specific concurrency, capacity, authority, and cleanup cases |
 
-The integrity test validates a correct connection, rejects its later mutation,
-then validates another correct connection. Reopen tests retain their checks
-that rejection does not change corrupted database bytes. Final verification
-uses [the repository procedure](../../.github/scripts/verify-rust-ci.sh).
+The integrity case accepts a correct connection, rejects its mutation, and
+accepts another correct connection. Reopen checks preserve corrupt bytes.
+Encoding sinks retain partial-write, error, flush, overflow, and exact-bound
+checks. OCI and actual-byte storage now supersede the older JSON package
+counting and cap-only tests; read the current production review for those paths.
 
-## Source and evidence limits
+## Source and verification limits
 
-This guide covers HEAD `404d0a78575558975359f6b1dbd886bf70baddeb` plus the
-current ten changed Rust files shown in the linked source families. The
-[diagnostic record](/tmp/araphor-data-diagnostic.json) covers the frozen
-instrumented baseline, not the changed implementation. The
-[cost report](/tmp/araphor-data-cost-report.json) has partial child attribution
-because child output is captured. One split record retains its numeric fields,
-but its thread label is corrupt. Fixture access combines shared initialization
-wait and mutex wait when another thread performs initialization. Unmarked work
-remains unattributed. Inclusive spans overlap and are not additive suite durations.
-Temporary timing markers are removed. No measured savings are claimed.
+The full earlier diagnostics, failed attempts, source hashes, binary hashes,
+and final receipts remain at
+`7b7b407adf347d389984553a4d212bfce37b75b5:docs/plans/araphor-data-test-runtime-review.md`.
+The final original qualification at `e31b033e` passes all 90 harnesses: 2,122
+passed, zero failed, and 568 ignored. The Data inventory retains all 633 original
+cases and seven regressions; the SDK adds three writer regressions.
 
-**Done** for final qualification. The exact source state, complete inventory,
-and final CI duration are recorded below.
-
-The focused feature-unified debug run passed 63 SDK tests, six author builder
-tests, and 26 Data tests. Data completed in 160.60 seconds. The complete Data
-inventory and all 19 ignored classifications are unchanged. The record is
-[/tmp/araphor-data-focused.json](/tmp/araphor-data-focused.json).
-**Done** for focused qualification. Final repository CI subsequently passed.
-
-The complete Data run passed 614 tests with 19 ignored in 1,390.41 seconds.
-The complete inventory remains 633 tests. The baseline was 2,157.82 seconds
-with the same debug profile and four test threads. The measured reduction is
-767.41 seconds, or 35.56 percent. Host load was not controlled between runs.
-The remaining workspace CI subsequently passed. The source recorder confirmed
-that covered hashes matched at process exit.
-
-## Final acceptance
-
-The final repository procedure passed with exit 0 at
-2026-10-14 17:52:03.212524 UTC. Formatting, workspace checking, strict clippy,
-and full workspace tests passed. The 90 parent harnesses reported 2,112 passed,
-0 failed, and 568 ignored. Elapsed procedure time was 2,450.85 seconds.
-All 1,392 covered Rust, Cargo, and CI file hashes remained unchanged during
-the run. The source state remains HEAD `404d0a78575558975359f6b1dbd886bf70baddeb`
-plus the ten uncommitted Rust changes.
-
-Read the [source record](/tmp/araphor-data-final-ci-source.json) and
-[CI log](/tmp/araphor-data-final-ci.log) for the exact command, hashes, and
-results. **Done** for approved changes 1 through 5. Diagnostic child-stage
-attribution remains incomplete. No complete-suite speed claim depends on
-those missing child records.
-
-## Test profile correction
-
-[Cargo test overrides](../../Cargo.toml) An engineer builds the Data tests
-  -> [Data and SDK overrides](../../Cargo.toml) compile Data and SDK test code at optimization level 1
-  -> [repository procedure](../../.github/scripts/verify-rust-ci.sh) retain the existing features, assertions, overflow checks, and test selection
-
-The profile change does not change guest compiler settings. The matching
-nine-case comparison covers the Data and SDK overrides. Both runs passed.
-The recorded harness duration changed from 473.97 to 442.83 seconds.
-There is no JSON or hashing dependency override. The temporary JSON override
-started a new DuckDB C++ build and was removed before execution qualification.
-A full filesystem blocked the first optimized build. The successful retry
-reused completed artifacts.
-Read [the implementation record](araphor-data-test-runtime-reduction.md#f1-test-build-profile)
-for the exact measurements and limits. These temporary diagnostics are manual
-evidence. They do not add committed timing tests.
-
-## Admitted bundle inspection
-
-[AnalysisPackageOwner::run](../../crates/araphor-data/src/package/evaluation.rs) Run completes the selected evaluations
-  -> [AnalysisPackageOwner::inspect](../../crates/araphor-data/src/package/inspect.rs) inspect with the admitted bundle
-  -> [AnalysisPackageOwner::refresh_package](../../crates/araphor-data/src/package/freshness.rs) read current activations and calculate freshness
-  -> [artifact selection](../../crates/araphor-data/src/package/inspect.rs) use the matching root and revision or load current stored data
-
-Run owns the borrowed bundle until inspection returns. Inspection does not
-retain that borrow. Authority, activation, receipt, and scope checks remain in
-their existing owners. Replacement can make the admitted root obsolete. The
-existing fallback then reads the current artifact. This correction adds no
-shared decoded package state or memory lease.
-
-Read `package::lifecycle::tests::admitted_inspection_tracks_replacement` in
-[the lifecycle tests](../../crates/araphor-data/src/package/lifecycle/tests.rs).
-The test covers matching roots, replacement, fallback, scope, and authority.
-Focused qualification passed in the 111-case Data run. The source record is
-`/tmp/araphor-f-final-focused.json`. Final repository CI is pending.
-
-## Bounded encoding sinks
-
-[PackageBundleV1::encode](../../crates/araphor-data/src/package/bundle.rs) A caller requests bundle bytes
-  -> [PackageBundleV1::encode_into](../../crates/araphor-data/src/package/bundle.rs) order artifacts and serialize the existing descriptor representation
-  -> [BoundedBuffer](../../crates/araphor-analysis-sdk/src/wire/codec.rs) reject a write beyond the byte limit and forward accepted writes
-
-[PackageBundleV1::validate](../../crates/araphor-data/src/package/admission.rs) Validation checks the encoded size
-  -> [PackageBundleV1::check_encoding](../../crates/araphor-data/src/package/bundle.rs) use a bounded discard sink with the same serializer
-
-[PackageBundleV1::digest](../../crates/araphor-data/src/package/bundle.rs) A caller requests the digest
-  -> [PackageBundleV1::encode_into](../../crates/araphor-data/src/package/bundle.rs) write the same bytes to the bounded SHA-256 sink after the existing domain
-
-Each call owns its temporary writer. Byte encoding returns the owned vector.
-Size checking discards accepted bytes. Digest calculation retains only the hash
-state. The SDK writer advances its count only after a successful write and uses
-the sink's accepted byte count. The writer forwards flush errors. The writer
-rejects arithmetic overflow and preserves the existing limit error text.
-
-Read the new `wire::codec::buffer_tests` in
-[the SDK codec](../../crates/araphor-analysis-sdk/src/wire/codec.rs) and
-`package::bundle::encoding_tests` in
-[the bundle owner](../../crates/araphor-data/src/package/bundle.rs).
-The tests cover partial writes, write and flush errors, overflow, exact limits,
-digest equality, and descriptor rejection. The existing
-`package::tests::wasm::metadata::sql_bundle_encoding_unchanged` test checks the
-compact SQL bytes. Focused qualification passed. The source record is
-`/tmp/araphor-f-final-focused.json`. Final repository CI is pending.
-
-## Installation retry encoding
-
-[AnalysisPackageOwner::install_revision](../../crates/araphor-data/src/package/lifecycle/revisions.rs) Installation prepares one immutable revision
-  -> [AnalysisPackageOwner::revision_encoding](../../crates/araphor-data/src/package/lifecycle/revisions.rs) construct the descriptor and sorted dependency fields
-  -> [AnalysisStore::package_revision](../../crates/araphor-data/src/analysis/packages/read.rs) read the saved record and retain its result
-  -> [ArtifactEncoding::check_encoding](../../crates/araphor-data/src/package/bundle.rs) check the candidate bound on a saved-record hit
-  -> [semantic comparison](../../crates/araphor-data/src/package/lifecycle/revisions.rs) return the identical saved record or encode the candidate bytes
-  -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) retain the existing collision and transaction checks
-
-The record lookup is read-only. Installation holds the existing lifecycle
-lock. The owner does not return a saved lookup or decode error until candidate
-serialization succeeds. A missing record or lookup error uses byte encoding
-instead of size checking, so cold installation serializes once. A different
-existing record can require both operations. Descriptor and artifact comparisons
-retain the legacy semantic rules. No cache, durable identity, or transaction
-owner changes.
-
-Read `package::lifecycle::revisions::tests::revision_retry_and_collision` and
-`revision_candidate_error_precedes_saved_decode` in
-[the revision owner](../../crates/araphor-data/src/package/lifecycle/revisions.rs).
-The tests cover identical retries, conflicting records, unchanged durable
-state, and candidate-limit errors before malformed saved artifact decoding.
-Focused qualification and final CI are pending.
-
-The internal revision serializer and size check both use the existing 64 MiB
-analysis record limit. Public bundle encoding and validation retain the 32 MiB
-bundle limit. The test
-`package::lifecycle::revisions::tests::revision_retry_preserves_encoding_bound`
-checks an internal revision between those limits and an identical retry.
-The candidate-limit precedence test retains rejection above the record limit.
-Qualification is pending after this bound correction.
-
-The earlier 111-case Data run passed retry collision and candidate-error
-precedence checks. The limit correction and added regression require the
-focused record `/tmp/araphor-f-retry-focused.json`. That run is in progress.
-
-## F5 Discovery crash preparation
-
-[Discovery crash case](../../crates/araphor-data/src/analysis/crash.rs) The parent creates the original evidence
-  -> [InstalledAnalysis::testing](../../crates/araphor-data/src/package/required/testing.rs) install the four required durable packages
-  -> [package reference checks](../../crates/araphor-data/src/analysis/crash.rs) check roots, revisions, and the unchanged source receipt
-  -> [child launch](../../crates/araphor-data/src/analysis/crash.rs) release installed and store handles before starting the child
-
-[AnalysisStore::open](../../crates/araphor-data/src/analysis/crash.rs) The child opens the prepared store
-  -> [InstalledAnalysis::testing_existing](../../crates/araphor-data/src/package/required/testing.rs) create the same authority and query limits without eager code preparation or package installation
-  -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) read and check the four durable package roots and revisions
-  -> [DiscoveryOwner](../../crates/araphor-data/src/analysis/crash.rs) process the original record through production lazy Discovery admission
-  -> [AnalysisStore::crash_path](../../crates/araphor-data/src/analysis/crash.rs) exit with code 73 at the original crash point
-
-[Discovery crash recovery](../../crates/araphor-data/src/analysis/crash.rs) The parent reopens the store after each child exit
-  -> [existing fixture constructor](../../crates/araphor-data/src/package/required/testing.rs) retain the original parent recovery setup
-  -> [recovery assertions](../../crates/araphor-data/src/analysis/crash.rs) check package roots, profile state, retries, source receipt, and raw records
-  -> [second reopen](../../crates/araphor-data/src/analysis/crash.rs) close and reopen again to check the recovered profile and idle processing
-
-The test still covers two sealing modes and three crash points. The child
-reference check loads metadata and computes identities; the check does not
-compile Wasm code. The child compiles Discovery when processing requires that
-library. No native replacement or machine-code cache is added. The constructor
-exists only under the existing test or `test-fixtures` module gate.
-
-Review `analysis::crash::discovery_profile_commit_crashes` for all six exits and
-recovery boundaries. Dedicated cold installation, compiler failure, eviction,
-and five-library capacity tests retain their original paths. Focused crash
-qualification passed in `/tmp/araphor-f-final-focused.json`. All six children
-returned the required exit code. Final repository CI is pending.
-
-## Local package pins
-
-[Live Discovery tests](../../crates/araphor-data/src/discovery/live.rs) A case creates an owner with fixed package revisions
-  -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) retain installed references and charged memory guards
-  -> [DiscoveryOwner::process](../../crates/araphor-data/src/discovery/live.rs) process the original transaction and source-window inputs
-
-Only `discovery_live_transaction` and the first owner in
-`discovery_live_boundaries` use this local pin. Each owner releases the snapshot
-when the case ends. The shared fixture constructor remains unpinned. Tests that
-change package activations, tenants, history, expiry, or authority retain their
-existing owners. No query case changes. Both live cases passed in
-`/tmp/araphor-f-final-focused.json`. Final repository CI is pending.
-
-## Independent fixture execution flow
-
-[Execution factories](../../crates/araphor-data/src/graph/tests.rs) A Discovery or graph case requests execution
-  -> [InstalledAnalysis::testing](../../crates/araphor-data/src/package/required/testing.rs) create a store, query budget, authority, and package owner for the case
-  -> [Existing Wasm fixture](../../crates/araphor-data/src/package/wasm/fixtures.rs) share compiled code and retain private execution state
-  -> [InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs) retain installed references and memory guards
-  -> [CommitFixture](../../crates/araphor-data/src/graph/tests/native_storage.rs) reuse that case execution for later windows
-
-
-The [Discovery test factory](../../crates/araphor-data/src/discovery/derive.rs)
-and [graph test factory](../../crates/araphor-data/src/graph/tests.rs) call
-`InstalledAnalysis::testing(None, tenant)` for each case. The
-[constructor](../../crates/araphor-data/src/package/required/testing.rs)
-opens a new temporary store, creates a query owner and fixture authority,
-creates a package owner, and installs the required packages. It uses the
-[existing compiled-code fixture](../../crates/araphor-data/src/package/wasm/fixtures.rs).
-That facility shares immutable compiled code. It does not share the case's
-query usage, grant owner, or guest execution state.
-
-The factory then calls
-[InstalledAnalysis::snapshot](../../crates/araphor-data/src/package/installed/read.rs).
-The snapshot records the tenant and installed activation references. Its
-[bundle and snapshot guards](../../crates/araphor-data/src/package/installed/snapshot.rs)
-retain input-memory leases on that case's query budget. Clones retain these
-guards. A pinned snapshot does not remove evaluation authorization checks.
-
-```mermaid
-sequenceDiagram
-    participant Case as Test case
-    participant Factory as execution()
-    participant Installed as InstalledAnalysis
-    participant Store as AnalysisStore
-    participant Query as QueryOwner
-    participant Package as AnalysisPackageOwner
-    participant Code as WasmExecution
-    Case->>Factory: execution()
-    Factory->>Installed: testing(None, tenant)
-    Installed->>Store: open(temporary path)
-    Installed->>Query: new(store, limits)
-    Installed->>Package: new(store, query, authority)
-    Installed->>Package: prepare_test_code()
-    Package->>Code: fixture_code(limits)
-    Code-->>Package: Shared code, private running state
-    Installed->>Package: ensure_required(grant, control)
-    Factory->>Installed: snapshot(tenant)
-    Installed->>Query: retain_analysis_input(bytes)
-    Installed-->>Factory: Pinned references and memory guards
-    Factory-->>Case: Independent case execution
-```
-
-[CommitFixture::new](../../crates/araphor-data/src/graph/tests/native_storage.rs)
-keeps that execution in its graph owner. `next_window` and
-[TraversalFixture::commit_window](../../crates/araphor-data/src/graph/tests/traversal/fixtures.rs)
-clone the same case execution. They retain all original window computations,
-inputs, witnesses, and commits. `add_packages` remains a separate operation:
-it creates an unpinned owner on the fixture store and reads current references.
-
-The new owner-identity test rejects a shared factory result. That test and
-connected parallel functional cases passed in the 111-case Data run recorded
-in `/tmp/araphor-f-final-focused.json`. The approved nine-case comparison
-uses four then eight test threads, with 900 seconds for each run. The comparison is pending. The final CI default remains four threads.
-
-## Corrected source qualification
-
-The five final encoding tests passed in 49.79 seconds. All 66 SDK tests passed.
-The run covers commit `e31b033e`. Covered source hashes remained unchanged.
-Read `/tmp/araphor-f-retry-focused.json` for commands and hashes. That record
-names the two files changed after the earlier 111-case Data run. The complete
-Data inventory retains every existing test and adds seven regressions.
-
-The earlier focused results remain valid for the other unchanged source files.
-The thread comparison and final repository CI are pending. These records do
-not establish a complete-suite speed improvement.
-
-## Thread comparison evidence
-
-The approved nine-case comparison passed with four and eight test threads.
-The recorded harness durations are 360.39 and 394.92 seconds. Eight threads
-increased elapsed time by 9.58 percent for this workload. The configuration
-retains four threads. Both runs cover commit `e31b033e` with the same binary.
-Source and executable hashes remained unchanged. Other host load and file-system
-caches were not controlled. Read `/tmp/araphor-f7-comparison.json` for the
-selected cases, commands, and terminal results. Full repository CI is pending.
-
-## Final source acceptance
-
-The final repository procedure passed for commit
-`e31b033ebf95224e8210c73cec5abed4e8149def`. All 1,392 covered source hashes
-remained unchanged. The 90 parent harnesses reported 2,122 passed, zero failed,
-and 568 ignored. Data reported 621 passed and the same 19 ignored cases in
-1,471.15 seconds. The complete procedure took 2,679.10 seconds.
-
-Read `/tmp/araphor-f-final-ci-source.json`, `/tmp/araphor-f-final-ci.log`, and
-`/tmp/araphor-f-final-report.json`. The result parser excludes child summaries
-from parent totals and checks the original test and ignored inventories.
-**Done** for all seven implementations and final functional qualification.
-The whole-suite timings have uncontrolled host load and file-system caches.
-Their difference does not establish a production speed change.
-
-The production architecture proposals are separate from this accepted source.
-No proposed typed commit, package storage format, or composed SQL operation
-is implemented by the seven commits.
+Diagnostic child attribution is incomplete. Some fixture access spans combine
+initialization and mutex wait. Inclusive spans overlap. Unmarked work remains
+unattributed. Whole-suite runs have uncontrolled host load and filesystem
+caches. They cannot establish a causal production speed change. Temporary
+markers and comparison wrappers are removed; no timing infrastructure remains.
+Use the [current TODO](araphor-performance-simplification-todo.md) for later
+source verification and the required final Rust procedure.

@@ -168,12 +168,8 @@ mod tests {
                 processor_id: "detector".into(),
                 method_version: 1,
                 identity: EvidenceIntakeIdentityV1 {
-                    tenant_id: [1; 16],
                     node_id: "n".into(),
-                    node_boot_id: [2; 16],
-                    label_epoch: 1,
-                    source_id: [3; 16],
-                    source_epoch: 1,
+                    ..crate::analysis::tests::identity()
                 },
             },
             change_id: "change-1".into(),
@@ -218,20 +214,14 @@ mod tests {
             },
         )?;
         let result = AnalysisResultCommitV1 {
-            scope: input.scope.clone(),
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "finding".into(),
             body: vec![1],
             created_utc_ns: 2,
-            context_refs: vec![],
             witnesses: vec![AnalysisWitnessV1 {
                 identity: input.scope.identity.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 100,
             }],
+            ..crate::analysis::tests::result(input.scope.clone(), "finding".into())
         };
         let result_receipt = store.commit_result(&result)?;
         let before = store.meta()?;

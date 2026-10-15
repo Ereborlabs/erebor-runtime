@@ -34,7 +34,7 @@ Wasm qualification is **Not done**. The runtime keeps Wasmtime and the generated
 WebAssembly Interface Types (WIT) interface. It adds no Extism dependency.
 The six optional Wasm quotas default
 to unset. Compiler, cache, SDK, shared query, caller, and commit guards remain.
-Read the [open production gates](phase-7-5-4-wasm-execution.md#goal-deliverable-review)
+Read the [open production gates](phase-7-5-4-wasm-execution.md#historical-records)
 before using this implementation.
 
 Configure these quotas in `client.investigation.query.wasm` in the existing

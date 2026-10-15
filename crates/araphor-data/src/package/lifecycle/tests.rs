@@ -310,16 +310,11 @@ async fn shared_dependency_parameter_comparison() -> TestResult {
             })),
         )
         .await?;
-    let output = fixture
-        .owner
-        .read_output(
-            &fixture.grant,
-            "test",
-            "test.second",
-            "count",
-            &response.exports[0].results[0].result_id,
-        )?
-        .json_rows()?;
+    let output = crate::AnalysisPackageOwner::output_rows(&fixture.output(
+        "test.second",
+        "count",
+        &response.exports[0].results[0].result_id,
+    )?)?;
     assert_eq!(output["rows"], serde_json::json!([{"count":5}]));
     let evaluated = fixture
         .execute(PackageRequestV1::Run {
@@ -330,15 +325,13 @@ async fn shared_dependency_parameter_comparison() -> TestResult {
             parameters: None,
         })
         .await?;
-    let output = fixture.owner.read_output(
-        &fixture.grant,
-        "test",
+    let output = fixture.output(
         "test.second",
         "count",
         &evaluated.exports[0].results[0].result_id,
     )?;
     assert_eq!(
-        output.json_rows()?["rows"],
+        crate::AnalysisPackageOwner::output_rows(&output)?["rows"],
         serde_json::json!([{"count":5}])
     );
     let shared = fixture

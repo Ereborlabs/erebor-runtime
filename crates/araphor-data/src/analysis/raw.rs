@@ -2566,9 +2566,8 @@ pub(super) mod tests {
             tenant_id: identity.tenant_id,
             node_id: identity.node_id.clone(),
             node_boot_id: identity.node_boot_id,
-            label_epoch: 1,
             source_id: [5; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         };
         store.accept_validated_batch(
             evidence.clone(),
@@ -2588,12 +2587,6 @@ pub(super) mod tests {
         };
         store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "trace-result".into(),
             body: vec![1],
             created_utc_ns: 201,
             witnesses: vec![AnalysisWitnessV1 {
@@ -2601,7 +2594,7 @@ pub(super) mod tests {
                 cursor: 1,
                 expires_utc_ns: 1_000,
             }],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "trace-result".into())
         })?;
         let usage = store.witness_usage(identity.tenant_id, 202)?;
         let limits = StorageLimitsV1 {
@@ -2855,14 +2848,7 @@ pub(super) mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        };
+        let identity = crate::analysis::tests::identity();
         for cursor in 1..=4 {
             let outcome = store.accept_validated_batch(
                 identity.clone(),
@@ -2926,14 +2912,7 @@ pub(super) mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path();
         AnalysisStore::segment_directory(root)?;
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        };
+        let identity = crate::analysis::tests::identity();
         let batch = ValidatedEvidenceBatchV1 {
             cpu_id: 0,
             first_cursor: 2,

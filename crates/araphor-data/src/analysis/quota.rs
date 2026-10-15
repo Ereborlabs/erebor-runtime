@@ -499,10 +499,7 @@ mod tests {
                 let evidence = EvidenceIntakeIdentityV1 {
                     tenant_id: [tenant; 16],
                     node_id: "n".into(),
-                    node_boot_id: [2; 16],
-                    label_epoch: 1,
-                    source_id: [3; 16],
-                    source_epoch: 1,
+                    ..crate::analysis::tests::identity()
                 };
                 store.accept_validated_batch(
                     evidence.clone(),
@@ -522,16 +519,9 @@ mod tests {
                 };
                 store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
                 store.commit_result(&AnalysisResultCommitV1 {
-                    scope,
-                    expected_cursor: 0,
-                    consumed_cursor: 1,
-                    coverage_revision: 0,
-                    context_revision: 0,
-                    result_id: format!("pressure-{tenant}"),
                     body: vec![1; 800 * 1024 / usize::from(tenants)],
                     created_utc_ns: 101,
-                    witnesses: vec![],
-                    context_refs: vec![],
+                    ..crate::analysis::tests::result(scope, format!("pressure-{tenant}"))
                 })?;
             }
             {
@@ -665,12 +655,8 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "n".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         };
         let mut cursor = 1;
         let mut previous = None;
@@ -724,12 +710,8 @@ mod tests {
         let root = directory.path().join("analysis");
         let mut store = AnalysisStore::open(&root)?;
         let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "n".repeat(128),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         };
         store.accept_validated_batch(
             identity.clone(),
@@ -770,12 +752,7 @@ mod tests {
         let context = context(1, 1);
         let context_revision = store.commit_context(&context)?;
         let input = AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
             context_revision,
-            result_id: "r".into(),
             body: vec![1],
             created_utc_ns: 2,
             witnesses: vec![AnalysisWitnessV1 {
@@ -787,6 +764,7 @@ mod tests {
                 commit_revision: context_revision,
                 key: context.key,
             }],
+            ..crate::analysis::tests::result(scope, "r".into())
         };
         let current_bytes = {
             let mut writer = store.writer()?;
@@ -991,12 +969,8 @@ mod tests {
         };
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "n".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         };
         for group in 0..4 {
             store.accept_validated_batch(
@@ -1018,12 +992,7 @@ mod tests {
         };
         store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
         let mut input = AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
             consumed_cursor: 4096,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "first".into(),
             body: vec![1],
             created_utc_ns: 2,
             witnesses: [1, 2, 3073, 4096]
@@ -1034,7 +1003,7 @@ mod tests {
                     expires_utc_ns: 100,
                 })
                 .collect(),
-            context_refs: Vec::new(),
+            ..crate::analysis::tests::result(scope, "first".into())
         };
         store.commit_result(&input)?;
         let segment_bytes = std::fs::read_dir(root.join("segments"))?

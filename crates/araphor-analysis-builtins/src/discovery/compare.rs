@@ -1,14 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::Rows;
 use araphor_analysis_sdk as sdk;
 
 use super::{Comparison, Discovery, MatchGroup, MatchState, Side};
 
 impl Discovery {
     pub(super) fn compare(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
-        let groups = Self::read::<MatchGroup>(input, "groups")?;
-        let forbidden = Self::read::<String>(input, "forbidden")?;
-        let states = Self::read::<MatchState>(input, "states")?;
+        let groups = Rows::input::<MatchGroup>(input, "groups")?;
+        let forbidden = Rows::input::<String>(input, "forbidden")?;
+        let states = Rows::input::<MatchState>(input, "states")?;
         Self::require(states.len() == 2, "comparison states")?;
         let mut current = Vec::new();
         let mut previous = Vec::new();
@@ -77,7 +78,7 @@ impl Discovery {
                 result.forbidden.push(index as u64);
             }
         }
-        let resources = Self::read::<Side<String>>(input, "resources")?;
+        let resources = Rows::input::<Side<String>>(input, "resources")?;
         for row in &resources {
             Self::require(row.side < 2, "snapshot side")?;
         }

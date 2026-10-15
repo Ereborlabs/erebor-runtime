@@ -9,6 +9,18 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 mod buffers;
 
+fn values(name: &str, values: Vec<u64>) -> crate::Result<(Schema, crate::Dataset)> {
+    let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
+    let data = crate::Dataset {
+        name: name.into(),
+        batches: vec![RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(UInt64Array::from(values))],
+        )?],
+    };
+    Ok((schema, data))
+}
+
 #[test]
 fn ipc_preflights_schema_allocation() -> TestResult {
     let stream = |schema: &Schema| -> TestResultWithBytes {
@@ -67,59 +79,50 @@ type TestResultWithBytes = std::result::Result<Vec<u8>, Box<dyn std::error::Erro
 
 #[test]
 fn ipc_round_trip_and_bounds() -> TestResult {
-    let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
-    let data = crate::Dataset {
-        name: "values".into(),
-        batches: vec![RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(UInt64Array::from(vec![1, 2, 3]))],
-        )?],
-    };
+    let (schema, data) = values("values", vec![1, 2, 3])?;
     let encoded = Dataset::encode(&data, &schema, Limits::default())?;
     let decoded = encoded.decode(&schema, Limits::default())?;
     assert_eq!(decoded.batches, data.batches);
-    assert_eq!(
-        encoded
-            .decode(
-                &schema,
-                Limits {
-                    max_rows: 2,
-                    ..Limits::default()
-                }
-            )
-            .err()
-            .ok_or("row bound")?
-            .code(),
-        ErrorCode::Limit
-    );
-    assert_eq!(
-        encoded
-            .decode(
+    for (bound, result) in [
+        (
+            "row bound",
+            encoded
+                .decode(
+                    &schema,
+                    Limits {
+                        max_rows: 2,
+                        ..Limits::default()
+                    },
+                )
+                .map(|_| ()),
+        ),
+        (
+            "byte bound",
+            encoded
+                .decode(
+                    &schema,
+                    Limits {
+                        max_bytes: 1,
+                        ..Limits::default()
+                    },
+                )
+                .map(|_| ()),
+        ),
+        (
+            "encode byte bound",
+            Dataset::encode(
+                &data,
                 &schema,
                 Limits {
                     max_bytes: 1,
                     ..Limits::default()
-                }
+                },
             )
-            .err()
-            .ok_or("byte bound")?
-            .code(),
-        ErrorCode::Limit
-    );
-    assert_eq!(
-        Dataset::encode(
-            &data,
-            &schema,
-            Limits {
-                max_bytes: 1,
-                ..Limits::default()
-            }
-        )
-        .err()
-        .ok_or("encode byte bound")?
-        .code(),
-        ErrorCode::Limit
-    );
+            .map(|_| ()),
+        ),
+    ] {
+        assert_eq!(result.err().ok_or(bound)?.code(), ErrorCode::Limit);
+    }
     let wrong = Schema::new(vec![Field::new("other", DataType::UInt64, false)]);
     assert!(encoded.decode(&wrong, Limits::default()).is_err());
     let truncated = Dataset {
@@ -147,14 +150,7 @@ fn ipc_keeps_empty_schema() -> TestResult {
 
 #[test]
 fn wire_validates_evidence() -> TestResult {
-    let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
-    let data = crate::Dataset {
-        name: "values".into(),
-        batches: vec![RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(UInt64Array::from(vec![1]))],
-        )?],
-    };
+    let (schema, data) = values("values", vec![1])?;
     let mut port = crate::Port::new("values", schema);
     port.evidence_required = true;
     let package = crate::Package::new(
@@ -193,14 +189,7 @@ fn wire_validates_evidence() -> TestResult {
 
 #[test]
 fn allocation_counts_schema_metadata() -> TestResult {
-    let schema = Schema::new(vec![Field::new("value", DataType::UInt64, false)]);
-    let data = crate::Dataset {
-        name: "data".into(),
-        batches: vec![RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(UInt64Array::from(vec![1]))],
-        )?],
-    };
+    let (schema, data) = values("data", vec![1])?;
     let mut output = crate::Output {
         datasets: vec![data],
         ..Default::default()

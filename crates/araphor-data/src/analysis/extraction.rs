@@ -1778,10 +1778,7 @@ mod tests {
         EvidenceIntakeIdentityV1 {
             tenant_id: [tenant; 16],
             node_id: "n".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         }
     }
 
@@ -2634,16 +2631,9 @@ mod tests {
             store.accept_validated_batch(identity.clone(), batch(2, 1, 5))?;
             store.commit_context(&context)?;
             store.commit_result(&AnalysisResultCommitV1 {
-                scope: scope.clone(),
-                expected_cursor: 0,
-                consumed_cursor: 1,
-                coverage_revision: 0,
-                context_revision: 0,
-                result_id: "late".into(),
                 body: vec![43],
                 created_utc_ns: 20,
-                witnesses: vec![],
-                context_refs: vec![],
+                ..crate::analysis::tests::result(scope.clone(), "late".into())
             })?;
             Ok(Some(vec![1]))
         })?;
@@ -3186,12 +3176,7 @@ mod tests {
         store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
         let started = std::time::Instant::now();
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
             consumed_cursor: 18 * 32,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "sparse-history".into(),
             body: vec![1],
             created_utc_ns: 21,
             witnesses: (0..18)
@@ -3201,7 +3186,7 @@ mod tests {
                     expires_utc_ns: 100,
                 })
                 .collect(),
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "sparse-history".into())
         })?;
         let pin_commit_us = started.elapsed().as_micros();
         let started = std::time::Instant::now();

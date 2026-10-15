@@ -1149,10 +1149,10 @@ impl CaptureFixture {
                 _ = tokio::time::sleep(Duration::from_millis(20)) => {}
             }
             self.node.reap()?;
-            let retained = self.node.retained()?;
+            let retained = self.node.retained();
             let mut output = None;
-            for (id, dispatch) in &retained {
-                if let Some(batch) = self.node.next_batch(*id, *cursors.get(id).unwrap_or(&0))? {
+            for (id, dispatch) in retained.clone() {
+                if let Some(batch) = self.node.next_batch(id, *cursors.get(&id).unwrap_or(&0))? {
                     output = Some(TraceUploadV1 {
                         request_id: dispatch.accepted.request.request_id,
                         target_index: dispatch.target_index,
@@ -1165,7 +1165,7 @@ impl CaptureFixture {
             let reply = self
                 .connection
                 .exchange_diagnostics(&TraceExchangeV1 {
-                    retained: retained.iter().map(|(id, _)| *id).collect(),
+                    retained: retained.map(|(id, _)| id).collect(),
                     resolved: resolved.take(),
                     output: output.clone(),
                 })

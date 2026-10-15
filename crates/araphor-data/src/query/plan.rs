@@ -231,35 +231,27 @@ impl QueryPlan {
     }
 
     pub(super) fn reads_raw(&self) -> bool {
-        if let QueryTemplate::Client(sql) = &self.template {
-            return ["events", "trace_output", "trace_measurements"]
-                .iter()
-                .any(|relation| sql.dependencies().contains(*relation));
-        }
-        self.reads_events()
+        ["events", "trace_output", "trace_measurements"]
+            .iter()
+            .any(|relation| self.template.reads_relation(relation))
     }
 
     fn reads_events(&self) -> bool {
-        if let QueryTemplate::Client(sql) = &self.template {
-            return sql.dependencies().contains("events");
-        }
-        !matches!(
-            self.template,
-            QueryTemplate::Coverage
-                | QueryTemplate::ContextVersions
-                | QueryTemplate::RevisionDifference
-                | QueryTemplate::Catalog
-        )
+        self.template.reads_relation("events")
     }
 
     pub(super) fn dependencies(&self, now_ns: u64) -> Result<AnalysisSelectionV1> {
         let mut selection = self.selection(now_ns);
-        let trace_sql = matches!(&self.template, QueryTemplate::Client(sql) if ["traces", "trace_output", "trace_measurements"].iter().any(|relation| sql.dependencies().contains(*relation)));
-        let target_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("targets"));
-        let behavior_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("behaviors"));
-        let context_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("context"));
-        let graph_sql = matches!(&self.template, QueryTemplate::Client(sql) if super::graph::RELATIONS.iter().any(|relation| sql.dependencies().contains(*relation)));
-        let notification_sql = matches!(&self.template, QueryTemplate::Client(sql) if sql.dependencies().contains("notifications"));
+        let trace_sql = ["traces", "trace_output", "trace_measurements"]
+            .iter()
+            .any(|relation| self.template.reads_relation(relation));
+        let target_sql = self.template.reads_relation("targets");
+        let behavior_sql = self.template.reads_relation("behaviors");
+        let context_sql = self.template.reads_relation("context");
+        let graph_sql = super::graph::RELATIONS
+            .iter()
+            .any(|relation| self.template.reads_relation(relation));
+        let notification_sql = self.template.reads_relation("notifications");
         selection.discovery = behavior_sql;
         selection.profiles.clear();
         selection.graph = graph_sql;
@@ -274,7 +266,8 @@ impl QueryPlan {
         selection.notifications = notification_sql;
         selection.obligations.clear();
         selection.targets = target_sql;
-        selection.targets_only = matches!(&self.template, QueryTemplate::Client(sql) if target_sql && !context_sql && !sql.dependencies().contains("context_versions"));
+        selection.targets_only =
+            target_sql && !context_sql && !self.template.reads_relation("context_versions");
         if !trace_sql {
             selection.traces = Selection::Exact(Vec::new());
         }

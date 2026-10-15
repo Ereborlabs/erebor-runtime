@@ -1,10 +1,10 @@
 use araphor_analysis_sdk as sdk;
+use snafu::ResultExt as _;
 
 use super::{ModelInputRequest, ModelSource};
 use crate::analysis::{PackageKeyV1, PackageResultRefV1};
 use crate::package::{
-    AnalysisPackageOwner, InstalledContext, PackageErrorCodeV1 as Code, PackageOutputV1,
-    ResultContext,
+    AnalysisPackageOwner, InstalledContext, PackageErrorCodeV1 as Code, ResultContext,
 };
 use crate::{QueryOwner, Result};
 
@@ -39,23 +39,25 @@ impl QueryOwner {
         let installed: InstalledContext =
             AnalysisPackageOwner::decode(&result.activation.metadata)?;
         AnalysisPackageOwner::permits(request.grant, &installed.grant)?;
-        let packet: PackageOutputV1 = AnalysisPackageOwner::decode(&result.datasets)?;
+        let packet: sdk::wire::Output = AnalysisPackageOwner::decode(&result.datasets)?;
         let dataset = packet
             .datasets
             .iter()
             .find(|dataset| dataset.name == reference.output)
             .ok_or_else(|| Code::Invalid.error("dependency dataset"))?;
-        let mut data = dataset.decode(
-            &port.schema,
-            sdk::Limits {
-                max_bytes: request
-                    .model
-                    .limits
-                    .max_bytes
-                    .min(self.limits.input_bytes as u64),
-                ..request.model.limits
-            },
-        )?;
+        let mut data = dataset
+            .decode(
+                &port.schema,
+                sdk::Limits {
+                    max_bytes: request
+                        .model
+                        .limits
+                        .max_bytes
+                        .min(self.limits.input_bytes as u64),
+                    ..request.model.limits
+                },
+            )
+            .context(crate::AnalysisContractSnafu)?;
         data.name = port.name.clone();
         let metadata: ResultContext = AnalysisPackageOwner::decode(&result.metadata)?;
         let (witnesses, contexts) = self

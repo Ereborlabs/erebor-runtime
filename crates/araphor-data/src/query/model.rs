@@ -20,6 +20,7 @@ mod projection;
 mod schema;
 mod source;
 pub use datasets::SqlDatasetOutputV1;
+pub(crate) use operation::ModelOperation;
 pub(crate) use source::{ModelInputRequest, ModelInputs};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]

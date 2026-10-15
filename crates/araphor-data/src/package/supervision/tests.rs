@@ -50,12 +50,12 @@ async fn idle_reconcile_checks_grant() -> TestResult {
         )
         .map_err(|_| crate::PackageErrorCodeV1::Invalid.error("fixture artifact mutation"))?;
     let (_stop, mut receiver) = tokio::sync::watch::channel(false);
-    assert!(
-        fixture
-            .owner
-            .reconcile_until(&mut receiver, false, false)
-            .await?
-    );
+    let (complete, deadline) = fixture
+        .owner
+        .reconcile_until(&mut receiver, false, false)
+        .await?;
+    assert!(complete);
+    assert_eq!(deadline, u64::MAX);
     assert_eq!(fixture.store.package_activation_page(None)?, before);
     fixture.authority.set_revision(0);
     assert!(
@@ -63,6 +63,7 @@ async fn idle_reconcile_checks_grant() -> TestResult {
             .owner
             .reconcile_until(&mut receiver, false, false)
             .await?
+            .0
     );
     assert!(!fixture.store.package_activation_page(None)?[0].active);
     Ok(())

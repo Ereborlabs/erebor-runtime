@@ -91,20 +91,18 @@ fn declared_row_limits() -> sdk::Result<()> {
             ..normal
         },
     ] {
-        assert!(matches!(
-            Rows::encode(&port, &values, bounds),
-            Err(sdk::Error::Contract {
-                code: sdk::ErrorCode::Limit,
-                ..
-            })
-        ));
-        assert!(matches!(
-            Rows::decode::<Sample>(&port, &data, bounds),
-            Err(sdk::Error::Contract {
-                code: sdk::ErrorCode::Limit,
-                ..
-            })
-        ));
+        for result in [
+            Rows::encode(&port, &values, bounds).map(|_| ()),
+            Rows::decode::<Sample>(&port, &data, bounds).map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(sdk::Error::Contract {
+                    code: sdk::ErrorCode::Limit,
+                    ..
+                })
+            ));
+        }
     }
     Ok(())
 }
@@ -136,20 +134,18 @@ fn rows_fit_payload_bound() -> sdk::Result<()> {
         max_bytes: 1024,
         ..bounds
     };
-    assert!(matches!(
-        Rows::encode(&port, &values, small),
-        Err(sdk::Error::Contract {
-            code: sdk::ErrorCode::Limit,
-            ..
-        })
-    ));
-    assert!(matches!(
-        Rows::decode::<String>(&port, &data, small),
-        Err(sdk::Error::Contract {
-            code: sdk::ErrorCode::Limit,
-            ..
-        })
-    ));
+    for result in [
+        Rows::encode(&port, &values, small).map(|_| ()),
+        Rows::decode::<String>(&port, &data, small).map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(sdk::Error::Contract {
+                code: sdk::ErrorCode::Limit,
+                ..
+            })
+        ));
+    }
     Ok(())
 }
 

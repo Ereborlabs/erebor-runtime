@@ -1,4 +1,5 @@
 use araphor_analysis_sdk as sdk;
+use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
 use crate::{AnalysisReadControl, QueryOwner, Result};
@@ -12,6 +13,32 @@ use super::{
 mod comparison;
 #[cfg(test)]
 mod tests;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageFixtureV1 {
+    pub name: String,
+    pub export: String,
+    #[serde(default)]
+    pub time_utc_ns: i64,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    pub inputs: Vec<sdk::wire::Input>,
+    pub parameters: Option<serde_json::Value>,
+    pub checkpoint: Option<sdk::wire::Checkpoint>,
+    pub expected: sdk::wire::Output,
+}
+
+impl PackageFixtureV1 {
+    pub(super) fn evaluation_context(&self, model: &sdk::Model) -> sdk::EvaluationContext {
+        sdk::EvaluationContext {
+            id: format!("fixture:{}", self.name),
+            time_utc_ns: self.time_utc_ns,
+            seed: self.seed,
+            limits: model.limits,
+        }
+    }
+}
 
 impl AnalysisPackageOwner {
     pub(super) fn test_package(
@@ -57,7 +84,10 @@ impl AnalysisPackageOwner {
                         .find(|port| port.name == input.data.name)
                         .ok_or_else(|| Code::Invalid.error("fixture input"))?;
                     inputs.push(sdk::Input {
-                        data: input.data.decode(&port.schema, model.limits)?,
+                        data: input
+                            .data
+                            .decode(&port.schema, model.limits)
+                            .context(crate::AnalysisContractSnafu)?,
                         revision: input.revision.clone(),
                         coverage: input.coverage.clone(),
                     });
@@ -73,7 +103,7 @@ impl AnalysisPackageOwner {
                     checkpoint: fixture
                         .checkpoint
                         .as_ref()
-                        .map(|checkpoint| checkpoint.decode(model))
+                        .map(|checkpoint| Self::decode_checkpoint(checkpoint, model))
                         .transpose()?,
                 };
                 control.check()?;
@@ -85,7 +115,7 @@ impl AnalysisPackageOwner {
                     &evaluation,
                     control,
                 )?;
-                let expected = fixture.expected.decode(model)?;
+                let expected = Self::decode_output(&fixture.expected, model)?;
                 artifact
                     .descriptor
                     .validate_output(&evaluation, &expected)

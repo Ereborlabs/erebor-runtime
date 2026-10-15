@@ -1,11 +1,8 @@
-use araphor_analysis_sdk as sdk;
 use std::collections::BTreeSet;
 
-use crate::analysis::PackageActivationV1;
 use crate::{AnalysisReadControl, Result};
 
-use super::evaluation::ResultContext;
-use super::owner::{ClockDependency, InstalledContext};
+use super::owner::InstalledContext;
 use super::{AnalysisPackageOwner, PackageActionV1, PackageBundleV1, PackageGrantV1, PackageRefV1};
 
 impl AnalysisPackageOwner {
@@ -45,92 +42,29 @@ impl AnalysisPackageOwner {
                 if !active.active || active.revision != reference.package.revision {
                     continue;
                 }
-                let artifact = bundle.artifact(&reference.package)?;
-                let model = artifact
-                    .descriptor
-                    .exports
-                    .iter()
-                    .find(|model| model.name == reference.export)
-                    .ok_or_else(|| super::PackageErrorCodeV1::Missing.error("installed export"))?;
-                self.refresh(&active, model, grant, control)?;
+                if active.result_id.is_none() {
+                    continue;
+                }
+                self.check(grant, PackageActionV1::Inspect)?;
+                let mut context: InstalledContext = Self::decode(&active.metadata)?;
+                Self::permits(grant, &context.grant)?;
+                let selection = context.grant.selection.clone();
+                context.grant = grant.clone();
+                context.grant.selection = selection;
+                self.model_run(
+                    &active,
+                    &context,
+                    bundle,
+                    super::evaluation::RunPreparation {
+                        id: "inspect",
+                        rebuild: false,
+                        automatic: true,
+                        now: Self::now(),
+                    },
+                    PackageActionV1::Inspect,
+                    control,
+                )?;
             }
-        }
-        Ok(())
-    }
-
-    pub(super) fn refresh(
-        &self,
-        active: &PackageActivationV1,
-        model: &sdk::Model,
-        grant: &PackageGrantV1,
-        control: &AnalysisReadControl,
-    ) -> Result<()> {
-        let Some(id) = &active.result_id else {
-            return Ok(());
-        };
-        if !active.active {
-            return Ok(());
-        }
-        self.check(grant, PackageActionV1::Inspect)?;
-        let installed: InstalledContext = Self::decode(&active.metadata)?;
-        Self::permits(grant, &installed.grant)?;
-        if self.inputs_current(active, installed.clock, Self::now(), true, control)? {
-            return Ok(());
-        }
-        let Some(result) = self.store.package_result(active.key.tenant_id, id)? else {
-            return Ok(());
-        };
-        if result.stale {
-            return Ok(());
-        }
-        let saved: ResultContext = Self::decode(&result.metadata)?;
-        let mut context: InstalledContext = Self::decode(&active.metadata)?;
-        Self::permits(grant, &context.grant)?;
-        let selection = context.grant.selection.clone();
-        context.grant = grant.clone();
-        context.grant.selection = selection;
-        let now = Self::clock_tick(Self::now());
-        let now = if Self::clock_tick(saved.context.time_utc_ns as u64) == now {
-            saved.context.time_utc_ns as u64
-        } else {
-            now
-        };
-        let clocked = installed.clock == ClockDependency::Model;
-        let clock_changed = Self::clock_changed(clocked, saved.context.time_utc_ns, now);
-        let inputs = self.query.model_operation(active.key.tenant_id).inputs(
-            crate::query::ModelInputRequest {
-                activation: active,
-                model,
-                grant: &context.grant,
-                now,
-            },
-            control,
-            || self.check(&context.grant, PackageActionV1::Inspect),
-        );
-        let unchanged = match inputs {
-            Ok((_operation, inputs)) => {
-                saved.inputs
-                    == inputs
-                        .inputs
-                        .iter()
-                        .map(|input| input.revision.clone())
-                        .collect::<Vec<_>>()
-                    && saved.input_coverage
-                        == inputs
-                            .inputs
-                            .iter()
-                            .map(|input| input.coverage.clone())
-                            .collect::<Vec<_>>()
-            }
-            Err(crate::Error::Package {
-                code: super::PackageErrorCodeV1::Missing | super::PackageErrorCodeV1::Incomplete,
-                ..
-            }) => false,
-            Err(error) => return Err(error),
-        };
-        control.check()?;
-        if !unchanged || clock_changed {
-            self.store.mark_package_stale(active)?;
         }
         Ok(())
     }

@@ -1,19 +1,23 @@
 use crate::{Coverage, Error, ErrorCode, EvaluationContext, EvidenceLink, Revision, RowRef};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Dataset {
     pub name: String,
     pub arrow_ipc: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Input {
     pub data: Dataset,
     pub revision: Revision,
     pub coverage: Coverage,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Checkpoint {
     pub version: u32,
     pub datasets: Vec<Dataset>,
@@ -28,14 +32,16 @@ pub struct Evaluation {
     pub checkpoint: Option<Checkpoint>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReasonValue {
     pub output: RowRef,
     pub code: String,
     pub details: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Output {
     pub datasets: Vec<Dataset>,
     pub evidence: Vec<EvidenceLink>,

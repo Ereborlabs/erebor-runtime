@@ -8,12 +8,25 @@ use crate::{
 mod batch;
 use batch::BatchBudget;
 
+pub trait Guest {
+    fn package() -> Package;
+    fn compute(input: &CheckedEvaluation<'_>) -> Result<Output>;
+
+    fn evaluate(evaluation: &Evaluation) -> Result<Output> {
+        Self::package()
+            .check_evaluation(evaluation)?
+            .evaluate(Self::compute)
+    }
+}
+
 impl Package {
     pub fn check_evaluation<'a>(
         &'a self,
         evaluation: &'a Evaluation,
     ) -> Result<CheckedEvaluation<'a>> {
-        self.validator(evaluation)?.check(evaluation)
+        let model = self.validator(evaluation)?;
+        model.input(evaluation)?;
+        Ok(CheckedEvaluation::new(self, model, evaluation))
     }
 
     pub fn validate_evaluation(&self, evaluation: &Evaluation) -> Result<()> {
@@ -24,22 +37,18 @@ impl Package {
         self.check_evaluation(evaluation)?.validate_output(output)
     }
 
-    pub(crate) fn validator(&self, evaluation: &Evaluation) -> Result<ContractValidator<'_>> {
+    pub(crate) fn validator(&self, evaluation: &Evaluation) -> Result<&Model> {
         self.validate()?;
         self.select_validator(&evaluation.export, evaluation.context.limits)
     }
 
-    pub(crate) fn wire_validator(
-        &self,
-        export: &str,
-        limits: Limits,
-    ) -> Result<ContractValidator<'_>> {
+    pub(crate) fn wire_validator(&self, export: &str, limits: Limits) -> Result<&Model> {
         self.validate()?;
         limits.validate()?;
         self.select_validator(export, limits)
     }
 
-    fn select_validator(&self, export: &str, limits: Limits) -> Result<ContractValidator<'_>> {
+    fn select_validator(&self, export: &str, limits: Limits) -> Result<&Model> {
         let model = self
             .exports
             .iter()
@@ -49,23 +58,28 @@ impl Package {
         if !model.limits.permits(&limits) {
             return Err(Error::contract(ErrorCode::Limit, "evaluation limits"));
         }
-        Ok(ContractValidator {
-            package: self,
-            model,
-            limits,
-        })
+        Ok(model)
     }
 }
 
 /// Borrowed package and input that passed the SDK contract checks.
 pub struct CheckedEvaluation<'a> {
     evaluation: &'a Evaluation,
-    validator: ContractValidator<'a>,
+    package: &'a Package,
+    model: &'a Model,
 }
 
-impl CheckedEvaluation<'_> {
+impl<'a> CheckedEvaluation<'a> {
+    pub(crate) fn new(package: &'a Package, model: &'a Model, evaluation: &'a Evaluation) -> Self {
+        Self {
+            package,
+            model,
+            evaluation,
+        }
+    }
+
     pub fn package(&self) -> &Package {
-        self.validator.package
+        self.package
     }
 
     pub fn evaluation(&self) -> &Evaluation {
@@ -73,52 +87,35 @@ impl CheckedEvaluation<'_> {
     }
 
     pub fn model(&self) -> &Model {
-        self.validator.model
+        self.model
     }
 
     pub fn validate_output(&self, output: &Output) -> Result<()> {
-        self.validator.output(self.evaluation, output)
+        self.model.output(self.evaluation, output)
+    }
+
+    pub fn evaluate(&self, compute: impl FnOnce(&Self) -> Result<Output>) -> Result<Output> {
+        let output = compute(self)?;
+        self.validate_output(&output)?;
+        Ok(output)
     }
 }
 
-pub(crate) struct ContractValidator<'a> {
-    package: &'a Package,
-    pub(crate) model: &'a Model,
-    limits: Limits,
-}
-
-impl<'contract> ContractValidator<'contract> {
-    pub(crate) fn check(
-        self,
-        evaluation: &'contract Evaluation,
-    ) -> Result<CheckedEvaluation<'contract>> {
-        self.input(evaluation)?;
-        Ok(self.checked(evaluation))
-    }
-
-    pub(crate) fn checked(self, evaluation: &'contract Evaluation) -> CheckedEvaluation<'contract> {
-        CheckedEvaluation {
-            evaluation,
-            validator: self,
-        }
-    }
-
+impl Model {
     pub(crate) fn input(&self, evaluation: &Evaluation) -> Result<()> {
+        let limits = evaluation.context.limits;
         Package::text(&evaluation.context.id)?;
-        let mut budget = BatchBudget::new(self.limits.max_bytes, &self.limits);
+        let mut budget = BatchBudget::new(limits.max_bytes, &limits);
         budget.bytes((evaluation.context.id.len() + evaluation.export.len() + 64) as u64)?;
-        match (
-            &evaluation.parameters,
-            self.model.parameters.fields().is_empty(),
-        ) {
+        match (&evaluation.parameters, self.parameters.fields().is_empty()) {
             (None, true) => {}
             (Some(parameters), false) if parameters.num_rows() == 1 => {
-                budget.batch(parameters, &self.model.parameters)?;
+                budget.batch(parameters, &self.parameters)?;
             }
             _ => return Err(Error::contract(ErrorCode::Invalid, "parameters")),
         }
         Self::datasets(
-            self.model.inputs.iter().map(|input| &input.port),
+            self.inputs.iter().map(|input| &input.port),
             evaluation.inputs.iter().map(|input| &input.data),
             &mut budget,
         )?;
@@ -143,16 +140,13 @@ impl<'contract> ContractValidator<'contract> {
                 budget.bytes(reason.len() as u64)?;
             }
         }
-        self.checkpoint(evaluation.checkpoint.as_ref(), false)
+        self.checkpoint(evaluation.checkpoint.as_ref(), false, limits)
     }
 
     pub(crate) fn output(&self, evaluation: &Evaluation, output: &Output) -> Result<()> {
-        let mut budget = BatchBudget::new(self.limits.max_bytes, &self.limits);
-        let outputs = Self::datasets(
-            self.model.outputs.iter(),
-            output.datasets.iter(),
-            &mut budget,
-        )?;
+        let limits = evaluation.context.limits;
+        let mut budget = BatchBudget::new(limits.max_bytes, &limits);
+        let outputs = Self::datasets(self.outputs.iter(), output.datasets.iter(), &mut budget)?;
         let inputs: BTreeMap<_, _> = evaluation
             .inputs
             .iter()
@@ -168,12 +162,7 @@ impl<'contract> ContractValidator<'contract> {
             budget.bytes((link.output.dataset.len() + link.input.dataset.len() + 16) as u64)?;
         }
         let cited: BTreeSet<_> = evidence.iter().map(|link| &link.output).collect();
-        for port in self
-            .model
-            .outputs
-            .iter()
-            .filter(|port| port.evidence_required)
-        {
+        for port in self.outputs.iter().filter(|port| port.evidence_required) {
             let count = cited
                 .iter()
                 .filter(|reference| reference.dataset == port.name)
@@ -192,7 +181,6 @@ impl<'contract> ContractValidator<'contract> {
                 return Err(Error::contract(ErrorCode::Invalid, "duplicate reason"));
             }
             let reason = self
-                .model
                 .reasons
                 .iter()
                 .find(|reason| reason.code == value.code)
@@ -203,7 +191,7 @@ impl<'contract> ContractValidator<'contract> {
             budget.batch(&value.details, &reason.details)?;
             budget.bytes((value.output.dataset.len() + value.code.len() + 8) as u64)?;
         }
-        self.checkpoint(output.checkpoint.as_ref(), true)
+        self.checkpoint(output.checkpoint.as_ref(), true, limits)
     }
 
     fn datasets<'a, 'p>(
@@ -242,12 +230,17 @@ impl<'contract> ContractValidator<'contract> {
         Ok(())
     }
 
-    fn checkpoint(&self, checkpoint: Option<&Checkpoint>, required: bool) -> Result<()> {
-        match (&self.model.checkpoint, checkpoint) {
+    fn checkpoint(
+        &self,
+        checkpoint: Option<&Checkpoint>,
+        required: bool,
+        limits: Limits,
+    ) -> Result<()> {
+        match (&self.checkpoint, checkpoint) {
             (None, None) => Ok(()),
             (Some(_), None) if !required => Ok(()),
             (Some(spec), Some(checkpoint)) if spec.version == checkpoint.version => {
-                let mut budget = BatchBudget::new(self.limits.max_checkpoint_bytes, &self.limits);
+                let mut budget = BatchBudget::new(limits.max_checkpoint_bytes, &limits);
                 Self::datasets(
                     spec.datasets.iter(),
                     checkpoint.datasets.iter(),
@@ -272,7 +265,7 @@ impl Dataset {
     pub fn validate_all(datasets: &[Self], ports: &[Port], limits: Limits) -> Result<()> {
         limits.validate()?;
         Model::ports(ports.iter())?;
-        ContractValidator::datasets(
+        Model::datasets(
             ports.iter(),
             datasets.iter(),
             &mut BatchBudget::new(limits.max_bytes, &limits),

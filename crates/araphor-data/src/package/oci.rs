@@ -6,10 +6,7 @@ use araphor_analysis_sdk::{self as sdk, oci};
 use snafu::ResultExt as _;
 
 use super::storage::StoredArtifact;
-use super::{
-    PackageArtifactV1, PackageBundleV1, PackageCheckpointV1, PackageDatasetV1, PackageFixtureV1,
-    PackageImplementationV1, PackageInputV1, PackageOutputV1, PackageReasonV1,
-};
+use super::{PackageArtifactV1, PackageBundleV1, PackageFixtureV1, PackageImplementationV1};
 use crate::{AnalysisContractSnafu, IoSnafu, Result};
 
 pub(super) struct PackageOci;
@@ -90,24 +87,24 @@ impl PackageOci {
     }
 
     fn dataset<'a>(
-        data: &'a PackageDatasetV1,
+        data: &'a sdk::wire::Dataset,
         layers: &mut Vec<oci::Layer<'a>>,
-    ) -> PackageDatasetV1 {
+    ) -> sdk::wire::Dataset {
         layers.push(oci::Layer {
             media_type: oci::ARROW_IPC_MEDIA_TYPE,
-            bytes: &data.ipc,
+            bytes: &data.arrow_ipc,
         });
-        PackageDatasetV1 {
+        sdk::wire::Dataset {
             name: data.name.clone(),
-            ipc: Vec::new(),
+            arrow_ipc: Vec::new(),
         }
     }
 
     fn checkpoint<'a>(
-        checkpoint: &'a PackageCheckpointV1,
+        checkpoint: &'a sdk::wire::Checkpoint,
         layers: &mut Vec<oci::Layer<'a>>,
-    ) -> PackageCheckpointV1 {
-        PackageCheckpointV1 {
+    ) -> sdk::wire::Checkpoint {
+        sdk::wire::Checkpoint {
             version: checkpoint.version,
             datasets: checkpoint
                 .datasets
@@ -130,7 +127,7 @@ impl PackageOci {
             inputs: fixture
                 .inputs
                 .iter()
-                .map(|input| PackageInputV1 {
+                .map(|input| sdk::wire::Input {
                     data: Self::dataset(&input.data, layers),
                     revision: input.revision.clone(),
                     coverage: input.coverage.clone(),
@@ -140,7 +137,7 @@ impl PackageOci {
                 .checkpoint
                 .as_ref()
                 .map(|checkpoint| Self::checkpoint(checkpoint, layers)),
-            expected: PackageOutputV1 {
+            expected: sdk::wire::Output {
                 datasets: fixture
                     .expected
                     .datasets
@@ -152,10 +149,16 @@ impl PackageOci {
                     .expected
                     .reasons
                     .iter()
-                    .map(|reason| PackageReasonV1 {
+                    .map(|reason| sdk::wire::ReasonValue {
                         output: reason.output.clone(),
                         code: reason.code.clone(),
-                        details: Self::dataset(&reason.details, layers),
+                        details: {
+                            layers.push(oci::Layer {
+                                media_type: oci::ARROW_IPC_MEDIA_TYPE,
+                                bytes: &reason.details,
+                            });
+                            Vec::new()
+                        },
                     })
                     .collect(),
                 checkpoint: fixture
@@ -209,7 +212,7 @@ impl PackageOci {
                     Self::fill_dataset(data, &mut layers)?;
                 }
                 for reason in &mut fixture.expected.reasons {
-                    Self::fill_dataset(&mut reason.details, &mut layers)?;
+                    Self::fill(&mut reason.details, oci::ARROW_IPC_MEDIA_TYPE, &mut layers)?;
                 }
                 if let Some(checkpoint) = &mut fixture.expected.checkpoint {
                     Self::fill_checkpoint(checkpoint, &mut layers)?;
@@ -242,14 +245,14 @@ impl PackageOci {
     }
 
     fn fill_dataset(
-        data: &mut PackageDatasetV1,
+        data: &mut sdk::wire::Dataset,
         layers: &mut std::vec::IntoIter<oci::Blob>,
     ) -> Result<()> {
-        Self::fill(&mut data.ipc, oci::ARROW_IPC_MEDIA_TYPE, layers)
+        Self::fill(&mut data.arrow_ipc, oci::ARROW_IPC_MEDIA_TYPE, layers)
     }
 
     fn fill_checkpoint(
-        checkpoint: &mut PackageCheckpointV1,
+        checkpoint: &mut sdk::wire::Checkpoint,
         layers: &mut std::vec::IntoIter<oci::Blob>,
     ) -> Result<()> {
         for data in &mut checkpoint.datasets {

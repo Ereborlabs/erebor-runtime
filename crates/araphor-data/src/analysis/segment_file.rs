@@ -299,12 +299,11 @@ mod tests {
     #[test]
     fn segment_identity_checks_integrity() -> Result<()> {
         let identity = crate::EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "segment-node".to_owned(),
-            node_boot_id: [2; 16],
             label_epoch: 3,
             source_id: [4; 16],
             source_epoch: 5,
+            ..crate::analysis::tests::identity()
         };
         let path = Path::new("/test/segment");
         let encoded = SegmentFile::encode_identity(&identity)?;

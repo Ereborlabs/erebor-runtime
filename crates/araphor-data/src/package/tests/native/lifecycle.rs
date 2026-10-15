@@ -15,15 +15,9 @@ async fn native_declared_type_lifecycle() -> TestResult {
     assert_eq!(installed.exports[0].results[0].target, "native");
     let first = fixture.execute(evaluate("first")).await?;
     let receipt = first.exports[0].results[0].clone();
-    let output = fixture.owner.read_output(
-        &fixture.grant,
-        "test",
-        "runtime-fixture",
-        "evaluate",
-        &receipt.result_id,
-    )?;
+    let output = fixture.output("runtime-fixture", "evaluate", &receipt.result_id)?;
     assert_eq!(
-        output.json_rows()?["data"],
+        crate::AnalysisPackageOwner::output_rows(&output)?["data"],
         serde_json::json!([{"value":7}])
     );
     let retry = fixture.execute(evaluate("first")).await?;
@@ -78,15 +72,9 @@ async fn native_declared_type_lifecycle() -> TestResult {
         })
         .await?;
     assert!(fixture.execute(evaluate("removed")).await.is_err());
-    let historical = fixture.owner.read_output(
-        &fixture.grant,
-        "test",
-        "runtime-fixture",
-        "evaluate",
-        &receipt.result_id,
-    )?;
+    let historical = fixture.output("runtime-fixture", "evaluate", &receipt.result_id)?;
     assert_eq!(
-        historical.json_rows()?["data"],
+        crate::AnalysisPackageOwner::output_rows(&historical)?["data"],
         serde_json::json!([{"value":7}])
     );
     assert_eq!(fixture.owner.operations.available_permits(), 4);

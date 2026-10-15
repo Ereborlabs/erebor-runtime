@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::Rows;
 use araphor_analysis_sdk as sdk;
 use serde::de::DeserializeOwned;
 
@@ -7,7 +8,7 @@ use super::{Atom, Counts, Coverage, Discovery, Disposition, Lifecycle, Side, Sna
 
 impl Discovery {
     pub(super) fn merge(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
-        let snapshots = Self::read::<Snapshot>(input, "snapshots")?;
+        let snapshots = Rows::input::<Snapshot>(input, "snapshots")?;
         Self::require(snapshots.len() == 2, "snapshot count")?;
         Self::same(
             snapshots[0].identity == snapshots[1].identity,
@@ -67,7 +68,7 @@ impl Discovery {
         name: &str,
     ) -> sdk::Result<[Vec<T>; 2]> {
         let mut output = [Vec::new(), Vec::new()];
-        for row in Self::read::<Side<T>>(input, name)? {
+        for row in Rows::input::<Side<T>>(input, name)? {
             Self::require(row.side < 2, "snapshot side")?;
             output[row.side as usize].push(row.value);
         }

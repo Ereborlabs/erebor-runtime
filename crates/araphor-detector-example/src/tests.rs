@@ -73,7 +73,7 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     };
     let output = BurstDetector::evaluate(&evaluation)?;
     let checked = package.check_evaluation(&evaluation)?;
-    let supplied = <BurstDetector as sdk::guest::Guest>::evaluate_checked(&checked)?;
+    let supplied = <BurstDetector as sdk::Guest>::compute(&checked)?;
     checked.validate_output(&supplied)?;
     assert_eq!(supplied.evidence, output.evidence);
     for (actual, expected) in supplied.datasets.iter().zip(&output.datasets) {
@@ -82,10 +82,8 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     let mut other = package.clone();
     other.revision = "other".into();
     let other = other.check_evaluation(&evaluation)?;
-    assert!(
-        matches!(<BurstDetector as sdk::guest::Guest>::evaluate_checked(&other),
-        Err(sdk::Error::Contract { code: sdk::ErrorCode::Incompatible, field, .. }) if field == "detector package")
-    );
+    assert!(matches!(<BurstDetector as sdk::Guest>::compute(&other),
+        Err(sdk::Error::Contract { code: sdk::ErrorCode::Incompatible, field, .. }) if field == "detector package"));
     let findings: Vec<Finding> =
         Rows::decode(&model.outputs[2], &output.datasets[2], model.limits)?;
     assert_eq!(findings.len(), 1);

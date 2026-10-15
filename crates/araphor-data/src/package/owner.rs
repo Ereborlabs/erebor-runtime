@@ -277,25 +277,35 @@ impl AnalysisPackageOwner {
             }
             let revision = *authority.borrow_and_update();
             let source_revision = *sources.borrow_and_update();
-            if self
+            let (complete, deadline) = self
                 .reconcile_until(
                     &mut stop,
                     admitted != Some(revision),
                     checked != Some(source_revision),
                 )
-                .await?
-            {
+                .await?;
+            if complete {
                 admitted = Some(revision);
                 checked = Some(source_revision);
             }
             if *stop.borrow() || stop.has_changed().is_err() {
                 return Ok(());
             }
+            let wakeup = async {
+                if deadline == u64::MAX {
+                    std::future::pending::<()>().await;
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_nanos(
+                        deadline.saturating_sub(Self::now()),
+                    ))
+                    .await;
+                }
+            };
             tokio::select! {
                 changed = stop.changed() => { if changed.is_err() { return Ok(()); } }
                 changed = sources.changed() => { if changed.is_err() { return Ok(()); } }
                 changed = authority.changed() => { if changed.is_err() { return Ok(()); } }
-                () = tokio::time::sleep(Self::RECONCILE_INTERVAL) => {}
+                () = wakeup => {}
             }
         }
     }

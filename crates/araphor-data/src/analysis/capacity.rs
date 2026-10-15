@@ -331,14 +331,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open_with_limits(&root, RetentionLimitsV1::default(), limits)?;
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        };
+        let identity = crate::analysis::tests::identity();
         let first = ValidatedEvidenceBatchV1 {
             cpu_id: 0,
             first_cursor: 1,
@@ -417,12 +410,8 @@ mod tests {
         };
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let source = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "capacity-node".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         };
         let batch = |cursor| ValidatedEvidenceBatchV1 {
             cpu_id: 0,
@@ -614,10 +603,7 @@ mod tests {
             .map(|tenant| EvidenceIntakeIdentityV1 {
                 tenant_id: [tenant; 16],
                 node_id: format!("node-{tenant}"),
-                node_boot_id: [2; 16],
-                label_epoch: 1,
-                source_id: [3; 16],
-                source_epoch: 1,
+                ..crate::analysis::tests::identity()
             })
             .collect();
         let expected_limit = if tenants == 1 {

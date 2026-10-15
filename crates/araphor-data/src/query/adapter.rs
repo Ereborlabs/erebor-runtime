@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -11,7 +10,7 @@ use duckdb::vtab::{BindInfo, InitInfo, TableFunctionInfo, VTab};
 use duckdb::Connection;
 use snafu::ResultExt as _;
 
-use crate::{AnalysisDatabaseSnafu, AnalysisStateSnafu, Result};
+use crate::{AnalysisDatabaseSnafu, Result};
 
 type CallbackResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -63,31 +62,6 @@ impl InputSource {
 }
 
 impl InputTable {
-    pub(super) fn register(
-        self: &Arc<Self>,
-        connection: &Connection,
-        function: &'static str,
-        view: &'static str,
-    ) -> Result<()> {
-        self.validate(function, view).map_err(|reason| {
-            AnalysisStateSnafu {
-                path: Path::new("<query-input>"),
-                reason,
-            }
-            .build()
-        })?;
-        let source = InputSource::new();
-        source.replace(Some(self.clone()))?;
-        source.register(connection, function)?;
-        connection
-            .execute_batch(&format!(
-                "CREATE TEMP VIEW \"{view}\" AS SELECT * FROM \"{function}\"()"
-            ))
-            .context(AnalysisDatabaseSnafu {
-                operation: "create query input view",
-            })
-    }
-
     pub(super) fn validate(
         &self,
         function: &str,
@@ -271,6 +245,17 @@ mod tests {
     use super::*;
 
     type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+    impl InputTable {
+        fn register(
+            self: &Arc<Self>,
+            connection: &Connection,
+            function: &'static str,
+            view: &'static str,
+        ) -> Result<()> {
+            crate::query::input::ScopedSources::default().register(connection, self, function, view)
+        }
+    }
 
     fn connection() -> TestResult<Connection> {
         let config = Config::default()

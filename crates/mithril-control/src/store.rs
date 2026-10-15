@@ -59,7 +59,7 @@ struct ControlStoreInner {
     state: ControlStoreState,
     state_file: ControlStateOwner,
     changes: tokio::sync::watch::Sender<u64>,
-    context_changes: context::ContextChanges,
+    context_index: context::ContextIndex,
 }
 
 struct ControlStateOwner {
@@ -621,7 +621,7 @@ impl ControlStore {
             inner: Arc::new(ControlStoreLock::new(ControlStoreInner {
                 root,
                 changes: tokio::sync::watch::channel(state.commit_index).0,
-                context_changes: context::ContextChanges::default(),
+                context_index: context::ContextIndex::new(&state),
                 state,
                 state_file,
             })),
@@ -2268,12 +2268,10 @@ fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> R
         "the Control commit index is exhausted",
     )?;
     let mut next_state = inner.state.clone();
-    apply_transaction(&mut next_state, &transaction, &inner.root)?;
+    let changes = apply_transaction(&mut next_state, &transaction, &inner.root)?;
     next_state.commit_index = commit_index;
     inner.state_file.replace(&inner.root, &next_state)?;
-    inner
-        .context_changes
-        .record(&transaction, &inner.state, &next_state);
+    inner.context_index.apply(changes, commit_index);
     inner.state = next_state;
     inner.changes.send_replace(commit_index);
     debug!(
@@ -2676,7 +2674,8 @@ fn apply_transaction(
     state: &mut ControlStoreState,
     transaction: &ControlTransactionV1,
     path: &Path,
-) -> Result<()> {
+) -> Result<context::ContextChanges> {
+    let mut changes = context::ContextChanges::default();
     match transaction {
         ControlTransactionV1::AuthorityUpdated {
             expected_revision,
@@ -2687,17 +2686,44 @@ fn apply_transaction(
                     && expected_revision.checked_add(1) == Some(authority.revision),
                 "authority commit revision",
             )?;
+            context::ContextSource::changed(
+                &mut changes,
+                &state.authority.requests,
+                &authority.requests,
+                context::ContextSource::Request,
+            );
+            context::ContextSource::changed(
+                &mut changes,
+                &state.authority.approvals,
+                &authority.approvals,
+                context::ContextSource::Approval,
+            );
+            context::ContextSource::changed(
+                &mut changes,
+                &state.authority.leases,
+                &authority.leases,
+                context::ContextSource::Lease,
+            );
+            context::ContextSource::changed(
+                &mut changes,
+                &state.authority.handles,
+                &authority.handles,
+                context::ContextSource::Audit,
+            );
             state.authority = *authority.clone();
         }
         ControlTransactionV1::NodeSessionAdvanced { advance } => {
             validate_node_session_advance(state, advance, path)?;
             for rollout in &advance.policy_rollout_states {
-                state.rollout_states.insert(
+                context::ContextSource::insert(
+                    &mut changes,
+                    &mut state.rollout_states,
                     PolicyRolloutKeyV1 {
                         candidate_content_id: rollout.desired_candidate_content_id.clone(),
                         node_id: rollout.target.node_id.clone(),
                     },
                     rollout.clone(),
+                    context::ContextSource::Rollout,
                 );
             }
             for settlement in &advance.exception_settlements {
@@ -2767,13 +2793,14 @@ fn apply_transaction(
                 )?;
             }
             let key = PolicyObjectKeyV1::from(source_revision.as_ref());
-            if let Some(existing) = state
-                .source_revisions
-                .insert(
-                    source_revision.policy_source_revision_id.clone(),
-                    source_revision.as_ref().clone(),
-                )
-                .filter(|existing| existing != source_revision.as_ref())
+            if let Some(existing) = context::ContextSource::insert(
+                &mut changes,
+                &mut state.source_revisions,
+                source_revision.policy_source_revision_id.clone(),
+                source_revision.as_ref().clone(),
+                context::ContextSource::Policy,
+            )
+            .filter(|existing| existing != source_revision.as_ref())
             {
                 return ControlStoreSnafu {
                     path: path.to_owned(),
@@ -2787,9 +2814,12 @@ fn apply_transaction(
             state
                 .latest_sources
                 .insert(key, source_revision.policy_source_revision_id.clone());
-            state.policy_documents.insert(
+            context::ContextSource::insert(
+                &mut changes,
+                &mut state.policy_documents,
                 source_revision.policy_source_revision_id.clone(),
                 policy_document.as_ref().clone(),
+                context::ContextSource::Policy,
             );
             if let Some(artifact) = artifact {
                 let existing = state.compiled_artifacts.insert(
@@ -2853,7 +2883,7 @@ fn apply_transaction(
             } = rollout.as_ref();
             validate_rollout_transaction(target_snapshot, bundles, rollout_states, path)?;
             validate_rollout_ordering(state, bundles, path, false)?;
-            apply_rollout_transaction(state, rollout);
+            apply_rollout_transaction(state, rollout, &mut changes);
             if state
                 .source_revisions
                 .get(&target_snapshot.policy_source_revision_id)
@@ -2878,9 +2908,9 @@ fn apply_transaction(
                     artifact.clone(),
                 );
             }
-            apply_rollout_transaction(state, &reconciliation.desired);
+            apply_rollout_transaction(state, &reconciliation.desired, &mut changes);
             if let Some(retirement) = &reconciliation.retirement {
-                apply_rollout_transaction(state, retirement);
+                apply_rollout_transaction(state, retirement, &mut changes);
             }
             state.latest_desired_snapshots.insert(
                 reconciliation
@@ -2912,12 +2942,15 @@ fn apply_transaction(
                 ),
                 result.as_ref().clone(),
             );
-            state.rollout_states.insert(
+            context::ContextSource::insert(
+                &mut changes,
+                &mut state.rollout_states,
                 PolicyRolloutKeyV1 {
                     candidate_content_id: rollout_state.desired_candidate_content_id.clone(),
                     node_id: rollout_state.target.node_id.clone(),
                 },
                 rollout_state.clone(),
+                context::ContextSource::Rollout,
             );
         }
         ControlTransactionV1::ExceptionDesired { desired } => {
@@ -2974,10 +3007,14 @@ fn apply_transaction(
         }
         ControlTransactionV1::TrustInstalled { generation } => {
             validate_trust_transition(state, generation, path)?;
-            if state
-                .trust_generations
-                .insert(generation.generation, generation.as_ref().clone())
-                .is_some()
+            if context::ContextSource::insert(
+                &mut changes,
+                &mut state.trust_generations,
+                generation.generation,
+                generation.as_ref().clone(),
+                context::ContextSource::Trust,
+            )
+            .is_some()
             {
                 return ControlStoreSnafu {
                     path: path.to_owned(),
@@ -3037,7 +3074,7 @@ fn apply_transaction(
                 .insert(record.digest(), record.as_ref().clone());
         }
     }
-    Ok(())
+    Ok(changes)
 }
 
 fn validate_node_decommission_update(
@@ -3682,10 +3719,17 @@ const fn valid_exception_rollout_transition(
     }
 }
 
-fn apply_rollout_transaction(state: &mut ControlStoreState, rollout: &PolicyRolloutTransactionV1) {
-    state.target_snapshots.insert(
+fn apply_rollout_transaction(
+    state: &mut ControlStoreState,
+    rollout: &PolicyRolloutTransactionV1,
+    changes: &mut context::ContextChanges,
+) {
+    context::ContextSource::insert(
+        changes,
+        &mut state.target_snapshots,
         rollout.target_snapshot.target_snapshot_digest.clone(),
         rollout.target_snapshot.clone(),
+        context::ContextSource::Target,
     );
     for bundle in &rollout.bundles {
         state.bundles.insert(
@@ -3694,12 +3738,15 @@ fn apply_rollout_transaction(state: &mut ControlStoreState, rollout: &PolicyRoll
         );
     }
     for rollout_state in &rollout.rollout_states {
-        state.rollout_states.insert(
+        context::ContextSource::insert(
+            changes,
+            &mut state.rollout_states,
             PolicyRolloutKeyV1 {
                 candidate_content_id: rollout_state.desired_candidate_content_id.clone(),
                 node_id: rollout_state.target.node_id.clone(),
             },
             rollout_state.clone(),
+            context::ContextSource::Rollout,
         );
     }
 }
@@ -5216,8 +5263,8 @@ mod tests {
         ))
     }
 
-    fn required_rejection(
-        result: crate::Result<()>,
+    fn required_rejection<T>(
+        result: crate::Result<T>,
         reason: &'static str,
     ) -> crate::Result<crate::error::Error> {
         result.err().ok_or_else(|| {

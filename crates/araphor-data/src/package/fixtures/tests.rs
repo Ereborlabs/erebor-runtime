@@ -8,9 +8,7 @@ use sdk::arrow_array::{
 
 use super::comparison;
 use crate::package::tests::{bundle, Fixture, TestResult};
-use crate::package::{
-    PackageFixtureV1, PackageImplementationV1, PackageOutputV1, PackageRequestV1,
-};
+use crate::package::{PackageFixtureV1, PackageImplementationV1, PackageRequestV1};
 
 fn schema() -> sdk::Schema {
     sdk::Schema::new(vec![sdk::Field::new(
@@ -70,7 +68,7 @@ async fn package_fixture_row_tolerance() -> TestResult {
         inputs: Vec::new(),
         parameters: None,
         checkpoint: None,
-        expected: PackageOutputV1::encode(&expected, model)?,
+        expected: crate::AnalysisPackageOwner::encode_output(&expected, model)?,
     });
     let changed = sdk::Output {
         datasets: vec![
@@ -81,7 +79,7 @@ async fn package_fixture_row_tolerance() -> TestResult {
     };
     let mut mismatch = artifact.fixtures[0].clone();
     mismatch.name = "different".into();
-    mismatch.expected = PackageOutputV1::encode(&changed, model)?;
+    mismatch.expected = crate::AnalysisPackageOwner::encode_output(&changed, model)?;
     artifact.fixtures.push(mismatch);
     fixture.install(bundle, None).await?;
     let response = fixture

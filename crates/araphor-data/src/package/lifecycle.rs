@@ -132,17 +132,24 @@ impl AnalysisPackageOwner {
             let evaluated = if artifact.prepared(&active.key.export) {
                 None
             } else {
-                Some(self.prepare(
-                    &active,
-                    bundle,
-                    &format!(
-                        "upgrade:{}:{}",
-                        previous.as_ref().map_or(0, |old| old.generation),
-                        active.revision
-                    ),
-                    true,
-                    control,
-                )?)
+                Some(
+                    self.prepare_at(
+                        &active,
+                        bundle,
+                        super::evaluation::RunPreparation {
+                            id: &format!(
+                                "upgrade:{}:{}",
+                                previous.as_ref().map_or(0, |old| old.generation),
+                                active.revision
+                            ),
+                            rebuild: true,
+                            automatic: false,
+                            now: Self::now(),
+                        },
+                        control,
+                    )?
+                    .ok_or_else(|| Code::Conflict.error("prepared evaluation"))?,
+                )
             };
             self.authorize_commit(grant, action, admitted, || {
                 self.store.activate_package(
@@ -188,7 +195,7 @@ impl AnalysisPackageOwner {
             active,
             &format!("install:{}", active.generation),
             false,
-            Some(admitted),
+            admitted,
             control,
         ) {
             let crate::Error::Package {

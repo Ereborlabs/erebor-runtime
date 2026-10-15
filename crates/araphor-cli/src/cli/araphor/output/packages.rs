@@ -14,7 +14,7 @@ impl Output {
         let output = response
             .output
             .take()
-            .map(|output| output.json_rows())
+            .map(|output| araphor_data::AnalysisPackageOwner::output_rows(&output))
             .transpose()
             .context(PackageSnafu)?;
         if matches!(self.mode, OutputMode::Jsonl) {

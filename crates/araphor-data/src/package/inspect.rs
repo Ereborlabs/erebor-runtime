@@ -1,11 +1,12 @@
-use crate::analysis::{PackageActivationV1, PackageKeyV1};
+use crate::analysis::{PackageActivationV1, PackageKeyV1, PackageResultV1};
 use crate::{AnalysisReadControl, Result};
+use araphor_analysis_sdk as sdk;
+use snafu::ResultExt as _;
 
 use super::owner::InstalledContext;
 use super::{
-    AnalysisPackageOwner, PackageActionV1 as Action, PackageBundleV1, PackageDatasetV1,
-    PackageErrorCodeV1 as Code, PackageExportStatusV1, PackageGrantV1, PackageOutputV1,
-    PackageReceiptV1, PackageResponseV1,
+    AnalysisPackageOwner, PackageActionV1 as Action, PackageBundleV1, PackageErrorCodeV1 as Code,
+    PackageExportStatusV1, PackageGrantV1, PackageReceiptV1, PackageResponseV1,
 };
 
 pub(super) struct PackageQuery<'a> {
@@ -112,7 +113,7 @@ impl AnalysisPackageOwner {
         package: &str,
         export: &str,
         id: &str,
-    ) -> Result<PackageOutputV1> {
+    ) -> Result<sdk::wire::Output> {
         self.check(grant, Action::Inspect)?;
         let key = PackageKeyV1 {
             tenant_id: grant.selection.tenant_id,
@@ -128,15 +129,23 @@ impl AnalysisPackageOwner {
             .package_result(key.tenant_id, id)?
             .filter(|result| result.key == key)
             .ok_or_else(|| Code::Missing.error("package result"))?;
+        let output = Self::result_output(grant, &result)?;
+        self.check(grant, Action::Inspect)?;
+        Ok(output)
+    }
+
+    fn result_output(
+        grant: &PackageGrantV1,
+        result: &PackageResultV1,
+    ) -> Result<sdk::wire::Output> {
         let installed: InstalledContext = Self::decode(&result.activation.metadata)?;
         Self::permits(grant, &installed.grant)?;
-        let mut output: PackageOutputV1 = Self::decode(&result.datasets)?;
+        let mut output: sdk::wire::Output = Self::decode(&result.datasets)?;
         output.checkpoint = if result.checkpoint.is_empty() {
             None
         } else {
             Some(Self::decode(&result.checkpoint)?)
         };
-        self.check(grant, Action::Inspect)?;
         Ok(output)
     }
 
@@ -186,9 +195,8 @@ impl AnalysisPackageOwner {
             .iter()
             .find(|model| model.name == export)
             .ok_or_else(|| Code::Missing.error("result export"))?;
-        let output = self
-            .read_output(grant, scope, package, export, id)?
-            .decode(model)?;
+        let output = Self::decode_output(&Self::result_output(grant, &stored)?, model)?;
+        self.check(grant, Action::Inspect)?;
         control.check()?;
         let query = self.query.query_datasets(
             key.tenant_id,
@@ -203,7 +211,8 @@ impl AnalysisPackageOwner {
             .first()
             .ok_or_else(|| Code::Invalid.error("query output schema"))?
             .schema();
-        let dataset = PackageDatasetV1::encode(&query.data, &schema, model.limits)?;
+        let dataset = sdk::wire::Dataset::encode(&query.data, &schema, model.limits)
+            .context(crate::AnalysisContractSnafu)?;
         let mut response = PackageResponseV1 {
             scope_id: scope.into(),
             package_id: package.into(),
@@ -229,7 +238,7 @@ impl AnalysisPackageOwner {
             status.activation_revision = stored.commit_revision;
         }
         response.exports = vec![status];
-        response.output = Some(PackageOutputV1 {
+        response.output = Some(sdk::wire::Output {
             datasets: vec![dataset],
             ..Default::default()
         });

@@ -694,14 +694,7 @@ mod tests {
 
     #[test]
     fn analysis_keys_preserve_identity() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        };
+        let identity = crate::analysis::tests::identity();
         let header = super::super::segment_file::SegmentFile::encode_identity(&identity)?;
         let key = identity.key();
         assert_eq!(key[0], 0);
@@ -767,12 +760,8 @@ mod tests {
             processor_id: "required".into(),
             method_version: 1,
             identity: EvidenceIntakeIdentityV1 {
-                tenant_id: [1; 16],
                 node_id: "n".repeat(128),
-                node_boot_id: [2; 16],
-                label_epoch: 1,
-                source_id: [3; 16],
-                source_epoch: 1,
+                ..crate::analysis::tests::identity()
             },
         };
         let key_bytes = scope.identity.key().len() as u64;
@@ -860,12 +849,8 @@ mod tests {
             ],
         )?;
         let mut identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "n".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         };
         assert!(AnalysisStore::bind_source(
             &transaction,
@@ -924,14 +909,7 @@ mod tests {
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("analysis");
             let store = AnalysisStore::open(&root)?;
-            let identity = EvidenceIntakeIdentityV1 {
-                tenant_id: [1; 16],
-                node_id: "node-a".into(),
-                node_boot_id: [2; 16],
-                label_epoch: 1,
-                source_id: [3; 16],
-                source_epoch: 1,
-            };
+            let identity = crate::analysis::tests::identity();
             let scope = crate::ProcessorScopeV1 {
                 processor_id: "required".into(),
                 method_version: 1,
@@ -964,12 +942,7 @@ mod tests {
             };
             let revision = store.commit_context(&context)?;
             store.commit_result(&crate::AnalysisResultCommitV1 {
-                scope,
-                expected_cursor: 0,
-                consumed_cursor: 1,
-                coverage_revision: 0,
                 context_revision: revision,
-                result_id: "result".into(),
                 body: b"result".to_vec(),
                 created_utc_ns: 2,
                 witnesses: vec![crate::AnalysisWitnessV1 {
@@ -981,6 +954,7 @@ mod tests {
                     key: context.key,
                     commit_revision: revision,
                 }],
+                ..crate::analysis::tests::result(scope, "result".into())
             })?;
             drop(store);
             let store = AnalysisStore::open(&root)?;
@@ -996,12 +970,9 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
             label_epoch: 7,
-            source_id: [3; 16],
             source_epoch: 9,
+            ..crate::analysis::tests::identity()
         };
         let lookup = || {
             store.source_binding(
@@ -1078,14 +1049,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        };
+        let identity = crate::analysis::tests::identity();
         store.accept_validated_batch(
             identity.clone(),
             super::super::ValidatedEvidenceBatchV1 {

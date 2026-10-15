@@ -31,12 +31,12 @@ impl AnalysisPackageOwner {
         stop: &mut tokio::sync::watch::Receiver<bool>,
         refresh: bool,
         changed: bool,
-    ) -> Result<bool> {
-        let mut complete = true;
+    ) -> Result<(bool, u64)> {
+        let (mut complete, mut deadline) = (true, u64::MAX);
         let mut after = None;
         loop {
             if *stop.borrow() || stop.has_changed().is_err() {
-                return Ok(false);
+                return Ok((false, deadline));
             }
             let store = self.store.clone();
             let cursor = after.clone();
@@ -62,140 +62,145 @@ impl AnalysisPackageOwner {
             }
             for group in groups.into_values() {
                 if *stop.borrow() || stop.has_changed().is_err() {
-                    return Ok(false);
+                    return Ok((false, deadline));
                 }
                 let owner = self.clone();
-                let selected = group[0].clone();
-                tokio::task::spawn_blocking(move || owner.prune_orphans(&selected))
-                    .await
-                    .map_err(|source| crate::QueryExecutionSnafu.into_error(source))??;
-                let mut bundle = None::<Arc<InstalledBundle>>;
-                for selected in group {
-                    if *stop.borrow() || stop.has_changed().is_err() {
-                        return Ok(false);
+                let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(
+                    30 * (group.len() as u64 + 1),
+                ))?);
+                let _task = PackageTask {
+                    control: control.clone(),
+                };
+                let stage = control.clone();
+                let mut changes = self.authority.changes();
+                let mut run = tokio::task::spawn_blocking(move || {
+                    owner.reconcile_group(group, refresh, changed, &stage)
+                });
+                let result = tokio::select! {
+                    result = &mut run => result.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?,
+                    _changed = stop.changed() => {
+                        control.cancel()?;
+                        let _result = run.await.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?;
+                        return Ok((false, deadline));
                     }
-                    let permit = match self.operation() {
-                        Ok(permit) => permit,
-                        Err(crate::Error::AnalysisBusy { .. }) => return Ok(false),
-                        Err(error) => return Err(error),
-                    };
-                    let owner = self.clone();
-                    let control =
-                        Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(30))?);
-                    let _task = PackageTask {
-                        control: control.clone(),
-                    };
-                    let mut changes = self.authority.changes();
-                    let stage = control.clone();
-                    let known = bundle.take();
-                    let mut run = tokio::task::spawn_blocking(
-                        move || -> Result<(Option<Arc<InstalledBundle>>, bool)> {
-                            let _permit = permit;
-                            stage.check()?;
-                            let Some(active) = owner
-                                .store
-                                .package_activation(&selected.key)?
-                                .filter(|active| active.active)
-                            else {
-                                return Ok((known, true));
-                            };
-                            let context: InstalledContext = Self::decode(&active.metadata)?;
-                            let checked = owner.check(&context.grant, Action::Run).and_then(|()| {
-                                if !refresh
-                                    && (context.prepared
-                                        || owner.inputs_current(
-                                            &active,
-                                            context.clock,
-                                            Self::now(),
-                                            changed,
-                                            &stage,
-                                        )?)
-                                {
-                                    return Ok(known);
-                                }
-                                let bundle = match known {
-                                    Some(bundle) if bundle.value.root == context.root => bundle,
-                                    _ => InstalledBundle::new(
-                                        &owner.query,
-                                        owner.load_bundle(active.key.tenant_id, &context.root)?,
-                                    )?,
-                                };
-                                stage.check()?;
-                                let admission = bundle.admission();
-                                owner.authority.admit(&context.grant, &admission)?;
-                                let artifact = bundle.value.artifact(&super::PackageRefV1 {
-                                    package_id: active.key.package_id.clone(),
-                                    revision: active.revision.clone(),
-                                })?;
-                                let model = artifact
-                                    .descriptor
-                                    .exports
-                                    .iter()
-                                    .find(|model| model.name == active.key.export)
-                                    .ok_or_else(|| Code::Missing.error("installed export"))?;
-                                if context.prepared != artifact.prepared(&active.key.export)
-                                    || context.clock != artifact.clock_dependency(model)?
-                                {
-                                    return Err(Code::Invalid.error("activation model flags"));
-                                }
-                                stage.check()?;
-                                if !context.prepared {
-                                    let stage = Self::grant_control(&context.grant, stage.clone())?;
-                                    owner.evaluate_active(
-                                        &active,
-                                        "automatic",
-                                        true,
-                                        Some(&admission),
-                                        &stage,
-                                    )?;
-                                }
-                                Ok(Some(bundle))
-                            });
-                            match checked {
-                                Ok(bundle) => Ok((bundle, true)),
-                                Err(error) => {
-                                    stage.check()?;
-                                    owner.failed(&active, &error, &stage)?;
-                                    if error.status_code() == StatusCode::PermissionDenied {
-                                        let _lifecycle = owner.lifecycle.lock().map_err(|_| {
-                                            Code::Conflict.error("package lifecycle lock")
-                                        })?;
-                                        owner.store.suspend_package(
-                                            &active.key,
-                                            active.generation,
-                                            || stage.check(),
-                                        )?;
-                                    }
-                                    Ok((None, error.status_code() == StatusCode::PermissionDenied))
-                                }
-                            }
-                        },
-                    );
-                    tokio::select! {
-                        result = &mut run => {
-                            match result.map_err(|source| crate::QueryExecutionSnafu.into_error(source))? {
-                                Ok((retained, admitted)) => { bundle = retained; complete &= admitted; }
-                                Err(_) => complete = false,
-                            }
-                        }
-                        _changed = stop.changed() => {
-                            let cancelled = control.cancel();
-                            let _result = run.await.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?;
-                            cancelled?;
-                            if *stop.borrow() || stop.has_changed().is_err() { return Ok(false); }
-                            complete = false;
-                        }
-                        _changed = changes.changed() => {
-                            let cancelled = control.cancel();
-                            let _result = run.await.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?;
-                            cancelled?;
-                            complete = false;
-                        }
+                    _changed = changes.changed() => {
+                        control.cancel()?;
+                        let _result = run.await.map_err(|source| crate::QueryExecutionSnafu.into_error(source))?;
+                        return Ok((false, Self::now()));
+                    }
+                };
+                match result {
+                    Ok((admitted, next)) => {
+                        complete &= admitted;
+                        deadline = deadline.min(next);
+                    }
+                    Err(_) => {
+                        complete = false;
+                        deadline = deadline.min(
+                            Self::now().saturating_add(Self::RECONCILE_INTERVAL.as_nanos() as u64),
+                        );
                     }
                 }
             }
         }
-        Ok(complete)
+        Ok((complete, deadline))
+    }
+
+    fn reconcile_group(
+        &self,
+        group: Vec<PackageActivationV1>,
+        refresh: bool,
+        changed: bool,
+        control: &AnalysisReadControl,
+    ) -> Result<(bool, u64)> {
+        control.check()?;
+        self.prune_orphans(&group[0])?;
+        let (mut complete, mut deadline) = (true, u64::MAX);
+        let mut bundle = None::<Arc<InstalledBundle>>;
+        for selected in group {
+            control.check()?;
+            let Some(active) = self
+                .store
+                .package_activation(&selected.key)?
+                .filter(|active| active.active)
+            else {
+                continue;
+            };
+            let context: InstalledContext = Self::decode(&active.metadata)?;
+            let now = Self::now();
+            let stage = Arc::new(control.within(Duration::from_secs(30))?);
+            let result = (|| -> Result<()> {
+                self.check(&context.grant, Action::Run)?;
+                if let Some(expires) = context.grant.expires_utc_ns {
+                    deadline = deadline.min(expires);
+                }
+                if !context.prepared {
+                    let (current, next) =
+                        self.inputs_current(&active, context.clock, now, changed, &stage)?;
+                    deadline = deadline.min(next);
+                    if !refresh && current {
+                        return Ok(());
+                    }
+                } else if !refresh {
+                    return Ok(());
+                }
+                let _permit = self.operation()?;
+                if bundle
+                    .as_ref()
+                    .is_none_or(|bundle| bundle.value.root != context.root)
+                {
+                    bundle = None;
+                    bundle = Some(InstalledBundle::new(
+                        &self.query,
+                        self.load_bundle(active.key.tenant_id, &context.root)?,
+                    )?);
+                }
+                let bundle = bundle
+                    .as_ref()
+                    .ok_or_else(|| Code::Missing.error("installed bundle"))?;
+                let admission = bundle.admission();
+                self.authority.admit(&context.grant, &admission)?;
+                stage.check()?;
+                let artifact = bundle.value.artifact(&super::PackageRefV1 {
+                    package_id: active.key.package_id.clone(),
+                    revision: active.revision.clone(),
+                })?;
+                let model = artifact
+                    .descriptor
+                    .exports
+                    .iter()
+                    .find(|model| model.name == active.key.export)
+                    .ok_or_else(|| Code::Missing.error("installed export"))?;
+                if context.prepared != artifact.prepared(&active.key.export)
+                    || context.clock != artifact.clock_dependency(model)?
+                {
+                    return Err(Code::Invalid.error("activation model flags"));
+                }
+                if !context.prepared {
+                    let stage = Self::grant_control(&context.grant, stage.clone())?;
+                    self.evaluate_active(&active, "automatic", true, &admission, &stage)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                stage.check()?;
+                complete &= error.status_code() == StatusCode::PermissionDenied;
+                deadline =
+                    deadline.min(now.saturating_add(Self::RECONCILE_INTERVAL.as_nanos() as u64));
+                if !matches!(error, crate::Error::AnalysisBusy { .. }) {
+                    self.failed(&active, &error, &stage)?;
+                    if error.status_code() == StatusCode::PermissionDenied {
+                        let _lifecycle = self
+                            .lifecycle
+                            .lock()
+                            .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
+                        self.store
+                            .suspend_package(&active.key, active.generation, || stage.check())?;
+                    }
+                }
+            }
+        }
+        Ok((complete, deadline))
     }
 
     pub(super) fn failed(

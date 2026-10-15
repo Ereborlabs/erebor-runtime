@@ -64,16 +64,11 @@ fn run(id: &str) -> PackageRequestV1 {
 
 fn assert_value(fixture: &Fixture, response: &PackageResponseV1, expected: u64) -> TestResult {
     let receipt = &response.exports[0].results[0];
-    let rows = fixture
-        .owner
-        .read_output(
-            &fixture.grant,
-            "test",
-            "runtime-fixture",
-            "count-input",
-            &receipt.result_id,
-        )?
-        .json_rows()?;
+    let rows = crate::AnalysisPackageOwner::output_rows(&fixture.output(
+        "runtime-fixture",
+        "count-input",
+        &receipt.result_id,
+    )?)?;
     assert_eq!(rows["data"], serde_json::json!([{"value": expected}]));
     assert_eq!(receipt.target, "wasm");
     Ok(())

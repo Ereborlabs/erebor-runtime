@@ -1,18 +1,30 @@
 use super::*;
 
 #[test]
-fn wire_validation_keeps_precedence() -> TestResult {
+fn wire_contract_boundaries() -> TestResult {
     let package = FilesCount::package();
     let fixture = FilesCount::fixture()?;
     let output = FilesCount::evaluate(&fixture.evaluation)?;
-    let mut input = wire::Evaluation::encode(&package, &fixture.evaluation)?;
+    let input = wire::Evaluation::encode(&package, &fixture.evaluation)?;
     let encoded = wire::Output::encode(&package, &fixture.evaluation, &output)?;
-    let mut evaluation = fixture.evaluation;
+    assert_eq!(
+        serde_json::from_slice::<wire::Output>(&serde_json::to_vec(&encoded)?)?,
+        encoded
+    );
+    assert_eq!(
+        serde_json::from_slice::<Vec<wire::Input>>(&serde_json::to_vec(&input.inputs)?)?,
+        input.inputs
+    );
+    let mut metadata = serde_json::to_value(&encoded)?;
+    metadata["datasets"][0]["ipc"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<wire::Output>(metadata).is_err());
+    let mut evaluation = fixture.evaluation.clone();
     evaluation.export = "missing".into();
     evaluation.context.limits.max_bytes = 0;
-    input.export_name = evaluation.export.clone();
-    input.context.limits = evaluation.context.limits;
-    for (result, expected, expected_field) in [
+    let mut header = input.clone();
+    header.export_name = evaluation.export.clone();
+    header.context.limits = evaluation.context.limits;
+    let headers = [
         (
             package.check_evaluation(&evaluation).map(|_| ()),
             ErrorCode::Incompatible,
@@ -34,7 +46,7 @@ fn wire_validation_keeps_precedence() -> TestResult {
             "export",
         ),
         (
-            input.decode(&package).map(|_| ()),
+            header.decode(&package).map(|_| ()),
             ErrorCode::Invalid,
             "limits",
         ),
@@ -43,49 +55,27 @@ fn wire_validation_keeps_precedence() -> TestResult {
             ErrorCode::Invalid,
             "limits",
         ),
-    ] {
-        let Error::Contract { code, field, .. } = result.err().ok_or("invalid header accepted")?
-        else {
-            return Err("contract error absent".into());
-        };
-        assert_eq!(code, expected);
-        assert_eq!(field, expected_field);
-    }
-    let mut invalid = package;
+    ];
+    let mut invalid = package.clone();
     invalid.contract_version += 1;
-    for result in [
+    let versions = [
         invalid.check_evaluation(&evaluation).map(|_| ()),
         invalid.validate_evaluation(&evaluation),
         wire::Evaluation::encode(&invalid, &evaluation).map(|_| ()),
         wire::Output::encode(&invalid, &evaluation, &output).map(|_| ()),
-        input.decode(&invalid).map(|_| ()),
+        header.decode(&invalid).map(|_| ()),
         encoded.decode(&invalid, &evaluation).map(|_| ()),
-    ] {
-        let Error::Contract { code, field, .. } = result.err().ok_or("invalid package accepted")?
-        else {
-            return Err("contract error absent".into());
-        };
-        assert_eq!(code, ErrorCode::Incompatible);
-        assert_eq!(field, "contract version");
-    }
-    Ok(())
-}
-
-#[test]
-fn wire_checks_decoded_inputs() -> TestResult {
-    let package = FilesCount::package();
-    let fixture = FilesCount::fixture()?;
-    let output = FilesCount::evaluate(&fixture.evaluation)?;
-    let mut input = wire::Evaluation::encode(&package, &fixture.evaluation)?;
-    let encoded = wire::Output::encode(&package, &fixture.evaluation, &output)?;
-    let mut evaluation = fixture.evaluation.clone();
+    ]
+    .map(|result| (result, ErrorCode::Incompatible, "contract version"));
+    evaluation = fixture.evaluation.clone();
     evaluation.inputs.clear();
-    input.inputs.clear();
+    let mut missing = input.clone();
+    missing.inputs.clear();
     let mut malformed = encoded.clone();
     malformed.datasets[0].arrow_ipc = vec![0];
     let mut uncited = encoded.clone();
     uncited.evidence.clear();
-    for (result, expected, expected_field) in [
+    let inputs = [
         (
             malformed.decode(&package, &evaluation).map(|_| ()),
             ErrorCode::Invalid,
@@ -102,7 +92,7 @@ fn wire_checks_decoded_inputs() -> TestResult {
             "missing dataset",
         ),
         (
-            input.decode(&package).map(|_| ()),
+            missing.decode(&package).map(|_| ()),
             ErrorCode::Incomplete,
             "missing dataset",
         ),
@@ -111,8 +101,34 @@ fn wire_checks_decoded_inputs() -> TestResult {
             ErrorCode::Incomplete,
             "required output evidence",
         ),
-    ] {
-        let Error::Contract { code, field, .. } = result.err().ok_or("invalid wire accepted")?
+    ];
+    let mut changed_input = package.clone();
+    changed_input.exports[0].inputs[0].port.schema = Schema::new(vec![
+        Field::new("subject", DataType::UInt64, false),
+        Field::new("event_id", DataType::UInt64, false),
+    ]);
+    let mut changed_output = package.clone();
+    changed_output.exports[0].outputs[0].schema = Schema::new(vec![
+        Field::new("subject", DataType::Utf8, false),
+        Field::new("count", DataType::Boolean, false),
+    ]);
+    changed_input.validate()?;
+    changed_output.validate()?;
+    let schemas = [
+        input.decode(&changed_input).map(|_| ()),
+        encoded
+            .decode(&changed_output, &fixture.evaluation)
+            .map(|_| ()),
+    ]
+    .map(|result| (result, ErrorCode::Invalid, "dataset schema"));
+    for (result, expected, expected_field) in headers
+        .into_iter()
+        .chain(versions)
+        .chain(inputs)
+        .chain(schemas)
+    {
+        let Error::Contract { code, field, .. } =
+            result.err().ok_or("invalid contract accepted")?
         else {
             return Err("contract error absent".into());
         };
@@ -122,40 +138,5 @@ fn wire_checks_decoded_inputs() -> TestResult {
     let decoded = encoded.decode(&package, &fixture.evaluation)?;
     assert_eq!(decoded.evidence, output.evidence);
     assert_eq!(decoded.datasets[0].batches, output.datasets[0].batches);
-    Ok(())
-}
-
-#[test]
-fn wire_rejects_changed_packages() -> TestResult {
-    let package = FilesCount::package();
-    let fixture = FilesCount::fixture()?;
-    let output = FilesCount::evaluate(&fixture.evaluation)?;
-    let input = wire::Evaluation::encode(&package, &fixture.evaluation)?;
-    let encoded = wire::Output::encode(&package, &fixture.evaluation, &output)?;
-    let mut changed_input = package.clone();
-    changed_input.exports[0].inputs[0].port.schema = Schema::new(vec![
-        Field::new("subject", DataType::UInt64, false),
-        Field::new("event_id", DataType::UInt64, false),
-    ]);
-    let mut changed_output = package;
-    changed_output.exports[0].outputs[0].schema = Schema::new(vec![
-        Field::new("subject", DataType::Utf8, false),
-        Field::new("count", DataType::Boolean, false),
-    ]);
-    changed_input.validate()?;
-    changed_output.validate()?;
-    for result in [
-        input.decode(&changed_input).map(|_| ()),
-        encoded
-            .decode(&changed_output, &fixture.evaluation)
-            .map(|_| ()),
-    ] {
-        let Error::Contract { code, field, .. } = result.err().ok_or("changed schema accepted")?
-        else {
-            return Err("contract error absent".into());
-        };
-        assert_eq!(code, ErrorCode::Invalid);
-        assert_eq!(field, "dataset schema");
-    }
     Ok(())
 }

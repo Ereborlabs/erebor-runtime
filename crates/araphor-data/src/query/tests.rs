@@ -142,7 +142,7 @@ impl QueryFixture {
             .enable_autoload_extension(false)?
             .threads(1)?;
         let connection = Connection::open_in_memory_with_flags(config)?;
-        input.register(&connection, "baseline_rows", relation)?;
+        input::ScopedSources::default().register(&connection, &input, "baseline_rows", relation)?;
         let mut statement = connection.prepare(&plan.sql())?;
         let parameters = plan.parameters(now_ns);
         let mut rows = statement.query(params_from_iter(parameters.iter()))?;

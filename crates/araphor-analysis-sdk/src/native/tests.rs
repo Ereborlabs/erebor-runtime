@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrow_array::UInt64Array;
 
 use super::*;
-use crate::guest::Guest;
+use crate::Guest;
 use crate::{CheckpointSpec, DataType, Field, Port, RecordBatch, Schema};
 
 use crate::tests::sensitive_access::SensitiveAccess;
@@ -26,7 +26,8 @@ impl Guest for Detector {
         package
     }
 
-    fn evaluate(evaluation: &Evaluation) -> Result<Output> {
+    fn compute(checked: &crate::CheckedEvaluation<'_>) -> Result<Output> {
+        let evaluation = checked.evaluation();
         assert_eq!(evaluation.context.time_utc_ns, -55);
         assert_eq!(evaluation.context.seed, Some(u64::MAX));
         assert_eq!(
@@ -114,13 +115,9 @@ impl<const INVALID: bool> Guest for CheckedDetector<INVALID> {
         Detector::package()
     }
 
-    fn evaluate(_evaluation: &Evaluation) -> Result<Output> {
-        Err(Error::contract(ErrorCode::Failed, "unchecked guest entry"))
-    }
-
-    fn evaluate_checked(checked: &crate::CheckedEvaluation<'_>) -> Result<Output> {
+    fn compute(checked: &crate::CheckedEvaluation<'_>) -> Result<Output> {
         assert_eq!(checked.model().name, checked.evaluation().export);
-        let mut output = Detector::evaluate(checked.evaluation())?;
+        let mut output = Detector::compute(checked)?;
         if INVALID {
             output.evidence.clear();
         }
@@ -148,6 +145,14 @@ fn checked_guest_keeps_output_boundary() -> TestResult {
     .err()
     .ok_or("unchecked output accepted")?;
     assert_eq!(error.code(), ErrorCode::Incomplete);
+    assert!(matches!(CheckedDetector::<true>::evaluate(&value),
+        Err(Error::Contract { code: ErrorCode::Incomplete, field, .. })
+            if field == "required output evidence"));
+    let mut invalid = value;
+    invalid.inputs.clear();
+    assert!(matches!(CheckedDetector::<false>::evaluate(&invalid),
+        Err(Error::Contract { code: ErrorCode::Incomplete, field, .. })
+            if field == "missing dataset"));
     Ok(())
 }
 
@@ -159,31 +164,30 @@ fn release_success_failure_and_repeat() -> TestResult {
     let api = Api::for_guest::<Detector>();
     let evaluate = api.evaluate.ok_or("evaluate")?;
     let release = api.release.ok_or("release")?;
-    let mut response = Response::default();
-    assert_eq!(unsafe { evaluate(&invocation.request(), &mut response) }, 0);
-    assert!(!response.private_data.is_null());
-    assert!(unsafe {
-        (*invocation.exchange.inputs[0].data.batches)
-            .release
-            .is_some()
-    });
-    unsafe {
-        release(&mut response);
-        release(&mut response);
+    for valid in [true, false] {
+        let request = invocation.request();
+        let mut response = Response::default();
+        let request = if valid { &request } else { std::ptr::null() };
+        assert_eq!(
+            unsafe { evaluate(request, &mut response) },
+            if valid { 0 } else { ErrorCode::Invalid as u32 }
+        );
+        assert!(!response.private_data.is_null());
+        if valid {
+            assert!(unsafe {
+                (*invocation.exchange.inputs[0].data.batches)
+                    .release
+                    .is_some()
+            });
+        }
+        unsafe {
+            release(&mut response);
+            release(&mut response);
+        }
+        assert!(response.private_data.is_null());
+        assert!(response.datasets.is_null());
+        assert_eq!(response.dataset_count, 0);
     }
-    assert!(response.private_data.is_null());
-    assert!(response.datasets.is_null());
-    assert_eq!(response.dataset_count, 0);
-    assert_eq!(
-        unsafe { evaluate(std::ptr::null(), &mut response) },
-        ErrorCode::Invalid as u32
-    );
-    assert!(!response.private_data.is_null());
-    unsafe {
-        release(&mut response);
-        release(&mut response);
-    }
-    assert!(response.private_data.is_null());
     Ok(())
 }
 
@@ -229,7 +233,7 @@ impl Guest for Panicking {
         Detector::package()
     }
     #[allow(clippy::panic)]
-    fn evaluate(_evaluation: &Evaluation) -> Result<Output> {
+    fn compute(_input: &crate::CheckedEvaluation<'_>) -> Result<Output> {
         panic!("native fixture panic")
     }
 }
@@ -408,7 +412,7 @@ impl<const SIZE: usize> Guest for ErrorField<SIZE> {
         Detector::package()
     }
 
-    fn evaluate(_evaluation: &Evaluation) -> Result<Output> {
+    fn compute(_input: &crate::CheckedEvaluation<'_>) -> Result<Output> {
         Err(Error::contract(ErrorCode::Failed, "x".repeat(SIZE)))
     }
 }
@@ -417,19 +421,16 @@ impl<const SIZE: usize> Guest for ErrorField<SIZE> {
 fn producer_error_field_uses_existing_transport_bound() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
-    let boundary = unsafe {
-        Invocation::new(&package, &value, || false)?
-            .call(&Api::for_guest::<ErrorField<1024>>(), value.context.limits)
+    for (api, expected) in [
+        (Api::for_guest::<ErrorField<1024>>(), ErrorCode::Failed),
+        (Api::for_guest::<ErrorField<1025>>(), ErrorCode::Limit),
+    ] {
+        let error = unsafe {
+            Invocation::new(&package, &value, || false)?.call(&api, value.context.limits)
+        }
+        .err()
+        .ok_or("error accepted")?;
+        assert_eq!(error.code(), expected);
     }
-    .err()
-    .ok_or("error accepted")?;
-    assert_eq!(boundary.code(), ErrorCode::Failed);
-    let oversized = unsafe {
-        Invocation::new(&package, &value, || false)?
-            .call(&Api::for_guest::<ErrorField<1025>>(), value.context.limits)
-    }
-    .err()
-    .ok_or("oversized error accepted")?;
-    assert_eq!(oversized.code(), ErrorCode::Limit);
     Ok(())
 }

@@ -202,10 +202,10 @@ impl Fixture {
             "count",
             &receipt.result_id,
         )?;
-        let checkpoint = output
-            .decode(&export.descriptor)?
-            .checkpoint
-            .ok_or("checkpoint is absent")?;
+        let checkpoint =
+            araphor_data::AnalysisPackageOwner::decode_output(&output, &export.descriptor)?
+                .checkpoint
+                .ok_or("checkpoint is absent")?;
         if checkpoint.version != 1 || checkpoint.datasets.len() != 1 {
             return Err("checkpoint shape changed".into());
         }
@@ -315,10 +315,9 @@ impl Fixture {
                 sql: "SELECT count FROM rows ORDER BY count".into(),
             })
             .await?;
-        let rows = response
-            .output
-            .ok_or("query output is absent")?
-            .json_rows()?;
+        let rows = araphor_data::AnalysisPackageOwner::output_rows(
+            &response.output.ok_or("query output is absent")?,
+        )?;
         rows.get("query")
             .cloned()
             .ok_or_else(|| "query rows are absent".into())

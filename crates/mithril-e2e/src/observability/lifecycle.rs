@@ -463,7 +463,7 @@ impl ObservabilityQualification {
                         .map(|frame| frame.bytes.len() as u64)
                         .sum::<u64>()
                 || node.frames(id, 0)? != frames
-                || node.retained()? != vec![(id, &dispatch)]
+                || !node.retained().eq([(id, &dispatch)])
                 || node.admit(dispatch.clone(), None, &dispatch_key, now)? != id
             {
                 return Err("Node restart changed its frozen intent, prefix or terminal".into());

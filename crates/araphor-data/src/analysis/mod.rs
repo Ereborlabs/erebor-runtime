@@ -1036,12 +1036,12 @@ impl AnalysisStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::MAX_PENDING_EVIDENCE_RECORDS;
     use duckdb::Config;
 
-    fn identity() -> EvidenceIntakeIdentityV1 {
+    pub(crate) fn identity() -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
             tenant_id: [1; 16],
             node_id: "node-a".to_owned(),
@@ -1049,6 +1049,21 @@ mod tests {
             label_epoch: 1,
             source_id: [3; 16],
             source_epoch: 1,
+        }
+    }
+
+    pub(crate) fn result(scope: ProcessorScopeV1, result_id: String) -> AnalysisResultCommitV1 {
+        AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 1,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id,
+            body: b"finding".to_vec(),
+            created_utc_ns: 100,
+            witnesses: Vec::new(),
+            context_refs: Vec::new(),
         }
     }
 

@@ -84,15 +84,15 @@ the installed component path.
 
 ## Build a Wasm component
 
-Enable the SDK `guest` feature. Implement `guest::Guest::package` and
-`guest::Guest::evaluate` on the algorithm type. Use
+Enable the SDK `guest` feature. Implement `Guest::package` and `Guest::compute`
+on the algorithm type. Use
 `export_component!(Algorithm)` under `#[cfg(target_arch = "wasm32")]` to export
 the generated analysis interface. Use a `cdylib` crate for the core module.
 The guest wrapper decodes typed inputs, validates the evaluation, calls
-`Guest::evaluate_checked`, and validates and encodes its complete result.
-The default method calls `Guest::evaluate`. An algorithm can override the
-checked method to use the immutable `CheckedEvaluation` and avoid repeated
-input checks. Keep input and output checks on its standalone Rust entry.
+`Guest::compute`, and validates and encodes its complete result.
+The computation receives an immutable `CheckedEvaluation`. Standalone
+`Guest::evaluate` validates the input, calls the same computation, and validates
+the output. There is one computation hook for all three entry points.
 
 The bindings use `wit-bindgen` 0.61.1. The component builder uses
 `wit-component` and `wasmparser` 0.258.3. The production host uses Wasmtime
@@ -266,7 +266,7 @@ execution owner supplies cancellation and Wasmtime isolation. Native execution
 shares the host process and has cooperative cancellation.
 
 `Package::check_evaluation` returns an immutable `CheckedEvaluation` after it
-validates the input contract. `Guest::evaluate_checked` permits one invocation
+validates the input contract. `Guest::compute` permits one invocation
 to reuse that proof. The proof borrows the package and inputs. The native and
 Wasm wrappers validate imported data before they create the proof. They
 validate output against the same checked contract. Standalone evaluation and

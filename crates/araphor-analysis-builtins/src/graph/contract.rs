@@ -72,16 +72,12 @@ impl Detector {
     }
 
     pub fn evaluate(self, evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        let checked = self.declaration().check_evaluation(evaluation)?;
-        let output = self.evaluate_checked(&checked)?;
-        checked.validate_output(&output)?;
-        Ok(output)
+        self.declaration()
+            .check_evaluation(evaluation)?
+            .evaluate(|input| self.compute(input))
     }
 
-    pub fn evaluate_checked(
-        self,
-        checked: &sdk::CheckedEvaluation<'_>,
-    ) -> sdk::Result<sdk::Output> {
+    pub fn compute(self, checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
         if checked.package() != self.declaration() {
             return Err(sdk::Error::contract(
                 sdk::ErrorCode::Incompatible,

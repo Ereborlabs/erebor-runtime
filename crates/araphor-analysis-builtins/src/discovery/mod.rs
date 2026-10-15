@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use araphor_analysis_sdk as sdk;
 use schemars::JsonSchema;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::Serialize;
 
 use crate::Rows;
 
@@ -102,37 +102,13 @@ impl Discovery {
     }
 
     pub fn evaluate(input: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        let checked = Self::declaration().check_evaluation(input)?;
-        let output = Self::evaluate_checked(&checked)?;
-        checked.validate_output(&output)?;
-        Ok(output)
-    }
-
-    pub fn evaluate_checked(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
-        if input.package() != Self::declaration() {
-            return Err(sdk::Error::contract(
-                sdk::ErrorCode::Incompatible,
-                "discovery package",
-            ));
-        }
-        match input.evaluation().export.as_str() {
-            "atoms" => Self::atoms(input),
-            "merge" => Self::merge(input),
-            "groups" => Self::groups(input),
-            "compare" => Self::compare(input),
-            _ => Err(sdk::Error::contract(sdk::ErrorCode::Incompatible, "export")),
-        }
+        Self::declaration()
+            .check_evaluation(input)?
+            .evaluate(<Self as sdk::Guest>::compute)
     }
 
     pub fn port<T: JsonSchema>(name: &str) -> sdk::Port {
         Rows::port::<T>(name, &format!("discovery.{}.v1", T::schema_name()))
-    }
-
-    fn read<T: DeserializeOwned>(
-        input: &sdk::CheckedEvaluation<'_>,
-        name: &str,
-    ) -> sdk::Result<Vec<T>> {
-        Rows::input(input, name)
     }
 
     fn write<T: Serialize>(
@@ -170,5 +146,27 @@ impl Discovery {
             .checked_add(value)
             .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "count"))?;
         Ok(())
+    }
+}
+
+impl sdk::Guest for Discovery {
+    fn package() -> sdk::Package {
+        Self::package()
+    }
+
+    fn compute(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        if input.package() != Self::declaration() {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Incompatible,
+                "discovery package",
+            ));
+        }
+        match input.evaluation().export.as_str() {
+            "atoms" => Self::atoms(input),
+            "merge" => Self::merge(input),
+            "groups" => Self::groups(input),
+            "compare" => Self::compare(input),
+            _ => Err(sdk::Error::contract(sdk::ErrorCode::Incompatible, "export")),
+        }
     }
 }

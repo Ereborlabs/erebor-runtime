@@ -24,12 +24,13 @@ impl Guest for RuntimeFixture {
 sdk::guest::bindings::export!(RuntimeFixture with_types_in sdk::guest::bindings);
 
 #[cfg(not(target_arch = "wasm32"))]
-impl sdk::guest::Guest for RuntimeFixture {
+impl sdk::Guest for RuntimeFixture {
     fn package() -> sdk::Package {
         Self::package()
     }
 
-    fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
+    fn compute(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        let evaluation = input.evaluation();
         Self::native_fault()?;
         let package = Self::package();
         Self::execute(sdk::wire::Evaluation::encode(&package, evaluation)?)?

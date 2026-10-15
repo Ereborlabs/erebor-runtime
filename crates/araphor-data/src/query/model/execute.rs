@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
-use duckdb::{params_from_iter, Connection};
+use duckdb::Connection;
 use snafu::ResultExt as _;
 
 use super::{schema::ModelSchema, AdmittedModel, SqlModelV1};
@@ -124,24 +124,14 @@ impl<'a> ModelExecution<'a> {
             .build()
         })?;
         let bound = query.bind_complete(now)?;
-        let sql = format!(
-            "SELECT * FROM ({}) AS model_result LIMIT {}",
-            bound.sql,
-            self.limits.max_rows.saturating_add(1)
-        );
-        let mut statement =
-            self.connection
-                .prepare(&sql)
-                .context(crate::AnalysisDatabaseSnafu {
-                    operation: "prepare model query",
-                })?;
-        drop(
-            statement
-                .query_arrow(params_from_iter(bound.parameters.iter()))
-                .context(crate::AnalysisDatabaseSnafu {
-                    operation: "execute model query",
-                })?,
-        );
+        let statement = crate::query::evaluation::QueryEvaluation::prepare(
+            self.connection,
+            &bound.sql,
+            &bound.parameters,
+            self.limits.max_rows,
+            #[cfg(test)]
+            None,
+        )?;
         let actual = statement.schema();
         let schema = schema.unwrap_or(actual.as_ref());
         let empty = sdk::RecordBatch::new_empty(actual.clone());

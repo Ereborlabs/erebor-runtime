@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::Rows;
 use araphor_analysis_sdk as sdk;
 
 use super::{
@@ -16,9 +17,9 @@ struct Atoms {
 
 impl Discovery {
     pub(super) fn atoms(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
-        let rows = Self::read::<Record>(input, "records")?;
-        let mut coverage = Self::read::<Coverage>(input, "coverage")?;
-        let observed = Self::read::<bool>(input, "observed")?;
+        let rows = Rows::input::<Record>(input, "records")?;
+        let mut coverage = Rows::input::<Coverage>(input, "coverage")?;
+        let observed = Rows::input::<bool>(input, "observed")?;
         Self::require(observed.len() == 1, "proof kind")?;
         let mut state = Atoms {
             values: BTreeMap::new(),
@@ -34,7 +35,7 @@ impl Discovery {
                 Self::add(&mut state.counts.duplicates, 1)?;
             }
         }
-        let contexts = Self::read::<Context>(input, "contexts")?;
+        let contexts = Rows::input::<Context>(input, "contexts")?;
         let mut context_map = BTreeMap::new();
         for context in &contexts {
             Self::require(records.contains_key(&context.record), "orphan context")?;
@@ -42,7 +43,7 @@ impl Discovery {
                 Self::same(previous == context, "context values")?;
             }
         }
-        let exclusions = Self::read::<Disposition>(input, "exclusions")?;
+        let exclusions = Rows::input::<Disposition>(input, "exclusions")?;
         let mut exclusion_map = BTreeMap::new();
         for exclusion in &exclusions {
             Self::require(
@@ -65,7 +66,7 @@ impl Discovery {
         }
         state.coverage(&mut coverage);
         let coverage = Self::merge_coverage(coverage)?;
-        let lifecycle = Self::merge_lifecycle(Self::read::<Lifecycle>(input, "lifecycle")?)?;
+        let lifecycle = Self::merge_lifecycle(Rows::input::<Lifecycle>(input, "lifecycle")?)?;
         Ok(sdk::Output {
             datasets: vec![
                 Self::write(

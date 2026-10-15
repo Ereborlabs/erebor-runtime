@@ -267,14 +267,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
         AnalysisStore::restore(&backup, &root)?;
         return Err("the requested restore crash did not occur".into());
     }
-    let source = EvidenceIntakeIdentityV1 {
-        tenant_id: [1; 16],
-        node_id: "node-a".into(),
-        node_boot_id: [2; 16],
-        label_epoch: 1,
-        source_id: [3; 16],
-        source_epoch: 1,
-    };
+    let source = crate::analysis::tests::identity();
     for point in [
         "restore.marked",
         "restore.before",
@@ -356,14 +349,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
     let scope = ProcessorScopeV1 {
         processor_id: "processor".into(),
         method_version: 1,
-        identity: EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        },
+        identity: crate::analysis::tests::identity(),
     };
     let input = ProcessorRetirementV1 {
         scope: scope.clone(),
@@ -422,12 +408,6 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
             } else if kind == "retire" {
                 store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
                 store.commit_result(&AnalysisResultCommitV1 {
-                    scope: scope.clone(),
-                    expected_cursor: 0,
-                    consumed_cursor: 1,
-                    coverage_revision: 0,
-                    context_revision: 0,
-                    result_id: "finding".into(),
                     body: b"result".to_vec(),
                     created_utc_ns: 101,
                     witnesses: vec![AnalysisWitnessV1 {
@@ -435,7 +415,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
                         cursor: 1,
                         expires_utc_ns: 1_000,
                     }],
-                    context_refs: vec![],
+                    ..crate::analysis::tests::result(scope.clone(), "finding".into())
                 })?;
             }
             let before = store.meta()?;
@@ -567,14 +547,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
 
 #[test]
 fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let source = EvidenceIntakeIdentityV1 {
-        tenant_id: [1; 16],
-        node_id: "node-a".into(),
-        node_boot_id: [2; 16],
-        label_epoch: 1,
-        source_id: [3; 16],
-        source_epoch: 1,
-    };
+    let source = crate::analysis::tests::identity();
     let scope = ProcessorScopeV1 {
         processor_id: "required".into(),
         method_version: 1,
@@ -773,14 +746,7 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
 
 #[test]
 fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let source = EvidenceIntakeIdentityV1 {
-        tenant_id: [1; 16],
-        node_id: "node-a".into(),
-        node_boot_id: [2; 16],
-        label_epoch: 1,
-        source_id: [3; 16],
-        source_epoch: 1,
-    };
+    let source = crate::analysis::tests::identity();
     let context = AnalysisContextVersionV1 {
         key: AnalysisContextKeyV1 {
             tenant_id: source.tenant_id,

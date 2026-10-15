@@ -74,16 +74,11 @@ async fn admission_preserves_internal_composition() -> TestResult {
         .iter()
         .find(|export| export.descriptor.name == "derived")
         .ok_or("derived export is absent")?;
-    let output = fixture
-        .owner
-        .read_output(
-            &fixture.grant,
-            "test",
-            "test.model",
-            "derived",
-            &export.results[0].result_id,
-        )?
-        .json_rows()?;
+    let output = crate::AnalysisPackageOwner::output_rows(&fixture.output(
+        "test.model",
+        "derived",
+        &export.results[0].result_id,
+    )?)?;
     assert_eq!(output["rows"], serde_json::json!([{"count": 4}]));
     Ok(())
 }

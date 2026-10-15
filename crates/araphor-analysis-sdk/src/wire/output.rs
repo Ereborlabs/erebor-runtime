@@ -9,8 +9,7 @@ impl Output {
         evaluation: &crate::Evaluation,
         output: &crate::Output,
     ) -> Result<Self> {
-        let validator = package.validator(evaluation)?;
-        Self::encode_checked(&validator.check(evaluation)?, output)
+        Self::encode_checked(&package.check_evaluation(evaluation)?, output)
     }
 
     pub(crate) fn encode_checked(
@@ -68,8 +67,7 @@ impl Output {
         evaluation: &crate::Evaluation,
     ) -> Result<crate::Output> {
         let limits = evaluation.context.limits;
-        let validator = package.wire_validator(&evaluation.export, limits)?;
-        let model = validator.model;
+        let model = package.wire_validator(&evaluation.export, limits)?;
         let mut codec = Codec::new(limits);
         let datasets = self
             .datasets
@@ -102,8 +100,8 @@ impl Output {
                 .map(|checkpoint| checkpoint.decode(model, limits))
                 .transpose()?,
         };
-        validator.input(evaluation)?;
-        validator.output(evaluation, &output)?;
+        model.input(evaluation)?;
+        model.output(evaluation, &output)?;
         Ok(output)
     }
 }

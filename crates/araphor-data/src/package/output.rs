@@ -3,19 +3,17 @@ use snafu::ResultExt as _;
 
 use crate::Result;
 
-use super::{
-    PackageCheckpointV1, PackageDatasetV1, PackageErrorCodeV1 as Code, PackageOutputV1,
-    PackageReasonV1,
-};
+use super::{AnalysisPackageOwner, PackageErrorCodeV1 as Code};
 
-impl PackageOutputV1 {
-    pub fn json_rows(&self) -> Result<serde_json::Value> {
+impl AnalysisPackageOwner {
+    pub fn output_rows(output: &sdk::wire::Output) -> Result<serde_json::Value> {
         let mut outputs = serde_json::Map::new();
         let mut remaining = 16 * 1024 * 1024;
-        for dataset in &self.datasets {
-            let data = dataset.decode_any(sdk::Limits::default())?;
-            let mut writer =
-                arrow_json::ArrayWriter::new(super::wire::PackageBuffer::new(remaining));
+        for dataset in &output.datasets {
+            let data = dataset
+                .decode_any(sdk::Limits::default())
+                .context(crate::AnalysisContractSnafu)?;
+            let mut writer = arrow_json::ArrayWriter::new(sdk::wire::BoundedBuffer::new(remaining));
             for batch in data.batches {
                 writer.write(&batch).context(crate::PackageArrowSnafu)?;
             }
@@ -28,13 +26,17 @@ impl PackageOutputV1 {
         Ok(serde_json::Value::Object(outputs))
     }
 
-    pub fn encode(output: &sdk::Output, model: &sdk::Model) -> Result<Self> {
+    pub(crate) fn encode_output(
+        output: &sdk::Output,
+        model: &sdk::Model,
+    ) -> Result<sdk::wire::Output> {
         let datasets = Self::encode_datasets(&output.datasets, &model.outputs, model.limits)?;
-        let mut remaining = model
-            .limits
-            .max_bytes
-            .min(16 * 1024 * 1024)
-            .saturating_sub(datasets.iter().map(|data| data.ipc.len() as u64).sum());
+        let mut remaining = model.limits.max_bytes.min(16 * 1024 * 1024).saturating_sub(
+            datasets
+                .iter()
+                .map(|data| data.arrow_ipc.len() as u64)
+                .sum(),
+        );
         let mut reasons = Vec::new();
         for reason in &output.reasons {
             let schema = &model
@@ -43,7 +45,7 @@ impl PackageOutputV1 {
                 .find(|spec| spec.code == reason.code)
                 .ok_or_else(|| Code::Invalid.error("reason code"))?
                 .details;
-            let details = PackageDatasetV1::encode(
+            let details = sdk::wire::Dataset::encode(
                 &sdk::Dataset {
                     name: reason.code.clone(),
                     batches: vec![reason.details.clone()],
@@ -53,12 +55,13 @@ impl PackageOutputV1 {
                     max_bytes: remaining,
                     ..model.limits
                 },
-            )?;
-            remaining = remaining.saturating_sub(details.ipc.len() as u64);
-            reasons.push(PackageReasonV1 {
+            )
+            .context(crate::AnalysisContractSnafu)?;
+            remaining = remaining.saturating_sub(details.arrow_ipc.len() as u64);
+            reasons.push(sdk::wire::ReasonValue {
                 output: reason.output.clone(),
                 code: reason.code.clone(),
-                details,
+                details: details.arrow_ipc,
             });
         }
         let checkpoint = output
@@ -69,7 +72,7 @@ impl PackageOutputV1 {
                     .checkpoint
                     .as_ref()
                     .ok_or_else(|| Code::Invalid.error("checkpoint declaration"))?;
-                Ok(PackageCheckpointV1 {
+                Ok(sdk::wire::Checkpoint {
                     version: checkpoint.version,
                     datasets: Self::encode_datasets(
                         &checkpoint.datasets,
@@ -82,7 +85,7 @@ impl PackageOutputV1 {
                 })
             })
             .transpose()?;
-        Ok(Self {
+        Ok(sdk::wire::Output {
             datasets,
             evidence: output.evidence.clone(),
             reasons,
@@ -90,17 +93,24 @@ impl PackageOutputV1 {
         })
     }
 
-    pub fn decode(&self, model: &sdk::Model) -> Result<sdk::Output> {
-        let datasets = Self::decode_datasets(&self.datasets, &model.outputs, model.limits)?;
+    pub fn decode_output(output: &sdk::wire::Output, model: &sdk::Model) -> Result<sdk::Output> {
+        let datasets = Self::decode_datasets(&output.datasets, &model.outputs, model.limits)?;
         let mut reasons = Vec::new();
-        for reason in &self.reasons {
+        for reason in &output.reasons {
             let schema = &model
                 .reasons
                 .iter()
                 .find(|spec| spec.code == reason.code)
                 .ok_or_else(|| Code::Invalid.error("reason code"))?
                 .details;
-            let mut details = reason.details.decode(schema, model.limits)?.batches;
+            let mut details = sdk::wire::Dataset::decode_ipc(
+                &reason.code,
+                &reason.details,
+                Some(schema),
+                model.limits,
+            )
+            .context(crate::AnalysisContractSnafu)?
+            .batches;
             if details.len() != 1 || details[0].num_rows() != 1 {
                 return Err(Code::Invalid.error("reason details"));
             }
@@ -110,14 +120,14 @@ impl PackageOutputV1 {
                 details: details.remove(0),
             });
         }
-        let checkpoint = self
+        let checkpoint = output
             .checkpoint
             .as_ref()
-            .map(|checkpoint| checkpoint.decode(model))
+            .map(|checkpoint| Self::decode_checkpoint(checkpoint, model))
             .transpose()?;
         Ok(sdk::Output {
             datasets,
-            evidence: self.evidence.clone(),
+            evidence: output.evidence.clone(),
             reasons,
             checkpoint,
         })
@@ -127,7 +137,7 @@ impl PackageOutputV1 {
         datasets: &[sdk::Dataset],
         ports: &[sdk::Port],
         limits: sdk::Limits,
-    ) -> Result<Vec<PackageDatasetV1>> {
+    ) -> Result<Vec<sdk::wire::Dataset>> {
         let mut remaining = limits.max_bytes.min(16 * 1024 * 1024);
         datasets
             .iter()
@@ -137,22 +147,23 @@ impl PackageOutputV1 {
                     .find(|port| port.name == dataset.name)
                     .ok_or_else(|| Code::Invalid.error("dataset name"))?
                     .schema;
-                let encoded = PackageDatasetV1::encode(
+                let encoded = sdk::wire::Dataset::encode(
                     dataset,
                     schema,
                     sdk::Limits {
                         max_bytes: remaining,
                         ..limits
                     },
-                )?;
-                remaining = remaining.saturating_sub(encoded.ipc.len() as u64);
+                )
+                .context(crate::AnalysisContractSnafu)?;
+                remaining = remaining.saturating_sub(encoded.arrow_ipc.len() as u64);
                 Ok(encoded)
             })
             .collect()
     }
 
     pub(super) fn decode_datasets(
-        datasets: &[PackageDatasetV1],
+        datasets: &[sdk::wire::Dataset],
         ports: &[sdk::Port],
         limits: sdk::Limits,
     ) -> Result<Vec<sdk::Dataset>> {
@@ -161,7 +172,7 @@ impl PackageOutputV1 {
         datasets
             .iter()
             .map(|dataset| {
-                total = total.saturating_add(dataset.ipc.len() as u64);
+                total = total.saturating_add(dataset.arrow_ipc.len() as u64);
                 if total > limits.max_bytes {
                     return Err(Code::Limit.error("encoded datasets"));
                 }
@@ -170,13 +181,15 @@ impl PackageOutputV1 {
                     .find(|port| port.name == dataset.name)
                     .ok_or_else(|| Code::Invalid.error("dataset name"))?
                     .schema;
-                let data = dataset.decode(
-                    schema,
-                    sdk::Limits {
-                        max_bytes: limits.max_bytes.saturating_sub(decoded),
-                        ..limits
-                    },
-                )?;
+                let data = dataset
+                    .decode(
+                        schema,
+                        sdk::Limits {
+                            max_bytes: limits.max_bytes.saturating_sub(decoded),
+                            ..limits
+                        },
+                    )
+                    .context(crate::AnalysisContractSnafu)?;
                 decoded = decoded.saturating_add(
                     data.batches
                         .iter()
@@ -187,15 +200,16 @@ impl PackageOutputV1 {
             })
             .collect()
     }
-}
 
-impl PackageCheckpointV1 {
-    pub(super) fn decode(&self, model: &sdk::Model) -> Result<sdk::Checkpoint> {
+    pub(super) fn decode_checkpoint(
+        checkpoint: &sdk::wire::Checkpoint,
+        model: &sdk::Model,
+    ) -> Result<sdk::Checkpoint> {
         let spec = model
             .checkpoint
             .as_ref()
             .ok_or_else(|| Code::Invalid.error("checkpoint declaration"))?;
-        if spec.version != self.version {
+        if spec.version != checkpoint.version {
             return Err(Code::Invalid.error("checkpoint version"));
         }
         let limits = sdk::Limits {
@@ -203,8 +217,8 @@ impl PackageCheckpointV1 {
             ..model.limits
         };
         Ok(sdk::Checkpoint {
-            version: self.version,
-            datasets: PackageOutputV1::decode_datasets(&self.datasets, &spec.datasets, limits)?,
+            version: checkpoint.version,
+            datasets: Self::decode_datasets(&checkpoint.datasets, &spec.datasets, limits)?,
         })
     }
 }

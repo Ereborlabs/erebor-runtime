@@ -12,33 +12,10 @@ mod tests;
 
 pub struct BurstDetector;
 
-impl sdk::guest::Guest for BurstDetector {
+impl sdk::Guest for BurstDetector {
     fn package() -> sdk::Package {
         Self::package()
     }
-    fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        Self::evaluate(evaluation)
-    }
-
-    fn evaluate_checked(checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
-        Self::compute(checked)
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-sdk::export_component!(BurstDetector);
-
-#[cfg(not(target_arch = "wasm32"))]
-sdk::export_native!(BurstDetector);
-
-impl BurstDetector {
-    pub fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        let checked = Self::declaration().check_evaluation(evaluation)?;
-        let output = Self::compute(&checked)?;
-        checked.validate_output(&output)?;
-        Ok(output)
-    }
-
     fn compute(checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
         if checked.package() != Self::declaration() {
             return Err(sdk::Error::contract(
@@ -49,11 +26,7 @@ impl BurstDetector {
         let evaluation = checked.evaluation();
         let model = checked.model();
         let threshold = Self::threshold(evaluation)?;
-        let records: Vec<Observation> = Rows::decode(
-            &model.inputs[0].port,
-            &evaluation.input("records")?.data,
-            evaluation.context.limits,
-        )?;
+        let records: Vec<Observation> = Rows::input(checked, "records")?;
         let mut groups = BTreeMap::new();
         for (row, record) in records.iter().enumerate() {
             groups
@@ -105,6 +78,20 @@ impl BurstDetector {
             )?],
         });
         Ok(output)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+sdk::export_component!(BurstDetector);
+
+#[cfg(not(target_arch = "wasm32"))]
+sdk::export_native!(BurstDetector);
+
+impl BurstDetector {
+    pub fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
+        Self::declaration()
+            .check_evaluation(evaluation)?
+            .evaluate(<Self as sdk::Guest>::compute)
     }
 
     fn threshold(evaluation: &sdk::Evaluation) -> sdk::Result<u64> {

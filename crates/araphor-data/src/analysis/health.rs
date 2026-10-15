@@ -31,12 +31,8 @@ mod tests {
             processor_id: "required".into(),
             method_version: 1,
             identity: EvidenceIntakeIdentityV1 {
-                tenant_id: [1; 16],
                 node_id: "n".into(),
-                node_boot_id: [2; 16],
-                label_epoch: 1,
-                source_id: [3; 16],
-                source_epoch: 1,
+                ..crate::analysis::tests::identity()
             },
         }
     }
@@ -84,16 +80,9 @@ mod tests {
         optional.processor_id = "optional".into();
         store.register_processor(&optional, ProcessorClassV1::Optional, 1)?;
         store.commit_result(&AnalysisResultCommitV1 {
-            scope: required.clone(),
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "r".into(),
             body: vec![1],
             created_utc_ns: 2,
-            witnesses: vec![],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(required.clone(), "r".into())
         })?;
         assert_eq!(
             store

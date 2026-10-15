@@ -797,14 +797,7 @@ mod tests {
     use crate::{EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, ValidatedEvidenceBatchV1};
 
     fn identity() -> EvidenceIntakeIdentityV1 {
-        EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        }
+        crate::analysis::tests::identity()
     }
 
     fn batch(cursor: u64) -> ValidatedEvidenceBatchV1 {

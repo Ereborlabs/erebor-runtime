@@ -102,14 +102,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        };
+        let identity = crate::analysis::tests::identity();
         for cursor in 1..=65 {
             store.accept_validated_batch(
                 identity.clone(),
@@ -269,7 +262,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "read raw deletion recovery",
                 })?
-                .collect::<duckdb::Result<Vec<_>>>()
+                .collect::<duckdb::Result<BTreeSet<_>>>()
                 .context(AnalysisDatabaseSnafu {
                     operation: "decode raw deletion recovery",
                 })?
@@ -292,10 +285,8 @@ impl AnalysisStore {
         };
         let mut raw = RawJournal::open(root, &committed)?;
         raw.restore_receipts(writer)?;
-        for id in deleting {
-            Self::remove_segment(writer, root, &raw, id)?;
-            raw.forget_segments([id])?;
-        }
+        Self::remove_segments(writer, root, &raw, &deleting)?;
+        raw.forget_segments(deleting)?;
         raw.validate_catalog(writer)?;
         raw.project(writer, None)?;
         raw.project_paths(writer)?;
@@ -656,9 +647,7 @@ impl RawJournal {
             .map(|entry| entry.reference.id)
             .filter(|id| !ids.contains(id))
             .collect();
-        for id in removed {
-            self.forget_segments([id])?;
-        }
+        self.forget_segments(removed)?;
         for entry in self.entries.values() {
             let key = entry.identity.key();
             let Some(&floor) = budget.required.get(&key) else {
@@ -1056,22 +1045,5 @@ impl RawJournal {
             }
         }
         self.refresh_receipts()
-    }
-
-    pub(super) fn catalog_path(
-        writer: &Connection,
-        root: &Path,
-        id: u64,
-    ) -> Result<std::path::PathBuf> {
-        let name: String = writer
-            .query_row(
-                "SELECT file_name FROM segments WHERE segment_id = ?",
-                params![id],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read raw segment file name",
-            })?;
-        Self::file_path(root, &name)
     }
 }

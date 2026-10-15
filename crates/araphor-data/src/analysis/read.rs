@@ -694,12 +694,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "n".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         };
         let processor = super::super::ProcessorScopeV1 {
             identity: identity.clone(),
@@ -749,12 +745,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
             node_id: "n".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         };
         store.accept_validated_batch(
             identity.clone(),
@@ -974,14 +966,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
-        };
+        let identity = crate::analysis::tests::identity();
         assert!(store.source_page(identity.tenant_id, None)?.is_empty());
         let mut expected = Vec::new();
         for index in 0..MAX_ANALYSIS_PAGE_RECORDS + 2 {

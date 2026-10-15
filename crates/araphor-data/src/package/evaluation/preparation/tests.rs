@@ -1,7 +1,8 @@
+use araphor_analysis_sdk as sdk;
 use std::time::Duration;
 
 use crate::package::tests::{bundle, Fixture, TestResult};
-use crate::package::{PackageImplementationV1, PackageOutputV1};
+use crate::package::PackageImplementationV1;
 
 use super::*;
 
@@ -115,9 +116,12 @@ async fn automatic_clock_ticks() -> TestResult {
                 },
                 "source: {source:?}"
             );
-            assert!(!fixture
-                .owner
-                .inputs_current(&active, context.clock, now, false, &control)?);
+            let (current, next) =
+                fixture
+                    .owner
+                    .inputs_current(&active, context.clock, now, false, &control)?;
+            assert!(!current);
+            assert_eq!(next, AnalysisPackageOwner::clock_tick(now) + period);
             let prior = if source.is_some() && offset >= 2 {
                 Some((
                     fixture.store.meta()?,
@@ -150,18 +154,15 @@ async fn automatic_clock_ticks() -> TestResult {
             assert_eq!(prepared.created_utc_ns, tick);
             let metadata: ResultContext = AnalysisPackageOwner::decode(&prepared.metadata)?;
             assert_eq!(metadata.context.time_utc_ns, tick as i64);
-            let output: PackageOutputV1 = AnalysisPackageOwner::decode(&prepared.datasets)?;
+            let output: sdk::wire::Output = AnalysisPackageOwner::decode(&prepared.datasets)?;
             assert_eq!(
-                output.json_rows()?["rows"],
+                crate::AnalysisPackageOwner::output_rows(&output)?["rows"],
                 serde_json::json!([{"count":expected}])
             );
             let committed = fixture
                 .store
                 .commit_package(&prepared, || control.check())?;
-            let stored = fixture
-                .store
-                .package_result([1; 16], &committed.result_id)?
-                .ok_or("committed result")?;
+            let stored = fixture.result(&committed.result_id)?;
             let saved: ResultContext = AnalysisPackageOwner::decode(&stored.metadata)?;
             assert_eq!(saved.context.time_utc_ns, tick as i64);
             let active = fixture.store.package_activation_page(None)?.remove(0);
@@ -181,16 +182,14 @@ async fn automatic_clock_ticks() -> TestResult {
             );
         }
         let active = fixture.store.package_activation_page(None)?.remove(0);
-        fixture.owner.refresh(
-            &active,
-            &package.artifacts[0].descriptor.exports[0],
+        fixture.owner.inspect(
             &fixture.grant,
+            "test",
+            &active.key.package_id,
+            Some(&package),
             &control,
         )?;
-        let stored = fixture
-            .store
-            .package_result([1; 16], active.result_id.as_deref().ok_or("active result")?)?
-            .ok_or("stored result")?;
+        let stored = fixture.result(active.result_id.as_deref().ok_or("active result")?)?;
         assert_eq!(stored.stale, source.is_none());
     }
     Ok(())

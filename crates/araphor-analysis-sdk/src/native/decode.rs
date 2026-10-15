@@ -21,12 +21,11 @@ impl Decoder {
     pub(super) unsafe fn evaluation<'a>(
         package: &'a Package,
         request: &abi::Request,
-    ) -> Result<(Evaluation, crate::validation::ContractValidator<'a>)> {
+    ) -> Result<(Evaluation, &'a crate::Model)> {
         let limits = request.context.limits.into();
         let mut decoder = Self::new(limits);
         let export = unsafe { decoder.text(request.export_name)? };
-        let validator = package.wire_validator(&export, limits)?;
-        let model = validator.model;
+        let model = package.wire_validator(&export, limits)?;
         if request.context.has_seed > 1 {
             return Err(Error::contract(ErrorCode::Invalid, "native seed flag"));
         }
@@ -87,8 +86,8 @@ impl Decoder {
             },
             checkpoint: unsafe { decoder.checkpoint(request.checkpoint, model, false)? },
         };
-        validator.input(&evaluation)?;
-        Ok((evaluation, validator))
+        model.input(&evaluation)?;
+        Ok((evaluation, model))
     }
 
     pub(super) unsafe fn output(
@@ -97,8 +96,7 @@ impl Decoder {
         response: &abi::Response,
         output_limits: Limits,
     ) -> Result<Output> {
-        let validator = package.validator(evaluation)?;
-        let model = validator.model;
+        let model = package.validator(evaluation)?;
         let mut decoder = Self::new(output_limits);
         let mut datasets = decoder.vector(response.dataset_count)?;
         for data in unsafe { decoder.slice(response.datasets, response.dataset_count)? } {

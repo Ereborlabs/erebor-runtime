@@ -1,7 +1,6 @@
 use araphor_analysis_sdk as sdk;
 
 use crate::analysis::PackageKeyV1;
-use crate::package::{PackageInputV1, PackageReasonV1};
 
 use super::*;
 
@@ -19,10 +18,10 @@ fn string(value: &mut String) -> usize {
     value.capacity() - capacity
 }
 
-fn dataset(name: &str) -> PackageDatasetV1 {
-    PackageDatasetV1 {
+fn dataset(name: &str) -> sdk::wire::Dataset {
+    sdk::wire::Dataset {
         name: name.into(),
-        ipc: vec![1, 2, 3],
+        arrow_ipc: vec![1, 2, 3],
     }
 }
 
@@ -57,7 +56,7 @@ fn fixture_capacity_is_charged() -> TestResult {
         export: "evaluate".into(),
         time_utc_ns: 0,
         seed: None,
-        inputs: vec![PackageInputV1 {
+        inputs: vec![sdk::wire::Input {
             data: dataset("input"),
             revision: sdk::Revision {
                 owner: "fixture".into(),
@@ -74,11 +73,11 @@ fn fixture_capacity_is_charged() -> TestResult {
             },
         }],
         parameters: Some(serde_json::json!({"values": ["retained"]})),
-        checkpoint: Some(PackageCheckpointV1 {
+        checkpoint: Some(sdk::wire::Checkpoint {
             version: 1,
             datasets: vec![dataset("state")],
         }),
-        expected: PackageOutputV1 {
+        expected: sdk::wire::Output {
             datasets: vec![dataset("data")],
             evidence: vec![sdk::EvidenceLink {
                 output: sdk::RowRef {
@@ -90,15 +89,15 @@ fn fixture_capacity_is_charged() -> TestResult {
                     row: 0,
                 },
             }],
-            reasons: vec![PackageReasonV1 {
+            reasons: vec![sdk::wire::ReasonValue {
                 output: sdk::RowRef {
                     dataset: "data".into(),
                     row: 0,
                 },
                 code: "fixture.retained".into(),
-                details: dataset("details"),
+                details: vec![1, 2, 3],
             }],
-            checkpoint: Some(PackageCheckpointV1 {
+            checkpoint: Some(sdk::wire::Checkpoint {
                 version: 1,
                 datasets: vec![dataset("state")],
             }),
@@ -110,7 +109,7 @@ fn fixture_capacity_is_charged() -> TestResult {
     let mut growth = string(&mut fixture.name) + string(&mut fixture.export);
     growth += grow(&mut fixture.inputs);
     let input = &mut fixture.inputs[0];
-    growth += string(&mut input.data.name) + grow(&mut input.data.ipc);
+    growth += string(&mut input.data.name) + grow(&mut input.data.arrow_ipc);
     growth += string(&mut input.revision.owner) + string(&mut input.revision.id);
     growth += grow(&mut input.revision.window.as_mut().ok_or("window")?.source);
     growth += grow(&mut input.coverage.limits) + string(&mut input.coverage.limits[0]);
@@ -125,19 +124,21 @@ fn fixture_capacity_is_charged() -> TestResult {
     growth += string(value);
     let checkpoint = fixture.checkpoint.as_mut().ok_or("checkpoint")?;
     growth += grow(&mut checkpoint.datasets);
-    growth += string(&mut checkpoint.datasets[0].name) + grow(&mut checkpoint.datasets[0].ipc);
+    growth +=
+        string(&mut checkpoint.datasets[0].name) + grow(&mut checkpoint.datasets[0].arrow_ipc);
     let expected = &mut fixture.expected;
     growth +=
         grow(&mut expected.datasets) + grow(&mut expected.evidence) + grow(&mut expected.reasons);
-    growth += string(&mut expected.datasets[0].name) + grow(&mut expected.datasets[0].ipc);
+    growth += string(&mut expected.datasets[0].name) + grow(&mut expected.datasets[0].arrow_ipc);
     growth += string(&mut expected.evidence[0].output.dataset)
         + string(&mut expected.evidence[0].input.dataset);
     let reason = &mut expected.reasons[0];
     growth += string(&mut reason.output.dataset) + string(&mut reason.code);
-    growth += string(&mut reason.details.name) + grow(&mut reason.details.ipc);
+    growth += grow(&mut reason.details);
     let checkpoint = expected.checkpoint.as_mut().ok_or("expected checkpoint")?;
     growth += grow(&mut checkpoint.datasets);
-    growth += string(&mut checkpoint.datasets[0].name) + grow(&mut checkpoint.datasets[0].ipc);
+    growth +=
+        string(&mut checkpoint.datasets[0].name) + grow(&mut checkpoint.datasets[0].arrow_ipc);
     let mut charged = BundleMemory { bytes: 0 };
     charged.fixture(&fixture)?;
     assert_eq!(serde_json::to_vec(&fixture)?, encoded);

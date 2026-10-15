@@ -115,18 +115,19 @@ impl FindingReasonV1 {
 impl DeclaredFindingReasonV1 {
     pub(super) fn from_value(value: &sdk::ReasonValue, limits: sdk::Limits) -> Result<Self> {
         let schema = value.details.schema().as_ref().clone();
-        let encoded = crate::PackageDatasetV1::encode(
+        let encoded = sdk::wire::Dataset::encode(
             &sdk::Dataset {
                 name: "details".into(),
                 batches: vec![value.details.clone()],
             },
             &schema,
             limits,
-        )?;
+        )
+        .context(AnalysisContractSnafu)?;
         Ok(Self {
             code: value.code.clone(),
             schema,
-            ipc: encoded.ipc,
+            ipc: encoded.arrow_ipc,
         })
     }
 
@@ -144,11 +145,8 @@ impl DeclaredFindingReasonV1 {
             max_bytes: super::GRAPH_WINDOW_BYTES as u64,
             ..sdk::Limits::default()
         };
-        let data = crate::PackageDatasetV1 {
-            name: "details".into(),
-            ipc: self.ipc.clone(),
-        }
-        .decode(&self.schema, limits)?;
+        let data = sdk::wire::Dataset::decode_ipc("details", &self.ipc, Some(&self.schema), limits)
+            .context(AnalysisContractSnafu)?;
         if data.batches.len() != 1 || data.batches[0].num_rows() != 1 {
             return GraphInvalidSnafu {
                 field: "finding reason details",

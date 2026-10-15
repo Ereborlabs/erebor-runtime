@@ -1,114 +1,157 @@
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
-use crate::analysis::{PackageActivationV1, PackageCommitV1};
+use crate::analysis::{PackageActivationV1, PackageCommitV1, PackageResultV1};
 use crate::{AnalysisReadControl, QueryOwner, Result};
 
-use super::ResultContext;
+use super::{ResultContext, RunPreparation};
 use crate::package::owner::{ClockDependency, InstalledContext};
 use crate::package::{
     AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageBundleV1,
-    PackageCheckpointV1, PackageErrorCodeV1 as Code, PackageOutputV1,
+    PackageErrorCodeV1 as Code,
 };
-use crate::query::{ModelInputRequest, ModelInputs};
+use crate::query::{ModelInputRequest, ModelInputs, ModelOperation};
 
-struct ModelRun<'a> {
+pub(in crate::package) struct ModelRun<'a> {
+    owner: &'a AnalysisPackageOwner,
     active: &'a PackageActivationV1,
     context: &'a InstalledContext,
     artifact: &'a PackageArtifactV1,
     model: &'a sdk::Model,
-    clocked: bool,
     id: &'a str,
-}
-
-struct RunPreparation<'a> {
-    id: &'a str,
-    rebuild: bool,
-    automatic: bool,
     now: u64,
+    operation: ModelOperation<'a>,
+    inputs: ModelInputs,
+    previous: Option<PackageResultV1>,
+    unchanged: bool,
 }
 
 impl AnalysisPackageOwner {
-    pub(super) fn prepare_run(
-        &self,
-        active: &PackageActivationV1,
-        bundle: &PackageBundleV1,
-        id: &str,
-        rebuild: bool,
-        automatic: bool,
-        control: &AnalysisReadControl,
-    ) -> Result<Option<PackageCommitV1>> {
-        self.prepare_at(
-            active,
-            bundle,
-            RunPreparation {
-                id,
-                rebuild,
-                automatic,
-                now: Self::now(),
-            },
-            control,
-        )
-    }
-
-    fn prepare_at(
+    pub(in crate::package) fn prepare_at(
         &self,
         active: &PackageActivationV1,
         bundle: &PackageBundleV1,
         request: RunPreparation<'_>,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageCommitV1>> {
-        let RunPreparation {
-            id,
-            rebuild,
-            automatic,
-            now,
-        } = request;
         control.check()?;
         let context: InstalledContext = Self::decode(&active.metadata)?;
-        if bundle.root != context.root {
+        self.model_run(active, &context, bundle, request, Action::Run, control)?
+            .map(|run| run.evaluate(request.rebuild, request.automatic, control))
+            .transpose()
+    }
+
+    pub(in crate::package) fn model_run<'a>(
+        &'a self,
+        active: &'a PackageActivationV1,
+        context: &'a InstalledContext,
+        bundle: &'a PackageBundleV1,
+        request: RunPreparation<'a>,
+        action: Action,
+        control: &AnalysisReadControl,
+    ) -> Result<Option<ModelRun<'a>>> {
+        control.check()?;
+        let mut now = if request.automatic {
+            Self::clock_tick(request.now)
+        } else {
+            request.now
+        };
+        if action == Action::Run && bundle.root != context.root {
             return Err(Code::Conflict.error("activation package root"));
         }
-        if automatic && self.inputs_current(active, context.clock, now, true, control)? {
+        if request.automatic
+            && self
+                .inputs_current(active, context.clock, request.now, true, control)?
+                .0
+        {
             return Ok(None);
         }
-        let run = ModelRun::new(active, &context, bundle, id)?;
-        let implementation = run.artifact.implementation(&run.model.name)?;
-        let now = if automatic {
-            Self::clock_tick(now)
-        } else {
-            now
-        };
-        let (operation, inputs) = self.query.model_operation(active.key.tenant_id).inputs(
+        let artifact = bundle.artifact(&crate::PackageRefV1 {
+            package_id: active.key.package_id.clone(),
+            revision: active.revision.clone(),
+        })?;
+        let model = artifact
+            .descriptor
+            .exports
+            .iter()
+            .find(|model| model.name == active.key.export)
+            .ok_or_else(|| Code::Missing.error("active export"))?;
+        let previous = active
+            .result_id
+            .as_deref()
+            .map(|id| self.store.package_result(active.key.tenant_id, id))
+            .transpose()?
+            .flatten();
+        if action == Action::Inspect && previous.as_ref().is_none_or(|previous| previous.stale) {
+            return Ok(None);
+        }
+        let prior = previous
+            .as_ref()
+            .map(|previous| Self::decode::<ResultContext>(&previous.metadata))
+            .transpose()?;
+        if action == Action::Inspect {
+            if let Some(prior) = prior
+                .as_ref()
+                .filter(|prior| Self::clock_tick(prior.context.time_utc_ns as u64) == now)
+            {
+                now = prior.context.time_utc_ns as u64;
+            }
+        }
+        let prepared = self.query.model_operation(active.key.tenant_id).inputs(
             ModelInputRequest {
                 activation: active,
-                model: run.model,
+                model,
                 grant: &context.grant,
                 now,
             },
             control,
-            || self.check(&context.grant, Action::Run),
-        )?;
-        let mut metadata = ResultContext::new(id, now, run.model, &inputs);
-        metadata.target = implementation.target().into();
-        metadata.artifact = implementation.identity()?;
-        if metadata.target == "wasm" {
-            metadata.context.limits = self.query.component_limits(metadata.context.limits);
+            || self.check(&context.grant, action),
+        );
+        let (operation, inputs) = match prepared {
+            Ok(prepared) => prepared,
+            Err(crate::Error::Package {
+                code: Code::Missing | Code::Incomplete,
+                ..
+            }) if action == Action::Inspect => {
+                control.check()?;
+                self.store.mark_package_stale(active)?;
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        control.check()?;
+        let unchanged = prior.as_ref().is_some_and(|prior| prior.matches(&inputs));
+        let current = unchanged
+            && !prior.as_ref().is_some_and(|prior| {
+                Self::clock_changed(
+                    context.clock == ClockDependency::Model,
+                    prior.context.time_utc_ns,
+                    now,
+                )
+            });
+        if !current && active.generation != 0 && active.result_id.is_some() {
+            self.store.mark_package_stale(active)?;
         }
-        let Some(evaluation) = run.evaluation(self, &inputs, &metadata, rebuild, automatic)? else {
+        if action == Action::Inspect
+            || (request.automatic
+                && current
+                && previous.as_ref().is_some_and(|previous| !previous.stale))
+        {
             return Ok(None);
-        };
-        let evaluated = match implementation {
-            crate::package::PackageImplementationV1::Sql { program, .. } => {
-                operation.evaluate(&run.artifact.descriptor, program, &evaluation, control)?
-            }
-            _ => {
-                drop(operation);
-                self.evaluate_artifact(active.key.tenant_id, run.artifact, &evaluation, control)?
-            }
-        };
-        run.commit(inputs, metadata, &evaluated.output, automatic)
-            .map(Some)
+        }
+        Ok(Some(ModelRun {
+            owner: self,
+            active,
+            context,
+            artifact,
+            model,
+            id: request.id,
+            now,
+            operation,
+            inputs,
+            previous,
+            unchanged,
+        }))
     }
 
     pub(in crate::package) fn clock_tick(now: u64) -> u64 {
@@ -127,127 +170,90 @@ impl AnalysisPackageOwner {
         now: u64,
         changed: bool,
         control: &AnalysisReadControl,
-    ) -> Result<bool> {
-        let Some(metadata) = self.store.package_current(active, now, changed, control)? else {
-            return Ok(false);
+    ) -> Result<(bool, u64)> {
+        let tick = Self::clock_tick(now).saturating_add(Self::RECONCILE_INTERVAL.as_nanos() as u64);
+        let Some((metadata, deadline)) =
+            self.store.package_current(active, now, changed, control)?
+        else {
+            return Ok((false, tick));
         };
         let saved: ResultContext = Self::decode(&metadata)?;
-        Ok(!Self::clock_changed(
-            clock != ClockDependency::None,
-            saved.context.time_utc_ns,
-            now,
+        Ok((
+            !Self::clock_changed(
+                clock != ClockDependency::None,
+                saved.context.time_utc_ns,
+                now,
+            ),
+            deadline.min(if clock == ClockDependency::None {
+                u64::MAX
+            } else {
+                tick
+            }),
         ))
     }
 }
 
-impl<'a> ModelRun<'a> {
-    fn new(
-        active: &'a PackageActivationV1,
-        context: &'a InstalledContext,
-        bundle: &'a PackageBundleV1,
-        id: &'a str,
-    ) -> Result<Self> {
-        let artifact = bundle
-            .artifacts
-            .iter()
-            .find(|artifact| {
-                artifact.descriptor.id == active.key.package_id
-                    && artifact.descriptor.revision == active.revision
-            })
-            .ok_or_else(|| Code::Missing.error("active artifact"))?;
-        let model = artifact
-            .descriptor
-            .exports
-            .iter()
-            .find(|model| model.name == active.key.export)
-            .ok_or_else(|| Code::Missing.error("active export"))?;
-        let clocked = context.clock == ClockDependency::Model;
-        Ok(Self {
-            active,
-            context,
-            artifact,
-            model,
-            clocked,
-            id,
-        })
-    }
-
-    fn evaluation(
-        &self,
-        owner: &AnalysisPackageOwner,
-        inputs: &ModelInputs,
-        metadata: &ResultContext,
+impl ModelRun<'_> {
+    fn evaluate(
+        self,
         rebuild: bool,
         automatic: bool,
-    ) -> Result<Option<sdk::Evaluation>> {
-        let previous = self
-            .active
-            .result_id
-            .as_deref()
-            .map(|id| owner.store.package_result(self.active.key.tenant_id, id))
-            .transpose()?
-            .flatten();
-        let prior = previous
-            .as_ref()
-            .map(|previous| AnalysisPackageOwner::decode::<ResultContext>(&previous.metadata))
-            .transpose()?;
-        let unchanged = prior.as_ref().is_some_and(|prior| {
-            prior.inputs == metadata.inputs && prior.input_coverage == metadata.input_coverage
-        });
-        let clock_changed = prior.as_ref().is_some_and(|prior| {
-            AnalysisPackageOwner::clock_changed(
-                self.clocked,
-                prior.context.time_utc_ns,
-                metadata.context.time_utc_ns as u64,
-            )
-        });
-        if automatic
-            && unchanged
-            && !clock_changed
-            && previous.as_ref().is_some_and(|previous| !previous.stale)
-        {
-            return Ok(None);
+        control: &AnalysisReadControl,
+    ) -> Result<PackageCommitV1> {
+        let implementation = self.artifact.implementation(&self.model.name)?;
+        let mut metadata = ResultContext::new(self.id, self.now, self.model, &self.inputs);
+        metadata.target = implementation.target().into();
+        metadata.artifact = implementation.identity()?;
+        if metadata.target == "wasm" {
+            metadata.context.limits = self.owner.query.component_limits(metadata.context.limits);
         }
-        if (!unchanged || clock_changed)
-            && self.active.generation != 0
-            && self.active.result_id.is_some()
-        {
-            owner.store.mark_package_stale(self.active)?;
-        }
-        let checkpoint = if unchanged && !rebuild {
-            previous
+        let checkpoint = if self.unchanged && !rebuild {
+            self.previous
                 .as_ref()
                 .filter(|previous| !previous.checkpoint.is_empty())
                 .map(|previous| {
-                    AnalysisPackageOwner::decode::<PackageCheckpointV1>(&previous.checkpoint)?
-                        .decode(self.model)
+                    AnalysisPackageOwner::decode_checkpoint(
+                        &AnalysisPackageOwner::decode::<sdk::wire::Checkpoint>(
+                            &previous.checkpoint,
+                        )?,
+                        self.model,
+                    )
                 })
                 .transpose()?
         } else {
             None
         };
-        let parameters = AnalysisPackageOwner::parameter_values(
-            self.context.parameters.as_ref(),
-            &self.active.key.package_id,
-            &self.active.key.export,
-        );
-        Ok(Some(sdk::Evaluation {
+        drop(self.previous);
+        let evaluation = sdk::Evaluation {
             export: self.model.name.clone(),
-            inputs: inputs.inputs.clone(),
-            parameters: QueryOwner::model_parameters(&self.model.parameters, parameters)?,
+            inputs: self.inputs.inputs.clone(),
+            parameters: QueryOwner::model_parameters(
+                &self.model.parameters,
+                AnalysisPackageOwner::parameter_values(
+                    self.context.parameters.as_ref(),
+                    &self.active.key.package_id,
+                    &self.active.key.export,
+                ),
+            )?,
             context: metadata.context.clone(),
             checkpoint,
-        }))
-    }
-
-    fn commit(
-        &self,
-        inputs: ModelInputs,
-        metadata: ResultContext,
-        output: &sdk::Output,
-        automatic: bool,
-    ) -> Result<PackageCommitV1> {
-        let mut packet = PackageOutputV1::encode(output, self.model)?;
+        };
+        let evaluated = match implementation {
+            crate::PackageImplementationV1::Sql { program, .. } => {
+                self.operation
+                    .evaluate(&self.artifact.descriptor, program, &evaluation, control)?
+            }
+            _ => {
+                drop(self.operation);
+                self.owner.evaluate_artifact(
+                    self.active.key.tenant_id,
+                    self.artifact,
+                    &evaluation,
+                    control,
+                )?
+            }
+        };
+        let mut packet = crate::AnalysisPackageOwner::encode_output(&evaluated.output, self.model)?;
         let checkpoint = packet
             .checkpoint
             .take()
@@ -263,7 +269,8 @@ impl<'a> ModelRun<'a> {
                     self.active.checkpoint_revision,
                     &metadata.inputs,
                     &metadata.input_coverage,
-                    self.clocked.then_some(metadata.context.time_utc_ns),
+                    (self.context.clock == ClockDependency::Model)
+                        .then_some(metadata.context.time_utc_ns),
                 ))
                 .context(crate::PackageEncodingSnafu)?
             )
@@ -284,10 +291,10 @@ impl<'a> ModelRun<'a> {
             metadata: AnalysisPackageOwner::encode(&metadata)?,
             datasets: AnalysisPackageOwner::encode(&packet)?,
             checkpoint,
-            dependencies: inputs.dependencies,
-            source_revisions: inputs.source_revisions,
-            witnesses: inputs.witnesses,
-            context_refs: inputs.contexts,
+            dependencies: self.inputs.dependencies,
+            source_revisions: self.inputs.source_revisions,
+            witnesses: self.inputs.witnesses,
+            context_refs: self.inputs.contexts,
             created_utc_ns: metadata.context.time_utc_ns as u64,
         })
     }
@@ -297,6 +304,16 @@ impl<'a> ModelRun<'a> {
 mod tests;
 
 impl ResultContext {
+    fn matches(&self, inputs: &ModelInputs) -> bool {
+        self.inputs
+            .iter()
+            .eq(inputs.inputs.iter().map(|input| &input.revision))
+            && self
+                .input_coverage
+                .iter()
+                .eq(inputs.inputs.iter().map(|input| &input.coverage))
+    }
+
     fn new(id: &str, now: u64, model: &sdk::Model, inputs: &ModelInputs) -> Self {
         let input_coverage: Vec<_> = inputs
             .inputs

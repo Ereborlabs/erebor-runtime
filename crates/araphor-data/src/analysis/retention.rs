@@ -433,18 +433,9 @@ impl<'a> EvidenceRetentionOwner<'a> {
         }
         #[cfg(test)]
         self.store.crash_at("retention.after");
-        let mut failure = None;
-        for segment_id in &selected {
-            let cleanup =
-                AnalysisStore::remove_segment(writer, &self.store.root, &raw, *segment_id);
-            if let Err(error) = cleanup {
-                failure.get_or_insert(error);
-            }
-        }
+        let cleanup = AnalysisStore::remove_segments(writer, &self.store.root, &raw, &selected);
         raw.forget_segments(selected)?;
-        if let Some(error) = failure {
-            return Err(error);
-        }
+        cleanup?;
         raw.refresh_budget(writer)?;
         self.store
             .write_ready
@@ -471,11 +462,7 @@ mod tests {
     fn identity(tenant: u8) -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
             tenant_id: [tenant; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         }
     }
 
@@ -521,12 +508,7 @@ mod tests {
         };
         store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
             consumed_cursor: 18,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "bounded-pin".into(),
             body: vec![1],
             created_utc_ns: 101,
             witnesses: vec![AnalysisWitnessV1 {
@@ -534,7 +516,7 @@ mod tests {
                 cursor: 1,
                 expires_utc_ns: 300,
             }],
-            context_refs: Vec::new(),
+            ..crate::analysis::tests::result(scope, "bounded-pin".into())
         })?;
         let first = EvidenceRetentionOwner::new(&store).retain(&source, 200)?;
         assert_eq!(first.removed_records, SWEEP_SEGMENTS as u32);
@@ -817,20 +799,14 @@ mod tests {
         };
         store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
             consumed_cursor: 3,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "retained-witness".into(),
             body: b"review".to_vec(),
-            created_utc_ns: 100,
             witnesses: vec![AnalysisWitnessV1 {
                 identity: source.clone().into(),
                 cursor: 1,
                 expires_utc_ns: expires,
             }],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "retained-witness".into())
         })?;
         let result = EvidenceRetentionOwner::new(&store).retain(&source, expires - 1)?;
         assert_eq!(result.removed_records, 2);
@@ -930,12 +906,6 @@ mod tests {
         store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
         store.accept_validated_batch(source.clone(), batch(1, b"abc"))?;
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "witness".into(),
             body: b"checked".to_vec(),
             created_utc_ns: 101,
             witnesses: vec![AnalysisWitnessV1 {
@@ -943,7 +913,7 @@ mod tests {
                 cursor: 1,
                 expires_utc_ns: 200,
             }],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "witness".into())
         })?;
         let writer = store.raw_access()?;
         {
@@ -998,16 +968,10 @@ mod tests {
         store.accept_validated_batch(source.clone(), batch(1, b"abc"))?;
         for (scope, cursor) in [(&first, 2), (&second, 3)] {
             store.commit_result(&AnalysisResultCommitV1 {
-                scope: scope.clone(),
-                expected_cursor: 0,
                 consumed_cursor: cursor,
-                coverage_revision: 0,
-                context_revision: 0,
-                result_id: scope.processor_id.clone(),
                 body: b"checked".to_vec(),
                 created_utc_ns: 101,
-                witnesses: vec![],
-                context_refs: vec![],
+                ..crate::analysis::tests::result(scope.clone(), scope.processor_id.clone())
             })?;
             if cursor == 2 {
                 let before = store.meta()?;
@@ -1081,16 +1045,10 @@ mod tests {
         store.accept_validated_batch(source.clone(), retry)?;
         assert_eq!(store.meta()?, before);
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
             consumed_cursor: 2,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "caught-up".into(),
             body: b"checked".to_vec(),
             created_utc_ns: aged.intake_utc_ns,
-            witnesses: vec![],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "caught-up".into())
         })?;
         store.accept_validated_batch(source.clone(), aged)?;
 
@@ -1384,28 +1342,17 @@ mod tests {
         let owner = EvidenceRetentionOwner::new(&store);
         assert_eq!(owner.retain(&source, 200)?.removed_records, 0);
         store.commit_result(&AnalysisResultCommitV1 {
-            scope: scope.clone(),
-            expected_cursor: 0,
             consumed_cursor: 2,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "finding-a".into(),
-            body: b"finding".to_vec(),
             created_utc_ns: 150,
             witnesses: vec![AnalysisWitnessV1 {
                 identity: source.clone().into(),
                 cursor: 1,
                 expires_utc_ns: 300,
             }],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope.clone(), "finding-a".into())
         })?;
         store.commit_result(&AnalysisResultCommitV1 {
-            scope: review,
-            expected_cursor: 0,
             consumed_cursor: 3,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "review".into(),
             body: b"checked".to_vec(),
             created_utc_ns: 150,
             witnesses: vec![AnalysisWitnessV1 {
@@ -1413,7 +1360,7 @@ mod tests {
                 cursor: 1,
                 expires_utc_ns: 200,
             }],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(review, "review".into())
         })?;
         let first = owner.retain(&source, 200)?;
         assert_eq!(first.removed_records, 0);
@@ -1448,16 +1395,10 @@ mod tests {
             3
         );
         store.commit_result(&AnalysisResultCommitV1 {
-            scope,
             expected_cursor: 2,
             consumed_cursor: 3,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "finding-b".into(),
-            body: b"finding".to_vec(),
             created_utc_ns: 300,
-            witnesses: vec![],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "finding-b".into())
         })?;
         let third = owner.retain(&source, 300)?;
         assert_eq!(third.removed_records, 3);
@@ -1537,12 +1478,7 @@ mod tests {
                 };
                 store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
                 store.commit_result(&AnalysisResultCommitV1 {
-                    scope,
-                    expected_cursor: 0,
                     consumed_cursor: ROWS,
-                    coverage_revision: 0,
-                    context_revision: 0,
-                    result_id: "retained-witness".into(),
                     body: b"review".to_vec(),
                     created_utc_ns: intake,
                     witnesses: vec![AnalysisWitnessV1 {
@@ -1550,7 +1486,7 @@ mod tests {
                         cursor: ROWS,
                         expires_utc_ns: 10_000,
                     }],
-                    context_refs: vec![],
+                    ..crate::analysis::tests::result(scope, "retained-witness".into())
                 })?;
             }
             store.checkpoint()?;
@@ -1661,16 +1597,11 @@ mod tests {
         assert_eq!(reopened.resume_optional(&optional)?, None);
         reopened.accept_validated_batch(source.clone(), batch(4, b"d"))?;
         reopened.commit_result(&AnalysisResultCommitV1 {
-            scope: optional,
             expected_cursor: 3,
             consumed_cursor: 4,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "profile-after-gap".into(),
             body: b"incomplete".to_vec(),
             created_utc_ns: 101,
-            witnesses: vec![],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(optional, "profile-after-gap".into())
         })?;
         let scope = ProcessorScopeV1 {
             processor_id: "late-security".into(),

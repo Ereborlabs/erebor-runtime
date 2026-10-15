@@ -1,8 +1,9 @@
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{bundle, run, Fixture, TestResult};
-use crate::package::PackageBundleV1;
+use crate::analysis::PackageKeyV1;
+use crate::package::{AnalysisPackageOwner, PackageBundleV1, PackageErrorCodeV1, PackageRequestV1};
 use crate::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisReadControl, ContextSensitivityV1,
 };
@@ -13,11 +14,7 @@ async fn package_supervisor_stop_during_admission() -> TestResult {
     fixture
         .install(bundle("1", "SELECT 1::UBIGINT AS count"), None)
         .await?;
-    let before = fixture
-        .owner
-        .activations([1; 16], "test", "test.model")?
-        .pop()
-        .ok_or("activation absent")?;
+    let before = fixture.activation("test.model")?;
     let results = fixture.store.package_results(&before.key)?;
     let (entered, ready) = tokio::sync::oneshot::channel();
     let (held, admission) = mpsc::channel();
@@ -92,11 +89,7 @@ async fn package_cancelled_failure_preserves_state() -> TestResult {
     fixture
         .install(bundle("1", "SELECT 1::UBIGINT AS count"), None)
         .await?;
-    let before = fixture
-        .owner
-        .activations([1; 16], "test", "test.model")?
-        .pop()
-        .ok_or("activation absent")?;
+    let before = fixture.activation("test.model")?;
     let results = fixture.store.package_results(&before.key)?;
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     control.cancel()?;
@@ -119,11 +112,7 @@ async fn package_running_stop() -> TestResult {
         let mut fixture = Fixture::new()?;
         let package = source_bundle(&fixture)?;
         fixture.install(package.clone(), None).await?;
-        let before = fixture
-            .owner
-            .activations([1; 16], "test", "test.model")?
-            .pop()
-            .ok_or("activation absent")?;
+        let before = fixture.activation("test.model")?;
         let (entered, ready) = mpsc::channel();
         let (release, resumed) = mpsc::channel();
         fixture.owner.query.set_scan_gate(entered, resumed)?;
@@ -179,12 +168,9 @@ async fn package_running_stop() -> TestResult {
 #[tokio::test]
 async fn package_busy_preserves_result() -> TestResult {
     let fixture = Fixture::new()?;
-    fixture.install(source_bundle(&fixture)?, None).await?;
-    let before = fixture
-        .owner
-        .activations([1; 16], "test", "test.model")?
-        .pop()
-        .ok_or("activation absent")?;
+    let package = source_bundle(&fixture)?;
+    fixture.install(package.clone(), None).await?;
+    let before = fixture.activation("test.model")?;
     let (entered, ready) = mpsc::channel();
     let (release, resumed) = mpsc::channel();
     fixture.owner.query.set_scan_gate(entered, resumed)?;
@@ -206,19 +192,20 @@ async fn package_busy_preserves_result() -> TestResult {
             Err(crate::Error::AnalysisBusy { .. })
         ));
         assert!(matches!(
-            fixture
-                .owner
-                .evaluate_active(&before, "automatic", true, None, &control),
+            fixture.owner.evaluate_active(
+                &before,
+                "automatic",
+                true,
+                &crate::package::PackageBundleRef::new(&package)?,
+                &control
+            ),
             Err(crate::Error::AnalysisBusy { .. })
         ));
         assert_eq!(
             fixture.store.package_activation(&before.key)?.as_ref(),
             Some(&before)
         );
-        let result = fixture
-            .store
-            .package_result([1; 16], before.result_id.as_deref().ok_or("result absent")?)?
-            .ok_or("stored result absent")?;
+        let result = fixture.result(before.result_id.as_deref().ok_or("result absent")?)?;
         assert!(!result.stale);
         Ok(())
     })();
@@ -257,4 +244,102 @@ fn source_bundle(fixture: &Fixture) -> TestResult<PackageBundleV1> {
         "SELECT owner_revision AS count FROM context_versions".into(),
     );
     Ok(package)
+}
+
+pub(super) async fn running_guest(
+    fixture: Fixture,
+    package: PackageBundleV1,
+    cause: &str,
+) -> TestResult {
+    let key = PackageKeyV1 {
+        tenant_id: [1; 16],
+        scope_id: "test".into(),
+        package_id: "runtime-fixture".into(),
+        export: "evaluate".into(),
+    };
+    let owner = fixture.owner.clone();
+    let mut grant = fixture.grant.clone();
+    if cause == "expiry" {
+        grant.expires_utc_ns = Some(AnalysisPackageOwner::now() + 5_000_000_000);
+    }
+    let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(30))?);
+    let stage = control.clone();
+    let task = tokio::spawn(async move {
+        owner
+            .execute(
+                grant,
+                PackageRequestV1::Install {
+                    scope_id: "test".into(),
+                    bundle: package,
+                    parameters: Some(super::wasm::parameters("cancel")),
+                },
+                stage,
+            )
+            .await
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if fixture.store.package_activation(&key)?.is_some() {
+            break;
+        }
+        if task.is_finished() {
+            return Err(format!("{cause}: guest activation absent: {:?}", task.await?).into());
+        }
+        if Instant::now() >= deadline {
+            control.cancel()?;
+            let result = tokio::time::timeout(Duration::from_secs(5), task).await;
+            return Err(format!("{cause}: guest activation deadline: {result:?}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    match cause {
+        "cancel" => control.cancel()?,
+        "revoke" => fixture.authority.set_revision(0),
+        _ => (),
+    }
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .map_err(|error| format!("{cause}: guest task: {error}"))??;
+    match cause {
+        "cancel" => assert!(matches!(
+            result,
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        )),
+        "revoke" => assert!(matches!(
+            result,
+            Err(crate::Error::Package {
+                code: PackageErrorCodeV1::Denied,
+                ..
+            })
+        )),
+        _ => assert!(matches!(
+            result,
+            Err(crate::Error::AnalysisReadDeadline { .. })
+                | Err(crate::Error::Package {
+                    code: PackageErrorCodeV1::Denied,
+                    field: "package grant",
+                    ..
+                })
+        )),
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.owner.operations.available_permits() != 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|error| {
+        format!(
+            "{cause}: guest permits ({} available): {error}",
+            fixture.owner.operations.available_permits()
+        )
+    })?;
+    assert!(fixture.store.package_results(&key)?.is_empty());
+    let active = fixture
+        .store
+        .package_activation(&key)?
+        .ok_or("guest activation absent")?;
+    assert!(active.result_id.is_none());
+    assert_eq!(active.checkpoint_revision, 0);
+    Ok(())
 }

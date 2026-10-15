@@ -160,7 +160,7 @@ pub struct PackageResponseV1 {
     pub package_id: String,
     pub exports: Vec<PackageExportStatusV1>,
     pub tests: Vec<PackageTestResultV1>,
-    pub output: Option<super::PackageOutputV1>,
+    pub output: Option<sdk::wire::Output>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

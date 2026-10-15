@@ -2050,323 +2050,170 @@ async fn query_follow_wait_capacity() -> TestResult {
 }
 
 #[tokio::test]
-async fn query_follow_wait_cancel() -> TestResult {
-    let fixture = ClientFixture::waiting(WAIT)?;
-    fixture.commit(1, 1, 7, 4)?;
-    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
-    let (entering, release) = fixture.gate()?;
-    let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
-    let inputs = fixture.input_count()?;
-    let waiting = fixture.wait_signal()?;
-    let mut second = fixture.stream(plan, None)?;
-    ClientFixture::pending(&mut second, async {
-        tokio::time::timeout(WAIT, waiting).await??;
-        Ok(())
-    })
-    .await?;
-    ClientFixture::cancel(&mut second).await?;
-    fixture.inputs(true)?;
-    assert_eq!(fixture.input_count()?, inputs);
-    assert!(fixture
-        .owner
-        .budget
-        .evaluate(fixture.grant.selection.tenant_id)
-        .is_err());
-    first.cancel()?;
-    fixture.inputs(true)?;
-    assert!(fixture
-        .owner
-        .budget
-        .evaluate(fixture.grant.selection.tenant_id)
-        .is_err());
-    release.send(())?;
-    ClientFixture::entered(&entering).await?;
-    ClientFixture::cancel(&mut first).await?;
-    fixture.released().await?;
-    fixture.inputs(false)?;
-    drop(
-        fixture
-            .owner
-            .budget
-            .evaluate(fixture.grant.selection.tenant_id)?,
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_follow_wait_close() -> TestResult {
-    let fixture = ClientFixture::waiting(WAIT)?;
-    fixture.commit(1, 1, 7, 4)?;
-    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
-    let (entering, release) = fixture.gate()?;
-    let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
-    let inputs = fixture.input_count()?;
-    let waiting = fixture.wait_signal()?;
-    let mut second = fixture.stream(plan, None)?;
-    ClientFixture::pending(&mut second, async {
-        tokio::time::timeout(WAIT, waiting).await??;
-        Ok(())
-    })
-    .await?;
-    drop(second);
-    fixture.inputs(true)?;
-    assert_eq!(fixture.input_count()?, inputs);
-    assert!(fixture
-        .owner
-        .budget
-        .evaluate(fixture.grant.selection.tenant_id)
-        .is_err());
-    first.cancel()?;
-    release.send(())?;
-    ClientFixture::entered(&entering).await?;
-    ClientFixture::cancel(&mut first).await?;
-    fixture.released().await?;
-    fixture.inputs(false)?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_follow_wait_revoke() -> TestResult {
-    let fixture = ClientFixture::waiting(WAIT)?;
-    fixture.commit(1, 1, 7, 4)?;
-    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
-    let (entering, release) = fixture.gate()?;
-    let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
-    let inputs = fixture.input_count()?;
-    let waiting = fixture.wait_signal()?;
-    let mut second = fixture.stream(plan, None)?;
-    ClientFixture::pending(&mut second, async {
-        tokio::time::timeout(WAIT, waiting).await??;
-        Ok(())
-    })
-    .await?;
-    fixture.authority.revoke();
-    assert!(matches!(
-        second.next().await,
-        Some(Err(crate::Error::QueryDenied { .. }))
-    ));
-    fixture.inputs(true)?;
-    assert_eq!(fixture.input_count()?, inputs);
-    assert!(fixture
-        .owner
-        .budget
-        .evaluate(fixture.grant.selection.tenant_id)
-        .is_err());
-    release.send(())?;
-    ClientFixture::entered(&entering).await?;
-    assert!(matches!(
-        first.next().await,
-        Some(Err(crate::Error::QueryDenied { .. }))
-    ));
-    fixture.released().await?;
-    fixture.inputs(false)?;
-    drop(
-        fixture
-            .owner
-            .budget
-            .evaluate(fixture.grant.selection.tenant_id)?,
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_follow_wait_deadline() -> TestResult {
-    let fixture = ClientFixture::waiting(Duration::from_millis(100))?;
-    fixture.commit(1, 1, 7, 4)?;
-    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
-    let (entering, release) = fixture.gate()?;
-    let mut first = fixture.stream(plan.clone(), None)?;
-    ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
-    let inputs = fixture.input_count()?;
-    let waiting = fixture.wait_signal()?;
-    let mut second = fixture.stream(plan, None)?;
-    ClientFixture::pending(&mut second, async {
-        tokio::time::timeout(WAIT, waiting).await??;
-        Ok(())
-    })
-    .await?;
-    let frame = ClientFixture::next(&mut second).await?;
-    assert!(matches!(
-        frame.payload,
-        QueryPayload::Error {
-            code: QueryErrorCode::DeadlineExceeded,
-            last_checkpoint: None,
-            ..
-        }
-    ));
-    drop(frame);
-    assert!(second.next().await.is_none());
-    fixture.inputs(true)?;
-    assert_eq!(fixture.input_count()?, inputs);
-    assert!(fixture
-        .owner
-        .budget
-        .evaluate(fixture.grant.selection.tenant_id)
-        .is_err());
-    first.cancel()?;
-    release.send(())?;
-    ClientFixture::entered(&entering).await?;
-    ClientFixture::cancel(&mut first).await?;
-    fixture.released().await?;
-    fixture.inputs(false)?;
-    drop(
-        fixture
-            .owner
-            .budget
-            .evaluate(fixture.grant.selection.tenant_id)?,
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_client_cancel() -> TestResult {
-    let fixture = ClientFixture::bounded()?;
-    fixture.commit(1, 1, 7, 4)?;
-    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
-    let before = fixture.data.store.meta()?;
-    let (entering, release) = fixture.gate()?;
-    let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(30))?);
-    let query = control.clone();
-    let owner = fixture.owner.clone();
-    let authority = fixture.authority.clone();
-    let request = plan.clone();
-    let task =
-        tokio::spawn(async move { owner.query_client(request, authority, 100, query).await });
-    ClientFixture::entered(&entering).await?;
-    control.cancel()?;
-    assert!(!task.is_finished());
-    fixture.inputs(true)?;
-    assert!(fixture
-        .owner
-        .budget
-        .evaluate(fixture.grant.selection.tenant_id)
-        .is_err());
-    assert!(fixture.owner.budget.output(1).is_err());
-    release.send(())?;
-    ClientFixture::entered(&entering).await?;
-    let result = tokio::time::timeout(WAIT, task).await??;
-    assert!(
-        matches!(result, Err(crate::Error::AnalysisReadCancelled { .. })),
-        "{result:?}"
-    );
-    assert!(fixture.owner.native_failed.load(Ordering::Acquire));
-    fixture.inputs(false)?;
-    assert_eq!(fixture.data.store.meta()?, before);
-    fixture.commit(2, 2, 8, 4)?;
-    let result = fixture.query(&plan).await?;
-    assert_eq!(result.rows, vec![vec![Value::BigInt(2)]]);
-    drop(result);
-    drop(
-        fixture
-            .owner
-            .budget
-            .evaluate(fixture.grant.selection.tenant_id)?,
-    );
-    drop(
-        fixture
-            .owner
-            .budget
-            .output(fixture.owner.limits.output_bytes)?,
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_client_drop() -> TestResult {
-    let fixture = ClientFixture::bounded()?;
-    fixture.commit(1, 1, 7, 4)?;
-    let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
-    let before = fixture.data.store.meta()?;
-    let (entering, release) = fixture.gate()?;
-    let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(30))?);
-    let query = control.clone();
-    let owner = fixture.owner.clone();
-    let authority = fixture.authority.clone();
-    let request = plan.clone();
-    let task =
-        tokio::spawn(async move { owner.query_client(request, authority, 100, query).await });
-    ClientFixture::entered(&entering).await?;
-    task.abort();
-    assert!(matches!(
-        tokio::time::timeout(WAIT, task).await?,
-        Err(error) if error.is_cancelled()
-    ));
-    assert!(matches!(
-        control.check(),
-        Err(crate::Error::AnalysisReadCancelled { .. })
-    ));
-    fixture.inputs(true)?;
-    assert!(fixture
-        .owner
-        .budget
-        .evaluate(fixture.grant.selection.tenant_id)
-        .is_err());
-    assert!(fixture.owner.budget.output(1).is_err());
-    assert!(matches!(
-        fixture.query(&plan).await,
-        Err(crate::Error::AnalysisBusy { .. })
-    ));
-    release.send(())?;
-    ClientFixture::entered(&entering).await?;
-    tokio::time::timeout(WAIT, async {
-        loop {
-            match fixture
-                .owner
-                .budget
-                .evaluate(fixture.grant.selection.tenant_id)
-            {
-                Ok(lease) => {
-                    drop(lease);
-                    return Ok::<_, crate::Error>(());
-                }
-                Err(crate::Error::AnalysisBusy { .. }) => tokio::task::yield_now().await,
-                Err(error) => return Err(error),
+async fn query_follow_wait_interruptions() -> TestResult {
+    #[derive(Clone, Copy)]
+    enum Exit {
+        Cancel,
+        Close,
+        Revoke,
+        Deadline,
+    }
+    for exit in [Exit::Cancel, Exit::Close, Exit::Revoke, Exit::Deadline] {
+        let timeout = if matches!(exit, Exit::Deadline) {
+            Duration::from_millis(100)
+        } else {
+            WAIT
+        };
+        let fixture = ClientFixture::waiting(timeout)?;
+        fixture.commit(1, 1, 7, 4)?;
+        let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], true)?;
+        let (entering, release) = fixture.gate()?;
+        let mut first = fixture.stream(plan.clone(), None)?;
+        ClientFixture::pending(&mut first, ClientFixture::entered(&entering)).await?;
+        let inputs = fixture.input_count()?;
+        let waiting = fixture.wait_signal()?;
+        let mut second = fixture.stream(plan, None)?;
+        ClientFixture::pending(&mut second, async {
+            tokio::time::timeout(WAIT, waiting).await??;
+            Ok(())
+        })
+        .await?;
+        match exit {
+            Exit::Cancel => ClientFixture::cancel(&mut second).await?,
+            Exit::Close => drop(second),
+            Exit::Revoke => {
+                fixture.authority.revoke();
+                assert!(matches!(
+                    second.next().await,
+                    Some(Err(crate::Error::QueryDenied { .. }))
+                ));
+            }
+            Exit::Deadline => {
+                let frame = ClientFixture::next(&mut second).await?;
+                assert!(matches!(
+                    frame.payload,
+                    QueryPayload::Error {
+                        code: QueryErrorCode::DeadlineExceeded,
+                        last_checkpoint: None,
+                        ..
+                    }
+                ));
+                drop(frame);
+                assert!(second.next().await.is_none());
             }
         }
-    })
-    .await??;
-    assert!(fixture.owner.native_failed.load(Ordering::Acquire));
-    fixture.inputs(false)?;
-    drop(
-        fixture
+        fixture.inputs(true)?;
+        assert_eq!(fixture.input_count()?, inputs);
+        assert!(fixture
             .owner
             .budget
-            .output(fixture.owner.limits.output_bytes)?,
-    );
-    assert_eq!(fixture.data.store.meta()?, before);
-    fixture.commit(2, 2, 8, 4)?;
-    let result = fixture.query(&plan).await?;
-    assert_eq!(result.rows, vec![vec![Value::BigInt(2)]]);
+            .evaluate(fixture.grant.selection.tenant_id)
+            .is_err());
+        if !matches!(exit, Exit::Revoke) {
+            first.cancel()?;
+            if matches!(exit, Exit::Cancel) {
+                fixture.inputs(true)?;
+                assert!(fixture
+                    .owner
+                    .budget
+                    .evaluate(fixture.grant.selection.tenant_id)
+                    .is_err());
+            }
+        }
+        release.send(())?;
+        ClientFixture::entered(&entering).await?;
+        if matches!(exit, Exit::Revoke) {
+            assert!(matches!(
+                first.next().await,
+                Some(Err(crate::Error::QueryDenied { .. }))
+            ));
+        } else {
+            ClientFixture::cancel(&mut first).await?;
+        }
+        fixture.released().await?;
+        fixture.inputs(false)?;
+        drop(
+            fixture
+                .owner
+                .budget
+                .evaluate(fixture.grant.selection.tenant_id)?,
+        );
+    }
     Ok(())
 }
 
-#[test]
-fn query_client_stream_admission() -> TestResult {
-    let fixture = ClientFixture::local()?;
-    let client = fixture.plan("SELECT operation FROM events", vec![], false)?;
-    let mut plan = fixture
-        .data
-        .plan(super::QueryTemplate::Events { operation: None })?;
-    plan.template = client.template().clone();
-    assert!(matches!(
-        fixture
+#[tokio::test]
+async fn query_client_interruptions() -> TestResult {
+    for dropped in [false, true] {
+        let fixture = ClientFixture::bounded()?;
+        fixture.commit(1, 1, 7, 4)?;
+        let plan = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
+        let before = fixture.data.store.meta()?;
+        let (entering, release) = fixture.gate()?;
+        let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(30))?);
+        let query = control.clone();
+        let owner = fixture.owner.clone();
+        let authority = fixture.authority.clone();
+        let request = plan.clone();
+        let mut task =
+            tokio::spawn(async move { owner.query_client(request, authority, 100, query).await });
+        ClientFixture::entered(&entering).await?;
+        if dropped {
+            task.abort();
+            assert!(
+                matches!(tokio::time::timeout(WAIT, &mut task).await?, Err(error) if error.is_cancelled())
+            );
+            assert!(matches!(
+                control.check(),
+                Err(crate::Error::AnalysisReadCancelled { .. })
+            ));
+        } else {
+            control.cancel()?;
+            assert!(!task.is_finished());
+        }
+        fixture.inputs(true)?;
+        assert!(fixture
             .owner
-            .stream_client(plan.clone(), None, fixture.authority.clone()),
-        Err(crate::Error::QueryDenied { .. })
-    ));
-    assert!(matches!(
-        fixture.stream(plan, None),
-        Err(crate::Error::QueryDenied { .. })
-    ));
-    assert!(fixture
-        .owner
-        .input_refs
-        .lock()
-        .map_err(|_| "input reference lock failed")?
-        .is_empty());
+            .budget
+            .evaluate(fixture.grant.selection.tenant_id)
+            .is_err());
+        assert!(fixture.owner.budget.output(1).is_err());
+        if dropped {
+            assert!(matches!(
+                fixture.query(&plan).await,
+                Err(crate::Error::AnalysisBusy { .. })
+            ));
+        }
+        release.send(())?;
+        ClientFixture::entered(&entering).await?;
+        if !dropped {
+            let result = tokio::time::timeout(WAIT, task).await??;
+            assert!(
+                matches!(result, Err(crate::Error::AnalysisReadCancelled { .. })),
+                "{result:?}"
+            );
+        }
+        fixture.released().await?;
+        assert!(fixture.owner.native_failed.load(Ordering::Acquire));
+        fixture.inputs(false)?;
+        assert_eq!(fixture.data.store.meta()?, before);
+        fixture.commit(2, 2, 8, 4)?;
+        let result = fixture.query(&plan).await?;
+        assert_eq!(result.rows, vec![vec![Value::BigInt(2)]]);
+        drop(result);
+        drop(
+            fixture
+                .owner
+                .budget
+                .evaluate(fixture.grant.selection.tenant_id)?,
+        );
+        drop(
+            fixture
+                .owner
+                .budget
+                .output(fixture.owner.limits.output_bytes)?,
+        );
+    }
     Ok(())
 }
 
@@ -2567,11 +2414,15 @@ async fn query_event_projection() -> TestResult {
     assert_eq!(result.rows, vec![vec![Value::UInt(7)]; 4]);
     assert_eq!(result.input_rows, 4);
     drop(result);
-    let counted = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
-    assert_eq!(
-        fixture.query(&counted).await?.rows,
-        vec![vec![Value::BigInt(8)]]
-    );
+    for (expression, expected) in [
+        ("COUNT(*)", Value::BigInt(8)),
+        ("CAST(SUM(operation) AS UBIGINT)", Value::UBigInt(64)),
+        ("MIN(operation)", Value::UInt(7)),
+        ("MAX(operation)", Value::UInt(9)),
+    ] {
+        let plan = fixture.plan(&format!("SELECT {expression} FROM events"), vec![], false)?;
+        assert_eq!(fixture.query(&plan).await?.rows, vec![vec![expected]]);
+    }
     let ordered = fixture.plan(
         "SELECT operation FROM events ORDER BY source_cursor",
         vec![],

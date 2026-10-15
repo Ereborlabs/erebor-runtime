@@ -4,7 +4,7 @@ use araphor_analysis_sdk as sdk;
 use sdk::arrow_array::UInt64Array;
 
 use crate::package::tests::{bundle, Fixture, TestResult};
-use crate::package::{PackageFixtureV1, PackageOutputV1, PackageRequestV1};
+use crate::package::{PackageFixtureV1, PackageRequestV1};
 
 #[tokio::test]
 async fn fixture_replays_saved_context() -> TestResult {
@@ -34,7 +34,7 @@ async fn fixture_replays_saved_context() -> TestResult {
             inputs: Vec::new(),
             parameters: None,
             checkpoint: None,
-            expected: PackageOutputV1::encode(&output, model)?,
+            expected: crate::AnalysisPackageOwner::encode_output(&output, model)?,
         };
         let mut json = serde_json::to_value(&saved)?;
         let restored: PackageFixtureV1 = serde_json::from_value(json.clone())?;

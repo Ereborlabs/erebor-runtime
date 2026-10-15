@@ -207,6 +207,24 @@ impl Fixture {
         .await
     }
 
+    pub fn output(&self, package: &str, export: &str, id: &str) -> Result<sdk::wire::Output> {
+        self.owner
+            .read_output(&self.grant, "test", package, export, id)
+    }
+
+    pub fn result(&self, id: &str) -> Result<crate::analysis::PackageResultV1> {
+        self.store
+            .package_result([1; 16], id)?
+            .ok_or_else(|| PackageErrorCodeV1::Missing.error("fixture result"))
+    }
+
+    pub fn activation(&self, package: &str) -> Result<crate::analysis::PackageActivationV1> {
+        self.owner
+            .activations([1; 16], "test", package)?
+            .pop()
+            .ok_or_else(|| PackageErrorCodeV1::Missing.error("fixture activation"))
+    }
+
     pub fn renew(&mut self) {
         self.grant.revision += 1;
         self.authority.set_revision(self.grant.revision);

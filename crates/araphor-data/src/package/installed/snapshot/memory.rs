@@ -1,3 +1,4 @@
+use araphor_analysis_sdk as sdk;
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -6,8 +7,7 @@ use serde_json::Value;
 
 use crate::analysis::PackageActivationV1;
 use crate::package::{
-    PackageBundleV1, PackageCheckpointV1, PackageDatasetV1, PackageErrorCodeV1 as Code,
-    PackageFixtureV1, PackageImplementationV1, PackageOutputV1,
+    PackageBundleV1, PackageErrorCodeV1 as Code, PackageFixtureV1, PackageImplementationV1,
 };
 use crate::{Result, SqlModelV1};
 
@@ -225,12 +225,12 @@ impl BundleMemory {
         self.output(&value.expected)
     }
 
-    fn dataset(&mut self, value: &PackageDatasetV1) -> Result<()> {
+    fn dataset(&mut self, value: &sdk::wire::Dataset) -> Result<()> {
         self.add(value.name.capacity())?;
-        self.vector(&value.ipc)
+        self.vector(&value.arrow_ipc)
     }
 
-    fn checkpoint(&mut self, value: &PackageCheckpointV1) -> Result<()> {
+    fn checkpoint(&mut self, value: &sdk::wire::Checkpoint) -> Result<()> {
         self.vector(&value.datasets)?;
         for data in &value.datasets {
             self.dataset(data)?;
@@ -238,7 +238,7 @@ impl BundleMemory {
         Ok(())
     }
 
-    fn output(&mut self, value: &PackageOutputV1) -> Result<()> {
+    fn output(&mut self, value: &sdk::wire::Output) -> Result<()> {
         self.vector(&value.datasets)?;
         for data in &value.datasets {
             self.dataset(data)?;
@@ -250,7 +250,7 @@ impl BundleMemory {
         self.vector(&value.reasons)?;
         for reason in &value.reasons {
             self.strings([&reason.output.dataset, &reason.code])?;
-            self.dataset(&reason.details)?;
+            self.vector(&reason.details)?;
         }
         if let Some(checkpoint) = &value.checkpoint {
             self.checkpoint(checkpoint)?;

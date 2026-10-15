@@ -800,14 +800,7 @@ mod tests {
         ));
         assert!(store.trace_intent([1; 16], [4; 16])?.is_none());
         store.accept_validated_batch(
-            crate::EvidenceIntakeIdentityV1 {
-                tenant_id: [1; 16],
-                node_id: "node-a".into(),
-                node_boot_id: [2; 16],
-                label_epoch: 1,
-                source_id: [3; 16],
-                source_epoch: 1,
-            },
+            crate::analysis::tests::identity(),
             crate::ValidatedEvidenceBatchV1 {
                 cpu_id: 0,
                 first_cursor: 1,
@@ -855,14 +848,7 @@ mod tests {
         let store = AnalysisStore::open(directory.path().join("data"))?;
         store.accept_trace(&intent(3)?)?;
         store.accept_validated_batch(
-            crate::EvidenceIntakeIdentityV1 {
-                tenant_id: [1; 16],
-                node_id: "node-a".into(),
-                node_boot_id: [2; 16],
-                label_epoch: 1,
-                source_id: [3; 16],
-                source_epoch: 1,
-            },
+            crate::analysis::tests::identity(),
             crate::ValidatedEvidenceBatchV1 {
                 cpu_id: 0,
                 first_cursor: 1,

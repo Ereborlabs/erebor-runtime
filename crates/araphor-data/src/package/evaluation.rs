@@ -2,7 +2,7 @@ use araphor_analysis_sdk as sdk;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use crate::analysis::{PackageActivationV1, PackageCommitV1, PackageResultRefV1};
+use crate::analysis::{PackageActivationV1, PackageResultRefV1};
 use crate::{AnalysisReadControl, Result};
 
 use super::owner::InstalledContext;
@@ -29,6 +29,14 @@ impl ResultContext {
     fn sql_target() -> String {
         "sql".into()
     }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RunPreparation<'a> {
+    pub(super) id: &'a str,
+    pub(super) rebuild: bool,
+    pub(super) automatic: bool,
+    pub(super) now: u64,
 }
 
 pub(super) struct PackageRun<'a> {
@@ -104,9 +112,16 @@ impl AnalysisPackageOwner {
                     )
                 })?;
             }
-            if let Some(receipt) =
-                self.evaluate_active(&active, id, false, Some(&admitted), control)?
-            {
+            let loaded;
+            let dependency;
+            let admission = if saved.root == bundle.root {
+                &admitted
+            } else {
+                loaded = self.load_bundle(grant.selection.tenant_id, &saved.root)?;
+                dependency = super::PackageBundleRef::new(&loaded)?;
+                &dependency
+            };
+            if let Some(receipt) = self.evaluate_active(&active, id, false, admission, control)? {
                 receipts.push((active.key.export, active.key.package_id, receipt));
             }
         }
@@ -135,21 +150,14 @@ impl AnalysisPackageOwner {
         active: &PackageActivationV1,
         id: &str,
         automatic: bool,
-        known: Option<&super::PackageBundleRef<'_>>,
+        admission: &super::PackageBundleRef<'_>,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageResultRefV1>> {
         let context: InstalledContext = Self::decode(&active.metadata)?;
         control.check()?;
-        let loaded;
-        let admitted;
-        let admission = match known.filter(|bundle| bundle.bundle().root == context.root) {
-            Some(bundle) => bundle,
-            None => {
-                loaded = self.load_bundle(active.key.tenant_id, &context.root)?;
-                admitted = super::PackageBundleRef::new(&loaded)?;
-                &admitted
-            }
-        };
+        if admission.bundle().root != context.root {
+            return Err(Code::Conflict.error("activation package root"));
+        }
         let bundle = admission.bundle();
         self.check(&context.grant, Action::Run)?;
         self.authority.admit(&context.grant, admission)?;
@@ -174,7 +182,17 @@ impl AnalysisPackageOwner {
                 }));
             }
         }
-        let result = self.prepare_run(active, bundle, id, false, automatic, control);
+        let result = self.prepare_at(
+            active,
+            bundle,
+            RunPreparation {
+                id,
+                rebuild: false,
+                automatic,
+                now: Self::now(),
+            },
+            control,
+        );
         let prepared = match result {
             Ok(Some(prepared)) => prepared,
             Ok(None) => return Ok(None),
@@ -188,18 +206,6 @@ impl AnalysisPackageOwner {
             self.store.commit_package(&prepared, || control.check())
         })?;
         Ok(Some(receipt))
-    }
-
-    pub(super) fn prepare(
-        &self,
-        active: &PackageActivationV1,
-        bundle: &super::PackageBundleV1,
-        id: &str,
-        rebuild: bool,
-        control: &AnalysisReadControl,
-    ) -> Result<PackageCommitV1> {
-        self.prepare_run(active, bundle, id, rebuild, false, control)?
-            .ok_or_else(|| Code::Conflict.error("prepared evaluation"))
     }
 
     fn result_id(active: &PackageActivationV1, id: &str) -> Result<String> {

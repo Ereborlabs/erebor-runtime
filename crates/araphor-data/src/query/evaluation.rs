@@ -2,7 +2,7 @@ use duckdb::types::{Value, ValueRef};
 use duckdb::{params_from_iter, Config, Connection};
 use snafu::ResultExt as _;
 
-use super::input::InputRelations;
+use super::input::{InputRelations, ScopedSources};
 use super::{Column, QueryOperation, QueryOwner};
 use crate::{AnalysisReadControl, Result, StorePositionV1};
 
@@ -36,24 +36,16 @@ impl QueryEvaluation {
     ) -> Result<EvaluationResult> {
         let connection = Self::connection()?;
         control.query_run(&connection, || {
-            input.register(&connection)?;
-            let sql = format!(
-                "SELECT * FROM ({sql}) AS query_result LIMIT {}",
-                limits.rows + 1
-            );
-            let mut statement = connection
-                .prepare(&sql)
-                .context(crate::AnalysisDatabaseSnafu {
-                    operation: "prepare query evaluation",
-                })?;
-            let native = statement.query(params_from_iter(parameters.iter()));
-            #[cfg(test)]
-            if let Some(failed) = native_failed {
-                failed.store(native.is_err(), std::sync::atomic::Ordering::Release);
-            }
-            let mut result = native.context(crate::AnalysisDatabaseSnafu {
-                operation: "execute query evaluation",
-            })?;
+            input.register(&connection, &mut ScopedSources::default())?;
+            let statement = Self::prepare(
+                &connection,
+                sql,
+                parameters,
+                limits.rows as u64,
+                #[cfg(test)]
+                native_failed,
+            )?;
+            let mut result = statement.raw_query();
             let schema = result.as_ref().ok_or_else(|| {
                 crate::QueryInvalidSnafu {
                     field: "query result schema",
@@ -168,6 +160,33 @@ impl QueryEvaluation {
             }
             Ok(output)
         })
+    }
+
+    pub(super) fn prepare<'a>(
+        connection: &'a Connection,
+        sql: &str,
+        parameters: &[Value],
+        rows: u64,
+        #[cfg(test)] native_failed: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<duckdb::Statement<'a>> {
+        let sql = format!(
+            "SELECT * FROM ({sql}) AS query_result LIMIT {}",
+            rows.saturating_add(1)
+        );
+        let mut statement = connection
+            .prepare(&sql)
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "prepare query evaluation",
+            })?;
+        let native = statement.query_arrow(params_from_iter(parameters.iter()));
+        #[cfg(test)]
+        if let Some(failed) = native_failed {
+            failed.store(native.is_err(), std::sync::atomic::Ordering::Release);
+        }
+        drop(native.context(crate::AnalysisDatabaseSnafu {
+            operation: "execute query evaluation",
+        })?);
+        Ok(statement)
     }
     pub(super) fn connection() -> Result<Connection> {
         let mut config = Config::default()

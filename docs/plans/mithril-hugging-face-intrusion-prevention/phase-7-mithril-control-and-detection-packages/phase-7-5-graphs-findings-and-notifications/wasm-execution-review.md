@@ -21,7 +21,7 @@ Restart and identical retry preserve the committed result.
 
 [AnalysisPackageOwner::evaluate_artifact](../../../../../crates/araphor-data/src/package/execution.rs) The scheduler invokes an admitted export
   -> [QueryOwner::evaluate_component](../../../../../crates/araphor-data/src/query/model/component.rs) the host reserves input and schema scratch before it encodes the input
-  -> [WasmExecution::evaluate_encoded](../../../../../crates/araphor-data/src/package/wasm.rs) the execution owner receives the owned wire input
+  -> [WasmExecution::evaluate_prepared](../../../../../crates/araphor-data/src/package/wasm.rs) the execution owner receives the owned wire input
   -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the host creates an evaluation instance with explicit limits and authorized inputs
   -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) generated WIT bindings transfer bounded batches and the prior checkpoint
   -> [WasmExecution::invoke](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the component returns declared outputs, evidence references, and next checkpoint
@@ -32,7 +32,7 @@ Restart and identical retry preserve the committed result.
   -> [GuestState](../../../../../crates/araphor-data/src/package/wasm/execution.rs) the host interrupts execution and checks cancellation
   -> [InstalledAnalysis::evaluate](../../../../../crates/araphor-data/src/package/installed.rs) the host discards uncommitted output and releases resources
 
-[AnalysisPackageOwner::reconcile](../../../../../crates/araphor-data/src/package/supervision.rs) The generic package scheduler receives the error
+[AnalysisPackageOwner::reconcile_group](../../../../../crates/araphor-data/src/package/supervision.rs) The generic package scheduler receives the error
   -> [AnalysisPackageOwner::failed](../../../../../crates/araphor-data/src/package/supervision.rs) the package owner records typed failure and marks retained results stale without replacing output or checkpoint
 
 [InstalledAnalysis::evaluate](../../../../../crates/araphor-data/src/package/installed.rs) A domain adapter receives the error
@@ -108,12 +108,9 @@ The canonical Araphor config and manifest subset permits identity reconstruction
 after loading the immutable package closure. There is no previous JSON bundle
 or bare hexadecimal trust-pin fallback.
 [Immutable revision writes](../../../../../crates/araphor-data/src/package/lifecycle/revisions.rs)
-use canonical descriptor JSON for component revisions. SQL revisions keep
-their checked original bytes.
-An identical SQL dependency retains its original stored bytes after a checked
-descriptor, artifact, and dependency comparison.
-Arrow metadata map order cannot change a component digest or an identical
-installation record after decode or restart.
+retain one descriptor and raw executable buffers. An identical dependency uses
+the saved bytes after checked descriptor, artifact, and dependency comparison.
+Arrow metadata map order cannot change a digest or identical install record.
 
 Read the [current package storage and OCI guide](../../../../guides/araphor-binary-package-storage-review.md)
 for format, bounds, request framing, trust, and current verification status.
@@ -131,12 +128,8 @@ transactional storage and immutable revision checks replace immediate artifact
 readback for this response only. Later reads retain corruption detection.
 The [metadata retry tests](../../../../../crates/araphor-data/src/package/tests/wasm/metadata.rs)
 compare complete Install and Inspect responses after installation, retry, and
-reopen. The same four metadata tests pass before and after the correction.
-Test time falls from 215.82 to 169.09 seconds, with compilation excluded.
-This is one run per source with the same workload, profile, assertions, and
-limits. The proof is `/tmp/araphor-install-comparison-v59.json`. Nine affected
-lifecycle checks also pass. All four final production cases and shared CI pass.
-Read the [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) for the final source and proof.
+reopen. Read the [final installed lifecycle record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
+for the source-bound proof of this response path.
 
 [ClientGrpcOwner](../../../../../crates/mithril-control/src/client_grpc/packages.rs)
 checks the current permission before it decodes the operation.
@@ -155,36 +148,6 @@ install or update operation to assign its grant to an activation. The client
 must trust each required bundle digest. Historical replay uses the current
 activation grant and still requires trust in the historical bundle. Same-artifact
 restart and explicit package upgrades do not prove automatic host-build migration.
-
-The fresh v57 `analysis-packages` case passes after SDK correction `9f8f5da2`.
-It uses the normal executable and source-built components. The installed
-example preserves typed reasons, evidence, retry, restart, and trust revocation.
-Its proof is `/tmp/araphor-wasm-analysis-packages-proof-v57.json`. Fresh v57
-context and profile cases also pass with the same executable. Their records
-are `/tmp/araphor-wasm-context-roundtrip-proof-v57.json` and
-`/tmp/araphor-wasm-profile-restart-proof-v57.json`. Complete graph qualification
-also passes with that executable in 2,272.799 seconds. Its proof is
-`/tmp/araphor-wasm-graph-notification-proof-v57.json`; the stage record is
-`/tmp/araphor-wasm-graph-costs-v57.json`. All incident cards, notification
-obligations, and both native windows remain in the case. Warm fixture setup
-uses independent state and takes a median of 18.990 seconds across 35 calls.
-This is the baseline for the installation cost investigation. It establishes
-no speed improvement. At this baseline, the installation correction and final
-workspace CI remained required. The [phase result](phase-7-5-4-wasm-execution.md#installed-package-qualification-after-the-codec-correction)
-records the exact source and executable.
-
-The installation correction is committed in `c145e7b8`. Its normal build
-passes, with all six component artifacts equal to the v57 baseline. Fresh
-v59 installed-package, context, profile-restart, and complete graph cases pass. The
-[final installed lifecycle record](phase-7-5-4-wasm-execution.md#final-installed-lifecycle-qualification)
-contains their source, executable, durations, and proof paths. The
-[complete graph comparison](phase-7-5-4-wasm-execution.md#final-complete-graph-qualification-and-cost-comparison)
-retains the incident corpus, 257 notification obligations, and both native
-windows. Warm fixture setup takes 260.690 seconds across 35 independent states,
-compared with 658.770 seconds in v57. Other processing stages increase. An
-unrelated concurrent build prevents an isolated complete-case comparison.
-The final shared Rust procedure passes on this source. Read the
-[final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) for the terminal record.
 
 ## Execution owners
 
@@ -290,7 +253,10 @@ The operation validates the immutable descriptor and selects its model once.
 Encoding checks typed input and output before IPC serialization. Decoding checks
 the descriptor and limits before IPC, then checks the decoded input and output.
 The two entry paths preserve the original export and limit error order.
-Independent host, guest, and algorithm calls retain their own validation.
+Host and guest boundaries validate imported data separately. The guest wrapper
+passes immutable [CheckedEvaluation](../../../../../crates/araphor-analysis-sdk/src/validation.rs)
+references to `Guest::compute`. Standalone `Guest::evaluate` validates input
+and output through the same checked contract.
 The [codec boundary tests](../../../../../crates/araphor-analysis-sdk/src/tests/codec.rs)
 check exact error codes, changed descriptors, malformed IPC, missing inputs,
 and required output evidence. The
@@ -305,10 +271,6 @@ Typed inputs and wire inputs share one revision and coverage calculation.
 Schema charges include nested fields, Arc headers, and metadata capacity.
 The [allocation tests](../../../../../crates/araphor-analysis-sdk/src/memory/tests.rs)
 check unused capacity, nested metadata, all schema positions, and wire growth.
-The SDK suite has 51 passes. The build proof records equal bytes from two
-independent builds of all six components under `memory_accounting_correction`.
-This is the historical memory-accounting proof. The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
-records current production and workspace qualification.
 
 [Rows](../../../../../crates/araphor-analysis-builtins/src/rows.rs) buffers JSON
 with the standard Rust `BufWriter`. The buffer uses at most 8 KiB per row.
@@ -321,13 +283,7 @@ No complete-row vector or complete-row copy is created. The
 checks empty writes, complete writes, and rejection without a partial write.
 The large escaped-string test compares exact JSON bytes across flush
 boundaries. The serializer-error test retains byte-limit error precedence
-and checks a successful next call. The v25 shared suite has 14 passes.
-The earlier build proof records six equal component pairs under
-`direct_builder_correction` and `inline_writer_correction`.
-The `buffered_writer_correction` record has 14 native passes and six equal
-component pairs from two builds. At the v25 record, the original graph split
-assertion and production fuel limit were unchanged. Installed runtime
-qualification remained open.
+and checks a successful next call.
 
 [Computation::authorities](../../../../../crates/araphor-analysis-builtins/src/graph/credential/join.rs)
 indexes each qualified fact identity by its position in one vector. The first
@@ -336,10 +292,7 @@ flag with OR. Stable record sorting keeps equal-record encounter order. Every
 channel evidence append remains in its original position. The
 [credential test](../../../../../crates/araphor-analysis-builtins/src/graph/tests.rs)
 checks repeated identities, direct-proof changes, tied records, contextual
-fallback, and the exact raw evidence. The `authority_index_correction` build
-record has six equal component pairs and 13 native test passes. The later
-`direct_builder_correction` record applies the writer change. These proofs do
-not replace installed execution at production limits.
+fallback, and the exact raw evidence.
 
 [Computation::credential](../../../../../crates/araphor-analysis-builtins/src/graph/credential/mod.rs)
 copies raw join evidence once into a separate edge prefix. The shared
@@ -382,7 +335,7 @@ Native graph extraction and seeded traversal retain their existing byte limits
 and whole-version permission checks.
 
 [GraphAndFindingOwner::process](../../../../../crates/araphor-data/src/graph/live.rs)
-retains a previous installed snapshot only during the current operation.
+retains one installed snapshot in the existing operation state.
 [InstalledAnalysis::snapshot_reusing](../../../../../crates/araphor-data/src/package/installed/read.rs)
 reads fresh activations under the shared lifecycle lock for each live window.
 Bundle reuse requires the same owner, scope, and tenant. A retained root must
@@ -394,7 +347,7 @@ when their last owner drops. Explicit pinned and historical handles keep their
 existing selection rules. The
 [bundle reuse tests](../../../../../crates/araphor-data/src/package/installed/read/tests/retained/reusing.rs)
 check current grants, active roots, scope, tenant, generation, and capacity
-release before a new root loads. The corrected fixture retry has five passes.
+release before a new root loads.
 
 [InstalledAnalysis::descriptors and prepared_models](../../../../../crates/araphor-data/src/package/installed/read.rs)
 keep the complete immutable package descriptor. Dependency declarations can
@@ -405,13 +358,7 @@ validation. The
 [package regression](../../../../../crates/araphor-data/src/package/installed/read/tests/descriptors.rs)
 checks the complete contract and direct and snapshot evaluation. The
 [graph regression](../../../../../crates/araphor-data/src/graph/tests/installed/current/descriptors.rs)
-checks mixed exports and complete graph equality. Both pass in
-`/tmp/araphor-installed-descriptor-green-v41-retry.log`. Its SHA256 is
-`235cd00d6beb8fde6c39832569687ba81f50cc52fedf8996f0d7dbf8b1116ddb`.
-The [phase result](phase-7-5-4-wasm-execution.md#multi-export-descriptor-correction-todos)
-records the defect reproduction, fixture lifetime correction, and source hashes.
-These focused results retain their original source boundary. The
-[final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) records final qualification.
+checks mixed exports and complete graph equality.
 
 [Adapter](../../../../../crates/araphor-data/src/discovery/sdk/mod.rs)
 executes atoms, merge, groups, and compare through installed components.
@@ -460,7 +407,7 @@ Existing notification routes and human deadlines remain host-owned.
 Host graph assembly already sorts retained evidence and removes duplicates.
 Canonical publication preserves that historical finding JSON.
 Generic package `Run` results retain SDK candidate and reason-detail IPC through
-[PackageOutputV1::encode](../../../../../crates/araphor-data/src/package/output.rs).
+[AnalysisPackageOwner::encode_output](../../../../../crates/araphor-data/src/package/output.rs).
 The candidate and reason-detail IPC bytes change when publication removes
 duplicate references or changes their order. Generic results do not use the legacy graph
 reason mapping. An identical saved
@@ -529,11 +476,7 @@ The [notice reuse tests](../../../../../crates/araphor-data/src/graph/tests/noti
 observe the real guest import. They check a notice-only skip, a later fact
 replacement, forced execution, raw-context rejection, and recovery. A newer
 report for an unrelated interval runs the guest even when manifest coverage
-keys stay empty. The six focused notice tests pass. Disabling the shortcut
-makes the skip test fail because the guest enters. The existing activation and
-revocation group has two passes. At the initial v39 focused record, a new normal
-build, four fresh production cases, and final workspace verification remained
-required.
+keys stay empty.
 
 When a changed notice produces the same graph,
 [commit_bounded_window](../../../../../crates/araphor-data/src/graph/commit.rs)
@@ -571,19 +514,6 @@ identifies the call to the read runner or snapshot wrapper. The location does
 not identify a specific SQL statement inside its read closure. The one-second
 default read deadline
 and cleanup rules stay unchanged.
-
-[Graph notice migration](../../../../../crates/araphor-data/src/analysis/graph_migration/notices.rs)
-converts schema 19 to schema 20 in one transaction. It initializes each retained
-graph notice from its checked native header. The schema 17 conversion uses the
-same header field. Both paths retain immutable records and validate stored state.
-The [schema owner](../../../../../crates/araphor-data/src/analysis/mod.rs)
-selects the checked conversion for each supported version.
-The [migration tests](../../../../../crates/araphor-data/src/analysis/graph_migration/tests/notices.rs)
-check retained versions, package references, reopen, restore, quota, retry, and
-unchanged originals after rejection. The focused notice checks and the exact
-installed lifecycle check pass in the focused record. The
-[final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) records final workspace verification. See the [correction record](phase-7-5-4-wasm-execution.md#completed-graph-check-reuse)
-for source hashes and failed attempts.
 
 The generic package commit retains result, checkpoint, input references,
 progress, and quota together. Domain adapters use their existing graph or
@@ -633,7 +563,7 @@ is set. Each call applies its configured fuel budget. The same configuration
 path applies in production and tests. Resource-failure tests set the quotas
 they check. The earlier 32 MiB data and 100 million fuel settings are historical
 configurations. The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
-records current-source qualification.
+records qualification for its captured source.
 
 Mandatory guards remain. Each store permits one memory, four tables,
 16,384 elements per table, and 16 instances. The engine uses a 512 KiB Wasm
@@ -646,15 +576,12 @@ remain. The `allocation_bytes` quota does not measure total host resident memory
 When this quota is unset, value lifting has no additional Wasm allocation cap.
 These settings do not bound total process resident memory.
 
-The local package file has a 32 MiB bound.
-Package JSON requests and replies allow an additional 64 KiB.
-The package transport permits an additional 128 KiB for protocol framing.
+Local OCI packages and package transport have no separate aggregate size cap.
+Read the [current storage guide](../../../../guides/araphor-binary-package-storage-review.md#local-oci-transport-and-admission)
+for exact byte identity, format checks, runtime limits, and store charges.
+
 The [code cache](../../../../../crates/araphor-data/src/package/wasm/cache.rs)
 has an 80 MiB byte limit and a 16-entry limit.
-On the earlier qualified Linux x86-64 build, the four required components charge
-61,237,517 bytes in total. The SDK runtime fixture raises this total to
-74,374,204 bytes. Each charge includes source bytes and mapped image bytes.
-These figures predate the current SDK and graph schema corrections.
 The cache index and prepared handles share each code entry. The byte and entry
 charges stay live until the last reference drops. Cache eviction or clearing
 cannot release the charge for retained code. Admission removes only entries
@@ -665,12 +592,6 @@ checks both limits, cloned cache indexes, retained handles, and final release.
 The [prepared execution test](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/prepared.rs)
 clears the index and holds the compiler permit. The saved handle still executes
 the real component and returns value 42. A foreign engine rejects the handle.
-The focused v44 runs pass 40 tests with zero failures. Four private compiler
-workers remain ignored in the parent harness. The proof is
-`/tmp/araphor-live-code-proof-v44.json`, with SHA-256
-`bd1c71ec2f6a2fe747f938fb1b6e5554397a56e53b48d2f43bf742ad5cc08fad`.
-At v44, the five component charges total 66,333,163 bytes. This is a historical
-charge record; it does not state the final component sizes.
 The [execution error](../../../../../crates/araphor-data/src/package/wasm/execution.rs)
 also retains a charged handle. Wasmtime backtrace frames retain compiled modules.
 The original error source drops before the handle. The host classifies the
@@ -678,13 +599,8 @@ original trap before it adds the handle. Display, the source chain, and the
 exact root trap remain available. The retained-trap regression fails on the
 original error path and passes after the correction. Cache clearing cannot
 release the charge while the error is retained. Dropping the error releases
-the last charge. The v45 focused runs pass 41 tests with zero failures and four
-ignored private worker entries. The reviewed proof is
-`/tmp/araphor-retained-trap-reviewed-proof-v45.json`, with SHA-256
-`8a096e939a8fcf0e68581f4ac17a7775aa7384926c72d00c8f073116e4eb5799`.
-The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
-records complete qualification and final workspace verification.
-The code charge excludes engine metadata, allocator overhead, and Arrow buffers.
+the last charge. The code charge excludes engine metadata, allocator overhead,
+and Arrow buffers.
 Query accounting and evaluation limits bound input and output separately. The
 code limit is not a total process memory limit.
 
@@ -744,12 +660,9 @@ before they close stores. The directory drops last. The
 [owner lifetime tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/lifetime.rs)
 check required registration, cursor wrap, context replacement, historical
 findings, and source isolation. The registration test fails on the original
-fixture. Both corrected tests pass. Their proof is
-`/tmp/araphor-graph-owner-proof-v44.json`, with SHA-256
-`285008d9497bf605c6eea26b765288883bc4c505ee7bad5e01fdb44bec40e3c5`.
-The complete CLI case has static DEBUG step timings and an INFO whole-case
-duration. These diagnostics add no timing threshold. The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
-records the four final cases and terminal workspace procedure.
+fixture. The complete CLI case has DEBUG step timings and an INFO whole-case
+duration.
+These diagnostics add no timing threshold.
 
 Review these boundary tests with the algorithm cases:
 
@@ -758,40 +671,22 @@ Review these boundary tests with the algorithm cases:
   agent limits, and human acknowledgement in eight ordinary Rust tests.
   The commit and notification modules are siblings of the transport module.
   Each test shows its production calls and assertions. Helpers prepare inputs
-  and initial resources only. All eight tests pass on the v46 captured source.
-  The proof is `/tmp/araphor-focused-graph-proof-v46.json`, with SHA-256
-  `5099009ea6a0500a6d26aa1220ecc6a85cd5ab8302ef7c65e2d010fb619a70c2`.
-  At the v46 record, the full CLI, large workloads, and aggregate are unchanged.
+  and initial resources only.
 - [Focused host boundary tests](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/tests/context.rs)
   retain all 12 cards, device denial, policy history, local input proof, node
   isolation, provider facts, and read scope in nine more ordinary Rust tests.
-  The other modules are siblings of the context module. Each single-test file
-  has fewer than 100 lines. All nine tests pass on the v48 captured source.
-  The proof is `/tmp/araphor-focused-graph-host-proof-v48.json`, with SHA-256
-  `0d7be6a3a8f3aab8bb4b17f525c4e40d5b92668fc732815fa6a6e1692e42f644`.
-  Eighteen existing graph and query tests also pass on the corrected Data source.
-  Their proof is `/tmp/araphor-focused-graph-reuse-proof-v47.json`, with SHA-256
-  `dafc5c5865d6e56f4677f22e5ec8234f2e4b3f39c7dec679079978d79f120957`.
+  The other modules are siblings of the context module.
   Reuse these owner tests for read-result, contradiction, provenance, baseline,
   authorization, sensitivity, follow, and subject-join checks. The complete CLI
   retains combined-source checks, all read and send records, and large inputs.
-  The aggregate Rust invocation is removed after the focused proofs pass.
-  The existing-output test retains its rejection assertion. The supported CLI
-  still runs the complete case. At v50, production source before the test
-  module, density, both native windows, and large Data traversal were
-  byte-identical.
-  The library test build passes after removal. Standard test registration proof
-  is `/tmp/araphor-graph-aggregate-retirement-proof-v50.json`, with SHA-256
-  `8f3ad02fcefab1e40d0d113253cd6057e3c40cc5a0896cced6061ce78d78d8aa`.
-  At v50, four fresh complete cases and final workspace verification remained
-  required.
+  The focused tests keep visible production calls and assertions.
+
 - [Installed guest overlap](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/concurrency.rs)
   uses the shipped Discovery `groups` component for two tenants. Both tenant
   snapshots retain the same installed owner. The test checks separate
   evaluation IDs, group keys, and sample identities. It checks member indexes
   `[0, 1]` and aggregate counts 5 and 18. Each output has no checkpoint,
-  evidence, or reason. The focused overlap test and the existing cancellation
-  test pass on the v12 source. Final qualification remained pending at v12.
+  evidence, or reason.
 - [Multiple input batches](../../../../../crates/araphor-data/src/package/wasm/tests/runtime/batches.rs)
   includes an empty batch and verifies the computed total.
 - [Checkpoint recovery](../../../../../crates/araphor-data/src/package/tests/wasm/checkpoint.rs)
@@ -807,10 +702,8 @@ Review these boundary tests with the algorithm cases:
   partial finding commit. The test requires split processing to consume all
   256 records and retain 255 native findings and one contextual credential
   finding with exact evidence. Each stored result must stay within 4 MiB.
-  The v23 run exhausts guest fuel before the aggregate error. Evidence recovery
-  passes in that historical record. The final v59 workspace run passes
-  `output_bytes_split` with the retained workload and production limits. Its
-  terminal record is `/tmp/araphor-wasm-rust-ci-ordered-v59.json`.
+  The retained final proof is
+  `/tmp/araphor-wasm-rust-ci-ordered-v59.json`.
 - [Domain commit fences](../../../../../crates/araphor-data/src/package/installed/commit/tests/changes.rs)
   verify that Run renewal and supervisor suspension cannot change an activation
   during the commit callback.
@@ -866,321 +759,16 @@ returns an error after Tokio shutdown. Existing assertions and workloads remain.
 
 ## Verification record
 
-**Done.** The four final production cases pass on source `c145e7b8`. The final
-shared Rust procedure passes in 9,147.416 seconds: 2,080 tests pass, zero fail,
+**Done** for source `c145e7b8`. The four final production cases pass on that
+source. The final shared Rust procedure passes in 9,147.416 seconds: 2,080 tests pass, zero fail,
 and 555 remain ignored. Ignored tests do not supply qualification evidence.
 The final proof is `/tmp/araphor-wasm-rust-ci-proof-v59.json`.
 Its terminal record is `/tmp/araphor-wasm-rust-ci-ordered-v59.json`;
 its log is `/tmp/araphor-wasm-rust-ci-ordered-v59.log`. The
 [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review) records the eight deliverables and remaining scope limits.
 The dispatch change preceded complete equivalence proof. This historical error
-remains; final qualification proves current installed-component equivalence.
-
-### Earlier verification records
-
-The records below retain their source boundaries and results at each stage.
-Later corrections retain live compiled-code charges in prepared handles and
-returned trap errors. Their focused proof passes 41 tests. Seventeen focused
-graph tests also pass before the shared-input correction. Eighteen existing
-graph/query tests pass on the corrected Data source. The duplicate aggregate
-Rust invocation is removed. The complete CLI and large workloads remain.
-The [shared input owner](../../../../../crates/mithril-e2e/src/discovery/graph_notification/replay/inputs.rs)
-now supplies card, read, and send inputs to both CLI and focused callers.
-Its children prepare inputs only. Graph operations and assertions stay in the
-callers. The normal test build passes. All 17 focused runtime checks pass for
-this correction in 1,093.82 seconds, with zero failures and no ignored tests.
-The change removes 187 Rust lines overall. Its reviewed proof is
-`/tmp/araphor-shared-graph-inputs-proof-v52.json`, with SHA-256
-`972a54ad508452cb7ab3020a15a379d534b39292978a66f2d0220c47ccbb0f09`.
-The [final source record](phase-7-5-4-wasm-execution.md#final-source-qualification-record)
-captures source `1f6b434` and its normal executable. The fresh v53 installed
-package case exits zero and reports `PASS`. The real client installs the SDK
-detector without a host rebuild. Restart, retry, and revocation checks pass.
-The fresh context case also passes. Installed transport preserves identity,
-revision, coverage, and the host-selected cutoff. The fresh profile restart
-case also passes. Live profiles persist and late context resolves after reopen.
-The complete graph case also passes with all 12 cards, 257 notification
-obligations, and both native windows. Its recorded duration is 1,995.544 seconds.
-All four fresh cases use the same captured source and executable. The final
-workspace procedure stopped at the user's request with exit 130 after
-formatting, workspace check, and strict Clippy passed. Workspace tests did not
-complete. The user approved the
-[revised completion goal](phase-7-5-4-wasm-execution.md#approved-completion-goal-and-remaining-todos)
-on 2026-10-12. It requires current installed equivalence and preserves the
-earlier dispatch-order error as history. Production cost isolation, any
-confirmed corrections, and terminal final CI remain required.
-
-The subsequent descriptor and codec correction passes 14 algorithm tests and
-54 SDK tests. The SDK all-features command passes 55 tests, including generated
-bindings. These counts overlap. They are not separate algorithm corpora.
-The [correction proof](phase-7-5-4-wasm-execution.md#descriptor-and-codec-correction-proof)
-records the commands and preserved validation order. These focused results do
-not qualify the changed guest artifacts or establish a production speed
-improvement. Affected production cases and final workspace CI remain required.
-
-The following records retain their original source boundaries.
-The isolation fixture now issues trace authority after service startup. Its
-existing case passes in 88.81 seconds. The
-[query fixture](../../../../../crates/mithril-e2e/src/observability/query.rs)
-starts the public listener with the other services before capture. It connects
-the same client and runs the unchanged 10-second query contract during capture.
-One shutdown method closes the query service before Control reopen. Its existing
-case passes in 69.70 seconds, including service startup. The 60-second active
-case, 30-second capture, 120-second grant, and original assertions remain.
-The [phase record](phase-7-5-4-wasm-execution.md#query-upload-diagnostic-correction-todos)
-retains both red and green results. The corrected Rust source is committed
-through `6cce92d1`. Its normal locked build passes without warnings. The
-[capture](phase-7-5-4-wasm-execution.md#corrected-normal-qualification-capture)
-records the frozen source and complete saved executable. All four fresh v43
-cases pass with that executable. Ordered final workspace verification remains
-required. The
-[record](phase-7-5-4-wasm-execution.md#fresh-qualification-on-the-corrected-source)
-retains the real client installation, custom reason, checkpoint, and lifecycle
-proof. Fresh context and profile restart cases also pass with equal v41 result
-bytes. The graph case exits zero and reports `PASS`. It retains all 12 incident
-cards, 257 findings and obligations across 33 sources, and both native windows.
-The phase record retains the immutable four-case completion snapshot. Final CI
-starts after all four cases pass, then stops with a controlled SIGINT before
-the user-requested performance and test-maintainability corrections. It exits
-130. Formatting, workspace check, strict Clippy, and linking pass. The completed
-targets have 135 passes and one ignored test. Workspace verification is
-unfinished. The
-[start record](phase-7-5-4-wasm-execution.md#ordered-final-verification-on-the-corrected-source)
-retains its command, source checks, and interrupted result. After the last Rust
-correction, all four fresh cases and final CI remain required. The historical
-dispatch order remains unmet.
-
-The retained multi-export correction is committed in `b14ffb2`. Its two focused
-regressions and normal build pass. Its source has 1,590 files and source SHA256
-`1807fd55302479664c33f129c2e487020e0f0b872fd24f06135e9ca74e192c0a`.
-The saved executable is `/tmp/araphor-current-v41-bin/mithril_discovery_test`,
-with SHA256 `8096891350c3022c5674df9974abb6ef390a5b48336f52d6dba7d4795623bcee`.
-The [v41 capture](phase-7-5-4-wasm-execution.md#current-multi-export-production-capture)
-records copy checks, component hashes, and checked cache recovery. The fresh
-installed-package case passes with result SHA256
-`30f956ac4e461befe7eb0e7ada5991dd18da041d52ca943c795eda51ed2738f6`.
-The aggregate proof is
-`/tmp/araphor-wasm-production-proof-v41.json`.
-The fresh context round-trip case also passes, with result SHA256
-`312cd19eaec497b7be967bb10f94ff74fe7f8f33a6a6cbd785a578c94906f587`.
-The fresh profile restart case also passes, with result SHA256
-`3e4dbc6f293c12a9911137d41285b1b18b4ec2c02df03c0a3cd2f265f6d996d5`.
-The fresh v41 graph case also exits zero and reports `PASS`, with result SHA256
-`912f2dbd7d8823190a861c72e09d4bfb5bc23fa4a0e9d6648b70036d0320dbe6`.
-All four fresh cases pass with the same saved executable. The graph proof is
-`/tmp/araphor-wasm-graph-proof-v41.json`, with SHA256
-`ebb44bbfdff12e464b533796119faba58c9b48f95002351af5f88291cfbe67a9`.
-The case retains all 12 incident cards, 257 findings and obligations across
-33 sources, and the 64-record and 185-record native windows. The windows return
-192 and 370 relationships. The larger window uses two SQL chunks. Reopen,
-exact versions, subject joins, evidence, proof, coverage, original deadlines,
-human receipt, intake acknowledgements, and transaction rollback checks pass.
-The case remains lightweight recorded replay. Ordered final CI and closure
-remain required.
-The first v41 procedure starts after the last Rust edit, before the fresh graph
-case. Formatting, workspace check, strict Clippy, and test linking pass. The
-root stops this unfinished run with SIGINT to follow the phase's required order.
-It exits 130. No test failure is reported. The SDK suite has 52 passes. The
-large corpus, graph bounds, evidence recovery, mixed-export graph regression,
-and large native traversal tests pass. Workspace verification is incomplete.
-The log is `/tmp/araphor-wasm-rust-ci-final-v41.log`, with SHA256
-`2cfcd512d1c13470b97bc251c39779d82753cad1c03faad80aa2b219ac1fb56d`.
-The final procedure must run again after fresh graph qualification.
-
-The ordered final procedure now starts after all four fresh cases pass.
-All 1,590 source hashes, the saved executable hash, and all four result file
-hashes match before the start. The command retains one Cargo build job and one
-test thread. The log is `/tmp/araphor-wasm-rust-ci-ordered-v41.log`. The capture is
-`/tmp/araphor-wasm-final-ci-ordered-capture-v41.json`, with SHA256
-`ba2a5b58be2ce2659a49e22d2dafed33c6c9a7e3627a9b858e6568aca06b4d93`.
-The procedure exits 101. Formatting, workspace check, strict Clippy, and test
-linking pass. The 75 completed Cargo targets have 1,748 passes, two failures,
-and 552 ignored tests. Data has 588 passes and seven ignored tests. The failing
-e2e target has 171 passes, two failures, and 527 ignored tests. The failures are
-the isolation trace-authority check and the query-upload timeout. Later targets
-do not run. The log has SHA256
-`fb8ccc87c6f8685051adf13f195c270a4528ea3c4c87d747cff443fcbab10d9c`.
-The [phase record](phase-7-5-4-wasm-execution.md#ordered-final-workspace-verification)
-links the immutable failed result and correction TODOs. No workspace pass is
-claimed.
-
-Independent guide review finds no additional source correction. All 157 local
-links and anchors resolve. The review checks owners, quota defaults, generated
-builds, operator installation, mixed exports, and lifecycle failures against
-source. All 1,590 source hashes, 24 independent artifact hashes, and the saved
-executable hash remain equal to their captured values. The review proof is
-`/tmp/araphor-wasm-review-audit-v41.json`, with SHA256
-`58f5e3d4fce119622894d7d93d900ce547dd7feaac424204c8b6fcd411e849b3`.
-This proof retains the earlier partial CI snapshot. The later v41 graph proof
-above closes fresh graph qualification. Ordered final CI and closure remain
-required.
-
-The retained v40 graph retry exits zero and reports `PASS`, with result SHA256
-`125b6841f7e66aed953cfb060963147866908358481fc9554542c51044d17692`.
-All four retained v39/v40 cases pass. The aggregate proof SHA256 is
-`1eda662b77adc7a5e4dedc702935084b56fb158db84b015a5f55e3c2b3c74e26`.
-The earlier failures remain recorded. These passes do not qualify the
-multi-export correction. The records below retain their source boundaries.
-
-The production repetition correction is committed in `82902cf4`. Its frozen
-v39 source manifest has 1,588 files and source SHA256
-`c1c5fcae09434446684c6cbe8fce4da61256a06271c119e469fa2b71a13921fa`.
-The normal build exits zero without warnings. The saved executable is
-`/tmp/araphor-current-v39-bin/mithril_discovery_test`, with SHA256
-`2c6a05f5daefc9e85c921d31496a262e2ecac8ebe17df71d9561b4de90603e3f`.
-The [phase result](phase-7-5-4-wasm-execution.md#corrected-production-source-and-final-verification)
-records source, build, executable, and copy hashes. The new graph case and exact
-final workspace procedure have started. Their terminal results and the other
-three fresh cases remain required. The v38 proof below retains its older source
-boundary.
-
-The test-only lint correction in `b1339b57` changes no production input. The
-v40 normal rebuild produces the same complete executable bytes as v39. The
-identity proof is `/tmp/araphor-wasm-production-identity-v40.json`, with SHA256
-`00816dde3e71d8d77f12a81ad53409391fc22085b31e81490324d3863a7660a6`.
-Fresh installed-package, context transport, and profile restart cases exit zero
-with the unchanged saved executable. Their records have separate commits and
-cover the byte-identical v39/v40 normal executable. At that v40 record, the graph
-case and exact v40 workspace procedure require retries. The graph case exits
-1 at the filesystem reserve and produces no result file. The final procedure
-passes formatting, workspace check, strict Clippy, and test linking, then exits
-134 during workspace tests after the disk fills. No complete workspace pass is
-recorded. The [storage failure record](phase-7-5-4-wasm-execution.md#current-storage-failure-and-recovery-todos)
-preserves both log hashes and required retries. The aggregate proof is
-`/tmp/araphor-wasm-production-proof-v39.json`.
-
-The [phase result](phase-7-5-4-wasm-execution.md#result) will record final source
-state, commands, counts, and evidence after the required checks pass.
-The [build proof](wasm-component-build-proof.json) records independent component
-build hashes. This work adds no new BPF program or ABI, physical-prevention
-qualification, native target, OCI distribution, or performance result.
-
-The retained v38 Rust source is committed through `20db87a9`. Its 1,586-file manifest
-is `/tmp/araphor-wasm-source-manifest-production-v38.json`, with source SHA256
-`e4681bec06f08de042c760c75fd0a76025b5fdfa945262e30e9377c1455a1a06`.
-The saved normal executable is
-`/tmp/araphor-current-v38-bin/mithril_discovery_test`, with SHA256
-`b1d25154f255dbac2aefb7fc1fc063d38972628beba20f7fbcddef000173320f`.
-Fresh `analysis-packages`, `context-roundtrip`, and `profile-restart` cases use
-this unchanged executable. All three exit zero and produce schema version 1
-`PASS` results. Their records have separate commits: `e4deb6cd`, `fdbd67c9`,
-and `75c0e363`, respectively. The proof is
-`/tmp/araphor-wasm-production-proof-v38.json`.
-The fresh `graph-notification` case also exits zero and reports `PASS`. Its
-result SHA256 is
-`7e79955351206bd3ab153a803fac872d03509daf2e888b03906e029316c3644d`.
-It preserves 12 incident cards, 257 findings and notification obligations,
-33 source windows, and the 64-record and 185-record native windows. The latter
-selects 370 relationships through two SQL chunks and reopens with equal output.
-The aggregate proof SHA256 is
-`3d9531eaed7693c662acf3379c3a0545cbc8f1f33c0220a24879b2385e3174f8`.
-These four passes cover the retained v38 executable. Production repetition
-corrections are under review. They require a new source capture, normal build,
-four fresh production cases, and the final shared Rust procedure.
-
-The retained v37 Rust source is committed through `6f6ac795`. All 1,586 files in
-`/tmp/araphor-wasm-source-manifest-production-v37.json` matched source SHA256
-`0df1d83246835e7158967cd7890a9cb8deda67f0061859b18e81191e628d6bb0`.
-Two independent builds reproduced all six source-built components. The v37
-runtime group had ten passes and one filesystem-reserve failure. After checked
-cache recovery, the unchanged installed overlap test passed in 87.58 seconds.
-The group and retry logs have SHA256 values
-`7ac12dddedc80822246c50be7be6e82bf655285f45cbc36cf71e94caa0d6160a`
-and `2f559b478f7ebf49bb9093fd2941fdfb4e104697f050a3addbd8ad5b5c510fee`.
-The [phase record](phase-7-5-4-wasm-execution.md#current-native-build-failure)
-contains the exact reserve, cache, loaded-section, and executable proof.
-Four fresh normal production cases and the final shared Rust procedure remained
-required on that source. The records below retain their historical source and
-limits.
-
-The retained v31 verification record follows `d8528992`. Its 1,576-file source
-manifest is `/tmp/araphor-wasm-source-manifest-production-v31.json`, with SHA256
-`12f6f8e821a5fe2aeb18fe727b3f6d9a65202492a75d7f9bb4a79237841823e7`.
-Canonical evidence publication, the derived JSON byte check, and the common
-edge prefix are implemented. The v27 graph group has five passes at production
-limits. These are historical checks; final current-source CI remains required.
-
-The earlier v30 production cases passed with the saved normal executable:
-`analysis-packages`, `context-roundtrip`, and `profile-restart`.
-The executable is `/tmp/araphor-current-v30-bin/mithril_discovery_test`, with
-SHA256 `2bce7ffca52037ea28d6b974f38a9d16fad443ed76d63de2968568ba8f96eca2`.
-Production source is unchanged between v30 and v31. The v31 normal build
-produces the same executable bytes after test-only corrections.
-The graph case exits one on the unchanged filesystem reserve and writes no
-result. Its same-binary retry uses `/tmp/araphor-current-v31-graph-retry`.
-The retry also exits one, with `AnalysisReadDeadline` at the final read cleanup
-check. This earlier location does not identify the native read operation.
-The proof is `/tmp/araphor-wasm-production-proof-v30.json`. Graph qualification
-and the final shared Rust procedure remain required.
-
-Current source also includes optional Wasm quotas, input reservation from
-retained allocations, native window selection, and caller-location errors.
-The combined source still requires complete algorithm and lifecycle checks,
-the remaining graph production case with the saved executable, and the final
-shared Rust procedure after the last Rust edit. Earlier source records do not
-qualify these corrections. The dispatch ordering breach remains recorded.
-
-The retained v23 graph group has one pass and one failure. Evidence recovery
-passes. The split test exhausts guest fuel in graph output encoding. The log is
-`/tmp/araphor-wasm-graph-recovery-and-split-production-v23.log`.
-This run is historical evidence. It does not qualify the current changes.
-
-The retained v26 graph group has one pass and one failure after 251.72
-seconds. Evidence recovery passes. The split case exhausts guest fuel in
-`quicksort<u64>` from `Computation::output`, before row encoding. The proof is
-`/tmp/araphor-wasm-production-bounds-proof-v26.json`.
-The later v27 graph checks pass. The current graph production case and final
-workspace procedure remain required.
-
-The focused correction run `v10` passed all six tests in 602.21 seconds.
-The log is `/tmp/araphor-wasm-fixture-and-graph-tests-v10.log`.
-The run includes `graph::tests::bounded::output_bytes_split` and
-`package::tests::wasm::lifecycle::wasm_installed_lifecycle`.
-The source manifest is `/tmp/araphor-wasm-source-manifest-correction-v10.json`.
-Its SHA256 is `a0a0ee9405ef1963bc1e471f097c45df66dae7724074e299b11caa31d1aa5481`.
-The run uses temporary unit test allowances. These allowances precede the
-[approved resource policy](phase-7-5-4-wasm-execution.md#approved-resource-policy-correction)
-and do not qualify current execution. The final shared Rust procedure and
-production qualification remain incomplete.
-
-Concurrency correction source `v12` adds
-`package::wasm::tests::runtime::concurrency::installed_guests_overlap`
-and the test-only release gate. Compilation and both focused tests pass.
-The proof is `/tmp/araphor-wasm-concurrency-proof-v12.json`. The overlap and
-cancellation logs have SHA256 values
-`533d27f5c2c5a0fb8915195be8ae0b7f8691c1f5d6c0c4680c9f5d31a820c3a1`
-and `813c5b0a6c375e4849aa883310bb4565e587e174da3f6407fc4c6950cfe6a59c`.
-The source manifest is
-`/tmp/araphor-wasm-source-manifest-concurrency-v12.json`.
-Its SHA256 is `47d73bbfec0059251f6c8851a410d232f83bf2440c4edef7d10720064b33eb8b`.
-The shared Rust run `v11` uses earlier source and cannot qualify this correction.
-The final current-source run `v12` ended with exit code 101.
-Formatting, workspace checking, and strict Clippy passed.
-Linking the `mithril-control` test `contract` failed with a linker Bus error.
-The filesystem had 342 MiB free at the final observation.
-The cause of the linker error remains unconfirmed. Full workspace tests did
-not start. The log is `/tmp/araphor-wasm-rust-ci-final-v12.log`.
-Its SHA256 is `033debd8c043ebce29898229ebc7db73ca80801170b0ad3a8ca63730f774cbfc`.
-The result is `/tmp/araphor-wasm-rust-ci-final-v12-result.json`.
-The source SHA256 remains the `v12` value above.
-
-Cleanup removed debug sections from 13 inactive generated executables.
-The cleanup saved 17,862,496,480 bytes. Every loaded section stayed equal.
-The cleanup proof and log paths are
-`/tmp/araphor-strip-proof-20261011-ci-v12.json` and
-`/tmp/araphor-strip-ci-v12.log`.
-The retry uses the same v12 source. Its log and result paths are
-`/tmp/araphor-wasm-rust-ci-final-v12-retry.log` and
-`/tmp/araphor-wasm-rust-ci-final-v12-retry-result.json`.
-The run receives a controlled SIGINT and exits 130 before the required
-production-bound discovery correction starts. It is live when interrupted.
-No timeout or terminal test failure causes the stop. No CI descendant remains
-after the stop. The log SHA256 is
-`5a870fce9d077ac6fe0c9f6ad04bbf4545720d2dc2ae5e7b688d3d1bfb1c15c4`.
-Formatting, workspace checking, and strict Clippy pass on v12. Workspace tests
-remain incomplete. The bounded-input correction is implemented and committed.
-At this earlier bounded-input record, all four fresh production cases and a new
-final shared Rust procedure remain required.
+remains. Final qualification proves installed-component equivalence at that
+source. The current working tree requires new verification.
 
 ## Bounded discovery input correction
 
@@ -1200,29 +788,30 @@ validates the final result against the complete input and commits no page.
 The opaque record-comparison string uses the existing full-record digest.
 Host validation still compares complete records for duplicate conflicts.
 
-The v20 discovery group passes all 28 tests at production limits. It includes
-all 21 normal and duplicate replay cases. The
-[rare-case helper](../../../../../crates/araphor-data/src/discovery/derive/tests/corpus.rs)
+The [rare-case helper](../../../../../crates/araphor-data/src/discovery/derive/tests/corpus.rs)
 checks exact groups and all eleven comparison fields against a 64-record
-baseline. Its proof is `/tmp/araphor-wasm-production-bounds-proof-v20.json`.
-Later component rebuilds require new qualification.
-
-The earlier v13 production and tests use 32 MiB of data and 100 million fuel
-units.
-Source `v13` has SHA256
-`8c34f38f69015fb184c8d8660e81e7882340ac0f9dbea0109ff58a15e389f42a`.
-The ten planner tests and both real-component correction tests pass. Their
-proof is `/tmp/araphor-wasm-production-bounds-proof-v13.json`. The complete
-corpus fails at the shared 60-second deadline on `rare-forbidden normal`.
-The graph evidence-recovery test fails with `PackageWasm::Limit` in
-`/tmp/araphor-wasm-graph-recovery-production-v13.log`. Fresh production
-qualification and final Rust CI remain required.
+baseline. The full corpus retains all 21 normal and duplicate replay cases.
 
 The graph correction changes `Computation::output` in
 `araphor-analysis-builtins/src/graph/contract.rs`. It constructs one
 reason-details port before the finding loop and reuses it. Finding values,
 reason codes, evidence links, schemas, and checkpoint state stay equal.
-The graph schema correction passed 13 shared tests. Two independent builds
-produce equal bytes for all four required components. See `graph_schema_correction`
-in [the build proof](wasm-component-build-proof.json). These checks do not
-replace current production-limit graph recovery and output-byte qualification.
+The independent component-build record is
+`graph_schema_correction` in the [build proof](wasm-component-build-proof.json).
+It does not replace source-bound production graph and output-byte qualification.
+
+## Historical records
+
+Intermediate builds, focused receipts, failed and interrupted checks, cost
+investigations, and superseded format and quota records remain at
+`7b7b407adf347d389984553a4d212bfce37b75b5:docs/plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/wasm-execution-review.md`.
+The [phase history](phase-7-5-4-wasm-execution.md#historical-records) retains the
+matching implementation record. Each receipt applies only to its captured
+source, executable, component bytes, configuration, and limits. A later pass
+does not change an earlier failed or interrupted result.
+
+The dispatch-order requirement was not met. The approved completion goal
+replaced that requirement. Historical CPU-cost variation remains unexplained.
+No physical-prevention, cross-node-causality, or performance result follows
+from the current working-tree simplification. New verification is required in
+the [approved TODO](../../../araphor-performance-simplification-todo.md).

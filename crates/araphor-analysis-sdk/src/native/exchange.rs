@@ -33,9 +33,8 @@ impl Exchange {
     }
 
     pub(super) fn evaluation(package: &Package, value: &Evaluation) -> Result<Self> {
-        let validator = package.validator(value)?;
-        validator.input(value)?;
-        let model = validator.model;
+        let model = package.validator(value)?;
+        model.input(value)?;
         let mut frame = Self::new();
         for input in &value.inputs {
             let data = frame.dataset(&input.data, model.inputs.iter().map(|input| &input.port))?;

@@ -1048,11 +1048,7 @@ mod tests {
     fn identity(tenant: u8) -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
             tenant_id: [tenant; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+            ..crate::analysis::tests::identity()
         }
     }
 
@@ -1107,12 +1103,7 @@ mod tests {
         };
         let context_revision = store.commit_context(&context)?;
         let mut input = AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
             context_revision,
-            result_id: "finding-1".into(),
             body: b"result".to_vec(),
             created_utc_ns: 1_000_000_000,
             witnesses: vec![AnalysisWitnessV1 {
@@ -1124,6 +1115,7 @@ mod tests {
                 key: context.key.clone(),
                 commit_revision: context_revision,
             }],
+            ..crate::analysis::tests::result(scope, "finding-1".into())
         };
         let mut invalid = input.clone();
         assert!(store.processor_result(&input.scope)?.is_none());
@@ -1323,12 +1315,6 @@ mod tests {
             100,
         )?;
         let input = AnalysisResultCommitV1 {
-            scope,
-            expected_cursor: 0,
-            consumed_cursor: 1,
-            coverage_revision: 0,
-            context_revision: 0,
-            result_id: "mixed-result".into(),
             body: b"result".to_vec(),
             created_utc_ns: 101,
             witnesses: vec![
@@ -1343,7 +1329,7 @@ mod tests {
                     expires_utc_ns: 300,
                 },
             ],
-            context_refs: vec![],
+            ..crate::analysis::tests::result(scope, "mixed-result".into())
         };
         let mut invalid = input.clone();
         invalid.witnesses[1].cursor = 3;

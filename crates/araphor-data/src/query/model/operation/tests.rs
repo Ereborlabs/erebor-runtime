@@ -127,7 +127,7 @@ fn operation_inputs_match() -> TestResult {
         &evaluation(expected_inputs.inputs.clone(), &model),
         &control()?,
     )?;
-    let expected_bytes = serde_json::to_vec(&crate::package::PackageOutputV1::encode(
+    let expected_bytes = serde_json::to_vec(&crate::AnalysisPackageOwner::encode_output(
         &expected.output,
         &model,
     )?)?;
@@ -161,7 +161,7 @@ fn operation_inputs_match() -> TestResult {
     )?;
     assert_eq!(
         expected_bytes,
-        serde_json::to_vec(&crate::package::PackageOutputV1::encode(
+        serde_json::to_vec(&crate::AnalysisPackageOwner::encode_output(
             &output.output,
             &model
         )?)?

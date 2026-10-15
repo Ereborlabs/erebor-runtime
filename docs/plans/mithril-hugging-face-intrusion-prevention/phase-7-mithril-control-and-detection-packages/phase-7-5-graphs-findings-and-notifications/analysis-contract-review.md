@@ -38,9 +38,9 @@ These event blocks follow the approved plan. Links identify the current owners.
 
 [Fixture](../../../../../crates/araphor-analysis-sdk/src/fixture.rs) Author tests an export against fixtures.<br>
 -> [Evaluation](../../../../../crates/araphor-analysis-sdk/src/evaluation.rs) The fixture supplies typed inputs, evaluation context, parameters, and prior checkpoint.<br>
--> [ContractValidator::input](../../../../../crates/araphor-analysis-sdk/src/validation.rs) The SDK validates those values before computation.<br>
+-> [Model::input](../../../../../crates/araphor-analysis-sdk/src/validation.rs) The SDK validates those values before computation.<br>
 -> [FilesCount::evaluate](../../../../../crates/araphor-analysis-sdk/examples/files_count.rs) Ordinary algorithm code returns datasets and evidence references; stateful exports also return the next checkpoint.<br>
--> [ContractValidator::output](../../../../../crates/araphor-analysis-sdk/src/validation.rs) Shared contract validation checks the declared outputs and limits.<br>
+-> [Model::output](../../../../../crates/araphor-analysis-sdk/src/validation.rs) Shared contract validation checks the declared outputs and limits.<br>
 -> [FixtureReport](../../../../../crates/araphor-analysis-sdk/src/fixture.rs) The test result identifies the export, implementation, fixture, package, and input revisions.
 
 [SensitiveAccess::evaluate](../../../../../crates/araphor-analysis-sdk/examples/sensitive_access.rs) Author tests a detector against an exact baseline.<br>
@@ -52,7 +52,7 @@ These event blocks follow the approved plan. Links identify the current owners.
 -> An incomplete baseline returns `Incomplete`; it produces no report.
 
 [Output](../../../../../crates/araphor-analysis-sdk/src/evaluation.rs) An export returns an invalid schema, reference, or checkpoint.<br>
--> [ContractValidator](../../../../../crates/araphor-analysis-sdk/src/validation.rs) Validation rejects the complete result with a structured error.<br>
+-> [CheckedEvaluation::validate_output](../../../../../crates/araphor-analysis-sdk/src/validation.rs) Validation rejects the complete result with a structured error.<br>
 -> [Package::test](../../../../../crates/araphor-analysis-sdk/src/fixture.rs) The fixture runner returns no report. It has no durable commit call.<br>
 -> **Implemented outside this phase:** [AnalysisStore::commit_graph](../../../../../crates/araphor-data/src/analysis/progress.rs) remains the production graph commit owner. The SDK fixture does not call that owner.
 
@@ -97,7 +97,7 @@ then the following owners in order. The SDK has no host store or Control depende
 | [Package, Model, Port](../../../../../crates/araphor-analysis-sdk/src/model.rs) | Identity, revision, named schemas, dependencies, reasons, limits, and state version. | The author owns these values. Validation does not load dependencies or execute code. |
 | [Evaluation](../../../../../crates/araphor-analysis-sdk/src/evaluation.rs) | Named Arrow batches, revisions, coverage, source windows, parameters, context, and prior state. | The fixture owns the input. Computation borrows it for one call. |
 | [Package::interfaces](../../../../../crates/araphor-analysis-sdk/src/bindings.rs) | One validated descriptor supplies JSON and both interface declarations. | Generated strings are owned return values. Inspection has no executable loader. |
-| [ContractValidator](../../../../../crates/araphor-analysis-sdk/src/validation.rs) | Declared schemas and reduced evaluation limits. | A validator borrows the selected model. Its counters and reference sets end with validation. |
+| [Model](../../../../../crates/araphor-analysis-sdk/src/validation.rs) | Declared schemas and reduced evaluation limits. | A checked evaluation borrows the selected model. Validation counters and reference sets end with each check. |
 | [BatchBudget](../../../../../crates/araphor-analysis-sdk/src/validation/batch.rs) | Arrow batches, declared schemas, and data bounds. | Counters reject excess data. Range checks inspect selected non-null values without copying child buffers. |
 | [Package::test](../../../../../crates/araphor-analysis-sdk/src/fixture.rs) | One fixture and one Rust function. | The function runs once after input checks. A report owns the checked output and copies revision metadata. |
 | [Discovery::evaluate](../../../../../crates/araphor-analysis-builtins/src/discovery/mod.rs) | Normalized records, context, coverage, lifecycle, snapshots, or baseline groups. | One call owns the computation state. The production adapter reconstructs and validates the domain output. |
@@ -129,7 +129,7 @@ Encoded descriptors have a 1 MiB bound. Local dependency bindings require the
 exact package revision and equal input/output schemas. External resolution and
 cycle checks belong to admission.
 
-[ContractValidator::input](../../../../../crates/araphor-analysis-sdk/src/validation.rs)
+[Model::input](../../../../../crates/araphor-analysis-sdk/src/validation.rs)
 requires every named input exactly once. Schemas include nullability and
 metadata. Parameters have one row, or are absent for an empty parameter schema.
 Source windows carry exact source bytes and ordered UTC bounds. Prior state can
@@ -151,7 +151,7 @@ nullable at every schema depth. A presence field distinguishes
 a missing source value from a nullable value. The SDK validates tolerance
 bounds; author assertions perform numeric result comparisons.
 
-[ContractValidator::output](../../../../../crates/araphor-analysis-sdk/src/validation.rs)
+[Model::output](../../../../../crates/araphor-analysis-sdk/src/validation.rs)
 checks every output, each global dataset row reference, duplicate evidence,
 required evidence, namespaced reason codes, one-row reason details, and next
 state. Named outputs can have different row counts. Input order is batch order,
