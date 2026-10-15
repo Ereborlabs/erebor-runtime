@@ -8,7 +8,7 @@ use snafu::ResultExt as _;
 use super::storage::StoredArtifact;
 use super::{
     PackageArtifactV1, PackageBundleV1, PackageCheckpointV1, PackageDatasetV1, PackageFixtureV1,
-    PackageImplementationV1, PackageInputV1, PackageOutputV1, PackageReasonV1, MAX_PACKAGE_BYTES,
+    PackageImplementationV1, PackageInputV1, PackageOutputV1, PackageReasonV1,
 };
 use crate::{AnalysisContractSnafu, IoSnafu, Result};
 
@@ -50,7 +50,6 @@ impl PackageOci {
                 artifacts: metadata,
             },
             &layers,
-            MAX_PACKAGE_BYTES,
         )
         .context(AnalysisContractSnafu)
     }
@@ -262,20 +261,17 @@ impl PackageOci {
     pub(super) fn read(path: &Path) -> Result<PackageBundleV1> {
         let root = Self::open_path(path).context(IoSnafu { path })?;
         if root.metadata().context(IoSnafu { path })?.is_dir() {
-            let content = oci::Content::read_files(
-                |name, limit| {
-                    Self::read_file(&root, name, limit).map_err(|source| sdk::Error::Io {
-                        path: path.join(name),
-                        source,
-                        location: snafu::Location::new(file!(), line!(), column!()),
-                    })
-                },
-                MAX_PACKAGE_BYTES,
-            )
+            let content = oci::Content::read_files(|name| {
+                Self::read_file(&root, name).map_err(|source| sdk::Error::Io {
+                    path: path.join(name),
+                    source,
+                    location: snafu::Location::new(file!(), line!(), column!()),
+                })
+            })
             .context(AnalysisContractSnafu)?;
             Self::decode(content)
         } else {
-            let bytes = Self::read_open(root, MAX_PACKAGE_BYTES).context(IoSnafu { path })?;
+            let bytes = Self::read_open(root).context(IoSnafu { path })?;
             PackageBundleV1::from_bytes(&bytes)
         }
     }
@@ -307,7 +303,7 @@ impl PackageOci {
         Ok(directory.into())
     }
 
-    fn read_file(root: &File, name: &str, limit: usize) -> std::io::Result<Vec<u8>> {
+    fn read_file(root: &File, name: &str) -> std::io::Result<Vec<u8>> {
         use rustix::fs::{openat, Mode, OFlags};
         let mut directory = rustix::io::dup(root)?;
         let parts = name.split('/').collect::<Vec<_>>();
@@ -318,25 +314,19 @@ impl PackageOci {
             }
             directory = openat(&directory, *part, flags, Mode::empty())?;
         }
-        Self::read_open(directory.into(), limit)
+        Self::read_open(directory.into())
     }
 
-    fn read_open(file: File, limit: usize) -> std::io::Result<Vec<u8>> {
+    fn read_open(mut file: File) -> std::io::Result<Vec<u8>> {
         let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.len() > limit as u64 {
+        if !metadata.is_file() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "OCI file size or type",
+                "OCI file type",
             ));
         }
         let mut bytes = Vec::new();
-        file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
-        if bytes.len() > limit {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::FileTooLarge,
-                "OCI file bytes",
-            ));
-        }
+        file.read_to_end(&mut bytes)?;
         Ok(bytes)
     }
 }

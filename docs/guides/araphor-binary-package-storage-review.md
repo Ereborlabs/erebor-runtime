@@ -1,9 +1,10 @@
 # Araphor Binary Package Storage Review
 
 This guide covers binary package storage and the approved local OCI transport.
-The retained evidence below covers `cffde410`. The OCI and admission changes
-are committed through `ab6b5da3` and pass focused tests and final CI. Refreshed
-native Data and the exact E2E retry pass. E2E reproducibility remains **Not done**.
+This change adds explicit input sources and removes the approved package caps.
+The third final Rust procedure and native qualification on Linux x86_64 GNU
+pass. Results at `ab6b5da3` and
+`cffde410` below are historical. E2E reproducibility remains **Not done**.
 The [approved plan](../plans/araphor-production-dataflow-simplification.md)
 defines the package storage scope.
 
@@ -50,9 +51,9 @@ canonical count against the frame and the `encoded_bytes` column. There is no
 migration adjustment or legacy JSON decoder.
 
 The [schema](../../crates/araphor-data/src/analysis/packages/schema.rs) charges
-the canonical V1 artifact size. The external 32 MiB bundle bound and internal
-64 MiB revision bound retain their encoded units. Smaller physical storage does
-not increase these limits. Fixtures still use their existing JSON and Arrow
+the canonical V1 artifact size. The user removed the external 32 MiB package
+cap and internal 64 MiB revision cap. Content-derived byte counts still check
+frame integrity and supply store usage charges. Fixtures use their JSON and Arrow
 Interprocess Communication (IPC) encoding.
 Runtime bundle and input leases still charge owned decoded buffers. The logical
 encoding charge does not replace runtime memory accounting. DuckDB owns the
@@ -71,7 +72,7 @@ sequenceDiagram
 ```
 
 Installation retries compare the decoded artifact with the candidate. The
-candidate byte bound is checked before a saved decode error. Collection
+candidate encoding is prepared before a saved decode error. Collection
 removes the existing row through its current retention rules. It does not
 manage a second blob table or filesystem owner.
 
@@ -97,7 +98,7 @@ section records the separately approved local OCI transport change.
   -> [Content](../../crates/araphor-analysis-sdk/src/oci.rs) the SDK verifies descriptor sizes, SHA-256 hashes, media types, and the canonical Araphor manifest and config
   -> [PackageOci::decode](../../crates/araphor-data/src/package/oci.rs) Data fills ordered empty metadata slots from typed raw layers and checks reconstructed identity
   -> [PackageRequestV1::encode](../../crates/araphor-data/src/package/model/request.rs) the client encodes request metadata and the OCI archive as separate CBOR byte strings
-  -> [ClientGrpcOwner](../../crates/mithril-control/src/client_grpc/packages.rs) Control decodes the bounded binary request from the existing gRPC bytes field
+  -> [ClientGrpcOwner](../../crates/mithril-control/src/client_grpc/packages.rs) Control decodes the binary request from the existing gRPC bytes field
   -> [PackageTrustPinV1](../../crates/mithril-control/src/client_auth/packages.rs) Control requires the selected tenant's exact `sha256:` manifest pin and current grant
   -> [AnalysisPackageOwner::admit_artifact](../../crates/araphor-data/src/package/execution.rs) the package owner admits each shared executable once and retains each export's SQL and binding checks
   -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) the existing store commits the immutable package revision
@@ -118,12 +119,14 @@ by 64 lowercase hexadecimal characters. Bare hexadecimal trust pins are invalid.
 The request is a three-field CBOR array: version 1, metadata JSON bytes, and
 OCI archive bytes. Install and update metadata exclude the bundle. Other
 operations require an empty archive. The request rejects trailing bytes and
-retains its existing 32 MiB plus 64 KiB total bound. The package archive retains
-the 32 MiB bound, including tar headers and padding. The internal revision
-retains its separate 64 MiB logical encoding bound.
+has no separate aggregate size cap. The user also removed the descriptor-only
+1 MiB cap, OCI package 32 MiB cap, and stored revision 64 MiB cap. Package gRPC
+clients and the server remove the aggregate message cap for package transport.
+OCI exact descriptor sizes, digests, format checks, runtime data limits, and
+store usage accounting remain.
 
 Directory reads retain file descriptors and open each component without
-following symbolic links. They require bounded regular files. Archive reads
+following symbolic links. They require regular files. Archive reads
 do not extract content. They reject duplicate paths, links, special entries,
 unsafe names, missing or changed referenced blobs, and nonzero trailing data.
 Unreferenced layout content does not become admitted package content.
@@ -138,11 +141,61 @@ Read [SDK OCI tests](../../crates/araphor-analysis-sdk/src/oci/tests.rs),
 [package OCI tests](../../crates/araphor-data/src/package/oci/tests.rs),
 [request tests](../../crates/araphor-data/src/package/model/request/tests.rs), and
 [trust-pin tests](../../crates/mithril-control/src/client_auth/packages/tests.rs).
-They cover byte bounds, descriptor identity, raw-layer order, malformed input,
+They cover descriptor identity, raw-layer order, malformed input,
 directory links, request framing, changed-content denial, and authority locking.
-These are the source test routes covered by the current qualification below.
+These are source test routes. Current-source verification is **Done** on Linux
+x86_64 GNU; read the current source record below.
 
-### Current qualification at `ab6b5da3`
+### Explicit input declarations
+
+[InputPort](../../crates/araphor-analysis-sdk/src/model.rs) Each input declares its port and source
+  -> [Package::validate](../../crates/araphor-analysis-sdk/src/descriptor.rs) the SDK checks source and mode combinations and exact local output references
+  -> [PackageBundleV1::validate](../../crates/araphor-data/src/package/admission.rs) Data checks the dependency closure from output references
+  -> [AnalysisPackageOwner::inputs_with_sql](../../crates/araphor-data/src/package/inputs.rs) the package owner resolves each explicit SQL or output source
+
+`InputMode::Provided` accepts `Provided` and `Output` sources. The caller supplies
+all datasets; output references still retain dependency edges. `Resolved` accepts
+`Sql(query)` and `Output(OutputRef)` sources. Zero-input models also declare the
+mode. `Model::new` defaults to `Provided`. There is no separate package dependency
+list, SQL binding map, or missing-key fallback. Computation ports and the native
+and Wasm evaluation ABI remain unchanged.
+
+### Current source record
+
+The source record covers this change based on `4176a9cb`. Explicit inputs and
+cap removals are implemented. Focused checks pass. The first final Rust procedure fails in
+`analysis_packages_contract`: count revision 31 is fresh, but repeated revision
+24 is stale. Diagnostic execution confirms query-capacity contention without
+establishing the timeout cause. The fixture now waits for store revisions with
+the same deadline and assertions. Its exact case passes in 133.55 seconds.
+
+The second procedure exits 101 after 1,405.74 seconds: 1,829 passed, one failed,
+and 565 ignored. The package case passes; `data_store_recovery` fails an assertion
+that incorrectly requires pinned and unprocessed records to share a segment.
+Both retention/append orders are valid; witness accounting is correct. The
+fixture now checks exact pinned bytes after retention and before the next append.
+It preserves the original ACK, record, backup, and timeout checks. The corrected
+exact case passes in 10.92 seconds.
+
+The third final Rust procedure passes in 1,364.72 seconds: all 90 harnesses
+finish with 2,135 passed, zero failed, and 568 ignored. Both corrected E2E cases
+pass, and source hashes remain unchanged. **Done** for final Rust CI. Data takes
+767.26 seconds, so the target below ten minutes is **Not met**. Read the [input verification record](../plans/araphor-production-dataflow-simplification.md#explicit-input-sources-and-removed-package-caps)
+for all counts, timings, retained failures, corrections, and evidence paths.
+
+Six current native libraries build successfully; read
+`/tmp/araphor-input-native-build2.json`. All 12 native Data cases pass in 224.05
+seconds. The native detector E2E case passes in 224.16 seconds with an empty
+`PATH`. Both runs have zero failures and zero ignored cases. The runner records
+`qualified=true` on Linux x86_64 GNU with glibc 2.39. Source, build inputs,
+binaries, and library hashes remain unchanged. Read
+`/tmp/araphor-input-native-qualification.json` and
+`/tmp/araphor-input-native-qualification.log`. **Done** for the input and cap
+changes and their verification on this platform.
+Production scheduling fairness remains unproven. Historical results below do
+not qualify this source. No runtime saving is established.
+
+### Historical qualification at `ab6b5da3`
 
 Source implementation, focused qualification, and final Rust CI are **Done**.
 Focused checks pass for 43 Data cases, five SDK OCI cases, six builder cases,
@@ -195,12 +248,15 @@ digests, malformed frames, exact logical charges, and byte bounds.
 current schema integrity and filesystem permissions.
 [Backup tests](../../crates/araphor-data/src/analysis/backup.rs) check current
 restore and malformed input.
-[Revision tests](../../crates/araphor-data/src/package/lifecycle/revisions.rs)
-retain immutable retry and candidate error precedence cases.
+At `cffde410`, revision tests checked immutable retry and candidate error
+precedence. The current [revision tests](../../crates/araphor-data/src/package/lifecycle/revisions.rs)
+check immutable retry, store reopen, and OCI encoding and decoding with a 33 MiB
+artifact. Its encoded store charge exceeds 64 MiB. The cap-only candidate error
+case is removed.
 [Graph recovery tests](../../crates/araphor-data/src/analysis/graph_rows/tests/recovery.rs)
 retain current graph history, backup, and corruption checks.
 
-The implemented source is HEAD `cffde410`. Commit `6b6d5ebb` contains the
+The historical source is `cffde410`. Commit `6b6d5ebb` contains the
 package storage change. The focused run uses a fresh development store and
 the current binary frame. No old-store conversion or compatibility proof is
 part of this result.

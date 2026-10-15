@@ -173,7 +173,6 @@ pub struct PackageExportStatusV1 {
     pub active: bool,
     pub activation_revision: u64,
     pub results: Vec<PackageReceiptV1>,
-    pub dependencies: Vec<sdk::Dependency>,
     pub fixtures: Vec<String>,
 }
 

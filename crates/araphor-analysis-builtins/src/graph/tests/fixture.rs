@@ -37,10 +37,10 @@ pub(super) fn fixture(
     let package = detector.descriptor();
     let model = &package.exports[0];
     let datasets = vec![
-        Rows::encode(&model.inputs[0], records, model.limits)?,
-        Rows::encode(&model.inputs[1], facts, model.limits)?,
+        Rows::encode(&model.inputs[0].port, records, model.limits)?,
+        Rows::encode(&model.inputs[1].port, facts, model.limits)?,
         Rows::encode(
-            &model.inputs[2],
+            &model.inputs[2].port,
             &[Manifest {
                 window_ns: 100,
                 window_records: 256,

@@ -46,7 +46,6 @@ impl ContextComponent {
             descriptor,
             implementations: vec![PackageImplementationV1::Wasm {
                 exports: vec!["echo-inputs".into()],
-                inputs: None,
                 artifact: COMPONENT.to_vec(),
             }],
             fixtures: Vec::new(),

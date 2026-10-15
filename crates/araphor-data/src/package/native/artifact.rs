@@ -29,8 +29,6 @@ pub struct Dependency {
 #[serde(deny_unknown_fields)]
 pub struct Qualification {
     pub exports: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inputs: Option<BTreeMap<String, String>>,
     pub target: String,
     pub cpu_features: Vec<String>,
     pub contract_version: u32,
@@ -87,7 +85,6 @@ impl Qualification {
         }
         Ok(Self {
             exports,
-            inputs: None,
             target,
             cpu_features: Vec::new(),
             contract_version: 1,
@@ -542,7 +539,6 @@ mod tests {
     fn admission_rejects_foreign_target() {
         let qualification = Qualification {
             exports: vec!["detect".into()],
-            inputs: None,
             target: "foreign-target".into(),
             cpu_features: Vec::new(),
             contract_version: 1,

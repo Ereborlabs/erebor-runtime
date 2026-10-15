@@ -281,7 +281,6 @@ mod tests {
         control.cancel()?;
         let qualification = Qualification {
             exports: vec!["detect".into()],
-            inputs: None,
             target: env!("ARAPHOR_NATIVE_TARGET").into(),
             cpu_features: Vec::new(),
             contract_version: 1,

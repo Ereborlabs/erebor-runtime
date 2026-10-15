@@ -2,7 +2,7 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use super::{bundle, run, Fixture, TestResult};
-use crate::package::{PackageBundleV1, PackageImplementationV1};
+use crate::package::PackageBundleV1;
 use crate::{
     AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisReadControl, ContextSensitivityV1,
 };
@@ -252,12 +252,8 @@ fn source_bundle(fixture: &Fixture) -> TestResult<PackageBundleV1> {
     let artifact = &mut package.artifacts[0];
     let mut input = artifact.descriptor.exports[0].outputs[0].clone();
     input.name = "source".into();
-    artifact.descriptor.exports[0].inputs.push(input);
-    let PackageImplementationV1::Sql { inputs, .. } = &mut artifact.implementations[0] else {
-        return Err("SQL fixture absent".into());
-    };
-    inputs.insert(
-        "source".into(),
+    artifact.descriptor.exports[0].inputs.push(input.into());
+    artifact.descriptor.exports[0].inputs[0].source = araphor_analysis_sdk::InputSource::Sql(
         "SELECT owner_revision AS count FROM context_versions".into(),
     );
     Ok(package)

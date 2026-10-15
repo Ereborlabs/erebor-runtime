@@ -941,13 +941,6 @@ impl DataStoreQualification {
             ),
             "stale progress was accepted",
         )?;
-        connection.send_evidence_batch(blocked.clone()).await?;
-        let ack = Self::ack(&mut connection).await?;
-        self.check(
-            ack.contiguous_cursor == 4,
-            "caught-up processor did not release intake",
-        )?;
-        observations.acknowledge_evidence(ack)?;
         let mut revisions = data.subscribe_revision();
         tokio::time::timeout(Duration::from_secs(5), async {
             while data
@@ -976,10 +969,8 @@ impl DataStoreQualification {
         )?;
         let witness = data.read_page(&identity, 3)?;
         self.check(
-            witness.records.len() == 2
-                && witness.records[0].cursor == 3
-                && witness.records[1].cursor == 4,
-            "the exact witness is not readable",
+            witness.records.len() == 1 && witness.records[0].cursor == 3,
+            "the pinned witness is not readable",
         )?;
         let witness_usage = data.witness_usage(identity.tenant_id, START + 48 * HOUR)?;
         let segment_bytes = fs::read_dir(data_root.join("segments"))?
@@ -994,6 +985,20 @@ impl DataStoreQualification {
                 && witness_usage.context_bytes == 0
                 && witness_usage.charged_bytes == segment_bytes,
             "witness accounting did not separate exact frames from retained segments",
+        )?;
+        connection.send_evidence_batch(blocked.clone()).await?;
+        let ack = Self::ack(&mut connection).await?;
+        self.check(
+            ack.contiguous_cursor == 4,
+            "caught-up processor did not release intake",
+        )?;
+        observations.acknowledge_evidence(ack)?;
+        let witness = data.read_page(&identity, 3)?;
+        self.check(
+            witness.records.len() == 2
+                && witness.records[0].cursor == 3
+                && witness.records[1].cursor == 4,
+            "the exact witness is not readable",
         )?;
         let gap = data
             .resume_optional(&optional)?

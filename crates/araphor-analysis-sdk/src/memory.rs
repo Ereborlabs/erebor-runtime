@@ -1,6 +1,8 @@
 use std::mem::size_of;
 
-use crate::{wire, Coverage, Dependency, Model, Package, Port, Reason, Revision, Schema};
+use crate::{
+    wire, Coverage, InputPort, InputSource, Model, Package, Port, Reason, Revision, Schema,
+};
 
 impl Package {
     pub fn allocated_bytes(&self) -> usize {
@@ -8,21 +10,7 @@ impl Package {
             .id
             .capacity()
             .saturating_add(self.revision.capacity())
-            .saturating_add(
-                self.dependencies
-                    .capacity()
-                    .saturating_mul(size_of::<Dependency>()),
-            )
             .saturating_add(self.exports.capacity().saturating_mul(size_of::<Model>()));
-        for dependency in &self.dependencies {
-            bytes = bytes
-                .saturating_add(dependency.model.capacity())
-                .saturating_add(dependency.input.capacity())
-                .saturating_add(dependency.package.capacity())
-                .saturating_add(dependency.revision.capacity())
-                .saturating_add(dependency.export.capacity())
-                .saturating_add(dependency.output.capacity());
-        }
         for model in &self.exports {
             bytes = bytes.saturating_add(Memory::model(model));
         }
@@ -74,10 +62,30 @@ impl Memory {
         let mut bytes = model
             .name
             .capacity()
-            .saturating_add(Self::ports(&model.inputs))
+            .saturating_add(
+                model
+                    .inputs
+                    .capacity()
+                    .saturating_mul(size_of::<InputPort>()),
+            )
             .saturating_add(Self::ports(&model.outputs))
             .saturating_add(Self::schema_heap(&model.parameters))
             .saturating_add(model.reasons.capacity().saturating_mul(size_of::<Reason>()));
+        for input in &model.inputs {
+            bytes = bytes
+                .saturating_add(input.port.name.capacity())
+                .saturating_add(Self::schema_heap(&input.port.schema));
+            bytes = bytes.saturating_add(match &input.source {
+                InputSource::Provided => 0,
+                InputSource::Sql(sql) => sql.capacity(),
+                InputSource::Output(output) => output
+                    .package
+                    .capacity()
+                    .saturating_add(output.revision.capacity())
+                    .saturating_add(output.export.capacity())
+                    .saturating_add(output.output.capacity()),
+            });
+        }
         for reason in &model.reasons {
             bytes = bytes
                 .saturating_add(reason.code.capacity())

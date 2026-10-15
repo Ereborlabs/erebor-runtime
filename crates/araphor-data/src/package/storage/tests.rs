@@ -14,7 +14,6 @@ fn raw_code_preserves_native_dependencies() -> TestResult {
         sql,
         PackageImplementationV1::Wasm {
             exports: vec!["wasm".into()],
-            inputs: None,
             artifact: (0_u8..=255).collect(),
         },
         PackageImplementationV1::Native {
@@ -22,7 +21,6 @@ fn raw_code_preserves_native_dependencies() -> TestResult {
             artifact: vec![9, 8, 0, 255],
             qualification: Some(super::super::native::Qualification {
                 exports: vec!["native".into()],
-                inputs: None,
                 target: "x86_64-unknown-linux-gnu".into(),
                 cpu_features: Vec::new(),
                 contract_version: 1,
@@ -103,32 +101,5 @@ fn raw_frame_rejects_corruption() -> TestResult {
         .array(0)?;
     assert!(forged.len() < size - 1);
     assert!(StoredArtifact::validate(&forged, &artifact.descriptor, size - 1).is_err());
-    Ok(())
-}
-
-#[test]
-fn raw_frame_preserves_byte_bounds() -> TestResult {
-    let mut artifact = bundle("1", "SELECT 1::UBIGINT AS count")
-        .artifacts
-        .remove(0);
-    artifact.implementations = vec![PackageImplementationV1::Python {
-        export: "count".into(),
-        artifact: vec![0; super::super::MAX_PACKAGE_BYTES / 2],
-    }];
-    let (bytes, size) = StoredArtifact::encode(&artifact)?;
-    assert!(size > super::super::MAX_PACKAGE_BYTES);
-    assert!(size <= crate::analysis::MAX_PACKAGE_BYTES);
-    assert!(bytes.len() < super::super::MAX_PACKAGE_BYTES);
-    assert_eq!(
-        StoredArtifact::decode(&bytes, &artifact.descriptor, size)?,
-        artifact
-    );
-    artifact.implementations = vec![PackageImplementationV1::Python {
-        export: "count".into(),
-        artifact: vec![0; super::super::MAX_PACKAGE_BYTES],
-    }];
-    assert!(matches!(StoredArtifact::encode(&artifact),
-        Err(crate::Error::PackageEncoding { source, .. })
-            if source.io_error_kind() == Some(io::ErrorKind::FileTooLarge)));
     Ok(())
 }

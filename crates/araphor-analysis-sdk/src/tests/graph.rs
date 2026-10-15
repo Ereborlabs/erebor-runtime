@@ -106,22 +106,82 @@ fn dependency_has_one_binding() -> TestResult {
         vec![Port::new("prior", output.schema.clone())],
         vec![Port::new("selected", output.schema)],
     ));
-    let dependency = Dependency {
-        model: "count.review".into(),
-        input: "prior".into(),
+    package.exports[1].inputs[0].source = InputSource::Output(OutputRef {
         package: package.id.clone(),
         revision: package.revision.clone(),
         export: "files.count".into(),
         output: "counts".into(),
-    };
-    package.dependencies.push(dependency.clone());
+    });
     package.validate()?;
     let decoded: Package = serde_json::from_str(&package.inspect()?)?;
-    assert_eq!(decoded.dependencies, package.dependencies);
-    package.dependencies.push(dependency);
-    assert!(package.validate().is_err());
-    package.dependencies.pop();
-    package.dependencies[0].input = "absent".into();
-    assert!(package.validate().is_err());
+    assert_eq!(decoded, package);
+    for mode in [InputMode::Provided, InputMode::Resolved] {
+        package.exports[0].inputs[0].source = InputSource::Provided;
+        package.exports[0].input_mode = InputMode::Provided;
+        package.exports[1].input_mode = mode;
+        package.validate()?;
+        for source in [InputSource::Provided, InputSource::Sql("SELECT 1".into())] {
+            let valid = matches!(
+                (mode, &source),
+                (InputMode::Provided, InputSource::Provided)
+                    | (InputMode::Resolved, InputSource::Sql(_))
+            );
+            package.exports[0].inputs[0].source = source;
+            package.exports[0].input_mode = mode;
+            assert_eq!(package.validate().is_ok(), valid);
+        }
+        let inputs = std::mem::take(&mut package.exports[0].inputs);
+        let restored: Package = serde_json::from_str(&package.inspect()?)?;
+        assert_eq!(restored.exports[0].input_mode, mode);
+        package.exports[0].inputs = inputs;
+    }
+    package.exports.remove(0);
+    let input = &mut package.exports[0].inputs[0];
+    input.source = InputSource::Output(OutputRef {
+        package: "example".into(),
+        revision: "1".into(),
+        export: "run".into(),
+        output: "rows".into(),
+    });
+    package.id = "example".into();
+    package.revision = "1".into();
+    package.exports[0].name = "run".into();
+    package.exports[0].outputs[0].name = "rows".into();
+    let original = package.exports[0].inputs[0].clone();
+    for failure in ["output", "revision", "schema", "kind"] {
+        package.exports[0].inputs[0] = original.clone();
+        let input = &mut package.exports[0].inputs[0];
+        let InputSource::Output(output) = &mut input.source else {
+            return Err("output source absent".into());
+        };
+        match failure {
+            "output" => output.output = "absent".into(),
+            "revision" => output.revision = "other".into(),
+            "schema" => input.port.schema = Schema::empty(),
+            _ => input.port.kind = OutputKind::Findings,
+        }
+        assert!(package.validate().is_err());
+    }
+    package.exports[0].inputs = (0..64)
+        .map(|index| {
+            let mut input = original.clone();
+            input.port.name = format!("input{index}");
+            input
+        })
+        .collect();
+    package.validate()?;
+    assert_eq!(package.exports[0].dependencies().count(), 64);
+    let mut extra = package.exports[0].clone();
+    extra.name = "extra".into();
+    extra.inputs.truncate(1);
+    package.exports.push(extra);
+    assert_eq!(
+        package
+            .validate()
+            .err()
+            .ok_or("65 output references accepted")?
+            .code(),
+        ErrorCode::Limit
+    );
     Ok(())
 }

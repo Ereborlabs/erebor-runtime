@@ -93,7 +93,13 @@ impl GraphDerivation<'_> {
                         .exports
                         .iter()
                         .find(|model| GraphAndFindingOwner::supports_analysis(model))
-                        .map(|model| model.inputs.iter().map(|port| port.name.clone()).collect())
+                        .map(|model| {
+                            model
+                                .inputs
+                                .iter()
+                                .map(|input| input.port.name.clone())
+                                .collect()
+                        })
                         .unwrap_or_default()
                 } else {
                     inputs

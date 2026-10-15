@@ -59,7 +59,7 @@ fn descriptor_preserves_owners() -> TestResult {
             model
                 .inputs
                 .iter()
-                .map(|port| port.name.as_str())
+                .map(|input| input.port.name.as_str())
                 .collect::<Vec<_>>(),
             ["records", "facts", "manifest"]
         );

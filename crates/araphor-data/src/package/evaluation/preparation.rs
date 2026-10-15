@@ -73,8 +73,13 @@ impl AnalysisPackageOwner {
         let implementation = run.artifact.implementation(&run.model.name)?;
         let mut sql_operation = if matches!(
             implementation,
-            crate::package::PackageImplementationV1::Sql { inputs, .. } if !inputs.is_empty()
-        ) {
+            crate::package::PackageImplementationV1::Sql { .. }
+        ) && run
+            .model
+            .inputs
+            .iter()
+            .any(|input| matches!(&input.source, sdk::InputSource::Sql(_)))
+        {
             Some(self.query.sql_operation(active.key.tenant_id)?)
         } else {
             None
@@ -87,7 +92,6 @@ impl AnalysisPackageOwner {
         let inputs = self.inputs_with_sql(
             InputRequest {
                 activation: active,
-                artifact: run.artifact,
                 model: run.model,
                 context: &context,
                 now,
@@ -97,12 +101,8 @@ impl AnalysisPackageOwner {
             sql_operation.as_mut(),
         )?;
         let mut metadata = ResultContext::new(id, now, run.model, &inputs);
-        metadata.target = run
-            .artifact
-            .implementation(&run.model.name)?
-            .target()
-            .into();
-        metadata.artifact = run.artifact.implementation(&run.model.name)?.identity()?;
+        metadata.target = implementation.target().into();
+        metadata.artifact = implementation.identity()?;
         if metadata.target == "wasm" {
             metadata.context.limits = self.query.component_limits(metadata.context.limits);
         }

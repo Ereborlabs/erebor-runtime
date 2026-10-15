@@ -210,7 +210,7 @@ impl Fixture {
 }
 
 pub(in crate::package) fn bundle(revision: &str, sql: &str) -> PackageBundleV1 {
-    let descriptor = sdk::Package::new(
+    let mut descriptor = sdk::Package::new(
         "test.model",
         revision,
         vec![sdk::Model::new(
@@ -222,6 +222,7 @@ pub(in crate::package) fn bundle(revision: &str, sql: &str) -> PackageBundleV1 {
             )],
         )],
     );
+    descriptor.exports[0].input_mode = sdk::InputMode::Resolved;
     PackageBundleV1 {
         schema_version: 1,
         root: PackageRefV1 {
@@ -232,7 +233,6 @@ pub(in crate::package) fn bundle(revision: &str, sql: &str) -> PackageBundleV1 {
             descriptor,
             implementations: vec![PackageImplementationV1::Sql {
                 export: "count".into(),
-                inputs: BTreeMap::new(),
                 program: SqlModelV1 {
                     outputs: BTreeMap::from([("rows".into(), sql.into())]),
                     ..Default::default()

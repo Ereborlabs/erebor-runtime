@@ -173,7 +173,7 @@ fn credential_exact_and_missing() -> TestResult {
     let mut missing = complete;
     let model = detector.descriptor();
     missing.evaluation.inputs[1].data = Rows::encode(
-        &model.exports[0].inputs[1],
+        &model.exports[0].inputs[1].port,
         &facts[..1],
         missing.evaluation.context.limits,
     )?;
@@ -188,7 +188,7 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
     let package = detector.descriptor();
     let model = &package.exports[0];
     let records: Vec<Observation> = Rows::decode(
-        &model.inputs[0],
+        &model.inputs[0].port,
         &complete.evaluation.inputs[0].data,
         complete.evaluation.context.limits,
     )?;
@@ -227,7 +227,7 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
         let fixture = fixture(detector, &records, &facts)?;
         package.validate_evaluation(&fixture.evaluation)?;
         let mut manifests: Vec<Manifest> = Rows::decode(
-            &model.inputs[2],
+            &model.inputs[2].port,
             &fixture.evaluation.inputs[2].data,
             fixture.evaluation.context.limits,
         )?;

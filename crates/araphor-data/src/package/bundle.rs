@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use araphor_analysis_sdk as sdk;
@@ -9,8 +8,6 @@ use snafu::ResultExt as _;
 use crate::{PackageEncodingSnafu, Result, SqlModelV1};
 
 use super::{PackageErrorCodeV1 as Code, PackageFixtureV1};
-
-pub const MAX_PACKAGE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -93,13 +90,10 @@ impl<'a> ArtifactEncoding<'a> {
 pub enum PackageImplementationV1 {
     Sql {
         export: String,
-        inputs: BTreeMap<String, String>,
         program: SqlModelV1,
     },
     Wasm {
         exports: Vec<String>,
-        #[serde(default)]
-        inputs: Option<BTreeMap<String, String>>,
         artifact: Vec<u8>,
     },
     Native {
@@ -115,15 +109,6 @@ pub enum PackageImplementationV1 {
 }
 
 impl PackageImplementationV1 {
-    pub(crate) fn bindings(&self) -> Option<&BTreeMap<String, String>> {
-        match self {
-            Self::Sql { inputs, .. } => Some(inputs),
-            Self::Wasm { inputs, .. } => inputs.as_ref(),
-            Self::Native { qualification, .. } => qualification.as_ref()?.inputs.as_ref(),
-            Self::Python { .. } => None,
-        }
-    }
-
     pub fn exports(&self) -> &[String] {
         match self {
             Self::Wasm { exports, .. } => exports,
@@ -208,14 +193,18 @@ impl PackageArtifactV1 {
     }
 
     pub(crate) fn prepared(&self, export: &str) -> bool {
-        matches!(
-            self.implementation(export),
-            Ok(PackageImplementationV1::Wasm { inputs: None, .. })
-        ) || matches!(
-            self.implementation(export),
-            Ok(PackageImplementationV1::Native { qualification: Some(qualification), .. })
-                if qualification.inputs.is_none()
-        )
+        self.descriptor
+            .exports
+            .iter()
+            .any(|model| model.name == export && model.input_mode == sdk::InputMode::Provided)
+            && matches!(
+                self.implementation(export),
+                Ok(PackageImplementationV1::Wasm { .. }
+                    | PackageImplementationV1::Native {
+                        qualification: Some(_),
+                        ..
+                    })
+            )
     }
 
     pub fn reference(&self) -> PackageRefV1 {
@@ -243,8 +232,7 @@ impl PackageBundleV1 {
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         super::oci::PackageOci::decode(
-            sdk::oci::Content::from_bytes(bytes, MAX_PACKAGE_BYTES)
-                .context(crate::AnalysisContractSnafu)?,
+            sdk::oci::Content::from_bytes(bytes).context(crate::AnalysisContractSnafu)?,
         )
     }
 
@@ -285,23 +273,33 @@ mod encoding_tests {
 
     #[test]
     fn bundle_writer_digest_matches_bytes() -> TestResult {
-        let sql = bundle("1", "SELECT 1::UBIGINT AS count");
+        let mut sql = bundle("1", "SELECT count FROM source");
+        let mut port = sql.artifacts[0].descriptor.exports[0].outputs[0].clone();
+        port.name = "source".into();
+        sql.artifacts[0].descriptor.exports[0]
+            .inputs
+            .push(sdk::InputPort {
+                port,
+                source: sdk::InputSource::Sql("SELECT 1::UBIGINT AS count".into()),
+            });
+        let original = sql.digest()?;
+        sql.artifacts[0].descriptor.exports[0].inputs[0].source =
+            sdk::InputSource::Sql("SELECT 2::UBIGINT AS count".into());
+        assert_ne!(sql.digest()?, original);
         let mut component = sql.clone();
         component.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
             exports: vec!["count".into()],
-            inputs: None,
             artifact: (0_u8..=255).cycle().take(16 * 1024 + 1).collect(),
         }];
         for package in [sql, component] {
             let bytes = package.encode()?;
-            let content = sdk::oci::Content::from_bytes(&bytes, MAX_PACKAGE_BYTES)?;
+            let content = sdk::oci::Content::from_bytes(&bytes)?;
             use sha2::{Digest as _, Sha256};
             assert_eq!(
                 package.digest()?,
                 format!("sha256:{:x}", Sha256::digest(&content.manifest))
             );
             package.check_encoding()?;
-            assert_eq!(package.oci()?.archive_size(), bytes.len());
             assert_eq!(
                 PackageBundleV1::from_bytes(&bytes)?.digest()?,
                 package.digest()?
@@ -315,7 +313,6 @@ mod encoding_tests {
         let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
         package.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
             exports: vec!["count".into()],
-            inputs: None,
             artifact: Vec::new(),
         }];
         package.artifacts[0].descriptor.id.clear();

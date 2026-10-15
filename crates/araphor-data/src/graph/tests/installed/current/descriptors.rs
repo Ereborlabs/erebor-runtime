@@ -8,14 +8,13 @@ fn mixed_bundle() -> TestResult<PackageBundleV1> {
     let mut bundle = process_bundle("2")?;
     let artifact = &mut bundle.artifacts[0];
     let graph = artifact.descriptor.exports[0].clone();
-    let auxiliary = sdk::Model::new(
+    let mut auxiliary = sdk::Model::new(
         "aux",
         Vec::new(),
-        vec![sdk::Port::new("rows", graph.inputs[0].schema.clone())],
+        vec![sdk::Port::new("rows", graph.inputs[0].port.schema.clone())],
     );
-    artifact.descriptor.dependencies.push(sdk::Dependency {
-        model: graph.name.clone(),
-        input: graph.inputs[0].name.clone(),
+    auxiliary.input_mode = sdk::InputMode::Resolved;
+    artifact.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
         package: artifact.descriptor.id.clone(),
         revision: artifact.descriptor.revision.clone(),
         export: auxiliary.name.clone(),
@@ -23,7 +22,6 @@ fn mixed_bundle() -> TestResult<PackageBundleV1> {
     });
     artifact.implementations.push(PackageImplementationV1::Sql {
         export: auxiliary.name.clone(),
-        inputs: BTreeMap::new(),
         program: SqlModelV1 {
             outputs: BTreeMap::from([(
                 "rows".into(),
@@ -35,6 +33,10 @@ fn mixed_bundle() -> TestResult<PackageBundleV1> {
     artifact.descriptor.exports.push(auxiliary);
     let mut sql = graph;
     sql.name = "sql-graph".into();
+    sql.input_mode = sdk::InputMode::Resolved;
+    for input in &mut sql.inputs {
+        input.source = sdk::InputSource::Sql("SELECT ''::BLOB AS value WHERE false".into());
+    }
     let queries = |ports: &[sdk::Port]| {
         ports
             .iter()
@@ -48,7 +50,6 @@ fn mixed_bundle() -> TestResult<PackageBundleV1> {
     };
     artifact.implementations.push(PackageImplementationV1::Sql {
         export: sql.name.clone(),
-        inputs: queries(&sql.inputs),
         program: SqlModelV1 {
             outputs: queries(&sql.outputs),
             checkpoint: queries(&sql.checkpoint.as_ref().ok_or("graph checkpoint")?.datasets),

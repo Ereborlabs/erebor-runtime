@@ -101,7 +101,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "bound package evidence manifests",
                 })?;
-            if bytes > super::MAX_PACKAGE_BYTES as u64 {
+            if bytes > Self::RESULT_READ_BYTES {
                 return self.reject("the package evidence manifests exceed their byte limit");
             }
             let mut statement = reader

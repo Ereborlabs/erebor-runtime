@@ -34,7 +34,7 @@ impl BurstDetector {
         let model = &package.exports[0];
         let threshold = Self::threshold(evaluation)?;
         let records: Vec<Observation> = Rows::decode(
-            &model.inputs[0],
+            &model.inputs[0].port,
             &evaluation.input("records")?.data,
             evaluation.context.limits,
         )?;

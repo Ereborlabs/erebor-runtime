@@ -17,7 +17,7 @@ fn nested_vectors_preserve_precision() -> TestResult {
     ]);
     package.exports[0]
         .inputs
-        .push(Port::new("features", schema.clone()));
+        .push(Port::new("features", schema.clone()).into());
     let mut fixture = FilesCount::fixture()?;
     let features: Vec<ArrayRef> = vec![
         Arc::new(UInt64Array::from(vec![u64::MAX])),
@@ -69,7 +69,7 @@ fn missing_differs_from_null() -> TestResult {
     ]);
     package.exports[0]
         .inputs
-        .push(Port::new("fields", schema.clone()));
+        .push(Port::new("fields", schema.clone()).into());
     let mut fixture = FilesCount::fixture()?;
     fixture.evaluation.inputs.push(Input {
         data: Dataset {
@@ -106,7 +106,7 @@ fn prior_result_retains_evidence() -> TestResult {
     let mut prior = package.exports[0].outputs[0].clone();
     prior.name = "prior".into();
     prior.evidence_required = false;
-    package.exports[0].inputs.push(prior);
+    package.exports[0].inputs.push(prior.into());
     let mut fixture = FilesCount::fixture()?;
     let prior = FilesCount::evaluate(&fixture.evaluation)?
         .datasets

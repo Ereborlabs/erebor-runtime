@@ -116,8 +116,14 @@ impl Fixture {
         worker: &mut Worker,
     ) -> Result<PackageResponseV1> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        let store = self
+            .control
+            .analysis_store()
+            .ok_or("retained store is absent")?;
+        let mut revisions = store.subscribe_revision();
         loop {
             worker.check().await?;
+            let _revision = *revisions.borrow_and_update();
             let response = match self.inspect().await {
                 Ok(response) => response,
                 Err(error)
@@ -161,7 +167,9 @@ impl Fixture {
                 )
                 .into());
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            if let Ok(changed) = tokio::time::timeout_at(deadline, revisions.changed()).await {
+                changed?;
+            }
         }
     }
 

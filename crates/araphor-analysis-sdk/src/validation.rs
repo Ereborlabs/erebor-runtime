@@ -69,7 +69,7 @@ impl ContractValidator<'_> {
             _ => return Err(Error::contract(ErrorCode::Invalid, "parameters")),
         }
         self.datasets(
-            &self.model.inputs,
+            self.model.inputs.iter().map(|input| &input.port),
             evaluation.inputs.iter().map(|input| &input.data),
             &mut budget,
         )?;
@@ -99,7 +99,11 @@ impl ContractValidator<'_> {
 
     pub(crate) fn output(&self, evaluation: &Evaluation, output: &Output) -> Result<()> {
         let mut budget = BatchBudget::new(self.limits.max_bytes, &self.limits);
-        let outputs = self.datasets(&self.model.outputs, output.datasets.iter(), &mut budget)?;
+        let outputs = self.datasets(
+            self.model.outputs.iter(),
+            output.datasets.iter(),
+            &mut budget,
+        )?;
         let inputs: BTreeMap<_, _> = evaluation
             .inputs
             .iter()
@@ -153,9 +157,9 @@ impl ContractValidator<'_> {
         self.checkpoint(output.checkpoint.as_ref(), true)
     }
 
-    fn datasets<'a>(
+    fn datasets<'a, 'p>(
         &self,
-        ports: &[Port],
+        ports: impl Clone + ExactSizeIterator<Item = &'p Port>,
         datasets: impl Iterator<Item = &'a Dataset>,
         budget: &mut BatchBudget,
     ) -> Result<BTreeMap<&'a str, u64>> {
@@ -165,7 +169,7 @@ impl ContractValidator<'_> {
                 return Err(Error::contract(ErrorCode::Invalid, "duplicate dataset"));
             }
             let port = ports
-                .iter()
+                .clone()
                 .find(|port| port.name == dataset.name)
                 .ok_or_else(|| Error::contract(ErrorCode::Invalid, "undeclared dataset"))?;
             let mut rows = 0_u64;
@@ -203,7 +207,11 @@ impl ContractValidator<'_> {
             (Some(_), None) if !required => Ok(()),
             (Some(spec), Some(checkpoint)) if spec.version == checkpoint.version => {
                 let mut budget = BatchBudget::new(self.limits.max_checkpoint_bytes, &self.limits);
-                self.datasets(&spec.datasets, checkpoint.datasets.iter(), &mut budget)?;
+                self.datasets(
+                    spec.datasets.iter(),
+                    checkpoint.datasets.iter(),
+                    &mut budget,
+                )?;
                 Ok(())
             }
             _ => Err(Error::contract(ErrorCode::Incompatible, "checkpoint")),

@@ -9,6 +9,7 @@ use crate::Result;
 impl ModelExecution<'_> {
     pub(super) fn register(&self, model: &sdk::Model) -> Result<()> {
         for port in &model.inputs {
+            let port = &port.port;
             self.table(
                 &port.name,
                 &port.schema,

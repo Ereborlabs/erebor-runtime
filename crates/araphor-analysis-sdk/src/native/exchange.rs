@@ -38,7 +38,7 @@ impl Exchange {
         let model = validator.model;
         let mut frame = Self::new();
         for input in &value.inputs {
-            let data = frame.dataset(&input.data, &model.inputs)?;
+            let data = frame.dataset(&input.data, model.inputs.iter().map(|input| &input.port))?;
             let window = input
                 .revision
                 .window
@@ -116,9 +116,13 @@ impl Exchange {
         Ok(frame)
     }
 
-    fn dataset(&mut self, data: &crate::Dataset, ports: &[crate::Port]) -> Result<abi::Dataset> {
+    fn dataset<'p>(
+        &mut self,
+        data: &crate::Dataset,
+        ports: impl IntoIterator<Item = &'p crate::Port>,
+    ) -> Result<abi::Dataset> {
         let port = ports
-            .iter()
+            .into_iter()
             .find(|port| port.name == data.name)
             .ok_or_else(|| Error::contract(ErrorCode::Invalid, "native dataset"))?;
         Ok(abi::Dataset {

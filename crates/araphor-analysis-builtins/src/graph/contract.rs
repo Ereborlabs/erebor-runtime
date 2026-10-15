@@ -74,17 +74,17 @@ impl Detector {
             }
         }
         let records = Rows::decode(
-            &model.inputs[0],
+            &model.inputs[0].port,
             &evaluation.input("records")?.data,
             evaluation.context.limits,
         )?;
         let facts: Vec<Fact> = Rows::decode(
-            &model.inputs[1],
+            &model.inputs[1].port,
             &evaluation.input("facts")?.data,
             evaluation.context.limits,
         )?;
         let mut manifests = Rows::decode(
-            &model.inputs[2],
+            &model.inputs[2].port,
             &evaluation.input("manifest")?.data,
             evaluation.context.limits,
         )?;

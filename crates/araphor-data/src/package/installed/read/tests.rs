@@ -77,9 +77,7 @@ fn component() -> PackageBundleV1 {
         sdk::Field::new("amount", sdk::DataType::UInt64, false),
     ]);
     let mut descriptor = sdk::Package::new("runtime-fixture", "1", vec![model]);
-    descriptor.dependencies.push(sdk::Dependency {
-        model: "count-input".into(),
-        input: "input".into(),
+    descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
         package: "test.model".into(),
         revision: "1".into(),
         export: "count".into(),
@@ -93,7 +91,6 @@ fn component() -> PackageBundleV1 {
         descriptor,
         implementations: vec![PackageImplementationV1::Wasm {
             exports: vec!["count-input".into()],
-            inputs: None,
             artifact: araphor_analysis_builtins::components::RUNTIME.to_vec(),
         }],
         fixtures: Vec::new(),
@@ -113,7 +110,7 @@ fn evaluation(selected: &PackageBundleV1) -> sdk::Result<sdk::Evaluation> {
             data: sdk::Dataset {
                 name: "input".into(),
                 batches: vec![sdk::RecordBatch::try_new(
-                    Arc::new(model.inputs[0].schema.clone()),
+                    Arc::new(model.inputs[0].port.schema.clone()),
                     vec![Arc::new(UInt64Array::from(vec![7]))],
                 )?],
             },

@@ -10,7 +10,6 @@ pub struct Package {
     pub contract_version: u32,
     pub id: String,
     pub revision: String,
-    pub dependencies: Vec<Dependency>,
     pub exports: Vec<Model>,
 }
 
@@ -20,7 +19,6 @@ impl Package {
             contract_version: CONTRACT_VERSION,
             id: id.into(),
             revision: revision.into(),
-            dependencies: Vec::new(),
             exports,
         }
     }
@@ -28,9 +26,7 @@ impl Package {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Dependency {
-    pub model: String,
-    pub input: String,
+pub struct OutputRef {
     pub package: String,
     pub revision: String,
     pub export: String,
@@ -39,9 +35,46 @@ pub struct Dependency {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct InputPort {
+    pub port: Port,
+    pub source: InputSource,
+}
+
+impl From<Port> for InputPort {
+    fn from(port: Port) -> Self {
+        Self {
+            port,
+            source: InputSource::Provided,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum InputSource {
+    Provided,
+    Sql(String),
+    Output(OutputRef),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMode {
+    Provided,
+    Resolved,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Model {
     pub name: String,
-    pub inputs: Vec<Port>,
+    pub inputs: Vec<InputPort>,
+    pub input_mode: InputMode,
     pub parameters: Schema,
     pub outputs: Vec<Port>,
     pub checkpoint: Option<CheckpointSpec>,
@@ -51,10 +84,18 @@ pub struct Model {
 }
 
 impl Model {
+    pub fn dependencies(&self) -> impl Iterator<Item = (&Port, &OutputRef)> {
+        self.inputs.iter().filter_map(|input| match &input.source {
+            InputSource::Output(output) => Some((&input.port, output)),
+            _ => None,
+        })
+    }
+
     pub fn new(name: impl Into<String>, inputs: Vec<Port>, outputs: Vec<Port>) -> Self {
         Self {
             name: name.into(),
-            inputs,
+            inputs: inputs.into_iter().map(InputPort::from).collect(),
+            input_mode: InputMode::Provided,
             parameters: Schema::empty(),
             outputs,
             checkpoint: None,

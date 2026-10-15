@@ -11,8 +11,11 @@ typed Discovery profile commits, and selected finding-row accounting. These
 changes are committed through `ab6b5da3`. Source, focused tests, and final CI
 are **Done**. Native Data and the exact native E2E retry pass. The E2E
 reproducibility issue remains **Not done**. The
-final section defines their current scope and replaces the earlier external
-JSON transport restriction. No speed improvement is established.
+final sections define their scope and replace the earlier external JSON
+transport restriction. This change adds explicit input sources and removes the
+user-rejected package caps. The third final Rust procedure and current native
+qualification pass. Native qualification covers Linux x86_64 GNU.
+The earlier results below remain historical. No speed improvement is established.
 
 ## Intended end state
 
@@ -187,10 +190,10 @@ one descriptor copy. Validate current records without repairing malformed
 data. Keep current backup, restore, and crash checks. A failed transaction
 does not retain a partial revision. Add no older-format conversion or reader.
 
-The external bundle limit remains 32 MiB under the existing encoded rules.
-The internal revision limit remains 64 MiB under its existing encoded rules.
-Preserve those logical quota units. Smaller physical storage does not increase
-the admitted quota. Charge actual owned runtime buffers through existing leases.
+The initial storage change retained the external 32 MiB bundle cap and internal
+64 MiB revision cap. The subsequent explicit user approval removes both caps.
+Content-derived encoded sizes still check frame integrity and supply store usage
+charges. Runtime leases still charge owned buffers.
 
 Update [schema and usage](../../crates/araphor-data/src/analysis/packages/schema.rs),
 [immutable reads](../../crates/araphor-data/src/analysis/packages/read.rs),
@@ -296,7 +299,8 @@ transaction. Do not retain an old header decoder.
 Store current binary package records. Remove legacy JSON conversion and the
 signed migration adjustment. Validate the current canonical encoding count
 against both the frame and the row. The current external package V1 format,
-identity, dependency bytes, native ABI, and 32/64 MiB limits remain supported.
+identity, dependency bytes, and native ABI remain supported. The later explicit
+cap-removal decision replaces the earlier 32/64 MiB package limits.
 
 Keep the existing current-format integrity guards. Add no older-data
 conversion, preservation, or rejection-specific bookkeeping.
@@ -419,7 +423,7 @@ Context batching and further crash-fixture changes are not approved here.
   -> [Content](../../crates/araphor-analysis-sdk/src/oci.rs) the SDK verifies descriptor sizes, SHA-256 hashes, media types, and the canonical Araphor manifest and config
   -> [PackageOci::decode](../../crates/araphor-data/src/package/oci.rs) Data fills ordered empty metadata slots from typed raw layers and checks reconstructed identity
   -> [PackageRequestV1::encode](../../crates/araphor-data/src/package/model/request.rs) the client encodes request metadata and the OCI archive as separate CBOR byte strings
-  -> [ClientGrpcOwner](../../crates/mithril-control/src/client_grpc/packages.rs) Control decodes the bounded binary request from the existing gRPC bytes field
+  -> [ClientGrpcOwner](../../crates/mithril-control/src/client_grpc/packages.rs) Control decodes the binary request from the existing gRPC bytes field
   -> [PackageTrustPinV1](../../crates/mithril-control/src/client_auth/packages.rs) Control requires the selected tenant's exact `sha256:` manifest pin and current grant
   -> [AnalysisPackageOwner::admit_artifact](../../crates/araphor-data/src/package/execution.rs) the package owner admits each shared executable once and retains each export's SQL and binding checks
   -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) the existing store commits the immutable package revision
@@ -449,10 +453,9 @@ Use fresh development packages and stores. Add no external JSON fallback.
 The request uses a three-field CBOR array: version 1, operation metadata JSON
 bytes without the bundle, and OCI archive bytes. The existing gRPC bytes field
 is named `definition`. Operations other than install and update require an
-empty archive. Keep
-the 32 MiB archive bound, including headers and padding, and the 32 MiB plus
-64 KiB request bound. The internal 64 MiB logical revision bound remains
-separate. Read the [package review guide](../guides/araphor-binary-package-storage-review.md)
+empty archive. The subsequent user approval removes the aggregate archive,
+request, and stored revision caps. Exact OCI descriptor sizes and hashes remain
+required. Read the [package review guide](../guides/araphor-binary-package-storage-review.md)
 for the current representation, owners, source tests, and retained evidence.
 
 ### Bounded graph preparation
@@ -503,7 +506,137 @@ bound, header-cache bound, record bound, exact output limit, ordering, and
 fallback. The [graph review guide](../guides/araphor-graph-commit-review.md)
 links the implementation and current correctness cases.
 
+### Explicit input sources and removed package caps
+
+The user approves per-input source declarations and removes parallel routing
+metadata. The implementation uses
+[InputPort](../../crates/araphor-analysis-sdk/src/model.rs) with a `Port` and an
+`InputSource`. Sources are `Provided`, `Sql(query)`, or `Output(OutputRef)`.
+`OutputRef` names the package, revision, export, and output. Remove
+`Package.dependencies`, backend SQL input maps, and the missing-key fallback.
+
+[Package::validate](../../crates/araphor-analysis-sdk/src/descriptor.rs) The SDK checks each input declaration and the model mode
+  -> [PackageBundleV1::validate](../../crates/araphor-data/src/package/admission.rs) Data derives dependency edges from output sources and validates the closure
+  -> [AnalysisPackageOwner::inputs_with_sql](../../crates/araphor-data/src/package/inputs.rs) the package owner matches each explicit source and retains its provenance
+  -> [AnalysisPackageOwner::prepare_run](../../crates/araphor-data/src/package/evaluation/preparation.rs) resolved SQL sources share the existing private operation
+
+`InputMode::Provided` accepts `Provided` and `Output` sources. The caller supplies
+the datasets. Output references still retain dependency edges. `Resolved` accepts
+`Sql` and `Output` sources. Zero-input models also declare the mode. `Model::new`
+accepts existing `Vec<Port>` values and selects `Provided` sources and mode.
+Output ports and the computation evaluation ABI remain unchanged. No arbitrary
+database table lookup or implicit SQL query is added.
+
+The user explicitly removes the descriptor-only 1 MiB cap, aggregate OCI package
+32 MiB cap, and stored package revision 64 MiB cap. Package request framing and
+package gRPC client/server configuration impose no separate aggregate message
+cap. Remove the cap-only serializers, counters, and tests. Keep exact descriptor
+sizes, content hashes, media types, canonical Araphor manifest/config checks,
+archive path and entry checks, frame integrity, and store usage charges.
+Authorization, SQL admission, model data limits, runtime leases, and commit
+checks remain with their existing owners. No replacement cap is added.
+
+The source record covers this change based on `4176a9cb`. Source changes are
+implemented with a net reduction of 311 Rust lines. Focused checks pass: 70 SDK
+cases, six builder cases, 32 Data cases
+across the first run and corrected-case retries, and six Control cases. The
+large-package case uses a 33 MiB artifact whose encoded store charge exceeds
+64 MiB. It installs through the package owner, checks an immutable retry,
+reopens the store, and checks the OCI encoding and decoding.
+
+The first Data run found two fixture errors. A 65 MiB raw artifact exceeded the
+existing database memory budget. The Discovery fixture used table outputs, so
+it did not select the domain-contract check. The corrected graph fixture passes.
+The next package retry found that owner recovery collects a revision without
+an installed activation. The test now uses the supported installation path and
+checks that the unsupported payload is retained without execution. The final
+package retry passes. Read `/tmp/araphor-input-focused.log`,
+`/tmp/araphor-input-control-focused.log`, `/tmp/araphor-input-retry.log`, and
+`/tmp/araphor-input-retry2.log`. The captured source hashes are unchanged within
+each recorded run.
+
+The first final Rust command is `bash .github/scripts/verify-rust-ci.sh`, with
+`CARGO_BUILD_JOBS=1` and `RUST_TEST_THREADS=4`. Formatting, workspace checking,
+and strict clippy pass. The procedure exits 101 after 1,566.40 seconds and stops
+at Mithril E2E. All 75 started outer harnesses finish: 1,829 passed, one failed,
+and 565 ignored. Data has 630 passed and 19 ignored in 799.91 seconds. Control
+has 188 passed and two ignored in 88.08 seconds. Mithril E2E has 190 passed,
+one failed, and 528 ignored in 496.68 seconds. Source hashes remain unchanged
+during the run. Read `/tmp/araphor-input-final-ci-source.json`,
+`/tmp/araphor-input-final-ci-report.json`, and `/tmp/araphor-input-final-ci.log`.
+
+The failed case is `discovery::packages::tests::analysis_packages_contract`.
+Automatic source replacement does not finish within the case's 120-second
+wait. The final inspection reports count revision 31 with `stale=false` and
+repeated revision 24 with `stale=true`. Both exports are active and report
+`Ready`. This result does not establish the failure cause. The earlier native
+E2E record below contains the same result revisions and stale flags; its retry
+pass does not qualify this source.
+
+A diagnostic run of the exact E2E case passes in 134.45 seconds. The temporary
+supervisor trace records a repeated-export attempt rejected for query evaluation
+capacity after 49 ms. On the next pass, count is rejected for the same capacity
+after 9 ms, and repeated succeeds after 249 ms. Read
+`/tmp/araphor-input-supervision-trace.log`. This proves capacity contention in
+that run. It does not reproduce the full-CI timeout or establish its cause. The
+supervisor source is restored to its exact prior content.
+
+The fixture now subscribes to store revisions before inspection, marks the
+observed revision before the read, and waits for a revision change instead of
+polling every 20 ms. It keeps the same 120-second deadline and result assertions.
+A Busy response still uses a 20 ms retry. The corrected exact E2E case passes:
+one passed, zero failed, and zero ignored in 133.55 seconds. Source hashes remain
+unchanged during the run. Read `/tmp/araphor-input-recovery.log` and
+`/tmp/araphor-input-recovery.json`. This fixture change does not change or prove
+production scheduling fairness.
+
+The second final Rust procedure exits 101 after 1,405.74 seconds. The 75 started
+harnesses finish with 1,829 passed, one failed, and 565 ignored. Data has 630
+passed in 766.40 seconds; Control has 188 passed in 88.09 seconds. Mithril E2E
+has 190 passed and one failed in 385.90 seconds. The corrected package case
+passes. `data_store_recovery` fails the witness-byte assertion. Source hashes
+remain unchanged. Read `/tmp/araphor-input-final-ci-attempt2-report.json`.
+
+The assertion incorrectly requires pinned cursor 3 and unprocessed cursor 4
+to share a segment. Retention can seal cursor 3's segment before cursor 4 is
+appended. Both operation orders are valid. Witness accounting correctly counts
+only pinned segments; the fixture counted all segment files. An unchanged exact
+retry passes in 10.98 seconds of runner time. The fixture now waits for automatic
+retention, checks the one pinned record and the same exact byte comparisons,
+then resends cursor 4 and checks its ACK. The original records `[3,4]` and backup
+checks remain. Production behavior and timeouts do not change. The corrected
+exact case passes in 10.92 seconds, with 10.94 seconds of runner time and
+unchanged source hashes. Read `/tmp/araphor-input-store-fixed.log` and
+`/tmp/araphor-input-store-fixed.json`.
+
+The third final Rust procedure exits 0 after 1,364.72 seconds. Formatting,
+workspace checking, strict clippy, and all 90 outer harnesses pass: 2,135 passed,
+zero failed, and 568 ignored. Data has 630 passed and 19 ignored in 767.26 seconds.
+Control has 188 passed and two ignored in 88.22 seconds. Mithril E2E has 191
+passed and 528 ignored in 389.55 seconds; both corrected cases pass. Node has
+282 passed and one ignored in 7.30 seconds. Source hashes remain unchanged.
+Read `/tmp/araphor-input-final-ci-attempt3-source.json`,
+`/tmp/araphor-input-final-ci-attempt3-report.json`, and
+`/tmp/araphor-input-final-ci-attempt3.log`. **Done** for final Rust CI. The Data
+target below ten minutes is **Not met**: 767.26 seconds exceeds 600 seconds.
+These functional-run times do not establish a causal performance improvement.
+
+The six current native libraries build successfully. Read
+`/tmp/araphor-input-native-build2.json`. All 12 native Data cases pass in 224.05
+seconds. The native detector E2E case passes in 224.16 seconds with an empty
+`PATH`. Both runs have zero failures and zero ignored cases. Qualification uses
+Linux x86_64 GNU with glibc 2.39. The runner exits 0 after 452.75 seconds and
+records `qualified=true`. Source, native build inputs, binaries, and all six
+library hashes remain unchanged and match the passing CI and build records.
+Read `/tmp/araphor-input-native-qualification.json` and
+`/tmp/araphor-input-native-qualification.log`. **Done** for the input and cap
+changes and their verification on this platform. Production scheduling fairness
+remains unproven. No runtime saving is established.
+
 ### Current verification record
+
+This record is historical. It covers the source cut below, before the explicit
+input declarations and package cap removals.
 
 The qualified source is `ab6b5da3bd4765f9a9fde8fde01d404fc032d6cf`.
 Separate source commits are `2f1b4d20` for bounded graph serialization,

@@ -79,6 +79,7 @@ pub(super) fn component(revision: &str) -> PackageBundleV1 {
             sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::UInt64, false)]),
         )],
     );
+    model.input_mode = sdk::InputMode::Resolved;
     model.parameters = sdk::Schema::new(vec![
         sdk::Field::new("mode", sdk::DataType::Utf8, false),
         sdk::Field::new("amount", sdk::DataType::UInt64, false),
@@ -94,7 +95,6 @@ pub(super) fn component(revision: &str) -> PackageBundleV1 {
             descriptor,
             implementations: vec![PackageImplementationV1::Wasm {
                 exports: vec!["evaluate".into()],
-                inputs: Some(BTreeMap::new()),
                 artifact: araphor_analysis_builtins::components::RUNTIME.to_vec(),
             }],
             fixtures: Vec::new(),
@@ -177,7 +177,6 @@ async fn ambiguous_type_rejects_activation() -> TestResult {
         .implementations
         .push(PackageImplementationV1::Sql {
             export: "evaluate".into(),
-            inputs: BTreeMap::new(),
             program: crate::SqlModelV1 {
                 outputs: BTreeMap::from([("data".into(), "SELECT 7::UBIGINT AS value".into())]),
                 ..Default::default()

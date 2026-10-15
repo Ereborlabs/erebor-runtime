@@ -42,7 +42,6 @@ fn bundle(inputs: &[sdk::Input]) -> TestResult<PackageBundleV1> {
             descriptor,
             implementations: vec![PackageImplementationV1::Wasm {
                 exports: vec!["echo-inputs".into()],
-                inputs: None,
                 artifact: araphor_analysis_builtins::components::RUNTIME.to_vec(),
             }],
             fixtures: Vec::new(),

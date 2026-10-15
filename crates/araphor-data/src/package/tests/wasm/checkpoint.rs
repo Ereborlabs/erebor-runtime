@@ -13,18 +13,13 @@ pub(in crate::package::tests) fn bundle() -> TestResult<PackageBundleV1> {
         version: 1,
         datasets: vec![sdk::Port::new("state", schema)],
     });
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs[0].source = sdk::InputSource::Sql("SELECT 3::UBIGINT AS value".into());
     artifact.descriptor.exports = vec![model];
-    let PackageImplementationV1::Wasm {
-        exports, inputs, ..
-    } = &mut artifact.implementations[0]
-    else {
+    let PackageImplementationV1::Wasm { exports, .. } = &mut artifact.implementations[0] else {
         return Err("Wasm fixture absent".into());
     };
     *exports = vec!["accumulate".into()];
-    *inputs = Some(BTreeMap::from([(
-        "input".into(),
-        "SELECT 3::UBIGINT AS value".into(),
-    )]));
     Ok(package)
 }
 

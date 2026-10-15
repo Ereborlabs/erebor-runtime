@@ -53,6 +53,7 @@ impl ModelSchema {
     pub(super) fn relations(model: &sdk::Model) -> Result<BTreeMap<String, Vec<String>>> {
         let mut relations = BTreeMap::new();
         for port in &model.inputs {
+            let port = &port.port;
             Self::relation(&mut relations, &port.name, &port.schema)?;
         }
         if !model.parameters.fields().is_empty() {

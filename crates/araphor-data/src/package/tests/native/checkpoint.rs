@@ -112,17 +112,10 @@ async fn native_checkpoint_retry_and_restart() -> TestResult {
 async fn native_overflow_keeps_checkpoint() -> TestResult {
     let fixture = Fixture::new()?;
     let mut package = bundle()?;
-    let PackageImplementationV1::Wasm {
-        inputs: Some(inputs),
-        ..
-    } = &mut package.artifacts[0].implementations[0]
-    else {
-        return Err("fixture input binding absent".into());
-    };
-    inputs.insert(
-        "input".into(),
-        "SELECT 18446744073709551615::UBIGINT AS value".into(),
-    );
+    package.artifacts[0].descriptor.exports[0].inputs[0].source =
+        araphor_analysis_sdk::InputSource::Sql(
+            "SELECT 18446744073709551615::UBIGINT AS value".into(),
+        );
     let installed = fixture.install(native(package)?, None).await?;
     assert_eq!(installed.exports[0].results[0].target, "native");
     let before = fixture

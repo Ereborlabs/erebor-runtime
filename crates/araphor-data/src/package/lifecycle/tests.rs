@@ -9,6 +9,31 @@ use crate::SqlModelV1;
 mod admissions;
 mod recovery;
 
+#[test]
+fn graph_accepts_output_sources() {
+    let mut artifact = super::AnalysisPackageOwner::required_bundles()
+        .remove(1)
+        .artifacts
+        .remove(0);
+    let model = &mut artifact.descriptor.exports[0];
+    let export = model.name.clone();
+    model.inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
+        package: "test.upstream".into(),
+        revision: "1".into(),
+        export: "source".into(),
+        output: "rows".into(),
+    });
+    assert!(matches!(
+        super::AnalysisPackageOwner::readiness(&artifact, &export),
+        PackageReadinessV1::Ready
+    ));
+    artifact.descriptor.exports[0].inputs[0].port.name = "other".into();
+    assert!(matches!(
+        super::AnalysisPackageOwner::readiness(&artifact, &export),
+        PackageReadinessV1::Unsupported { .. }
+    ));
+}
+
 #[tokio::test]
 async fn admitted_inspection_tracks_replacement() -> TestResult {
     let fixture = Fixture::new()?;
@@ -82,7 +107,6 @@ async fn parameters_checked_before_installation() -> TestResult {
     artifact.descriptor.exports.push(second);
     artifact.implementations.push(PackageImplementationV1::Sql {
         export: "threshold".into(),
-        inputs: BTreeMap::new(),
         program: SqlModelV1 {
             outputs: BTreeMap::from([(
                 "rows".into(),
@@ -167,10 +191,8 @@ async fn missing_dependency_target_status() -> TestResult {
     let root = &mut package.artifacts[0];
     let mut input = root.descriptor.exports[0].outputs[0].clone();
     input.name = "source".into();
-    root.descriptor.exports[0].inputs.push(input);
-    root.descriptor.dependencies.push(sdk::Dependency {
-        model: "count".into(),
-        input: "source".into(),
+    root.descriptor.exports[0].inputs.push(input.into());
+    root.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
         package: "test.upstream".into(),
         revision: "1".into(),
         export: "count".into(),
@@ -241,15 +263,13 @@ fn shared_bundle(name: &str) -> crate::PackageBundleV1 {
     root.descriptor.id = name.into();
     let mut input = root.descriptor.exports[0].outputs[0].clone();
     input.name = "source".into();
-    root.descriptor.exports[0].inputs.push(input);
+    root.descriptor.exports[0].inputs.push(input.into());
     root.descriptor.exports[0].parameters = sdk::Schema::new(vec![sdk::Field::new(
         "offset",
         sdk::DataType::UInt64,
         false,
     )]);
-    root.descriptor.dependencies.push(sdk::Dependency {
-        model: "count".into(),
-        input: "source".into(),
+    root.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
         package: "test.shared".into(),
         revision: "1".into(),
         export: "count".into(),

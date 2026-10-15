@@ -33,7 +33,10 @@ struct EncodingSize(usize);
 
 impl Write for EncodingSize {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0 += bytes.len();
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .ok_or_else(|| io::Error::other("Package byte count overflows"))?;
         Ok(bytes.len())
     }
 
@@ -54,42 +57,32 @@ impl StoredArtifact {
         Self::count_parts(
             &encoded.borrowed(&metadata.implementations, metadata.fixtures),
             binaries.into_iter(),
-            crate::analysis::MAX_PACKAGE_BYTES as u64,
         )
     }
 
     fn count_parts<'a>(
         encoded: &super::bundle::ArtifactEncoding<'_>,
         binaries: impl Iterator<Item = &'a [u8]>,
-        limit: u64,
     ) -> Result<usize> {
         let mut size = EncodingSize::default();
-        let mut writer = sdk::wire::BoundedBuffer::from_writer(&mut size, limit);
-        serde_json::to_writer(&mut writer, encoded).context(PackageEncodingSnafu)?;
-        // Count the added bytes through the existing bounded writer.
-        let block = [0_u8; 8192];
+        serde_json::to_writer(&mut size, encoded).context(PackageEncodingSnafu)?;
         for binary in binaries {
-            let mut added = binary
+            let added = binary
                 .iter()
                 .fold(0usize, |total, byte| {
-                    total
-                        + if *byte < 10 {
-                            1
-                        } else if *byte < 100 {
-                            2
-                        } else {
-                            3
-                        }
+                    total.saturating_add(if *byte < 10 {
+                        1
+                    } else if *byte < 100 {
+                        2
+                    } else {
+                        3
+                    })
                 })
                 .saturating_add(binary.len().saturating_sub(1));
-            while added != 0 {
-                let chunk = added.min(block.len());
-                writer
-                    .write_all(&block[..chunk])
-                    .map_err(serde_json::Error::io)
-                    .context(PackageEncodingSnafu)?;
-                added -= chunk;
-            }
+            size.0 = size
+                .0
+                .checked_add(added)
+                .ok_or_else(|| Code::Invalid.error("retained package byte count"))?;
         }
         Ok(size.0)
     }
@@ -101,13 +94,11 @@ impl StoredArtifact {
     }
 
     pub(crate) fn encode_sized(artifact: &PackageArtifactV1, size: usize) -> Result<Vec<u8>> {
-        if size == 0 || size > crate::analysis::MAX_PACKAGE_BYTES {
+        if size == 0 {
             return Err(Code::Limit.error("retained package bytes"));
         }
         let (metadata, binaries) = Self::split(&artifact.implementations, &artifact.fixtures);
-        let mut output = sdk::wire::BoundedBuffer::new(crate::analysis::MAX_PACKAGE_BYTES as u64);
-        serde_json::to_writer(&mut output, &metadata).context(PackageEncodingSnafu)?;
-        let metadata = output.finish();
+        let metadata = serde_json::to_vec(&metadata).context(PackageEncodingSnafu)?;
         let mut bytes = Vec::new();
         let mut encoder = Encoder::new(&mut bytes);
         encoder
@@ -137,15 +128,10 @@ impl StoredArtifact {
             .iter()
             .map(|implementation| match implementation {
                 PackageImplementationV1::Sql { .. } => implementation.clone(),
-                PackageImplementationV1::Wasm {
-                    exports,
-                    inputs,
-                    artifact,
-                } => {
+                PackageImplementationV1::Wasm { exports, artifact } => {
                     binaries.push(artifact.as_slice());
                     PackageImplementationV1::Wasm {
                         exports: exports.clone(),
-                        inputs: inputs.clone(),
                         artifact: Vec::new(),
                     }
                 }
@@ -167,7 +153,6 @@ impl StoredArtifact {
                             .as_ref()
                             .map(|qualification| super::native::Qualification {
                                 exports: qualification.exports.clone(),
-                                inputs: qualification.inputs.clone(),
                                 target: qualification.target.clone(),
                                 cpu_features: qualification.cpu_features.clone(),
                                 contract_version: qualification.contract_version,
@@ -203,9 +188,6 @@ impl StoredArtifact {
     }
 
     pub(crate) fn frame_size(bytes: &[u8]) -> Result<usize> {
-        if bytes.len() > crate::analysis::MAX_PACKAGE_BYTES {
-            return Err(Code::Limit.error("retained package frame bytes"));
-        }
         let mut decoder = Decoder::new(bytes);
         let invalid = |_| Code::Invalid.error("retained package frame");
         if decoder.array().map_err(invalid)? != Some(4) || decoder.u32().map_err(invalid)? != 1 {
@@ -213,7 +195,7 @@ impl StoredArtifact {
         }
         let size = usize::try_from(decoder.u64().map_err(invalid)?)
             .map_err(|_| Code::Limit.error("retained package bytes"))?;
-        if size == 0 || size > crate::analysis::MAX_PACKAGE_BYTES || bytes.len() > size {
+        if size == 0 || bytes.len() > size {
             return Err(Code::Limit.error("retained package bytes"));
         }
         decoder.bytes().map_err(invalid)?;
@@ -332,7 +314,7 @@ impl StoredArtifact {
         for binary in binaries {
             raw.push(binary.map_err(invalid)?);
         }
-        let canonical = Self::count_parts(&encoded, raw.into_iter(), u64::MAX)?;
+        let canonical = Self::count_parts(&encoded, raw.into_iter())?;
         if canonical != encoded_bytes {
             return Err(Code::Invalid.error("retained package encoded size"));
         }

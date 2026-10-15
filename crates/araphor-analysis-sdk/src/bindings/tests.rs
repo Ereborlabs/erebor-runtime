@@ -70,50 +70,6 @@ fn declarations_share_descriptor() -> TestResult {
 }
 
 #[test]
-fn descriptor_size_is_bounded() -> TestResult {
-    let mut package = package();
-    let metadata = HashMap::from([("description".into(), String::new())]);
-    package.exports[0].outputs[0].schema = package.exports[0].outputs[0]
-        .schema
-        .clone()
-        .with_metadata(metadata);
-    let limit = crate::descriptor::MAX_DESCRIPTOR_BYTES;
-    let overhead = serde_json::to_string_pretty(&package)?.len();
-    package.exports[0].outputs[0]
-        .schema
-        .metadata
-        .insert("description".into(), "a".repeat(limit - overhead));
-    package.validate()?;
-    assert_eq!(package.inspect()?.len(), limit);
-    let directory = tempfile::tempdir()?;
-    package.build(directory.path())?;
-    assert_eq!(
-        std::fs::metadata(directory.path().join("descriptor.json"))?.len(),
-        limit as u64
-    );
-    package.exports[0].outputs[0]
-        .schema
-        .metadata
-        .get_mut("description")
-        .ok_or("description is absent")?
-        .push('a');
-    let rejected = directory.path().join("rejected");
-    for result in [
-        package.validate(),
-        package.inspect().map(|_| ()),
-        package.interfaces().map(|_| ()),
-        package.build(&rejected),
-    ] {
-        assert_eq!(
-            result.err().ok_or("limit error is absent")?.code(),
-            ErrorCode::Limit
-        );
-    }
-    assert!(!rejected.exists());
-    Ok(())
-}
-
-#[test]
 fn wit_declaration_parses() -> TestResult {
     let declarations = package().interfaces()?;
     let mut resolve = wit_parser::Resolve::default();

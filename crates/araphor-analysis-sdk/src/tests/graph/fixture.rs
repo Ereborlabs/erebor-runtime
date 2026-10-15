@@ -116,7 +116,8 @@ impl SelectedGraph {
                 inputs: inputs
                     .into_iter()
                     .zip(Self::columns())
-                    .map(|(port, columns)| {
+                    .map(|(input, columns)| {
+                        let port = input.port;
                         Ok(Input {
                             data: Dataset {
                                 name: port.name,

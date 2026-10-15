@@ -8,10 +8,7 @@ use crate::{
 use super::admission::ModelRef;
 use super::evaluation::ResultContext;
 use super::owner::InstalledContext;
-use super::{
-    AnalysisPackageOwner, PackageArtifactV1, PackageErrorCodeV1 as Code, PackageOutputV1,
-    PackageRefV1,
-};
+use super::{AnalysisPackageOwner, PackageErrorCodeV1 as Code, PackageOutputV1, PackageRefV1};
 
 pub(super) struct ModelInputs {
     pub inputs: Vec<sdk::Input>,
@@ -24,7 +21,6 @@ pub(super) struct ModelInputs {
 
 pub(super) struct InputRequest<'a> {
     pub activation: &'a PackageActivationV1,
-    pub artifact: &'a PackageArtifactV1,
     pub model: &'a sdk::Model,
     pub context: &'a InstalledContext,
     pub now: u64,
@@ -48,16 +44,14 @@ impl AnalysisPackageOwner {
     ) -> Result<ModelInputs> {
         let InputRequest {
             activation,
-            artifact,
             model,
             context,
             now,
             action,
         } = request;
-        let sources = artifact
-            .implementation(&model.name)?
-            .bindings()
-            .ok_or_else(|| Code::Missing.error("host-prepared inputs"))?;
+        if model.input_mode == sdk::InputMode::Provided {
+            return Err(Code::Missing.error("host-prepared inputs"));
+        }
         let mut selected = ModelInputs {
             inputs: Vec::new(),
             dependencies: Vec::new(),
@@ -66,60 +60,56 @@ impl AnalysisPackageOwner {
             contexts: Vec::new(),
             _sources: Vec::new(),
         };
-        for port in &model.inputs {
+        for input in &model.inputs {
             control.check()?;
             self.check(&context.grant, action)?;
-            if let Some(sql) = sources.get(&port.name) {
-                let request = crate::SqlModelInputRequestV1 {
-                    selection: context.grant.selection.clone(),
-                    sql: QuerySql::admit(sql, Vec::new(), false)?,
-                    port,
-                    limits: model.limits,
-                    now_ns: now,
-                };
-                let mut input = match operation.as_deref_mut() {
-                    Some(operation) => operation.model_input(request, control)?,
-                    None => self.query.model_input(request, control)?,
-                };
-                for witness in &mut input.witnesses {
-                    if witness.expires_utc_ns == 0 {
-                        witness.expires_utc_ns =
-                            now.saturating_add(7 * 24 * 60 * 60 * 1_000_000_000);
-                    }
+            match &input.source {
+                sdk::InputSource::Provided => {
+                    return Err(Code::Incomplete.error("input binding"));
                 }
-                selected.dependencies.extend(
-                    self.store
-                        .package_result_refs(activation.key.tenant_id, &input.result_ids)?,
-                );
-                let (witnesses, contexts) = self
-                    .store
-                    .package_evidence(activation.key.tenant_id, &input.result_ids)?;
-                selected.witnesses.extend(witnesses);
-                selected.contexts.extend(contexts);
-                selected.witnesses.extend(input.witnesses.iter().cloned());
-                selected.contexts.extend(input.contexts.iter().cloned());
-                selected.inputs.push(input.input.clone());
-                selected
-                    .source_revisions
-                    .extend(input.source_revisions.iter().cloned());
-                selected._sources.push(input);
-            } else {
-                let dependency = artifact
-                    .descriptor
-                    .dependencies
-                    .iter()
-                    .find(|dependency| {
-                        dependency.model == model.name && dependency.input == port.name
-                    })
-                    .ok_or_else(|| Code::Incomplete.error("input binding"))?;
-                self.dependency(
+                sdk::InputSource::Sql(sql) => {
+                    let request = crate::SqlModelInputRequestV1 {
+                        selection: context.grant.selection.clone(),
+                        sql: QuerySql::admit(sql, Vec::new(), false)?,
+                        port: &input.port,
+                        limits: model.limits,
+                        now_ns: now,
+                    };
+                    let mut input = match operation.as_deref_mut() {
+                        Some(operation) => operation.model_input(request, control)?,
+                        None => self.query.model_input(request, control)?,
+                    };
+                    for witness in &mut input.witnesses {
+                        if witness.expires_utc_ns == 0 {
+                            witness.expires_utc_ns =
+                                now.saturating_add(7 * 24 * 60 * 60 * 1_000_000_000);
+                        }
+                    }
+                    selected.dependencies.extend(
+                        self.store
+                            .package_result_refs(activation.key.tenant_id, &input.result_ids)?,
+                    );
+                    let (witnesses, contexts) = self
+                        .store
+                        .package_evidence(activation.key.tenant_id, &input.result_ids)?;
+                    selected.witnesses.extend(witnesses);
+                    selected.contexts.extend(contexts);
+                    selected.witnesses.extend(input.witnesses.iter().cloned());
+                    selected.contexts.extend(input.contexts.iter().cloned());
+                    selected.inputs.push(input.input.clone());
+                    selected
+                        .source_revisions
+                        .extend(input.source_revisions.iter().cloned());
+                    selected._sources.push(input);
+                }
+                sdk::InputSource::Output(dependency) => self.dependency(
                     activation,
                     context,
                     dependency,
-                    port,
+                    &input.port,
                     model.limits,
                     &mut selected,
-                )?;
+                )?,
             }
             selected.check(model.limits)?;
         }
@@ -155,7 +145,7 @@ impl AnalysisPackageOwner {
         &self,
         activation: &PackageActivationV1,
         context: &InstalledContext,
-        dependency: &sdk::Dependency,
+        dependency: &sdk::OutputRef,
         port: &sdk::Port,
         limits: sdk::Limits,
         selected: &mut ModelInputs,

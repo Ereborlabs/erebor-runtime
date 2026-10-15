@@ -8,7 +8,11 @@ impl GraphAndFindingOwner {
     pub fn supports_analysis(model: &sdk::Model) -> bool {
         let expected = araphor_analysis_builtins::graph::Detector::Process.descriptor();
         let expected = &expected.exports[0];
-        model.inputs == expected.inputs
+        model
+            .inputs
+            .iter()
+            .map(|input| &input.port)
+            .eq(expected.inputs.iter().map(|input| &input.port))
             && model.outputs == expected.outputs
             && model.checkpoint == expected.checkpoint
     }

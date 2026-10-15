@@ -11,8 +11,12 @@ fn mixed_bundle() -> TestResult<PackageBundleV1> {
     };
     *export = auxiliary.name.clone();
     let artifact = &mut selected.artifacts[0];
-    artifact.descriptor.dependencies[0].package = artifact.descriptor.id.clone();
-    artifact.descriptor.dependencies[0].export = auxiliary.name.clone();
+    artifact.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
+        package: artifact.descriptor.id.clone(),
+        revision: artifact.descriptor.revision.clone(),
+        export: auxiliary.name.clone(),
+        output: "rows".into(),
+    });
     artifact.descriptor.exports.push(auxiliary);
     artifact.implementations.push(implementation);
     selected.validate()?;

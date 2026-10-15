@@ -228,12 +228,25 @@ impl AnalysisPackageOwner {
         if prepared
             && domain_output
             && model.is_some_and(|model| {
-                !crate::GraphAndFindingOwner::supports_analysis(model)
-                    && !(artifact.descriptor.id
-                        == araphor_analysis_builtins::discovery::Discovery::package().id
-                        && araphor_analysis_builtins::discovery::Discovery::package()
-                            .exports
-                            .contains(model))
+                if crate::GraphAndFindingOwner::supports_analysis(model) {
+                    return false;
+                }
+                let discovery = araphor_analysis_builtins::discovery::Discovery::package();
+                artifact.descriptor.id != discovery.id
+                    || !discovery.exports.iter().any(|expected| {
+                        model.name == expected.name
+                            && model
+                                .inputs
+                                .iter()
+                                .map(|input| &input.port)
+                                .eq(expected.inputs.iter().map(|input| &input.port))
+                            && model.parameters == expected.parameters
+                            && model.outputs == expected.outputs
+                            && model.checkpoint == expected.checkpoint
+                            && model.reasons == expected.reasons
+                            && model.limits == expected.limits
+                            && model.tolerance == expected.tolerance
+                    })
             })
         {
             return PackageReadinessV1::Unsupported {

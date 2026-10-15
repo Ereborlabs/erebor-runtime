@@ -14,7 +14,6 @@ use tonic::transport::{server::Connected, Channel, Endpoint, Uri};
 use tower::service_fn;
 
 pub const MAX_GRPC_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
-pub const MAX_PACKAGE_GRPC_BYTES: usize = 32 * 1024 * 1024 + 128 * 1024;
 pub const IDEMPOTENCY_KEY_METADATA: &str = "erebor-idempotency-key";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

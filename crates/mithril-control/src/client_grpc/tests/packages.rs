@@ -9,7 +9,7 @@ use araphor_data::{
 use super::*;
 
 fn bundle() -> PackageBundleV1 {
-    let descriptor = Package::new(
+    let mut descriptor = Package::new(
         "api.fixture",
         "1",
         vec![Model::new(
@@ -21,6 +21,7 @@ fn bundle() -> PackageBundleV1 {
             )],
         )],
     );
+    descriptor.exports[0].input_mode = araphor_analysis_sdk::InputMode::Resolved;
     PackageBundleV1 {
         schema_version: 1,
         root: PackageRefV1 {
@@ -31,7 +32,6 @@ fn bundle() -> PackageBundleV1 {
             descriptor,
             implementations: vec![PackageImplementationV1::Sql {
                 export: "count".into(),
-                inputs: BTreeMap::new(),
                 program: SqlModelV1 {
                     outputs: BTreeMap::from([("rows".into(), "SELECT 3::UBIGINT AS count".into())]),
                     ..Default::default()
@@ -144,8 +144,8 @@ async fn package_rpc_authority_trust() -> TestResult {
 }
 
 #[test]
-fn package_response_encoding_bound() -> TestResult {
-    let mut response = PackageResponseV1 {
+fn package_response_encoding() -> TestResult {
+    let response = PackageResponseV1 {
         scope_id: "test".into(),
         package_id: "api.fixture".into(),
         exports: Vec::new(),
@@ -156,21 +156,6 @@ fn package_response_encoding_bound() -> TestResult {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&bytes)?,
         serde_json::to_value(&response)?
-    );
-    response.output = Some(araphor_data::PackageOutputV1 {
-        datasets: vec![araphor_data::PackageDatasetV1 {
-            name: "rows".into(),
-            ipc: vec![255; araphor_data::MAX_PACKAGE_BYTES],
-        }],
-        ..Default::default()
-    });
-    let error = ClientGrpcOwner::package_response(&response)
-        .err()
-        .ok_or("oversized response passed")?;
-    assert_eq!(error.code(), tonic::Code::ResourceExhausted);
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(error.details())?,
-        serde_json::json!({"code":"limit","field":"response bytes"})
     );
     Ok(())
 }

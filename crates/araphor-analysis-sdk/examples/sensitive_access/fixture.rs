@@ -5,7 +5,7 @@ impl SensitiveAccess {
         let package = Self::package();
         let ports = &package.exports[0].inputs;
         let events = RecordBatch::try_new(
-            Arc::new(ports[0].schema.clone()),
+            Arc::new(ports[0].port.schema.clone()),
             vec![
                 Arc::new(StringArray::from(vec![
                     "subject.1",
@@ -21,7 +21,7 @@ impl SensitiveAccess {
             ],
         )?;
         let baseline = RecordBatch::try_new(
-            Arc::new(ports[1].schema.clone()),
+            Arc::new(ports[1].port.schema.clone()),
             vec![
                 Arc::new(StringArray::from(vec!["subject.1"])),
                 Arc::new(StringArray::from(vec!["model.weights"])),

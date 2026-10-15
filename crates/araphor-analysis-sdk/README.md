@@ -187,10 +187,34 @@ under a nonzero checkpoint version. An initial evaluation can omit state.
 A stateful export must return its next checkpoint. A wrong version, schema,
 or dataset rejects the complete evaluation.
 
-`Dependency` binds one model input to an exact package revision and named
-export/output. Local bindings check the output schema. Dependency resolution,
-cycle rejection, authorization, and scheduling belong to package admission.
-The SDK does not load or execute a dependency.
+Each `Model.inputs` entry is an `InputPort` with a `port` and an explicit
+`source`. `InputSource::Provided` selects caller-supplied data.
+`InputSource::Sql(query)` selects an admitted SQL source.
+`InputSource::Output(OutputRef)` names an exact package, revision, export, and
+output. There is no separate package dependency list or backend SQL input map.
+`Model::dependencies()` returns the output references with their input ports.
+Local references check schema, kind, and revision. Package admission owns
+cross-package resolution, cycle rejection, authorization, and scheduling.
+
+`Model::new` accepts `Vec<Port>` and sets `InputMode::Provided`. The constructor
+wraps each port with `InputSource::Provided`. In `Provided` mode, the caller
+supplies every dataset. Output references still declare retained dependencies.
+In `Resolved` mode, every source is `Sql` or `Output`. The package owner resolves
+each source. Zero-input models also declare their mode. The mode does not depend
+on an empty map or a missing SQL key.
+
+For example, change one declared input to a resolved SQL source:
+
+```rust
+use araphor_analysis_sdk::{InputMode, InputSource};
+let mut resolved = package.exports[0].clone();
+resolved.input_mode = InputMode::Resolved;
+resolved.inputs[0].source = InputSource::Sql("SELECT subject,event_id FROM events".into());
+```
+
+Read input schema fields through `model.inputs[index].port`. Output ports remain
+`Port` values. Routing metadata does not cross the native or Wasm evaluation ABI;
+both sides validate the supplied computation datasets.
 
 ## Bounds and graph inputs
 
@@ -206,8 +230,10 @@ memory limit or execution timeout.
 Arrow storage, schemas, and owned metadata for host memory reservations.
 
 Default bounds are 1,024 batches, 1,000,000 rows, 64 MiB of data, and 16 MiB of
-checkpoint data. Descriptors have a 1 MiB encoded size bound. Schema checks
-limit nesting to depth 16 and 1,024 fields per schema. Larger workloads need
+checkpoint data. Descriptors, OCI packages, stored package revisions, and package
+gRPC messages have no separate aggregate size cap. OCI descriptor sizes and hashes,
+frame validation, store usage charges, runtime leases, and model data limits
+still apply. Schema checks limit nesting to depth 16 and 1,024 fields per schema. Larger workloads need
 explicit bounds and bounded input selection. Client SQL display limits do not
 apply to SDK inputs. Tests supply 300 event rows across three batches.
 
@@ -226,11 +252,11 @@ The native manifest retains source cursor ranges without inferring UTC time.
 
 The WIT declaration carries named Arrow IPC streams and the versioned
 evaluation/result envelope. The native C declaration uses Arrow C stream
-interfaces inside one isolated worker. Both carry the same descriptor.
+interfaces in the host process. Both use the same computation port contract.
 Syntax tests parse the WIT and compile the C header. The guest feature supplies
 the generated component bindings and bounded IPC transport. The package
 execution owner supplies cancellation and Wasmtime isolation. Native execution
-and cross-target parity remain later work.
+shares the host process and has cooperative cancellation.
 
 Local fixture tests call trusted Rust code in the test process. These tests
 do not install a package or prove a sandbox. Structured errors distinguish
@@ -246,3 +272,11 @@ and the declared SDK detail schema. Installed detectors retain declared
 namespaced reasons and typed details. The host retains the reason mapping used
 by historical HF findings.
 No package descriptor grants policy or physical authority.
+
+## Current source qualification
+
+The explicit input declarations and package cap removals based on `4176a9cb`
+pass final Rust CI: 2,135 passed, zero failed, and 568 ignored. All 12 native
+Data cases and the native detector E2E case pass on Linux x86_64 GNU. Read the
+[verification record](../../docs/plans/araphor-production-dataflow-simplification.md#explicit-input-sources-and-removed-package-caps)
+for source hashes, fixture corrections, commands, and remaining work.

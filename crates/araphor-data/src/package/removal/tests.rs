@@ -9,15 +9,16 @@ fn consumer(name: &str, dependency: &PackageBundleV1) -> PackageBundleV1 {
     package.root.package_id = name.into();
     let artifact = &mut package.artifacts[0];
     artifact.descriptor.id = name.into();
-    artifact.descriptor.exports[0].inputs.push(sdk::Port::new(
-        "upstream",
-        dependency.artifacts[0].descriptor.exports[0].outputs[0]
-            .schema
-            .clone(),
-    ));
-    artifact.descriptor.dependencies.push(sdk::Dependency {
-        model: "count".into(),
-        input: "upstream".into(),
+    artifact.descriptor.exports[0].inputs.push(
+        sdk::Port::new(
+            "upstream",
+            dependency.artifacts[0].descriptor.exports[0].outputs[0]
+                .schema
+                .clone(),
+        )
+        .into(),
+    );
+    artifact.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
         package: dependency.root.package_id.clone(),
         revision: dependency.root.revision.clone(),
         export: "count".into(),

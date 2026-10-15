@@ -61,8 +61,8 @@ impl AnalysisStore {
         let revision_query =
             "SELECT 1 FROM package_revisions WHERE octet_length(tenant_id) <> 16
                 OR length(package_id) NOT BETWEEN 1 AND 256 OR length(revision) NOT BETWEEN 1 AND 4096
-                OR octet_length(encode(dependencies)) > 1048576 OR octet_length(descriptor) NOT BETWEEN 1 AND 1048576
-                OR encoded_bytes NOT BETWEEN 1 AND 67108864
+                OR octet_length(encode(dependencies)) > 1048576 OR octet_length(descriptor) = 0
+                OR encoded_bytes = 0
                 OR octet_length(artifact) NOT BETWEEN 1 AND encoded_bytes OR commit_revision = 0
                 OR commit_revision > (SELECT commit_revision FROM store_meta)";
         for (reason, query) in [

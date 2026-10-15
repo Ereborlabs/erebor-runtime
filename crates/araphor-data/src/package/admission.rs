@@ -47,8 +47,9 @@ impl PackageBundleV1 {
             pending.extend(
                 artifact
                     .descriptor
-                    .dependencies
+                    .exports
                     .iter()
+                    .flat_map(|model| model.dependencies().map(|(_, dependency)| dependency))
                     .filter(|dependency| dependency.package != artifact.descriptor.id)
                     .map(|dependency| {
                         (
@@ -144,12 +145,7 @@ impl PackageBundleV1 {
             .find(|model| model.name == key.export)
             .ok_or_else(|| Code::Missing.error("dependency export"))?;
         states.insert(key.clone(), false);
-        for dependency in artifact
-            .descriptor
-            .dependencies
-            .iter()
-            .filter(|dependency| dependency.model == key.export)
-        {
+        for (input, dependency) in model.dependencies() {
             let upstream = ModelRef {
                 package: PackageRefV1 {
                     package_id: dependency.package.clone(),
@@ -170,11 +166,6 @@ impl PackageBundleV1 {
                         .find(|port| port.name == dependency.output)
                 })
                 .ok_or_else(|| Code::Missing.error("dependency output"))?;
-            let input = model
-                .inputs
-                .iter()
-                .find(|port| port.name == dependency.input)
-                .ok_or_else(|| Code::Invalid.error("dependency input"))?;
             if input.schema != output.schema || input.kind != output.kind {
                 return Err(Code::Invalid.error("dependency schema or kind"));
             }
@@ -230,32 +221,18 @@ impl PackageArtifactV1 {
             {
                 return Err(Code::Missing.error("export implementation"));
             }
-            let implementation = match self.implementation(&model.name) {
-                Ok(implementation) => implementation,
-                Err(crate::Error::Package {
+            match self.implementation(&model.name) {
+                Ok(super::PackageImplementationV1::Sql { .. })
+                    if model.input_mode != araphor_analysis_sdk::InputMode::Resolved =>
+                {
+                    return Err(Code::Invalid.error("SQL input mode"));
+                }
+                Ok(_)
+                | Err(crate::Error::Package {
                     code: Code::Unsupported,
                     ..
-                }) => continue,
+                }) => {}
                 Err(error) => return Err(error),
-            };
-            let Some(sources) = implementation.bindings() else {
-                continue;
-            };
-            let dependencies: BTreeSet<_> = self
-                .descriptor
-                .dependencies
-                .iter()
-                .filter(|dependency| dependency.model == model.name)
-                .map(|dependency| dependency.input.as_str())
-                .collect();
-            if sources
-                .keys()
-                .any(|name| !model.inputs.iter().any(|port| port.name == *name))
-                || model.inputs.iter().any(|port| {
-                    sources.contains_key(&port.name) == dependencies.contains(port.name.as_str())
-                })
-            {
-                return Err(Code::Invalid.error("input binding"));
             }
         }
         let mut fixtures = BTreeSet::new();

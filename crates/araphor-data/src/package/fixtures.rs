@@ -52,6 +52,7 @@ impl AnalysisPackageOwner {
                     let port = model
                         .inputs
                         .iter()
+                        .map(|input| &input.port)
                         .find(|port| port.name == input.data.name)
                         .ok_or_else(|| Code::Invalid.error("fixture input"))?;
                     inputs.push(sdk::Input {

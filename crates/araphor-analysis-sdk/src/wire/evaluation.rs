@@ -15,8 +15,13 @@ impl Evaluation {
             .iter()
             .map(|input| {
                 Ok(Input {
-                    data: codec
-                        .encode(&input.data, Codec::schema(&model.inputs, &input.data.name)?)?,
+                    data: codec.encode(
+                        &input.data,
+                        Codec::schema(
+                            model.inputs.iter().map(|input| &input.port),
+                            &input.data.name,
+                        )?,
+                    )?,
                     revision: input.revision.clone(),
                     coverage: input.coverage.clone(),
                 })
@@ -60,8 +65,13 @@ impl Evaluation {
             .iter()
             .map(|input| {
                 Ok(crate::Input {
-                    data: codec
-                        .decode(&input.data, Codec::schema(&model.inputs, &input.data.name)?)?,
+                    data: codec.decode(
+                        &input.data,
+                        Codec::schema(
+                            model.inputs.iter().map(|input| &input.port),
+                            &input.data.name,
+                        )?,
+                    )?,
                     revision: input.revision.clone(),
                     coverage: input.coverage.clone(),
                 })

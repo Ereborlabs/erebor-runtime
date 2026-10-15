@@ -23,12 +23,11 @@ fn native(mut bundle: PackageBundleV1) -> TestResult<PackageBundleV1> {
         .iter()
         .map(|model| model.name.clone())
         .collect();
-    let mut qualification = crate::package::native::Qualification::inspect(
+    let qualification = crate::package::native::Qualification::inspect(
         &artifact,
         exports.clone(),
         env!("ARAPHOR_NATIVE_TARGET").into(),
     )?;
-    qualification.inputs = package.implementations[0].bindings().cloned();
     package.implementations = vec![PackageImplementationV1::Native {
         export: exports[0].clone(),
         artifact,

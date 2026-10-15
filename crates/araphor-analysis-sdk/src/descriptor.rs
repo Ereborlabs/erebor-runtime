@@ -4,11 +4,9 @@ use std::path::Path;
 use snafu::ResultExt as _;
 
 use crate::{
-    DataType, Error, ErrorCode, Field, IoSnafu, Limits, Model, Package, Port, Result, Schema,
-    TimeUnit, CONTRACT_VERSION,
+    DataType, Error, ErrorCode, Field, InputMode, InputSource, IoSnafu, Limits, Model, Package,
+    Port, Result, Schema, TimeUnit, CONTRACT_VERSION,
 };
-
-pub(crate) const MAX_DESCRIPTOR_BYTES: usize = 1024 * 1024;
 
 impl Package {
     pub fn validate(&self) -> Result<()> {
@@ -17,57 +15,48 @@ impl Package {
         }
         Self::name(&self.id)?;
         Self::text(&self.revision)?;
-        if self.exports.is_empty() || self.exports.len() > 64 || self.dependencies.len() > 64 {
+        if self.exports.is_empty() || self.exports.len() > 64 {
             return Err(Error::contract(ErrorCode::Limit, "exports or dependencies"));
         }
         Self::unique(self.exports.iter().map(|model| model.name.as_str()))?;
         for model in &self.exports {
             model.validate(&self.id)?;
         }
-        let mut dependencies = BTreeSet::new();
-        for dependency in &self.dependencies {
-            Self::name(&dependency.model)?;
-            Self::name(&dependency.input)?;
-            Self::name(&dependency.package)?;
-            Self::text(&dependency.revision)?;
-            Self::name(&dependency.export)?;
-            Self::name(&dependency.output)?;
-            let input = self
-                .exports
-                .iter()
-                .find(|model| model.name == dependency.model)
-                .and_then(|model| {
-                    model
-                        .inputs
+        let mut dependencies = 0usize;
+        for model in &self.exports {
+            for (input, dependency) in model.dependencies() {
+                dependencies += 1;
+                if dependencies > 64 {
+                    return Err(Error::contract(ErrorCode::Limit, "exports or dependencies"));
+                }
+                Self::name(&dependency.package)?;
+                Self::text(&dependency.revision)?;
+                Self::name(&dependency.export)?;
+                Self::name(&dependency.output)?;
+                if dependency.package == self.id {
+                    let output = self
+                        .exports
                         .iter()
-                        .find(|port| port.name == dependency.input)
-                })
-                .ok_or_else(|| Error::contract(ErrorCode::Invalid, "dependency input"))?;
-            if !dependencies.insert((&dependency.model, &dependency.input)) {
-                return Err(Error::contract(ErrorCode::Invalid, "dependency"));
-            }
-            if dependency.package == self.id {
-                let output = self
-                    .exports
-                    .iter()
-                    .find(|model| model.name == dependency.export)
-                    .and_then(|model| {
-                        model
-                            .outputs
-                            .iter()
-                            .find(|port| port.name == dependency.output)
-                    })
-                    .ok_or_else(|| Error::contract(ErrorCode::Invalid, "dependency output"))?;
-                if dependency.revision != self.revision || input.schema != output.schema {
-                    return Err(Error::contract(
-                        ErrorCode::Incompatible,
-                        "dependency schema or revision",
-                    ));
+                        .find(|model| model.name == dependency.export)
+                        .and_then(|model| {
+                            model
+                                .outputs
+                                .iter()
+                                .find(|port| port.name == dependency.output)
+                        })
+                        .ok_or_else(|| Error::contract(ErrorCode::Invalid, "dependency output"))?;
+                    if dependency.revision != self.revision
+                        || input.schema != output.schema
+                        || input.kind != output.kind
+                    {
+                        return Err(Error::contract(
+                            ErrorCode::Incompatible,
+                            "dependency schema or revision",
+                        ));
+                    }
                 }
             }
         }
-        serde_json::to_writer_pretty(DescriptorLimit(MAX_DESCRIPTOR_BYTES), self)
-            .map_err(|_| Error::contract(ErrorCode::Limit, "descriptor bytes"))?;
         Ok(())
     }
 
@@ -127,28 +116,19 @@ impl Package {
     }
 }
 
-struct DescriptorLimit(usize);
-
-impl std::io::Write for DescriptorLimit {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 = self
-            .0
-            .checked_sub(bytes.len())
-            .ok_or_else(|| std::io::Error::other("Descriptor exceeds its byte limit"))?;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 impl Model {
     fn validate(&self, package: &str) -> Result<()> {
         Package::name(&self.name)?;
         self.limits.validate()?;
-        Self::ports(&self.inputs)?;
-        Self::ports(&self.outputs)?;
+        Self::ports(self.inputs.iter().map(|input| &input.port))?;
+        for input in &self.inputs {
+            match (&self.input_mode, &input.source) {
+                (InputMode::Provided, InputSource::Provided | InputSource::Output(_))
+                | (InputMode::Resolved, InputSource::Output(_) | InputSource::Sql(_)) => {}
+                _ => return Err(Error::contract(ErrorCode::Invalid, "input source mode")),
+            }
+        }
+        Self::ports(self.outputs.iter())?;
         Self::schema(&self.parameters)?;
         if self.outputs.is_empty() || self.reasons.len() > 128 {
             return Err(Error::contract(ErrorCode::Invalid, "outputs or reasons"));
@@ -160,7 +140,7 @@ impl Model {
         {
             return Err(Error::contract(ErrorCode::Invalid, "numeric tolerance"));
         }
-        if self.inputs.iter().any(|port| port.evidence_required) {
+        if self.inputs.iter().any(|input| input.port.evidence_required) {
             return Err(Error::contract(
                 ErrorCode::Invalid,
                 "input evidence requirement",
@@ -187,16 +167,16 @@ impl Model {
                     "checkpoint declaration",
                 ));
             }
-            Self::ports(&checkpoint.datasets)?;
+            Self::ports(checkpoint.datasets.iter())?;
         }
         Ok(())
     }
 
-    fn ports(ports: &[Port]) -> Result<()> {
+    fn ports<'a>(ports: impl Clone + ExactSizeIterator<Item = &'a Port>) -> Result<()> {
         if ports.len() > 64 {
             return Err(Error::contract(ErrorCode::Limit, "ports"));
         }
-        Package::unique(ports.iter().map(|port| port.name.as_str()))?;
+        Package::unique(ports.clone().map(|port| port.name.as_str()))?;
         for port in ports {
             Self::schema(&port.schema)?;
         }

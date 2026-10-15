@@ -168,17 +168,17 @@ impl AnalysisStore {
         transaction: &Transaction<'_>,
         key: &PackageKeyV1,
     ) -> Result<()> {
-        let (count, bytes): (u64, u64) = transaction
+        let count: u64 = transaction
             .query_row(
-                "SELECT count(*), COALESCE(SUM(octet_length(metadata)), 0)::UBIGINT
+                "SELECT count(*)
              FROM package_activations WHERE tenant_id = ? AND scope_id = ? AND installed",
                 params![key.tenant_id.as_slice(), key.scope_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "bound package scope",
             })?;
-        if count > super::MAX_PACKAGE_ROWS as u64 || bytes > super::MAX_PACKAGE_BYTES as u64 {
+        if count > super::MAX_PACKAGE_ROWS as u64 {
             return Err(crate::PackageErrorCodeV1::Limit.error("package scope activations"));
         }
         Ok(())

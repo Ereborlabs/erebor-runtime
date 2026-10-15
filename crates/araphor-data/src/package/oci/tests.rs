@@ -9,7 +9,6 @@ fn oci_package_identity() -> TestResult {
         artifact: (0_u8..=255).collect(),
         qualification: Some(super::super::native::Qualification {
             exports: vec!["count".into()],
-            inputs: None,
             target: "x86_64-unknown-linux-gnu".into(),
             cpu_features: Vec::new(),
             contract_version: 1,
@@ -38,7 +37,7 @@ fn oci_package_identity() -> TestResult {
         },
     });
     let bytes = package.encode()?;
-    let content = oci::Content::from_bytes(&bytes, MAX_PACKAGE_BYTES)?;
+    let content = oci::Content::from_bytes(&bytes)?;
     assert_eq!(content.layers.len(), 3);
     assert_eq!(content.layers[0].media_type, oci::NATIVE_MEDIA_TYPE);
     assert_eq!(
@@ -90,10 +89,7 @@ fn oci_raw_slot_rejections() -> TestResult {
         media_type: oci::PYTHON_MEDIA_TYPE,
         bytes: &[1],
     }];
-    assert!(PackageBundleV1::from_bytes(
-        &oci::Layout::new(&package, &layers, MAX_PACKAGE_BYTES)?.encode()?
-    )
-    .is_err());
+    assert!(PackageBundleV1::from_bytes(&oci::Layout::new(&package, &layers)?.encode()?).is_err());
     let PackageImplementationV1::Python { artifact, .. } =
         &mut package.artifacts[0].implementations[0]
     else {
@@ -104,10 +100,7 @@ fn oci_raw_slot_rejections() -> TestResult {
         media_type: oci::WASM_MEDIA_TYPE,
         bytes: &[1],
     }];
-    assert!(PackageBundleV1::from_bytes(
-        &oci::Layout::new(&package, &layers, MAX_PACKAGE_BYTES)?.encode()?
-    )
-    .is_err());
+    assert!(PackageBundleV1::from_bytes(&oci::Layout::new(&package, &layers)?.encode()?).is_err());
     Ok(())
 }
 

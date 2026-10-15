@@ -20,7 +20,6 @@ fn shared_executable_checks_sql() -> TestResult {
     artifact.descriptor.exports.push(second);
     artifact.implementations.push(PackageImplementationV1::Sql {
         export: "invalid-sql".into(),
-        inputs: BTreeMap::new(),
         program: crate::SqlModelV1 {
             outputs: BTreeMap::from([("data".into(), "DROP TABLE events".into())]),
             ..Default::default()
@@ -66,7 +65,7 @@ fn package_metadata_digest_stable() -> TestResult {
 #[test]
 fn sql_oci_metadata_unchanged() -> TestResult {
     let package = crate::package::tests::bundle("1", "SELECT 1::UBIGINT AS count");
-    let content = sdk::oci::Content::from_bytes(&package.encode()?, MAX_PACKAGE_BYTES)?;
+    let content = sdk::oci::Content::from_bytes(&package.encode()?)?;
     assert!(content.layers.is_empty());
     assert_eq!(
         serde_json::to_value(content.package::<PackageBundleV1>()?)?,
@@ -165,11 +164,10 @@ async fn mixed_metadata_install_retry() -> TestResult {
         .artifacts
         .remove(0);
     source.descriptor.id = "sql.rows".into();
-    source.descriptor.exports[0].inputs = vec![sdk::Port::new("input", output.schema.clone())];
+    source.descriptor.exports[0].inputs =
+        vec![sdk::Port::new("input", output.schema.clone()).into()];
     source.descriptor.exports[0].outputs[0].schema = output.schema;
-    source.descriptor.dependencies.push(sdk::Dependency {
-        model: "count".into(),
-        input: "input".into(),
+    source.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
         package: package.root.package_id.clone(),
         revision: package.root.revision.clone(),
         export: "atoms".into(),

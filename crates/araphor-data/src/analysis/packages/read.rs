@@ -7,6 +7,8 @@ use super::{
 use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
+    pub(super) const RESULT_READ_BYTES: u64 = 64 * 1024 * 1024;
+
     pub(crate) fn package_revision(
         &self,
         tenant: [u8; 16],
@@ -61,19 +63,6 @@ impl AnalysisStore {
     #[cfg(test)]
     pub(crate) fn package_revisions(&self, tenant: [u8; 16]) -> Result<Vec<PackageRevisionV1>> {
         self.read_snapshot(|reader| {
-            let bytes: u64 = reader
-                .query_row(
-                    "SELECT COALESCE(SUM(octet_length(descriptor) + encoded_bytes), 0)::UBIGINT
-                FROM package_revisions WHERE tenant_id = ?",
-                    params![tenant.as_slice()],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "bound package list bytes",
-                })?;
-            if bytes > super::MAX_PACKAGE_BYTES as u64 {
-                return self.reject("the package list exceeds its byte limit");
-            }
             let mut statement = reader
                 .prepare(
                     "SELECT package_id, revision FROM package_revisions WHERE tenant_id = ?
@@ -140,14 +129,6 @@ impl AnalysisStore {
         package: Option<&str>,
     ) -> Result<Vec<PackageActivationV1>> {
         self.read_snapshot(|reader| {
-            let bytes: u64 = reader.query_row(
-                "SELECT COALESCE(SUM(octet_length(metadata)), 0)::UBIGINT FROM package_activations
-                 WHERE installed AND tenant_id = ? AND scope_id = ? AND (? IS NULL OR package_id = ?)",
-                params![tenant.as_slice(), scope, package, package], |row| row.get(0),
-            ).context(AnalysisDatabaseSnafu { operation: "bound package activation bytes" })?;
-            if bytes > super::MAX_PACKAGE_BYTES as u64 {
-                return self.reject("the package activations exceed their byte limit");
-            }
             let mut statement = reader.prepare(
                 "SELECT package_id, export_name FROM package_activations
                  WHERE installed AND tenant_id = ? AND scope_id = ? AND (? IS NULL OR package_id = ?)
@@ -256,7 +237,7 @@ impl AnalysisStore {
                 WHERE h.tenant_id = ? AND h.scope_id = ? AND h.package_id = ? AND h.export_name = ?",
                 params![key.tenant_id.as_slice(), key.scope_id, key.package_id, key.export], |row| row.get(0),
             ).context(AnalysisDatabaseSnafu { operation: "bound selected package results" })?;
-            if bytes > super::MAX_PACKAGE_BYTES as u64 { return self.reject("the package results exceed their byte limit"); }
+            if bytes > Self::RESULT_READ_BYTES { return self.reject("the package results exceed their byte limit"); }
             let mut statement = reader.prepare(
                 "SELECT result_id FROM package_heads
                  WHERE tenant_id = ? AND scope_id = ? AND package_id = ? AND export_name = ?

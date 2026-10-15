@@ -248,9 +248,12 @@ impl Codec {
         Ok(data.batches.remove(0))
     }
 
-    pub(super) fn schema<'a>(ports: &'a [crate::Port], name: &str) -> Result<&'a Schema> {
+    pub(super) fn schema<'a>(
+        ports: impl IntoIterator<Item = &'a crate::Port>,
+        name: &str,
+    ) -> Result<&'a Schema> {
         ports
-            .iter()
+            .into_iter()
             .find(|port| port.name == name)
             .map(|port| &port.schema)
             .ok_or_else(|| Error::contract(ErrorCode::Invalid, "dataset name"))

@@ -4,7 +4,6 @@ use crate::{AnalysisContextRefV1, AnalysisWitnessV1};
 
 pub(crate) const MAX_PACKAGE_METADATA_BYTES: usize = 1024 * 1024;
 
-pub(crate) const MAX_PACKAGE_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_PACKAGE_ROWS: usize = 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

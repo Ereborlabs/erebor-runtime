@@ -17,14 +17,14 @@ async fn automatic_clock_ticks() -> TestResult {
             let artifact = &mut package.artifacts[0];
             let mut port = artifact.descriptor.exports[0].outputs[0].clone();
             port.name = "source".into();
-            artifact.descriptor.exports[0].inputs.push(port);
-            let PackageImplementationV1::Sql {
-                inputs, program, ..
-            } = &mut artifact.implementations[0]
+            artifact.descriptor.exports[0].inputs.push(sdk::InputPort {
+                port,
+                source: sdk::InputSource::Sql(EXPIRY.into()),
+            });
+            let PackageImplementationV1::Sql { program, .. } = &mut artifact.implementations[0]
             else {
                 return Err("SQL implementation".into());
             };
-            inputs.insert("source".into(), EXPIRY.into());
             program
                 .outputs
                 .insert("rows".into(), "SELECT count FROM source".into());

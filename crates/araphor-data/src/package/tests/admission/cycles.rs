@@ -13,19 +13,18 @@ fn derived(artifact: &mut PackageArtifactV1, source: &PackageRefV1) {
     model.name = "derived".into();
     let mut input = model.outputs[0].clone();
     input.name = "source".into();
-    model.inputs.push(input);
-    artifact.descriptor.exports.push(model);
-    artifact.descriptor.dependencies.push(sdk::Dependency {
-        model: "derived".into(),
-        input: "source".into(),
-        package: source.package_id.clone(),
-        revision: source.revision.clone(),
-        export: "count".into(),
-        output: "rows".into(),
+    model.inputs.push(sdk::InputPort {
+        port: input,
+        source: sdk::InputSource::Output(sdk::OutputRef {
+            package: source.package_id.clone(),
+            revision: source.revision.clone(),
+            export: "count".into(),
+            output: "rows".into(),
+        }),
     });
+    artifact.descriptor.exports.push(model);
     artifact.implementations.push(PackageImplementationV1::Sql {
         export: "derived".into(),
-        inputs: BTreeMap::new(),
         program: SqlModelV1 {
             outputs: BTreeMap::from([(
                 "rows".into(),

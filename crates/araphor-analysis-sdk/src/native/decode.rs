@@ -32,7 +32,9 @@ impl Decoder {
         }
         let mut inputs = decoder.vector(request.input_count)?;
         for input in unsafe { decoder.slice(request.inputs, request.input_count)? } {
-            let data = unsafe { decoder.dataset(&input.data, &model.inputs)? };
+            let data = unsafe {
+                decoder.dataset(&input.data, model.inputs.iter().map(|input| &input.port))?
+            };
             let window = if input.revision.window.is_null() {
                 None
             } else {
@@ -136,14 +138,14 @@ impl Decoder {
         Ok(output)
     }
 
-    unsafe fn dataset(
+    unsafe fn dataset<'p>(
         &mut self,
         value: &abi::Dataset,
-        ports: &[crate::Port],
+        ports: impl IntoIterator<Item = &'p crate::Port>,
     ) -> Result<crate::Dataset> {
         let name = unsafe { self.text(value.name)? };
         let port = ports
-            .iter()
+            .into_iter()
             .find(|port| port.name == name)
             .ok_or_else(|| Error::contract(ErrorCode::Invalid, "native dataset"))?;
         let batches = unsafe { streams::read(value.batches, &port.schema, self.remaining())? };

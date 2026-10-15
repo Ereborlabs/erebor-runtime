@@ -20,7 +20,7 @@ fn check_nested(array: ArrayRef, minimum: usize) -> TestResult {
         array.data_type().clone(),
         false,
     )]);
-    package.exports[0].inputs[0].schema = schema.clone();
+    package.exports[0].inputs[0].port.schema = schema.clone();
     package.exports[0].outputs[0].schema = schema.clone();
     evaluation.inputs[0].data.batches =
         vec![sdk::RecordBatch::try_new(Arc::new(schema), vec![array])?];

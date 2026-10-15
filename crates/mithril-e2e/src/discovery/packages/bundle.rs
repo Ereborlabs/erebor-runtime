@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use araphor_analysis_sdk::{
-    CheckpointSpec, DataType, Dependency, Field, Model, Package, Port, Schema,
+    CheckpointSpec, DataType, Field, InputMode, InputSource, Model, OutputRef, Package, Port,
+    Schema,
 };
 use araphor_data::{
     PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
@@ -35,11 +36,12 @@ impl Denials {
                 Schema::new(vec![Field::new("runs", DataType::UInt64, false)]),
             )],
         });
+        count.input_mode = InputMode::Resolved;
+        count.inputs[0].source = InputSource::Sql("WITH latest AS (SELECT MAX(owner_revision) AS revision FROM context_versions WHERE owner_id='qualification-window-v1') SELECT d.entity_key AS event,d.lifetime_key AS subject,d.body AS resource FROM context_versions d JOIN latest w ON d.owner_revision=w.revision WHERE d.owner_id='qualification-denials-v1' ORDER BY d.entity_key".into());
         let count = PackageArtifactV1 {
             descriptor: Package::new("denials.count", "1", vec![count]),
             implementations: vec![PackageImplementationV1::Sql {
                 export: "count".into(),
-                inputs: BTreeMap::from([("denials".into(), "WITH latest AS (SELECT MAX(owner_revision) AS revision FROM context_versions WHERE owner_id='qualification-window-v1') SELECT d.entity_key AS event,d.lifetime_key AS subject,d.body AS resource FROM context_versions d JOIN latest w ON d.owner_revision=w.revision WHERE d.owner_id='qualification-denials-v1' ORDER BY d.entity_key".into())]),
                 program: SqlModelV1 {
                     outputs: BTreeMap::from([("counts".into(), "SELECT subject,resource,CAST(COUNT(DISTINCT event) AS UBIGINT) AS count FROM denials GROUP BY subject,resource ORDER BY subject,resource".into())]),
                     checkpoint: BTreeMap::from([("state".into(), "SELECT CAST(COALESCE(MAX(runs),0)+1 AS UBIGINT) AS runs FROM prior_state".into())]),
@@ -54,9 +56,8 @@ impl Denials {
             revision,
             vec![Model::new("repeated", vec![counts], vec![rows])],
         );
-        descriptor.dependencies.push(Dependency {
-            model: "repeated".into(),
-            input: "counts".into(),
+        descriptor.exports[0].input_mode = InputMode::Resolved;
+        descriptor.exports[0].inputs[0].source = InputSource::Output(OutputRef {
             package: "denials.count".into(),
             revision: "1".into(),
             export: "count".into(),
@@ -79,7 +80,6 @@ impl Denials {
                     descriptor,
                     implementations: vec![PackageImplementationV1::Sql {
                         export: "repeated".into(),
-                        inputs: BTreeMap::new(),
                         program: SqlModelV1 {
                             outputs: BTreeMap::from([("rows".into(), sql)]),
                             ..Default::default()

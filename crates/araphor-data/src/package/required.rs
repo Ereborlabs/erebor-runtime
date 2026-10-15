@@ -43,7 +43,6 @@ impl AnalysisPackageOwner {
                         .iter()
                         .map(|model| model.name.clone())
                         .collect(),
-                    inputs: None,
                     artifact: bytes.to_vec(),
                 }];
                 let artifact = PackageArtifactV1 {

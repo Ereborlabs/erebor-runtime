@@ -12,7 +12,6 @@ fn oci_authoring_replaces_layout() -> TestResult {
             media_type: WASM_MEDIA_TYPE,
             bytes: b"first-code",
         }],
-        32 * 1024,
     )?;
     first.write(directory.path())?;
     first.write(directory.path())?;
@@ -22,16 +21,12 @@ fn oci_authoring_replaces_layout() -> TestResult {
             media_type: WASM_MEDIA_TYPE,
             bytes: b"changed-code",
         }],
-        32 * 1024,
     )?;
     latest.write(directory.path())?;
-    let content = Content::read_files(
-        |name, _| {
-            let path = directory.path().join(name);
-            std::fs::read(&path).context(IoSnafu { path: &path })
-        },
-        32 * 1024,
-    )?;
+    let content = Content::read_files(|name| {
+        let path = directory.path().join(name);
+        std::fs::read(&path).context(IoSnafu { path: &path })
+    })?;
     assert!(latest.matches(&content));
     assert!(!first.matches(&content));
     assert_ne!(latest.digest(), first.digest());
@@ -40,7 +35,7 @@ fn oci_authoring_replaces_layout() -> TestResult {
 }
 
 #[test]
-fn oci_identity_bounds() -> TestResult {
+fn oci_identity() -> TestResult {
     #[derive(Serialize)]
     struct Metadata {
         z: u32,
@@ -51,47 +46,24 @@ fn oci_identity_bounds() -> TestResult {
         media_type: WASM_MEDIA_TYPE,
         bytes: &raw,
     }];
-    let layout = Layout::new(&Metadata { z: 2, a: 1 }, &layers, 32 * 1024)?;
+    let layout = Layout::new(&Metadata { z: 2, a: 1 }, &layers)?;
     let bytes = layout.encode()?;
-    assert_eq!(bytes.len(), layout.archive_size());
     assert_eq!(
-        Layout::new(&serde_json::json!({"a":1,"z":2}), &layers, bytes.len())?.encode()?,
+        Layout::new(&serde_json::json!({"a":1,"z":2}), &layers)?.encode()?,
         bytes
     );
-    assert_eq!(
-        Layout::new(&Metadata { z: 2, a: 1 }, &layers, bytes.len() - 1)
-            .err()
-            .ok_or("short bound accepted")?
-            .code(),
-        ErrorCode::Limit
-    );
-    let decoded = Content::from_bytes(&bytes, bytes.len())?;
+    let decoded = Content::from_bytes(&bytes)?;
     assert_eq!(decoded.layers[0].bytes, raw);
     assert_eq!(
         layout.digest(),
         format!("sha256:{:x}", Sha256::digest(&decoded.manifest))
-    );
-    assert!(Content::from_bytes(&bytes, bytes.len() - 1).is_err());
-    assert_eq!(
-        Content::read_files(
-            |name, _| layout
-                .files
-                .get(name)
-                .map(|bytes| bytes.to_vec())
-                .ok_or_else(|| Layout::invalid("missing")),
-            bytes.len() - 1,
-        )
-        .err()
-        .ok_or("short reconstructed archive bound accepted")?
-        .code(),
-        ErrorCode::Limit,
     );
     Ok(())
 }
 
 #[test]
 fn oci_rejects_noncanonical_config() -> TestResult {
-    let layout = Layout::new(&serde_json::json!({"a": 1}), &[], 32 * 1024)?;
+    let layout = Layout::new(&serde_json::json!({"a": 1}), &[])?;
     let mut files = layout
         .files
         .iter()
@@ -111,8 +83,7 @@ fn oci_rejects_noncanonical_config() -> TestResult {
     index.set_manifests(vec![manifest_descriptor]);
     files.insert("index.json".into(), Layout::json(&index)?);
     assert!(matches!(Content::read_files(
-        |name, _| files.get(name).cloned().ok_or_else(|| Layout::invalid("missing")),
-        32 * 1024,
+        |name| files.get(name).cloned().ok_or_else(|| Layout::invalid("missing")),
     ), Err(Error::Contract { code: ErrorCode::Invalid, field, .. })
         if field == "noncanonical Araphor OCI artifact"));
     Ok(())
@@ -126,7 +97,6 @@ fn oci_rejects_blob_changes() -> TestResult {
             media_type: NATIVE_MEDIA_TYPE,
             bytes: b"native-code",
         }],
-        32 * 1024,
     )?;
     let mut files = layout
         .files
@@ -139,22 +109,16 @@ fn oci_rejects_blob_changes() -> TestResult {
         .map(|(name, _)| name.clone())
         .ok_or("raw blob absent")?;
     files.insert(raw_path.clone(), b"changed-code".to_vec());
-    assert!(Content::read_files(
-        |name, _| files
-            .get(name)
-            .cloned()
-            .ok_or_else(|| Layout::invalid("missing")),
-        32 * 1024
-    )
+    assert!(Content::read_files(|name| files
+        .get(name)
+        .cloned()
+        .ok_or_else(|| Layout::invalid("missing")))
     .is_err());
     files.remove(&raw_path);
-    assert!(Content::read_files(
-        |name, _| files
-            .get(name)
-            .cloned()
-            .ok_or_else(|| Layout::invalid("missing")),
-        32 * 1024
-    )
+    assert!(Content::read_files(|name| files
+        .get(name)
+        .cloned()
+        .ok_or_else(|| Layout::invalid("missing")))
     .is_err());
     Ok(())
 }
@@ -173,7 +137,7 @@ fn oci_archive_rejections() -> TestResult {
         header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
         header.set_cksum();
         archive.append(&header, &[][..])?;
-        assert!(Content::from_bytes(&archive.into_inner()?, 32 * 1024).is_err());
+        assert!(Content::from_bytes(&archive.into_inner()?).is_err());
     }
     let mut archive = tar::Builder::new(Vec::new());
     for _ in 0..2 {
@@ -183,11 +147,11 @@ fn oci_archive_rejections() -> TestResult {
         header.set_cksum();
         archive.append_data(&mut header, "index.json", &b"{}"[..])?;
     }
-    assert!(Content::from_bytes(&archive.into_inner()?, 32 * 1024).is_err());
-    let layout = Layout::new(&serde_json::json!({}), &[], 32 * 1024)?;
+    assert!(Content::from_bytes(&archive.into_inner()?).is_err());
+    let layout = Layout::new(&serde_json::json!({}), &[])?;
     let mut archive = layout.encode()?;
     archive.extend_from_slice(b"hidden");
-    assert!(Content::from_bytes(&archive, 32 * 1024).is_err());
-    assert!(Content::from_bytes(b"{\"schema_version\":1}", 32 * 1024).is_err());
+    assert!(Content::from_bytes(&archive).is_err());
+    assert!(Content::from_bytes(b"{\"schema_version\":1}").is_err());
     Ok(())
 }

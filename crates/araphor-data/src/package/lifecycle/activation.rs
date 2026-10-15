@@ -24,14 +24,9 @@ impl AnalysisPackageOwner {
         upgrade: bool,
     ) -> Result<Vec<ModelActivation>> {
         let mut activations = Vec::new();
-        let mut bytes = 0usize;
         for key in bundle.order()? {
             let activation =
                 self.model_activation(grant, scope, bundle, &key, parameters, upgrade)?;
-            bytes = bytes
-                .checked_add(activation.active.metadata.len())
-                .filter(|bytes| *bytes <= crate::analysis::MAX_PACKAGE_BYTES)
-                .ok_or_else(|| Code::Limit.error("activation metadata bytes"))?;
             activations.push(activation);
         }
         Ok(activations)

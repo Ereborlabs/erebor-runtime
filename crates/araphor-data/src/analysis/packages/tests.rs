@@ -10,7 +10,7 @@ mod evidence;
 mod lifecycle;
 
 fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {
-    let descriptor = araphor_analysis_sdk::Package::new(
+    let mut descriptor = araphor_analysis_sdk::Package::new(
         id,
         revision,
         vec![araphor_analysis_sdk::Model::new(
@@ -22,11 +22,11 @@ fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {
             )],
         )],
     );
+    descriptor.exports[0].input_mode = araphor_analysis_sdk::InputMode::Resolved;
     let source = crate::PackageArtifactV1 {
         descriptor: descriptor.clone(),
         implementations: vec![crate::PackageImplementationV1::Sql {
             export: "model".into(),
-            inputs: std::collections::BTreeMap::new(),
             program: crate::SqlModelV1 {
                 outputs: std::collections::BTreeMap::from([("rows".into(), "SELECT 1".into())]),
                 ..Default::default()

@@ -50,8 +50,9 @@ impl AnalysisStore {
             let dependencies: Vec<PackageRevisionRefV1> =
                 serde_json::from_str(&dependencies).context(JsonSnafu { path: root })?;
             let declared: std::collections::BTreeSet<_> = package
-                .dependencies
+                .exports
                 .iter()
+                .flat_map(|model| model.dependencies().map(|(_, dependency)| dependency))
                 .filter(|dependency| dependency.package != package.id)
                 .map(|dependency| (dependency.package.as_str(), dependency.revision.as_str()))
                 .collect();

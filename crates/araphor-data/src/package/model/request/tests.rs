@@ -136,26 +136,3 @@ fn package_request_metadata_roundtrip() -> TestResult {
     }
     Ok(())
 }
-
-#[test]
-fn package_request_byte_bound() -> TestResult {
-    let operation = PackageRequestV1::Inspect {
-        scope_id: "team".into(),
-        package_id: "x".repeat(PackageRequestV1::MAX_BYTES),
-    };
-    assert!(matches!(
-        operation.encode(),
-        Err(crate::Error::Package {
-            code: Code::Limit,
-            ..
-        })
-    ));
-    assert!(matches!(
-        PackageRequestV1::from_bytes(&vec![0; PackageRequestV1::MAX_BYTES + 1]),
-        Err(crate::Error::Package {
-            code: Code::Limit,
-            ..
-        })
-    ));
-    Ok(())
-}

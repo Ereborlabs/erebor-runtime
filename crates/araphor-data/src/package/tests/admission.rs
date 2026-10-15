@@ -8,14 +8,14 @@ mod cycles;
 fn bind(artifact: &mut PackageArtifactV1, input: &str, source: &PackageRefV1) {
     let mut port = artifact.descriptor.exports[0].outputs[0].clone();
     port.name = input.into();
-    artifact.descriptor.exports[0].inputs.push(port);
-    artifact.descriptor.dependencies.push(sdk::Dependency {
-        model: "count".into(),
-        input: input.into(),
-        package: source.package_id.clone(),
-        revision: source.revision.clone(),
-        export: "count".into(),
-        output: "rows".into(),
+    artifact.descriptor.exports[0].inputs.push(sdk::InputPort {
+        port,
+        source: sdk::InputSource::Output(sdk::OutputRef {
+            package: source.package_id.clone(),
+            revision: source.revision.clone(),
+            export: "count".into(),
+            output: "rows".into(),
+        }),
     });
 }
 

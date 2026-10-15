@@ -363,7 +363,7 @@ impl RuntimeFixture {
         ]);
         let mut count = model.clone();
         count.name = "count-input".into();
-        count.inputs = vec![sdk::Port::new("input", model.outputs[0].schema.clone())];
+        count.inputs = vec![sdk::Port::new("input", model.outputs[0].schema.clone()).into()];
         let mut accumulate = count.clone();
         accumulate.name = "accumulate".into();
         accumulate.parameters = sdk::Schema::empty();

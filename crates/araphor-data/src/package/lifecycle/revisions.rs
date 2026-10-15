@@ -5,7 +5,7 @@ use crate::Result;
 
 use crate::package::{
     AnalysisPackageOwner, PackageArtifactV1, PackageBundleV1, PackageErrorCodeV1 as Code,
-    PackageGrantV1, PackageRefV1, MAX_PACKAGE_BYTES,
+    PackageGrantV1, PackageRefV1,
 };
 
 impl AnalysisPackageOwner {
@@ -57,8 +57,9 @@ impl AnalysisPackageOwner {
         let encoded = artifact.encoding(false)?;
         let dependencies: BTreeSet<_> = artifact
             .descriptor
-            .dependencies
+            .exports
             .iter()
+            .flat_map(|model| model.dependencies().map(|(_, dependency)| dependency))
             .filter(|dependency| dependency.package != artifact.descriptor.id)
             .map(|dependency| (dependency.package.clone(), dependency.revision.clone()))
             .collect();
@@ -88,7 +89,6 @@ impl AnalysisPackageOwner {
         let mut pending = vec![root.clone()];
         let mut seen = BTreeSet::new();
         let mut artifacts = Vec::new();
-        let mut bytes = 0usize;
         while let Some(reference) = pending.pop() {
             if !seen.insert(reference.clone()) {
                 continue;
@@ -100,10 +100,6 @@ impl AnalysisPackageOwner {
                 .store
                 .package_revision(tenant, &reference.package_id, &reference.revision)?
                 .ok_or_else(|| Code::Missing.error("installed artifact"))?;
-            bytes = bytes
-                .checked_add(record.encoded_bytes)
-                .filter(|bytes| *bytes <= MAX_PACKAGE_BYTES)
-                .ok_or_else(|| Code::Limit.error("installed dependency bytes"))?;
             artifacts.push(record.decode_artifact()?);
             pending.extend(
                 record
@@ -166,68 +162,42 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn revision_retry_preserves_encoding_bound() -> TestResult {
+    #[tokio::test]
+    async fn large_package_roundtrip() -> TestResult {
         let fixture = Fixture::new()?;
-        let mut artifact = bundle("1", "SELECT 1::UBIGINT AS count")
-            .artifacts
-            .remove(0);
+        let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
+        let artifact = &mut package.artifacts[0];
         artifact.implementations = vec![PackageImplementationV1::Python {
             export: "count".into(),
-            artifact: vec![0; MAX_PACKAGE_BYTES / 2],
+            artifact: vec![255; 33 * 1024 * 1024],
         }];
-        let saved = AnalysisPackageOwner::revision(&fixture.grant, &artifact)?;
-        assert!(saved.encoded_bytes > MAX_PACKAGE_BYTES);
-        assert!(saved.encoded_bytes <= crate::analysis::MAX_PACKAGE_BYTES);
-        fixture
-            .store
-            .install_package(std::slice::from_ref(&saved), || Ok(()))?;
+        let saved = AnalysisPackageOwner::revision(&fixture.grant, artifact)?;
+        assert!(saved.encoded_bytes > 64 * 1024 * 1024);
+        let response = fixture.install(package.clone(), None).await?;
+        assert!(!response.exports[0].active);
+        assert!(matches!(
+            response.exports[0].readiness,
+            crate::package::PackageReadinessV1::Unsupported { .. }
+        ));
         let before = *fixture.store.subscribe_revision().borrow();
         assert_eq!(
-            fixture.owner.install_revision(&fixture.grant, &artifact)?,
+            fixture
+                .owner
+                .install_revision(&fixture.grant, &package.artifacts[0])?,
             saved
         );
         assert_eq!(*fixture.store.subscribe_revision().borrow(), before);
-        Ok(())
-    }
-
-    #[test]
-    fn revision_candidate_error_precedes_saved_decode() -> TestResult {
-        let fixture = Fixture::new()?;
-        let mut artifact = bundle("1", "SELECT 1::UBIGINT AS count")
-            .artifacts
-            .remove(0);
-        let mut saved = AnalysisPackageOwner::revision(&fixture.grant, &artifact)?;
-        let mut bytes = Vec::new();
-        minicbor::Encoder::new(&mut bytes)
-            .array(4)?
-            .u32(1)?
-            .u64(saved.encoded_bytes as u64)?
-            .bytes(b"{")?
-            .array(0)?;
-        saved.artifact = bytes;
-        fixture
-            .store
-            .install_package(std::slice::from_ref(&saved), || Ok(()))?;
-        let before = *fixture.store.subscribe_revision().borrow();
-        artifact.implementations = vec![PackageImplementationV1::Python {
-            export: "count".into(),
-            artifact: vec![0; MAX_PACKAGE_BYTES],
-        }];
-        let error = fixture
-            .owner
-            .install_revision(&fixture.grant, &artifact)
-            .err()
-            .ok_or("oversize revision accepted")?;
-        assert!(matches!(error, crate::Error::PackageEncoding { source, .. }
-            if source.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge)));
-        assert_eq!(*fixture.store.subscribe_revision().borrow(), before);
-        assert_eq!(
-            fixture
-                .store
-                .package_revision(saved.tenant_id, &saved.package_id, &saved.revision)?,
-            Some(saved)
-        );
+        drop(saved);
+        let fixture = fixture.reopen()?;
+        let restored = fixture.owner.load_bundle([1; 16], &package.root)?;
+        assert_eq!(restored.artifacts, package.artifacts);
+        let digest = restored.digest()?;
+        let bytes = restored.encode()?;
+        assert!(bytes.len() > 32 * 1024 * 1024);
+        drop(restored);
+        let restored = PackageBundleV1::from_bytes(&bytes)?;
+        assert_eq!(restored.artifacts, package.artifacts);
+        assert_eq!(restored.digest()?, digest);
         Ok(())
     }
 }

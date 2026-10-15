@@ -1,7 +1,7 @@
 use duckdb::{params, Connection, Transaction};
 use snafu::ResultExt as _;
 
-use super::{PackageRevisionV1, MAX_PACKAGE_BYTES, MAX_PACKAGE_ROWS};
+use super::{PackageRevisionV1, MAX_PACKAGE_ROWS};
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
@@ -15,27 +15,21 @@ impl AnalysisStore {
         }
         let tenant = revisions[0].tenant_id;
         let mut keys = std::collections::BTreeSet::new();
-        let mut bytes = 0_usize;
         for package in revisions {
-            bytes = bytes
-                .saturating_add(package.descriptor.len())
-                .saturating_add(package.encoded_bytes);
             if package.tenant_id != tenant
                 || package.package_id.is_empty()
                 || package.package_id.len() > 256
                 || package.revision.is_empty()
                 || package.revision.len() > 4096
                 || package.descriptor.is_empty()
-                || package.descriptor.len() > 1024 * 1024
                 || package.artifact.is_empty()
                 || package.encoded_bytes == 0
                 || crate::package::storage::StoredArtifact::frame_size(&package.artifact)?
                     != package.encoded_bytes
-                || bytes > MAX_PACKAGE_BYTES
                 || package.dependencies.len() > 64
                 || !keys.insert((&package.package_id, &package.revision))
             {
-                return self.reject("the package closure is invalid or exceeds its byte limit");
+                return self.reject("the package closure is invalid");
             }
         }
         let mut guard = self.writer()?;

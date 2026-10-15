@@ -232,9 +232,7 @@ impl AnalysisPackageOwner {
     }
 
     pub(super) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
-        let mut bytes = super::wire::PackageBuffer::new(crate::analysis::MAX_PACKAGE_BYTES as u64);
-        serde_json::to_writer(&mut bytes, value).context(PackageEncodingSnafu)?;
-        Ok(bytes.finish())
+        serde_json::to_vec(value).context(PackageEncodingSnafu)
     }
 
     pub(super) fn authorize_commit<T>(

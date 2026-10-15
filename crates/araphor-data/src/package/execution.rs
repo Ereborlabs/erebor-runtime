@@ -137,8 +137,8 @@ impl AnalysisPackageOwner {
                 Err(error) => return Err(error),
                 _ => return Err(Code::Unsupported.error("model target")),
             }
-            if let Some(inputs) = artifact.implementation(&model.name)?.bindings() {
-                for sql in inputs.values() {
+            for input in &model.inputs {
+                if let sdk::InputSource::Sql(sql) = &input.source {
                     crate::QuerySql::admit(sql, Vec::new(), false)?;
                 }
             }

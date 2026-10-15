@@ -11,7 +11,7 @@ fn validate(array: ArrayRef) -> Result<()> {
     let mut package = FilesCount::package();
     let mut fixture = FilesCount::fixture()?;
     let schema = Schema::new(vec![Field::new("value", array.data_type().clone(), true)]);
-    package.exports[0].inputs[0].schema = schema.clone();
+    package.exports[0].inputs[0].port.schema = schema.clone();
     fixture.evaluation.inputs[0].data.batches =
         vec![RecordBatch::try_new(Arc::new(schema), vec![array])?];
     package.validate_evaluation(&fixture.evaluation)
@@ -123,7 +123,7 @@ fn null_type_requires_nullable() -> TestResult {
         )),
     ] {
         let mut package = FilesCount::package();
-        package.exports[0].inputs[0].schema = Schema::new(vec![field]);
+        package.exports[0].inputs[0].port.schema = Schema::new(vec![field]);
         assert_eq!(
             package.validate().map_err(|error| error.code()),
             Err(ErrorCode::Incompatible)

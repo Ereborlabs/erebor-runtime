@@ -127,25 +127,13 @@ impl BundleMemory {
 
     fn implementation(&mut self, value: &PackageImplementationV1) -> Result<()> {
         match value {
-            PackageImplementationV1::Sql {
-                export,
-                inputs,
-                program,
-            } => {
+            PackageImplementationV1::Sql { export, program } => {
                 self.add(export.capacity())?;
-                self.bindings(inputs)?;
                 self.program(program)
             }
-            PackageImplementationV1::Wasm {
-                exports,
-                inputs,
-                artifact,
-            } => {
+            PackageImplementationV1::Wasm { exports, artifact } => {
                 self.vector(exports)?;
                 self.strings(exports)?;
-                if let Some(inputs) = inputs {
-                    self.bindings(inputs)?;
-                }
                 self.vector(artifact)
             }
             PackageImplementationV1::Native {
@@ -161,9 +149,6 @@ impl BundleMemory {
                     self.add(qualification.target.capacity())?;
                     self.vector(&qualification.cpu_features)?;
                     self.strings(&qualification.cpu_features)?;
-                    if let Some(inputs) = &qualification.inputs {
-                        self.bindings(inputs)?;
-                    }
                     self.vector(&qualification.dependencies)?;
                     for dependency in &qualification.dependencies {
                         self.strings([&dependency.name, &dependency.digest])?;

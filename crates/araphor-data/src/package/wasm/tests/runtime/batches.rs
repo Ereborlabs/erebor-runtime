@@ -7,7 +7,7 @@ fn component_keeps_input_batches() -> TestResult {
     let mut model = package.exports[0].clone();
     model.name = "count-input".into();
     let schema = Arc::new(model.outputs[0].schema.clone());
-    model.inputs = vec![sdk::Port::new("input", schema.as_ref().clone())];
+    model.inputs = vec![sdk::Port::new("input", schema.as_ref().clone()).into()];
     package.exports.push(model);
     let mut input = evaluation(&package, "sum-input", 0)?;
     input.export = "count-input".into();

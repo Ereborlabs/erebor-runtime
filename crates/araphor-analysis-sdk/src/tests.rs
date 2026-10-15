@@ -73,7 +73,7 @@ fn invalid_input_blocks_execution() -> TestResult {
 fn batches_keep_all_rows() -> TestResult {
     let package = FilesCount::package();
     let mut fixture = FilesCount::fixture()?;
-    let schema = Arc::new(package.exports[0].inputs[0].schema.clone());
+    let schema = Arc::new(package.exports[0].inputs[0].port.schema.clone());
     let batches = (0..3)
         .map(|batch| {
             RecordBatch::try_new(
@@ -103,7 +103,7 @@ fn batches_keep_all_rows() -> TestResult {
 fn multiple_inputs_variable_outputs() -> TestResult {
     let mut package = FilesCount::package();
     let mut extra = package.exports[0].inputs[0].clone();
-    extra.name = "baseline".into();
+    extra.port.name = "baseline".into();
     package.exports[0].inputs.push(extra);
     package.exports[0]
         .outputs

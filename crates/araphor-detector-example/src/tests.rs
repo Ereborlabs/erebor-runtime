@@ -28,13 +28,13 @@ fn threshold_retains_evidence_and_state() -> TestResult {
     separate.lifetime = vec![9];
     let inputs = vec![
         Rows::encode(
-            &model.inputs[0],
+            &model.inputs[0].port,
             &[first.clone(), separate, first],
             model.limits,
         )?,
-        Rows::encode::<Fact>(&model.inputs[1], &[], model.limits)?,
+        Rows::encode::<Fact>(&model.inputs[1].port, &[], model.limits)?,
         Rows::encode(
-            &model.inputs[2],
+            &model.inputs[2].port,
             &[Manifest {
                 window_ns: 100,
                 window_records: 3,

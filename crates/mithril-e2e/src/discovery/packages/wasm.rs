@@ -32,7 +32,7 @@ pub(super) fn bundle() -> PackageBundleV1 {
                 .iter()
                 .map(|model| model.name.clone())
                 .collect(),
-            inputs: None,
+
             artifact: COMPONENT.to_vec(),
         }],
         descriptor,
@@ -152,7 +152,7 @@ impl DetectorQualification<'_> {
                 qualification: Some(qualification),
                 ..
             } => {
-                let mut metadata = json!({
+                let metadata = json!({
                     "exports": qualification.exports,
                     "target": qualification.target,
                     "cpu_features": qualification.cpu_features,
@@ -162,9 +162,6 @@ impl DetectorQualification<'_> {
                         "name": dependency.name, "artifact": [], "digest": dependency.digest,
                     })).collect::<Vec<_>>(),
                 });
-                if let Some(inputs) = &qualification.inputs {
-                    metadata["inputs"] = serde_json::to_value(inputs)?;
-                }
                 let dependencies = qualification
                     .dependencies
                     .iter()
@@ -209,7 +206,6 @@ impl DetectorQualification<'_> {
         }
         let transport_bytes = request.encoded_len();
         assert!(transport_bytes > 4 * 1024 * 1024);
-        assert!(transport_bytes <= PackageRequestV1::MAX_BYTES + 64);
         let raw_size = match &self.bundle.artifacts[0].implementations[0] {
             PackageImplementationV1::Wasm { artifact, .. }
             | PackageImplementationV1::Native { artifact, .. } => artifact.len(),

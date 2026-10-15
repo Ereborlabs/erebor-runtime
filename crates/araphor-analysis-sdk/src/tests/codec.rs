@@ -127,7 +127,7 @@ fn wire_rejects_changed_packages() -> TestResult {
     let input = wire::Evaluation::encode(&package, &fixture.evaluation)?;
     let encoded = wire::Output::encode(&package, &fixture.evaluation, &output)?;
     let mut changed_input = package.clone();
-    changed_input.exports[0].inputs[0].schema = Schema::new(vec![
+    changed_input.exports[0].inputs[0].port.schema = Schema::new(vec![
         Field::new("subject", DataType::UInt64, false),
         Field::new("event_id", DataType::UInt64, false),
     ]);

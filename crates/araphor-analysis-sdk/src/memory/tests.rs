@@ -3,9 +3,9 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::{
-    wire, CheckpointSpec, Coverage, CoverageState, DataType, Dependency, Evaluation,
-    EvaluationContext, Field, Input, Limits, Model, Package, Port, Reason, RecordBatch, Revision,
-    Schema, SourceWindow,
+    wire, CheckpointSpec, Coverage, CoverageState, DataType, Evaluation, EvaluationContext, Field,
+    Input, InputPort, InputSource, Limits, Model, OutputRef, Package, Port, Reason, RecordBatch,
+    Revision, Schema, SourceWindow,
 };
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -17,25 +17,28 @@ fn package_reserves_are_charged() -> TestResult {
         "1",
         vec![Model::new("run", Vec::new(), Vec::new())],
     );
-    package.dependencies.push(Dependency {
-        model: "run".into(),
-        input: "input".into(),
-        package: "dependency".into(),
-        revision: "1".into(),
-        export: "run".into(),
-        output: "output".into(),
+    package.exports[0].inputs.push(InputPort {
+        port: Port::new("input", Schema::empty()),
+        source: InputSource::Output(OutputRef {
+            package: "dependency".into(),
+            revision: "1".into(),
+            export: "run".into(),
+            output: "output".into(),
+        }),
     });
     let original = serde_json::to_vec(&package)?;
     let initial = package.allocated_bytes();
-    let capacity = package.dependencies.capacity();
-    package.dependencies.reserve_exact(capacity + 32);
+    let capacity = package.exports[0].inputs.capacity();
+    package.exports[0].inputs.reserve_exact(capacity + 32);
     package.exports.reserve_exact(8);
     package.id.reserve_exact(256);
     package.revision.reserve_exact(128);
-    let dependency = &mut package.dependencies[0];
+    let input = &mut package.exports[0].inputs[0];
+    let InputSource::Output(dependency) = &mut input.source else {
+        return Err("output source absent".into());
+    };
     for value in [
-        &mut dependency.model,
-        &mut dependency.input,
+        &mut input.port.name,
         &mut dependency.package,
         &mut dependency.revision,
         &mut dependency.export,
@@ -45,8 +48,18 @@ fn package_reserves_are_charged() -> TestResult {
     }
     assert!(
         package.allocated_bytes()
-            >= initial + 32 * size_of::<Dependency>() + 8 * size_of::<Model>() + 768
+            >= initial + 32 * size_of::<InputPort>() + 8 * size_of::<Model>() + 704
     );
+    assert_eq!(serde_json::to_vec(&package)?, original);
+    package.exports[0].input_mode = crate::InputMode::Resolved;
+    package.exports[0].inputs[0].source = InputSource::Sql("SELECT 1".into());
+    let original = serde_json::to_vec(&package)?;
+    let before = package.allocated_bytes();
+    let InputSource::Sql(sql) = &mut package.exports[0].inputs[0].source else {
+        return Err("SQL source absent".into());
+    };
+    sql.reserve_exact(4096);
+    assert!(package.allocated_bytes() >= before + 4096);
     assert_eq!(serde_json::to_vec(&package)?, original);
     Ok(())
 }
@@ -74,7 +87,11 @@ fn model_reserves_are_charged() -> TestResult {
         .reserve_exact(32);
     assert!(
         package.allocated_bytes()
-            >= initial + 96 * size_of::<Port>() + 32 * size_of::<Reason>() + 64
+            >= initial
+                + 64 * size_of::<Port>()
+                + 32 * size_of::<InputPort>()
+                + 32 * size_of::<Reason>()
+                + 64
     );
     assert_eq!(serde_json::to_vec(&package)?, original);
     Ok(())
@@ -128,7 +145,7 @@ fn schemas_include_nested_metadata() -> TestResult {
         let model = &mut package.exports[0];
         match index {
             0 => model.parameters = schema,
-            1 => model.inputs[0].schema = schema,
+            1 => model.inputs[0].port.schema = schema,
             2 => model.outputs[0].schema = schema,
             3 => model.reasons[0].details = schema,
             _ => {

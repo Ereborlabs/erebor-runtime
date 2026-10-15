@@ -54,7 +54,6 @@ impl AnalysisStore {
     ) -> Result<BTreeMap<PackageRefV1, sdk::Package>> {
         let mut pending = vec![reference.clone()];
         let mut packages = BTreeMap::new();
-        let mut bytes = 0usize;
         while let Some(reference) = pending.pop() {
             if packages.contains_key(&reference) {
                 continue;
@@ -62,18 +61,7 @@ impl AnalysisStore {
             if packages.len() == 64 {
                 return Self::reject_path(root, "the context package closure exceeds its limit");
             }
-            let (package, dependencies, size) =
-                Self::context_package(reader, root, tenant, &reference)?;
-            bytes = bytes
-                .checked_add(size)
-                .filter(|bytes| *bytes <= crate::package::MAX_PACKAGE_BYTES)
-                .ok_or_else(|| {
-                    crate::AnalysisStateSnafu {
-                        path: root,
-                        reason: "the context package closure exceeds its byte limit",
-                    }
-                    .build()
-                })?;
+            let (package, dependencies) = Self::context_package(reader, root, tenant, &reference)?;
             pending.extend(dependencies);
             packages.insert(reference, package);
         }
@@ -85,17 +73,16 @@ impl AnalysisStore {
         root: &Path,
         tenant: [u8; 16],
         reference: &PackageRefV1,
-    ) -> Result<(sdk::Package, Vec<PackageRefV1>, usize)> {
+    ) -> Result<(sdk::Package, Vec<PackageRefV1>)> {
         let stored: Option<(Vec<u8>, String)> = reader
             .query_row(
                 "SELECT descriptor, dependencies FROM package_revisions
              WHERE tenant_id = ? AND package_id = ? AND revision = ?
-             AND octet_length(descriptor) <= ? AND length(dependencies) <= ?",
+             AND length(dependencies) <= ?",
                 params![
                     tenant.as_slice(),
                     reference.package_id,
                     reference.revision,
-                    crate::analysis::MAX_PACKAGE_METADATA_BYTES as u64,
                     crate::analysis::MAX_PACKAGE_METADATA_BYTES as u64
                 ],
                 |row| Ok((row.get(0)?, row.get(1)?)),
@@ -107,14 +94,14 @@ impl AnalysisStore {
         let Some((descriptor, dependencies)) = stored else {
             return Self::reject_path(root, "the context package revision is absent or too large");
         };
-        let size = descriptor.len() + dependencies.len();
         let package: sdk::Package =
             serde_json::from_slice(&descriptor).context(JsonSnafu { path: root })?;
         let dependencies: Vec<crate::analysis::PackageRevisionRefV1> =
             serde_json::from_str(&dependencies).context(JsonSnafu { path: root })?;
         let declared: BTreeSet<_> = package
-            .dependencies
+            .exports
             .iter()
+            .flat_map(|model| model.dependencies().map(|(_, dependency)| dependency))
             .filter(|dependency| dependency.package != package.id)
             .map(|dependency| (dependency.package.as_str(), dependency.revision.as_str()))
             .collect();
@@ -139,7 +126,6 @@ impl AnalysisStore {
                     revision: dependency.revision,
                 })
                 .collect(),
-            size,
         ))
     }
 }

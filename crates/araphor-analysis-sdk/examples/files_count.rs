@@ -97,7 +97,7 @@ impl FilesCount {
     pub fn fixture() -> Result<Fixture> {
         let package = Self::package();
         let batch = RecordBatch::try_new(
-            Arc::new(package.exports[0].inputs[0].schema.clone()),
+            Arc::new(package.exports[0].inputs[0].port.schema.clone()),
             vec![
                 Arc::new(StringArray::from(vec!["subject.1"; 3])),
                 Arc::new(UInt64Array::from(vec![1, 2, 3])),

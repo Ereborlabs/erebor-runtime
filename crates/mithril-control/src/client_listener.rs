@@ -114,12 +114,8 @@ impl ClientListener {
             let service = GrpcWebLayer::new()
                 .layer(
                     AraphorClientServiceServer::new(owner)
-                        .max_decoding_message_size(
-                            erebor_runtime_ipc::transport::MAX_PACKAGE_GRPC_BYTES,
-                        )
-                        .max_encoding_message_size(
-                            erebor_runtime_ipc::transport::MAX_PACKAGE_GRPC_BYTES,
-                        ),
+                        .max_decoding_message_size(usize::MAX)
+                        .max_encoding_message_size(usize::MAX),
                 )
                 .map_request(|request: Request<Body>| request.map(tonic::body::boxed));
             for name in [

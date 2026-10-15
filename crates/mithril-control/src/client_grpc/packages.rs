@@ -1,6 +1,5 @@
 use araphor_data::{
     AnalysisReadControl, PackageActionV1, PackageErrorCodeV1, PackageRequestV1, PackageResponseV1,
-    MAX_PACKAGE_BYTES,
 };
 
 use super::*;
@@ -18,9 +17,6 @@ impl ClientGrpcOwner {
         &self,
         request: Request<proto::PackageOperationRequest>,
     ) -> Result<proto::PackageOperationReply, Status> {
-        if request.get_ref().definition.len() > PackageRequestV1::MAX_BYTES {
-            return Err(Self::package_limit("request bytes"));
-        }
         let access = self.authenticate(&request, false).await?;
         let operation: PackageRequestV1 =
             PackageRequestV1::from_bytes(&request.get_ref().definition)
@@ -49,23 +45,8 @@ impl ClientGrpcOwner {
     }
 
     pub(super) fn package_response(response: &PackageResponseV1) -> Result<Vec<u8>, Status> {
-        let mut bytes = vec![0; MAX_PACKAGE_BYTES + 64 * 1024];
-        let length = {
-            let mut writer = std::io::Cursor::new(bytes.as_mut_slice());
-            serde_json::to_writer(&mut writer, response)
-                .map_err(|_| Self::package_limit("response bytes"))?;
-            writer.position() as usize
-        };
-        bytes.truncate(length);
-        Ok(bytes)
-    }
-
-    fn package_limit(field: &'static str) -> Status {
-        Self::package_status(
-            Status::resource_exhausted("The package operation exceeds its byte limit."),
-            PackageErrorCodeV1::Limit,
-            field,
-        )
+        serde_json::to_vec(response)
+            .map_err(|_| Status::internal("The package response cannot be encoded."))
     }
 
     fn package_failure(error: araphor_data::Error) -> Status {

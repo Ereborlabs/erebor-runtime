@@ -44,19 +44,14 @@ fn packages_release_unused_dependencies() -> TestResult {
         serde_json::from_slice(&consumer.descriptor)?;
     descriptor.exports[0]
         .inputs
-        .push(araphor_analysis_sdk::Port::new(
-            "input",
-            araphor_analysis_sdk::Schema::empty(),
-        ));
-    descriptor
-        .dependencies
-        .push(araphor_analysis_sdk::Dependency {
-            model: "model".into(),
-            input: "input".into(),
-            package: "dependency".into(),
-            revision: "v1".into(),
-            export: "model".into(),
-            output: "rows".into(),
+        .push(araphor_analysis_sdk::InputPort {
+            port: araphor_analysis_sdk::Port::new("input", araphor_analysis_sdk::Schema::empty()),
+            source: araphor_analysis_sdk::InputSource::Output(araphor_analysis_sdk::OutputRef {
+                package: "dependency".into(),
+                revision: "v1".into(),
+                export: "model".into(),
+                output: "rows".into(),
+            }),
         });
     consumer.descriptor = serde_json::to_vec(&descriptor)?;
     consumer.dependencies.push(PackageRevisionRefV1 {

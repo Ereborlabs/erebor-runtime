@@ -105,8 +105,7 @@ impl ComponentBuilder {
             media_type: oci::NATIVE_DEPENDENCY_MEDIA_TYPE,
             bytes: artifact,
         }));
-        let layout =
-            oci::Layout::new(&bundle, &layers, 32 * 1024 * 1024).context(error::ContractSnafu)?;
+        let layout = oci::Layout::new(&bundle, &layers).context(error::ContractSnafu)?;
         package.build(directory).context(error::ContractSnafu)?;
         layout.write(directory).context(error::ContractSnafu)
     }
@@ -121,7 +120,7 @@ impl ComponentBuilder {
             media_type: oci::WASM_MEDIA_TYPE,
             bytes: artifact,
         }];
-        oci::Layout::new(&bundle, &layers, 32 * 1024 * 1024)
+        oci::Layout::new(&bundle, &layers)
             .context(error::ContractSnafu)?
             .write(directory)
             .context(error::ContractSnafu)
@@ -152,7 +151,6 @@ impl ComponentBuilder {
                 "implementations": [{
                     "target": "wasm",
                     "exports": package.exports.iter().map(|model| &model.name).collect::<Vec<_>>(),
-                    "inputs": null,
                     "artifact": [],
                 }],
                 "fixtures": [],
@@ -271,17 +269,14 @@ mod tests {
             &[("helper.so", &[7, 8])],
             &directory,
         )?;
-        let content = oci::Content::read_files(
-            |name, _| {
-                std::fs::read(directory.join(name)).map_err(|_| {
-                    araphor_analysis_sdk::Error::contract(
-                        araphor_analysis_sdk::ErrorCode::Failed,
-                        "builder fixture file",
-                    )
-                })
-            },
-            32 * 1024 * 1024,
-        )
+        let content = oci::Content::read_files(|name| {
+            std::fs::read(directory.join(name)).map_err(|_| {
+                araphor_analysis_sdk::Error::contract(
+                    araphor_analysis_sdk::ErrorCode::Failed,
+                    "builder fixture file",
+                )
+            })
+        })
         .context(error::ContractSnafu)?;
         let manifest: serde_json::Value = content.package().context(error::ContractSnafu)?;
         let implementations = &manifest["artifacts"][0]["implementations"];

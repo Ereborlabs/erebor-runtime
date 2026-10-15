@@ -81,9 +81,9 @@ impl GraphDerivation<'_> {
             },
         };
         let datasets = vec![
-            Rows::encode(&model.inputs[0], &records, model.limits),
-            Rows::encode(&model.inputs[1], &facts, model.limits),
-            Rows::encode(&model.inputs[2], &[manifest], model.limits),
+            Rows::encode(&model.inputs[0].port, &records, model.limits),
+            Rows::encode(&model.inputs[1].port, &facts, model.limits),
+            Rows::encode(&model.inputs[2].port, &[manifest], model.limits),
         ];
         let inputs = datasets
             .into_iter()

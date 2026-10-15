@@ -6,10 +6,8 @@ fn chain(revision: &str, empty: bool) -> TestResult<PackageBundleV1> {
     let artifact = &mut package.artifacts[0];
     let model = &mut artifact.descriptor.exports[0];
     model.name = "count-input".into();
-    model.inputs = vec![sdk::Port::new("input", model.outputs[0].schema.clone())];
-    artifact.descriptor.dependencies.push(sdk::Dependency {
-        model: model.name.clone(),
-        input: "input".into(),
+    model.inputs = vec![sdk::Port::new("input", model.outputs[0].schema.clone()).into()];
+    model.inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
         package: "sql-source".into(),
         revision: revision.into(),
         export: "count".into(),
@@ -32,11 +30,8 @@ fn chain(revision: &str, empty: bool) -> TestResult<PackageBundleV1> {
     upstream.descriptor.id = "sql-source".into();
     upstream.descriptor.exports[0].outputs[0].schema = model.outputs[0].schema.clone();
     upstream.descriptor.exports[0].inputs =
-        vec![sdk::Port::new("source", model.outputs[0].schema.clone())];
-    let PackageImplementationV1::Sql { inputs, .. } = &mut upstream.implementations[0] else {
-        return Err("SQL fixture absent".into());
-    };
-    inputs.insert("source".into(), "SELECT max(owner_revision)::UBIGINT AS value FROM context_versions WHERE owner_id = 'fixture'".into());
+        vec![sdk::Port::new("source", model.outputs[0].schema.clone()).into()];
+    upstream.descriptor.exports[0].inputs[0].source = sdk::InputSource::Sql("SELECT max(owner_revision)::UBIGINT AS value FROM context_versions WHERE owner_id = 'fixture'".into());
     package.artifacts.push(upstream);
     Ok(package)
 }

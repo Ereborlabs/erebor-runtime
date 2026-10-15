@@ -98,7 +98,6 @@ impl AnalysisPackageOwner {
         let inputs = self.inputs(
             super::inputs::InputRequest {
                 activation: active,
-                artifact,
                 model,
                 context: &context,
                 now,

@@ -3,7 +3,7 @@ use super::*;
 fn evaluation(model: &sdk::Model, values: Vec<Vec<u64>>) -> sdk::Result<sdk::Evaluation> {
     let batch = |values| {
         sdk::RecordBatch::try_new(
-            Arc::new(model.inputs[0].schema.clone()),
+            Arc::new(model.inputs[0].port.schema.clone()),
             vec![Arc::new(UInt64Array::from(values))],
         )
     };

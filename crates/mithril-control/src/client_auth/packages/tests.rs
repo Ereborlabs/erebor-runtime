@@ -89,7 +89,7 @@ fn package_tenant_trust_pins() -> std::result::Result<(), Box<dyn std::error::Er
 }
 
 fn bundle(query: &str) -> PackageBundleV1 {
-    let descriptor = araphor_analysis_sdk::Package::new(
+    let mut descriptor = araphor_analysis_sdk::Package::new(
         "lock-fixture",
         "1",
         vec![araphor_analysis_sdk::Model::new(
@@ -105,6 +105,7 @@ fn bundle(query: &str) -> PackageBundleV1 {
             )],
         )],
     );
+    descriptor.exports[0].input_mode = araphor_analysis_sdk::InputMode::Resolved;
     PackageBundleV1 {
         schema_version: 1,
         root: araphor_data::PackageRefV1 {
@@ -115,7 +116,6 @@ fn bundle(query: &str) -> PackageBundleV1 {
             descriptor,
             implementations: vec![araphor_data::PackageImplementationV1::Sql {
                 export: "count".into(),
-                inputs: std::collections::BTreeMap::new(),
                 program: araphor_data::SqlModelV1 {
                     outputs: std::collections::BTreeMap::from([("rows".into(), query.into())]),
                     ..Default::default()

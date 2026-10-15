@@ -28,13 +28,6 @@ impl PackageExportStatusV1 {
             active: active.active,
             activation_revision: active.generation,
             results,
-            dependencies: artifact
-                .descriptor
-                .dependencies
-                .iter()
-                .filter(|dependency| dependency.model == model.name)
-                .cloned()
-                .collect(),
             fixtures: artifact
                 .fixtures
                 .iter()
