@@ -59,7 +59,7 @@ pub use progress::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisProcessorResultV1, AnalysisResultCommitV1,
     AnalysisResultReceiptV1, AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
-pub(crate) use progress::{MAX_RESULT_BYTES, MAX_RESULT_REFS};
+pub(crate) use progress::{PreparedProfile, MAX_RESULT_BYTES, MAX_RESULT_REFS};
 pub use quota::WitnessUsageV1;
 pub use raw::{AnalysisStreamIdentityV1, TraceOutputPageV1, TraceOutputReceiptV1};
 pub use read::AnalysisReadControl;

@@ -16,7 +16,7 @@ use crate::{
     ProcessorClassV1, ProcessorScopeV1,
 };
 
-use crate::analysis::{MAX_RESULT_BYTES, MAX_RESULT_REFS};
+use crate::analysis::{PreparedProfile, MAX_RESULT_BYTES, MAX_RESULT_REFS};
 
 impl crate::CoverageInterval {
     fn has_gap(&self) -> bool {
@@ -492,29 +492,31 @@ impl DiscoveryOwner {
                 expires_utc_ns: deadline,
             })
             .collect();
-        profile.validate()?;
+        let commit = AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: expected,
+            consumed_cursor: consumed,
+            coverage_revision: status.receipt.coverage_revision,
+            context_revision: profile
+                .context_refs
+                .iter()
+                .map(|reference| reference.commit_revision)
+                .max()
+                .unwrap_or(0),
+            result_id: profile.profile_id.clone(),
+            body: Vec::new(),
+            created_utc_ns: now,
+            witnesses,
+            context_refs: profile.context_refs.clone(),
+        };
+        let prepared = PreparedProfile::new(profile)?;
         execution.authorize(
             source.tenant_id,
             &Self::package_revisions(&installed),
             || {
-                self.store.commit_working(
-                    &AnalysisResultCommitV1 {
-                        scope,
-                        expected_cursor: expected,
-                        consumed_cursor: consumed,
-                        coverage_revision: status.receipt.coverage_revision,
-                        context_revision: profile
-                            .context_refs
-                            .iter()
-                            .map(|reference| reference.commit_revision)
-                            .max()
-                            .unwrap_or(0),
-                        result_id: profile.profile_id.clone(),
-                        body: serde_json::to_vec(&profile).context(DiscoveryEncodingSnafu)?,
-                        created_utc_ns: now,
-                        witnesses,
-                        context_refs: profile.context_refs.clone(),
-                    },
+                self.store.commit_working_profile(
+                    commit,
+                    prepared,
                     if continuing {
                         head.map(|head| head.commit_revision)
                     } else {
@@ -1027,7 +1029,6 @@ impl DiscoveryOwner {
         profile
             .context_refs
             .sort_by(|left, right| left.key.cmp(&right.key));
-        profile.validate()?;
         let deadline = now.checked_add(self.config.witness_age_ns).ok_or_else(|| {
             crate::DiscoveryInvalidSnafu {
                 field: "witness deadline",
@@ -1057,7 +1058,7 @@ impl DiscoveryOwner {
                 .max()
                 .unwrap_or(0),
             result_id: profile.profile_id.clone(),
-            body: serde_json::to_vec(&profile).context(DiscoveryEncodingSnafu)?,
+            body: Vec::new(),
             created_utc_ns: now,
             witnesses: samples
                 .into_iter()
@@ -1069,15 +1070,17 @@ impl DiscoveryOwner {
                 .collect(),
             context_refs: profile.context_refs.clone(),
         };
+        let sealed = profile.sealed;
+        let prepared = PreparedProfile::new(profile)?;
         execution.authorize(
             source.tenant_id,
             &Self::package_revisions(&installed),
             || {
                 if publish {
-                    self.store.commit_working(&commit, prior)?;
+                    self.store.commit_working_profile(commit, prepared, prior)?;
                 } else {
-                    require(profile.sealed, "historical profile state")?;
-                    self.store.commit_profile(&commit)?;
+                    require(sealed, "historical profile state")?;
+                    self.store.commit_sealed_profile(commit, prepared)?;
                 }
                 Ok(())
             },

@@ -9,6 +9,9 @@ use crate::{
 };
 
 mod notices;
+mod profile;
+
+pub(crate) use profile::PreparedProfile;
 
 pub(crate) const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESULT_META_BYTES: usize = 16 * 1024 * 1024;
@@ -600,7 +603,8 @@ impl AnalysisStore {
         self.commit_progress(input, None, advance, None, Some(graph), canonical)
     }
 
-    pub(crate) fn commit_working(
+    #[cfg(test)]
+    fn commit_working(
         &self,
         input: &AnalysisResultCommitV1,
         previous: Option<u64>,
@@ -612,10 +616,8 @@ impl AnalysisStore {
         self.commit_progress(input, previous, true, Some(&profile), None, false)
     }
 
-    pub(crate) fn commit_profile(
-        &self,
-        input: &AnalysisResultCommitV1,
-    ) -> Result<AnalysisResultReceiptV1> {
+    #[cfg(test)]
+    fn commit_profile(&self, input: &AnalysisResultCommitV1) -> Result<AnalysisResultReceiptV1> {
         if input.scope.processor_id != crate::DISCOVERY_PROCESSOR
             || input.expected_cursor != input.consumed_cursor
         {
