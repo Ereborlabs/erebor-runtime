@@ -3,7 +3,7 @@ use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, GraphEdgeKeyV1, GraphEdgeV1, GraphInvalidSnafu,
     Result,
 };
-use duckdb::{params, params_from_iter, types::Value, Connection, Row, Statement};
+use duckdb::{params, params_from_iter, types::Value, Appender, Connection, Row};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
@@ -26,8 +26,6 @@ impl RelationshipRow {
     pub(super) const COLUMNS: &str = "ordinal, from_subject_id, to_subject_id, edge_type,
         package_id, cause, evidence, proof_quality, required_coverage_interval_ids,
         first_boottime_ns, last_boottime_ns";
-    pub(super) const INSERT: &str =
-        "INSERT INTO graph_relationships VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
     pub(super) fn encode(edge: &GraphEdgeV1) -> Result<Self> {
         Ok(Self {
@@ -46,12 +44,12 @@ impl RelationshipRow {
 
     pub(super) fn insert(
         &self,
-        writer: &mut Statement<'_>,
+        writer: &mut Appender<'_>,
         result_id: &str,
         ordinal: usize,
     ) -> Result<()> {
         writer
-            .execute(params![
+            .append_row(params![
                 result_id,
                 ordinal as u32,
                 &self.from,

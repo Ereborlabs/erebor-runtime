@@ -306,8 +306,6 @@ impl AnalysisStore {
     fn usage_projection() -> String {
         let graphs = format!(
             " UNION ALL SELECT tenant_id, 'graph_rows', bytes FROM ({})
-            UNION ALL SELECT tenant_id, 'graph_encoding', octet_length(graph_encoding)
-                FROM analysis_results WHERE graph_encoding IS NOT NULL
             UNION ALL SELECT tenant_id, 'package_rows', bytes FROM ({})",
             super::graph_rows::GraphRows::CHARGES,
             Self::PACKAGE_CHARGES,

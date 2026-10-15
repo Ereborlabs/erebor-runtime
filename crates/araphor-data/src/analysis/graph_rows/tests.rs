@@ -45,30 +45,26 @@ fn native_rows_integrity() -> TestResult {
     writer.execute_batch(
         "CREATE TABLE analysis_results (result_id VARCHAR PRIMARY KEY,
         tenant_id BLOB, processor_id VARCHAR, body BLOB, stream_key BLOB,
-        method_version UBIGINT, first_cursor UBIGINT, graph_encoding BLOB)",
+        method_version UBIGINT, first_cursor UBIGINT)",
     )?;
     writer.execute_batch(GraphRows::SCHEMA)?;
     GraphRows::validate_tables(&writer)?;
     writer.execute(
-        "INSERT INTO analysis_results VALUES ('version', ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO analysis_results VALUES ('version', ?, ?, ?, ?, ?, ?)",
         params![
             graph.scope.identity.tenant_id.as_slice(),
             crate::GRAPH_PROCESSOR,
             rows.header(),
             graph.scope.identity.key().as_slice(),
             graph.scope.method_version,
-            graph.first_cursor,
-            rows.encoding()
+            graph.first_cursor
         ],
     )?;
     rows.insert(&writer, "version")?;
     let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, "version")?
         .ok_or("missing header")?;
     assert_eq!(GraphRows::read(&writer, "version", &header)?, *graph);
-    assert_eq!(
-        GraphRows::read_body(&writer, "version", &header, graph)?,
-        serde_json::to_vec(graph)?
-    );
+    assert_eq!(header.body(graph)?, serde_json::to_vec(graph)?);
     assert_eq!(
         serde_json::to_vec(&GraphRows::read(&writer, "version", &header)?)?,
         serde_json::to_vec(graph)?
@@ -90,16 +86,6 @@ fn native_rows_integrity() -> TestResult {
         )?,
         Some(graph.findings[0].clone())
     );
-    for mutation in [
-        "UPDATE analysis_results SET graph_encoding = NULL",
-        "UPDATE analysis_results SET graph_encoding = 'invalid'::BLOB",
-    ] {
-        let transaction = writer.transaction()?;
-        transaction.execute(mutation, [])?;
-        assert_eq!(GraphRows::read(&transaction, "version", &header)?, *graph);
-        assert!(GraphRows::read_body(&transaction, "version", &header, graph).is_err());
-        transaction.rollback()?;
-    }
     for mutation in [
         "DELETE FROM graph_subjects WHERE ordinal = 0",
         "UPDATE graph_relationships SET first_boottime_ns = last_boottime_ns + 1",

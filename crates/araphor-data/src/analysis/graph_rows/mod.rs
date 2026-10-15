@@ -10,7 +10,6 @@ use crate::{
 mod findings;
 mod header;
 mod headers;
-mod layout;
 mod read;
 mod relationships;
 mod schema;
@@ -24,23 +23,54 @@ pub(super) use header::GraphHeader;
 #[serde(deny_unknown_fields)]
 pub(super) struct GraphRows {
     header: Vec<u8>,
-    encoding: Vec<u8>,
     subjects: Vec<subjects::SubjectRow>,
     edges: Vec<relationships::RelationshipRow>,
     findings: Vec<findings::FindingRow>,
 }
 
-impl GraphRows {
-    // Canonical JSON adds null fields for optional fields absent from the source.
-    pub(super) const MAX_CANONICAL_BYTES: usize = 2 * super::MAX_RESULT_BYTES;
-    pub(super) const MAX_ENCODING: usize = layout::JsonLayout::MAX_BYTES;
+pub(crate) struct CanonicalGraph {
+    snapshot: GraphSnapshotV1,
+    body: Vec<u8>,
+}
 
+impl CanonicalGraph {
+    pub(crate) fn new(snapshot: GraphSnapshotV1) -> Result<Self> {
+        snapshot.validate()?;
+        let body = GraphRows::json(&snapshot)?;
+        Ok(Self { snapshot, body })
+    }
+
+    pub(crate) fn snapshot(&self) -> &GraphSnapshotV1 {
+        &self.snapshot
+    }
+
+    pub(crate) fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    pub(in crate::analysis) fn into_parts(self) -> (GraphSnapshotV1, Vec<u8>) {
+        (self.snapshot, self.body)
+    }
+}
+
+impl GraphRows {
+    pub(super) const MAX_CANONICAL_BYTES: usize = super::MAX_RESULT_BYTES;
     pub(super) fn encode_body(snapshot: &GraphSnapshotV1, body: &[u8]) -> Result<Self> {
         snapshot.validate()?;
         let canonical = Self::json(snapshot)?;
+        if canonical != body {
+            return GraphInvalidSnafu {
+                field: "graph canonical bytes",
+            }
+            .fail();
+        }
+        Self::encode_canonical(snapshot, body)
+    }
+
+    pub(super) fn encode_canonical(snapshot: &GraphSnapshotV1, body: &[u8]) -> Result<Self> {
+        snapshot.validate()?;
         Ok(Self {
-            header: GraphHeader::encode(snapshot, &canonical, body.len())?,
-            encoding: layout::JsonLayout::encode(snapshot, body, &canonical)?,
+            header: GraphHeader::encode(snapshot, body)?,
             subjects: snapshot
                 .graph
                 .subjects
@@ -65,41 +95,53 @@ impl GraphRows {
         &self.header
     }
 
-    pub(super) fn encoding(&self) -> &[u8] {
-        &self.encoding
-    }
-
     #[cfg(test)]
     pub(super) fn encode(snapshot: &GraphSnapshotV1) -> Result<Self> {
         Self::encode_body(snapshot, &Self::json(snapshot)?)
     }
 
     pub(super) fn insert(&self, writer: &Connection, result_id: &str) -> Result<()> {
-        let mut statement =
-            writer
-                .prepare(subjects::SubjectRow::INSERT)
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare native graph subjects",
-                })?;
-        for (ordinal, subject) in self.subjects.iter().enumerate() {
-            subject.insert(&mut statement, result_id, ordinal)?;
-        }
-        let mut statement = writer
-            .prepare(relationships::RelationshipRow::INSERT)
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare native graph relationships",
+        {
+            let mut appender =
+                writer
+                    .appender("graph_subjects")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "prepare native graph subjects",
+                    })?;
+            for (ordinal, subject) in self.subjects.iter().enumerate() {
+                subject.insert(&mut appender, result_id, ordinal)?;
+            }
+            appender.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush native graph subjects",
             })?;
-        for (ordinal, edge) in self.edges.iter().enumerate() {
-            edge.insert(&mut statement, result_id, ordinal)?;
         }
-        let mut statement =
-            writer
-                .prepare(findings::FindingRow::INSERT)
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare native graph findings",
-                })?;
-        for (ordinal, finding) in self.findings.iter().enumerate() {
-            finding.insert(&mut statement, result_id, ordinal)?;
+        {
+            let mut appender =
+                writer
+                    .appender("graph_relationships")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "prepare native graph relationships",
+                    })?;
+            for (ordinal, edge) in self.edges.iter().enumerate() {
+                edge.insert(&mut appender, result_id, ordinal)?;
+            }
+            appender.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush native graph relationships",
+            })?;
+        }
+        {
+            let mut appender =
+                writer
+                    .appender("graph_findings")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "prepare native graph findings",
+                    })?;
+            for (ordinal, finding) in self.findings.iter().enumerate() {
+                finding.insert(&mut appender, result_id, ordinal)?;
+            }
+            appender.flush().context(AnalysisDatabaseSnafu {
+                operation: "flush native graph findings",
+            })?;
         }
         Ok(())
     }

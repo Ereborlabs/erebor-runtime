@@ -4,9 +4,7 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::AnalysisStore;
-use crate::{
-    AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, GraphInvalidSnafu, JsonSnafu, Result,
-};
+use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result};
 
 const MAX_SOURCES: u64 = 4096;
 
@@ -214,29 +212,7 @@ impl AnalysisStore {
         }
         Self::validate_packages(writer, root)?;
         Self::validate_usage(writer, root)?;
-        Self::validate_encoding(writer, root)?;
         Self::validate_graphs(writer, root)?;
-        Ok(())
-    }
-
-    fn validate_encoding(writer: &Connection, root: &Path) -> Result<()> {
-        let invalid: bool = writer
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM analysis_results
-                WHERE (processor_id = 'graph-findings' AND stream_key IS NOT NULL
-                    AND graph_encoding IS NULL)
-                OR ((processor_id <> 'graph-findings' OR stream_key IS NULL)
-                    AND graph_encoding IS NOT NULL)
-                OR octet_length(graph_encoding) > ?)",
-                params![super::graph_rows::GraphRows::MAX_ENCODING as u64],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "validate retained graph encoding",
-            })?;
-        if invalid {
-            return Self::reject_path(root, "the stored graph encoding is invalid");
-        }
         Ok(())
     }
 
@@ -291,7 +267,7 @@ impl AnalysisStore {
                 .build()
             })?;
             let rebuilt = GraphRows::read(writer, &id, &header)?;
-            GraphRows::read_body(writer, &id, &header, &rebuilt)?;
+            header.body(&rebuilt)?;
             after = id;
         }
         Ok(())
@@ -611,24 +587,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "validate binary package schema",
             })?;
-        let encoding: bool = writer
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM information_schema.columns
-                WHERE table_schema = 'main' AND table_name = 'analysis_results'
-                AND column_name = 'graph_encoding' AND data_type = 'BLOB'
-                AND is_nullable = 'YES')",
-                [],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "validate graph encoding schema",
-            })?;
-        if !encoding {
-            return GraphInvalidSnafu {
-                field: "graph encoding schema",
-            }
-            .fail();
-        }
         super::graph_rows::GraphRows::validate_tables(writer)?;
         Ok(())
     }

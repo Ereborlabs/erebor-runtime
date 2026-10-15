@@ -432,8 +432,7 @@ impl AnalysisStore {
                     profile_revision UBIGINT,
                     facts_revision UBIGINT,
                     coverage_revision UBIGINT,
-                    first_cursor UBIGINT,
-                    graph_encoding BLOB
+                    first_cursor UBIGINT
                 );
                 CREATE TABLE IF NOT EXISTS processor_gaps (
                     processor_id VARCHAR NOT NULL,

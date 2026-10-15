@@ -227,27 +227,26 @@ fn graph_native_encoding_exact() -> TestResult {
     let fixture = CommitFixture::new()?;
     let mut request = fixture.request.clone();
     request.body = serde_json::to_vec_pretty(&fixture.snapshot)?;
-    let receipt = fixture.store.commit_graph(&request, true)?;
-    assert_eq!(fixture.store.commit_graph(&request, true)?, receipt);
+    assert!(matches!(
+        fixture.store.commit_graph(&request, true),
+        Err(Error::GraphInvalid {
+            field: "graph canonical bytes",
+            ..
+        })
+    ));
+    assert!(fixture
+        .store
+        .read_result(source().tenant_id, &request.result_id)?
+        .is_none());
+    let receipt = fixture.store.commit_graph(&fixture.request, true)?;
+    assert_eq!(fixture.store.commit_graph(&fixture.request, true)?, receipt);
     assert_eq!(
         fixture
             .store
             .read_result(source().tenant_id, &request.result_id)?,
-        Some(request.body)
+        Some(fixture.request.body.clone())
     );
     assert_eq!(fixture.owner.snapshot(&source())?, Some(fixture.snapshot));
-    assert!(matches!(
-        fixture.store.commit_graph(&fixture.request, true),
-        Err(Error::AnalysisConflict { .. })
-    ));
-    assert_eq!(
-        fixture.store.meta()?.commit_revision,
-        receipt.commit_revision
-    );
-    assert!(fixture
-        .store
-        .read_result([99; 16], &request.result_id)?
-        .is_none());
     Ok(())
 }
 
@@ -301,5 +300,43 @@ fn graph_native_replacement_removal() -> TestResult {
             .read_result(source().tenant_id, &fixture.request.result_id)?,
         Some(fixture.request.body)
     );
+    Ok(())
+}
+
+#[test]
+fn graph_typed_commit_rejects_metadata() -> TestResult {
+    use crate::analysis::graph_rows::CanonicalGraph;
+    let fixture = CommitFixture::new()?;
+    let before = fixture.store.meta()?;
+    assert!(fixture
+        .store
+        .commit_graph_snapshot(
+            fixture.request.clone(),
+            CanonicalGraph::new(fixture.snapshot.clone())?,
+            true
+        )
+        .is_err());
+    for fault in [0, 1, 2] {
+        let mut request = fixture.request.clone();
+        request.body.clear();
+        match fault {
+            0 => request.scope.identity.tenant_id = [99; 16],
+            1 => request.witnesses[0].expires_utc_ns += 1,
+            _ => request.consumed_cursor += 1,
+        }
+        assert!(fixture
+            .store
+            .commit_graph_snapshot(
+                request,
+                CanonicalGraph::new(fixture.snapshot.clone())?,
+                true
+            )
+            .is_err());
+        assert_eq!(fixture.store.meta()?, before);
+        assert!(fixture
+            .store
+            .read_result(source().tenant_id, &fixture.request.result_id)?
+            .is_none());
+    }
     Ok(())
 }

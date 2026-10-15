@@ -4,7 +4,7 @@ use super::*;
 use crate::graph::tests::native_storage::CommitFixture;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
-type FrozenResult = (Vec<u8>, Vec<u8>, u64, Vec<u8>);
+type FrozenResult = (Vec<u8>, Vec<u8>, u64);
 
 struct NoFacts;
 
@@ -19,10 +19,10 @@ impl crate::GraphContextProvider for NoFacts {
 
 fn frozen(store: &AnalysisStore, result_id: &str) -> TestResult<FrozenResult> {
     Ok(store.writer()?.get()?.query_row(
-        "SELECT body, request_meta, commit_revision, graph_encoding
+        "SELECT body, request_meta, commit_revision
         FROM analysis_results WHERE result_id = ?",
         params![result_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?)
 }
 

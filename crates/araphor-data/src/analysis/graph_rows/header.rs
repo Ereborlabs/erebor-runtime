@@ -1,6 +1,8 @@
 use minicbor::{Decoder, Encoder};
+use serde::ser::{Serialize, SerializeMap as _, Serializer};
+use snafu::ResultExt as _;
 
-use super::{layout::JsonLayout, GraphRows};
+use super::GraphRows;
 use crate::{GraphInvalidSnafu, GraphSnapshotV1, Result};
 
 pub(in crate::analysis) struct GraphHeader {
@@ -9,46 +11,29 @@ pub(in crate::analysis) struct GraphHeader {
     pub(in crate::analysis) edge_count: usize,
     pub(in crate::analysis) finding_count: usize,
     pub(in crate::analysis) snapshot_bytes: usize,
-    source_bytes: usize,
 }
 
 impl GraphHeader {
     pub(in crate::analysis) const MAX_BYTES: usize = GraphRows::MAX_CANONICAL_BYTES + 128;
 
-    pub(super) fn encode(
-        snapshot: &GraphSnapshotV1,
-        canonical: &[u8],
-        source_bytes: usize,
-    ) -> Result<Vec<u8>> {
-        if canonical.len() > GraphRows::MAX_CANONICAL_BYTES
-            || source_bytes > super::super::MAX_RESULT_BYTES
-            || source_bytes == 0
-        {
+    pub(super) fn encode(snapshot: &GraphSnapshotV1, canonical: &[u8]) -> Result<Vec<u8>> {
+        if canonical.len() > GraphRows::MAX_CANONICAL_BYTES || canonical.is_empty() {
             return GraphInvalidSnafu {
                 field: "graph result bytes",
             }
             .fail();
         }
-        let mut metadata: serde_json::Value = GraphRows::decode(canonical)?;
-        let _ = metadata["graph"]
-            .as_object_mut()
-            .and_then(|graph| graph.remove("subjects"));
-        let _ = metadata["graph"]
-            .as_object_mut()
-            .and_then(|graph| graph.remove("edges"));
-        let _ = metadata
-            .as_object_mut()
-            .and_then(|graph| graph.remove("findings"));
+        let metadata =
+            serde_json::to_value(HeaderMetadata(snapshot)).context(crate::GraphEncodingSnafu)?;
         let metadata = GraphRows::json(&metadata)?;
         let mut bytes = Vec::new();
         Encoder::new(&mut bytes)
-            .array(7)
-            .and_then(|e| e.u32(1))
+            .array(6)
+            .and_then(|e| e.u32(2))
             .and_then(|e| e.u32(snapshot.graph.subjects.len() as u32))
             .and_then(|e| e.u32(snapshot.graph.edges.len() as u32))
             .and_then(|e| e.u32(snapshot.findings.len() as u32))
             .and_then(|e| e.u32(canonical.len() as u32))
-            .and_then(|e| e.u32(source_bytes as u32))
             .and_then(|e| e.bytes(&metadata))
             .map_err(Self::error)?;
         Ok(bytes)
@@ -62,8 +47,8 @@ impl GraphHeader {
             .fail();
         }
         let mut decoder = Decoder::new(bytes);
-        if decoder.array().map_err(Self::error)? != Some(7)
-            || decoder.u32().map_err(Self::error)? != 1
+        if decoder.array().map_err(Self::error)? != Some(6)
+            || decoder.u32().map_err(Self::error)? != 2
         {
             return GraphInvalidSnafu {
                 field: "graph header version",
@@ -74,14 +59,12 @@ impl GraphHeader {
         let edge_count = decoder.u32().map_err(Self::error)? as usize;
         let finding_count = decoder.u32().map_err(Self::error)? as usize;
         let snapshot_bytes = decoder.u32().map_err(Self::error)? as usize;
-        let source_bytes = decoder.u32().map_err(Self::error)? as usize;
         let metadata = decoder.bytes().map_err(Self::error)?;
         if subject_count > 2048
             || edge_count > 4096
             || finding_count > 1024
             || snapshot_bytes > GraphRows::MAX_CANONICAL_BYTES
-            || source_bytes > super::super::MAX_RESULT_BYTES
-            || source_bytes == 0
+            || snapshot_bytes == 0
             || metadata.len() > GraphRows::MAX_CANONICAL_BYTES
             || metadata.len() > snapshot_bytes
             || decoder.position() != bytes.len()
@@ -131,15 +114,10 @@ impl GraphHeader {
             edge_count,
             finding_count,
             snapshot_bytes,
-            source_bytes,
         })
     }
 
-    pub(in crate::analysis) fn body(
-        &self,
-        snapshot: &GraphSnapshotV1,
-        encoding: &[u8],
-    ) -> Result<Vec<u8>> {
+    pub(in crate::analysis) fn body(&self, snapshot: &GraphSnapshotV1) -> Result<Vec<u8>> {
         let canonical = GraphRows::json(snapshot)?;
         if canonical.len() != self.snapshot_bytes {
             return GraphInvalidSnafu {
@@ -147,16 +125,7 @@ impl GraphHeader {
             }
             .fail();
         }
-        let body = JsonLayout::replay(encoding, &canonical, self.source_bytes)?;
-        if body.len() != self.source_bytes
-            || (!encoding.is_empty() && GraphRows::decode::<GraphSnapshotV1>(&body)? != *snapshot)
-        {
-            return GraphInvalidSnafu {
-                field: "graph encoding reconstruction",
-            }
-            .fail();
-        }
-        Ok(body)
+        Ok(canonical)
     }
 
     pub(in crate::analysis) fn check_index(
@@ -210,5 +179,38 @@ impl GraphHeader {
             field: "graph header format",
         }
         .build()
+    }
+}
+
+struct HeaderMetadata<'a>(&'a GraphSnapshotV1);
+struct GraphMetadata<'a>(&'a crate::GraphVersionV1);
+
+impl Serialize for HeaderMetadata<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let snapshot = self.0;
+        let mut map = serializer.serialize_map(Some(12))?;
+        map.serialize_entry("schema_version", &snapshot.schema_version)?;
+        map.serialize_entry("scope", &snapshot.scope)?;
+        map.serialize_entry("first_cursor", &snapshot.first_cursor)?;
+        map.serialize_entry("last_cursor", &snapshot.last_cursor)?;
+        map.serialize_entry("input_manifest", &snapshot.input_manifest)?;
+        map.serialize_entry("graph", &GraphMetadata(&snapshot.graph))?;
+        map.serialize_entry("packages", &snapshot.packages)?;
+        map.serialize_entry("missing_ranges", &snapshot.missing_ranges)?;
+        map.serialize_entry("input_positions", &snapshot.input_positions)?;
+        map.serialize_entry("previous_result_id", &snapshot.previous_result_id)?;
+        map.serialize_entry("context_notice_revision", &snapshot.context_notice_revision)?;
+        map.serialize_entry("witness_deadline_utc_ns", &snapshot.witness_deadline_utc_ns)?;
+        map.end()
+    }
+}
+
+impl Serialize for GraphMetadata<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("revision", &self.0.revision)?;
+        map.serialize_entry("branches", &self.0.branches)?;
+        map.serialize_entry("facts", &self.0.facts)?;
+        map.end()
     }
 }

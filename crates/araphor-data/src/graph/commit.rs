@@ -1,12 +1,10 @@
 use std::collections::BTreeSet;
 
-use snafu::ResultExt as _;
-
 use super::window::{WindowHead, WindowRun};
 use super::*;
 use crate::{
     AnalysisContextRefV1, AnalysisResultCommitV1, AnalysisSourceStatusV1, AnalysisStreamIdentityV1,
-    AnalysisWitnessV1, GraphEncodingSnafu,
+    AnalysisWitnessV1,
 };
 
 impl GraphAndFindingOwner {
@@ -91,9 +89,8 @@ impl GraphAndFindingOwner {
             return Ok(Some(false));
         }
         snapshot.previous_result_id = previous.as_ref().map(|row| row.0.clone());
-        snapshot.validate()?;
-        let body = serde_json::to_vec(&snapshot).context(GraphEncodingSnafu)?;
-        if body.len() > GRAPH_WINDOW_BYTES.min(crate::analysis::MAX_RESULT_BYTES) {
+        let prepared = crate::analysis::graph_rows::CanonicalGraph::new(snapshot)?;
+        if prepared.body().len() > GRAPH_WINDOW_BYTES.min(crate::analysis::MAX_RESULT_BYTES) {
             return Ok(None);
         }
         execution.authorize(
@@ -101,8 +98,7 @@ impl GraphAndFindingOwner {
             &Self::package_revisions(&installed),
             || {
                 self.commit_snapshot(
-                    snapshot,
-                    body,
+                    prepared,
                     &input.facts,
                     status,
                     consumed,
@@ -141,8 +137,7 @@ impl GraphAndFindingOwner {
     #[allow(clippy::too_many_arguments)]
     fn commit_snapshot(
         &self,
-        snapshot: GraphSnapshotV1,
-        body: Vec<u8>,
+        prepared: crate::analysis::graph_rows::CanonicalGraph,
         facts: &[AnalysisContextVersionV1],
         status: &AnalysisSourceStatusV1,
         consumed: u64,
@@ -150,9 +145,10 @@ impl GraphAndFindingOwner {
         now: u64,
         installed: &[crate::InstalledRefV1],
     ) -> Result<()> {
+        let snapshot = prepared.snapshot();
         let result_id = format!("graph:{}", uuid::Uuid::new_v4());
         let mut references = self.commit_contexts(facts)?;
-        references.push(self.package_context(&snapshot, &result_id, installed)?);
+        references.push(self.package_context(snapshot, &result_id, installed)?);
         references.sort_by(|left, right| left.key.cmp(&right.key));
         let expires = snapshot.witness_deadline_utc_ns;
         let witness_ids: BTreeSet<_> = snapshot.input_manifest.evidence.iter().cloned().collect();
@@ -179,12 +175,14 @@ impl GraphAndFindingOwner {
                 .max()
                 .unwrap_or(0),
             result_id,
-            body,
+            body: Vec::new(),
             created_utc_ns: now,
             witnesses,
             context_refs: references,
         };
-        self.store.commit_graph(&commit, advance).map(|_| ())
+        self.store
+            .commit_graph_snapshot(commit, prepared, advance)
+            .map(|_| ())
     }
 
     pub(super) fn commit_contexts(

@@ -2,44 +2,11 @@ use duckdb::{params, Connection, OptionalExt as _};
 use snafu::ResultExt as _;
 
 use super::{GraphHeader, GraphRows};
-use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, GraphSnapshotV1, Result};
+use crate::{AnalysisDatabaseSnafu, GraphInvalidSnafu, Result};
 
 type HeaderRow = (Option<Vec<u8>>, Option<Vec<u8>>, u64, u64);
 
 impl GraphRows {
-    pub(in crate::analysis) fn read_body(
-        writer: &Connection,
-        result_id: &str,
-        header: &GraphHeader,
-        snapshot: &GraphSnapshotV1,
-    ) -> Result<Vec<u8>> {
-        let encoding: Option<Option<Vec<u8>>> = writer
-            .query_row(
-                "SELECT CASE WHEN octet_length(graph_encoding) <= ?
-                THEN graph_encoding ELSE NULL END FROM analysis_results
-                WHERE tenant_id = ? AND result_id = ? AND processor_id = ?
-                AND stream_key IS NOT NULL",
-                params![
-                    Self::MAX_ENCODING as u64,
-                    header.snapshot.scope.identity.tenant_id.as_slice(),
-                    result_id,
-                    crate::GRAPH_PROCESSOR
-                ],
-                |row| row.get(0),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read native graph encoding",
-            })?;
-        let encoding = encoding.flatten().ok_or_else(|| {
-            GraphInvalidSnafu {
-                field: "graph encoding bytes",
-            }
-            .build()
-        })?;
-        header.body(snapshot, &encoding)
-    }
-
     pub(in crate::analysis) fn read_header(
         writer: &Connection,
         tenant: [u8; 16],

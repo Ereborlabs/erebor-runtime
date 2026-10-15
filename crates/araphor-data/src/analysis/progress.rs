@@ -315,7 +315,7 @@ impl AnalysisStore {
             let header = super::graph_rows::GraphRows::read_header(connection, tenant, result_id)?
                 .ok_or_else(|| self.state_error("the retained graph result is absent"))?;
             let graph = super::graph_rows::GraphRows::read(connection, result_id, &header)?;
-            body = super::graph_rows::GraphRows::read_body(connection, result_id, &header, &graph)?;
+            body = header.body(&graph)?;
         }
         if body.is_empty() || body.len() > MAX_RESULT_BYTES {
             return self.reject("the retained analysis result size is invalid");
@@ -525,7 +525,7 @@ impl AnalysisStore {
         if input.scope.processor_id == crate::GRAPH_PROCESSOR {
             return self.commit_graph(input, true);
         }
-        self.commit_progress(input, None, true, None, None)
+        self.commit_progress(input, None, true, None, None, false)
     }
 
     pub(crate) fn commit_graph(
@@ -537,6 +537,33 @@ impl AnalysisStore {
             return self.reject("the graph result owner is invalid");
         }
         let graph = crate::GraphSnapshotV1::try_from(input.body.as_slice())?;
+        self.commit_graph_inner(input, &graph, advance, false)
+    }
+
+    pub(crate) fn commit_graph_snapshot(
+        &self,
+        mut input: AnalysisResultCommitV1,
+        prepared: super::graph_rows::CanonicalGraph,
+        advance: bool,
+    ) -> Result<AnalysisResultReceiptV1> {
+        if input.scope.processor_id != crate::GRAPH_PROCESSOR {
+            return self.reject("the graph result owner is invalid");
+        }
+        if !input.body.is_empty() {
+            return self.reject("the typed graph commit contains independent body bytes");
+        }
+        let (graph, body) = prepared.into_parts();
+        input.body = body;
+        self.commit_graph_inner(&input, &graph, advance, true)
+    }
+
+    fn commit_graph_inner(
+        &self,
+        input: &AnalysisResultCommitV1,
+        graph: &crate::GraphSnapshotV1,
+        advance: bool,
+        canonical: bool,
+    ) -> Result<AnalysisResultReceiptV1> {
         let expected: Vec<_> = graph
             .input_manifest
             .evidence
@@ -570,7 +597,7 @@ impl AnalysisStore {
         {
             return self.reject("the graph input manifest, witnesses, or progress differ");
         }
-        self.commit_progress(input, None, advance, None, Some(&graph))
+        self.commit_progress(input, None, advance, None, Some(graph), canonical)
     }
 
     pub(crate) fn commit_working(
@@ -582,7 +609,7 @@ impl AnalysisStore {
             return self.reject("the working result owner is invalid");
         }
         let profile = crate::DiscoveryProfileV1::try_from(input.body.as_slice())?;
-        self.commit_progress(input, previous, true, Some(&profile), None)
+        self.commit_progress(input, previous, true, Some(&profile), None, false)
     }
 
     pub(crate) fn commit_profile(
@@ -598,7 +625,7 @@ impl AnalysisStore {
         if !profile.sealed {
             return self.reject("the historical profile is not sealed");
         }
-        self.commit_progress(input, None, false, Some(&profile), None)
+        self.commit_progress(input, None, false, Some(&profile), None, false)
     }
 
     fn commit_progress(
@@ -608,6 +635,7 @@ impl AnalysisStore {
         advance: bool,
         profile: Option<&crate::DiscoveryProfileV1>,
         graph: Option<&crate::GraphSnapshotV1>,
+        canonical: bool,
     ) -> Result<AnalysisResultReceiptV1> {
         if profile.is_some_and(|profile| {
             profile.scope != input.scope
@@ -686,7 +714,13 @@ impl AnalysisStore {
             return self.reject("the analysis result metadata exceeds its byte bound");
         }
         let rows = graph
-            .map(|graph| super::graph_rows::GraphRows::encode_body(graph, &input.body))
+            .map(|graph| {
+                if canonical {
+                    super::graph_rows::GraphRows::encode_canonical(graph, &input.body)
+                } else {
+                    super::graph_rows::GraphRows::encode_body(graph, &input.body)
+                }
+            })
             .transpose()?;
         let body = rows
             .as_ref()
@@ -888,8 +922,8 @@ impl AnalysisStore {
                 .execute(
                     "INSERT INTO analysis_results (result_id, tenant_id, processor_id, body,
                         request_meta, commit_revision, stream_key, method_version, interval_id,
-                        profile_revision, facts_revision, coverage_revision, first_cursor, graph_encoding)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        profile_revision, facts_revision, coverage_revision, first_cursor)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         input.result_id,
                         input.scope.identity.tenant_id.as_slice(),
@@ -904,7 +938,6 @@ impl AnalysisStore {
                         header.facts_revision,
                         header.coverage_revision,
                         header.first_cursor,
-                        rows.as_ref().map(|rows| rows.encoding()),
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -913,7 +946,7 @@ impl AnalysisStore {
         }
         let row_bytes = if let Some(rows) = &rows {
             rows.insert(&transaction, &input.result_id)?;
-            rows.bytes(&input.result_id)? + rows.encoding().len() as i64
+            rows.bytes(&input.result_id)?
         } else {
             0
         };

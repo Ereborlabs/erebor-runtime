@@ -2,7 +2,7 @@ use super::GraphRows;
 use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, GraphInvalidSnafu, GraphSubjectKeyV1, Result,
 };
-use duckdb::{params, params_from_iter, types::Value, Connection, Row, Statement};
+use duckdb::{params, params_from_iter, types::Value, Appender, Connection, Row};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
@@ -17,7 +17,6 @@ pub(super) struct SubjectRow {
 
 impl SubjectRow {
     pub(super) const COLUMNS: &str = "ordinal, tenant_id, subject_kind, authority, identity";
-    pub(super) const INSERT: &str = "INSERT INTO graph_subjects VALUES (?, ?, ?, ?, ?, ?)";
 
     pub(super) fn encode(subject: &GraphSubjectKeyV1) -> Result<Self> {
         Ok(Self {
@@ -30,12 +29,12 @@ impl SubjectRow {
 
     pub(super) fn insert(
         &self,
-        writer: &mut Statement<'_>,
+        writer: &mut Appender<'_>,
         result_id: &str,
         ordinal: usize,
     ) -> Result<()> {
         writer
-            .execute(params![
+            .append_row(params![
                 result_id,
                 ordinal as u32,
                 &self.tenant,

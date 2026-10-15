@@ -3,7 +3,7 @@ use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, ContextSensitivityV1, FindingV1, GraphInvalidSnafu,
     Result,
 };
-use duckdb::{params, Connection, OptionalExt as _, Row, Statement};
+use duckdb::{params, Appender, Connection, OptionalExt as _, Row};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
@@ -34,7 +34,6 @@ impl FindingRow {
         subject_id, state, window_start_utc_ns, window_end_utc_ns, evidence,
         required_coverage_interval_ids, policy_provenance, effects, reason, severity,
         sensitivity, required_action, limits";
-    pub(super) const INSERT: &str = "INSERT INTO graph_findings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
     pub(super) fn encode(finding: &FindingV1) -> Result<Self> {
         Ok(Self {
@@ -60,12 +59,12 @@ impl FindingRow {
 
     pub(super) fn insert(
         &self,
-        writer: &mut Statement<'_>,
+        writer: &mut Appender<'_>,
         result_id: &str,
         ordinal: usize,
     ) -> Result<()> {
         writer
-            .execute(params![
+            .append_row(params![
                 result_id,
                 ordinal as u32,
                 &self.tenant,
