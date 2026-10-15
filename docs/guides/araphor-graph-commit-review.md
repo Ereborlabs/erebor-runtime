@@ -1,8 +1,11 @@
 # Araphor Graph Commit Review
 
 This guide covers the approved typed graph handoff and buffered row appends.
-The implemented source head is `cffde410`. Focused verification is complete.
-The final Rust procedure passes. The [production plan](../plans/araphor-production-dataflow-simplification.md)
+The retained source head is `cffde410`. Its final Rust procedure passes.
+The subsequent graph, Discovery, and finding changes are committed through
+`ab6b5da3` and pass focused tests and final CI. Refreshed native runtime
+qualification passes through the exact retry. E2E reproducibility remains
+**Not done**. The [production plan](../plans/araphor-production-dataflow-simplification.md)
 defines the approved scope.
 
 ## Intended end state
@@ -15,9 +18,11 @@ Accept only the current graph header. Reject noncanonical byte input.
 
 ## Implementation review flow
 
-Each line below describes the implemented source. Focused qualification passes.
+Each line below describes the implemented source. Current focused and final CI
+qualification passes. Refreshed native E2E passes on exact retry after the
+failure recorded below. Its reproducibility issue remains unresolved.
 
-[CanonicalGraph::new](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) The graph owner validates the typed snapshot and prepares its canonical body once
+[CanonicalGraph::bounded](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) The graph owner validates the typed snapshot and prepares its bounded canonical body once
   -> [GraphAndFindingOwner::commit_bounded_window](../../crates/araphor-data/src/graph/commit.rs) the graph owner checks the body bound before context effects
   -> [AnalysisStore::commit_graph_snapshot](../../crates/araphor-data/src/analysis/progress.rs) the graph owner submits the prepared pair and empty-body commit metadata
   -> [AnalysisStore::commit_graph_inner](../../crates/araphor-data/src/analysis/progress.rs) the store applies shared manifest, witness, scope, and progress validation
@@ -28,18 +33,18 @@ Each line below describes the implemented source. Focused qualification passes.
   -> [AnalysisResultReceiptV1](../../crates/araphor-data/src/analysis/progress.rs) the graph owner receives the existing receipt
 
 The reading order follows these links. Read the constructor before the commit
-entry. The constructor prepares canonical bytes before the existing body-size
-check and context effects. The transaction remains the only graph durability
+entry. The constructor prepares canonical bytes through a bounded writer
+before context effects. The transaction remains the only graph durability
 owner.
 
 ## Owners and input contracts
 
 `GraphAndFindingOwner` derives and validates the snapshot. The owner sets the
 window cursors, positions, notice revision, witness deadline, and previous
-result ID. `CanonicalGraph::new` consumes this snapshot. The constructor
+result ID. `CanonicalGraph::bounded` consumes this snapshot. The constructor
 validates the snapshot and serializes its canonical body once. Private fields
-keep the snapshot and body together. Borrowed accessors permit the existing
-size check and context preparation without a large clone.
+keep the snapshot and body together. A borrowed snapshot accessor permits
+context preparation without a large clone.
 
 `AnalysisStore::commit_graph_snapshot` consumes the prepared pair and commit
 metadata. The metadata body must be empty. The store fills that body from the
@@ -61,7 +66,7 @@ sequenceDiagram
     participant Pair as CanonicalGraph
     participant Store as AnalysisStore
     participant Rows as GraphRows
-    Graph->>Pair: Validate snapshot and encode body once
+    Graph->>Pair: Validate snapshot and encode bounded body once
     Graph->>Graph: Check body bound and prepare references
     Graph->>Store: commit_graph_snapshot(metadata, pair, advance)
     Store->>Store: Shared manifest and progress validation
@@ -111,7 +116,141 @@ and [findings](../../crates/araphor-data/src/analysis/graph_rows/findings.rs).
 Read [retained graph reads](../../crates/araphor-data/src/analysis/graph_rows/read.rs)
 for byte reconstruction and row validation.
 
+## Typed Discovery profile commit
+
+[PreparedProfile::new](../../crates/araphor-data/src/analysis/progress/profile.rs) Discovery validates a profile and encodes its bounded body once
+  -> [DiscoveryOwner](../../crates/araphor-data/src/discovery/live.rs) the owner obtains current package authorization for the prepared commit
+  -> [AnalysisStore::commit_working_profile](../../crates/araphor-data/src/analysis/progress/profile.rs) the store consumes the private pair for a working revision
+  -> [AnalysisStore::commit_progress](../../crates/araphor-data/src/analysis/progress.rs) the existing transaction checks metadata and commits the profile
+
+`DiscoveryOwner` creates the prepared value after it sets the profile fields
+and commit metadata. `PreparedProfile` owns private profile and body fields.
+Its constructor validates the profile and writes its exact JSON body through
+the existing 16 MiB bounded buffer. Callers cannot change either field or
+supply independent body bytes. The store consumes the pair after package
+authorization. It uses the same metadata, scope, witness, context reference,
+revision, synchronization, and usage checks as the existing commit owner.
+The pair adds no durable state or separate transaction. Its values are dropped
+after success or error; retained profiles remain owned by the store.
+
+`commit_sealed_profile` handles sealed historical profiles. It requires equal
+expected and consumed cursors, so this entry cannot advance progress. Working
+replacement uses `commit_working_profile` with the expected prior revision.
+Both entries reject nonempty independent commit bodies. Authorization failure
+prevents the store call; commit failure does not publish a successful receipt.
+Retry and recovery retain their existing owners.
+
+```mermaid
+sequenceDiagram
+    participant Discovery as DiscoveryOwner
+    participant Pair as PreparedProfile
+    participant Packages as InstalledAnalysis
+    participant Store as AnalysisStore
+    Discovery->>Pair: Validate profile and encode bounded body
+    Discovery->>Packages: Authorize current package revisions
+    Packages->>Store: Commit consumed pair and metadata
+    Store->>Store: Existing validation and transaction
+    Store-->>Discovery: Existing receipt or error
+```
+
+The byte-input `commit_working` and `commit_profile` helpers are now test-only
+parity routes. [Profile handoff tests](../../crates/araphor-data/src/analysis/progress/profile/tests.rs)
+compare typed and byte paths for exact bodies, request metadata, receipts,
+working replacement, sealed retry, and reopen. They reject mismatched scope,
+result ID, coverage revision, independent body bytes, unsealed history,
+historical cursor advance, and invalid profile tenant data. Existing physical
+crash tests remain at their original commit boundaries. This change adds no
+ABI or BPF interface.
+
+**Done** for source, focused profile qualification, and final CI at `ab6b5da3`.
+Retained `cffde410` evidence remains historical. No runtime saving is measured.
+
 ## Verification route and limits
+
+### Current bounded preparation and finding batches
+
+[GraphAndFindingOwner::derive_candidate](../../crates/araphor-data/src/graph/derive.rs) The graph owner derives a validated typed candidate
+  -> [GraphAndFindingOwner::commit_bounded_window](../../crates/araphor-data/src/graph/commit.rs) the owner supplies final positions, notice, witness deadline, and previous result
+  -> [CanonicalGraph::bounded](../../crates/araphor-data/src/analysis/graph_rows/mod.rs) the owner serializes once into the existing bounded buffer
+  -> [GraphAndFindingOwner::commit_snapshot](../../crates/araphor-data/src/graph/commit.rs) the owner prepares context references only after the body fits
+  -> [AnalysisStore::commit_graph_snapshot](../../crates/araphor-data/src/analysis/progress.rs) the existing transaction commits the prepared graph
+
+The configured graph-window bound applies during serialization. Only the
+`graph output bytes` error selects a smaller window. Other errors propagate.
+Public derivation retains its byte check. The pair retains private fields and
+has no independent body input. The format remains the six-field version-2
+header and a 16 MiB maximum canonical result. The transaction, authorization,
+witnesses, references, rollback, and revision notification remain unchanged.
+
+[AnalysisStore::preflight_findings](../../crates/araphor-data/src/analysis/graph/findings/preflight.rs) The finding owner selects keys and checks each distinct complete result's stored row charge and header
+  -> [FindingKey::batch_end](../../crates/araphor-data/src/analysis/graph/findings/batches.rs) the owner charges selected rows, each copied input manifest, and one shared header per result in the batch
+  -> [AnalysisStore::collect_findings](../../crates/araphor-data/src/analysis/graph/findings/batches.rs) the owner reads the batch or uses the existing single-finding fallback
+  -> [FindingOutput](../../crates/araphor-data/src/analysis/graph/findings/batches.rs) the owner checks exact serialized output bytes before returning the page
+
+The selected row charge follows the native finding columns. It no longer
+charges all subjects, edges, and findings again for each selected finding.
+The revision charge is per finding because decoded findings each own an input
+manifest. Header accounting is shared only within that batch. Full-result
+preflight remains separate from selected-row accounting. The 32 MiB read bound,
+256-record batch bound, header-cache bound, output limit, row validation,
+ordering, pagination, and fallback remain in force.
+
+Read `final_header_bounds` and `output_bytes_split` in
+[bounded graph tests](../../crates/araphor-data/src/graph/tests/bounded.rs).
+Read `native_finding_batches`, `finding_shared_header_batch`, and
+`native_finding_fallback` in
+[finding tests](../../crates/araphor-data/src/analysis/graph/findings/tests.rs).
+The current test routes cover final metadata growth, batch accounting,
+shared headers, output pagination, and fallback. Current focused and final CI
+results pass.
+
+**Done** for the subsequent graph and finding source, focused checks, and final
+CI. Refreshed native Data and exact E2E retry qualification also pass.
+
+### Current qualification at `ab6b5da3`
+
+The final Rust procedure exits 0 in 1,848.31 seconds. Formatting, workspace
+check, strict clippy, and all 90 outer harnesses pass: 2,138 passed, zero failed,
+and 568 existing ignored cases. Data has 632 passes and 19 ignored cases in
+921.16 seconds. Covered source hashes remain unchanged. The capture starts
+at HEAD `cee3ecc9`; this same tested source was committed through `ab6b5da3`
+while the procedure ran.
+
+Read `/tmp/araphor-oci-deliverable-commits.json`,
+`/tmp/araphor-oci-final-ci-source.json`, `/tmp/araphor-oci-final-ci-report.json`,
+and `/tmp/araphor-oci-final-ci.log`. The
+[current plan record](../plans/araphor-production-dataflow-simplification.md#current-verification-record)
+records all focused checks, separate commits, and earlier corrected attempts.
+The 43-case focused Data run passes in 264.61 seconds. No deadline, quota, or
+workload was reduced.
+
+Six refreshed native libraries build in 29.11 seconds with matching hashes
+across the two builds. All 12 native Data cases pass with zero failures and
+zero ignored cases in 254.19 seconds on Linux x86_64 GNU with glibc 2.39.
+The native detector E2E case fails in 368.16 seconds with
+`automatic source replacement did not finish`: count revision 31 has
+`stale=false`, while repeated revision 24 has `stale=true`. It uses an empty
+`PATH` and target `x86_64-unknown-linux-gnu`. Source, binaries, and artifacts
+remain stable; the record has `qualified=false`. The failure cause is not
+established. That first attempt does not qualify native E2E; full Rust
+CI remains passed. Read
+`/tmp/araphor-oci-native-build2.json`, `/tmp/araphor-oci-native-build2.log`,
+`/tmp/araphor-oci-native-qualification.json`, and
+`/tmp/araphor-oci-native-qualification.log`.
+
+The exact native E2E retry passes with one passed, zero failed, and zero
+ignored in 281.10 seconds; runner time is 281.12 seconds. It uses the same
+`ab6b5da3` source, binary, artifacts, and empty `PATH`. The retry record confirms
+unchanged source, and its binary hash matches the first run. Read
+`/tmp/araphor-oci-native-e2e-retry1.json` and
+`/tmp/araphor-oci-native-e2e-retry1.log`. Both outcomes remain retained.
+Source qualification, including the native retry, passes. The unresolved
+E2E reproducibility issue is **Not done**; no root cause or fix is claimed.
+
+The Data target below ten minutes is not met. Ordinary functional times do
+not establish a causal speed improvement or regression. No saving is measured.
+
+### Retained verification at `cffde410`
 
 Existing Rust cases in [native storage tests](../../crates/araphor-data/src/graph/tests/native_storage.rs)
 cover immutable retry, rollback, exact encoding, and replacement removal.

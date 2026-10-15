@@ -1,20 +1,22 @@
 # Araphor Binary Package Storage Review
 
-This guide covers the binary package storage change at source head `cffde410`.
-Focused verification, the final Rust procedure, and native runtime qualification
-are complete on the platform stated below.
+This guide covers binary package storage and the approved local OCI transport.
+The retained evidence below covers `cffde410`. The OCI and admission changes
+are committed through `ab6b5da3` and pass focused tests and final CI. Refreshed
+native Data and the exact E2E retry pass. E2E reproducibility remains **Not done**.
 The [approved plan](../plans/araphor-production-dataflow-simplification.md)
 defines the package storage scope.
 
 ## Intended end state
 
 Keep one descriptor and raw executable buffers in the existing package revision
-row. Preserve external V1 bytes, package identity, logical quotas, native Application Binary Interface (ABI)
+row. Use OCI manifest identity for local transport and trust pins. Preserve
+logical quotas, native Application Binary Interface (ABI)
 validation, and the existing durable owner.
 
 ## Implementation review flow
 
-[PackageBundleV1](../../crates/araphor-data/src/package/bundle.rs) The existing external package admission validates V1 bytes
+[PackageBundleV1](../../crates/araphor-data/src/package/bundle.rs) The external package admission validates the current local OCI artifact
   -> [StoredArtifact](../../crates/araphor-data/src/package/storage.rs) the package owner separates one descriptor, implementation metadata, and raw executable bytes
   -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) the store writes the complete immutable revision in one transaction
   -> [PackageRevisionV1::decode_artifact](../../crates/araphor-data/src/analysis/packages/model.rs) loading parses one descriptor and the remaining metadata
@@ -86,10 +88,105 @@ existing owner. There are no deployed older stores to convert or preserve.
 
 The [native loader](../../crates/araphor-data/src/package/native/mod.rs) still
 validates code identity, dependency bytes, platform, and ABI. Storage does not
-interpret native binaries or replace hashing with a saved digest. OCI and V1
-transport remain outside this internal format change.
+interpret native binaries or replace hashing with a saved digest. The following
+section records the separately approved local OCI transport change.
 
-## Verification route
+## Local OCI transport and admission
+
+[PackageBundleV1::read](../../crates/araphor-data/src/package/bundle.rs) The author or client supplies an OCI directory or layout archive
+  -> [Content](../../crates/araphor-analysis-sdk/src/oci.rs) the SDK verifies descriptor sizes, SHA-256 hashes, media types, and the canonical Araphor manifest and config
+  -> [PackageOci::decode](../../crates/araphor-data/src/package/oci.rs) Data fills ordered empty metadata slots from typed raw layers and checks reconstructed identity
+  -> [PackageRequestV1::encode](../../crates/araphor-data/src/package/model/request.rs) the client encodes request metadata and the OCI archive as separate CBOR byte strings
+  -> [ClientGrpcOwner](../../crates/mithril-control/src/client_grpc/packages.rs) Control decodes the bounded binary request from the existing gRPC bytes field
+  -> [PackageTrustPinV1](../../crates/mithril-control/src/client_auth/packages.rs) Control requires the selected tenant's exact `sha256:` manifest pin and current grant
+  -> [AnalysisPackageOwner::admit_artifact](../../crates/araphor-data/src/package/execution.rs) the package owner admits each shared executable once and retains each export's SQL and binding checks
+  -> [AnalysisStore::install_package](../../crates/araphor-data/src/analysis/packages/revisions.rs) the existing store commits the immutable package revision
+
+The SDK owns OCI representation and content checks. Data owns package meaning,
+raw-slot order, and bundle validation. Control remains the trust and grant
+authority. A content digest does not authorize installation or execution.
+
+The artifact uses an OCI Image Manifest with schema version 2, a fixed Araphor
+artifact type, and a typed config. The config has package metadata and ordered
+blob descriptors. Wasm, native code, native dependencies, Python artifacts,
+and fixture Arrow IPC remain raw typed layers. Their metadata slots are empty.
+This canonical Araphor subset permits reconstruction of the same manifest
+identity after durable loading. OCI itself does not define canonical JSON.
+The digest is SHA-256 of exact manifest bytes, written as `sha256:` followed
+by 64 lowercase hexadecimal characters. Bare hexadecimal trust pins are invalid.
+
+The request is a three-field CBOR array: version 1, metadata JSON bytes, and
+OCI archive bytes. Install and update metadata exclude the bundle. Other
+operations require an empty archive. The request rejects trailing bytes and
+retains its existing 32 MiB plus 64 KiB total bound. The package archive retains
+the 32 MiB bound, including tar headers and padding. The internal revision
+retains its separate 64 MiB logical encoding bound.
+
+Directory reads retain file descriptors and open each component without
+following symbolic links. They require bounded regular files. Archive reads
+do not extract content. They reject duplicate paths, links, special entries,
+unsafe names, missing or changed referenced blobs, and nonzero trailing data.
+Unreferenced layout content does not become admitted package content.
+
+The current transport requires fresh development packages and stores. There
+is no JSON bundle fallback or older-format reader. The existing
+[OCI design](../plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/extensible-security-packages-design.md)
+points to the deferred registry and trust owner. This local format adds no
+network client, registry credentials, publisher verification, cache, or GC owner.
+
+Read [SDK OCI tests](../../crates/araphor-analysis-sdk/src/oci/tests.rs),
+[package OCI tests](../../crates/araphor-data/src/package/oci/tests.rs),
+[request tests](../../crates/araphor-data/src/package/model/request/tests.rs), and
+[trust-pin tests](../../crates/mithril-control/src/client_auth/packages/tests.rs).
+They cover byte bounds, descriptor identity, raw-layer order, malformed input,
+directory links, request framing, changed-content denial, and authority locking.
+These are the source test routes covered by the current qualification below.
+
+### Current qualification at `ab6b5da3`
+
+Source implementation, focused qualification, and final Rust CI are **Done**.
+Focused checks pass for 43 Data cases, five SDK OCI cases, six builder cases,
+six Control cases, one CLI case, and the complete existing package E2E case.
+The final procedure exits 0 in 1,848.31 seconds. All 90 outer harnesses finish
+with 2,138 passed, zero failed, and 568 existing ignored cases. Data has 632
+passes and 19 ignored cases in 921.16 seconds. Covered source hashes remain
+unchanged. The capture starts at HEAD `cee3ecc9`; this same tested source was
+committed through `ab6b5da3` during the run.
+
+Read `/tmp/araphor-oci-deliverable-commits.json`,
+`/tmp/araphor-oci-final-ci-source.json`, `/tmp/araphor-oci-final-ci-report.json`,
+and `/tmp/araphor-oci-final-ci.log`. The
+[current plan record](../plans/araphor-production-dataflow-simplification.md#current-verification-record)
+contains focused logs, counts, source commits, and earlier corrected attempts.
+No quota, deadline, or workload was reduced.
+
+Six refreshed native libraries build in 29.11 seconds on Linux x86_64 GNU
+with glibc 2.39. Their hashes match the first build. Read
+`/tmp/araphor-oci-native-build2.json` and `/tmp/araphor-oci-native-build2.log`.
+All 12 native Data cases pass with zero failures and zero ignored cases in
+254.19 seconds. The native detector E2E case fails in 368.16 seconds with
+`automatic source replacement did not finish`: count revision 31 has
+`stale=false`, while repeated revision 24 has `stale=true`. The case uses an
+empty `PATH` and target `x86_64-unknown-linux-gnu`. The record and log
+are `/tmp/araphor-oci-native-qualification.json` and
+`/tmp/araphor-oci-native-qualification.log`. Source, binaries, and artifacts
+remain stable; the record has `qualified=false`. The failure cause is not
+established. Full Rust CI remains passed.
+
+The exact native E2E retry passes with one passed, zero failed, and zero
+ignored in 281.10 seconds; runner time is 281.12 seconds. Source `ab6b5da3`,
+the binary, artifacts, and empty `PATH` are unchanged. The retry record confirms
+source stability; its binary hash matches the first run. Read
+`/tmp/araphor-oci-native-e2e-retry1.json` and
+`/tmp/araphor-oci-native-e2e-retry1.log`. The first failure is retained.
+The retry establishes no root cause or reproducibility fix.
+
+**Done** for refreshed native Data and exact E2E retry qualification.
+**Not done** for the unresolved E2E reproducibility issue. The Data target below
+ten minutes is not met. Ordinary functional times do not establish a causal
+speed improvement or regression. No runtime saving is measured.
+
+## Retained verification at `cffde410`
 
 [Codec tests](../../crates/araphor-data/src/package/storage/tests.rs) check
 mixed implementation order, native dependencies, exact external bytes and

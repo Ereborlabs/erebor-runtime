@@ -27,7 +27,11 @@ master plan invented for them.
 - [Araphor production data flow simplification](araphor-production-dataflow-simplification.md) —
   raw executable storage, one SQL operation engine, and the revised typed
   graph handoff with buffered DuckDB appends are implemented and pass final
-  Rust CI. Current-artifact native execution qualification also passes.
+  Rust CI. Local OCI transport, typed Discovery commits, bounded graph
+  preparation, shared executable admission, and finding-row accounting pass
+  qualification at `ab6b5da3`. Native Data and the exact native E2E retry pass;
+  the first E2E failure remains recorded, and reproducibility is unresolved.
+  The Data runtime target below ten minutes is not met.
   The [graph format review](araphor-graph-binary-duckdb-review.md) compares
   typed values, binary formats, and DuckDB input APIs. The user requires
   current-format storage and no backward compatibility. New timing workloads
