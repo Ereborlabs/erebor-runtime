@@ -190,6 +190,33 @@ impl QueryBudget {
 }
 
 impl QueryLease {
+    pub(super) fn reserve_output(&mut self, bytes: usize) -> Result<()> {
+        if !matches!(self.kind, LeaseKind::Evaluation) || self.bytes != 0 {
+            return crate::QueryInvalidSnafu {
+                field: "model output reservation",
+            }
+            .fail();
+        }
+        let mut usage = self.budget.usage.lock().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "query budget lock",
+            }
+            .build()
+        })?;
+        usage.output_bytes = usage
+            .output_bytes
+            .checked_add(bytes)
+            .filter(|total| *total <= self.budget.limits.output_capacity)
+            .ok_or_else(|| {
+                crate::AnalysisBusySnafu {
+                    resource: "query output capacity",
+                }
+                .build()
+            })?;
+        self.bytes = bytes;
+        Ok(())
+    }
+
     pub(super) fn shrink_input(&mut self, bytes: usize) -> Result<()> {
         if matches!(self.kind, LeaseKind::Stream) || bytes > self.input_bytes {
             return crate::QueryLimitSnafu {

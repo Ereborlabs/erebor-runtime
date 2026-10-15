@@ -70,12 +70,21 @@ impl AnalysisPackageOwner {
             return Err(Code::Conflict.error("activation package root"));
         }
         let run = ModelRun::new(active, &context, bundle, id)?;
+        let implementation = run.artifact.implementation(&run.model.name)?;
+        let mut sql_operation = if matches!(
+            implementation,
+            crate::package::PackageImplementationV1::Sql { inputs, .. } if !inputs.is_empty()
+        ) {
+            Some(self.query.sql_operation(active.key.tenant_id)?)
+        } else {
+            None
+        };
         let now = if automatic {
             Self::clock_tick(now)
         } else {
             now
         };
-        let inputs = self.inputs(
+        let inputs = self.inputs_with_sql(
             InputRequest {
                 activation: active,
                 artifact: run.artifact,
@@ -85,6 +94,7 @@ impl AnalysisPackageOwner {
                 action: Action::Run,
             },
             control,
+            sql_operation.as_mut(),
         )?;
         let mut metadata = ResultContext::new(id, now, run.model, &inputs);
         metadata.target = run
@@ -99,8 +109,14 @@ impl AnalysisPackageOwner {
         let Some(evaluation) = run.evaluation(self, &inputs, &metadata, rebuild, automatic)? else {
             return Ok(None);
         };
-        let evaluated =
-            self.evaluate_artifact(active.key.tenant_id, run.artifact, &evaluation, control)?;
+        let evaluated = match (sql_operation, implementation) {
+            (Some(operation), crate::package::PackageImplementationV1::Sql { program, .. }) => {
+                operation.evaluate(&run.artifact.descriptor, program, &evaluation, control)?
+            }
+            _ => {
+                self.evaluate_artifact(active.key.tenant_id, run.artifact, &evaluation, control)?
+            }
+        };
         run.commit(inputs, metadata, &evaluated.output, automatic)
             .map(Some)
     }

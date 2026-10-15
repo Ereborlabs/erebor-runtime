@@ -37,6 +37,15 @@ impl AnalysisPackageOwner {
         request: InputRequest<'_>,
         control: &AnalysisReadControl,
     ) -> Result<ModelInputs> {
+        self.inputs_with_sql(request, control, None)
+    }
+
+    pub(super) fn inputs_with_sql(
+        &self,
+        request: InputRequest<'_>,
+        control: &AnalysisReadControl,
+        mut operation: Option<&mut crate::query::SqlOperation<'_>>,
+    ) -> Result<ModelInputs> {
         let InputRequest {
             activation,
             artifact,
@@ -61,16 +70,17 @@ impl AnalysisPackageOwner {
             control.check()?;
             self.check(&context.grant, action)?;
             if let Some(sql) = sources.get(&port.name) {
-                let mut input = self.query.model_input(
-                    crate::SqlModelInputRequestV1 {
-                        selection: context.grant.selection.clone(),
-                        sql: QuerySql::admit(sql, Vec::new(), false)?,
-                        port,
-                        limits: model.limits,
-                        now_ns: now,
-                    },
-                    control,
-                )?;
+                let request = crate::SqlModelInputRequestV1 {
+                    selection: context.grant.selection.clone(),
+                    sql: QuerySql::admit(sql, Vec::new(), false)?,
+                    port,
+                    limits: model.limits,
+                    now_ns: now,
+                };
+                let mut input = match operation.as_deref_mut() {
+                    Some(operation) => operation.model_input(request, control)?,
+                    None => self.query.model_input(request, control)?,
+                };
                 for witness in &mut input.witnesses {
                     if witness.expires_utc_ns == 0 {
                         witness.expires_utc_ns =

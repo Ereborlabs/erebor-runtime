@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use duckdb::core::{DataChunkHandle, FlatVector, Inserter, LogicalTypeId};
@@ -28,6 +28,40 @@ pub(super) struct InputTable {
     pub(super) scan_gate: std::sync::Mutex<Option<ScanGate>>,
 }
 
+pub(super) struct InputSource {
+    input: Mutex<Option<Arc<InputTable>>>,
+}
+
+impl InputSource {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            input: Mutex::new(None),
+        })
+    }
+
+    pub(super) fn replace(&self, input: Option<Arc<InputTable>>) -> Result<()> {
+        *self.input.lock().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "SQL source projection lock",
+            }
+            .build()
+        })? = input;
+        Ok(())
+    }
+
+    pub(super) fn register(
+        self: &Arc<Self>,
+        connection: &Connection,
+        function: &str,
+    ) -> Result<()> {
+        connection
+            .register_table_function_with_extra_info::<InputScan, _>(function, self)
+            .context(AnalysisDatabaseSnafu {
+                operation: "register query input",
+            })
+    }
+}
+
 impl InputTable {
     pub(super) fn register(
         self: &Arc<Self>,
@@ -42,11 +76,9 @@ impl InputTable {
             }
             .build()
         })?;
-        connection
-            .register_table_function_with_extra_info::<InputScan, _>(function, self)
-            .context(AnalysisDatabaseSnafu {
-                operation: "register query input",
-            })?;
+        let source = InputSource::new();
+        source.replace(Some(self.clone()))?;
+        source.register(connection, function)?;
         connection
             .execute_batch(&format!(
                 "CREATE TEMP VIEW \"{view}\" AS SELECT * FROM \"{function}\"()"
@@ -56,7 +88,11 @@ impl InputTable {
             })
     }
 
-    fn validate(&self, function: &str, view: &str) -> std::result::Result<(), &'static str> {
+    pub(super) fn validate(
+        &self,
+        function: &str,
+        view: &str,
+    ) -> std::result::Result<(), &'static str> {
         if !InputColumn::valid_name(function) || !InputColumn::valid_name(view) {
             return Err("query input function or view name is invalid");
         }
@@ -176,13 +212,19 @@ impl VTab for InputScan {
 
     #[allow(unsafe_code)]
     fn bind(bind: &BindInfo) -> CallbackResult<Self::BindData> {
-        // SAFETY: Registration stores this exact Arc type until the connection closes.
-        let input = unsafe { bind.get_extra_info::<Arc<InputTable>>().as_ref() }
+        // SAFETY: Registration retains this Arc type until the connection closes.
+        let source = unsafe { bind.get_extra_info::<Arc<InputSource>>().as_ref() }
             .ok_or("query input is absent")?;
+        let input = source
+            .input
+            .lock()
+            .map_err(|_| "SQL source projection lock")?
+            .clone()
+            .ok_or("SQL source projection is not active")?;
         for column in &input.columns {
             bind.add_result_column(column.0, column.1.into());
         }
-        Ok(Arc::clone(input))
+        Ok(input)
     }
 
     fn init(init: &InitInfo) -> CallbackResult<Self::InitData> {

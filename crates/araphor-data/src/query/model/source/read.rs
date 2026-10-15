@@ -68,24 +68,69 @@ impl SourceRows {
         byte_limit: usize,
         control: &AnalysisReadControl,
     ) -> Result<(sdk::Dataset, usize)> {
+        self.evaluate_on(owner, request, plan, byte_limit, control, None)
+    }
+
+    pub(super) fn evaluate_shared(
+        &mut self,
+        owner: &QueryOwner,
+        request: &SqlModelInputRequestV1<'_>,
+        plan: &QueryPlan,
+        byte_limit: usize,
+        control: &AnalysisReadControl,
+        shared: (&duckdb::Connection, &mut crate::query::input::ScopedSources),
+    ) -> Result<(sdk::Dataset, usize)> {
+        self.evaluate_on(owner, request, plan, byte_limit, control, Some(shared))
+    }
+
+    fn evaluate_on(
+        &mut self,
+        owner: &QueryOwner,
+        request: &SqlModelInputRequestV1<'_>,
+        plan: &QueryPlan,
+        byte_limit: usize,
+        control: &AnalysisReadControl,
+        shared: Option<(&duckdb::Connection, &mut crate::query::input::ScopedSources)>,
+    ) -> Result<(sdk::Dataset, usize)> {
         let input = InputRelations::new(&mut self.extraction, byte_limit, &plan.template)?;
         #[cfg(test)]
         owner.test_input(&input)?;
         let held = input.allocation_bytes();
         let evaluation = request.evaluation()?;
         let stage = control.within(owner.limits.evaluate_timeout)?;
-        let connection = QueryEvaluation::connection()?;
+        let (connection, mut sources) = match shared {
+            Some((connection, sources)) => (Some(connection), Some(sources)),
+            None => (None, None),
+        };
+        let owned_connection = if connection.is_none() {
+            Some(QueryEvaluation::connection()?)
+        } else {
+            None
+        };
+        let connection = connection.or(owned_connection.as_ref()).ok_or_else(|| {
+            crate::QueryInvalidSnafu {
+                field: "model source connection",
+            }
+            .build()
+        })?;
         let host = crate::QueryLimits {
             output_capacity: byte_limit.saturating_sub(held),
             ..owner.limits.clone()
         };
-        let mut executor = ModelExecution::new(&connection, &stage, &evaluation, &host)?;
-        let batches = stage.query_run(&connection, || {
-            input.register(&connection)?;
+        let mut executor = ModelExecution::new(connection, &stage, &evaluation, &host)?;
+        let result = stage.query_run(connection, || {
+            if let Some(sources) = sources.as_deref_mut() {
+                input.register_scoped(connection, sources)?;
+            } else {
+                input.register(connection)?;
+            }
             executor.query(&request.sql, &request.port.schema)
-        })?;
+        });
+        let cleanup = sources.map(|sources| sources.clear(connection)).transpose();
+        let batches = result?;
+        cleanup?;
         let bytes = executor.bytes().saturating_add(held);
-        drop(connection);
+        drop(owned_connection);
         drop(input);
         if !self.extraction.trace_reads.is_empty() {
             owner.store.check_trace_reads(

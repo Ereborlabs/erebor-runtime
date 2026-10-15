@@ -30,6 +30,7 @@ mod graph;
 pub(crate) mod graph_tests;
 mod input;
 mod model;
+pub(crate) use model::SqlOperation;
 mod notification;
 #[cfg(test)]
 mod owner_tests;

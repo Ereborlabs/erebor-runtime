@@ -38,9 +38,32 @@ impl QueryOwner {
         request: SqlModelInputRequestV1<'_>,
         control: &AnalysisReadControl,
     ) -> Result<SqlModelInputV1> {
+        self.model_input_with(request, control, None)
+    }
+
+    pub(super) fn model_input_shared(
+        &self,
+        request: SqlModelInputRequestV1<'_>,
+        control: &AnalysisReadControl,
+        connection: &duckdb::Connection,
+        sources: &mut crate::query::input::ScopedSources,
+    ) -> Result<SqlModelInputV1> {
+        self.model_input_with(request, control, Some((connection, sources)))
+    }
+
+    fn model_input_with(
+        &self,
+        request: SqlModelInputRequestV1<'_>,
+        control: &AnalysisReadControl,
+        shared: Option<(&duckdb::Connection, &mut crate::query::input::ScopedSources)>,
+    ) -> Result<SqlModelInputV1> {
         let plan = QueryPlan::model(request.selection.clone(), request.sql.clone())?;
         let selection = plan.dependencies(request.now_ns)?;
-        let lease = self.budget.model(selection.tenant_id, 0)?;
+        let lease = if shared.is_none() {
+            Some(self.budget.model(selection.tenant_id, 0)?)
+        } else {
+            None
+        };
         let bounds = crate::analysis::AnalysisExtractLimits {
             scan_bytes: self.limits.scan_bytes,
             input_bytes: self
@@ -51,8 +74,22 @@ impl QueryOwner {
         };
         let mut rows =
             SourceRows::extract(self, &plan, &selection, request.now_ns, bounds, control)?;
-        let (data, bytes) = rows.evaluate(self, &request, &plan, bounds.input_bytes, control)?;
-        rows.finish(self, request.port, selection, data, lease.input(bytes)?)
+        let (data, bytes) = match shared {
+            Some((connection, sources)) => rows.evaluate_shared(
+                self,
+                &request,
+                &plan,
+                bounds.input_bytes,
+                control,
+                (connection, sources),
+            )?,
+            None => rows.evaluate(self, &request, &plan, bounds.input_bytes, control)?,
+        };
+        let lease = match lease {
+            Some(lease) => lease.input(bytes)?,
+            None => self.budget.retained_input(bytes)?,
+        };
+        rows.finish(self, request.port, selection, data, lease)
     }
 }
 

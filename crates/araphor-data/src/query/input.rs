@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem::{size_of, take};
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use duckdb::Connection;
 use prost::Message as _;
 use snafu::{IntoError as _, ResultExt as _};
 
-use super::adapter::{InputColumn, InputTable};
+use super::adapter::{InputColumn, InputSource, InputTable};
 use super::discovery::{BEHAVIORS, CONTEXT};
 use super::graph::{BRANCHES, FINDINGS, PACKAGES, POLICY, RELATIONSHIPS, SUBJECTS};
 use super::notification::NOTIFICATIONS;
@@ -20,6 +21,60 @@ use crate::{
 
 #[cfg(test)]
 use crate::EvidenceRecord;
+
+#[derive(Default)]
+pub(super) struct ScopedSources {
+    sources: BTreeMap<&'static str, Arc<InputSource>>,
+    views: BTreeSet<&'static str>,
+}
+
+impl ScopedSources {
+    fn register(
+        &mut self,
+        connection: &Connection,
+        table: &Arc<InputTable>,
+        function: &'static str,
+        view: &'static str,
+    ) -> Result<()> {
+        table.validate(function, view).map_err(|reason| {
+            crate::AnalysisStateSnafu {
+                path: std::path::Path::new("<query-input>"),
+                reason,
+            }
+            .build()
+        })?;
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.sources.entry(function) {
+            let source = InputSource::new();
+            source.register(connection, function)?;
+            entry.insert(source);
+        }
+        self.sources[function].replace(Some(table.clone()))?;
+        connection
+            .execute_batch(&format!(
+                "CREATE TEMP VIEW \"{view}\" AS SELECT * FROM \"{function}\"()"
+            ))
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "create query input view",
+            })?;
+        self.views.insert(view);
+        Ok(())
+    }
+
+    pub(super) fn clear(&mut self, connection: &Connection) -> Result<()> {
+        for view in &self.views {
+            connection
+                .execute_batch(&format!("DROP VIEW IF EXISTS \"{view}\""))
+                .context(crate::AnalysisDatabaseSnafu {
+                    operation: "remove SQL source view",
+                })?;
+        }
+        self.views.clear();
+        for source in self.sources.values() {
+            source.replace(None)?;
+        }
+        Ok(())
+    }
+}
 
 pub(super) struct InputField(
     pub(super) &'static str,
@@ -1820,6 +1875,22 @@ impl InputRelations {
     }
 
     pub(super) fn register(&self, connection: &Connection) -> Result<()> {
+        self.register_into(connection, None)
+    }
+
+    pub(super) fn register_scoped(
+        &self,
+        connection: &Connection,
+        sources: &mut ScopedSources,
+    ) -> Result<()> {
+        self.register_into(connection, Some(sources))
+    }
+
+    fn register_into(
+        &self,
+        connection: &Connection,
+        mut sources: Option<&mut ScopedSources>,
+    ) -> Result<()> {
         for (table, schema) in self.tables.iter().zip(&self.schemas) {
             let function = match schema.name {
                 "events" => "_query_events",
@@ -1847,7 +1918,11 @@ impl InputRelations {
                     .fail();
                 }
             };
-            table.register(connection, function, schema.name)?;
+            if let Some(sources) = sources.as_deref_mut() {
+                sources.register(connection, table, function, schema.name)?;
+            } else {
+                table.register(connection, function, schema.name)?;
+            }
             if schema.name == "findings" {
                 connection.execute_batch(
                     "CREATE OR REPLACE TEMP VIEW findings AS SELECT * FROM _query_findings()
