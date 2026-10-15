@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn shared_executable_checks_sql() -> TestResult {
+    let fixture = Fixture::new()?;
+    let mut package = component("1");
+    let artifact = &mut package.artifacts[0];
+    let mut second = artifact.descriptor.exports[0].clone();
+    second.name = "second".into();
+    artifact.descriptor.exports.push(second.clone());
+    let PackageImplementationV1::Wasm { exports, .. } = &mut artifact.implementations[0] else {
+        return Err("Wasm fixture absent".into());
+    };
+    exports.push(second.name.clone());
+    fixture
+        .owner
+        .admit_artifact(artifact, &crate::AnalysisReadControl::default())?;
+
+    second.name = "invalid-sql".into();
+    artifact.descriptor.exports.push(second);
+    artifact.implementations.push(PackageImplementationV1::Sql {
+        export: "invalid-sql".into(),
+        inputs: BTreeMap::new(),
+        program: crate::SqlModelV1 {
+            outputs: BTreeMap::from([("data".into(), "DROP TABLE events".into())]),
+            ..Default::default()
+        },
+    });
+    assert!(matches!(
+        fixture
+            .owner
+            .admit_artifact(artifact, &crate::AnalysisReadControl::default()),
+        Err(crate::Error::QueryInvalid { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn package_metadata_digest_stable() -> TestResult {
     let mut package = component("1");
     package.artifacts[0].descriptor.exports[0].outputs[0].schema =

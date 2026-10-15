@@ -99,20 +99,37 @@ impl AnalysisPackageOwner {
         artifact: &PackageArtifactV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {
+        let mut admitted = Vec::new();
         for model in &artifact.descriptor.exports {
             control.check()?;
             match artifact.implementation(&model.name) {
                 Ok(PackageImplementationV1::Sql { program, .. }) => {
                     crate::QueryOwner::admit_model(model, program)?;
                 }
-                Ok(PackageImplementationV1::Wasm { artifact, .. }) => {
-                    self.wasm.admit(artifact, control)?;
+                Ok(implementation @ PackageImplementationV1::Wasm { artifact, .. }) => {
+                    if !admitted
+                        .iter()
+                        .any(|previous| std::ptr::eq(*previous, implementation))
+                    {
+                        self.wasm.admit(artifact, control)?;
+                        admitted.push(implementation);
+                    }
                 }
-                Ok(PackageImplementationV1::Native {
-                    artifact,
-                    qualification: Some(qualification),
-                    ..
-                }) => self.native.admit(artifact, qualification)?,
+                Ok(
+                    implementation @ PackageImplementationV1::Native {
+                        artifact,
+                        qualification: Some(qualification),
+                        ..
+                    },
+                ) => {
+                    if !admitted
+                        .iter()
+                        .any(|previous| std::ptr::eq(*previous, implementation))
+                    {
+                        self.native.admit(artifact, qualification)?;
+                        admitted.push(implementation);
+                    }
+                }
                 Err(crate::Error::Package {
                     code: Code::Unsupported,
                     ..
