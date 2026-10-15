@@ -1,7 +1,7 @@
 # Built-in analysis algorithms
 
 This crate contains the current discovery and graph computations. Production
-owners in `araphor-data` execute installed Wasm components built from this code.
+owners in `araphor-data` execute installed native or Wasm components built from this code.
 Local SDK fixtures call the same computation directly. The crate depends on the
 analysis SDK. It has no Control, DuckDB, or host-store dependency.
 
@@ -9,6 +9,9 @@ analysis SDK. It has no Control, DuckDB, or host-store dependency.
 `groups`, and `compare`. `graph::Detector::descriptor()` declares `detect` for
 `HF-PROC-001`, `HF-DW-001`, or `HF-XNODE-001`. Call `evaluate` with an SDK
 `Evaluation`. Each call checks inputs and outputs against its descriptor.
+The declarations and ports are initialized once. A guest wrapper can pass an
+immutable `CheckedEvaluation` to reuse the input check within one invocation.
+Output validation remains at the guest and host boundaries.
 
 The host supplies exact record references, selected context, and qualified
 facts. Graph outputs contain subject selections, relationship candidates,
@@ -38,7 +41,8 @@ The production adapters and captured output checks are in `araphor-data`.
 The `components/` crates export this computation through the generated SDK
 bindings. Production package execution has no direct-computation fallback.
 See the [component guide](../araphor-detector-example/README.md)
-for artifact build and installation. Native execution remains later work.
+for artifact build and installation. Native execution uses the SDK C interface
+in the host process.
 
 ## Generated components
 

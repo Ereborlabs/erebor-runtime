@@ -1,4 +1,5 @@
 use super::*;
+use araphor_data::PackageBundleV1;
 
 fn managers() -> Vec<InvestigateGrant> {
     vec![InvestigateGrant {
@@ -139,8 +140,9 @@ fn package_commit_holds_authority() -> std::result::Result<(), Box<dyn std::erro
         tenant_id: Uuid::from_bytes([1; 16]).to_string(),
         bundle_digest: bundle.digest()?,
     }])?;
+    let admitted = araphor_data::PackageBundleRef::new(&bundle)?;
     let mut committed = false;
-    owner.commit(&grant, PackageActionV1::Run, &bundle, &mut || {
+    owner.commit(&grant, PackageActionV1::Run, &admitted, &mut || {
         assert!(matches!(
             owner.state.try_lock(),
             Err(std::sync::TryLockError::WouldBlock)
@@ -151,10 +153,11 @@ fn package_commit_holds_authority() -> std::result::Result<(), Box<dyn std::erro
     assert!(committed);
     let changed = self::bundle("SELECT 2::UBIGINT AS count");
     assert_ne!(bundle.digest()?, changed.digest()?);
-    assert!(owner.admit(&grant, &changed).is_err());
+    let changed_ref = araphor_data::PackageBundleRef::new(&changed)?;
+    assert!(owner.admit(&grant, &changed_ref).is_err());
     committed = false;
     assert!(owner
-        .commit(&grant, PackageActionV1::Run, &changed, &mut || {
+        .commit(&grant, PackageActionV1::Run, &changed_ref, &mut || {
             committed = true;
             Ok(())
         })
@@ -163,20 +166,20 @@ fn package_commit_holds_authority() -> std::result::Result<(), Box<dyn std::erro
     owner.replace_package_trust(Vec::new())?;
     committed = false;
     assert!(owner
-        .commit(&grant, PackageActionV1::Run, &bundle, &mut || {
+        .commit(&grant, PackageActionV1::Run, &admitted, &mut || {
             committed = true;
             Ok(())
         })
         .is_err());
     assert!(!committed);
-    owner.commit(&grant, PackageActionV1::Remove, &bundle, &mut || {
+    owner.commit(&grant, PackageActionV1::Remove, &admitted, &mut || {
         committed = true;
         Ok(())
     })?;
     assert!(committed);
     owner.replace_package_managers(Vec::new())?;
     assert!(owner
-        .commit(&grant, PackageActionV1::Remove, &bundle, &mut || Ok(()))
+        .commit(&grant, PackageActionV1::Remove, &admitted, &mut || Ok(()))
         .is_err());
     Ok(())
 }

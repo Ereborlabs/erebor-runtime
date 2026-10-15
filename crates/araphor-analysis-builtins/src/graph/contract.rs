@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use super::*;
 use crate::Rows;
 
@@ -23,6 +25,22 @@ impl Detector {
     }
 
     pub fn descriptor(self) -> sdk::Package {
+        self.declaration().clone()
+    }
+
+    fn declaration(self) -> &'static sdk::Package {
+        static PROCESS: OnceLock<sdk::Package> = OnceLock::new();
+        static CREDENTIALS: OnceLock<sdk::Package> = OnceLock::new();
+        static KUBERNETES: OnceLock<sdk::Package> = OnceLock::new();
+        let declaration = match self {
+            Self::Process => &PROCESS,
+            Self::Credentials => &CREDENTIALS,
+            Self::Kubernetes => &KUBERNETES,
+        };
+        declaration.get_or_init(|| self.build_descriptor())
+    }
+
+    fn build_descriptor(self) -> sdk::Package {
         let inputs = vec![
             Rows::port::<Observation>("records", "graph.observation.v1"),
             Rows::port::<Fact>("facts", "graph.fact.v1"),
@@ -54,9 +72,25 @@ impl Detector {
     }
 
     pub fn evaluate(self, evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        let package = self.descriptor();
-        package.validate_evaluation(evaluation)?;
-        let model = &package.exports[0];
+        let checked = self.declaration().check_evaluation(evaluation)?;
+        let output = self.evaluate_checked(&checked)?;
+        checked.validate_output(&output)?;
+        Ok(output)
+    }
+
+    pub fn evaluate_checked(
+        self,
+        checked: &sdk::CheckedEvaluation<'_>,
+    ) -> sdk::Result<sdk::Output> {
+        if checked.package() != self.declaration() {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Incompatible,
+                "graph package",
+            ));
+        }
+        let package = checked.package();
+        let evaluation = checked.evaluation();
+        let model = checked.model();
         if let Some(checkpoint) = &evaluation.checkpoint {
             let declaration = model.checkpoint.as_ref().ok_or_else(|| {
                 sdk::Error::contract(sdk::ErrorCode::Invalid, "graph checkpoint declaration")
@@ -73,21 +107,9 @@ impl Detector {
                 ));
             }
         }
-        let records = Rows::decode(
-            &model.inputs[0].port,
-            &evaluation.input("records")?.data,
-            evaluation.context.limits,
-        )?;
-        let facts: Vec<Fact> = Rows::decode(
-            &model.inputs[1].port,
-            &evaluation.input("facts")?.data,
-            evaluation.context.limits,
-        )?;
-        let mut manifests = Rows::decode(
-            &model.inputs[2].port,
-            &evaluation.input("manifest")?.data,
-            evaluation.context.limits,
-        )?;
+        let records = Rows::input(checked, "records")?;
+        let facts = Rows::input(checked, "facts")?;
+        let mut manifests = Rows::input(checked, "manifest")?;
         if manifests.len() != 1 {
             return Err(sdk::Error::contract(
                 sdk::ErrorCode::Invalid,
@@ -95,32 +117,13 @@ impl Detector {
             ));
         }
         // Each evaluation replays its complete retained window.
-        let mut computation = Computation {
-            records,
-            facts,
-            manifest: manifests.remove(0),
-            subjects: Vec::new(),
-            edges: Vec::new(),
-            findings: Vec::new(),
-            state: State {
-                value: match self {
-                    Self::Kubernetes => "KUBERNETES_PROOF_MISSING",
-                    _ => "WAITING",
-                }
-                .into(),
-            },
-        };
-        for fact in &computation.facts {
-            computation.record(fact.record)?;
-        }
+        let mut computation = Computation::new(records, facts, manifests.remove(0), self)?;
         match self {
             Self::Process => computation.process()?,
             Self::Credentials => computation.credentials()?,
             Self::Kubernetes => computation.kubernetes()?,
         }
-        let output = computation.output(&package, evaluation.context.limits)?;
-        package.validate_output(evaluation, &output)?;
-        Ok(output)
+        computation.output(package, evaluation.context.limits)
     }
 
     fn reasons(self) -> &'static [&'static str] {
@@ -167,7 +170,6 @@ impl Computation {
             ],
             ..Default::default()
         };
-        let details_port = Rows::port::<Finding>("details", "graph.finding-candidate.v1");
         for (row, finding) in self.findings.iter().enumerate() {
             let reference = sdk::RowRef {
                 dataset: "findings".into(),
@@ -182,7 +184,7 @@ impl Computation {
                     },
                 });
             }
-            let details = Rows::encode(&details_port, std::slice::from_ref(finding), limits)?
+            let details = Rows::encode(&model.outputs[2], std::slice::from_ref(finding), limits)?
                 .batches
                 .remove(0);
             output.reasons.push(sdk::ReasonValue {

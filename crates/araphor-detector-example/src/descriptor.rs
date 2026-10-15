@@ -2,6 +2,15 @@ use super::*;
 
 impl BurstDetector {
     pub fn package() -> sdk::Package {
+        Self::declaration().clone()
+    }
+
+    pub(super) fn declaration() -> &'static sdk::Package {
+        static PACKAGE: std::sync::OnceLock<sdk::Package> = std::sync::OnceLock::new();
+        PACKAGE.get_or_init(Self::build_package)
+    }
+
+    fn build_package() -> sdk::Package {
         let inputs = vec![
             Rows::port::<Observation>("records", "graph.observation.v1"),
             Rows::port::<Fact>("facts", "graph.fact.v1"),

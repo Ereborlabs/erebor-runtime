@@ -40,7 +40,11 @@ impl PackageAuthorization for Authority {
         Ok(())
     }
 
-    fn admit(&self, grant: &PackageGrantV1, _: &PackageBundleV1) -> Result<()> {
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        _: &crate::package::PackageBundleRef<'_>,
+    ) -> Result<()> {
         let observer = self
             .before_admit
             .lock()
@@ -56,7 +60,7 @@ impl PackageAuthorization for Authority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         self.check(grant, action)?;

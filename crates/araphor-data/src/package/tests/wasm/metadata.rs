@@ -49,8 +49,7 @@ fn package_metadata_digest_stable() -> TestResult {
             )]);
     let artifact = &package.artifacts[0];
     let descriptor = artifact.descriptor.interfaces()?.descriptor_json;
-    assert_eq!(artifact.encoding(false)?.descriptor.get(), descriptor);
-    assert_eq!(artifact.encoding(true)?.descriptor.get(), descriptor);
+    assert_eq!(artifact.descriptor_bytes()?, descriptor.as_bytes());
     let encoded = package.encode()?;
     let digest = package.digest()?;
     for _ in 0..8 {

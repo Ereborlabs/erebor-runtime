@@ -1074,8 +1074,11 @@ mod tests {
         assert_eq!(store.witness_usage(identity.tenant_id, 100)?, expired);
         let owner = crate::EvidenceRetentionOwner::new(&store);
         assert_eq!(owner.retain(&identity, 100)?.removed_records, 0);
-        assert_eq!(owner.retain(&identity, 201)?.removed_records, 3072);
-        assert_eq!(owner.retain(&identity, 201)?.removed_records, 1024);
+        let cleared = owner.retain(&identity, 201)?;
+        assert_eq!(cleared.removed_records, 4096);
+        assert_eq!(cleared.retained_bytes, 0);
+        assert_eq!(cleared.retained_floor, 4096);
+        assert_eq!(owner.retain(&identity, 201)?.removed_records, 0);
         assert_eq!(
             store.witness_usage(identity.tenant_id, 201)?.charged_bytes,
             0

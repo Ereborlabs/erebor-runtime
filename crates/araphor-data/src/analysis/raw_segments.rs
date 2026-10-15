@@ -1,5 +1,7 @@
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
 use prost::Message;
@@ -150,6 +152,7 @@ struct EvidenceSegmentStateV1 {
     path: PathBuf,
     frames: Vec<EvidenceFrameIndexV1>,
     active: bool,
+    usage: super::StorageUsageV1,
 }
 
 impl EvidenceSegmentStateV1 {
@@ -384,6 +387,7 @@ impl EvidenceSegmentStateV1 {
             path,
             frames,
             active,
+            usage: file.storage_usage()?,
         }))
     }
 
@@ -411,10 +415,50 @@ pub(crate) struct EvidenceSegmentOwner {
     active: BTreeMap<u64, u64>,
     identities: BTreeMap<u64, RawIdentity>,
     next_id: u64,
+    usage: super::StorageUsageV1,
+    diagnostics: usize,
+    directory: Cell<Option<DirectoryStamp>>,
 }
 
+type DirectoryStamp = (u64, u64, i64, i64, i64, i64);
+
 impl EvidenceSegmentOwner {
+    fn directory_stamp(root: &Path) -> Result<DirectoryStamp> {
+        let metadata = fs::symlink_metadata(root).context(IoSnafu { path: root })?;
+        Ok((
+            metadata.dev(),
+            metadata.ino(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        ))
+    }
+
+    pub(super) fn directory_current(&self) -> Result<bool> {
+        Ok(self.directory.get() == Some(Self::directory_stamp(&self.root)?))
+    }
+
+    pub(super) fn directory_changed(&self, current: bool) -> Result<()> {
+        self.directory.set(if current {
+            Some(Self::directory_stamp(&self.root)?)
+        } else {
+            None
+        });
+        Ok(())
+    }
+
+    pub(super) fn storage_summary(&self) -> Result<Option<(super::StorageUsageV1, usize, usize)>> {
+        // Only this owner changes known segment files while the store lease is held.
+        Ok(self.directory_current()?.then_some((
+            self.usage,
+            self.segments.len() - self.diagnostics,
+            self.diagnostics,
+        )))
+    }
+
     pub(super) fn seal_all(&mut self) -> Result<()> {
+        let current = self.directory_current()?;
         for id in self.active.values() {
             let state = self.segments.get_mut(id).ok_or_else(|| {
                 AnalysisStateSnafu {
@@ -426,7 +470,8 @@ impl EvidenceSegmentOwner {
             state.seal(&self.root)?;
         }
         self.active.clear();
-        EvidenceSegmentStateV1::sync_directory(&self.root)
+        EvidenceSegmentStateV1::sync_directory(&self.root)?;
+        self.directory_changed(current)
     }
 
     pub(super) fn append_plan(
@@ -463,6 +508,7 @@ impl EvidenceSegmentOwner {
 
     pub(super) fn seal_stream(&mut self, stream: u64) -> Result<()> {
         if let Some(id) = self.active.get(&stream).copied() {
+            let current = self.directory_current()?;
             self.segments
                 .get_mut(&id)
                 .ok_or_else(|| {
@@ -474,6 +520,7 @@ impl EvidenceSegmentOwner {
                 })?
                 .seal(&self.root)?;
             self.active.remove(&stream);
+            self.directory_changed(current)?;
         }
         Ok(())
     }
@@ -499,9 +546,22 @@ impl EvidenceSegmentOwner {
         self.next_id = self.next_id.max(next);
     }
 
-    pub(super) fn forget(&mut self, id: u64) {
-        self.segments.remove(&id);
+    pub(super) fn forget(&mut self, id: u64) -> Result<()> {
+        if let Some(state) = self.segments.remove(&id) {
+            self.usage.subtract(state.usage, &self.root)?;
+            self.diagnostics = self
+                .diagnostics
+                .checked_sub(usize::from(state.identity.evidence().is_none()))
+                .ok_or_else(|| {
+                    AnalysisStateSnafu {
+                        path: &self.root,
+                        reason: "the diagnostic segment count underflows",
+                    }
+                    .build()
+                })?;
+        }
         self.active.retain(|_, active| *active != id);
+        Ok(())
     }
 
     pub(crate) fn open(raw_root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
@@ -523,6 +583,7 @@ impl EvidenceSegmentOwner {
         let mut active = BTreeMap::new();
         let mut identities = BTreeMap::new();
         let mut next_id = 1_u64;
+        let mut usage = super::StorageUsageV1::default();
         let mut directory_changed = false;
         let mut diagnostic_count = 0;
         let mut evidence_count = 0;
@@ -605,6 +666,7 @@ impl EvidenceSegmentOwner {
                 }
                 .fail();
             }
+            usage.add(segment.usage, &root)?;
             if segments.insert(id, segment).is_some() {
                 return AnalysisStateSnafu {
                     path: root,
@@ -616,12 +678,20 @@ impl EvidenceSegmentOwner {
         if directory_changed {
             EvidenceSegmentStateV1::sync_directory(&root)?;
         }
+        let diagnostics = segments
+            .values()
+            .filter(|state| state.identity.evidence().is_none())
+            .count();
+        let directory = Cell::new(Some(Self::directory_stamp(&root)?));
         Ok(Self {
             root,
             segments,
             active,
             identities,
             next_id,
+            usage,
+            diagnostics,
+            directory,
         })
     }
 
@@ -692,6 +762,27 @@ impl EvidenceSegmentOwner {
             "segment.appended",
         );
         self.sync()?;
+        for batch in &batches {
+            let state = self.segments.get_mut(&batch.segment.id).ok_or_else(|| {
+                AnalysisStateSnafu {
+                    path: &self.root,
+                    reason: "the synced evidence segment is absent",
+                }
+                .build()
+            })?;
+            let metadata =
+                fs::symlink_metadata(&state.path).context(IoSnafu { path: &state.path })?;
+            if !metadata.is_file() {
+                return super::AnalysisStore::reject_path(
+                    &state.path,
+                    "the synced evidence segment is not a file",
+                );
+            }
+            let usage = super::StorageUsageV1::from_metadata(&state.path, &metadata)?;
+            self.usage.subtract(state.usage, &self.root)?;
+            self.usage.add(usage, &self.root)?;
+            state.usage = usage;
+        }
         #[cfg(test)]
         super::AnalysisStore::crash_path(
             self.root.parent().unwrap_or(&self.root),
@@ -864,6 +955,7 @@ impl EvidenceSegmentOwner {
         last: u64,
         frames: EncodedEvidenceFramesV1,
     ) -> Result<EvidenceSegmentRefV1> {
+        let current = self.directory_current()?;
         let count = last
             .checked_sub(first)
             .and_then(|count| count.checked_add(1));
@@ -953,6 +1045,10 @@ impl EvidenceSegmentOwner {
             let start = state.descriptor.reference.offset as usize;
             let file = super::SegmentFile::open(&state.path)?;
             file.append(state.descriptor.reference.offset, &frames.bytes)?;
+            let usage = file.storage_usage()?;
+            self.usage.subtract(state.usage, &self.root)?;
+            self.usage.add(usage, &self.root)?;
+            state.usage = usage;
             Self::extend_frames(&mut state.frames, start, &frames.frames);
             state.descriptor.bounds.last_cursor = last;
             state.descriptor.reference.offset += frame_bytes;
@@ -965,6 +1061,8 @@ impl EvidenceSegmentOwner {
                 "segment.reserved",
             );
             file.append(identity_bytes.len() as u64, &frames.bytes)?;
+            let usage = file.storage_usage()?;
+            self.usage.add(usage, &self.root)?;
             let bounds = EvidenceSegmentBoundsV1 {
                 stream_id: stream,
                 first_cursor: first,
@@ -986,12 +1084,15 @@ impl EvidenceSegmentOwner {
                     path,
                     frames: indexes,
                     active: true,
+                    usage,
                 },
             );
             self.active.insert(stream, id);
             self.identities
                 .entry(stream)
                 .or_insert_with(|| identity.clone());
+            self.diagnostics += usize::from(identity.evidence().is_none());
+            self.directory_changed(current)?;
         }
         self.segments
             .get(&id)

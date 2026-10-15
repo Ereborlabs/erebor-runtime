@@ -47,6 +47,18 @@ enum QueryScope {
     Client(Arc<QueryGrant>),
 }
 
+impl QueryTemplate {
+    pub(super) fn reads_relation(&self, relation: &str) -> bool {
+        match self {
+            Self::Client(sql) => sql.dependencies().contains(relation),
+            Self::Coverage => relation == "coverage",
+            Self::ContextVersions | Self::RevisionDifference => relation == "context_versions",
+            Self::Catalog => relation == "catalog",
+            _ => relation == "events",
+        }
+    }
+}
+
 impl QueryPlan {
     pub fn new(selection: AnalysisSelectionV1, template: QueryTemplate) -> Result<Self> {
         if matches!(template, QueryTemplate::Client(_)) {
@@ -328,15 +340,33 @@ impl QueryPlan {
 
     pub(super) fn statement(&self) -> &'static str {
         match self.template {
-            QueryTemplate::Events { .. } => "SELECT * FROM scoped_events WHERE (CAST(? AS UINTEGER) IS NULL OR operation = ?) ORDER BY commit_revision, ordinal",
-            QueryTemplate::ExactMatch { .. } => "SELECT * FROM scoped_events WHERE operation = ? AND exact_object_id = ? ORDER BY commit_revision, ordinal",
-            QueryTemplate::OperationCounts => "SELECT operation, COUNT(*) AS event_count FROM scoped_events GROUP BY operation ORDER BY operation",
-            QueryTemplate::MovingCount { .. } => "SELECT COUNT(*) AS event_count FROM scoped_events",
-            QueryTemplate::FixedBuckets { .. } => "SELECT time_bucket(CAST(? AS BIGINT) * INTERVAL '1 second', received_at, TIMESTAMP '1970-01-01 00:00:00') AS window_start, COUNT(*) AS event_count FROM scoped_events GROUP BY window_start ORDER BY window_start",
-            QueryTemplate::SubjectSequence { .. } => "SELECT tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, task_cookie, source_cursor, commit_revision, ordinal FROM (SELECT *, lag(operation) OVER subject AS prior_operation, lag(temporal_coverage) OVER subject AS prior_coverage, lag(kernel_sequence) OVER subject AS prior_sequence FROM scoped_events WINDOW subject AS (PARTITION BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, task_cookie ORDER BY source_cursor)) ordered WHERE prior_operation = ? AND operation = ? AND task_cookie <> 0 AND temporal_coverage = 1 AND prior_coverage = 1 AND prior_sequence > 0 AND CAST(kernel_sequence AS HUGEINT) = CAST(prior_sequence AS HUGEINT) + 1 ORDER BY commit_revision, ordinal",
-            QueryTemplate::RevisionDifference => "SELECT a.owner_revision AS old_revision, b.owner_revision AS new_revision, a.body <> b.body AS changed FROM context_versions a JOIN context_versions b ON a.tenant_id = b.tenant_id AND a.owner_id = b.owner_id AND a.entity_key = b.entity_key AND a.lifetime_key = b.lifetime_key WHERE a.owner_revision = ? AND b.owner_revision = ? ORDER BY old_revision, new_revision",
-            QueryTemplate::Coverage => "SELECT * FROM coverage ORDER BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, kind, first_cursor, last_cursor, commit_revision, interval_id, interval_revision",
-            QueryTemplate::ContextVersions => "SELECT * FROM context_versions ORDER BY owner_id, entity_key, lifetime_key, owner_revision",
+            QueryTemplate::Events { .. } => {
+                "SELECT * FROM scoped_events WHERE (CAST(? AS UINTEGER) IS NULL OR operation = ?) ORDER BY commit_revision, ordinal"
+            }
+            QueryTemplate::ExactMatch { .. } => {
+                "SELECT * FROM scoped_events WHERE operation = ? AND exact_object_id = ? ORDER BY commit_revision, ordinal"
+            }
+            QueryTemplate::OperationCounts => {
+                "SELECT operation, COUNT(*) AS event_count FROM scoped_events GROUP BY operation ORDER BY operation"
+            }
+            QueryTemplate::MovingCount { .. } => {
+                "SELECT COUNT(*) AS event_count FROM scoped_events"
+            }
+            QueryTemplate::FixedBuckets { .. } => {
+                "SELECT time_bucket(CAST(? AS BIGINT) * INTERVAL '1 second', received_at, TIMESTAMP '1970-01-01 00:00:00') AS window_start, COUNT(*) AS event_count FROM scoped_events GROUP BY window_start ORDER BY window_start"
+            }
+            QueryTemplate::SubjectSequence { .. } => {
+                "SELECT tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, task_cookie, source_cursor, commit_revision, ordinal FROM (SELECT *, lag(operation) OVER subject AS prior_operation, lag(temporal_coverage) OVER subject AS prior_coverage, lag(kernel_sequence) OVER subject AS prior_sequence FROM scoped_events WINDOW subject AS (PARTITION BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, task_cookie ORDER BY source_cursor)) ordered WHERE prior_operation = ? AND operation = ? AND task_cookie <> 0 AND temporal_coverage = 1 AND prior_coverage = 1 AND prior_sequence > 0 AND CAST(kernel_sequence AS HUGEINT) = CAST(prior_sequence AS HUGEINT) + 1 ORDER BY commit_revision, ordinal"
+            }
+            QueryTemplate::RevisionDifference => {
+                "SELECT a.owner_revision AS old_revision, b.owner_revision AS new_revision, a.body <> b.body AS changed FROM context_versions a JOIN context_versions b ON a.tenant_id = b.tenant_id AND a.owner_id = b.owner_id AND a.entity_key = b.entity_key AND a.lifetime_key = b.lifetime_key WHERE a.owner_revision = ? AND b.owner_revision = ? ORDER BY old_revision, new_revision"
+            }
+            QueryTemplate::Coverage => {
+                "SELECT * FROM coverage ORDER BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, kind, first_cursor, last_cursor, commit_revision, interval_id, interval_revision"
+            }
+            QueryTemplate::ContextVersions => {
+                "SELECT * FROM context_versions ORDER BY owner_id, entity_key, lifetime_key, owner_revision"
+            }
             QueryTemplate::Catalog => "SELECT * FROM catalog ORDER BY relation, ordinal",
             QueryTemplate::Client(_) => "",
         }
@@ -344,7 +374,10 @@ impl QueryPlan {
 
     pub(super) fn sql(&self) -> String {
         if self.reads_events() {
-            format!("WITH scoped_events AS (SELECT * FROM events WHERE received_utc_ns >= ? AND received_utc_ns <= ?) {}", self.statement())
+            format!(
+                "WITH scoped_events AS (SELECT * FROM events WHERE received_utc_ns >= ? AND received_utc_ns <= ?) {}",
+                self.statement()
+            )
         } else {
             self.statement().into()
         }

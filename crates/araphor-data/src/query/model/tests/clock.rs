@@ -41,6 +41,48 @@ fn model_clock_dependencies() -> TestResult {
         }
         assert!(clocked.uses_clock(&model)?);
     }
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs.push(sdk::InputPort {
+        port: port("source", "count"),
+        source: sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: "fixture".into(),
+            revision: "1".into(),
+            export: "count".into(),
+            output: "rows".into(),
+        })),
+    });
+    for (sql, expected) in [
+        (
+            "SELECT count + length('CURRENT_TIMESTAMP') AS count FROM source",
+            false,
+        ),
+        (
+            "SELECT CASE WHEN CURRENT_TIMESTAMP IS NULL THEN 0 ELSE count END AS count FROM source",
+            true,
+        ),
+    ] {
+        let mut sourced = model.clone();
+        sourced.inputs.push(sdk::InputPort {
+            port: port("selected", "count"),
+            source: sdk::InputSource::Query(sql.into()),
+        });
+        assert_eq!(QueryOwner::inputs_use_clock(&sourced)?, expected);
+        assert!(!program.uses_clock(&sourced)?);
+    }
+    for source in [
+        sdk::InputSource::Table(sdk::TableRef::Named("notifications".into())),
+        sdk::InputSource::Query(
+            "SELECT notification_revision FROM notifications WHERE overdue".into(),
+        ),
+    ] {
+        let mut sourced = model.clone();
+        sourced.inputs.push(sdk::InputPort {
+            port: port("notices", "notification_revision"),
+            source,
+        });
+        assert!(QueryOwner::inputs_use_clock(&sourced)?);
+        assert!(!program.uses_clock(&sourced)?);
+    }
     Ok(())
 }
 

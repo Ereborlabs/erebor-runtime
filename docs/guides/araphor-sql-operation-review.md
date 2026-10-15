@@ -81,6 +81,10 @@ permits later DataFusion work without adding an engine, provider framework,
 or compatibility layer in this change. Dataset-only SQL uses the existing
 dataset validators directly; it creates no synthetic package or evaluation.
 
+The following receipt covers the earlier table and query implementation. The
+[performance review](araphor-performance-simplification-review.md) covers the
+later projection, relation registration, and dependency-reuse changes.
+
 The full Rust procedure is **Done** with unchanged source: 2,146 passes, zero
 failures, and 568 existing ignored cases across 90 harnesses. The new
 [relation integration cases](../../crates/araphor-data/src/package/tests/relations.rs)

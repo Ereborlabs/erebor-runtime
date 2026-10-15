@@ -275,6 +275,49 @@ fn operation_source_cleanup() -> TestResult {
 }
 
 #[test]
+fn pruned_source_evidence() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    fixture.event(1, 100, 9)?;
+    fixture.event(2, 200, 7)?;
+    let owner = fixture.owner(limits())?;
+    let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
+    let mut model = model(&[("source", 7)]);
+    let mut revisions = Vec::new();
+    for predicate in ["operation = 7", "operation = 7 AND false"] {
+        model.inputs[0].source = sdk::InputSource::Query(format!(
+            "SELECT CAST(operation AS UBIGINT) AS value FROM events WHERE {predicate}"
+        ));
+        let (operation, inputs) = owner.model_operation([1; 16]).inputs(
+            request(&model, &grant, &active),
+            &control()?,
+            || Ok(()),
+        )?;
+        assert_eq!(
+            inputs
+                .witnesses
+                .iter()
+                .map(|witness| witness.cursor)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            inputs.inputs[0]
+                .data
+                .batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum::<usize>(),
+            usize::from(predicate == "operation = 7")
+        );
+        revisions.push(inputs.inputs[0].revision.clone());
+        drop(operation);
+        drop(inputs);
+    }
+    assert_ne!(revisions[0], revisions[1]);
+    Ok(())
+}
+
+#[test]
 fn operation_source_denial() -> TestResult {
     let fixture = QueryFixture::new()?;
     let owner = fixture.owner(limits())?;

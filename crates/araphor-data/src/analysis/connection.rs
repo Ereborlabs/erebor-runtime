@@ -80,6 +80,7 @@ impl Drop for AnalysisLease {
 
 pub(super) struct AnalysisConnection<'a> {
     pub(super) connection: MutexGuard<'a, Option<Connection>>,
+    pub(super) monitor: Option<&'a super::read::ReadMonitor>,
     root: &'a Path,
     dirty: Option<&'a std::sync::atomic::AtomicBool>,
     _snapshot: Option<RwLockReadGuard<'a, ()>>,
@@ -292,6 +293,7 @@ impl AnalysisStore {
         drop(raw);
         Ok(AnalysisConnection {
             connection,
+            monitor: None,
             root: &self.root,
             dirty: Some(&self.raw_dirty),
             _snapshot: None,
@@ -339,6 +341,7 @@ impl AnalysisStore {
                 Ok(connection) => {
                     return Ok(AnalysisConnection {
                         connection,
+                        monitor: Some(&self.read_monitors[(first + index) % self.readers.len()]),
                         root: &self.root,
                         dirty: None,
                         _snapshot: Some(snapshot),
@@ -360,6 +363,7 @@ impl AnalysisStore {
         };
         Ok(AnalysisConnection {
             connection,
+            monitor: Some(&self.read_monitors[first]),
             root: &self.root,
             dirty: None,
             _snapshot: Some(snapshot),

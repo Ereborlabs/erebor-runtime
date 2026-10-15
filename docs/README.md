@@ -19,6 +19,9 @@ tree contains only named, no-clobber copies selected during triage.
   [SQL operation review](guides/araphor-sql-operation-review.md), and
   [graph commit review](guides/araphor-graph-commit-review.md) give the source
   reading routes for the approved production changes.
+- [Performance simplification review](guides/araphor-performance-simplification-review.md)
+  gives the source route and verification limits for the approved repeated-work
+  changes.
 
 ## Important Status Rule
 

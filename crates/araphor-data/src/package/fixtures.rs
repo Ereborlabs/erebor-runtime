@@ -29,7 +29,8 @@ impl AnalysisPackageOwner {
             .ok_or_else(|| Code::Missing.error("installed package"))?;
         let context: InstalledContext = Self::decode(&active.metadata)?;
         let bundle = self.load_bundle(grant.selection.tenant_id, &context.root)?;
-        self.authority.admit(grant, &bundle)?;
+        let admitted = super::PackageBundleRef::new(&bundle)?;
+        self.authority.admit(grant, &admitted)?;
         let mut response = self.inspect(grant, scope, package, None, control)?;
         for artifact in bundle
             .artifacts
@@ -77,7 +78,7 @@ impl AnalysisPackageOwner {
                 };
                 control.check()?;
                 self.check(grant, Action::Test)?;
-                self.authority.admit(grant, &bundle)?;
+                self.authority.admit(grant, &admitted)?;
                 let output = self.evaluate_artifact(
                     grant.selection.tenant_id,
                     artifact,

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -122,6 +122,8 @@ pub struct NodeTraceOwner {
     backend: TraceBackend,
     reader: KernelStateReader,
     active: BTreeMap<[u8; 16], ActiveTrace>,
+    retained: BTreeMap<[u8; 16], TraceDispatchV1>,
+    cursors: Mutex<BTreeMap<[u8; 16], SpoolCursor>>,
     recovery_pending: bool,
     #[cfg(any(test, feature = "test-support"))]
     intent_hook: Option<Box<dyn FnOnce() + Send>>,
@@ -135,6 +137,13 @@ struct TraceSpool {
     output_bytes: u64,
     offset: u64,
     committed: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SpoolCursor {
+    sequence: u64,
+    // The offset follows the last complete, checked frame.
+    offset: u64,
 }
 
 impl NodeTraceOwner {
@@ -236,6 +245,8 @@ impl NodeTraceOwner {
             backend,
             reader,
             active: BTreeMap::new(),
+            retained: BTreeMap::new(),
+            cursors: Mutex::new(BTreeMap::new()),
             recovery_pending: true,
             #[cfg(any(test, feature = "test-support"))]
             intent_hook: None,
@@ -270,6 +281,7 @@ impl NodeTraceOwner {
         if !self.recovery_pending {
             return Ok(());
         }
+        self.retained = self.read_retained()?;
         for (id, dispatch) in self.retained()? {
             if !self.active.contains_key(&id) && self.terminal(id)?.is_none() {
                 let mut last_sequence = 0;
@@ -298,7 +310,7 @@ impl NodeTraceOwner {
                     forced_kill: false,
                     cleanup: TraceCleanupV1::Unknown,
                 };
-                let mut spool = TraceSpool::existing(self.path(id), &dispatch)?;
+                let mut spool = TraceSpool::existing(self.path(id), dispatch)?;
                 spool.complete(&terminal)?;
             }
             if !self.active.contains_key(&id) {
@@ -315,8 +327,16 @@ impl NodeTraceOwner {
         Ok(())
     }
 
-    pub fn retained(&self) -> Result<Vec<([u8; 16], TraceDispatchV1)>> {
-        let mut records = Vec::new();
+    pub fn retained(&self) -> Result<Vec<([u8; 16], &TraceDispatchV1)>> {
+        Ok(self
+            .retained
+            .iter()
+            .map(|(id, dispatch)| (*id, dispatch))
+            .collect())
+    }
+
+    fn read_retained(&self) -> Result<BTreeMap<[u8; 16], TraceDispatchV1>> {
+        let mut records = BTreeMap::new();
         for entry in fs::read_dir(&self.root).context(IoSnafu { path: &self.root })? {
             let entry = entry.context(IoSnafu { path: &self.root })?;
             if matches!(
@@ -356,9 +376,13 @@ impl NodeTraceOwner {
                     reason: "diagnostic directory does not match its execution"
                 }
             );
-            records.push((id, dispatch));
+            ensure!(
+                records.insert(id, dispatch).is_none(),
+                IdentityStateSnafu {
+                    reason: "diagnostic execution has duplicate directories"
+                }
+            );
         }
-        records.sort_by_key(|(id, _)| *id);
         Ok(records)
     }
 
@@ -393,8 +417,7 @@ impl NodeTraceOwner {
         let id = accepted.execution_id(dispatch.target_index)?;
         self.reap()?;
         self.expire_acknowledged(now)?;
-        let retained = self.retained()?;
-        if let Some((_, prior)) = retained.iter().find(|(prior, _)| *prior == id) {
+        if let Some(prior) = self.retained.get(&id) {
             ensure!(
                 *prior == dispatch,
                 AuthorizationSnafu {
@@ -413,12 +436,13 @@ impl NodeTraceOwner {
                 }
             );
         }
-        let occupied = retained
-            .iter()
-            .filter(|(id, _)| !self.path(*id).join("ack.json").exists())
+        let occupied = self
+            .retained
+            .keys()
+            .filter(|id| !self.path(**id).join("ack.json").exists())
             .count();
         ensure!(
-            occupied < 2 && retained.len() < 128 && self.active.len() < 2,
+            occupied < 2 && self.retained.len() < 128 && self.active.len() < 2,
             IdentityStateSnafu {
                 reason: "the two diagnostic slots are occupied"
             }
@@ -447,6 +471,7 @@ impl NodeTraceOwner {
                 return Err(error);
             }
         };
+        self.retained.insert(id, dispatch.clone());
         #[cfg(any(test, feature = "test-support"))]
         if let Some(callback) = self.intent_hook.take() {
             callback();
@@ -527,8 +552,23 @@ impl NodeTraceOwner {
             self.terminal(id)?
                 .map_or(4096, |terminal| terminal.last_sequence)
         };
-        let mut frames = TraceSpool::frames(&self.path(id), after)?;
-        frames.retain(|frame| frame.sequence <= through);
+        if through <= after {
+            return Ok(Vec::new());
+        }
+        let mut cursors = self.cursors.lock().map_err(|_| {
+            IdentityStateSnafu {
+                reason: "diagnostic cursor lock failed",
+            }
+            .build()
+        })?;
+        let mut cursor = cursors.get(&id).copied().unwrap_or_default();
+        if after < cursor.sequence || through < cursor.sequence {
+            cursor = SpoolCursor::default();
+        }
+        let frames = TraceSpool::frames(&self.path(id), after, through, &mut cursor)?;
+        if cursors.len() < 128 || cursors.contains_key(&id) {
+            cursors.insert(id, cursor);
+        }
         Ok(frames)
     }
 
@@ -618,13 +658,28 @@ impl NodeTraceOwner {
         let file = TraceSpool::open_file(&output, true)?;
         file.set_len(0)
             .and_then(|()| file.sync_all())
-            .context(IoSnafu { path: &output })
+            .context(IoSnafu { path: &output })?;
+        self.cursors
+            .get_mut()
+            .map_err(|_| {
+                IdentityStateSnafu {
+                    reason: "diagnostic cursor lock failed",
+                }
+                .build()
+            })?
+            .remove(&id);
+        Ok(())
     }
 
     fn expire_acknowledged(&mut self, now: u64) -> Result<()> {
-        for (id, dispatch) in self.retained()? {
+        let retained: Vec<_> = self
+            .retained
+            .iter()
+            .map(|(id, dispatch)| (*id, dispatch.accepted.deadline_unix_ns))
+            .collect();
+        for (id, deadline) in retained {
             if !self.active.contains_key(&id)
-                && dispatch.accepted.deadline_unix_ns <= now
+                && deadline <= now
                 && self.path(id).join("ack.json").exists()
             {
                 let ack: TraceTerminalV1 =
@@ -641,7 +696,7 @@ impl NodeTraceOwner {
                 } else {
                     0
                 };
-                if prior < dispatch.accepted.deadline_unix_ns {
+                if prior < deadline {
                     let pending = self.root.join("retired-before.pending");
                     let mut file = OpenOptions::new()
                         .write(true)
@@ -651,7 +706,7 @@ impl NodeTraceOwner {
                         .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
                         .open(&pending)
                         .context(IoSnafu { path: &pending })?;
-                    let bytes = dispatch.accepted.deadline_unix_ns.to_string();
+                    let bytes = deadline.to_string();
                     file.write_all(bytes.as_bytes())
                         .and_then(|()| file.sync_all())
                         .context(IoSnafu { path: &pending })?;
@@ -661,6 +716,16 @@ impl NodeTraceOwner {
                         .context(IoSnafu { path: &self.root })?;
                 }
                 TraceSpool::remove(&self.path(id))?;
+                self.retained.remove(&id);
+                self.cursors
+                    .get_mut()
+                    .map_err(|_| {
+                        IdentityStateSnafu {
+                            reason: "diagnostic cursor lock failed",
+                        }
+                        .build()
+                    })?
+                    .remove(&id);
             }
         }
         Ok(())
@@ -1024,13 +1089,27 @@ impl TraceSpool {
             .context(IoSnafu { path: &self.root })
     }
 
-    fn frames(root: &Path, after: u64) -> Result<Vec<TraceFrameV1>> {
+    fn frames(
+        root: &Path,
+        after: u64,
+        through: u64,
+        cursor: &mut SpoolCursor,
+    ) -> Result<Vec<TraceFrameV1>> {
         let path = root.join("output.jsonl");
-        let mut reader = BufReader::new(Self::open_file(&path, false)?);
+        let file = Self::open_file(&path, false)?;
+        ensure!(
+            file.metadata().context(IoSnafu { path: &path })?.len() >= cursor.offset,
+            IdentityStateSnafu {
+                reason: "diagnostic spool prefix was truncated"
+            }
+        );
+        let mut reader = BufReader::new(file);
+        reader
+            .seek(SeekFrom::Start(cursor.offset))
+            .context(IoSnafu { path: &path })?;
         let mut frames = Vec::new();
-        let mut sequence = 0;
         let mut bytes = 0;
-        loop {
+        while cursor.sequence < through && frames.len() < 200 {
             if reader
                 .fill_buf()
                 .context(IoSnafu { path: &path })?
@@ -1052,7 +1131,7 @@ impl TraceSpool {
                 serde_json::from_slice(&line).context(JsonSnafu { path: &path })?;
             frame.validate()?;
             ensure!(
-                frame.sequence == sequence + 1
+                frame.sequence == cursor.sequence + 1
                     && frame.sequence <= 4096
                     && root.file_name().and_then(|name| name.to_str())
                         == Some(hex::encode(frame.execution_id).as_str()),
@@ -1060,12 +1139,13 @@ impl TraceSpool {
                     reason: "diagnostic spool sequence changed"
                 }
             );
-            sequence = frame.sequence;
+            if frame.sequence > after && bytes + frame.bytes.len() > 1024 * 1024 {
+                break;
+            }
+            cursor.sequence = frame.sequence;
+            cursor.offset += line.len() as u64;
             if frame.sequence <= after {
                 continue;
-            }
-            if frames.len() == 200 || bytes + frame.bytes.len() > 1024 * 1024 {
-                break;
             }
             bytes += frame.bytes.len();
             frames.push(frame);
@@ -1270,7 +1350,7 @@ mod tests {
         assert_eq!(terminal.last_sequence, 0);
         assert_eq!(terminal.output_bytes, 0);
         assert!(owner.active.is_empty());
-        assert_eq!(owner.retained()?, vec![(id, dispatch.clone())]);
+        assert_eq!(owner.retained()?, vec![(id, &dispatch)]);
         let key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]).verifying_key();
         owner.set_intent_hook(|| {})?;
         assert_eq!(owner.admit(dispatch, None, &key, 3)?, id);
@@ -1382,6 +1462,62 @@ mod tests {
     }
 
     #[test]
+    fn observability_spool_seeks_forward_and_checks_replay(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let dispatch = dispatch()?;
+        let id = dispatch.accepted.execution_id(0)?;
+        let root = directory.path().join("diagnostics");
+        TraceSpool::directory(&root)?;
+        let mut spool = TraceSpool::create(root.join(hex::encode(id)), &dispatch)?;
+        for sequence in 1..=3 {
+            spool.append(&TraceFrameV1 {
+                execution_id: id,
+                sequence,
+                kind: TraceFrameKindV1::Data,
+                bytes: vec![1; 600 * 1024],
+            })?;
+        }
+        drop(spool);
+        let owner = NodeTraceOwner::open(
+            directory.path(),
+            [1; 16],
+            "node-a".into(),
+            [2; 16],
+            config(),
+            KernelStateReader::new(directory.path()),
+        )?;
+        assert_eq!(owner.frames(id, 0)?[0].sequence, 1);
+        let path = owner.path(id).join("output.jsonl");
+        let mut file = TraceSpool::open_file(&path, true)?;
+        file.write_all(b"!")?;
+        file.sync_data()?;
+        assert_eq!(owner.frames(id, 1)?[0].sequence, 2);
+        assert_eq!(owner.frames(id, 2)?[0].sequence, 3);
+        assert!(owner.frames(id, 3)?.is_empty());
+        assert!(matches!(
+            owner.frames(id, 0),
+            Err(crate::Error::Json { .. })
+        ));
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(b"{")?;
+        file.sync_data()?;
+        assert_eq!(owner.frames(id, 0)?[0].sequence, 1);
+        drop(owner);
+        let owner = NodeTraceOwner::open(
+            directory.path(),
+            [1; 16],
+            "node-a".into(),
+            [2; 16],
+            config(),
+            KernelStateReader::new(directory.path()),
+        )?;
+        assert_eq!(owner.retained()?, vec![(id, &dispatch)]);
+        assert_eq!(owner.frames(id, 2)?[0].sequence, 3);
+        Ok(())
+    }
+
+    #[test]
     fn observability_recovery_retries_transitions(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         for worker_failure in [false, true] {
@@ -1463,7 +1599,7 @@ mod tests {
             assert_eq!(terminal.output_bytes, u64::from(worker_failure) * 5);
             assert!(terminal.output_incomplete);
             assert_eq!(terminal.cleanup, TraceCleanupV1::Unknown);
-            assert_eq!(owner.retained()?, vec![(id, dispatch.clone())]);
+            assert_eq!(owner.retained()?, vec![(id, &dispatch)]);
             owner.set_intent_hook(|| {})?;
             assert_eq!(owner.admit(dispatch, None, &key, 3)?, id);
             assert!(owner.intent_hook.is_some());
@@ -1513,14 +1649,11 @@ mod tests {
                 worker: std::thread::spawn(|| Ok(())),
             },
         );
-        assert_eq!(owner.frames(id, 0)?, vec![frame]);
+        assert_eq!(owner.frames(id, 0)?, vec![frame.clone()]);
         spool.output.seek(SeekFrom::Start(spool.offset))?;
         spool.output.write_all(b"!")?;
         assert!(owner.frames(id, 1)?.is_empty());
-        assert!(matches!(
-            owner.frames(id, 0),
-            Err(crate::Error::Json { .. })
-        ));
+        assert_eq!(owner.frames(id, 0)?, vec![frame]);
         spool.output.seek(SeekFrom::Start(spool.offset))?;
         spool.output.write_all(&bytes[..1])?;
         let terminal = TraceTerminalV1 {

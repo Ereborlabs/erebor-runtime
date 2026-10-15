@@ -63,6 +63,7 @@ impl GraphAndFindingOwner {
                 package.id.clone(),
             )
         });
+        let mut evaluation = None;
         for package in packages {
             let models = execution
                 .prepared_models(&package)
@@ -75,8 +76,14 @@ impl GraphAndFindingOwner {
                 .fail();
             }
             if let Some(model) = models.first() {
-                let evaluation = owner.evaluation_for(model)?;
-                owner.evaluate(execution, &package, &evaluation)?;
+                if evaluation.is_none() {
+                    evaluation = Some(owner.evaluation_for(model)?);
+                }
+                if let Some(evaluation) = &mut evaluation {
+                    evaluation.export.clone_from(&model.name);
+                    evaluation.context.limits = model.limits;
+                    owner.evaluate(execution, &package, evaluation)?;
+                }
             }
         }
         owner.finish()

@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 
 use araphor_analysis_sdk as sdk;
-use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
 use super::{Atom, Counts, Coverage, Discovery, Disposition, Lifecycle, Side, Snapshot};
 
 impl Discovery {
-    pub(super) fn merge(input: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
+    pub(super) fn merge(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
         let snapshots = Self::read::<Snapshot>(input, "snapshots")?;
         Self::require(snapshots.len() == 2, "snapshot count")?;
         Self::same(
@@ -63,8 +62,8 @@ impl Discovery {
         })
     }
 
-    fn split<T: DeserializeOwned + JsonSchema>(
-        input: &sdk::Evaluation,
+    fn split<T: DeserializeOwned>(
+        input: &sdk::CheckedEvaluation<'_>,
         name: &str,
     ) -> sdk::Result<[Vec<T>; 2]> {
         let mut output = [Vec::new(), Vec::new()];

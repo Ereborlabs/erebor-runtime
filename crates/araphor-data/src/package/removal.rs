@@ -39,7 +39,8 @@ impl AnalysisPackageOwner {
         }
         for root in roots {
             let bundle = self.load_bundle(grant.selection.tenant_id, &root)?;
-            self.authorize_commit(grant, Action::Remove, &bundle, || {
+            let admitted = super::PackageBundleRef::new(&bundle)?;
+            self.authorize_commit(grant, Action::Remove, &admitted, || {
                 self.remove_closure(grant, scope, &bundle, true, control)
             })?;
         }

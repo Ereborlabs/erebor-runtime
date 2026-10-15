@@ -10,6 +10,10 @@ impl sdk::guest::Guest for CredentialsComponent {
     fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
         Detector::Credentials.evaluate(evaluation)
     }
+
+    fn evaluate_checked(checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        Detector::Credentials.evaluate_checked(checked)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

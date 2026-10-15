@@ -186,6 +186,19 @@ fn forced_refresh_runs_guest() -> TestResult {
 }
 
 #[test]
+fn idle_graph_reuses_bundle() -> TestResult {
+    let fixture = Fixture::new()?;
+    fixture.commit()?;
+    fixture.store.fault_write(
+        "UPDATE package_revisions SET artifact = 'invalid'::BLOB",
+        &[],
+    )?;
+    assert_eq!(fixture.process(11)?, 0);
+    assert!(fixture.execution.snapshot(source().tenant_id).is_err());
+    Ok(())
+}
+
+#[test]
 fn unrelated_coverage_runs_guest() -> TestResult {
     let fixture = Fixture::uncovered()?;
     fixture.unrelated_coverage(1, 8)?;

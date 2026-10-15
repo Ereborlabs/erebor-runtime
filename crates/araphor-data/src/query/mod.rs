@@ -184,6 +184,8 @@ pub struct QueryOwner {
     scan_gate: std::sync::Mutex<Option<adapter::ScanGate>>,
     #[cfg(test)]
     native_failed: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    dependency_reads: std::sync::atomic::AtomicUsize,
 }
 
 struct QueryTask {
@@ -228,6 +230,8 @@ impl QueryOwner {
             scan_gate: std::sync::Mutex::new(None),
             #[cfg(test)]
             native_failed: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            dependency_reads: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 

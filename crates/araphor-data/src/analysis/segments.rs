@@ -128,6 +128,7 @@ impl AnalysisStore {
             }
         }
         let path = super::raw::RawJournal::catalog_path(writer, root, segment_id)?;
+        let current = raw.segments.directory_current()?;
         match fs::symlink_metadata(&path) {
             Ok(metadata) => {
                 if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
@@ -145,6 +146,7 @@ impl AnalysisStore {
             .context(IoSnafu { path: &directory })?
             .sync_all()
             .context(IoSnafu { path: &directory })?;
+        raw.segments.directory_changed(current)?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin segment cleanup",
         })?;

@@ -6,12 +6,13 @@ impl GraphAndFindingOwner {
         if now == 0 {
             return GraphInvalidSnafu { field: "clock" }.fail();
         }
-        let mut after = self.operation.lock().map_err(|_| {
+        let mut operation = self.operation.lock().map_err(|_| {
             GraphInvalidSnafu {
                 field: "worker lock",
             }
             .build()
         })?;
+        let (after, installed) = &mut *operation;
         let mut sources = Vec::new();
         if let Some(source) = after.as_ref() {
             sources.extend(self.store.source_page(source.tenant_id, Some(source))?);
@@ -29,10 +30,9 @@ impl GraphAndFindingOwner {
         *after = sources.last().cloned();
         let mut count = 0;
         let mut failure = None;
-        let mut installed = None;
         for source in sources {
             let result = self
-                .process_source(&source, now, &mut installed)
+                .process_source(&source, now, installed)
                 .and_then(|processed| {
                     self.store.graph_set_health(&source, false)?;
                     Ok(processed)
@@ -97,13 +97,13 @@ impl GraphAndFindingOwner {
             }
             .fail();
         }
-        let _operation = self.operation.lock().map_err(|_| {
+        let mut operation = self.operation.lock().map_err(|_| {
             GraphInvalidSnafu {
                 field: "worker lock",
             }
             .build()
         })?;
-        let result = self.refresh_source(source, now, true, &mut None);
+        let result = self.refresh_source(source, now, true, &mut operation.1);
         if result.is_err() {
             let _health = self.store.graph_set_health(source, true);
         }
@@ -129,17 +129,43 @@ impl GraphAndFindingOwner {
                 .build()
             })?;
         let consumed = health.consumed_cursor.max(health.resume_floor);
+        let status = self.store.source_status(source)?.ok_or_else(|| {
+            GraphInvalidSnafu {
+                field: "source status",
+            }
+            .build()
+        })?;
         let mut after = None;
         let mut changed = false;
         loop {
-            let page = self.store.graph_window_bounds(source, after)?;
+            let page = self.store.graph_window_headers(source, after)?;
             if page.is_empty() {
                 break;
             }
-            after = page.last().map(|row| row.0);
-            for (first, last) in page {
-                changed |= self
-                    .commit_window(source, first, last, consumed, false, now, force, installed)?;
+            after = page.last().map(|row| row.1.first_cursor);
+            for (id, header, revision) in page {
+                if !force
+                    && header.witness_deadline_utc_ns > now
+                    && header.first_cursor > status.receipt.retained_floor
+                    && self.store.graph_notice(&header.scope, &id, revision)?
+                        == Some((
+                            self.provider.revision(source)?,
+                            status.receipt.coverage_revision,
+                        ))
+                    && self.installed_current(&id, &header, installed)?
+                {
+                    continue;
+                }
+                changed |= self.commit_window(
+                    source,
+                    header.first_cursor,
+                    header.last_cursor,
+                    consumed,
+                    false,
+                    now,
+                    force,
+                    installed,
+                )?;
             }
         }
         Ok(changed)

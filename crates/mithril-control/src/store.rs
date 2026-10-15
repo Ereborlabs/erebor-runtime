@@ -58,6 +58,8 @@ struct ControlStoreInner {
     root: PathBuf,
     state: ControlStoreState,
     state_file: ControlStateOwner,
+    changes: tokio::sync::watch::Sender<u64>,
+    context_changes: context::ContextChanges,
 }
 
 struct ControlStateOwner {
@@ -618,6 +620,8 @@ impl ControlStore {
         Ok(Self {
             inner: Arc::new(ControlStoreLock::new(ControlStoreInner {
                 root,
+                changes: tokio::sync::watch::channel(state.commit_index).0,
+                context_changes: context::ContextChanges::default(),
                 state,
                 state_file,
             })),
@@ -2267,7 +2271,11 @@ fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> R
     apply_transaction(&mut next_state, &transaction, &inner.root)?;
     next_state.commit_index = commit_index;
     inner.state_file.replace(&inner.root, &next_state)?;
+    inner
+        .context_changes
+        .record(&transaction, &inner.state, &next_state);
     inner.state = next_state;
+    inner.changes.send_replace(commit_index);
     debug!(
         "committed a Control store transaction",
         commit_index = %commit_index
@@ -4300,6 +4308,58 @@ mod tests {
         WorkloadTargetFactV1,
     };
     use tempfile::TempDir;
+
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn final_priority_release_wakes_evidence() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        use std::sync::{mpsc, Arc, Barrier};
+        use std::time::Duration;
+
+        let directory = TempDir::new()?;
+        let store = super::ControlStore::open(directory.path())?;
+        let priority_entered = Arc::new(Barrier::new(2));
+        let priority_release = Arc::new(Barrier::new(2));
+        let evidence_entered = Arc::new(Barrier::new(2));
+        let evidence_release = Arc::new(Barrier::new(2));
+        assert!(
+            store.pause_next_evidence_wait_for_test(
+                evidence_entered.clone(),
+                evidence_release.clone(),
+            )
+        );
+        std::thread::scope(
+            |scope| -> std::result::Result<(), Box<dyn std::error::Error>> {
+                let priority = scope
+                    .spawn(|| store.hold_priority_for_test(&priority_entered, &priority_release));
+                priority_entered.wait();
+                let (completed, completion) = mpsc::channel();
+                let evidence_store = &store;
+                let evidence = scope.spawn(move || {
+                    let result = evidence_store
+                        .evidence_lock()
+                        .map(|inner| inner.state.commit_index);
+                    let _sent = completed.send(result);
+                });
+                evidence_entered.wait();
+                priority_release.wait();
+                evidence_release.wait();
+                let completed = completion.recv_timeout(Duration::from_secs(2));
+                let needed_rescue = completed.is_err();
+                if needed_rescue {
+                    let _revision = store.commit_index();
+                }
+                priority.join().map_err(|_| "priority worker panicked")??;
+                evidence.join().map_err(|_| "evidence worker panicked")?;
+                assert!(
+                    !needed_rescue,
+                    "evidence slept after the final priority operation"
+                );
+                assert_eq!(completed??, 0);
+                Ok(())
+            },
+        )
+    }
 
     #[test]
     fn discovery_archive_startup_rejection() -> std::result::Result<(), Box<dyn std::error::Error>>

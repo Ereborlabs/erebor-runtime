@@ -107,6 +107,50 @@ fn native_parity_and_checkpoint() -> TestResult {
     Ok(())
 }
 
+struct CheckedDetector<const INVALID: bool>;
+
+impl<const INVALID: bool> Guest for CheckedDetector<INVALID> {
+    fn package() -> Package {
+        Detector::package()
+    }
+
+    fn evaluate(_evaluation: &Evaluation) -> Result<Output> {
+        Err(Error::contract(ErrorCode::Failed, "unchecked guest entry"))
+    }
+
+    fn evaluate_checked(checked: &crate::CheckedEvaluation<'_>) -> Result<Output> {
+        assert_eq!(checked.model().name, checked.evaluation().export);
+        let mut output = Detector::evaluate(checked.evaluation())?;
+        if INVALID {
+            output.evidence.clear();
+        }
+        Ok(output)
+    }
+}
+
+#[test]
+fn checked_guest_keeps_output_boundary() -> TestResult {
+    let package = Detector::package();
+    let value = evaluation()?;
+    let output = unsafe {
+        Invocation::new(&package, &value, || false)?.call(
+            &Api::for_guest::<CheckedDetector<false>>(),
+            value.context.limits,
+        )?
+    };
+    assert_eq!(output.evidence, Detector::evaluate(&value)?.evidence);
+    let error = unsafe {
+        Invocation::new(&package, &value, || false)?.call(
+            &Api::for_guest::<CheckedDetector<true>>(),
+            value.context.limits,
+        )
+    }
+    .err()
+    .ok_or("unchecked output accepted")?;
+    assert_eq!(error.code(), ErrorCode::Incomplete);
+    Ok(())
+}
+
 #[test]
 fn release_success_failure_and_repeat() -> TestResult {
     let package = Detector::package();

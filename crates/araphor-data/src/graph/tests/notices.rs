@@ -180,3 +180,32 @@ fn graph_notice_checks_once() -> TestResult {
         }));
     Ok(())
 }
+
+#[test]
+fn idle_graph_uses_headers() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
+    let provider = Arc::new(NoticeInputs::default());
+    let owner = GraphAndFindingOwner::new(
+        store.clone(),
+        provider.clone(),
+        InstalledAnalysis::testing(Some(store.clone()), source().tenant_id)?,
+    )?;
+    accept(
+        &store,
+        &[record(1, &wire(1, DeniedBeforeEffect, 2, 2, [20; 16]))?],
+    )?;
+    coverage(&store, 1, 1, "HEALTHY")?;
+    assert_eq!(owner.process(10)?, 1);
+    store.fault_write(
+        "UPDATE graph_subjects SET subject_kind = repeat('X', length(subject_kind))",
+        &[],
+    )?;
+    assert_eq!(owner.process(11)?, 0);
+    assert_eq!(owner.process(11)?, 0);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    provider.revision.store(1, Ordering::SeqCst);
+    assert_eq!(owner.process(12)?, 0);
+    assert!(owner.process(12).is_err());
+    Ok(())
+}

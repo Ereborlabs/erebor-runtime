@@ -1,5 +1,3 @@
-use std::io::{self, Write};
-
 use araphor_analysis_sdk as sdk;
 use minicbor::{Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -28,83 +26,15 @@ pub(super) struct MetadataRef<'a> {
     pub(super) fixtures: &'a [PackageFixtureV1],
 }
 
-#[derive(Default)]
-struct EncodingSize(usize);
-
-impl Write for EncodingSize {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0 = self
-            .0
-            .checked_add(bytes.len())
-            .ok_or_else(|| io::Error::other("Package byte count overflows"))?;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 impl StoredArtifact {
-    #[cfg(test)]
-    pub(crate) fn encoded_size(artifact: &PackageArtifactV1) -> Result<usize> {
-        let encoded = artifact.encoding(false)?;
-        Self::count_encoding(&encoded)
-    }
-
-    pub(super) fn count_encoding(encoded: &super::bundle::ArtifactEncoding<'_>) -> Result<usize> {
-        let (metadata, binaries) = Self::split(encoded.implementations, encoded.fixtures);
-        Self::count_parts(
-            &encoded.borrowed(&metadata.implementations, metadata.fixtures),
-            binaries.into_iter(),
-        )
-    }
-
-    fn count_parts<'a>(
-        encoded: &super::bundle::ArtifactEncoding<'_>,
-        binaries: impl Iterator<Item = &'a [u8]>,
-    ) -> Result<usize> {
-        let mut size = EncodingSize::default();
-        serde_json::to_writer(&mut size, encoded).context(PackageEncodingSnafu)?;
-        for binary in binaries {
-            let added = binary
-                .iter()
-                .fold(0usize, |total, byte| {
-                    total.saturating_add(if *byte < 10 {
-                        1
-                    } else if *byte < 100 {
-                        2
-                    } else {
-                        3
-                    })
-                })
-                .saturating_add(binary.len().saturating_sub(1));
-            size.0 = size
-                .0
-                .checked_add(added)
-                .ok_or_else(|| Code::Invalid.error("retained package byte count"))?;
-        }
-        Ok(size.0)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn encode(artifact: &PackageArtifactV1) -> Result<(Vec<u8>, usize)> {
-        let size = Self::encoded_size(artifact)?;
-        Ok((Self::encode_sized(artifact, size)?, size))
-    }
-
-    pub(crate) fn encode_sized(artifact: &PackageArtifactV1, size: usize) -> Result<Vec<u8>> {
-        if size == 0 {
-            return Err(Code::Limit.error("retained package bytes"));
-        }
+    pub(crate) fn encode(artifact: &PackageArtifactV1) -> Result<Vec<u8>> {
         let (metadata, binaries) = Self::split(&artifact.implementations, &artifact.fixtures);
         let metadata = serde_json::to_vec(&metadata).context(PackageEncodingSnafu)?;
         let mut bytes = Vec::new();
         let mut encoder = Encoder::new(&mut bytes);
         encoder
-            .array(4)
-            .and_then(|encoder| encoder.u32(1))
-            .and_then(|encoder| encoder.u64(size as u64))
+            .array(3)
+            .and_then(|encoder| encoder.u32(2))
             .and_then(|encoder| encoder.bytes(&metadata))
             .and_then(|encoder| encoder.array(binaries.len() as u64))
             .map_err(|_| Code::Invalid.error("retained package frame"))?;
@@ -112,9 +42,6 @@ impl StoredArtifact {
             encoder
                 .bytes(binary)
                 .map_err(|_| Code::Invalid.error("retained package frame"))?;
-        }
-        if bytes.len() > size {
-            return Err(Code::Limit.error("retained package frame bytes"));
         }
         Ok(bytes)
     }
@@ -187,40 +114,8 @@ impl StoredArtifact {
         )
     }
 
-    pub(crate) fn frame_size(bytes: &[u8]) -> Result<usize> {
-        let mut decoder = Decoder::new(bytes);
-        let invalid = |_| Code::Invalid.error("retained package frame");
-        if decoder.array().map_err(invalid)? != Some(4) || decoder.u32().map_err(invalid)? != 1 {
-            return Err(Code::Invalid.error("retained package frame"));
-        }
-        let size = usize::try_from(decoder.u64().map_err(invalid)?)
-            .map_err(|_| Code::Limit.error("retained package bytes"))?;
-        if size == 0 || bytes.len() > size {
-            return Err(Code::Limit.error("retained package bytes"));
-        }
-        decoder.bytes().map_err(invalid)?;
-        let count = decoder
-            .array()
-            .map_err(invalid)?
-            .ok_or_else(|| Code::Invalid.error("retained package frame"))?;
-        if count > bytes.len() as u64 {
-            return Err(Code::Invalid.error("retained package binary count"));
-        }
-        for _ in 0..count {
-            decoder.bytes().map_err(invalid)?;
-        }
-        if decoder.position() != bytes.len() {
-            return Err(Code::Invalid.error("retained package trailing bytes"));
-        }
-        Ok(size)
-    }
-
-    pub(crate) fn decode(
-        bytes: &[u8],
-        descriptor: &sdk::Package,
-        encoded_bytes: usize,
-    ) -> Result<PackageArtifactV1> {
-        let (mut metadata, mut decoder) = Self::metadata(bytes, descriptor, encoded_bytes)?;
+    pub(crate) fn decode(bytes: &[u8], descriptor: &sdk::Package) -> Result<PackageArtifactV1> {
+        let (mut metadata, mut decoder) = Self::metadata(bytes)?;
         let invalid = |_| Code::Invalid.error("retained package frame");
         for implementation in &mut metadata.implementations {
             let (artifact, qualification) = match implementation {
@@ -247,27 +142,16 @@ impl StoredArtifact {
         })
     }
 
-    pub(crate) fn validate(
-        bytes: &[u8],
-        descriptor: &sdk::Package,
-        encoded_bytes: usize,
-    ) -> Result<()> {
-        Self::metadata(bytes, descriptor, encoded_bytes).map(|_| ())
+    pub(crate) fn validate(bytes: &[u8]) -> Result<()> {
+        Self::metadata(bytes).map(|_| ())
     }
 
-    fn metadata<'a>(
-        bytes: &'a [u8],
-        descriptor: &sdk::Package,
-        encoded_bytes: usize,
-    ) -> Result<(Metadata, Decoder<'a>)> {
-        if Self::frame_size(bytes)? != encoded_bytes {
-            return Err(Code::Invalid.error("retained package byte count"));
-        }
+    fn metadata(bytes: &[u8]) -> Result<(Metadata, Decoder<'_>)> {
         let mut decoder = Decoder::new(bytes);
         let invalid = |_| Code::Invalid.error("retained package frame");
-        decoder.array().map_err(invalid)?;
-        decoder.u32().map_err(invalid)?;
-        decoder.u64().map_err(invalid)?;
+        if decoder.array().map_err(invalid)? != Some(3) || decoder.u32().map_err(invalid)? != 2 {
+            return Err(Code::Invalid.error("retained package frame"));
+        }
         let metadata: Metadata = serde_json::from_slice(decoder.bytes().map_err(invalid)?)
             .context(PackageEncodingSnafu)?;
         let count = decoder
@@ -302,21 +186,12 @@ impl StoredArtifact {
         if consumed != count {
             return Err(Code::Invalid.error("retained package binary count"));
         }
-        let encoded = super::bundle::ArtifactEncoding::new(
-            descriptor,
-            &metadata.implementations,
-            &metadata.fixtures,
-            false,
-        )?;
-        let mut counter = decoder.clone();
-        let binaries = (0..count).map(|_| counter.bytes());
-        let mut raw = Vec::with_capacity(count as usize);
-        for binary in binaries {
-            raw.push(binary.map_err(invalid)?);
+        let mut remaining = decoder.clone();
+        for _ in 0..count {
+            remaining.bytes().map_err(invalid)?;
         }
-        let canonical = Self::count_parts(&encoded, raw.into_iter())?;
-        if canonical != encoded_bytes {
-            return Err(Code::Invalid.error("retained package encoded size"));
+        if remaining.position() != bytes.len() {
+            return Err(Code::Invalid.error("retained package trailing bytes"));
         }
         Ok((metadata, decoder))
     }

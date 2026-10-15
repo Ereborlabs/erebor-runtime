@@ -23,6 +23,9 @@ impl AnalysisStore {
         {
             return self.reject("the package context keys are invalid");
         }
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
         self.read_snapshot(|reader| {
             keys.iter()
                 .map(|key| {
@@ -44,6 +47,9 @@ impl AnalysisStore {
     ) -> Result<Vec<PackageResultRefV1>> {
         if ids.len() > 64 {
             return self.reject("the package result references exceed their limit");
+        }
+        if ids.is_empty() {
+            return Ok(Vec::new());
         }
         self.read_snapshot(|reader| {
             ids.iter()
@@ -84,6 +90,9 @@ impl AnalysisStore {
     ) -> Result<PackageEvidence> {
         if ids.len() > 64 {
             return self.reject("the package evidence sources exceed their limit");
+        }
+        if ids.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
         }
         let encoded = serde_json::to_string(ids).context(JsonSnafu {
             path: "<package-evidence>",
@@ -254,5 +263,31 @@ impl AnalysisStore {
                 + reference.key.lifetime_key.len()) as i64;
         }
         Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_provenance_reads() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let mut held = Vec::new();
+        while let Ok(permit) = store.reserve_reader() {
+            held.push(permit);
+        }
+        assert!(!held.is_empty());
+        assert!(store.package_contexts([1; 16], &[])?.is_empty());
+        assert!(store.package_result_refs([1; 16], &[])?.is_empty());
+        assert_eq!(
+            store.package_evidence([1; 16], &[])?,
+            (Vec::new(), Vec::new())
+        );
+        let excess = vec!["result".to_owned(); 65];
+        assert!(store.package_result_refs([1; 16], &excess).is_err());
+        assert!(store.package_evidence([1; 16], &excess).is_err());
+        Ok(())
     }
 }

@@ -294,7 +294,7 @@ impl AnalysisStore {
         raw.restore_receipts(writer)?;
         for id in deleting {
             Self::remove_segment(writer, root, &raw, id)?;
-            raw.forget_segment(id)?;
+            raw.forget_segments([id])?;
         }
         raw.validate_catalog(writer)?;
         raw.project(writer, None)?;
@@ -657,7 +657,7 @@ impl RawJournal {
             .filter(|id| !ids.contains(id))
             .collect();
         for id in removed {
-            self.forget_segment(id)?;
+            self.forget_segments([id])?;
         }
         for entry in self.entries.values() {
             let key = entry.identity.key();

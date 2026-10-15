@@ -3,10 +3,10 @@ use std::ops::{Bound, ControlFlow};
 
 use duckdb::types::{TimeUnit, Value};
 use sqlparser::ast::{
-    BinaryOperator, DataType, DateTimeField, Distinct, Expr, Function, FunctionArg,
-    FunctionArgExpr, FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator,
-    LimitClause, NamedWindowExpr, ObjectName, OrderBy, OrderByExpr, OrderByKind, OrderBySort,
-    Query, Select, SelectFlavor, SelectItem, SelectItemQualifiedWildcardKind, SetExpr,
+    visit_expressions, BinaryOperator, DataType, DateTimeField, Distinct, Expr, Function,
+    FunctionArg, FunctionArgExpr, FunctionArguments, GroupByExpr, Ident, JoinConstraint,
+    JoinOperator, LimitClause, NamedWindowExpr, ObjectName, OrderBy, OrderByExpr, OrderByKind,
+    OrderBySort, Query, Select, SelectFlavor, SelectItem, SelectItemQualifiedWildcardKind, SetExpr,
     SetQuantifier, Statement, TableAlias, TableFactor, TimezoneInfo, UnaryOperator,
     Value as SqlValue, VisitMut as _, VisitorMut, WildcardAdditionalOptions, WindowFrameBound,
     WindowFrameUnits, WindowSpec, WindowType,
@@ -36,6 +36,8 @@ pub struct QuerySql {
     tests: Vec<TimeTest>,
     clocks: usize,
     follow: bool,
+    event_fields: Option<BTreeSet<String>>,
+    event_operation: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +115,11 @@ impl QuerySql {
         };
         let dependencies = std::mem::take(&mut binder.dependencies);
         let clocks = binder.clocks;
+        let event_fields = Self::event_fields_for(&query, operation, clocks);
+        let event_operation = event_fields.as_ref().and_then(|_| {
+            let (select, alias) = TimeTest::direct_events(&query)?;
+            Self::event_operation_for(select.selection.as_ref()?, &alias, &parameters)
+        });
         if query.to_string().len() > SQL_BYTES {
             return Err(Binder::invalid("expanded SQL length"));
         }
@@ -126,7 +133,116 @@ impl QuerySql {
             tests,
             clocks,
             follow,
+            event_fields,
+            event_operation,
         })
+    }
+
+    pub(super) fn event_fields(&self) -> Option<&BTreeSet<String>> {
+        self.event_fields.as_ref()
+    }
+
+    pub(super) fn event_operation(&self) -> Option<u32> {
+        self.event_operation
+    }
+
+    fn event_fields_for(
+        query: &Query,
+        operation: QueryOperation,
+        clocks: usize,
+    ) -> Option<BTreeSet<String>> {
+        let (select, alias) = TimeTest::direct_events(query)?;
+        if clocks != 0 || (operation != QueryOperation::Append && !Self::count_shape(query, select))
+        {
+            return None;
+        }
+        let mut fields = BTreeSet::from(["commit_revision".into(), "ordinal".into()]);
+        let _ = visit_expressions(query, |expr| {
+            if let Expr::CompoundIdentifier(parts) = expr {
+                if let [table, column] = parts.as_slice() {
+                    if table.value == alias {
+                        fields.insert(column.value.clone());
+                    }
+                }
+            }
+            ControlFlow::<()>::Continue(())
+        });
+        Some(fields)
+    }
+
+    fn count_shape(query: &Query, select: &Select) -> bool {
+        if query.order_by.is_some()
+            || query.limit_clause.is_some()
+            || select.distinct.is_some()
+            || select.having.is_some()
+            || !matches!(&select.group_by, GroupByExpr::Expressions(items, _) if items.is_empty())
+        {
+            return false;
+        }
+        let [item] = select.projection.as_slice() else {
+            return false;
+        };
+        let expr = match item {
+            SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => expr,
+            _ => return false,
+        };
+        matches!(expr, Expr::Function(function)
+            if Binder::name(&function.name).is_ok_and(|name| name == "count")
+                && function.over.is_none() && function.filter.is_none()
+                && matches!(&function.args, FunctionArguments::List(args)
+                    if args.duplicate_treatment.is_none() && args.clauses.is_empty()
+                        && matches!(args.args.as_slice(), [FunctionArg::Unnamed(FunctionArgExpr::Wildcard)])))
+    }
+
+    fn event_operation_for(expr: &Expr, alias: &str, parameters: &[Value]) -> Option<u32> {
+        match expr {
+            Expr::Nested(expr) => Self::event_operation_for(expr, alias, parameters),
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::And,
+                right,
+            } => Self::event_operation_for(left, alias, parameters)
+                .or_else(|| Self::event_operation_for(right, alias, parameters)),
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Eq,
+                right,
+            } => {
+                let column = |expr: &Expr| {
+                    matches!(expr, Expr::CompoundIdentifier(parts) if matches!(parts.as_slice(), [table, column]
+                        if table.value == alias && column.value == "operation"))
+                };
+                let value = if column(left) {
+                    right.as_ref()
+                } else if column(right) {
+                    left.as_ref()
+                } else {
+                    return None;
+                };
+                let Expr::Value(value) = value else {
+                    return None;
+                };
+                match &value.value {
+                    SqlValue::Number(value, false) => value.parse().ok(),
+                    SqlValue::Placeholder(mark) => {
+                        let index = mark
+                            .strip_prefix('$')?
+                            .parse::<usize>()
+                            .ok()?
+                            .checked_sub(1)?;
+                        match parameters.get(index)? {
+                            Value::UInt(value) => Some(*value),
+                            Value::UBigInt(value) => u32::try_from(*value).ok(),
+                            Value::Int(value) => u32::try_from(*value).ok(),
+                            Value::BigInt(value) => u32::try_from(*value).ok(),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     pub fn original(&self) -> &str {

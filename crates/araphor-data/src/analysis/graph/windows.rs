@@ -16,24 +16,26 @@ const GRAPH_HEADS: &str = "SELECT result_id, commit_revision, first_cursor,
 type GraphPage = (Vec<(String, GraphSnapshotV1, u64)>, Option<String>);
 
 impl AnalysisStore {
-    pub(crate) fn graph_window_bounds(
+    pub(crate) fn graph_window_headers(
         &self,
         source: &EvidenceIntakeIdentityV1,
         after: Option<u64>,
-    ) -> Result<Vec<(u64, u64)>> {
+    ) -> Result<Vec<(String, GraphSnapshotV1, u64)>> {
         if !source.valid() {
             return self.reject("the graph window source is invalid");
         }
         self.read_snapshot(|reader| {
             let query = format!(
-                "SELECT result_id FROM ({GRAPH_HEADS}) heads
+                "SELECT result_id, commit_revision FROM ({GRAPH_HEADS}) heads
                  WHERE current_rank = 1 AND (? IS NULL OR first_cursor > ?)
-                 ORDER BY first_cursor LIMIT 1"
+                 ORDER BY first_cursor LIMIT 32"
             );
             let key = source.key();
-            let id: Option<String> = reader
-                .query_row(
-                    &query,
+            let mut statement = reader.prepare(&query).context(AnalysisDatabaseSnafu {
+                operation: "prepare graph window headers",
+            })?;
+            let rows = statement
+                .query_map(
                     params![
                         source.tenant_id.as_slice(),
                         GRAPH_PROCESSOR,
@@ -43,20 +45,22 @@ impl AnalysisStore {
                         after,
                         after
                     ],
-                    |row| row.get(0),
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
                 )
-                .optional()
                 .context(AnalysisDatabaseSnafu {
-                    operation: "read graph window bounds",
+                    operation: "read graph window headers",
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode graph window headers",
                 })?;
-            let Some(id) = id else {
-                return Ok(Vec::new());
-            };
-            let header = self.selected_graph_header(reader, source.tenant_id, Some(source), &id)?;
-            Ok(vec![(
-                header.snapshot.first_cursor,
-                header.snapshot.last_cursor,
-            )])
+            rows.into_iter()
+                .map(|(id, revision)| {
+                    let header =
+                        self.selected_graph_header(reader, source.tenant_id, Some(source), &id)?;
+                    Ok((id, header.snapshot, revision))
+                })
+                .collect()
         })
     }
 

@@ -9,8 +9,10 @@ use super::InstalledAnalysis;
 
 mod memory;
 
-pub(super) struct InstalledBundle {
-    pub(super) value: PackageBundleV1,
+pub(in crate::package) struct InstalledBundle {
+    pub(in crate::package) value: PackageBundleV1,
+    digest: String,
+    identities: Vec<Vec<Option<super::super::PackageArtifactIdentityV1>>>,
     _lease: QueryLease,
 }
 
@@ -21,13 +23,51 @@ pub(super) struct InstalledSnapshot {
 }
 
 impl InstalledBundle {
-    pub(super) fn new(query: &QueryOwner, value: PackageBundleV1) -> Result<Arc<Self>> {
-        let bytes = memory::BundleMemory::bundle(&value)?;
+    pub(in crate::package) fn new(query: &QueryOwner, value: PackageBundleV1) -> Result<Arc<Self>> {
+        let digest = value.digest()?;
+        let identities = value
+            .artifacts
+            .iter()
+            .map(|artifact| {
+                artifact
+                    .implementations
+                    .iter()
+                    .map(|implementation| implementation.identity())
+                    .collect()
+            })
+            .collect::<Result<Vec<Vec<_>>>>()?;
+        let bytes = memory::BundleMemory::retained(&value, &digest, &identities)?;
         let lease = query.retain_analysis_input(bytes)?;
         Ok(Arc::new(Self {
             value,
+            digest,
+            identities,
             _lease: lease,
         }))
+    }
+
+    pub(in crate::package) fn admission(&self) -> super::super::PackageBundleRef<'_> {
+        super::super::PackageBundleRef::retained(&self.value, &self.digest)
+    }
+
+    pub(super) fn identity(
+        &self,
+        package: &str,
+        export: &str,
+    ) -> Result<Option<super::super::PackageArtifactIdentityV1>> {
+        let artifact = self
+            .value
+            .artifacts
+            .iter()
+            .position(|artifact| artifact.descriptor.id == package)
+            .ok_or_else(|| Code::Missing.error("installed artifact"))?;
+        let selected = self.value.artifacts[artifact].implementation(export)?;
+        let implementation = self.value.artifacts[artifact]
+            .implementations
+            .iter()
+            .position(|implementation| std::ptr::eq(implementation, selected))
+            .ok_or_else(|| Code::Missing.error("installed export"))?;
+        Ok(self.identities[artifact][implementation].clone())
     }
 }
 

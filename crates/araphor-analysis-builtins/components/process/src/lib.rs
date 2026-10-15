@@ -10,6 +10,10 @@ impl sdk::guest::Guest for ProcessComponent {
     fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
         Detector::Process.evaluate(evaluation)
     }
+
+    fn evaluate_checked(checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        Detector::Process.evaluate_checked(checked)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

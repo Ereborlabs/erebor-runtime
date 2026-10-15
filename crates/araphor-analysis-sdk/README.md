@@ -88,8 +88,11 @@ Enable the SDK `guest` feature. Implement `guest::Guest::package` and
 `guest::Guest::evaluate` on the algorithm type. Use
 `export_component!(Algorithm)` under `#[cfg(target_arch = "wasm32")]` to export
 the generated analysis interface. Use a `cdylib` crate for the core module.
-The guest wrapper decodes typed inputs, validates the evaluation, calls the
-algorithm, and validates and encodes its complete result.
+The guest wrapper decodes typed inputs, validates the evaluation, calls
+`Guest::evaluate_checked`, and validates and encodes its complete result.
+The default method calls `Guest::evaluate`. An algorithm can override the
+checked method to use the immutable `CheckedEvaluation` and avoid repeated
+input checks. Keep input and output checks on its standalone Rust entry.
 
 The bindings use `wit-bindgen` 0.61.1. The component builder uses
 `wit-component` and `wasmparser` 0.258.3. The production host uses Wasmtime
@@ -262,6 +265,13 @@ the generated component bindings and bounded IPC transport. The package
 execution owner supplies cancellation and Wasmtime isolation. Native execution
 shares the host process and has cooperative cancellation.
 
+`Package::check_evaluation` returns an immutable `CheckedEvaluation` after it
+validates the input contract. `Guest::evaluate_checked` permits one invocation
+to reuse that proof. The proof borrows the package and inputs. The native and
+Wasm wrappers validate imported data before they create the proof. They
+validate output against the same checked contract. Standalone evaluation and
+host output validation retain their checks.
+
 Local fixture tests call trusted Rust code in the test process. These tests
 do not install a package or prove a sandbox. Structured errors distinguish
 invalid, incompatible, unauthorized, incomplete, failed, and limit results.
@@ -278,6 +288,10 @@ by historical HF findings.
 No package descriptor grants policy or physical authority.
 
 ## Current source qualification
+
+The receipt below covers the earlier table and query change. The
+[performance simplification record](../../docs/guides/araphor-performance-simplification-review.md)
+covers the later checked-input and cached-declaration changes.
 
 The table and query declarations and dataset validators pass 74 SDK cases and
 six builder cases. The full current Rust procedure passes: 2,146 tests, zero

@@ -26,6 +26,7 @@ pub use error::{Error, ErrorCode, Result};
 pub use evaluation::*;
 pub use fixture::{Fixture, FixtureReport};
 pub use model::*;
+pub use validation::CheckedEvaluation;
 
 pub(crate) use error::*;
 

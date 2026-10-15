@@ -42,7 +42,10 @@ pub struct GraphAndFindingOwner {
     store: Arc<AnalysisStore>,
     execution: crate::InstalledAnalysis,
     provider: Arc<dyn GraphContextProvider>,
-    operation: Mutex<Option<crate::EvidenceIntakeIdentityV1>>,
+    operation: Mutex<(
+        Option<crate::EvidenceIntakeIdentityV1>,
+        Option<crate::InstalledAnalysis>,
+    )>,
 }
 
 impl GraphAndFindingOwner {
@@ -56,7 +59,7 @@ impl GraphAndFindingOwner {
             store,
             execution,
             provider,
-            operation: Mutex::new(None),
+            operation: Mutex::new((None, None)),
         };
         let mut tenant = None;
         loop {

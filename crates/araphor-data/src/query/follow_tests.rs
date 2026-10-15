@@ -122,7 +122,7 @@ async fn cancelled(stream: &mut QueryStream, last: Option<&QueryCheckpoint>) -> 
             ..
         } => assert_eq!(last_checkpoint.as_ref(), last),
         payload => {
-            return Err(format!("expected cancellation terminal, received {payload:?}").into())
+            return Err(format!("expected cancellation terminal, received {payload:?}").into());
         }
     }
     drop(frame);
@@ -370,6 +370,65 @@ async fn query_follow_coalesced_output() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn query_follow_dependency_reuse() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    fixture.event(1, 1, 7)?;
+    fixture.event(2, 2, 8)?;
+    let owner = Arc::new(fixture.owner(QueryLimits {
+        output_rows: 1,
+        heartbeat: Duration::from_nanos(1),
+        ..Default::default()
+    })?);
+    let plan = fixture.plan(QueryTemplate::Events { operation: None })?;
+    let clock = Arc::new(ExpiryClock {
+        now: AtomicU64::new(100),
+        reads: AtomicUsize::new(0),
+    });
+    let mut stream = owner.follow_clock(plan, None, clock)?;
+    drop(next(&mut stream).await?);
+    for cursor in [1, 2] {
+        let data = next(&mut stream).await?;
+        assert_eq!(cursors(&data)?, vec![cursor]);
+        drop(data);
+        checkpoint(&next(&mut stream).await?)?;
+    }
+    assert_eq!(owner.dependency_reads.load(Ordering::SeqCst), 1);
+    for _ in 0..3 {
+        assert!(matches!(
+            next(&mut stream).await?.payload,
+            QueryPayload::Health { .. }
+        ));
+    }
+    assert_eq!(owner.dependency_reads.load(Ordering::SeqCst), 1);
+    fixture.event(3, 3, 9)?;
+    let data = next(&mut stream).await?;
+    assert_eq!(cursors(&data)?, vec![3]);
+    drop(data);
+    let complete = checkpoint(&next(&mut stream).await?)?;
+    assert_eq!(owner.dependency_reads.load(Ordering::SeqCst), 2);
+    let tables = owner.input_refs.lock().map_err(|_| "input refs")?.len();
+    let mut foreign = fixture.source.clone();
+    foreign.tenant_id = [9; 16];
+    fixture.commit_as(&foreign, 0, 1, 4, crate::EvidenceRecord::default())?;
+    assert!(matches!(
+        next(&mut stream).await?.payload,
+        QueryPayload::Health { .. }
+    ));
+    assert_eq!(owner.dependency_reads.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        owner.input_refs.lock().map_err(|_| "input refs")?.len(),
+        tables
+    );
+    assert!(matches!(
+        next(&mut stream).await?.payload,
+        QueryPayload::Health { .. }
+    ));
+    assert_eq!(owner.dependency_reads.load(Ordering::SeqCst), 3);
+    cancelled(&mut stream, Some(&complete)).await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn query_follow_autonomous_expiry() -> TestResult {
     let fixture = QueryFixture::new()?;
@@ -422,6 +481,7 @@ async fn query_follow_autonomous_expiry() -> TestResult {
     assert_eq!(complete.read_revision(), meta.commit_revision);
     assert_eq!(complete.position(), None);
     assert_eq!(fixture.store.meta()?, meta);
+    assert_eq!(owner.dependency_reads.load(Ordering::SeqCst), 2);
     inputs_released(&owner);
     assert_eq!(Arc::strong_count(&owner), 1);
     Ok(())

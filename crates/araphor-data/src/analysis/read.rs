@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex, TryLockError, TryLockResult,
+    Arc, Condvar, Mutex, TryLockError, TryLockResult,
 };
 use std::time::{Duration, Instant};
 
@@ -15,23 +15,29 @@ pub struct AnalysisReadControl {
     deadline: Instant,
     cancelled: Arc<AtomicBool>,
     interrupt: Arc<Mutex<Option<Arc<duckdb::InterruptHandle>>>>,
+    monitor: Arc<ReadMonitor>,
     #[cfg(test)]
     pub(super) wait_signal: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 impl Default for AnalysisReadControl {
     fn default() -> Self {
-        Self {
-            deadline: Instant::now() + Duration::from_secs(1),
-            cancelled: Arc::new(AtomicBool::new(false)),
-            interrupt: Arc::new(Mutex::new(None)),
-            #[cfg(test)]
-            wait_signal: Mutex::new(None),
-        }
+        Self::monitored(Arc::new(ReadMonitor::default()))
     }
 }
 
 impl AnalysisReadControl {
+    pub(super) fn monitored(monitor: Arc<ReadMonitor>) -> Self {
+        Self {
+            deadline: Instant::now() + Duration::from_secs(1),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            interrupt: Arc::new(Mutex::new(None)),
+            monitor,
+            #[cfg(test)]
+            wait_signal: Mutex::new(None),
+        }
+    }
+
     pub fn with_timeout(timeout: Duration) -> Result<Self> {
         let deadline = Instant::now()
             .checked_add(timeout)
@@ -53,6 +59,7 @@ impl AnalysisReadControl {
         Ok(Self {
             cancelled: Arc::clone(&self.cancelled),
             interrupt: Arc::clone(&self.interrupt),
+            monitor: Arc::clone(&self.monitor),
             ..Self::with_timeout(timeout)?
         })
     }
@@ -66,12 +73,8 @@ impl AnalysisReadControl {
 
     pub fn cancel(&self) -> Result<()> {
         self.cancelled.store(true, Ordering::Release);
-        if let Some(interrupt) = self
-            .interrupt
-            .lock()
-            .map_err(|_| Self::lock_error())?
-            .as_ref()
-        {
+        let state = self.interrupt.lock().map_err(|_| Self::lock_error())?;
+        if let Some(interrupt) = state.as_ref() {
             interrupt.interrupt();
         }
         Ok(())
@@ -133,10 +136,11 @@ impl AnalysisReadControl {
         read: impl FnOnce(&duckdb::Connection) -> Result<T>,
     ) -> Result<T> {
         self.check()?;
+        let monitor = reader.monitor.unwrap_or(&self.monitor);
         let connection = reader.get_mut()?;
         let mut snapshot = None;
         let mut attempted = false;
-        let result = self.native_run(connection.interrupt_handle(), || {
+        let result = self.native_run(monitor, connection.interrupt_handle(), || {
             attempted = true;
             let transaction = connection.transaction().context(AnalysisDatabaseSnafu {
                 operation: "begin read snapshot",
@@ -168,13 +172,14 @@ impl AnalysisReadControl {
         connection: &duckdb::Connection,
         query: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
-        let result = self.native_run(connection.interrupt_handle(), query);
+        let result = self.native_run(&self.monitor, connection.interrupt_handle(), query);
         self.check()?;
         result
     }
 
     fn native_run<T>(
         &self,
+        monitor: &ReadMonitor,
         interrupt: Arc<duckdb::InterruptHandle>,
         read: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
@@ -189,35 +194,111 @@ impl AnalysisReadControl {
         *slot = Some(interrupt.clone());
         drop(slot);
         let guard = ReadInterrupt(self);
+        let deadline = monitor.enter(self, interrupt)?;
         self.check()?;
-        let result = std::thread::scope(|scope| {
-            let (stop, stopped) = std::sync::mpsc::channel::<()>();
-            let remaining = self.deadline.saturating_duration_since(Instant::now());
-            std::thread::Builder::new()
-                .name("analysis-read-deadline".into())
-                .spawn_scoped(scope, move || {
-                    let mut wait = remaining;
-                    while matches!(
-                        stopped.recv_timeout(wait),
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-                    ) {
-                        interrupt.interrupt();
-                        wait = Duration::from_millis(1);
-                    }
-                })
-                .map_err(|error| {
-                    crate::AnalysisStateSnafu {
-                        path: std::path::Path::new("<analysis-read>"),
-                        reason: format!("the read deadline worker could not start: {error}"),
-                    }
-                    .build()
-                })?;
-            let result = read();
-            drop(stop);
-            result
-        });
+        let result = read();
+        drop(deadline);
         drop(guard);
         result
+    }
+}
+
+#[derive(Default)]
+pub(super) struct ReadMonitor {
+    state: Arc<(Mutex<ReadDeadline>, Condvar)>,
+    worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+#[derive(Default)]
+struct ReadDeadline {
+    active: Option<(Instant, Arc<duckdb::InterruptHandle>)>,
+    stopped: bool,
+}
+
+impl ReadMonitor {
+    fn enter(
+        &self,
+        control: &AnalysisReadControl,
+        interrupt: Arc<duckdb::InterruptHandle>,
+    ) -> Result<ReadStage<'_>> {
+        let mut worker = control.lock(|| self.worker.try_lock())?;
+        let mut state = control.lock(|| self.state.0.try_lock())?;
+        if state.active.is_some() {
+            return crate::AnalysisBusySnafu {
+                resource: "read control",
+            }
+            .fail();
+        }
+        if worker
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+        {
+            return crate::AnalysisStateSnafu {
+                path: "<analysis-read>",
+                reason: "the read deadline worker stopped",
+            }
+            .fail();
+        }
+        if worker.is_none() {
+            let shared = self.state.clone();
+            *worker = Some(
+                std::thread::Builder::new()
+                    .name("analysis-read-deadline".into())
+                    .spawn(move || Self::run(&shared))
+                    .map_err(|error| {
+                        crate::AnalysisStateSnafu {
+                            path: "<analysis-read>",
+                            reason: format!("the read deadline worker could not start: {error}"),
+                        }
+                        .build()
+                    })?,
+            );
+        }
+        state.active = Some((control.deadline, interrupt));
+        self.state.1.notify_one();
+        Ok(ReadStage(self))
+    }
+
+    fn run(shared: &(Mutex<ReadDeadline>, Condvar)) {
+        let Ok(mut state) = shared.0.lock() else {
+            return;
+        };
+        while !state.stopped {
+            let next = if let Some((deadline, interrupt)) = &state.active {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let wait = if remaining.is_zero() {
+                    interrupt.interrupt();
+                    Duration::from_millis(1)
+                } else {
+                    remaining
+                };
+                shared
+                    .1
+                    .wait_timeout(state, wait)
+                    .ok()
+                    .map(|(state, _)| state)
+            } else {
+                shared.1.wait(state).ok()
+            };
+            let Some(next) = next else {
+                return;
+            };
+            state = next;
+        }
+    }
+}
+
+impl Drop for ReadMonitor {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.0.lock() {
+            state.stopped = true;
+        }
+        self.state.1.notify_one();
+        if let Ok(worker) = self.worker.get_mut() {
+            if let Some(worker) = worker.take() {
+                let _joined = worker.join();
+            }
+        }
     }
 }
 
@@ -227,6 +308,17 @@ impl Drop for ReadInterrupt<'_> {
     fn drop(&mut self) {
         if let Ok(mut slot) = self.0.interrupt.lock() {
             *slot = None;
+        }
+    }
+}
+
+struct ReadStage<'a>(&'a ReadMonitor);
+
+impl Drop for ReadStage<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.state.0.lock() {
+            state.active = None;
+            self.0.state.1.notify_one();
         }
     }
 }
@@ -358,6 +450,107 @@ mod tests {
     use super::*;
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    #[test]
+    fn read_monitor_store_reuse() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let expected = store.meta()?;
+        let workers = || -> std::result::Result<Vec<_>, &str> {
+            store
+                .read_monitors
+                .iter()
+                .map(|monitor| {
+                    Ok(monitor
+                        .worker
+                        .lock()
+                        .map_err(|_| "monitor poisoned")?
+                        .as_ref()
+                        .map(|worker| worker.thread().id()))
+                })
+                .collect()
+        };
+        assert_eq!(store.meta()?, expected);
+        let before = workers()?;
+        assert!(before.iter().all(Option::is_some));
+        assert_eq!(store.meta()?, expected);
+        assert_eq!(workers()?, before);
+        assert!(store.trace_intent([1; 16], [1; 16])?.is_none());
+        let writer = store
+            .write_monitor
+            .worker
+            .lock()
+            .map_err(|_| "monitor poisoned")?
+            .as_ref()
+            .ok_or("monitor absent")?
+            .thread()
+            .id();
+        assert!(store.trace_intent([1; 16], [1; 16])?.is_none());
+        assert_eq!(
+            store
+                .write_monitor
+                .worker
+                .lock()
+                .map_err(|_| "monitor poisoned")?
+                .as_ref()
+                .ok_or("monitor absent")?
+                .thread()
+                .id(),
+            writer
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn read_monitor_stage_cleanup() -> TestResult {
+        let connection = Connection::open_in_memory()?;
+        let operation = AnalysisReadControl::with_timeout(Duration::from_secs(5))?;
+        let stage = operation.within(Duration::from_millis(50))?;
+        let result = stage.query_run(&connection, || {
+            connection
+                .query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "test shorter stage deadline",
+                })
+        });
+        assert!(matches!(
+            result,
+            Err(crate::Error::AnalysisReadDeadline { .. })
+        ));
+        let worker = operation
+            .monitor
+            .worker
+            .lock()
+            .map_err(|_| "monitor poisoned")?
+            .as_ref()
+            .ok_or("monitor absent")?
+            .thread()
+            .id();
+        let result = operation.query_run(&connection, || {
+            connection
+                .query_row("SELECT 1", [], |row| row.get::<_, i64>(0))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "test next stage",
+                })
+        })?;
+        assert_eq!(result, 1);
+        assert_eq!(
+            operation
+                .monitor
+                .worker
+                .lock()
+                .map_err(|_| "monitor poisoned")?
+                .as_ref()
+                .ok_or("monitor absent")?
+                .thread()
+                .id(),
+            worker
+        );
+        operation.check()?;
+        Ok(())
+    }
 
     #[test]
     fn query_scope_reader_recovery() -> TestResult {

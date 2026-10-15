@@ -23,14 +23,14 @@ impl AnalysisStore {
                 || package.revision.len() > 4096
                 || package.descriptor.is_empty()
                 || package.artifact.is_empty()
-                || package.encoded_bytes == 0
-                || crate::package::storage::StoredArtifact::frame_size(&package.artifact)?
-                    != package.encoded_bytes
                 || package.dependencies.len() > 64
                 || !keys.insert((&package.package_id, &package.revision))
             {
                 return self.reject("the package closure is invalid");
             }
+        }
+        for package in revisions {
+            crate::package::storage::StoredArtifact::validate(&package.artifact)?;
         }
         let mut guard = self.writer()?;
         let transaction = guard
@@ -56,8 +56,8 @@ impl AnalysisStore {
             })?;
             transaction
                 .execute(
-                    "INSERT INTO package_revisions (tenant_id, package_id, revision, descriptor, artifact, dependencies, commit_revision, encoded_bytes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO package_revisions (tenant_id, package_id, revision, descriptor, artifact, dependencies, commit_revision)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)",
                     params![
                         tenant.as_slice(),
                         package.package_id,
@@ -65,8 +65,7 @@ impl AnalysisStore {
                         package.descriptor,
                         package.artifact,
                         dependencies,
-                        revision,
-                        package.encoded_bytes as u64
+                        revision
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {

@@ -173,9 +173,13 @@ impl PackageAuthorization for ControlPackageAuthority {
             .check(grant, action)
     }
 
-    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleV1) -> araphor_data::Result<()> {
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        bundle: &araphor_data::PackageBundleRef<'_>,
+    ) -> araphor_data::Result<()> {
         if self.internal(grant) {
-            return if self.pins.contains(&bundle.digest()?) {
+            return if self.pins.contains(bundle.digest()) {
                 Ok(())
             } else {
                 Err(Self::denied())
@@ -193,7 +197,7 @@ impl PackageAuthorization for ControlPackageAuthority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleV1,
+        bundle: &araphor_data::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(&[(grant, bundle)], action, operation)
@@ -201,7 +205,7 @@ impl PackageAuthorization for ControlPackageAuthority {
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, &PackageBundleV1)],
+        grants: &[(&PackageGrantV1, &araphor_data::PackageBundleRef<'_>)],
         action: PackageActionV1,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {

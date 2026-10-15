@@ -105,6 +105,12 @@ impl QueryOwner {
         Ok(queries)
     }
 
+    pub(crate) fn inputs_use_clock(model: &sdk::Model) -> Result<bool> {
+        Ok(Self::admit_inputs(model)?
+            .values()
+            .any(|sql| sql.uses_clock() || sql.dependencies().contains("notifications")))
+    }
+
     pub fn evaluate_model(
         &self,
         tenant: [u8; 16],

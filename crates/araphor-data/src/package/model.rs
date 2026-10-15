@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 use crate::{AnalysisSelectionV1, Result};
 
-use super::PackageBundleV1;
+use super::{PackageBundleRef, PackageBundleV1};
 
 mod request;
 
@@ -68,19 +68,19 @@ pub enum PackageActionV1 {
 
 pub trait PackageAuthorization: Send + Sync + 'static {
     fn check(&self, grant: &PackageGrantV1, action: PackageActionV1) -> Result<()>;
-    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleV1) -> Result<()>;
+    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleRef<'_>) -> Result<()>;
     fn commit(
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleV1,
+        bundle: &PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()>;
     fn changes(&self) -> watch::Receiver<u64>;
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, &PackageBundleV1)],
+        grants: &[(&PackageGrantV1, &PackageBundleRef<'_>)],
         action: PackageActionV1,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {

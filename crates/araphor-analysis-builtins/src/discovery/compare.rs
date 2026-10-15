@@ -5,7 +5,7 @@ use araphor_analysis_sdk as sdk;
 use super::{Comparison, Discovery, MatchGroup, MatchState, Side};
 
 impl Discovery {
-    pub(super) fn compare(input: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
+    pub(super) fn compare(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
         let groups = Self::read::<MatchGroup>(input, "groups")?;
         let forbidden = Self::read::<String>(input, "forbidden")?;
         let states = Self::read::<MatchState>(input, "states")?;
@@ -46,7 +46,7 @@ impl Discovery {
             lifecycle_changed: states[0].lifecycle != states[1].lifecycle,
             ..Comparison::default()
         };
-        let mut remaining = input.context.limits.max_bytes;
+        let mut remaining = input.evaluation().context.limits.max_bytes;
         Self::charge_refs(&mut remaining, result.removed.len(), 8)?;
         for (index, group) in current.iter().enumerate() {
             if let Some(&before) = old.get(&group.key) {

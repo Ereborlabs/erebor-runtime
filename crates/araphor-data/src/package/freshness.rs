@@ -5,11 +5,8 @@ use crate::analysis::PackageActivationV1;
 use crate::{AnalysisReadControl, Result};
 
 use super::evaluation::ResultContext;
-use super::owner::InstalledContext;
-use super::{
-    AnalysisPackageOwner, PackageActionV1, PackageArtifactV1, PackageBundleV1, PackageGrantV1,
-    PackageRefV1,
-};
+use super::owner::{ClockDependency, InstalledContext};
+use super::{AnalysisPackageOwner, PackageActionV1, PackageBundleV1, PackageGrantV1, PackageRefV1};
 
 impl AnalysisPackageOwner {
     pub(super) fn refresh_package(
@@ -55,7 +52,7 @@ impl AnalysisPackageOwner {
                     .iter()
                     .find(|model| model.name == reference.export)
                     .ok_or_else(|| super::PackageErrorCodeV1::Missing.error("installed export"))?;
-                self.refresh(&active, artifact, model, grant, control)?;
+                self.refresh(&active, model, grant, control)?;
             }
         }
         Ok(())
@@ -64,7 +61,6 @@ impl AnalysisPackageOwner {
     pub(super) fn refresh(
         &self,
         active: &PackageActivationV1,
-        artifact: &PackageArtifactV1,
         model: &sdk::Model,
         grant: &PackageGrantV1,
         control: &AnalysisReadControl,
@@ -73,6 +69,12 @@ impl AnalysisPackageOwner {
             return Ok(());
         };
         if !active.active {
+            return Ok(());
+        }
+        self.check(grant, PackageActionV1::Inspect)?;
+        let installed: InstalledContext = Self::decode(&active.metadata)?;
+        Self::permits(grant, &installed.grant)?;
+        if self.inputs_current(active, installed.clock, Self::now(), true, control)? {
             return Ok(());
         }
         let Some(result) = self.store.package_result(active.key.tenant_id, id)? else {
@@ -93,7 +95,7 @@ impl AnalysisPackageOwner {
         } else {
             now
         };
-        let clocked = artifact.uses_clock(model)?;
+        let clocked = installed.clock == ClockDependency::Model;
         let clock_changed = Self::clock_changed(clocked, saved.context.time_utc_ns, now);
         let inputs = self.query.model_operation(active.key.tenant_id).inputs(
             crate::query::ModelInputRequest {

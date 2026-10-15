@@ -4,6 +4,48 @@ use super::*;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[test]
+fn declaration_clones_keep_ports() -> TestResult {
+    let mut first = Discovery::package();
+    let second = Discovery::package();
+    assert_eq!(first, second);
+    assert!(std::sync::Arc::ptr_eq(
+        &first.exports[0].inputs[0].port.schema.fields()[0],
+        &second.exports[0].inputs[0].port.schema.fields()[0],
+    ));
+    first.exports[0].inputs[0].port.name = "changed".into();
+    assert_eq!(Discovery::package(), second);
+    let fixture = fixture()?;
+    let mut other = second;
+    other.id = "other".into();
+    let checked = other.check_evaluation(&fixture.evaluation)?;
+    assert!(
+        matches!(Discovery::evaluate_checked(&checked), Err(sdk::Error::Contract {
+        code: sdk::ErrorCode::Incompatible, field, ..
+    }) if field == "discovery package")
+    );
+    Ok(())
+}
+
+#[test]
+fn checked_input_keeps_json_errors() -> TestResult {
+    let package = Discovery::package();
+    let mut fixture = fixture()?;
+    let records = &mut fixture.evaluation.inputs[0].data;
+    records.batches = vec![sdk::RecordBatch::try_new(
+        records.batches[0].schema(),
+        vec![std::sync::Arc::new(sdk::arrow_array::BinaryArray::from(
+            vec![b"{".as_slice()],
+        ))],
+    )?];
+    let checked = package.check_evaluation(&fixture.evaluation)?;
+    assert!(matches!(
+        Discovery::evaluate_checked(&checked),
+        Err(sdk::Error::Encoding { .. })
+    ));
+    Ok(())
+}
+
 fn fixture() -> sdk::Result<sdk::Fixture> {
     let operation = Operation {
         family: 1,

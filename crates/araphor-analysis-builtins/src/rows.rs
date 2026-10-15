@@ -109,16 +109,46 @@ impl Rows {
             if bytes > bounds.max_bytes || rows > bounds.max_rows {
                 return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row input"));
             }
-            for value in array.iter().flatten() {
-                output.push(serde_json::from_slice(value).map_err(|source| {
-                    sdk::Error::Encoding {
-                        source,
-                        location: snafu::location!(),
-                    }
-                })?);
-            }
+            Self::values(array, &mut output)?;
         }
         Ok(output)
+    }
+
+    pub(crate) fn input<T: DeserializeOwned>(
+        checked: &sdk::CheckedEvaluation<'_>,
+        name: &str,
+    ) -> sdk::Result<Vec<T>> {
+        let port = checked
+            .model()
+            .inputs
+            .iter()
+            .find(|input| input.port.name == name)
+            .map(|input| &input.port)
+            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "row port"))?;
+        Self::check_port(port)?;
+        let dataset = &checked.evaluation().input(name)?.data;
+        let mut output = Vec::new();
+        for batch in &dataset.batches {
+            let array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "row type"))?;
+            Self::values(array, &mut output)?;
+        }
+        Ok(output)
+    }
+
+    fn values<T: DeserializeOwned>(array: &BinaryArray, output: &mut Vec<T>) -> sdk::Result<()> {
+        for value in array.iter().flatten() {
+            output.push(
+                serde_json::from_slice(value).map_err(|source| sdk::Error::Encoding {
+                    source,
+                    location: snafu::location!(),
+                })?,
+            );
+        }
+        Ok(())
     }
 
     fn check_port(port: &sdk::Port) -> sdk::Result<()> {

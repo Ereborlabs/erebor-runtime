@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound::{Excluded, Included, Unbounded};
+use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use araphor_data::{
@@ -8,22 +9,24 @@ use araphor_data::{
 use serde::Serialize;
 use snafu::ResultExt as _;
 
-use super::{ControlStore, PolicyRolloutKeyV1};
+use super::{ControlStore, ControlStoreState, ControlTransactionV1, PolicyRolloutKeyV1};
 use crate::{error::JsonSnafu, AllowedNodeIdentity, Result};
 
-pub(super) struct ContextLimit(pub(super) usize);
+pub(super) struct ContextLimit<W>(pub(super) usize, pub(super) W);
 
-impl std::io::Write for ContextLimit {
+impl<W: std::io::Write> std::io::Write for ContextLimit<W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 = self
+        let remaining = self
             .0
             .checked_sub(bytes.len())
             .ok_or_else(|| std::io::Error::other("the policy context exceeds its byte bound"))?;
+        self.1.write_all(bytes)?;
+        self.0 = remaining;
         Ok(bytes.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+        self.1.flush()
     }
 }
 
@@ -73,6 +76,173 @@ enum ContextCursor {
     End,
 }
 
+#[derive(Default)]
+pub(super) struct ContextChanges {
+    // These positions are not durable. Startup reads all stored facts.
+    policy: BTreeMap<String, u64>,
+    trust: BTreeMap<u64, u64>,
+    rollout: BTreeMap<PolicyRolloutKeyV1, u64>,
+    target: BTreeMap<String, u64>,
+    authority: [BTreeMap<[u8; 16], u64>; 4],
+}
+
+impl ContextChanges {
+    pub(super) fn record(
+        &mut self,
+        transaction: &ControlTransactionV1,
+        before: &ControlStoreState,
+        after: &ControlStoreState,
+    ) {
+        let revision = after.commit_index;
+        match transaction {
+            ControlTransactionV1::SourceAccepted {
+                source_revision, ..
+            } => {
+                let id = &source_revision.policy_source_revision_id;
+                if before.source_revisions.get(id) != after.source_revisions.get(id)
+                    || before.policy_documents.get(id) != after.policy_documents.get(id)
+                {
+                    self.policy.insert(id.clone(), revision);
+                }
+            }
+            ControlTransactionV1::TrustInstalled { generation } => {
+                self.trust.insert(generation.generation, revision);
+            }
+            ControlTransactionV1::RolloutCreated { rollout } => {
+                self.rollout(rollout, before, after);
+            }
+            ControlTransactionV1::TargetSetReconciled { reconciliation } => {
+                self.rollout(&reconciliation.desired, before, after);
+                if let Some(retirement) = &reconciliation.retirement {
+                    self.rollout(retirement, before, after);
+                }
+            }
+            ControlTransactionV1::NodeSessionAdvanced { advance } => {
+                for rollout in &advance.policy_rollout_states {
+                    self.rollout_state(rollout, before, after);
+                }
+            }
+            ControlTransactionV1::Acknowledged { result } => {
+                self.rollout_state(&result.rollout_state, before, after);
+            }
+            ControlTransactionV1::AuthorityUpdated { .. } => {
+                Self::changed(
+                    &mut self.authority[0],
+                    &before.authority.requests,
+                    &after.authority.requests,
+                    revision,
+                );
+                Self::changed(
+                    &mut self.authority[1],
+                    &before.authority.approvals,
+                    &after.authority.approvals,
+                    revision,
+                );
+                Self::changed(
+                    &mut self.authority[2],
+                    &before.authority.leases,
+                    &after.authority.leases,
+                    revision,
+                );
+                Self::changed(
+                    &mut self.authority[3],
+                    &before.authority.handles,
+                    &after.authority.handles,
+                    revision,
+                );
+            }
+            ControlTransactionV1::KubernetesNodeBound { .. }
+            | ControlTransactionV1::Compiled { .. }
+            | ControlTransactionV1::ExceptionDesired { .. }
+            | ControlTransactionV1::ExceptionAcknowledged { .. }
+            | ControlTransactionV1::TrustAcknowledged { .. }
+            | ControlTransactionV1::NodeDecommissionUpdated { .. } => {}
+        }
+    }
+
+    fn rollout(
+        &mut self,
+        rollout: &super::PolicyRolloutTransactionV1,
+        before: &ControlStoreState,
+        after: &ControlStoreState,
+    ) {
+        let id = &rollout.target_snapshot.target_snapshot_digest;
+        if before.target_snapshots.get(id) != after.target_snapshots.get(id) {
+            self.target.insert(id.clone(), after.commit_index);
+        }
+        for state in &rollout.rollout_states {
+            self.rollout_state(state, before, after);
+        }
+    }
+
+    fn rollout_state(
+        &mut self,
+        state: &crate::PolicyRolloutStateV1,
+        before: &ControlStoreState,
+        after: &ControlStoreState,
+    ) {
+        let key = PolicyRolloutKeyV1 {
+            candidate_content_id: state.desired_candidate_content_id.clone(),
+            node_id: state.target.node_id.clone(),
+        };
+        if before.rollout_states.get(&key) != after.rollout_states.get(&key) {
+            self.rollout.insert(key, after.commit_index);
+        }
+    }
+
+    fn changed<K: Ord + Clone, V: PartialEq>(
+        positions: &mut BTreeMap<K, u64>,
+        before: &BTreeMap<K, V>,
+        after: &BTreeMap<K, V>,
+        revision: u64,
+    ) {
+        positions.retain(|key, _| after.contains_key(key));
+        for (key, value) in after {
+            if before.get(key) != Some(value) {
+                positions.insert(key.clone(), revision);
+            }
+        }
+    }
+
+    fn since(&self, since: u64, through: u64) -> Self {
+        Self {
+            policy: Self::positions(&self.policy, since, through),
+            trust: Self::positions(&self.trust, since, through),
+            rollout: Self::positions(&self.rollout, since, through),
+            target: Self::positions(&self.target, since, through),
+            authority: self
+                .authority
+                .each_ref()
+                .map(|positions| Self::positions(positions, since, through)),
+        }
+    }
+
+    fn positions<K: Ord + Clone>(
+        positions: &BTreeMap<K, u64>,
+        since: u64,
+        through: u64,
+    ) -> BTreeMap<K, u64> {
+        positions
+            .iter()
+            .filter(|(_, revision)| since < **revision && **revision <= through)
+            .map(|(key, revision)| (key.clone(), *revision))
+            .collect()
+    }
+
+    fn next<'a, K: Ord, V>(
+        values: &'a BTreeMap<K, V>,
+        selected: Option<&BTreeMap<K, u64>>,
+        bounds: impl RangeBounds<K>,
+    ) -> Option<(&'a K, &'a V)> {
+        match selected {
+            Some(selected) => selected
+                .range(bounds)
+                .find_map(|(key, _)| values.get_key_value(key)),
+            None => values.range(bounds).next(),
+        }
+    }
+}
+
 /// Copies committed Control facts. Copies never grant policy authority.
 pub struct ControlContextOwner {
     store: ControlStore,
@@ -80,6 +250,10 @@ pub struct ControlContextOwner {
     tenants: Vec<[u8; 16]>,
     tenant: usize,
     cursor: ContextCursor,
+    changes: tokio::sync::watch::Receiver<u64>,
+    revision: u64,
+    complete: bool,
+    selected: Option<ContextChanges>,
 }
 
 impl ControlContextOwner {
@@ -101,25 +275,44 @@ impl ControlContextOwner {
                 })?;
             tenants.insert(tenant.into_bytes());
         }
+        let mut changes = store.subscribe_revision()?;
+        let revision = *changes.borrow_and_update();
         Ok(Self {
             store,
             data,
             tenants: tenants.into_iter().collect(),
             tenant: 0,
             cursor: ContextCursor::Policy(None),
+            changes,
+            revision,
+            complete: false,
+            selected: None,
         })
     }
 
     /// Reads at most 16 Control entries. Storage failures keep the retry cursor.
     pub fn reconcile(&mut self) -> Result<usize> {
         if self.tenants.is_empty() {
+            self.revision = *self.changes.borrow_and_update();
+            self.complete = true;
             return Ok(0);
+        }
+        if self.complete {
+            let revision = *self.changes.borrow_and_update();
+            if revision == self.revision {
+                return Ok(0);
+            }
+            self.selected = Some(self.store.context_changes(self.revision, revision)?);
+            self.revision = revision;
+            self.complete = false;
         }
         let mut copied = 0;
         for _ in 0..16 {
-            let (record, next) = self
-                .store
-                .next_context(self.tenants[self.tenant], &self.cursor)?;
+            let (record, next) = self.store.next_context(
+                self.tenants[self.tenant],
+                &self.cursor,
+                self.selected.as_ref(),
+            )?;
             if let Some(record) = record {
                 let record = match record {
                     Ok(record) => record,
@@ -139,32 +332,51 @@ impl ControlContextOwner {
             self.cursor = next;
             if matches!(self.cursor, ContextCursor::End) {
                 self.cursor = ContextCursor::Policy(None);
-                self.tenant = (self.tenant + 1) % self.tenants.len();
+                self.tenant += 1;
+                if self.tenant == self.tenants.len() {
+                    self.tenant = 0;
+                    self.complete = true;
+                }
                 break;
             }
         }
         Ok(copied)
     }
+
+    pub(crate) fn idle(&self) -> bool {
+        self.complete && *self.changes.borrow() == self.revision
+    }
+
+    pub(crate) async fn changed(&mut self) {
+        let _changed = self.changes.changed().await;
+    }
 }
 
 impl ControlStore {
+    pub(crate) fn subscribe_revision(&self) -> Result<tokio::sync::watch::Receiver<u64>> {
+        Ok(self.lock()?.changes.subscribe())
+    }
+
+    fn context_changes(&self, since: u64, through: u64) -> Result<ContextChanges> {
+        Ok(self.evidence_lock()?.context_changes.since(since, through))
+    }
+
     fn next_context(
         &self,
         tenant: [u8; 16],
         cursor: &ContextCursor,
+        selected: Option<&ContextChanges>,
     ) -> Result<(Option<Result<AnalysisContextVersionV1>>, ContextCursor)> {
-        // ponytail: scan each tenant in bounded pages; add a tenant index if scans dominate.
         let inner = self.evidence_lock()?;
         let matches = |id: &str| uuid::Uuid::parse_str(id).is_ok_and(|id| id.as_bytes() == &tenant);
         let record = match cursor {
             ContextCursor::Policy(after) => {
                 let bounds = (after.as_ref().map_or(Unbounded, Excluded), Unbounded);
-                let Some((id, source)) = inner
-                    .state
-                    .source_revisions
-                    .range::<String, _>(bounds)
-                    .next()
-                else {
+                let Some((id, source)) = ContextChanges::next(
+                    &inner.state.source_revisions,
+                    selected.map(|selected| &selected.policy),
+                    bounds,
+                ) else {
                     return Ok((None, ContextCursor::Trust(None)));
                 };
                 let next = ContextCursor::Policy(Some(id.clone()));
@@ -193,8 +405,11 @@ impl ControlStore {
             }
             ContextCursor::Trust(after) => {
                 let bounds = (after.as_ref().map_or(Unbounded, Excluded), Unbounded);
-                let Some((generation, trust)) = inner.state.trust_generations.range(bounds).next()
-                else {
+                let Some((generation, trust)) = ContextChanges::next(
+                    &inner.state.trust_generations,
+                    selected.map(|selected| &selected.trust),
+                    bounds,
+                ) else {
                     return Ok((None, ContextCursor::Rollout(None)));
                 };
                 let record = Self::encode_context(
@@ -212,7 +427,11 @@ impl ControlStore {
             }
             ContextCursor::Rollout(after) => {
                 let bounds = (after.as_ref().map_or(Unbounded, Excluded), Unbounded);
-                let Some((key, rollout)) = inner.state.rollout_states.range(bounds).next() else {
+                let Some((key, rollout)) = ContextChanges::next(
+                    &inner.state.rollout_states,
+                    selected.map(|selected| &selected.rollout),
+                    bounds,
+                ) else {
                     return Ok((None, ContextCursor::Target(None, 0, 0)));
                 };
                 let next = ContextCursor::Rollout(Some(key.clone()));
@@ -233,12 +452,11 @@ impl ControlStore {
             }
             ContextCursor::Target(after, target_index, fact_index) => {
                 let bounds = (after.as_ref().map_or(Unbounded, Included), Unbounded);
-                let Some((id, snapshot)) = inner
-                    .state
-                    .target_snapshots
-                    .range::<String, _>(bounds)
-                    .next()
-                else {
+                let Some((id, snapshot)) = ContextChanges::next(
+                    &inner.state.target_snapshots,
+                    selected.map(|selected| &selected.target),
+                    bounds,
+                ) else {
                     return Ok((None, ContextCursor::Authority(0, None)));
                 };
                 let (target_index, fact_index) = if after.as_ref() == Some(id) {
@@ -247,14 +465,14 @@ impl ControlStore {
                     (0, 0)
                 };
                 let Some(target) = snapshot.targets.get(target_index) else {
-                    let next = inner
-                        .state
-                        .target_snapshots
-                        .range::<String, _>((Excluded(id), Unbounded))
-                        .next()
-                        .map_or(ContextCursor::Authority(0, None), |(id, _)| {
-                            ContextCursor::Target(Some(id.clone()), 0, 0)
-                        });
+                    let next = ContextChanges::next(
+                        &inner.state.target_snapshots,
+                        selected.map(|selected| &selected.target),
+                        (Excluded(id), Unbounded),
+                    )
+                    .map_or(ContextCursor::Authority(0, None), |(id, _)| {
+                        ContextCursor::Target(Some(id.clone()), 0, 0)
+                    });
                     return Ok((None, next));
                 };
                 let Some(fact) = target.workload_targets.get(fact_index) else {
@@ -304,9 +522,11 @@ impl ControlStore {
                 let authority = &inner.state.authority;
                 match stage {
                     0 => {
-                        let Some((id, request)) =
-                            authority.requests.range::<[u8; 16], _>(bounds).next()
-                        else {
+                        let Some((id, request)) = ContextChanges::next(
+                            &authority.requests,
+                            selected.map(|selected| &selected.authority[0]),
+                            bounds,
+                        ) else {
                             return Ok((None, ContextCursor::Authority(1, None)));
                         };
                         (
@@ -325,9 +545,11 @@ impl ControlStore {
                         )
                     }
                     1 => {
-                        let Some((id, approval)) =
-                            authority.approvals.range::<[u8; 16], _>(bounds).next()
-                        else {
+                        let Some((id, approval)) = ContextChanges::next(
+                            &authority.approvals,
+                            selected.map(|selected| &selected.authority[1]),
+                            bounds,
+                        ) else {
                             return Ok((None, ContextCursor::Authority(2, None)));
                         };
                         (
@@ -346,9 +568,11 @@ impl ControlStore {
                         )
                     }
                     2 => {
-                        let Some((id, lease)) =
-                            authority.leases.range::<[u8; 16], _>(bounds).next()
-                        else {
+                        let Some((id, lease)) = ContextChanges::next(
+                            &authority.leases,
+                            selected.map(|selected| &selected.authority[2]),
+                            bounds,
+                        ) else {
                             return Ok((None, ContextCursor::Authority(3, None)));
                         };
                         (
@@ -367,9 +591,11 @@ impl ControlStore {
                         )
                     }
                     3 => {
-                        let Some((id, handle)) =
-                            authority.handles.range::<[u8; 16], _>(bounds).next()
-                        else {
+                        let Some((id, handle)) = ContextChanges::next(
+                            &authority.handles,
+                            selected.map(|selected| &selected.authority[3]),
+                            bounds,
+                        ) else {
                             return Ok((None, ContextCursor::End));
                         };
                         (
@@ -400,8 +626,9 @@ impl ControlStore {
         key: AnalysisContextKeyV1,
         fact: &impl Serialize,
     ) -> Result<AnalysisContextVersionV1> {
-        serde_json::to_writer(ContextLimit(32 * 1024), fact).context(JsonSnafu { path })?;
-        let body = serde_json::to_vec(fact).context(JsonSnafu { path })?;
+        let mut output = ContextLimit(32 * 1024, Vec::new());
+        serde_json::to_writer(&mut output, fact).context(JsonSnafu { path })?;
+        let body = output.1;
         Ok(AnalysisContextVersionV1 {
             key,
             valid_from_utc_ns: None,
@@ -609,6 +836,9 @@ mod tests {
         for _ in 0..4 {
             owner.reconcile()?;
         }
+        assert!(owner.idle());
+        assert_eq!(owner.reconcile()?, 0);
+        assert!(!owner.changes.has_changed()?);
         assert_eq!(data.meta()?, before);
         assert_eq!(store.commit_index(), authority);
         let key = AnalysisContextKeyV1 {
@@ -651,11 +881,130 @@ mod tests {
         oversized.generation = 22;
         oversized.policy_signers.clear();
         owner.store.install_trust_generation(oversized)?;
-        assert_eq!(owner.reconcile()?, 15);
+        assert!(!owner.idle());
+        assert!(owner.changes.has_changed()?);
         assert!(owner.reconcile().is_err());
         assert_eq!(reopened.meta()?, before);
         assert_eq!(owner.reconcile()?, 1);
         assert_eq!(reopened.meta()?.commit_revision, before.commit_revision + 1);
+        assert!(owner.idle());
+        let trust = owner
+            .store
+            .current_trust_generation()?
+            .ok_or("missing trust")?;
+        owner
+            .store
+            .acknowledge_trust_generation(crate::TrustGenerationAcknowledgementV1 {
+                node_id: "node-a".into(),
+                node_boot_id: [3; 16],
+                label_epoch: 1,
+                generation: trust.generation,
+                bundle_digest: trust.bundle_digest,
+            })?;
+        assert_eq!(owner.reconcile()?, 0);
+        assert!(owner.idle());
+        assert_eq!(reopened.meta()?.commit_revision, before.commit_revision + 1);
+        Ok(())
+    }
+
+    #[test]
+    fn control_context_preserves_changed_body_conflicts(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let allowed = [AllowedNodeIdentity {
+            node_id: "node-a".into(),
+            certificate_sha256: "a".repeat(64),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }];
+        store.update_authority(|state| {
+            state.approvals.insert(
+                [2; 16],
+                crate::AuthorityApprovalV1 {
+                    request_id: [2; 16],
+                    tenant_id: [1; 16],
+                    approver_principal_id: [3; 16],
+                    trust_revision: 1,
+                    proof_id: [4; 16],
+                    claim_slot_id: [5; 16],
+                    accepted_utc_ns: 1,
+                    expires_utc_ns: 100,
+                    signed_intent: vec![6],
+                    state: crate::AuthorityIntentStateV1::Pending,
+                },
+            );
+            Ok(true)
+        })?;
+        let mut owner = ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
+        assert_eq!(owner.reconcile()?, 1);
+        assert!(owner.idle());
+        let before = data.meta()?;
+        let prior = data
+            .context_version(&AnalysisContextKeyV1 {
+                tenant_id: [1; 16],
+                owner_id: "mithril-control/authority-approval".into(),
+                entity_key: vec![2; 16],
+                lifetime_key: vec![4; 16],
+                owner_revision: 1,
+            })?
+            .ok_or("missing retained approval")?;
+        store.update_authority(|state| Ok(state.proofs.insert([7; 16])))?;
+        assert_eq!(owner.reconcile()?, 0);
+        assert!(owner.idle());
+        assert_eq!(data.meta()?, before);
+        store.update_authority(|state| {
+            let approval = state.approvals.get_mut(&[2; 16]).ok_or_else(|| {
+                crate::AuthorityErrorCodeV1::Invalid.error("missing test approval")
+            })?;
+            approval.state = crate::AuthorityIntentStateV1::Cancelled;
+            Ok(true)
+        })?;
+        for _ in 0..2 {
+            assert!(
+                matches!(owner.reconcile(), Err(crate::Error::DataStore { source, .. })
+                if matches!(*source, araphor_data::Error::AnalysisConflict { .. }))
+            );
+            assert!(matches!(owner.cursor, ContextCursor::Authority(1, None)));
+            assert_eq!(data.meta()?, before);
+        }
+        store.update_authority(|state| {
+            let mut approval = state.approvals.remove(&[2; 16]).ok_or_else(|| {
+                crate::AuthorityErrorCodeV1::Invalid.error("missing test approval")
+            })?;
+            approval.request_id = [8; 16];
+            state.approvals.insert(approval.request_id, approval);
+            Ok(true)
+        })?;
+        assert_eq!(
+            store.evidence_lock()?.context_changes.authority[1]
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![[8; 16]]
+        );
+        assert_eq!(owner.reconcile()?, 0);
+        assert_eq!(owner.reconcile()?, 1);
+        assert!(owner.idle());
+        let mut current = prior.key.clone();
+        current.entity_key = vec![8; 16];
+        assert!(data.context_version(&current)?.is_some());
+        assert_eq!(data.context_version(&prior.key)?, Some(prior));
+        assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+        Ok(())
+    }
+
+    #[test]
+    fn control_context_empty_tenants_stay_idle(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(AnalysisStore::open(directory.path().join("data"))?);
+        let mut owner = ControlContextOwner::new(store.clone(), data, &[])?;
+        assert_eq!(owner.reconcile()?, 0);
+        store.update_authority(|state| Ok(state.proofs.insert([7; 16])))?;
+        assert_eq!(owner.reconcile()?, 0);
+        assert!(owner.idle());
         Ok(())
     }
 }

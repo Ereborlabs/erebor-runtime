@@ -41,15 +41,10 @@ fn raw_code_preserves_native_dependencies() -> TestResult {
     let original = package.encode()?;
     let original_digest = package.digest()?;
     let artifact = &package.artifacts[0];
-    let (bytes, size) = StoredArtifact::encode(artifact)?;
-    assert_eq!(
-        size,
-        crate::package::AnalysisPackageOwner::encode(&artifact.encoding(false)?)?.len()
-    );
-    assert!(bytes.len() < size);
-    assert_eq!(StoredArtifact::frame_size(&bytes)?, size);
-    StoredArtifact::validate(&bytes, &artifact.descriptor, size)?;
-    let decoded = StoredArtifact::decode(&bytes, &artifact.descriptor, size)?;
+    let bytes = StoredArtifact::encode(artifact)?;
+    assert!(bytes.len() < original.len());
+    StoredArtifact::validate(&bytes)?;
+    let decoded = StoredArtifact::decode(&bytes, &artifact.descriptor)?;
     assert_eq!(decoded, *artifact);
     package.artifacts[0] = decoded;
     assert_eq!(package.encode()?, original);
@@ -62,44 +57,31 @@ fn raw_frame_rejects_corruption() -> TestResult {
     let artifact = bundle("1", "SELECT 1::UBIGINT AS count")
         .artifacts
         .remove(0);
-    let (bytes, size) = StoredArtifact::encode(&artifact)?;
-    assert!(StoredArtifact::decode(&bytes, &artifact.descriptor, size + 1).is_err());
+    let bytes = StoredArtifact::encode(&artifact)?;
     for end in 0..bytes.len() {
-        assert!(StoredArtifact::validate(&bytes[..end], &artifact.descriptor, size).is_err());
+        assert!(StoredArtifact::validate(&bytes[..end]).is_err());
     }
     let mut trailing = bytes.clone();
     trailing.push(0);
-    assert!(StoredArtifact::validate(&trailing, &artifact.descriptor, size).is_err());
+    assert!(StoredArtifact::validate(&trailing).is_err());
     let mut decoder = Decoder::new(&bytes);
     decoder.array()?;
     decoder.u32()?;
-    decoder.u64()?;
     let metadata = decoder.bytes()?;
     let mut extra = Vec::new();
     Encoder::new(&mut extra)
-        .array(4)?
-        .u32(1)?
-        .u64(size as u64)?
+        .array(3)?
+        .u32(2)?
         .bytes(metadata)?
         .array(1)?
         .bytes(b"unused")?;
-    assert!(StoredArtifact::validate(&extra, &artifact.descriptor, size).is_err());
+    assert!(StoredArtifact::validate(&extra).is_err());
     let mut changed = Vec::new();
     Encoder::new(&mut changed)
-        .array(4)?
-        .u32(2)?
-        .u64(size as u64)?
+        .array(3)?
+        .u32(0)?
         .bytes(metadata)?
         .array(0)?;
-    assert!(StoredArtifact::validate(&changed, &artifact.descriptor, size).is_err());
-    let mut forged = Vec::new();
-    Encoder::new(&mut forged)
-        .array(4)?
-        .u32(1)?
-        .u64(size as u64 - 1)?
-        .bytes(metadata)?
-        .array(0)?;
-    assert!(forged.len() < size - 1);
-    assert!(StoredArtifact::validate(&forged, &artifact.descriptor, size - 1).is_err());
+    assert!(StoredArtifact::validate(&changed).is_err());
     Ok(())
 }

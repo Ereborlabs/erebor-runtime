@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::package::tests::{Authority, Fixture, TestResult};
-use crate::package::{PackageAuthorization, PackageBundleV1, PackageGrantV1, PackageRequestV1};
+use crate::package::{PackageAuthorization, PackageGrantV1, PackageRequestV1};
 use crate::{AnalysisReadControl, QueryLimits, QueryOwner};
 
 use super::*;
@@ -25,7 +25,11 @@ impl PackageAuthorization for SelectiveAuthority {
         Ok(())
     }
 
-    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleV1) -> Result<()> {
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
+    ) -> Result<()> {
         self.base.admit(grant, bundle)?;
         self.check(grant, Action::Run)
     }
@@ -34,7 +38,7 @@ impl PackageAuthorization for SelectiveAuthority {
         &self,
         grant: &PackageGrantV1,
         action: Action,
-        bundle: &PackageBundleV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         self.commit_many(&[(grant, bundle)], action, operation)
@@ -42,7 +46,7 @@ impl PackageAuthorization for SelectiveAuthority {
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, &PackageBundleV1)],
+        grants: &[(&PackageGrantV1, &crate::package::PackageBundleRef<'_>)],
         action: Action,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {

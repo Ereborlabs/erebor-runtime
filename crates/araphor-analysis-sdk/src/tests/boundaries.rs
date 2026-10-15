@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn checked_output_keeps_contract() -> TestResult {
+    let package = FilesCount::package();
+    let fixture = FilesCount::fixture()?;
+    let checked = package.check_evaluation(&fixture.evaluation)?;
+    assert!(std::ptr::eq(checked.package(), &package));
+    assert!(std::ptr::eq(checked.evaluation(), &fixture.evaluation));
+    assert!(std::ptr::eq(checked.model(), &package.exports[0]));
+    let mut output = FilesCount::evaluate(checked.evaluation())?;
+    checked.validate_output(&output)?;
+    output.evidence.clear();
+    assert!(
+        matches!(checked.validate_output(&output), Err(Error::Contract {
+        code: ErrorCode::Incomplete, field, ..
+    }) if field == "required output evidence")
+    );
+    let mut invalid = fixture.evaluation.clone();
+    invalid.inputs.clear();
+    assert!(
+        matches!(package.check_evaluation(&invalid), Err(Error::Contract {
+        code: ErrorCode::Incomplete, field, ..
+    }) if field == "missing dataset")
+    );
+    Ok(())
+}
+
+#[test]
 fn dataset_checks_shape_and_limits() -> TestResult {
     let package = FilesCount::package();
     let fixture = FilesCount::fixture()?;

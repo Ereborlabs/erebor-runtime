@@ -14,6 +14,11 @@ fn wire_validation_keeps_precedence() -> TestResult {
     input.context.limits = evaluation.context.limits;
     for (result, expected, expected_field) in [
         (
+            package.check_evaluation(&evaluation).map(|_| ()),
+            ErrorCode::Incompatible,
+            "export",
+        ),
+        (
             package.validate_evaluation(&evaluation),
             ErrorCode::Incompatible,
             "export",
@@ -49,6 +54,7 @@ fn wire_validation_keeps_precedence() -> TestResult {
     let mut invalid = package;
     invalid.contract_version += 1;
     for result in [
+        invalid.check_evaluation(&evaluation).map(|_| ()),
         invalid.validate_evaluation(&evaluation),
         wire::Evaluation::encode(&invalid, &evaluation).map(|_| ()),
         wire::Output::encode(&invalid, &evaluation, &output).map(|_| ()),

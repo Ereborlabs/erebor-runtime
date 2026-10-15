@@ -367,11 +367,8 @@ impl ControlPlane {
                 return std::future::pending().await;
             }
         };
-        let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
-        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut failed = false;
         loop {
-            timer.tick().await;
             match tokio::task::spawn_blocking(move || {
                 let result = owner.reconcile();
                 (owner, result)
@@ -406,6 +403,13 @@ impl ControlPlane {
                         Err(_) => return std::future::pending().await,
                     };
                 }
+            }
+            if failed {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            } else if owner.idle() {
+                owner.changed().await;
+            } else {
+                tokio::task::yield_now().await;
             }
         }
     }

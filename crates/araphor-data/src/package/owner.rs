@@ -11,6 +11,13 @@ use super::{
     PackageGrantV1, PackageReadinessV1, PackageRefV1, PackageRequestV1, PackageResponseV1,
 };
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) enum ClockDependency {
+    None,
+    Inputs,
+    Model,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct InstalledContext {
     pub grant: PackageGrantV1,
@@ -18,6 +25,8 @@ pub(crate) struct InstalledContext {
     pub parameters: Option<serde_json::Value>,
     pub readiness: PackageReadinessV1,
     pub status_checkpoint: u64,
+    pub prepared: bool,
+    pub clock: ClockDependency,
 }
 
 pub(super) struct PackageTask {
@@ -78,21 +87,20 @@ impl AnalysisPackageOwner {
             let _permit = permit;
             owner.execute_sync(saved, request, &stage)
         });
-        loop {
-            tokio::select! {
-                result = &mut run => {
-                    let result = result.context(crate::QueryExecutionSnafu)??;
-                    self.check(&grant, action)?;
-                    return Ok(result);
-                }
-                _change = changes.changed() => {
-                    task.control.cancel()?;
-                    return Err(Code::Denied.error("package authority changed"));
-                }
-                () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                    self.check(&grant, action)?;
-                    task.control.check()?;
-                }
+        tokio::select! {
+            result = &mut run => {
+                let result = result.context(crate::QueryExecutionSnafu)??;
+                self.check(&grant, action)?;
+                Ok(result)
+            }
+            _change = changes.changed() => {
+                task.control.cancel()?;
+                Err(Code::Denied.error("package authority changed"))
+            }
+            () = tokio::time::sleep(task.control.remaining()?) => {
+                self.check(&grant, action)?;
+                task.control.check()?;
+                Err(crate::AnalysisReadDeadlineSnafu.build())
             }
         }
     }
@@ -239,7 +247,7 @@ impl AnalysisPackageOwner {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &super::PackageBundleV1,
+        bundle: &super::PackageBundleRef<'_>,
         operation: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
         let mut operation = Some(operation);
@@ -261,11 +269,25 @@ impl AnalysisPackageOwner {
     pub async fn serve(self: Arc<Self>, mut stop: watch::Receiver<bool>) -> Result<()> {
         let mut sources = self.store.subscribe_revision();
         let mut authority = self.authority.changes();
+        let mut admitted = None;
+        let mut checked = None;
         loop {
             if *stop.borrow() {
                 return Ok(());
             }
-            self.reconcile_until(&mut stop).await?;
+            let revision = *authority.borrow_and_update();
+            let source_revision = *sources.borrow_and_update();
+            if self
+                .reconcile_until(
+                    &mut stop,
+                    admitted != Some(revision),
+                    checked != Some(source_revision),
+                )
+                .await?
+            {
+                admitted = Some(revision);
+                checked = Some(source_revision);
+            }
             if *stop.borrow() || stop.has_changed().is_err() {
                 return Ok(());
             }

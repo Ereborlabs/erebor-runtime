@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
 
-use araphor_data::{
-    AnalysisSelectionV1, PackageActionV1, PackageAuthorization, PackageBundleV1, PackageGrantV1,
-};
+use araphor_data::{AnalysisSelectionV1, PackageActionV1, PackageAuthorization, PackageGrantV1};
 
 use super::*;
 
@@ -187,8 +185,12 @@ impl PackageAuthorization for ClientAuth {
             .map_err(Self::package_denied)
     }
 
-    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleV1) -> araphor_data::Result<()> {
-        let digest = bundle.digest()?;
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        bundle: &araphor_data::PackageBundleRef<'_>,
+    ) -> araphor_data::Result<()> {
+        let digest = bundle.digest().to_owned();
         let state = self
             .package_state(grant, PackageActionV1::Run)
             .map_err(Self::package_denied)?;
@@ -207,7 +209,7 @@ impl PackageAuthorization for ClientAuth {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleV1,
+        bundle: &araphor_data::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.commit_many(&[(grant, bundle)], action, operation)
@@ -219,7 +221,7 @@ impl PackageAuthorization for ClientAuth {
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, &PackageBundleV1)],
+        grants: &[(&PackageGrantV1, &araphor_data::PackageBundleRef<'_>)],
         action: PackageActionV1,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
@@ -232,7 +234,7 @@ impl PackageAuthorization for ClientAuth {
             if action != PackageActionV1::Remove
                 && !state
                     .package_trust
-                    .contains(&(grant.selection.tenant_id, bundle.digest()?))
+                    .contains(&(grant.selection.tenant_id, bundle.digest().to_owned()))
             {
                 return Err(araphor_data::Error::QueryDenied {
                     location: snafu::Location::default(),

@@ -1,11 +1,10 @@
-use std::borrow::Cow;
 use std::path::Path;
 
 use araphor_analysis_sdk as sdk;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use crate::{PackageEncodingSnafu, Result, SqlModelV1};
+use crate::{Result, SqlModelV1};
 
 use super::{PackageErrorCodeV1 as Code, PackageFixtureV1};
 
@@ -24,6 +23,35 @@ pub struct PackageBundleV1 {
     pub artifacts: Vec<PackageArtifactV1>,
 }
 
+pub struct PackageBundleRef<'a> {
+    value: &'a PackageBundleV1,
+    digest: std::borrow::Cow<'a, str>,
+}
+
+impl<'a> PackageBundleRef<'a> {
+    pub fn new(value: &'a PackageBundleV1) -> Result<Self> {
+        Ok(Self {
+            value,
+            digest: value.digest()?.into(),
+        })
+    }
+
+    pub fn bundle(&self) -> &PackageBundleV1 {
+        self.value
+    }
+
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    pub(super) fn retained(value: &'a PackageBundleV1, digest: &'a str) -> Self {
+        Self {
+            value,
+            digest: digest.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageArtifactV1 {
@@ -31,58 +59,6 @@ pub struct PackageArtifactV1 {
     pub implementations: Vec<PackageImplementationV1>,
     #[serde(default)]
     pub fixtures: Vec<PackageFixtureV1>,
-}
-
-#[derive(Serialize)]
-pub(super) struct ArtifactEncoding<'a> {
-    pub(super) descriptor: Cow<'a, serde_json::value::RawValue>,
-    pub(super) implementations: &'a [PackageImplementationV1],
-    pub(super) fixtures: &'a [PackageFixtureV1],
-}
-
-impl<'a> ArtifactEncoding<'a> {
-    pub(super) fn new(
-        descriptor: &sdk::Package,
-        implementations: &'a [PackageImplementationV1],
-        fixtures: &'a [PackageFixtureV1],
-        canonical: bool,
-    ) -> Result<Self> {
-        let component = implementations.iter().any(|implementation| {
-            matches!(
-                implementation,
-                PackageImplementationV1::Wasm { .. }
-                    | PackageImplementationV1::Native {
-                        qualification: Some(_),
-                        ..
-                    }
-            )
-        });
-        let descriptor = if canonical || component {
-            descriptor.inspect().context(crate::AnalysisContractSnafu)?
-        } else {
-            serde_json::to_string(descriptor).context(PackageEncodingSnafu)?
-        };
-        Ok(Self {
-            descriptor: Cow::Owned(
-                serde_json::value::RawValue::from_string(descriptor)
-                    .context(PackageEncodingSnafu)?,
-            ),
-            implementations,
-            fixtures,
-        })
-    }
-
-    pub(super) fn borrowed<'b>(
-        &'b self,
-        implementations: &'b [PackageImplementationV1],
-        fixtures: &'b [PackageFixtureV1],
-    ) -> ArtifactEncoding<'b> {
-        ArtifactEncoding {
-            descriptor: Cow::Borrowed(self.descriptor.as_ref()),
-            implementations,
-            fixtures,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -158,13 +134,11 @@ impl PackageImplementationV1 {
 }
 
 impl PackageArtifactV1 {
-    pub(super) fn encoding(&self, canonical: bool) -> Result<ArtifactEncoding<'_>> {
-        ArtifactEncoding::new(
-            &self.descriptor,
-            &self.implementations,
-            &self.fixtures,
-            canonical,
-        )
+    pub(super) fn descriptor_bytes(&self) -> Result<Vec<u8>> {
+        self.descriptor
+            .inspect()
+            .map(String::into_bytes)
+            .context(crate::AnalysisContractSnafu)
     }
 
     pub(crate) fn implementation(&self, export: &str) -> Result<&PackageImplementationV1> {
@@ -214,14 +188,24 @@ impl PackageArtifactV1 {
         }
     }
 
-    pub(crate) fn uses_clock(&self, model: &sdk::Model) -> Result<bool> {
-        match self.implementation(&model.name)? {
-            PackageImplementationV1::Sql { program, .. } => program.uses_clock(model),
-            PackageImplementationV1::Wasm { .. } | PackageImplementationV1::Native { .. } => {
-                Ok(true)
-            }
-            _ => Err(Code::Unsupported.error("model target")),
-        }
+    pub(super) fn clock_dependency(
+        &self,
+        model: &sdk::Model,
+    ) -> Result<super::owner::ClockDependency> {
+        use super::owner::ClockDependency;
+
+        let clocked = match self.implementation(&model.name)? {
+            PackageImplementationV1::Sql { program, .. } => program.uses_clock(model)?,
+            PackageImplementationV1::Wasm { .. } | PackageImplementationV1::Native { .. } => true,
+            _ => return Err(Code::Unsupported.error("model target")),
+        };
+        Ok(if clocked {
+            ClockDependency::Model
+        } else if crate::QueryOwner::inputs_use_clock(model)? {
+            ClockDependency::Inputs
+        } else {
+            ClockDependency::None
+        })
     }
 }
 

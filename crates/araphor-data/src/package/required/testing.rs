@@ -3,8 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::package::{
-    AnalysisPackageOwner, InstalledAnalysis, PackageActionV1, PackageAuthorization,
-    PackageBundleV1, PackageGrantV1,
+    AnalysisPackageOwner, InstalledAnalysis, PackageActionV1, PackageAuthorization, PackageGrantV1,
 };
 use crate::{AnalysisSelectionV1, AnalysisStore, QueryLimits, QueryOwner, Result};
 
@@ -26,7 +25,11 @@ impl PackageAuthorization for FixtureAuthority {
         }
     }
 
-    fn admit(&self, grant: &PackageGrantV1, _bundle: &PackageBundleV1) -> Result<()> {
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        _bundle: &crate::package::PackageBundleRef<'_>,
+    ) -> Result<()> {
         self.check(grant, PackageActionV1::Run)
     }
 
@@ -34,7 +37,7 @@ impl PackageAuthorization for FixtureAuthority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         self.commit_many(&[(grant, bundle)], action, operation)
@@ -42,7 +45,7 @@ impl PackageAuthorization for FixtureAuthority {
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, &PackageBundleV1)],
+        grants: &[(&PackageGrantV1, &crate::package::PackageBundleRef<'_>)],
         action: PackageActionV1,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {

@@ -7,6 +7,71 @@ use fixture::*;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn detector_declarations_stay_independent() {
+    for detector in [
+        Detector::Process,
+        Detector::Credentials,
+        Detector::Kubernetes,
+    ] {
+        let mut first = detector.descriptor();
+        let second = detector.descriptor();
+        assert_eq!(first, second);
+        assert!(std::sync::Arc::ptr_eq(
+            &first.exports[0].outputs[2].schema.fields()[0],
+            &second.exports[0].outputs[2].schema.fields()[0],
+        ));
+        first.exports[0].outputs.clear();
+        assert_eq!(detector.descriptor(), second);
+        assert_eq!(second.id, detector.id());
+    }
+}
+
+#[test]
+fn record_index_keeps_fact_ordinals() -> TestResult {
+    let detector = Detector::Process;
+    let parent = FactValue::Parent {
+        child_task: Some(3),
+        child_process: Some([4; 16]),
+        qualified: true,
+    };
+    let fixture = fixture(
+        detector,
+        &[record(), record(), record()],
+        &[
+            fact(1, parent.clone()),
+            fact(0, parent.clone()),
+            fact(
+                2,
+                FactValue::Context {
+                    classification: ContextClass::InMemory,
+                },
+            ),
+            fact(1, parent),
+        ],
+    )?;
+    let (findings, output) = findings(detector, &fixture)?;
+    let edges: Vec<Relationship> = Rows::decode(
+        &detector.descriptor().exports[0].outputs[1],
+        &output.datasets[1],
+        fixture.evaluation.context.limits,
+    )?;
+    assert_eq!(
+        edges
+            .iter()
+            .filter_map(|edge| edge.fact.map(|fact| (edge.record, fact)))
+            .collect::<Vec<_>>(),
+        [(0, 1), (1, 0), (1, 3)]
+    );
+    assert_eq!(
+        findings
+            .last()
+            .map(|finding| (finding.record, finding.context)),
+        Some((2, Some(2)))
+    );
+    Ok(())
+}
+
+#[test]
 fn process_replay_checkpoint() -> TestResult {
     let detector = Detector::Process;
     let mut fixture = fixture(detector, &[record()], &[])?;
@@ -231,17 +296,12 @@ fn authority_identity_order(complete: &sdk::Fixture, facts: &[Fact]) -> TestResu
             &fixture.evaluation.inputs[2].data,
             fixture.evaluation.context.limits,
         )?;
-        let mut computation = Computation {
-            records: records.clone(),
-            facts: facts.clone(),
-            manifest: manifests.pop().ok_or("graph manifest")?,
-            subjects: Vec::new(),
-            edges: Vec::new(),
-            findings: Vec::new(),
-            state: State {
-                value: "WAITING".into(),
-            },
-        };
+        let mut computation = Computation::new(
+            records.clone(),
+            facts.clone(),
+            manifests.pop().ok_or("graph manifest")?,
+            detector,
+        )?;
         let (reason, evidence, prefix) = if network {
             (
                 "CREDENTIAL_PIVOT",

@@ -21,6 +21,9 @@ master plan invented for them.
 
 ## Proposed Master Plans
 
+- [Araphor performance simplification TODO](araphor-performance-simplification-todo.md) —
+  the user approves all 17 source-audit items. The file records implementation
+  and verification status for each item.
 - [Araphor Data test runtime reduction](araphor-data-test-runtime-reduction.md) —
   the seven approved corrections and final Rust qualification are complete.
   The record preserves the complete inventory and observed timing limits.

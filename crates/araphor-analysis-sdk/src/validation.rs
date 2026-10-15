@@ -9,14 +9,19 @@ mod batch;
 use batch::BatchBudget;
 
 impl Package {
+    pub fn check_evaluation<'a>(
+        &'a self,
+        evaluation: &'a Evaluation,
+    ) -> Result<CheckedEvaluation<'a>> {
+        self.validator(evaluation)?.check(evaluation)
+    }
+
     pub fn validate_evaluation(&self, evaluation: &Evaluation) -> Result<()> {
-        self.validator(evaluation)?.input(evaluation)
+        self.check_evaluation(evaluation).map(|_| ())
     }
 
     pub fn validate_output(&self, evaluation: &Evaluation, output: &Output) -> Result<()> {
-        let validator = self.validator(evaluation)?;
-        validator.input(evaluation)?;
-        validator.output(evaluation, output)
+        self.check_evaluation(evaluation)?.validate_output(output)
     }
 
     pub(crate) fn validator(&self, evaluation: &Evaluation) -> Result<ContractValidator<'_>> {
@@ -44,16 +49,60 @@ impl Package {
         if !model.limits.permits(&limits) {
             return Err(Error::contract(ErrorCode::Limit, "evaluation limits"));
         }
-        Ok(ContractValidator { model, limits })
+        Ok(ContractValidator {
+            package: self,
+            model,
+            limits,
+        })
+    }
+}
+
+/// Borrowed package and input that passed the SDK contract checks.
+pub struct CheckedEvaluation<'a> {
+    evaluation: &'a Evaluation,
+    validator: ContractValidator<'a>,
+}
+
+impl CheckedEvaluation<'_> {
+    pub fn package(&self) -> &Package {
+        self.validator.package
+    }
+
+    pub fn evaluation(&self) -> &Evaluation {
+        self.evaluation
+    }
+
+    pub fn model(&self) -> &Model {
+        self.validator.model
+    }
+
+    pub fn validate_output(&self, output: &Output) -> Result<()> {
+        self.validator.output(self.evaluation, output)
     }
 }
 
 pub(crate) struct ContractValidator<'a> {
+    package: &'a Package,
     pub(crate) model: &'a Model,
     limits: Limits,
 }
 
-impl ContractValidator<'_> {
+impl<'contract> ContractValidator<'contract> {
+    pub(crate) fn check(
+        self,
+        evaluation: &'contract Evaluation,
+    ) -> Result<CheckedEvaluation<'contract>> {
+        self.input(evaluation)?;
+        Ok(self.checked(evaluation))
+    }
+
+    pub(crate) fn checked(self, evaluation: &'contract Evaluation) -> CheckedEvaluation<'contract> {
+        CheckedEvaluation {
+            evaluation,
+            validator: self,
+        }
+    }
+
     pub(crate) fn input(&self, evaluation: &Evaluation) -> Result<()> {
         Package::text(&evaluation.context.id)?;
         let mut budget = BatchBudget::new(self.limits.max_bytes, &self.limits);

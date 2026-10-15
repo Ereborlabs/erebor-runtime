@@ -34,7 +34,11 @@ impl PackageAuthorization for ChangingAuthority {
         }
     }
 
-    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleV1) -> Result<()> {
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
+    ) -> Result<()> {
         self.check(grant, Action::Run)?;
         self.gate()?;
         self.base.admit(grant, bundle)
@@ -44,7 +48,7 @@ impl PackageAuthorization for ChangingAuthority {
         &self,
         grant: &PackageGrantV1,
         action: Action,
-        bundle: &PackageBundleV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         self.check(grant, action)?;

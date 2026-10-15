@@ -1,5 +1,21 @@
 # Araphor Binary Package Storage Review
 
+## Current storage update
+
+The approved [performance TODO](../plans/araphor-performance-simplification-todo.md)
+supersedes the logical JSON charge and schema-21 representation below. The
+current development store uses schema 22. The artifact is a three-field CBOR
+array: version 2, metadata bytes, and raw binary buffers. The store charges
+the descriptor and artifact byte lengths. The frame and database row contain
+no separate byte-count field. Recovery validates the current frame and
+reconstructs the same charges. No compatibility reader or migration exists.
+
+The package owner compares an installed artifact before it encodes a retry.
+An immutable installed bundle retains its verified OCI digest and executable
+identities. Current trust checks still run at admission and commit. The
+[current review guide](araphor-performance-simplification-review.md) gives the
+source route and verification result. Earlier results below remain historical.
+
 This guide covers binary package storage and the approved local OCI transport.
 The earlier change at `bf13d846` adds explicit input sources and removes the
 approved package caps.

@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use araphor_analysis_sdk as sdk;
 use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Serialize};
@@ -19,6 +21,15 @@ pub struct Discovery;
 
 impl Discovery {
     pub fn package() -> sdk::Package {
+        Self::declaration().clone()
+    }
+
+    fn declaration() -> &'static sdk::Package {
+        static PACKAGE: OnceLock<sdk::Package> = OnceLock::new();
+        PACKAGE.get_or_init(Self::build_package)
+    }
+
+    fn build_package() -> sdk::Package {
         let result = vec![
             Self::port::<Atom>("atoms"),
             Self::port::<Coverage>("coverage"),
@@ -91,40 +102,51 @@ impl Discovery {
     }
 
     pub fn evaluate(input: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        let package = Self::package();
-        package.validate_evaluation(input)?;
-        let output = match input.export.as_str() {
+        let checked = Self::declaration().check_evaluation(input)?;
+        let output = Self::evaluate_checked(&checked)?;
+        checked.validate_output(&output)?;
+        Ok(output)
+    }
+
+    pub fn evaluate_checked(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        if input.package() != Self::declaration() {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Incompatible,
+                "discovery package",
+            ));
+        }
+        match input.evaluation().export.as_str() {
             "atoms" => Self::atoms(input),
             "merge" => Self::merge(input),
             "groups" => Self::groups(input),
             "compare" => Self::compare(input),
             _ => Err(sdk::Error::contract(sdk::ErrorCode::Incompatible, "export")),
-        }?;
-        package.validate_output(input, &output)?;
-        Ok(output)
+        }
     }
 
     pub fn port<T: JsonSchema>(name: &str) -> sdk::Port {
         Rows::port::<T>(name, &format!("discovery.{}.v1", T::schema_name()))
     }
 
-    fn read<T: DeserializeOwned + JsonSchema>(
-        input: &sdk::Evaluation,
+    fn read<T: DeserializeOwned>(
+        input: &sdk::CheckedEvaluation<'_>,
         name: &str,
     ) -> sdk::Result<Vec<T>> {
-        Rows::decode(
-            &Self::port::<T>(name),
-            &input.input(name)?.data,
-            input.context.limits,
-        )
+        Rows::input(input, name)
     }
 
-    fn write<T: Serialize + JsonSchema>(
-        input: &sdk::Evaluation,
+    fn write<T: Serialize>(
+        input: &sdk::CheckedEvaluation<'_>,
         name: &str,
         rows: &[T],
     ) -> sdk::Result<sdk::Dataset> {
-        Rows::encode(&Self::port::<T>(name), rows, input.context.limits)
+        let port = input
+            .model()
+            .outputs
+            .iter()
+            .find(|port| port.name == name)
+            .ok_or_else(|| sdk::Error::contract(sdk::ErrorCode::Invalid, "row port"))?;
+        Rows::encode(port, rows, input.evaluation().context.limits)
     }
 
     fn require(valid: bool, field: &'static str) -> sdk::Result<()> {

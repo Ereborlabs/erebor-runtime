@@ -5,7 +5,7 @@ use crate::analysis::{PackageActivationV1, PackageCommitV1};
 use crate::{AnalysisReadControl, QueryOwner, Result};
 
 use super::ResultContext;
-use crate::package::owner::InstalledContext;
+use crate::package::owner::{ClockDependency, InstalledContext};
 use crate::package::{
     AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageBundleV1,
     PackageCheckpointV1, PackageErrorCodeV1 as Code, PackageOutputV1,
@@ -69,6 +69,9 @@ impl AnalysisPackageOwner {
         if bundle.root != context.root {
             return Err(Code::Conflict.error("activation package root"));
         }
+        if automatic && self.inputs_current(active, context.clock, now, true, control)? {
+            return Ok(None);
+        }
         let run = ModelRun::new(active, &context, bundle, id)?;
         let implementation = run.artifact.implementation(&run.model.name)?;
         let now = if automatic {
@@ -116,6 +119,25 @@ impl AnalysisPackageOwner {
     pub(in crate::package) fn clock_changed(clocked: bool, prior: i64, now: u64) -> bool {
         clocked && Self::clock_tick(prior as u64) != Self::clock_tick(now)
     }
+
+    pub(in crate::package) fn inputs_current(
+        &self,
+        active: &PackageActivationV1,
+        clock: ClockDependency,
+        now: u64,
+        changed: bool,
+        control: &AnalysisReadControl,
+    ) -> Result<bool> {
+        let Some(metadata) = self.store.package_current(active, now, changed, control)? else {
+            return Ok(false);
+        };
+        let saved: ResultContext = Self::decode(&metadata)?;
+        Ok(!Self::clock_changed(
+            clock != ClockDependency::None,
+            saved.context.time_utc_ns,
+            now,
+        ))
+    }
 }
 
 impl<'a> ModelRun<'a> {
@@ -139,7 +161,7 @@ impl<'a> ModelRun<'a> {
             .iter()
             .find(|model| model.name == active.key.export)
             .ok_or_else(|| Code::Missing.error("active export"))?;
-        let clocked = artifact.uses_clock(model)?;
+        let clocked = context.clock == ClockDependency::Model;
         Ok(Self {
             active,
             context,

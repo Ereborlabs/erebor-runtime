@@ -17,7 +17,11 @@ impl PackageAuthorization for CacheAuthority {
         Ok(())
     }
 
-    fn admit(&self, grant: &PackageGrantV1, _: &PackageBundleV1) -> Result<()> {
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        _: &crate::package::PackageBundleRef<'_>,
+    ) -> Result<()> {
         self.check(grant, PackageActionV1::Run)
     }
 
@@ -25,7 +29,7 @@ impl PackageAuthorization for CacheAuthority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         self.commit_many(&[(grant, bundle)], action, operation)
@@ -33,7 +37,7 @@ impl PackageAuthorization for CacheAuthority {
 
     fn commit_many(
         &self,
-        grants: &[(&PackageGrantV1, &PackageBundleV1)],
+        grants: &[(&PackageGrantV1, &crate::package::PackageBundleRef<'_>)],
         action: PackageActionV1,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {

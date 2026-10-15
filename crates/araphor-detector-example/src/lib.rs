@@ -19,6 +19,10 @@ impl sdk::guest::Guest for BurstDetector {
     fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
         Self::evaluate(evaluation)
     }
+
+    fn evaluate_checked(checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        Self::compute(checked)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -29,9 +33,21 @@ sdk::export_native!(BurstDetector);
 
 impl BurstDetector {
     pub fn evaluate(evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-        let package = Self::package();
-        package.validate_evaluation(evaluation)?;
-        let model = &package.exports[0];
+        let checked = Self::declaration().check_evaluation(evaluation)?;
+        let output = Self::compute(&checked)?;
+        checked.validate_output(&output)?;
+        Ok(output)
+    }
+
+    fn compute(checked: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
+        if checked.package() != Self::declaration() {
+            return Err(sdk::Error::contract(
+                sdk::ErrorCode::Incompatible,
+                "detector package",
+            ));
+        }
+        let evaluation = checked.evaluation();
+        let model = checked.model();
         let threshold = Self::threshold(evaluation)?;
         let records: Vec<Observation> = Rows::decode(
             &model.inputs[0].port,
@@ -88,7 +104,6 @@ impl BurstDetector {
                 evaluation.context.limits,
             )?],
         });
-        package.validate_output(evaluation, &output)?;
         Ok(output)
     }
 

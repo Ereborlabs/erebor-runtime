@@ -18,6 +18,25 @@ pub(super) struct BundleMemory {
 }
 
 impl BundleMemory {
+    pub(super) fn retained(
+        value: &PackageBundleV1,
+        digest: &String,
+        identities: &Vec<Vec<Option<crate::PackageArtifactIdentityV1>>>,
+    ) -> Result<usize> {
+        let mut memory = Self {
+            bytes: Self::bundle(value)?,
+        };
+        memory.add(digest.capacity())?;
+        memory.vector(identities)?;
+        for entries in identities {
+            memory.vector(entries)?;
+            for identity in entries.iter().flatten() {
+                memory.add(identity.allocated_bytes())?;
+            }
+        }
+        Ok(memory.bytes)
+    }
+
     pub(super) fn bundle(value: &PackageBundleV1) -> Result<usize> {
         let mut memory = Self { bytes: 0 };
         memory.add(size_of::<InstalledBundle>() + 2 * size_of::<usize>())?;

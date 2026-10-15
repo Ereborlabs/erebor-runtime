@@ -1,5 +1,10 @@
 # Araphor Production Data Flow Simplification
 
+The user approves all 17 subsequent performance-audit items. The
+[implementation TODO](araphor-performance-simplification-todo.md) records their
+scope and current verification. Item 17 replaces the earlier canonical JSON
+quota unit with current encoded bytes. Earlier records below remain historical.
+
 Remove intermediate representations and execution stages from production Data
 paths. This plan follows the request for structural changes. The existing
 test preparation changes are qualified. Their complete-suite timing difference

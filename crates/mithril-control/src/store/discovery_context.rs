@@ -127,7 +127,12 @@ impl ControlStore {
                     {
                         return Ok(unresolved(Missing::PolicyContextMismatch));
                     }
-                    if serde_json::to_writer(ContextLimit(DISCOVERY_PIN_BYTES), workload).is_err() {
+                    if serde_json::to_writer(
+                        ContextLimit(DISCOVERY_PIN_BYTES, std::io::sink()),
+                        workload,
+                    )
+                    .is_err()
+                    {
                         return Ok(unresolved(Missing::ContextLimit));
                     }
                     let next = DiscoveryPinnedContextV1 {

@@ -64,7 +64,8 @@ impl AnalysisPackageOwner {
             return Err(Code::Conflict.error("activation scope or parameters"));
         }
         let bundle = self.load_bundle(grant.selection.tenant_id, &context.root)?;
-        self.authority.admit(grant, &bundle)?;
+        let admitted = super::PackageBundleRef::new(&bundle)?;
+        self.authority.admit(grant, &admitted)?;
         let root = super::PackageRefV1 {
             package_id: package.into(),
             revision: active.revision.clone(),
@@ -94,7 +95,7 @@ impl AnalysisPackageOwner {
                     .lock()
                     .map_err(|_| Code::Conflict.error("package lifecycle lock"))?;
                 saved.grant = grant.clone();
-                active = self.authorize_commit(grant, Action::Run, &bundle, || {
+                active = self.authorize_commit(grant, Action::Run, &admitted, || {
                     self.store.renew_package(
                         &active,
                         &Self::encode(&saved)?,
@@ -104,7 +105,7 @@ impl AnalysisPackageOwner {
                 })?;
             }
             if let Some(receipt) =
-                self.evaluate_active(&active, id, false, Some(&bundle), control)?
+                self.evaluate_active(&active, id, false, Some(&admitted), control)?
             {
                 receipts.push((active.key.export, active.key.package_id, receipt));
             }
@@ -134,21 +135,24 @@ impl AnalysisPackageOwner {
         active: &PackageActivationV1,
         id: &str,
         automatic: bool,
-        known: Option<&super::PackageBundleV1>,
+        known: Option<&super::PackageBundleRef<'_>>,
         control: &AnalysisReadControl,
     ) -> Result<Option<PackageResultRefV1>> {
         let context: InstalledContext = Self::decode(&active.metadata)?;
         control.check()?;
         let loaded;
-        let bundle = match known.filter(|bundle| bundle.root == context.root) {
+        let admitted;
+        let admission = match known.filter(|bundle| bundle.bundle().root == context.root) {
             Some(bundle) => bundle,
             None => {
                 loaded = self.load_bundle(active.key.tenant_id, &context.root)?;
-                &loaded
+                admitted = super::PackageBundleRef::new(&loaded)?;
+                &admitted
             }
         };
+        let bundle = admission.bundle();
         self.check(&context.grant, Action::Run)?;
-        self.authority.admit(&context.grant, bundle)?;
+        self.authority.admit(&context.grant, admission)?;
         if !automatic {
             let result_id = Self::result_id(active, id)?;
             if let Some(previous) = self
@@ -180,7 +184,7 @@ impl AnalysisPackageOwner {
                 return Err(error);
             }
         };
-        let receipt = self.authorize_commit(&context.grant, Action::Run, bundle, || {
+        let receipt = self.authorize_commit(&context.grant, Action::Run, admission, || {
             self.store.commit_package(&prepared, || control.check())
         })?;
         Ok(Some(receipt))

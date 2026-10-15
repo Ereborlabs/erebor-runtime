@@ -105,7 +105,7 @@ async fn partition_replaces_policy() -> TestResult<()> {
 }
 
 #[tokio::test]
-async fn priority_release_wakes_coverage() -> TestResult<()> {
+async fn coverage_progresses_during_priority() -> TestResult<()> {
     let tls = MtlsFixture::new(false)?;
     let store = ControlStore::open(tls.path().join("control-store"))?;
     let server = tls.start(tls.control_with_store(store.clone(), 1)?).await?;
@@ -159,11 +159,6 @@ async fn priority_release_wakes_coverage() -> TestResult<()> {
 
     let priority_entered = Arc::new(Barrier::new(2));
     let priority_release = Arc::new(Barrier::new(2));
-    let evidence_entered = Arc::new(Barrier::new(2));
-    let evidence_release = Arc::new(Barrier::new(2));
-    assert!(
-        store.pause_next_evidence_wait_for_test(evidence_entered.clone(), evidence_release.clone())
-    );
     let priority_task = tokio::task::spawn_blocking({
         let store = store.clone();
         let entered = priority_entered.clone();
@@ -171,28 +166,16 @@ async fn priority_release_wakes_coverage() -> TestResult<()> {
         move || store.hold_priority_for_test(&entered, &release)
     });
     tokio::task::spawn_blocking(move || priority_entered.wait()).await?;
-    let mut pending = tokio::spawn(async move {
-        let result = connection.send_coverage_report(&coverage, &interval).await;
-        (connection, result)
-    });
-    tokio::task::spawn_blocking(move || evidence_entered.wait()).await?;
-    tokio::task::spawn_blocking(move || priority_release.wait()).await?;
-    tokio::task::spawn_blocking(move || evidence_release.wait()).await?;
-    let completed = timeout(Duration::from_millis(500), &mut pending).await;
-    let needed_rescue = completed.is_err();
-    let (mut connection, result) = match completed {
-        Ok(result) => result?,
-        Err(_) => {
-            tokio::task::spawn_blocking(move || store.commit_index()).await?;
-            pending.await?
-        }
-    };
-    priority_task.await??;
-    assert!(
-        !needed_rescue,
-        "coverage slept after the final priority operation"
-    );
-    let expected = result?;
+    let completed = timeout(
+        Duration::from_secs(2),
+        connection.send_coverage_report(&coverage, &interval),
+    )
+    .await;
+    let released = tokio::task::spawn_blocking(move || priority_release.wait()).await;
+    let priority = priority_task.await;
+    released?;
+    priority??;
+    let expected = completed??;
     let NodeControlMessage::CoverageAck(actual) = connection.next_message().await? else {
         return Err("Control did not acknowledge partition coverage".into());
     };

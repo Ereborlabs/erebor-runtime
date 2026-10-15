@@ -73,7 +73,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
-const ANALYSIS_SCHEMA_VERSION: i64 = 21;
+const ANALYSIS_SCHEMA_VERSION: i64 = 22;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -99,6 +99,8 @@ pub struct AnalysisStore {
     store_uuid: Uuid,
     // Close the cloned readers before their owning writer.
     readers: [Mutex<Option<Connection>>; 2],
+    read_monitors: [read::ReadMonitor; 2],
+    write_monitor: Arc<read::ReadMonitor>,
     writer: Mutex<Option<Connection>>,
     raw: Mutex<raw::RawJournal>,
     raw_dirty: AtomicBool,
@@ -522,6 +524,8 @@ impl AnalysisStore {
             raw_dirty: AtomicBool::new(false),
             raw_pending: AtomicBool::new(false),
             readers,
+            read_monitors: std::array::from_fn(|_| read::ReadMonitor::default()),
+            write_monitor: Arc::new(read::ReadMonitor::default()),
             read_slots: Arc::new(tokio::sync::Semaphore::new(16)),
             read_next: AtomicUsize::new(0),
             package_lifecycle: Arc::new(Mutex::new(())),

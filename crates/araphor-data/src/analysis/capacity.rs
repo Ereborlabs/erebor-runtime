@@ -406,6 +406,118 @@ mod tests {
     }
 
     #[test]
+    fn analysis_store_segment_usage() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 100,
+            ..Default::default()
+        };
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        let source = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "capacity-node".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let batch = |cursor| ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor: cursor,
+            last_cursor: cursor,
+            intake_utc_ns: 100,
+            framed_records: b"frame".to_vec().into(),
+            frame_ends: vec![5],
+        };
+        let check = |store: &AnalysisStore, count: usize| -> Result<()> {
+            let raw = store
+                .raw
+                .lock()
+                .map_err(|_| store.state_error("raw lock"))?;
+            let (_, evidence, diagnostic) = raw
+                .segments
+                .storage_summary()?
+                .ok_or_else(|| store.state_error("segment summary"))?;
+            assert_eq!((evidence, diagnostic), (count, 0));
+            let summary = store.storage_for_append(&raw.segments, 0, 0)?;
+            let inspected = AnalysisStore::storage_at(&root, 0, 0)?;
+            assert_eq!(
+                (summary.file_bytes, summary.allocated_bytes),
+                (inspected.file_bytes, inspected.allocated_bytes)
+            );
+            Ok(())
+        };
+        store.accept_validated_batch(source.clone(), batch(1))?;
+        check(&store, 1)?;
+        store.accept_validated_batch(source.clone(), batch(2))?;
+        check(&store, 1)?;
+        store.checkpoint()?;
+        check(&store, 1)?;
+        store
+            .raw
+            .lock()
+            .map_err(|_| store.state_error("raw lock"))?
+            .segments
+            .seal_all()?;
+        check(&store, 1)?;
+        store.accept_validated_batch(source.clone(), batch(3))?;
+        check(&store, 2)?;
+        crate::EvidenceRetentionOwner::new(&store).retain(&source, 500)?;
+        check(&store, 0)?;
+        drop(store);
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
+        check(&store, 0)?;
+        store.accept_validated_batch(source.clone(), batch(4))?;
+        check(&store, 1)?;
+
+        let unknown = root.join("segments/unknown");
+        let padding = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&unknown)?;
+        padding.set_len(1024 * 1024)?;
+        {
+            let raw = store
+                .raw
+                .lock()
+                .map_err(|_| store.state_error("raw lock"))?;
+            assert!(raw.segments.storage_summary()?.is_none());
+            let summary = store.storage_for_append(&raw.segments, 0, 0)?;
+            let inspected = store.storage_usage()?;
+            assert_eq!(
+                (summary.file_bytes, summary.allocated_bytes),
+                (inspected.file_bytes, inspected.allocated_bytes)
+            );
+        }
+        padding.set_len(2 * 1024 * 1024)?;
+        {
+            let raw = store
+                .raw
+                .lock()
+                .map_err(|_| store.state_error("raw lock"))?;
+            assert_eq!(
+                store.storage_for_append(&raw.segments, 0, 0)?.file_bytes,
+                store.storage_usage()?.file_bytes
+            );
+        }
+        drop(padding);
+        fs::remove_file(&unknown)?;
+        let before = store.meta()?;
+        let link = root.join("segments/link");
+        symlink(root.join("analysis.duckdb"), &link)?;
+        assert!(store
+            .accept_validated_batch(source.clone(), batch(5))
+            .is_err());
+        assert_eq!(store.meta()?, before);
+        fs::remove_file(link)?;
+        store.accept_validated_batch(source, batch(5))?;
+        Ok(())
+    }
+
+    #[test]
     fn analysis_store_native_limits() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
@@ -682,6 +794,51 @@ pub struct StorageUsageV1 {
 }
 
 impl StorageUsageV1 {
+    pub(super) fn from_metadata(path: &Path, metadata: &fs::Metadata) -> Result<Self> {
+        let allocated_bytes = metadata.blocks().checked_mul(512).ok_or_else(|| {
+            crate::AnalysisStateSnafu {
+                path,
+                reason: "allocated data bytes overflow",
+            }
+            .build()
+        })?;
+        Ok(Self {
+            file_bytes: metadata.len().max(allocated_bytes),
+            allocated_bytes,
+            available_bytes: 0,
+        })
+    }
+
+    pub(super) fn add(&mut self, other: Self, path: &Path) -> Result<()> {
+        let file_bytes = self.file_bytes.checked_add(other.file_bytes);
+        let allocated_bytes = self.allocated_bytes.checked_add(other.allocated_bytes);
+        let (Some(file_bytes), Some(allocated_bytes)) = (file_bytes, allocated_bytes) else {
+            return crate::AnalysisStateSnafu {
+                path,
+                reason: "data file bytes overflow",
+            }
+            .fail();
+        };
+        self.file_bytes = file_bytes;
+        self.allocated_bytes = allocated_bytes;
+        Ok(())
+    }
+
+    pub(super) fn subtract(&mut self, other: Self, path: &Path) -> Result<()> {
+        let file_bytes = self.file_bytes.checked_sub(other.file_bytes);
+        let allocated_bytes = self.allocated_bytes.checked_sub(other.allocated_bytes);
+        let (Some(file_bytes), Some(allocated_bytes)) = (file_bytes, allocated_bytes) else {
+            return crate::AnalysisStateSnafu {
+                path,
+                reason: "data file bytes underflow",
+            }
+            .fail();
+        };
+        self.file_bytes = file_bytes;
+        self.allocated_bytes = allocated_bytes;
+        Ok(())
+    }
+
     pub(super) fn free_bytes(root: &Path) -> Result<u64> {
         let volume = rustix::fs::statvfs(root)
             .map_err(std::io::Error::from)
@@ -715,8 +872,26 @@ impl AnalysisStore {
 
     pub(super) fn storage_at(
         root: &Path,
+        entries: usize,
+        diagnostics: usize,
+    ) -> Result<StorageUsageV1> {
+        Self::inspect_storage(root, entries, diagnostics, None)
+    }
+
+    pub(super) fn storage_for_append(
+        &self,
+        segments: &super::raw_segments::EvidenceSegmentOwner,
+        entries: usize,
+        diagnostics: usize,
+    ) -> Result<StorageUsageV1> {
+        Self::inspect_storage(&self.root, entries, diagnostics, Some(segments))
+    }
+
+    fn inspect_storage(
+        root: &Path,
         mut entries: usize,
         mut diagnostics: usize,
+        segments: Option<&super::raw_segments::EvidenceSegmentOwner>,
     ) -> Result<StorageUsageV1> {
         if diagnostics > MAX_DIAGNOSTIC_ENTRIES {
             return StorageCapacitySnafu {
@@ -728,6 +903,11 @@ impl AnalysisStore {
             available_bytes: StorageUsageV1::free_bytes(root)?,
             ..Default::default()
         };
+        let known = segments
+            .map(|segments| segments.storage_summary())
+            .transpose()?
+            .flatten();
+        let segment_root = root.join("segments");
         let mut pending = vec![root.to_path_buf()];
         while let Some(directory) = pending.pop() {
             for entry in fs::read_dir(&directory).context(IoSnafu { path: &directory })? {
@@ -748,6 +928,21 @@ impl AnalysisStore {
                 } else {
                     entries = entries.saturating_add(1);
                 }
+                if metadata.is_dir() {
+                    if path == segment_root {
+                        if let Some((segment_usage, evidence, diagnostic)) = known {
+                            usage.add(segment_usage, root)?;
+                            entries = entries.saturating_add(evidence);
+                            diagnostics = diagnostics.saturating_add(diagnostic);
+                        } else {
+                            pending.push(path.clone());
+                        }
+                    } else {
+                        pending.push(path.clone());
+                    }
+                } else if !metadata.is_file() {
+                    return Self::reject_path(root, "the data directory contains a non-file entry");
+                }
                 if entries > MAX_STORAGE_ENTRIES {
                     return Self::reject_path(root, "the data directory exceeds its entry bound");
                 }
@@ -757,39 +952,7 @@ impl AnalysisStore {
                     }
                     .fail();
                 }
-                if metadata.is_dir() {
-                    pending.push(path);
-                } else if !metadata.is_file() {
-                    return Self::reject_path(root, "the data directory contains a non-file entry");
-                }
-                let allocated = metadata.blocks().checked_mul(512).ok_or_else(|| {
-                    crate::AnalysisStateSnafu {
-                        path: root,
-                        reason: "allocated data bytes overflow",
-                    }
-                    .build()
-                })?;
-                usage.allocated_bytes =
-                    usage
-                        .allocated_bytes
-                        .checked_add(allocated)
-                        .ok_or_else(|| {
-                            crate::AnalysisStateSnafu {
-                                path: root,
-                                reason: "allocated data bytes overflow",
-                            }
-                            .build()
-                        })?;
-                usage.file_bytes = usage
-                    .file_bytes
-                    .checked_add(metadata.len().max(allocated))
-                    .ok_or_else(|| {
-                        crate::AnalysisStateSnafu {
-                            path: root,
-                            reason: "data file bytes overflow",
-                        }
-                        .build()
-                    })?;
+                usage.add(StorageUsageV1::from_metadata(&path, &metadata)?, root)?;
             }
         }
         Ok(usage)

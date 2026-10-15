@@ -12,7 +12,7 @@ impl AnalysisStore {
         CREATE TABLE IF NOT EXISTS package_revisions (
             tenant_id BLOB NOT NULL, package_id VARCHAR NOT NULL, revision VARCHAR NOT NULL,
             descriptor BLOB NOT NULL, artifact BLOB NOT NULL, dependencies VARCHAR NOT NULL,
-            commit_revision UBIGINT NOT NULL, encoded_bytes UBIGINT NOT NULL,
+            commit_revision UBIGINT NOT NULL,
             PRIMARY KEY (tenant_id, package_id, revision)
         );
         CREATE TABLE IF NOT EXISTS package_activations (
@@ -41,7 +41,7 @@ impl AnalysisStore {
 
     pub(in crate::analysis) const PACKAGE_CHARGES: &'static str = "
         SELECT tenant_id, 256 + octet_length(encode(package_id)) + octet_length(encode(revision))
-            + octet_length(descriptor) + encoded_bytes + octet_length(encode(dependencies)) AS bytes
+            + octet_length(descriptor) + octet_length(artifact) + octet_length(encode(dependencies)) AS bytes
             FROM package_revisions
         UNION ALL SELECT tenant_id, 256 + octet_length(encode(scope_id)) + octet_length(encode(package_id))
             + octet_length(encode(export_name)) + octet_length(encode(revision))
@@ -62,8 +62,7 @@ impl AnalysisStore {
             "SELECT 1 FROM package_revisions WHERE octet_length(tenant_id) <> 16
                 OR length(package_id) NOT BETWEEN 1 AND 256 OR length(revision) NOT BETWEEN 1 AND 4096
                 OR octet_length(encode(dependencies)) > 1048576 OR octet_length(descriptor) = 0
-                OR encoded_bytes = 0
-                OR octet_length(artifact) NOT BETWEEN 1 AND encoded_bytes OR commit_revision = 0
+                OR octet_length(artifact) = 0 OR commit_revision = 0
                 OR commit_revision > (SELECT commit_revision FROM store_meta)";
         for (reason, query) in [
             ("invalid retained package revision", revision_query),

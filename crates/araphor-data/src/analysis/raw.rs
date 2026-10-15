@@ -835,7 +835,8 @@ impl AnalysisStore {
             }
             .fail();
         }
-        let usage = self.storage_with_reserve(
+        let usage = self.storage_for_append(
+            &raw.segments,
             usize::from(created && !diagnostic),
             trace_slots + usize::from(created && diagnostic),
         )?;
@@ -1518,9 +1519,13 @@ impl RawJournal {
         Ok(gaps)
     }
 
-    pub(super) fn forget_segment(&mut self, id: u64) -> Result<()> {
-        self.segments.forget(id);
-        self.entries.retain(|_, entry| entry.reference.id != id);
+    pub(super) fn forget_segments(&mut self, ids: impl IntoIterator<Item = u64>) -> Result<()> {
+        let ids: std::collections::BTreeSet<_> = ids.into_iter().collect();
+        for id in &ids {
+            self.segments.forget(*id)?;
+        }
+        self.entries
+            .retain(|_, entry| !ids.contains(&entry.reference.id));
         self.ranges
             .retain(|_, (revision, _)| self.entries.contains_key(revision));
         Ok(())
@@ -2806,7 +2811,8 @@ pub(super) mod tests {
         }
         assert_eq!(last.frames, batch.frames);
         assert_eq!(last.terminal, terminal.terminal);
-        let removed = EvidenceRetentionOwner::new(&store).retain_trace(identity, 200)?;
+        let removed = EvidenceRetentionOwner::new(&store)
+            .retain_trace(identity, 116 + limits.raw_max_age_ns)?;
         assert_eq!((removed.removed_records, removed.retained_floor), (15, 15));
         drop(store);
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;

@@ -14,13 +14,12 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         artifact: &PackageArtifactV1,
     ) -> Result<PackageRevisionV1> {
-        let (mut revision, encoded) = Self::revision_encoding(grant, artifact)?;
+        let mut revision = Self::revision_metadata(grant, artifact)?;
         let saved = self.store.package_revision(
             revision.tenant_id,
             &revision.package_id,
             &revision.revision,
         );
-        revision.encoded_bytes = super::super::storage::StoredArtifact::count_encoding(&encoded)?;
         if let Some(saved) = saved? {
             if saved.dependencies == revision.dependencies
                 && Self::decode::<araphor_analysis_sdk::Package>(&saved.descriptor)?
@@ -30,8 +29,7 @@ impl AnalysisPackageOwner {
                 return Ok(saved);
             }
         }
-        revision.artifact =
-            super::super::storage::StoredArtifact::encode_sized(artifact, revision.encoded_bytes)?;
+        revision.artifact = super::super::storage::StoredArtifact::encode(artifact)?;
         Ok(revision)
     }
 
@@ -40,21 +38,16 @@ impl AnalysisPackageOwner {
         grant: &PackageGrantV1,
         artifact: &PackageArtifactV1,
     ) -> Result<PackageRevisionV1> {
-        let (mut revision, encoded) = Self::revision_encoding(grant, artifact)?;
-        revision.encoded_bytes = super::super::storage::StoredArtifact::count_encoding(&encoded)?;
-        revision.artifact =
-            super::super::storage::StoredArtifact::encode_sized(artifact, revision.encoded_bytes)?;
+        let mut revision = Self::revision_metadata(grant, artifact)?;
+        revision.artifact = super::super::storage::StoredArtifact::encode(artifact)?;
         Ok(revision)
     }
 
-    fn revision_encoding<'a>(
+    fn revision_metadata(
         grant: &PackageGrantV1,
-        artifact: &'a PackageArtifactV1,
-    ) -> Result<(
-        PackageRevisionV1,
-        super::super::bundle::ArtifactEncoding<'a>,
-    )> {
-        let encoded = artifact.encoding(false)?;
+        artifact: &PackageArtifactV1,
+    ) -> Result<PackageRevisionV1> {
+        let descriptor = artifact.descriptor_bytes()?;
         let dependencies: BTreeSet<_> = artifact
             .descriptor
             .exports
@@ -67,9 +60,8 @@ impl AnalysisPackageOwner {
             tenant_id: grant.selection.tenant_id,
             package_id: artifact.descriptor.id.clone(),
             revision: artifact.descriptor.revision.clone(),
-            descriptor: encoded.descriptor.get().as_bytes().to_vec(),
+            descriptor,
             artifact: Vec::new(),
-            encoded_bytes: 0,
             dependencies: dependencies
                 .into_iter()
                 .map(|(package_id, revision)| PackageRevisionRefV1 {
@@ -78,7 +70,7 @@ impl AnalysisPackageOwner {
                 })
                 .collect(),
         };
-        Ok((revision, encoded))
+        Ok(revision)
     }
 
     pub(in crate::package) fn load_bundle(
@@ -172,7 +164,7 @@ mod tests {
             artifact: vec![255; 33 * 1024 * 1024],
         }];
         let saved = AnalysisPackageOwner::revision(&fixture.grant, artifact)?;
-        assert!(saved.encoded_bytes > 64 * 1024 * 1024);
+        assert!(saved.artifact.len() > 32 * 1024 * 1024);
         let response = fixture.install(package.clone(), None).await?;
         assert!(!response.exports[0].active);
         assert!(matches!(

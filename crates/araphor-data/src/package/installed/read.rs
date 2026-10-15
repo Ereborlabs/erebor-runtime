@@ -94,7 +94,9 @@ impl InstalledAnalysis {
                 continue;
             }
             self.owner.check(&context.grant, Action::Run)?;
-            self.owner.authority.admit(&context.grant, &bundle.value)?;
+            self.owner
+                .authority
+                .admit(&context.grant, &bundle.admission())?;
             roots.insert(context.root);
             pins.push(active);
         }

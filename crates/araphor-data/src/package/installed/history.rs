@@ -33,7 +33,7 @@ impl InstalledAnalysis {
                     root: context.root,
                     parameters: context.parameters,
                     target: Some(implementation.target().into()),
-                    artifact: implementation.identity()?,
+                    artifact: bundle.identity(&pin.key.package_id, &pin.key.export)?,
                 })
             })
             .collect()
@@ -83,7 +83,9 @@ impl InstalledAnalysis {
                     self.owner.load_bundle(tenant, &reference.root)?,
                 )?
             };
-            self.owner.authority.admit(&context.grant, &bundle.value)?;
+            self.owner
+                .authority
+                .admit(&context.grant, &bundle.admission())?;
             let artifact = bundle
                 .value
                 .artifacts
@@ -101,7 +103,7 @@ impl InstalledAnalysis {
                 .find(|model| model.name == reference.export)
                 .ok_or_else(|| Code::Missing.error("historical export declaration"))?;
             let implementation = artifact.implementation(&reference.export)?;
-            let identity = implementation.identity()?;
+            let identity = bundle.identity(&reference.package_id, &reference.export)?;
             if reference
                 .target
                 .as_deref()

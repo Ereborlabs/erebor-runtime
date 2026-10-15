@@ -232,15 +232,15 @@ unsafe fn evaluate_guest<G: crate::guest::Guest>(
         return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
     }
     let package = G::package();
-    let evaluation = unsafe { Decoder::evaluation(&package, request)? };
-    let output = G::evaluate(&evaluation)?;
+    let (evaluation, validator) = unsafe { Decoder::evaluation(&package, request)? };
+    let checked = validator.checked(&evaluation);
+    let output = G::evaluate_checked(&checked)?;
     if cancelled() {
         return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
     }
-    package.validate_output(&evaluation, &output)?;
+    checked.validate_output(&output)?;
     let output = Box::new(output);
-    let model = package.validator(&evaluation)?.model;
-    let exchange = Exchange::output(model, &output)?;
+    let exchange = Exchange::output(checked.model(), &output)?;
     Ok(Box::new(OwnedResponse {
         _output: Some(output),
         exchange: Some(exchange),

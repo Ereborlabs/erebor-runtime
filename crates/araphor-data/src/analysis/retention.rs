@@ -5,6 +5,7 @@ use super::{raw::RawIdentity, AnalysisStore, StorePositionV1};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
 const SWEEP_SOURCES: usize = 16;
+const SWEEP_SEGMENTS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -213,12 +214,14 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     operation: "decode retention pins",
                 })?
         };
+        let entries: std::collections::BTreeSet<_> = raw
+            .ranges
+            .range((key.clone(), 0)..=(key.clone(), u64::MAX))
+            .map(|(_, &(revision, _))| revision)
+            .collect();
         let mut candidates = std::collections::BTreeMap::<u64, (u64, u64, u64, u64)>::new();
-        for entry in raw
-            .entries
-            .values()
-            .filter(|entry| entry.identity == identity)
-        {
+        for revision in &entries {
+            let entry = &raw.entries[revision];
             let candidate = candidates
                 .entry(entry.reference.id)
                 .or_insert((u64::MAX, 0, 0, 0));
@@ -229,100 +232,117 @@ impl<'a> EvidenceRetentionOwner<'a> {
             candidate.2 = candidate.2.max(entry.commit.intake);
             candidate.3 = entry.reference.offset;
         }
-        let selected = candidates
+        let mut candidates: Vec<_> = candidates
             .into_iter()
-            .filter(|(id, (_, last, intake, _))| {
-                *last <= consumed.min(receipt.cursor())
-                    && (*intake <= now_utc_ns.saturating_sub(self.store.retention.raw_max_age_ns)
-                        || tenant_bytes > self.store.retention.raw_max_bytes
-                        || pressure)
-                    && !pins.contains(id)
+            .filter(|(id, (_, last, _, _))| {
+                *last <= consumed.min(receipt.cursor()) && !pins.contains(id)
             })
-            .min_by_key(|(_, (first, _, _, _))| *first)
-            .map(|(id, (_, _, _, bytes))| (id, bytes));
-        let Some((segment_id, segment_bytes)) = selected else {
+            .collect();
+        candidates.sort_unstable_by_key(|(id, (first, _, _, _))| (*first, *id));
+        let mut selected = std::collections::BTreeSet::new();
+        let mut tenant_left = tenant_bytes;
+        let mut segment_bytes = 0_u64;
+        for (id, (_, _, intake, bytes)) in candidates {
+            if intake <= now_utc_ns.saturating_sub(self.store.retention.raw_max_age_ns)
+                || tenant_left > self.store.retention.raw_max_bytes
+                || (pressure && selected.is_empty())
+            {
+                selected.insert(id);
+                tenant_left = tenant_left
+                    .checked_sub(bytes)
+                    .ok_or_else(|| self.store.state_error("tenant segment bytes underflow"))?;
+                segment_bytes = segment_bytes
+                    .checked_add(bytes)
+                    .ok_or_else(|| self.store.state_error("expired segment bytes overflow"))?;
+                if selected.len() == SWEEP_SEGMENTS {
+                    break;
+                }
+            }
+        }
+        if selected.is_empty() {
             return Ok(RetentionResultV1 {
                 removed_records: 0,
                 retained_bytes,
                 retained_floor: receipt.floor(),
                 commit_revision: meta.commit_revision,
             });
-        };
+        }
         let revision = meta.commit_revision.checked_add(1).ok_or_else(|| {
             self.store
                 .state_error("the analysis commit revision is exhausted")
         })?;
-        let mut intervals: Vec<(u64, u64)> = raw
-            .entries
-            .values()
-            .filter(|entry| entry.reference.id == segment_id)
-            .flat_map(|entry| {
-                entry
-                    .commit
-                    .spans
-                    .iter()
-                    .map(|span| (span.first, span.last))
-            })
-            .collect();
-        intervals.sort_unstable();
-        let removed_records = intervals
-            .iter()
-            .try_fold(0_u32, |count, (first, last)| {
-                u32::try_from(last - first + 1)
-                    .ok()
-                    .and_then(|added| count.checked_add(added))
-            })
-            .ok_or_else(|| {
-                self.store
-                    .state_error("the expired record count is invalid")
-            })?;
-        let mut merged: Vec<(u64, u64)> = Vec::new();
-        for (first, last) in intervals {
-            if let Some(prior) = merged
-                .last_mut()
-                .filter(|prior| prior.1.checked_add(1) == Some(first))
-            {
-                prior.1 = last;
-            } else {
-                merged.push((first, last));
+        let mut intervals = std::collections::BTreeMap::<u64, Vec<(u64, u64)>>::new();
+        let mut replay_floor = None::<StorePositionV1>;
+        let mut next_retained = None::<u64>;
+        let mut removed_records = 0_u32;
+        for revision in &entries {
+            let entry = &raw.entries[revision];
+            for span in &entry.commit.spans {
+                if !selected.contains(&entry.reference.id) {
+                    if span.first <= receipt.cursor() {
+                        next_retained =
+                            Some(next_retained.map_or(span.first, |first| first.min(span.first)));
+                    }
+                    continue;
+                }
+                intervals
+                    .entry(entry.reference.id)
+                    .or_default()
+                    .push((span.first, span.last));
+                let count = u32::try_from(span.last - span.first + 1).map_err(|_| {
+                    self.store
+                        .state_error("the expired record count is invalid")
+                })?;
+                removed_records = removed_records.checked_add(count).ok_or_else(|| {
+                    self.store
+                        .state_error("the expired record count is invalid")
+                })?;
+                let ordinal = span
+                    .ordinal
+                    .checked_add(count - 1)
+                    .ok_or_else(|| self.store.state_error("the expired position is invalid"))?;
+                let position = StorePositionV1 {
+                    commit_revision: entry.commit.revision,
+                    ordinal,
+                };
+                replay_floor = Some(replay_floor.map_or(position, |prior| prior.max(position)));
             }
+        }
+        let mut merged = Vec::new();
+        for (segment, mut intervals) in intervals {
+            intervals.sort_unstable();
+            let mut ranges: Vec<(u64, u64)> = Vec::new();
+            for (first, last) in intervals {
+                if let Some(prior) = ranges
+                    .last_mut()
+                    .filter(|prior| prior.1.checked_add(1) == Some(first))
+                {
+                    prior.1 = last;
+                } else {
+                    ranges.push((first, last));
+                }
+            }
+            merged.extend(
+                ranges
+                    .into_iter()
+                    .map(|(first, last)| (segment, first, last)),
+            );
         }
         let retained_bytes = retained_bytes
             .checked_sub(segment_bytes)
             .ok_or_else(|| self.store.state_error("retained segment bytes underflow"))?;
-        let replay_floor = raw
-            .entries
-            .values()
-            .filter(|entry| entry.reference.id == segment_id)
-            .flat_map(|entry| {
-                entry
-                    .commit
-                    .spans
-                    .iter()
-                    .map(move |span| (entry.commit.revision, span))
-            })
-            .try_fold(None::<StorePositionV1>, |floor, (commit_revision, span)| {
-                let ordinal = span
-                    .last
-                    .checked_sub(span.first)
-                    .and_then(|count| u32::try_from(count).ok())
-                    .and_then(|count| span.ordinal.checked_add(count))
-                    .ok_or_else(|| self.store.state_error("the expired position is invalid"))?;
-                let position = StorePositionV1 {
-                    commit_revision,
-                    ordinal,
-                };
-                Ok::<_, crate::Error>(Some(floor.map_or(position, |prior| prior.max(position))))
-            })?
-            .ok_or_else(|| self.store.state_error("the expired position is absent"))?;
+        let replay_floor =
+            replay_floor.ok_or_else(|| self.store.state_error("the expired position is absent"))?;
         let previous_floor = AnalysisStore::replay_floor_from(&transaction, tenant)?;
         let floor_changed = previous_floor.is_none_or(|prior| replay_floor > prior);
         raw.segments.seal_all()?;
         raw.project_paths(&transaction)?;
-        transaction.execute(
+        for segment_id in &selected {
+            transaction.execute(
             "UPDATE segments SET state = 'Deleting', sealed = true WHERE segment_id = ? AND state = 'Live'",
             params![segment_id],
-        ).context(AnalysisDatabaseSnafu { operation: "mark eligible segment deletion" })?;
+            ).context(AnalysisDatabaseSnafu { operation: "mark eligible segment deletion" })?;
+        }
         if floor_changed {
             transaction
                 .execute(
@@ -339,7 +359,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                     operation: "advance tenant replay floor",
                 })?;
         }
-        for (first, last) in &merged {
+        for (segment_id, first, last) in &merged {
             transaction
                 .execute(
                     "INSERT INTO expired_ranges VALUES (?, ?, ?, ?, ?, ?)",
@@ -376,14 +396,6 @@ impl<'a> EvidenceRetentionOwner<'a> {
             (256 + key.len() as i64) * expired as i64 + floor_charge - released,
         )
         .apply(&transaction, &tenant)?;
-        let next_retained = raw
-            .entries
-            .values()
-            .filter(|entry| entry.identity == identity && entry.reference.id != segment_id)
-            .flat_map(|entry| &entry.commit.spans)
-            .filter(|span| span.first <= receipt.cursor())
-            .map(|span| span.first)
-            .min();
         let retained_floor = next_retained.map_or(receipt.cursor(), |cursor| cursor - 1);
         let (relation, receipts) = match identity {
             RawIdentity::Evidence(_) => ("events", "source_receipts"),
@@ -421,9 +433,18 @@ impl<'a> EvidenceRetentionOwner<'a> {
         }
         #[cfg(test)]
         self.store.crash_at("retention.after");
-        let cleanup = AnalysisStore::remove_segment(writer, &self.store.root, &raw, segment_id);
-        raw.forget_segment(segment_id)?;
-        cleanup?;
+        let mut failure = None;
+        for segment_id in &selected {
+            let cleanup =
+                AnalysisStore::remove_segment(writer, &self.store.root, &raw, *segment_id);
+            if let Err(error) = cleanup {
+                failure.get_or_insert(error);
+            }
+        }
+        raw.forget_segments(selected)?;
+        if let Some(error) = failure {
+            return Err(error);
+        }
         raw.refresh_budget(writer)?;
         self.store
             .write_ready
@@ -467,6 +488,74 @@ mod tests {
             framed_records: prost::bytes::Bytes::from_static(bytes),
             frame_ends: (1..=bytes.len()).collect(),
         }
+    }
+
+    #[test]
+    fn retention_bounds_segments() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open_with_limits(
+            &root,
+            RetentionLimitsV1 {
+                raw_max_age_ns: 50,
+                ..Default::default()
+            },
+            Default::default(),
+        )?;
+        let source = identity(1);
+        let foreign = identity(2);
+        for cursor in 1..=18 {
+            store.accept_validated_batch(source.clone(), batch(cursor, b"x"))?;
+            store
+                .raw
+                .lock()
+                .map_err(|_| "raw lock")?
+                .segments
+                .seal_all()?;
+        }
+        store.accept_validated_batch(foreign.clone(), batch(1, b"z"))?;
+        let scope = ProcessorScopeV1 {
+            processor_id: "bounded-retention".into(),
+            method_version: 1,
+            identity: source.clone(),
+        };
+        store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
+        store.commit_result(&AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 18,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "bounded-pin".into(),
+            body: vec![1],
+            created_utc_ns: 101,
+            witnesses: vec![AnalysisWitnessV1 {
+                identity: source.clone().into(),
+                cursor: 1,
+                expires_utc_ns: 300,
+            }],
+            context_refs: Vec::new(),
+        })?;
+        let first = EvidenceRetentionOwner::new(&store).retain(&source, 200)?;
+        assert_eq!(first.removed_records, SWEEP_SEGMENTS as u32);
+        assert_eq!(first.retained_floor, 0);
+        assert_eq!(store.read_page(&source, 1)?.records[0].framed_record, b"x");
+        assert_eq!(store.read_page(&source, 18)?.records[0].cursor, 18);
+        assert_eq!(store.read_page(&foreign, 1)?.records.len(), 1);
+        drop(store);
+        let store = AnalysisStore::open_with_limits(
+            &root,
+            RetentionLimitsV1 {
+                raw_max_age_ns: 50,
+                ..Default::default()
+            },
+            Default::default(),
+        )?;
+        let last = EvidenceRetentionOwner::new(&store).retain(&source, 300)?;
+        assert_eq!(last.removed_records, 2);
+        assert_eq!(last.retained_floor, 18);
+        assert_eq!(store.read_page(&foreign, 1)?.records[0].framed_record, b"z");
+        Ok(())
     }
 
     #[test]
@@ -1191,6 +1280,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 2);
         let reader = store.writer()?.get()?.try_clone()?;
         reader.execute_batch("BEGIN TRANSACTION; SELECT * FROM segments")?;
+        let pending = store.meta()?;
         let failed = owner.sweep(None, u64::MAX);
         assert!(
             matches!(
@@ -1208,11 +1298,21 @@ mod tests {
                 .source_status(&source)?
                 .ok_or("source status absent")?
                 .retained_event_count,
-            1
+            0
         );
-        assert_eq!(store.read_page(&source, 2)?.records[0].framed_record, b"b");
+        assert!(matches!(
+            store.read_page(&source, 2),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
+        assert!(matches!(
+            store.accept_validated_batch(source.clone(), batch(3, b"c")),
+            Err(crate::Error::RetentionUnavailable { .. })
+        ));
+        let expired = store.meta()?;
+        assert_eq!(expired.commit_revision, pending.commit_revision + 1);
         assert!(owner.sweep(None, u64::MAX).is_err());
         assert!(!store.retention_healthy());
+        assert_eq!(store.meta()?, expired);
         assert_eq!(
             store
                 .source_status(&source)?
@@ -1223,6 +1323,15 @@ mod tests {
         reader.execute_batch("ROLLBACK")?;
         assert_eq!(owner.sweep(None, u64::MAX)?.removed_records, 0);
         assert!(store.retention_healthy());
+        assert_eq!(store.meta()?, expired);
+        drop(reader);
+        drop(store);
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        assert_eq!(store.meta()?, expired);
+        assert!(matches!(
+            store.read_page(&source, 2),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
         Ok(())
     }
 

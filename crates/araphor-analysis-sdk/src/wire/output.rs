@@ -10,10 +10,17 @@ impl Output {
         output: &crate::Output,
     ) -> Result<Self> {
         let validator = package.validator(evaluation)?;
-        validator.input(evaluation)?;
-        validator.output(evaluation, output)?;
+        Self::encode_checked(&validator.check(evaluation)?, output)
+    }
+
+    pub(crate) fn encode_checked(
+        checked: &crate::CheckedEvaluation<'_>,
+        output: &crate::Output,
+    ) -> Result<Self> {
+        checked.validate_output(output)?;
+        let evaluation = checked.evaluation();
         let limits = evaluation.context.limits;
-        let model = validator.model;
+        let model = checked.model();
         let mut codec = Codec::new(limits);
         let datasets = output
             .datasets

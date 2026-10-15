@@ -9,7 +9,7 @@ mod schema;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 impl crate::analysis::AnalysisStore {
-    fn fault_write(&self, query: &str, values: &[&dyn duckdb::ToSql]) -> TestResult {
+    pub(crate) fn fault_write(&self, query: &str, values: &[&dyn duckdb::ToSql]) -> TestResult {
         let mut writer = self.writer_access()?;
         let writer = writer.get_mut()?;
         writer.execute_batch(&format!(

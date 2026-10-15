@@ -907,7 +907,7 @@ impl<'a> InputProjection<'a> {
     }
 
     fn needs(&self, relation: &str) -> bool {
-        !matches!(self.template, QueryTemplate::Client(sql) if !sql.dependencies().contains(relation))
+        self.template.reads_relation(relation)
     }
 
     pub(super) fn expands(&self, relation: &str) -> bool {
@@ -940,19 +940,40 @@ impl<'a> InputProjection<'a> {
                 return crate::QueryInvalidSnafu {
                     field: "unexpanded profile",
                 }
-                .fail()
+                .fail();
             }
             AnalysisInputV1::Graph { .. } | AnalysisInputV1::Notification { .. } => {
                 return crate::QueryInvalidSnafu {
                     field: "unexpanded owner input",
                 }
-                .fail()
+                .fail();
             }
         };
         if !self.needs(name) {
             return Ok(true);
         }
-        let row = InputRow::try_from(input)?;
+        let row = if let AnalysisInputV1::Event {
+            decoded: Some(decoded),
+            ..
+        } = &input
+        {
+            let operation = match self.template {
+                QueryTemplate::Client(sql) => sql.event_operation(),
+                QueryTemplate::Events { operation } => *operation,
+                QueryTemplate::ExactMatch { operation, .. } => Some(*operation),
+                _ => None,
+            };
+            if operation.is_some_and(|operation| operation != decoded.operation) {
+                return Ok(true);
+            }
+            let fields = match self.template {
+                QueryTemplate::Client(sql) => sql.event_fields(),
+                _ => None,
+            };
+            InputRow::event(input, fields)?
+        } else {
+            InputRow::try_from(input)?
+        };
         let bytes = row.allocation_bytes()?;
         sink.emit(relation, (row, bytes))
     }
@@ -1178,82 +1199,7 @@ impl TryFrom<AnalysisInputV1<'_>> for InputRow {
 
     fn try_from(input: AnalysisInputV1<'_>) -> Result<Self> {
         match input {
-            AnalysisInputV1::Event {
-                identity,
-                cpu_id,
-                received_utc_ns,
-                record,
-                decoded,
-            } => {
-                let decoded = decoded.ok_or_else(|| {
-                    crate::QueryInvalidSnafu {
-                        field: "decoded evidence input",
-                    }
-                    .build()
-                })?;
-                let mut row = Self(Vec::with_capacity(EVENTS.columns.len()));
-                row.source(identity, cpu_id);
-                row.0.extend([
-                    Value::UBigInt(record.cursor),
-                    Value::UBigInt(record.position.commit_revision),
-                    Value::UInt(record.position.ordinal),
-                    Value::UBigInt(received_utc_ns),
-                    Value::Timestamp(TimeUnit::Microsecond, (received_utc_ns / 1_000) as i64),
-                    Value::UBigInt(decoded.observed_boottime_ns),
-                    Value::BigInt(decoded.ingested_utc_ns),
-                    Value::Blob(decoded.coverage_interval_id.to_vec()),
-                    decoded
-                        .profile_generation_ref_id
-                        .map_or(Value::Null, Value::UBigInt),
-                    Value::UBigInt(decoded.task_cookie),
-                    Value::Blob(decoded.process_lineage_id.to_vec()),
-                    Value::Blob(decoded.authority_domain_id.to_vec()),
-                    Value::Blob(decoded.execution_set_id.to_vec()),
-                    Value::Blob(decoded.exact_object_id.to_vec()),
-                    Value::UBigInt(decoded.destination_id),
-                    Value::UBigInt(decoded.policy_rule_id),
-                    Value::UInt(decoded.reason),
-                    Value::UInt(decoded.decision),
-                    Value::UInt(decoded.effect_family),
-                    Value::UInt(decoded.operation),
-                    Value::Int(decoded.configured_errno),
-                    Value::Int(decoded.kernel_result),
-                    Value::Int(decoded.temporal_coverage),
-                    decoded
-                        .target_task_cookie
-                        .map_or(Value::Null, Value::UBigInt),
-                    decoded.operation_argument.map_or(Value::Null, Value::UInt),
-                ]);
-                if let Some(context) = &decoded.decision_context {
-                    row.0.extend([
-                        Value::UInt(context.schema_version),
-                        Value::UBigInt(context.original_kernel_sequence),
-                        Value::Blob(context.process_instance_id.clone()),
-                        Value::Blob(context.entry_instance_id.clone()),
-                        Value::Blob(context.binding_id.clone()),
-                        Value::UBigInt(context.profile_generation_ref_id),
-                        Value::UInt(context.role_id),
-                        Value::UInt(context.state_id),
-                        Value::UInt(context.entry_rule_id),
-                        Value::UBigInt(context.exact_object_key_id),
-                        Value::UBigInt(context.composite_atom_id),
-                        Value::Blob(context.catalog_json.clone()),
-                        Value::Text(context.catalog_state.clone()),
-                    ]);
-                    if let Some(object) = &context.exact_file_object {
-                        row.0.extend([
-                            Value::UBigInt(object.profile_generation_ref_id),
-                            Value::UBigInt(object.mount_id_unique),
-                            Value::UBigInt(object.inode),
-                            Value::UBigInt(object.inode_generation),
-                            Value::UInt(object.mount_namespace_inode),
-                            Value::UInt(object.filesystem_device),
-                        ]);
-                    }
-                }
-                row.0.resize(EVENTS.columns.len(), Value::Null);
-                Ok(row)
-            }
+            input @ AnalysisInputV1::Event { .. } => Self::event(input, None),
             AnalysisInputV1::Context(context) => Ok(Self::from(context)),
             AnalysisInputV1::DiscoveryContext(context) => super::discovery::context_row(context),
             AnalysisInputV1::Behavior {
@@ -1508,6 +1454,135 @@ impl TryFrom<TraceRecipeManifestV1> for InputRow {
 }
 
 impl InputRow {
+    fn event(input: AnalysisInputV1<'_>, fields: Option<&BTreeSet<String>>) -> Result<Self> {
+        let AnalysisInputV1::Event {
+            identity,
+            cpu_id,
+            received_utc_ns,
+            record,
+            decoded,
+        } = input
+        else {
+            return crate::QueryInvalidSnafu {
+                field: "evidence row",
+            }
+            .fail();
+        };
+        let decoded = decoded.ok_or_else(|| {
+            crate::QueryInvalidSnafu {
+                field: "decoded evidence input",
+            }
+            .build()
+        })?;
+        let context = decoded.decision_context.as_ref();
+        let object = context.and_then(|context| context.exact_file_object.as_ref());
+        let columns = EVENTS
+            .columns
+            .iter()
+            .filter(|field| fields.is_none_or(|fields| fields.contains(field.0)));
+        let mut row = Vec::with_capacity(fields.map_or(EVENTS.columns.len(), BTreeSet::len));
+        for field in columns {
+            row.push(match field.0 {
+                "tenant_id" => Value::Blob(identity.tenant_id.to_vec()),
+                "node_id" => Value::Text(identity.node_id.clone()),
+                "node_boot_id" => Value::Blob(identity.node_boot_id.to_vec()),
+                "label_epoch" => Value::UBigInt(identity.label_epoch),
+                "source_id" => Value::Blob(identity.source_id.to_vec()),
+                "source_epoch" => Value::UBigInt(identity.source_epoch),
+                "cpu_id" => Value::UInt(cpu_id),
+                "source_cursor" => Value::UBigInt(record.cursor),
+                "commit_revision" => Value::UBigInt(record.position.commit_revision),
+                "ordinal" => Value::UInt(record.position.ordinal),
+                "received_utc_ns" => Value::UBigInt(received_utc_ns),
+                "received_at" => {
+                    Value::Timestamp(TimeUnit::Microsecond, (received_utc_ns / 1_000) as i64)
+                }
+                "observed_boottime_ns" => Value::UBigInt(decoded.observed_boottime_ns),
+                "ingested_utc_ns" => Value::BigInt(decoded.ingested_utc_ns),
+                "coverage_interval_id" => Value::Blob(decoded.coverage_interval_id.to_vec()),
+                "profile_generation_ref_id" => decoded
+                    .profile_generation_ref_id
+                    .map_or(Value::Null, Value::UBigInt),
+                "task_cookie" => Value::UBigInt(decoded.task_cookie),
+                "process_lineage_id" => Value::Blob(decoded.process_lineage_id.to_vec()),
+                "authority_domain_id" => Value::Blob(decoded.authority_domain_id.to_vec()),
+                "execution_set_id" => Value::Blob(decoded.execution_set_id.to_vec()),
+                "exact_object_id" => Value::Blob(decoded.exact_object_id.to_vec()),
+                "destination_id" => Value::UBigInt(decoded.destination_id),
+                "policy_rule_id" => Value::UBigInt(decoded.policy_rule_id),
+                "reason" => Value::UInt(decoded.reason),
+                "decision" => Value::UInt(decoded.decision),
+                "effect_family" => Value::UInt(decoded.effect_family),
+                "operation" => Value::UInt(decoded.operation),
+                "configured_errno" => Value::Int(decoded.configured_errno),
+                "kernel_result" => Value::Int(decoded.kernel_result),
+                "temporal_coverage" => Value::Int(decoded.temporal_coverage),
+                "target_task_cookie" => decoded
+                    .target_task_cookie
+                    .map_or(Value::Null, Value::UBigInt),
+                "operation_argument" => decoded.operation_argument.map_or(Value::Null, Value::UInt),
+                "context_schema_version" => {
+                    context.map_or(Value::Null, |context| Value::UInt(context.schema_version))
+                }
+                "kernel_sequence" => context.map_or(Value::Null, |context| {
+                    Value::UBigInt(context.original_kernel_sequence)
+                }),
+                "process_instance_id" => context.map_or(Value::Null, |context| {
+                    Value::Blob(context.process_instance_id.clone())
+                }),
+                "entry_instance_id" => context.map_or(Value::Null, |context| {
+                    Value::Blob(context.entry_instance_id.clone())
+                }),
+                "binding_id" => context.map_or(Value::Null, |context| {
+                    Value::Blob(context.binding_id.clone())
+                }),
+                "context_profile_generation_ref_id" => context.map_or(Value::Null, |context| {
+                    Value::UBigInt(context.profile_generation_ref_id)
+                }),
+                "role_id" => context.map_or(Value::Null, |context| Value::UInt(context.role_id)),
+                "state_id" => context.map_or(Value::Null, |context| Value::UInt(context.state_id)),
+                "entry_rule_id" => {
+                    context.map_or(Value::Null, |context| Value::UInt(context.entry_rule_id))
+                }
+                "exact_object_key_id" => context.map_or(Value::Null, |context| {
+                    Value::UBigInt(context.exact_object_key_id)
+                }),
+                "composite_atom_id" => context.map_or(Value::Null, |context| {
+                    Value::UBigInt(context.composite_atom_id)
+                }),
+                "catalog_json" => context.map_or(Value::Null, |context| {
+                    Value::Blob(context.catalog_json.clone())
+                }),
+                "catalog_state" => context.map_or(Value::Null, |context| {
+                    Value::Text(context.catalog_state.clone())
+                }),
+                "exact_profile_generation_ref_id" => object.map_or(Value::Null, |object| {
+                    Value::UBigInt(object.profile_generation_ref_id)
+                }),
+                "mount_id_unique" => {
+                    object.map_or(Value::Null, |object| Value::UBigInt(object.mount_id_unique))
+                }
+                "inode" => object.map_or(Value::Null, |object| Value::UBigInt(object.inode)),
+                "inode_generation" => object.map_or(Value::Null, |object| {
+                    Value::UBigInt(object.inode_generation)
+                }),
+                "mount_namespace_inode" => object.map_or(Value::Null, |object| {
+                    Value::UInt(object.mount_namespace_inode)
+                }),
+                "filesystem_device" => {
+                    object.map_or(Value::Null, |object| Value::UInt(object.filesystem_device))
+                }
+                _ => {
+                    return crate::QueryInvalidSnafu {
+                        field: "evidence column",
+                    }
+                    .fail();
+                }
+            });
+        }
+        Ok(Self(row))
+    }
+
     pub(super) fn allocation_bytes(&self) -> Result<usize> {
         let mut bytes = self.0.capacity().checked_mul(size_of::<Value>());
         for value in &self.0 {
@@ -1642,40 +1717,32 @@ impl InputRelations {
                 .build()
             })?;
         }
-        let mut tables = [
-            Self::table(&EVENTS, counts[0], &mut bytes, limit)?,
-            Self::table(&COVERAGE, 0, &mut bytes, limit)?,
-            Self::table(&CONTEXTS, counts[2], &mut bytes, limit)?,
-            Self::table(&CATALOG, 0, &mut bytes, limit)?,
-            Self::table(&TRACES, counts[4], &mut bytes, limit)?,
-            Self::table(&TRACE_OUTPUT, counts[5], &mut bytes, limit)?,
-            Self::table(&TRACE_MEASUREMENTS, counts[6], &mut bytes, limit)?,
-            Self::table(&TARGETS, counts[7], &mut bytes, limit)?,
-            Self::table(&TRACE_RECIPES, 0, &mut bytes, limit)?,
-            Self::table(&BEHAVIORS, counts[9], &mut bytes, limit)?,
-            Self::table(&CONTEXT, counts[10], &mut bytes, limit)?,
-            Self::table(&FINDINGS, counts[11], &mut bytes, limit)?,
-            Self::table(&RELATIONSHIPS, counts[12], &mut bytes, limit)?,
-            Self::table(&SUBJECTS, counts[13], &mut bytes, limit)?,
-            Self::table(&BRANCHES, counts[14], &mut bytes, limit)?,
-            Self::table(&PACKAGES, counts[15], &mut bytes, limit)?,
-            Self::table(&POLICY, counts[16], &mut bytes, limit)?,
-            Self::table(&NOTIFICATIONS, counts[17], &mut bytes, limit)?,
-        ];
+        let mut tables: [Option<InputTable>; 18] = std::array::from_fn(|_| None);
+        for (index, schema) in SCHEMAS.iter().enumerate() {
+            if template.reads_relation(schema.name) {
+                tables[index] = Some(Self::table(
+                    schema,
+                    counts[index],
+                    &mut bytes,
+                    limit,
+                    template,
+                )?);
+            }
+        }
         Self::charge(&mut bytes, size_of::<Self>(), limit)?;
         for page in &mut extraction.pages {
             let index = Self::relation_index(page.relation)?;
-            for row in take(&mut page.rows) {
-                tables[index].rows.push(row.0);
+            if let Some(table) = &mut tables[index] {
+                for row in take(&mut page.rows) {
+                    table.rows.push(row.0);
+                }
             }
         }
-        if matches!(template, QueryTemplate::Coverage)
-            || matches!(template, QueryTemplate::Client(sql) if sql.dependencies().contains("coverage"))
-        {
+        if let Some(table) = &mut tables[1] {
             for source in &extraction.sources {
                 let report = Self::report(source)?;
                 Self::push(
-                    &mut tables[1],
+                    table,
                     InputRow::coverage(
                         source,
                         "receipt",
@@ -1698,7 +1765,7 @@ impl InputRelations {
                 ] {
                     for gap in gaps {
                         Self::push(
-                            &mut tables[1],
+                            table,
                             InputRow::coverage(source, kind, kind.into(), Some(gap), None)?,
                             &mut bytes,
                             limit,
@@ -1709,7 +1776,7 @@ impl InputRelations {
                     for mut interval in report.intervals {
                         let state = take(&mut interval.state);
                         Self::push(
-                            &mut tables[1],
+                            table,
                             InputRow::coverage(source, "interval", state, None, Some(interval))?,
                             &mut bytes,
                             limit,
@@ -1718,13 +1785,11 @@ impl InputRelations {
                 }
             }
         }
-        if matches!(template, QueryTemplate::Catalog)
-            || matches!(template, QueryTemplate::Client(sql) if sql.dependencies().contains("catalog"))
-        {
+        if let Some(table) = &mut tables[3] {
             for schema in SCHEMAS {
                 for (ordinal, field) in schema.columns.iter().enumerate() {
                     Self::push(
-                        &mut tables[3],
+                        table,
                         InputRow(vec![
                             Value::Text(schema.name.into()),
                             Value::UInt(ordinal as u32),
@@ -1767,11 +1832,10 @@ impl InputRelations {
                 }
             }
         }
-        if matches!(template, QueryTemplate::Client(sql) if sql.dependencies().contains("trace_recipes"))
-        {
+        if let Some(table) = &mut tables[8] {
             for recipe in [TraceRecipeV1::SyscallErrors, TraceRecipeV1::FailedOpens] {
                 Self::push(
-                    &mut tables[8],
+                    table,
                     InputRow::try_from(recipe.manifest()?)?,
                     &mut bytes,
                     limit,
@@ -1779,9 +1843,14 @@ impl InputRelations {
             }
         }
         extraction.input_bytes = bytes;
+        let (tables, schemas) = tables
+            .into_iter()
+            .zip(SCHEMAS)
+            .filter_map(|(table, schema)| table.map(|table| (Arc::new(table), schema)))
+            .unzip();
         Ok(Self {
-            tables: tables.into_iter().map(Arc::new).collect(),
-            schemas: SCHEMAS.iter().collect(),
+            tables,
+            schemas,
             bytes,
         })
     }
@@ -1799,12 +1868,13 @@ impl InputRelations {
                 .build()
             };
             let table = Arc::get_mut(table).ok_or_else(invalid)?;
-            if table.columns.len() != schema.columns.len()
-                || table
-                    .columns
-                    .iter()
-                    .zip(schema.columns)
-                    .any(|(column, field)| column.0 != field.0 || column.1 != field.1)
+            if table.columns.is_empty()
+                || table.columns.iter().any(|column| {
+                    !schema
+                        .columns
+                        .iter()
+                        .any(|field| column.0 == field.0 && column.1 == field.1)
+                })
             {
                 return Err(invalid());
             }
@@ -1944,7 +2014,10 @@ impl InputRelations {
             .tables
             .iter()
             .find(|table| !table.rows.is_empty())
-            .unwrap_or(&self.tables[0]);
+            .or_else(|| self.tables.first());
+        let Some(table) = table else {
+            return Ok(());
+        };
         *table.scan_gate.lock().map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "test scan gate",
@@ -1959,10 +2032,16 @@ impl InputRelations {
         rows: usize,
         bytes: &mut usize,
         limit: usize,
+        template: &QueryTemplate,
     ) -> Result<InputTable> {
+        let fields = match template {
+            QueryTemplate::Client(sql) if schema.name == "events" => sql.event_fields(),
+            _ => None,
+        };
         let columns: Vec<_> = schema
             .columns
             .iter()
+            .filter(|field| fields.is_none_or(|fields| fields.contains(field.0)))
             .map(|field| InputColumn(field.0, field.1))
             .collect();
         Self::charge(
@@ -2004,7 +2083,7 @@ impl InputRelations {
                 return crate::QueryUnsupportedSnafu {
                     relation: "results",
                 }
-                .fail()
+                .fail();
             }
         })
     }
@@ -2541,14 +2620,18 @@ mod tests {
                 ..EvidenceRecord::default()
             })?,
         )?;
-        let input =
-            InputRelations::new(&mut extraction, 1_000_000, &QueryTemplate::ContextVersions)?;
+        let template = QueryTemplate::Client(super::super::QuerySql::admit(
+            "SELECT e.operation, c.body FROM events e JOIN context_versions c ON e.tenant_id = c.tenant_id",
+            Vec::new(),
+            false,
+        )?);
+        let input = InputRelations::new(&mut extraction, 1_000_000, &template)?;
         assert_eq!(input.tables[0].rows.len(), 2);
         assert_eq!(
             value(&EVENTS, &input.tables[0].rows[1], "operation")?,
             &Value::UInt(42)
         );
-        assert_eq!(input.tables[2].rows, vec![expected]);
+        assert_eq!(input.tables[1].rows, vec![expected]);
         assert_eq!(extraction.missing_contexts, vec![context.key]);
         let mut unsupported = empty_input();
         add_page(
@@ -2616,7 +2699,7 @@ mod tests {
         let mut extraction = empty_input();
         extraction.sources = vec![source, snapshot()];
         let input = InputRelations::new(&mut extraction, 1_000_000, &QueryTemplate::Coverage)?;
-        let rows = &input.tables[1].rows;
+        let rows = &input.tables[0].rows;
         assert_eq!(rows.len(), 6);
         let kinds: Vec<_> = rows
             .iter()
@@ -2740,27 +2823,72 @@ mod tests {
             &QueryTemplate::Events { operation: None },
         )?;
         assert_eq!(input.tables[0].rows.len(), 1);
-        assert!(input.tables[1].rows.is_empty());
-        assert!(input.tables[3].rows.is_empty());
+        assert_eq!(
+            input
+                .schemas
+                .iter()
+                .map(|schema| schema.name)
+                .collect::<Vec<_>>(),
+            vec!["events"]
+        );
         assert!(events.input_bytes < 64 * 1024);
 
         let mut coverage = empty_input();
         coverage.sources.push(snapshot());
         let input = InputRelations::new(&mut coverage, 64 * 1024, &QueryTemplate::Coverage)?;
-        assert_eq!(input.tables[1].rows.len(), 1);
-        assert!(input.tables[3].rows.is_empty());
+        assert_eq!(input.tables[0].rows.len(), 1);
+        assert_eq!(
+            input
+                .schemas
+                .iter()
+                .map(|schema| schema.name)
+                .collect::<Vec<_>>(),
+            vec!["coverage"]
+        );
 
         let mut catalog = empty_input();
         catalog.sources.push(snapshot());
         let input = InputRelations::new(&mut catalog, 1_000_000, &QueryTemplate::Catalog)?;
-        assert!(input.tables[1].rows.is_empty());
         assert_eq!(
-            input.tables[3].rows.len(),
+            input
+                .schemas
+                .iter()
+                .map(|schema| schema.name)
+                .collect::<Vec<_>>(),
+            vec!["catalog"]
+        );
+        assert_eq!(
+            input.tables[0].rows.len(),
             SCHEMAS
                 .iter()
                 .map(|schema| schema.columns.len())
                 .sum::<usize>()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn query_input_no_builtins() -> TestResult {
+        let literal = super::super::QuerySql::admit("SELECT 1 AS value", Vec::new(), false)?;
+        let alias = super::super::QuerySql::admit_relations(
+            "SELECT value FROM source",
+            BTreeMap::from([("source".into(), vec!["value".into()])]),
+        )?;
+        for sql in [literal, alias] {
+            let input = InputRelations::new(&mut empty_input(), 1024, &QueryTemplate::Client(sql))?;
+            assert!(input.tables.is_empty());
+            let connection = Connection::open_in_memory()?;
+            let mut sources = ScopedSources::default();
+            input.register_scoped(&connection, &mut sources)?;
+            assert!(sources.sources.is_empty());
+            assert!(sources.views.is_empty());
+            assert!(connection.prepare("SELECT * FROM catalog").is_err());
+            assert!(connection.prepare("SELECT * FROM _query_events()").is_err());
+            assert_eq!(
+                connection.query_row("SELECT 1", [], |row| row.get::<_, u64>(0))?,
+                1
+            );
+        }
         Ok(())
     }
 
@@ -2775,8 +2903,8 @@ mod tests {
         let input = InputRelations::new(&mut extraction, 1_000_000, &template)?;
         let mut extraction = empty_input();
         let trusted = InputRelations::new(&mut extraction, 1_000_000, &QueryTemplate::Catalog)?;
-        assert_eq!(input.tables[3].rows, trusted.tables[3].rows);
-        assert!(input.tables[3].rows.iter().any(|row| {
+        assert_eq!(input.tables[0].rows, trusted.tables[0].rows);
+        assert!(input.tables[0].rows.iter().any(|row| {
             matches!(value(&CATALOG, row, "join_keys"), Ok(Value::Text(keys)) if !keys.is_empty())
         }));
         Ok(())
@@ -2816,7 +2944,7 @@ mod tests {
             event(&EvidenceRecord::default())?,
         )?;
         let charged = populated.input_bytes;
-        let populated_bound = charged + bound - base + size_of::<Vec<Value>>();
+        let populated_bound = charged + bound - base;
         InputRelations::new(&mut populated, populated_bound, &QueryTemplate::Catalog)?;
         assert_eq!(populated.input_bytes, populated_bound);
         let mut over_populated = empty_input();
@@ -2829,7 +2957,7 @@ mod tests {
             InputRelations::new(&mut over_populated, populated_bound - 1, &QueryTemplate::Catalog),
             Err(crate::Error::QueryLimit { limit, .. }) if limit == populated_bound - 1
         ));
-        let rows = &input.tables[3].rows;
+        let rows = &input.tables[0].rows;
         assert_eq!(
             rows.len(),
             SCHEMAS
@@ -2860,11 +2988,9 @@ mod tests {
         }
         let connection = Connection::open_in_memory()?;
         input.register(&connection)?;
-        assert_eq!(
-            connection.query_row("SELECT count(*) FROM trace_output", [], |row| row
-                .get::<_, u64>(0))?,
-            0
-        );
+        assert!(connection
+            .prepare("SELECT count(*) FROM trace_output")
+            .is_err());
         assert_eq!(
             connection.query_row("SELECT count(*) FROM catalog", [], |row| row
                 .get::<_, u64>(0))?,
@@ -2882,8 +3008,15 @@ mod tests {
         )?);
         let mut extraction = empty_input();
         let input = InputRelations::new(&mut extraction, 1_000_000, &template)?;
-        assert!(input.tables[7].rows.is_empty());
-        assert_eq!(input.tables[8].rows.len(), 2);
+        assert_eq!(
+            input
+                .schemas
+                .iter()
+                .map(|schema| schema.name)
+                .collect::<Vec<_>>(),
+            vec!["trace_recipes"]
+        );
+        assert_eq!(input.tables[0].rows.len(), 2);
         let bound = extraction.input_bytes;
         drop(input);
         let mut exact = empty_input();

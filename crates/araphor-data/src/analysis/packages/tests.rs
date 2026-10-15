@@ -34,14 +34,13 @@ fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {
         }],
         fixtures: Vec::new(),
     };
-    let (artifact, encoded_bytes) = crate::package::storage::StoredArtifact::encode(&source)?;
+    let artifact = crate::package::storage::StoredArtifact::encode(&source)?;
     Ok(PackageRevisionV1 {
         tenant_id: [1; 16],
         package_id: id.into(),
         revision: revision.into(),
         descriptor: serde_json::to_vec(&descriptor).context(crate::PackageEncodingSnafu)?,
         artifact,
-        encoded_bytes,
         dependencies: Vec::new(),
     })
 }
@@ -85,6 +84,38 @@ fn commit(active: PackageActivationV1, id: &str) -> PackageCommitV1 {
 fn start(store: &AnalysisStore, id: &str) -> crate::Result<PackageActivationV1> {
     store.install_package(&[package(id, "v1")?], || Ok(()))?;
     store.activate_package(&activation(id, "v1"), None, None, || Ok(()))
+}
+
+#[test]
+fn packages_charge_stored_bytes() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("store");
+    let store = AnalysisStore::open(&root)?;
+    let revision = package("bytes", "v1")?;
+    let expected = (256
+        + revision.package_id.len()
+        + revision.revision.len()
+        + revision.descriptor.len()
+        + revision.artifact.len()
+        + serde_json::to_vec(&revision.dependencies)?.len()) as i64;
+    for _ in 0..2 {
+        store.install_package(std::slice::from_ref(&revision), || Ok(()))?;
+        assert_eq!(
+            store.read_snapshot(|reader| AnalysisStore::package_bytes(reader, [1; 16]))?,
+            expected
+        );
+    }
+    drop(store);
+    let store = AnalysisStore::open(&root)?;
+    assert_eq!(
+        store.read_snapshot(|reader| AnalysisStore::package_bytes(reader, [1; 16]))?,
+        expected
+    );
+    assert_eq!(
+        store.package_revision([1; 16], "bytes", "v1")?,
+        Some(revision)
+    );
+    Ok(())
 }
 
 #[test]

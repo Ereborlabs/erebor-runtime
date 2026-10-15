@@ -2535,6 +2535,78 @@ async fn query_client_bounds() -> TestResult {
 }
 
 #[tokio::test]
+async fn query_event_projection() -> TestResult {
+    let mut fixture = ClientFixture::local()?;
+    for cursor in 1..=8 {
+        fixture.data.commit(
+            cursor,
+            cursor,
+            EvidenceRecord {
+                operation: if cursor % 2 == 0 { 7 } else { 9 },
+                decision_context: Some(crate::EvidenceDecisionContext {
+                    catalog_json: vec![b'x'; 8 * 1024],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )?;
+    }
+    fixture.owner = Arc::new(QueryOwner::new(
+        fixture.data.store.clone(),
+        QueryLimits {
+            input_bytes: 32 * 1024,
+            ..Default::default()
+        },
+    )?);
+    let selected = fixture.plan(
+        "SELECT operation FROM events WHERE operation = $1",
+        vec![Value::UInt(7)],
+        false,
+    )?;
+    let result = fixture.query(&selected).await?;
+    assert_eq!(result.rows, vec![vec![Value::UInt(7)]; 4]);
+    assert_eq!(result.input_rows, 4);
+    drop(result);
+    let counted = fixture.plan("SELECT COUNT(*) FROM events", vec![], false)?;
+    assert_eq!(
+        fixture.query(&counted).await?.rows,
+        vec![vec![Value::BigInt(8)]]
+    );
+    let ordered = fixture.plan(
+        "SELECT operation FROM events ORDER BY source_cursor",
+        vec![],
+        false,
+    )?;
+    assert!(matches!(
+        fixture.query(&ordered).await,
+        Err(crate::Error::AnalysisInputTooLarge { .. } | crate::Error::QueryLimit { .. })
+    ));
+    fixture.owner = Arc::new(QueryOwner::new(
+        fixture.data.store.clone(),
+        QueryLimits::default(),
+    )?);
+    let fallback = fixture.plan("WITH chosen AS (SELECT operation FROM events WHERE operation = $1) SELECT operation FROM chosen", vec![Value::UInt(7)], false)?;
+    let expected = fixture.query(&fallback).await?;
+    assert_eq!(fixture.query(&selected).await?.rows, expected.rows);
+    assert_eq!(expected.input_rows, 8);
+    let either = fixture.plan(
+        "SELECT operation FROM events WHERE operation = 7 OR operation = 9",
+        vec![],
+        false,
+    )?;
+    assert_eq!(fixture.query(&either).await?.rows.len(), 8);
+    let null = fixture.plan(
+        "SELECT operation FROM events WHERE operation = $1",
+        vec![Value::Null],
+        false,
+    )?;
+    let empty = fixture.query(&null).await?;
+    assert!(empty.rows.is_empty());
+    assert_eq!(empty.input_rows, 8);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_client_tenant_scope() -> TestResult {
     let fixture = ClientFixture::new(200, 100)?;
     for (cursor, operation, target) in [(1, 7, 4), (2, 99, 5), (3, 8, 4), (4, 99, 5), (5, 99, 0)] {
@@ -3144,13 +3216,13 @@ async fn query_stream_cursor_floor() -> TestResult {
         retention
             .retain(&fixture.data.source, expires)?
             .removed_records,
-        1
+        2
     );
     assert_eq!(
         retention
             .retain(&fixture.data.source, expires)?
             .removed_records,
-        1
+        0
     );
     let floor = fixture
         .data

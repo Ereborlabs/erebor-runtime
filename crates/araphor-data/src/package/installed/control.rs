@@ -1,5 +1,6 @@
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::thread::JoinHandle;
+#[cfg(test)]
 use std::time::Duration;
 
 use snafu::ResultExt as _;
@@ -9,7 +10,7 @@ use crate::{AnalysisReadControl, Result};
 use super::super::PackageAuthorization;
 
 pub(super) struct AuthorityWatch {
-    stop: mpsc::Sender<()>,
+    stop: tokio::sync::watch::Sender<bool>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -18,34 +19,37 @@ impl AuthorityWatch {
         authority: Arc<dyn PackageAuthorization>,
         control: Arc<AnalysisReadControl>,
     ) -> Result<Self> {
-        let changes = authority.changes();
-        let (stop, stopped) = mpsc::channel();
-        let worker = std::thread::Builder::new()
-            .name("analysis-authority".into())
-            .spawn(move || {
-                while matches!(
-                    stopped.recv_timeout(Duration::from_millis(10)),
-                    Err(mpsc::RecvTimeoutError::Timeout)
-                ) {
-                    if changes.has_changed().unwrap_or(true) {
-                        let _cancelled = control.cancel();
-                        break;
-                    }
+        let mut changes = authority.changes();
+        let (stop, mut stopped) = tokio::sync::watch::channel(false);
+        let observe = async move {
+            tokio::select! {
+                biased;
+                _stopped = stopped.changed() => {},
+                _changed = changes.changed() => {
+                    let _cancelled = control.cancel();
                 }
-            })
+            }
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
             .context(crate::IoSnafu {
                 path: "<analysis-authority>",
             })?;
-        Ok(Self {
-            stop,
-            worker: Some(worker),
-        })
+        let worker = Some(
+            std::thread::Builder::new()
+                .name("analysis-authority".into())
+                .spawn(move || runtime.block_on(observe))
+                .context(crate::IoSnafu {
+                    path: "<analysis-authority>",
+                })?,
+        );
+        Ok(Self { stop, worker })
     }
 }
 
 impl Drop for AuthorityWatch {
     fn drop(&mut self) {
-        let _stopped = self.stop.send(());
+        self.stop.send_replace(true);
         if let Some(worker) = self.worker.take() {
             let _joined = worker.join();
         }
@@ -85,5 +89,10 @@ mod tests {
         )?);
         control.check()?;
         Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocked_runtime_cancels() -> TestResult {
+        authority_change_cancels_computation()
     }
 }

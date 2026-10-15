@@ -268,6 +268,11 @@ impl SegmentFile {
             .len())
     }
 
+    pub(super) fn storage_usage(&self) -> Result<super::StorageUsageV1> {
+        let metadata = self.file.metadata().context(IoSnafu { path: &self.path })?;
+        super::StorageUsageV1::from_metadata(&self.path, &metadata)
+    }
+
     pub(super) fn sync(&self) -> Result<()> {
         self.file.sync_all().context(IoSnafu { path: &self.path })
     }

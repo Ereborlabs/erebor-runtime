@@ -189,6 +189,7 @@ struct QueryState {
     clock_signal: bool,
     clock_changed: bool,
     revision: u64,
+    checked: Option<(u64, crate::AnalysisSelectionV1, u64)>,
     exhausted: bool,
     yielding: QueryYield,
 }
@@ -304,6 +305,7 @@ impl QueryOwner {
             clock_signal: false,
             clock_changed: false,
             revision: 0,
+            checked: None,
             exhausted: false,
             yielding: QueryYield::Idle,
         });
@@ -466,7 +468,7 @@ impl QueryStream {
             if !state.initial && !state.follows {
                 return Self::finish(state, Ok(QueryTerminalReason::Completed));
             }
-            let _revision = *state.changes.borrow_and_update();
+            let commit = *state.changes.borrow_and_update();
             let now_ns = state.clock.now_ns()?;
             let now = tokio::time::Instant::now();
             let clock_changed = state.clock_signal
@@ -482,20 +484,37 @@ impl QueryStream {
             {
                 state.dirty = true;
             }
-            let owner = state.owner.clone();
             let selection = state.plan.dependencies(now_ns)?;
-            let control = state.control.stage(state.owner.limits.extract_timeout)?;
-            let (meta, revision) = tokio::task::spawn_blocking(move || {
-                owner.store.dependency_revision(&selection, &control)
-            })
-            .await
-            .map_err(|_| {
-                crate::QueryInvalidSnafu {
-                    field: "query dependency task",
-                }
-                .build()
-            })??;
-            state.meta = meta;
+            let revision = if let Some((_, _, revision)) = state
+                .checked
+                .as_ref()
+                .filter(|(checked, scope, _)| *checked == commit && *scope == selection)
+            {
+                *revision
+            } else {
+                let owner = state.owner.clone();
+                let control = state.control.stage(state.owner.limits.extract_timeout)?;
+                let (meta, revision, selection) = tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    owner
+                        .dependency_reads
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    owner
+                        .store
+                        .dependency_revision(&selection, &control)
+                        .map(|(meta, revision)| (meta, revision, selection))
+                })
+                .await
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "query dependency task",
+                    }
+                    .build()
+                })??;
+                state.meta = meta;
+                state.checked = Some((commit, selection, revision));
+                revision
+            };
             state.dirty |= state.seen != Some(revision);
             let ready = state.plan.operation() == QueryOperation::Append
                 || state

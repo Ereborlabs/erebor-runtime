@@ -15,7 +15,7 @@ struct Atoms {
 }
 
 impl Discovery {
-    pub(super) fn atoms(input: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
+    pub(super) fn atoms(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
         let rows = Self::read::<Record>(input, "records")?;
         let mut coverage = Self::read::<Coverage>(input, "coverage")?;
         let observed = Self::read::<bool>(input, "observed")?;

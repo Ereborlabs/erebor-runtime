@@ -35,9 +35,14 @@ impl PackageAuthorization for SelectionAuthority {
         Ok(())
     }
 
-    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleV1) -> Result<()> {
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
+    ) -> Result<()> {
         self.base.admit(grant, bundle)?;
         self.check(grant, Action::Run)?;
+        let bundle = bundle.bundle();
         if bundle.schema_version != self.expected.schema_version
             || bundle.root != self.expected.root
             || bundle.artifacts != self.expected.artifacts
@@ -52,7 +57,7 @@ impl PackageAuthorization for SelectionAuthority {
         &self,
         grant: &PackageGrantV1,
         action: Action,
-        bundle: &PackageBundleV1,
+        bundle: &crate::package::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         self.check(grant, action)?;

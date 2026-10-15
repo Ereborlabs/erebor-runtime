@@ -34,7 +34,8 @@ impl AnalysisPackageOwner {
             Action::Install
         };
         self.check(grant, action)?;
-        self.authority.admit(grant, bundle)?;
+        let admitted = super::PackageBundleRef::new(bundle)?;
+        self.authority.admit(grant, &admitted)?;
         bundle.validate()?;
         for artifact in &bundle.artifacts {
             self.admit_artifact(artifact, control)?;
@@ -63,11 +64,11 @@ impl AnalysisPackageOwner {
             .iter()
             .map(|artifact| self.install_revision(grant, artifact))
             .collect::<Result<Vec<_>>>()?;
-        self.authorize_commit(grant, action, bundle, || {
+        self.authorize_commit(grant, action, &admitted, || {
             self.store.install_package(&records, || control.check())
         })?;
         for activation in activations {
-            if let Err(error) = self.install_model(grant, bundle, activation, upgrade, control) {
+            if let Err(error) = self.install_model(grant, &admitted, activation, upgrade, control) {
                 for artifact in &bundle.artifacts {
                     self.store.collect_package(
                         grant.selection.tenant_id,
@@ -79,7 +80,7 @@ impl AnalysisPackageOwner {
             }
         }
         for prior in prior_bundles {
-            self.authorize_commit(grant, action, bundle, || {
+            self.authorize_commit(grant, action, &admitted, || {
                 self.prune_package(grant, scope, &prior, control)
             })?;
         }
@@ -90,11 +91,12 @@ impl AnalysisPackageOwner {
     fn install_model(
         &self,
         grant: &PackageGrantV1,
-        bundle: &PackageBundleV1,
+        admitted: &super::PackageBundleRef<'_>,
         prepared: ModelActivation,
         upgrade: bool,
         control: &AnalysisReadControl,
     ) -> Result<()> {
+        let bundle = admitted.bundle();
         control.check()?;
         let ModelActivation {
             mut active,
@@ -108,7 +110,7 @@ impl AnalysisPackageOwner {
         };
         if let Some(old) = previous.as_ref().filter(|_| reuse) {
             if old.metadata != active.metadata || old.grant_id != active.grant_id {
-                self.authorize_commit(grant, action, bundle, || {
+                self.authorize_commit(grant, action, admitted, || {
                     self.store
                         .renew_package(old, &active.metadata, &grant.principal, || control.check())
                 })?;
@@ -142,7 +144,7 @@ impl AnalysisPackageOwner {
                     control,
                 )?)
             };
-            self.authorize_commit(grant, action, bundle, || {
+            self.authorize_commit(grant, action, admitted, || {
                 self.store.activate_package(
                     &active,
                     previous.as_ref().map(|old| old.generation),
@@ -151,7 +153,7 @@ impl AnalysisPackageOwner {
                 )
             })?;
         } else {
-            let active = self.authorize_commit(grant, action, bundle, || {
+            let active = self.authorize_commit(grant, action, admitted, || {
                 self.store.activate_package(
                     &active,
                     previous.as_ref().map(|old| old.generation),
@@ -160,7 +162,7 @@ impl AnalysisPackageOwner {
                 )
             })?;
             if active.active {
-                self.start_model(grant, bundle, &active, control)?;
+                self.start_model(grant, admitted, &active, control)?;
             }
         }
         Ok(())
@@ -169,10 +171,11 @@ impl AnalysisPackageOwner {
     fn start_model(
         &self,
         grant: &PackageGrantV1,
-        bundle: &PackageBundleV1,
+        admitted: &super::PackageBundleRef<'_>,
         active: &PackageActivationV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {
+        let bundle = admitted.bundle();
         let artifact = bundle
             .artifacts
             .iter()
@@ -185,7 +188,7 @@ impl AnalysisPackageOwner {
             active,
             &format!("install:{}", active.generation),
             false,
-            Some(bundle),
+            Some(admitted),
             control,
         ) {
             let crate::Error::Package {
@@ -200,7 +203,7 @@ impl AnalysisPackageOwner {
             context.readiness = PackageReadinessV1::MissingInput {
                 input: field.into(),
             };
-            self.authorize_commit(grant, Action::Install, bundle, || {
+            self.authorize_commit(grant, Action::Install, admitted, || {
                 self.store.update_package_metadata(
                     &active.key,
                     active.generation,

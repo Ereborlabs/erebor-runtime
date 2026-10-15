@@ -583,7 +583,7 @@ impl AnalysisStore {
                 })?;
         }
         writer
-            .prepare("SELECT encoded_bytes FROM package_revisions LIMIT 0")
+            .prepare("SELECT descriptor, artifact FROM package_revisions LIMIT 0")
             .context(AnalysisDatabaseSnafu {
                 operation: "validate binary package schema",
             })?;

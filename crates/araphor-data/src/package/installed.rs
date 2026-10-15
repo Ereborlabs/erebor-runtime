@@ -13,7 +13,7 @@ mod control;
 mod history;
 mod provenance;
 mod read;
-mod snapshot;
+pub(super) mod snapshot;
 
 use snapshot::InstalledSnapshot;
 
@@ -91,7 +91,9 @@ impl InstalledAnalysis {
             return Err(Code::Denied.error("host-prepared input scope"));
         }
         let bundle = self.bundle(tenant, &context.root)?;
-        self.owner.authority.admit(&context.grant, &bundle.value)?;
+        self.owner
+            .authority
+            .admit(&context.grant, &bundle.admission())?;
         let artifact = bundle
             .value
             .artifacts
@@ -130,11 +132,13 @@ impl InstalledAnalysis {
             .owner
             .evaluate_artifact(tenant, artifact, &effective, &control);
         self.owner.check(&context.grant, Action::Run)?;
-        self.owner.authority.admit(&context.grant, &bundle.value)?;
+        self.owner
+            .authority
+            .admit(&context.grant, &bundle.admission())?;
         control.check()?;
         let (output, lease) = result?.into_parts();
         let target = implementation.target().to_owned();
-        let identity = implementation.identity()?;
+        let identity = bundle.identity(package, &evaluation.export)?;
         let bytes = artifact
             .descriptor
             .allocated_bytes()

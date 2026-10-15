@@ -162,9 +162,13 @@ impl PackageAuthorization for Authority {
         Ok(())
     }
 
-    fn admit(&self, grant: &PackageGrantV1, bundle: &PackageBundleV1) -> araphor_data::Result<()> {
+    fn admit(
+        &self,
+        grant: &PackageGrantV1,
+        bundle: &araphor_data::PackageBundleRef<'_>,
+    ) -> araphor_data::Result<()> {
         self.check(grant, PackageActionV1::Run)?;
-        if bundle.digest()? != self.digest {
+        if bundle.digest() != self.digest {
             return Err(Self::denied());
         }
         Ok(())
@@ -174,7 +178,7 @@ impl PackageAuthorization for Authority {
         &self,
         grant: &PackageGrantV1,
         action: PackageActionV1,
-        bundle: &PackageBundleV1,
+        bundle: &araphor_data::PackageBundleRef<'_>,
         operation: &mut dyn FnMut() -> araphor_data::Result<()>,
     ) -> araphor_data::Result<()> {
         self.check(grant, action)?;

@@ -29,6 +29,21 @@ impl WindowFixture {
         &self.native.snapshot.scope.identity
     }
 
+    fn bounds(&self, after: Option<u64>) -> TestResult<Vec<(u64, u64)>> {
+        Ok(self
+            .native
+            .store
+            .graph_window_headers(self.source(), after)?
+            .into_iter()
+            .map(|(_, header, _)| {
+                assert!(header.graph.subjects.is_empty());
+                assert!(header.graph.edges.is_empty());
+                assert!(header.findings.is_empty());
+                (header.first_cursor, header.last_cursor)
+            })
+            .collect())
+    }
+
     fn windows(&self, first: u64, last: u64) -> TestResult<Vec<(String, GraphSnapshotV1, u64)>> {
         let mut values = Vec::new();
         let mut after = None;
@@ -71,14 +86,9 @@ impl WindowFixture {
 fn graph_window_selection() -> TestResult {
     let fixture = WindowFixture::new()?;
     let store = &fixture.native.store;
-    assert_eq!(store.graph_window_bounds(fixture.source(), None)?, [(1, 1)]);
-    assert_eq!(
-        store.graph_window_bounds(fixture.source(), Some(1))?,
-        [(2, 2)]
-    );
-    assert!(store
-        .graph_window_bounds(fixture.source(), Some(2))?
-        .is_empty());
+    assert_eq!(fixture.bounds(None)?, [(1, 1), (2, 2)]);
+    assert_eq!(fixture.bounds(Some(1))?, [(2, 2)]);
+    assert!(fixture.bounds(Some(2))?.is_empty());
     let selected = fixture.windows(1, 1)?;
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].0, fixture.native.request.result_id);
@@ -100,7 +110,7 @@ fn graph_window_selection() -> TestResult {
     assert_eq!(selected[0].1, fixture.second);
     let mut foreign = fixture.source().clone();
     foreign.tenant_id = [99; 16];
-    assert!(store.graph_window_bounds(&foreign, None)?.is_empty());
+    assert!(store.graph_window_headers(&foreign, None)?.is_empty());
     assert_eq!(
         store.graph_window_page(&foreign, 1, 2, None)?,
         (Vec::new(), None)
@@ -123,11 +133,8 @@ fn graph_window_replacement() -> TestResult {
     assert_eq!(selected[0].1, wide);
     let short = fixture.replace("graph:z-short", 1, "graph:a-wide")?;
     let store = &fixture.native.store;
-    assert_eq!(store.graph_window_bounds(fixture.source(), None)?, [(1, 1)]);
-    assert_eq!(
-        store.graph_window_bounds(fixture.source(), Some(1))?,
-        [(2, 2)]
-    );
+    assert_eq!(fixture.bounds(None)?, [(1, 1), (2, 2)]);
+    assert_eq!(fixture.bounds(Some(1))?, [(2, 2)]);
     let selected = fixture.windows(2, 2)?;
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].0, fixture.request.result_id);
@@ -180,7 +187,7 @@ fn graph_window_metadata() -> TestResult {
          WHERE result_id = ?",
         params![fixture.native.request.result_id],
     )?;
-    assert_eq!(store.graph_window_bounds(fixture.source(), None)?, [(1, 1)]);
+    assert_eq!(fixture.bounds(None)?, [(1, 1), (2, 2)]);
     let selected = fixture.windows(2, 2)?;
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].1, fixture.second);
@@ -190,7 +197,7 @@ fn graph_window_metadata() -> TestResult {
         params![fixture.native.request.result_id],
     )?;
     assert!(matches!(
-        store.graph_window_bounds(fixture.source(), None),
+        store.graph_window_headers(fixture.source(), None),
         Err(crate::Error::GraphInvalid { .. })
     ));
     assert!(matches!(

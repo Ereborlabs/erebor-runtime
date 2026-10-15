@@ -2,7 +2,7 @@ use crate::analysis::PackageActivationV1;
 use crate::{QueryOwner, Result};
 
 use super::super::admission::ModelRef;
-use super::super::owner::InstalledContext;
+use super::super::owner::{ClockDependency, InstalledContext};
 use super::super::{
     AnalysisPackageOwner, PackageBundleV1, PackageErrorCodeV1 as Code, PackageGrantV1,
     PackageReadinessV1,
@@ -100,6 +100,15 @@ impl AnalysisPackageOwner {
                 status_checkpoint: previous
                     .as_ref()
                     .map_or(0, |active| active.checkpoint_revision),
+                prepared: artifact.prepared(&key.export),
+                clock: if matches!(
+                    Self::readiness(artifact, &key.export),
+                    PackageReadinessV1::Ready
+                ) {
+                    artifact.clock_dependency(model)?
+                } else {
+                    ClockDependency::None
+                },
             }
         };
         if restart {

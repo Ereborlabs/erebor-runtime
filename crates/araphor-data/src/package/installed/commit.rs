@@ -60,9 +60,14 @@ impl InstalledAnalysis {
         }
         let mut callback = Some(operation);
         let mut result = None;
+        let admissions: Vec<_> = grants
+            .iter()
+            .map(|(_, bundle)| bundle.admission())
+            .collect();
         let grants: Vec<_> = grants
             .iter()
-            .map(|(grant, bundle)| (grant, &bundle.value))
+            .zip(&admissions)
+            .map(|((grant, _), bundle)| (grant, bundle))
             .collect();
         self.owner
             .authority

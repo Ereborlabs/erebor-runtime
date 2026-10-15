@@ -56,6 +56,14 @@ impl Evaluation {
     }
 
     pub fn decode(&self, package: &Package) -> Result<crate::Evaluation> {
+        self.decode_validated(package)
+            .map(|(evaluation, _)| evaluation)
+    }
+
+    pub(crate) fn decode_validated<'a>(
+        &self,
+        package: &'a Package,
+    ) -> Result<(crate::Evaluation, crate::validation::ContractValidator<'a>)> {
         let limits = self.context.limits;
         let validator = package.wire_validator(&self.export_name, limits)?;
         let model = validator.model;
@@ -93,7 +101,7 @@ impl Evaluation {
                 .transpose()?,
         };
         validator.input(&evaluation)?;
-        Ok(evaluation)
+        Ok((evaluation, validator))
     }
 }
 

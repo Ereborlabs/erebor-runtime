@@ -18,10 +18,10 @@ impl Decoder {
         }
     }
 
-    pub(super) unsafe fn evaluation(
-        package: &Package,
+    pub(super) unsafe fn evaluation<'a>(
+        package: &'a Package,
         request: &abi::Request,
-    ) -> Result<Evaluation> {
+    ) -> Result<(Evaluation, crate::validation::ContractValidator<'a>)> {
         let limits = request.context.limits.into();
         let mut decoder = Self::new(limits);
         let export = unsafe { decoder.text(request.export_name)? };
@@ -87,8 +87,8 @@ impl Decoder {
             },
             checkpoint: unsafe { decoder.checkpoint(request.checkpoint, model, false)? },
         };
-        package.validate_evaluation(&evaluation)?;
-        Ok(evaluation)
+        validator.input(&evaluation)?;
+        Ok((evaluation, validator))
     }
 
     pub(super) unsafe fn output(

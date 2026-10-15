@@ -5,7 +5,7 @@ use araphor_analysis_sdk as sdk;
 use super::{Coverage, Discovery, Group, GroupAtom};
 
 impl Discovery {
-    pub(super) fn groups(input: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
+    pub(super) fn groups(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
         let atoms = Self::read::<GroupAtom>(input, "atoms")?;
         let coverage = Self::read::<Coverage>(input, "coverage")?;
         let mut groups = BTreeMap::<String, Group>::new();

@@ -313,7 +313,7 @@ impl AnalysisStore {
         request: [u8; 16],
     ) -> Result<Option<(TraceStateV1, TraceIntentV1)>> {
         Self::check_trace_key(tenant, request)?;
-        let control = AnalysisReadControl::default();
+        let control = AnalysisReadControl::monitored(self.write_monitor.clone());
         // Intent reads must not publish the pending raw catalogue before an upload ACK.
         let writer = self.raw_coordinator(&control)?;
         let reader = writer.get()?;
@@ -333,7 +333,7 @@ impl AnalysisStore {
                 reason: "trace intent page identity is invalid",
             }
         );
-        let control = AnalysisReadControl::default();
+        let control = AnalysisReadControl::monitored(self.write_monitor.clone());
         let writer = self.raw_coordinator(&control)?;
         let reader = writer.get()?;
         control.query_run(reader, || {

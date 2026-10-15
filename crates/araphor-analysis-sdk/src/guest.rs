@@ -1,4 +1,4 @@
-use crate::{wire, Evaluation, Output, Package, Result};
+use crate::{wire, CheckedEvaluation, Evaluation, Output, Package, Result};
 
 #[allow(unsafe_code)]
 pub mod bindings {
@@ -14,6 +14,11 @@ crate::component_conversions!(bindings::araphor::analysis::types);
 pub trait Guest {
     fn package() -> Package;
     fn evaluate(evaluation: &Evaluation) -> Result<Output>;
+
+    /// Compute output from input that passed the package contract checks.
+    fn evaluate_checked(checked: &CheckedEvaluation<'_>) -> Result<Output> {
+        Self::evaluate(checked.evaluation())
+    }
 }
 
 pub struct Component<G>(std::marker::PhantomData<G>);
@@ -32,10 +37,11 @@ impl<G: Guest> Component<G> {
     fn evaluate(input: wire::Evaluation) -> Result<wire::Output> {
         Self::check_cancelled()?;
         let package = G::package();
-        let evaluation = input.decode(&package)?;
-        let output = G::evaluate(&evaluation)?;
+        let (evaluation, validator) = input.decode_validated(&package)?;
+        let checked = validator.checked(&evaluation);
+        let output = G::evaluate_checked(&checked)?;
         Self::check_cancelled()?;
-        wire::Output::encode(&package, &evaluation, &output)
+        wire::Output::encode_checked(&checked, &output)
     }
 
     pub fn cancelled() -> bool {

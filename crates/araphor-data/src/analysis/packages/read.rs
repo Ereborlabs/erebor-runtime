@@ -9,6 +9,80 @@ use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 impl AnalysisStore {
     pub(super) const RESULT_READ_BYTES: u64 = 64 * 1024 * 1024;
 
+    pub(crate) fn package_current(
+        &self,
+        active: &PackageActivationV1,
+        now: u64,
+        changed: bool,
+        control: &crate::AnalysisReadControl,
+    ) -> Result<Option<Vec<u8>>> {
+        let Some(id) = &active.result_id else {
+            return Ok(None);
+        };
+        let mut reader = self.reader_until(control)?;
+        control.run(&mut reader, |reader| {
+            let row: Option<(Vec<u8>, Vec<u8>)> = reader.query_row(
+                "SELECT x.body, r.commit_meta FROM package_results r
+                 JOIN analysis_results x USING (result_id)
+                 JOIN package_heads h USING (result_id)
+                 JOIN package_activations a ON a.tenant_id = r.tenant_id
+                    AND a.scope_id = r.scope_id AND a.package_id = r.package_id
+                    AND a.export_name = r.export_name
+                 WHERE r.tenant_id = ? AND r.result_id = ? AND NOT r.stale
+                    AND a.active AND a.result_id = r.result_id AND a.generation = ?
+                    AND a.checkpoint_revision = ? AND a.metadata = ?",
+                params![active.key.tenant_id.as_slice(), id, active.generation,
+                    active.checkpoint_revision, active.metadata],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional().context(AnalysisDatabaseSnafu { operation: "read current package metadata" })?;
+            let Some((body, metadata)) = row else { return Ok(None); };
+            let metadata: super::PackageCommitMetadata = serde_json::from_slice(&metadata)
+                .context(JsonSnafu { path: "<package-commit>" })?;
+            if metadata.witnesses.iter().any(|witness| witness.expires_utc_ns <= now) {
+                return Ok(None);
+            }
+            if !changed {
+                return Ok(Some(body));
+            }
+            for (relation, captured) in &metadata.source_revisions {
+                control.check()?;
+                let changed: u64 = reader.query_row(
+                    "SELECT COALESCE(MAX(last_changed_revision), 0)::UBIGINT
+                     FROM relation_revisions WHERE relation_name = ?",
+                    params![relation], |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "read package source notice" })?;
+                if changed > *captured { return Ok(None); }
+            }
+            for dependency in &metadata.dependencies {
+                control.check()?;
+                let current: bool = reader.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM analysis_results x
+                     LEFT JOIN package_results r USING (result_id)
+                     WHERE x.tenant_id = ? AND x.result_id = ? AND x.commit_revision = ?
+                        AND (r.result_id IS NULL OR (r.scope_id = ? AND NOT r.stale
+                            AND EXISTS(SELECT 1 FROM package_heads h WHERE h.result_id = r.result_id))))",
+                    params![active.key.tenant_id.as_slice(), dependency.result_id,
+                        dependency.commit_revision, active.key.scope_id], |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "read package dependency notice" })?;
+                if !current { return Ok(None); }
+            }
+            for reference in &metadata.context_refs {
+                control.check()?;
+                let key = &reference.key;
+                let current: bool = reader.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM context_versions WHERE tenant_id = ?
+                     AND owner_id = ? AND entity_key = ? AND lifetime_key = ?
+                     AND owner_revision = ? AND commit_revision = ?)",
+                    params![key.tenant_id.as_slice(), key.owner_id, key.entity_key.as_slice(),
+                        key.lifetime_key.as_slice(), key.owner_revision, reference.commit_revision],
+                    |row| row.get(0),
+                ).context(AnalysisDatabaseSnafu { operation: "read package context notice" })?;
+                if !current { return Ok(None); }
+            }
+            Ok(Some(body))
+        })
+    }
+
     pub(crate) fn package_revision(
         &self,
         tenant: [u8; 16],
@@ -26,7 +100,7 @@ impl AnalysisStore {
     ) -> Result<Option<PackageRevisionV1>> {
         let row = reader
             .query_row(
-                "SELECT descriptor, artifact, dependencies, encoded_bytes FROM package_revisions
+                "SELECT descriptor, artifact, dependencies FROM package_revisions
              WHERE tenant_id = ? AND package_id = ? AND revision = ?",
                 params![tenant.as_slice(), package, revision],
                 |row| {
@@ -34,7 +108,6 @@ impl AnalysisStore {
                         row.get::<_, Vec<u8>>(0)?,
                         row.get::<_, Vec<u8>>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, u64>(3)?,
                     ))
                 },
             )
@@ -42,16 +115,13 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read package revision",
             })?;
-        row.map(|(descriptor, artifact, dependencies, encoded_bytes)| {
-            let encoded_bytes = usize::try_from(encoded_bytes)
-                .map_err(|_| crate::PackageErrorCodeV1::Limit.error("retained package bytes"))?;
+        row.map(|(descriptor, artifact, dependencies)| {
             Ok(PackageRevisionV1 {
                 tenant_id: tenant,
                 package_id: package.into(),
                 revision: revision.into(),
                 descriptor,
                 artifact,
-                encoded_bytes,
                 dependencies: serde_json::from_str(&dependencies).context(JsonSnafu {
                     path: "<package-dependencies>",
                 })?,
