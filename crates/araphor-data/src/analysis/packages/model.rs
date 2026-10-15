@@ -28,7 +28,21 @@ pub(crate) struct PackageRevisionV1 {
     pub revision: String,
     pub descriptor: Vec<u8>,
     pub artifact: Vec<u8>,
+    pub encoded_bytes: usize,
     pub dependencies: Vec<PackageRevisionRefV1>,
+}
+
+impl PackageRevisionV1 {
+    pub(crate) fn decode_artifact(&self) -> crate::Result<crate::PackageArtifactV1> {
+        use snafu::ResultExt as _;
+        let descriptor =
+            serde_json::from_slice(&self.descriptor).context(crate::PackageEncodingSnafu)?;
+        crate::package::storage::StoredArtifact::decode(
+            &self.artifact,
+            &descriptor,
+            self.encoded_bytes,
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

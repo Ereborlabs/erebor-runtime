@@ -22,12 +22,26 @@ fn package(id: &str, revision: &str) -> crate::Result<PackageRevisionV1> {
             )],
         )],
     );
+    let source = crate::PackageArtifactV1 {
+        descriptor: descriptor.clone(),
+        implementations: vec![crate::PackageImplementationV1::Sql {
+            export: "model".into(),
+            inputs: std::collections::BTreeMap::new(),
+            program: crate::SqlModelV1 {
+                outputs: std::collections::BTreeMap::from([("rows".into(), "SELECT 1".into())]),
+                ..Default::default()
+            },
+        }],
+        fixtures: Vec::new(),
+    };
+    let (artifact, encoded_bytes) = crate::package::storage::StoredArtifact::encode(&source)?;
     Ok(PackageRevisionV1 {
         tenant_id: [1; 16],
         package_id: id.into(),
         revision: revision.into(),
         descriptor: serde_json::to_vec(&descriptor).context(crate::PackageEncodingSnafu)?,
-        artifact: b"SELECT 1".to_vec(),
+        artifact,
+        encoded_bytes,
         dependencies: Vec::new(),
     })
 }

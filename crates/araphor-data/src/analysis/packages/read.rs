@@ -24,7 +24,7 @@ impl AnalysisStore {
     ) -> Result<Option<PackageRevisionV1>> {
         let row = reader
             .query_row(
-                "SELECT descriptor, artifact, dependencies FROM package_revisions
+                "SELECT descriptor, artifact, dependencies, encoded_bytes FROM package_revisions
              WHERE tenant_id = ? AND package_id = ? AND revision = ?",
                 params![tenant.as_slice(), package, revision],
                 |row| {
@@ -32,6 +32,7 @@ impl AnalysisStore {
                         row.get::<_, Vec<u8>>(0)?,
                         row.get::<_, Vec<u8>>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, u64>(3)?,
                     ))
                 },
             )
@@ -39,13 +40,16 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "read package revision",
             })?;
-        row.map(|(descriptor, artifact, dependencies)| {
+        row.map(|(descriptor, artifact, dependencies, encoded_bytes)| {
+            let encoded_bytes = usize::try_from(encoded_bytes)
+                .map_err(|_| crate::PackageErrorCodeV1::Limit.error("retained package bytes"))?;
             Ok(PackageRevisionV1 {
                 tenant_id: tenant,
                 package_id: package.into(),
                 revision: revision.into(),
                 descriptor,
                 artifact,
+                encoded_bytes,
                 dependencies: serde_json::from_str(&dependencies).context(JsonSnafu {
                     path: "<package-dependencies>",
                 })?,
@@ -57,23 +61,48 @@ impl AnalysisStore {
     #[cfg(test)]
     pub(crate) fn package_revisions(&self, tenant: [u8; 16]) -> Result<Vec<PackageRevisionV1>> {
         self.read_snapshot(|reader| {
-            let bytes: u64 = reader.query_row("SELECT COALESCE(SUM(octet_length(descriptor) + octet_length(artifact)), 0)::UBIGINT
-                FROM package_revisions WHERE tenant_id = ?", params![tenant.as_slice()], |row| row.get(0))
-                .context(AnalysisDatabaseSnafu { operation: "bound package list bytes" })?;
-            if bytes > super::MAX_PACKAGE_BYTES as u64 { return self.reject("the package list exceeds its byte limit"); }
-            let mut statement = reader.prepare(
-                "SELECT package_id, revision FROM package_revisions WHERE tenant_id = ?
+            let bytes: u64 = reader
+                .query_row(
+                    "SELECT COALESCE(SUM(octet_length(descriptor) + encoded_bytes), 0)::UBIGINT
+                FROM package_revisions WHERE tenant_id = ?",
+                    params![tenant.as_slice()],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "bound package list bytes",
+                })?;
+            if bytes > super::MAX_PACKAGE_BYTES as u64 {
+                return self.reject("the package list exceeds its byte limit");
+            }
+            let mut statement = reader
+                .prepare(
+                    "SELECT package_id, revision FROM package_revisions WHERE tenant_id = ?
                  ORDER BY package_id, revision LIMIT ?",
-            ).context(AnalysisDatabaseSnafu { operation: "prepare package list" })?;
-            let keys = statement.query_map(params![tenant.as_slice(), (MAX_PACKAGE_ROWS + 1) as u64],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            ).context(AnalysisDatabaseSnafu { operation: "list package revisions" })?
-                .collect::<duckdb::Result<Vec<_>>>().context(AnalysisDatabaseSnafu { operation: "decode package list" })?;
-            if keys.len() > MAX_PACKAGE_ROWS { return self.reject("the package list exceeds its row limit"); }
-            keys.into_iter().map(|(package, revision)| {
-                Self::package_from(reader, tenant, &package, &revision)?
-                    .ok_or_else(|| self.state_error("the selected package revision is absent"))
-            }).collect()
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare package list",
+                })?;
+            let keys = statement
+                .query_map(
+                    params![tenant.as_slice(), (MAX_PACKAGE_ROWS + 1) as u64],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "list package revisions",
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode package list",
+                })?;
+            if keys.len() > MAX_PACKAGE_ROWS {
+                return self.reject("the package list exceeds its row limit");
+            }
+            keys.into_iter()
+                .map(|(package, revision)| {
+                    Self::package_from(reader, tenant, &package, &revision)?
+                        .ok_or_else(|| self.state_error("the selected package revision is absent"))
+                })
+                .collect()
         })
     }
 

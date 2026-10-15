@@ -60,11 +60,7 @@ impl AnalysisStore {
         Self::validate_contexts(writer, root)?;
         Self::validate_traces(writer, root)?;
         Self::validate_trace_receipts(writer, root)?;
-        let graph_limit = if meta.schema_version >= 18 {
-            super::graph_rows::GraphHeader::MAX_BYTES
-        } else {
-            super::MAX_RESULT_BYTES
-        };
+        let graph_limit = super::graph_rows::GraphHeader::MAX_BYTES;
         let oversized: bool = writer.query_row(
             "SELECT EXISTS(SELECT 1 FROM analysis_results
             WHERE processor_id = 'graph-findings' AND stream_key IS NOT NULL AND octet_length(body) > ?)",
@@ -216,14 +212,10 @@ impl AnalysisStore {
         if invalid {
             return Self::reject_path(root, "the stored revision or pending bound is invalid");
         }
-        if meta.schema_version >= 19 {
-            Self::validate_packages(writer, root)?;
-        }
+        Self::validate_packages(writer, root)?;
         Self::validate_usage(writer, root)?;
-        if meta.schema_version >= 18 {
-            Self::validate_encoding(writer, root)?;
-            Self::validate_graphs(writer, root)?;
-        }
+        Self::validate_encoding(writer, root)?;
+        Self::validate_graphs(writer, root)?;
         Ok(())
     }
 
@@ -244,6 +236,63 @@ impl AnalysisStore {
             })?;
         if invalid {
             return Self::reject_path(root, "the stored graph encoding is invalid");
+        }
+        Ok(())
+    }
+
+    fn validate_graphs(writer: &Connection, root: &Path) -> Result<()> {
+        use super::graph_rows::GraphRows;
+        for table in ["graph_subjects", "graph_relationships", "graph_findings"] {
+            let tenant = if table == "graph_relationships" {
+                ""
+            } else {
+                "AND r.tenant_id = g.tenant_id"
+            };
+            let invalid: bool = writer.query_row(&format!(
+                "SELECT EXISTS(SELECT 1 FROM {table} g LEFT JOIN analysis_results r
+                ON r.result_id = g.result_id {tenant}
+                WHERE r.result_id IS NULL OR r.processor_id <> 'graph-findings' OR r.stream_key IS NULL
+                OR r.commit_revision > COALESCE((SELECT last_changed_revision FROM relation_revisions
+                    WHERE relation_name = '{table}'), 0))"
+            ), [], |row| row.get(0)).context(AnalysisDatabaseSnafu { operation: "validate native graph references" })?;
+            if invalid {
+                return Self::reject_path(root, "a native graph row has no valid result");
+            }
+        }
+        let mut after = String::new();
+        loop {
+            let next: Option<(String, Vec<u8>)> = writer
+                .query_row(
+                    "SELECT result_id, tenant_id FROM analysis_results
+                    WHERE processor_id = 'graph-findings' AND stream_key IS NOT NULL
+                        AND result_id > ? ORDER BY result_id LIMIT 1",
+                    params![after],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read graph validation result",
+                })?;
+            let Some((id, tenant)) = next else {
+                break;
+            };
+            let tenant = tenant.try_into().map_err(|_| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the retained graph tenant is invalid",
+                }
+                .build()
+            })?;
+            let header = GraphRows::read_header(writer, tenant, &id)?.ok_or_else(|| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the retained graph header is absent",
+                }
+                .build()
+            })?;
+            let rebuilt = GraphRows::read(writer, &id, &header)?;
+            GraphRows::read_body(writer, &id, &header, &rebuilt)?;
+            after = id;
         }
         Ok(())
     }
@@ -557,34 +606,30 @@ impl AnalysisStore {
                     operation: "validate stored schema",
                 })?;
         }
-        let version: u32 = writer
-            .query_row("SELECT schema_version FROM store_meta", [], |row| {
-                row.get(0)
-            })
+        writer
+            .prepare("SELECT encoded_bytes FROM package_revisions LIMIT 0")
             .context(AnalysisDatabaseSnafu {
-                operation: "read stored schema version",
+                operation: "validate binary package schema",
             })?;
-        if version >= 18 {
-            let encoding: bool = writer
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = 'main' AND table_name = 'analysis_results'
-                    AND column_name = 'graph_encoding' AND data_type = 'BLOB'
-                    AND is_nullable = 'YES')",
-                    [],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "validate graph encoding schema",
-                })?;
-            if !encoding {
-                return GraphInvalidSnafu {
-                    field: "graph encoding schema",
-                }
-                .fail();
+        let encoding: bool = writer
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'main' AND table_name = 'analysis_results'
+                AND column_name = 'graph_encoding' AND data_type = 'BLOB'
+                AND is_nullable = 'YES')",
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "validate graph encoding schema",
+            })?;
+        if !encoding {
+            return GraphInvalidSnafu {
+                field: "graph encoding schema",
             }
-            super::graph_rows::GraphRows::validate_tables(writer)?;
+            .fail();
         }
+        super::graph_rows::GraphRows::validate_tables(writer)?;
         Ok(())
     }
 

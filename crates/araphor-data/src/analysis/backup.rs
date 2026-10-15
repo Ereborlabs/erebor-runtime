@@ -462,9 +462,7 @@ impl AnalysisStore {
     }
 
     fn validate_bundle(manifest: &AnalysisBackupManifestV1, root: &Path) -> Result<()> {
-        if (manifest.schema_version != super::GRAPH_LEGACY_VERSION
-            && manifest.schema_version != super::GRAPH_NOTICE_LEGACY_VERSION
-            && manifest.schema_version != ANALYSIS_SCHEMA_VERSION as u32)
+        if manifest.schema_version != ANALYSIS_SCHEMA_VERSION as u32
             || Uuid::parse_str(&manifest.store_uuid).is_err()
             || manifest.database_bytes == 0
             || manifest.segments.len()
@@ -563,9 +561,6 @@ impl AnalysisStore {
             );
         }
         Self::validate_tables(&writer)?;
-        if meta.schema_version == super::GRAPH_LEGACY_VERSION {
-            Self::validate_legacy_graphs(&writer, root)?;
-        }
         Self::validate_state(&writer, root)?;
         let files = Self::backup_segments(&writer)?;
         if files

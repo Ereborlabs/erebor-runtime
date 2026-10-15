@@ -83,8 +83,7 @@ impl AnalysisStore {
                 }
             }
             if current.active && current.revision != input.revision && prepared.is_none() {
-                let artifact: crate::PackageArtifactV1 = serde_json::from_slice(&artifact.artifact)
-                    .context(crate::PackageEncodingSnafu)?;
+                let artifact = artifact.decode_artifact()?;
                 if !input.active || !artifact.prepared(&input.key.export) {
                     return self
                         .reject("a package upgrade requires a prepared result and checkpoint");

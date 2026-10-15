@@ -19,7 +19,7 @@ impl AnalysisStore {
         for package in revisions {
             bytes = bytes
                 .saturating_add(package.descriptor.len())
-                .saturating_add(package.artifact.len());
+                .saturating_add(package.encoded_bytes);
             if package.tenant_id != tenant
                 || package.package_id.is_empty()
                 || package.package_id.len() > 256
@@ -28,6 +28,9 @@ impl AnalysisStore {
                 || package.descriptor.is_empty()
                 || package.descriptor.len() > 1024 * 1024
                 || package.artifact.is_empty()
+                || package.encoded_bytes == 0
+                || crate::package::storage::StoredArtifact::frame_size(&package.artifact)?
+                    != package.encoded_bytes
                 || bytes > MAX_PACKAGE_BYTES
                 || package.dependencies.len() > 64
                 || !keys.insert((&package.package_id, &package.revision))
@@ -59,7 +62,8 @@ impl AnalysisStore {
             })?;
             transaction
                 .execute(
-                    "INSERT INTO package_revisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO package_revisions (tenant_id, package_id, revision, descriptor, artifact, dependencies, commit_revision, encoded_bytes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         tenant.as_slice(),
                         package.package_id,
@@ -67,7 +71,8 @@ impl AnalysisStore {
                         package.descriptor,
                         package.artifact,
                         dependencies,
-                        revision
+                        revision,
+                        package.encoded_bytes as u64
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {

@@ -303,19 +303,15 @@ impl AnalysisStore {
                         + CASE WHEN terminal IS NULL THEN 16 * 1024
                             ELSE octet_length(encode(terminal)) END FROM trace_receipts";
 
-    pub(super) fn usage_projection(native: bool) -> String {
-        let graphs = if native {
-            format!(
-                " UNION ALL SELECT tenant_id, 'graph_rows', bytes FROM ({})
-                UNION ALL SELECT tenant_id, 'graph_encoding', octet_length(graph_encoding)
-                    FROM analysis_results WHERE graph_encoding IS NOT NULL
-                UNION ALL SELECT tenant_id, 'package_rows', bytes FROM ({})",
-                super::graph_rows::GraphRows::CHARGES,
-                Self::PACKAGE_CHARGES
-            )
-        } else {
-            String::new()
-        };
+    fn usage_projection() -> String {
+        let graphs = format!(
+            " UNION ALL SELECT tenant_id, 'graph_rows', bytes FROM ({})
+            UNION ALL SELECT tenant_id, 'graph_encoding', octet_length(graph_encoding)
+                FROM analysis_results WHERE graph_encoding IS NOT NULL
+            UNION ALL SELECT tenant_id, 'package_rows', bytes FROM ({})",
+            super::graph_rows::GraphRows::CHARGES,
+            Self::PACKAGE_CHARGES,
+        );
         format!(
             "WITH charges AS ({}{graphs}) SELECT tenant_id, SUM(bytes)::UBIGINT AS logical_bytes,
                     COUNT(*) FILTER (WHERE family = 'coverage')::UBIGINT AS coverage_count,
@@ -327,8 +323,6 @@ impl AnalysisStore {
     }
 
     pub(super) fn validate_usage(writer: &Connection, root: &std::path::Path) -> Result<()> {
-        let native = Self::read_meta_from(writer, &root.join("analysis.duckdb"))?.schema_version
-            >= super::GRAPH_NOTICE_LEGACY_VERSION;
         let invalid: bool = writer
             .query_row(
                 &format!(
@@ -339,7 +333,7 @@ impl AnalysisStore {
                     OR e.coverage_count <> u.coverage_count
                     OR e.context_count <> u.context_count
                     OR e.result_count <> u.result_count)",
-                    Self::usage_projection(native)
+                    Self::usage_projection()
                 ),
                 [],
                 |row| row.get(0),

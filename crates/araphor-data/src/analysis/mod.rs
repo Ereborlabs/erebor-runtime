@@ -25,7 +25,6 @@ mod crash;
 mod dependencies;
 mod extraction;
 mod graph;
-mod graph_migration;
 pub(crate) mod graph_rows;
 mod health;
 mod notification;
@@ -74,9 +73,7 @@ pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
-const ANALYSIS_SCHEMA_VERSION: i64 = 20;
-const GRAPH_LEGACY_VERSION: u32 = 17;
-const GRAPH_NOTICE_LEGACY_VERSION: u32 = 19;
+const ANALYSIS_SCHEMA_VERSION: i64 = 21;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -288,11 +285,7 @@ impl AnalysisStore {
             .then(|| Self::read_meta_from(&writer, &path))
             .transpose()?;
         if let Some(meta) = &prior {
-            if meta.schema_version == GRAPH_LEGACY_VERSION {
-                Self::migrate_graphs(&mut writer, &root, storage)?;
-            } else if meta.schema_version == GRAPH_NOTICE_LEGACY_VERSION {
-                Self::migrate_graph_notices(&mut writer, &root)?;
-            } else if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
+            if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
                 return AnalysisStateSnafu {
                     path,
                     reason: "the analysis schema version is unsupported".to_owned(),
@@ -1128,30 +1121,25 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in (0..=ANALYSIS_SCHEMA_VERSION + 1).filter(|version| {
-            *version != ANALYSIS_SCHEMA_VERSION
-                && *version != i64::from(GRAPH_NOTICE_LEGACY_VERSION)
-        }) {
-            let root = directory.path().join(format!("schema-{version}"));
-            let store = AnalysisStore::open(&root)?;
-            {
-                let writer_guard = store.writer()?;
-                let writer = writer_guard.get()?;
-                writer.execute("UPDATE store_meta SET schema_version = ?", params![version])?;
-            }
-            drop(store);
-            let bytes = fs::read(root.join("analysis.duckdb"))?;
-            let expected = if version == GRAPH_LEGACY_VERSION as i64 {
-                "the legacy schema contains native graph tables"
-            } else {
-                "the analysis schema version is unsupported"
-            };
-            assert!(matches!(
-                AnalysisStore::open(&root),
-                Err(crate::Error::AnalysisState { reason, .. }) if reason == expected
-            ));
-            assert_eq!(fs::read(root.join("analysis.duckdb"))?, bytes);
+        let root = directory.path().join("schema");
+        let store = AnalysisStore::open(&root)?;
+        let before = store.meta()?;
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.meta()?, before);
+        {
+            let writer_guard = store.writer()?;
+            writer_guard
+                .get()?
+                .execute("UPDATE store_meta SET schema_version = 0", [])?;
         }
+        drop(store);
+        let bytes = fs::read(root.join("analysis.duckdb"))?;
+        assert!(matches!(
+            AnalysisStore::open(&root),
+            Err(crate::Error::AnalysisState { .. })
+        ));
+        assert_eq!(fs::read(root.join("analysis.duckdb"))?, bytes);
         let root = directory.path().join("nonprivate");
         let store = AnalysisStore::open(&root)?;
         drop(store);

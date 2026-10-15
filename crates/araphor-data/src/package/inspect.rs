@@ -3,9 +3,9 @@ use crate::{AnalysisReadControl, Result};
 
 use super::owner::InstalledContext;
 use super::{
-    AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageBundleV1,
-    PackageDatasetV1, PackageErrorCodeV1 as Code, PackageExportStatusV1, PackageGrantV1,
-    PackageOutputV1, PackageReceiptV1, PackageResponseV1,
+    AnalysisPackageOwner, PackageActionV1 as Action, PackageBundleV1, PackageDatasetV1,
+    PackageErrorCodeV1 as Code, PackageExportStatusV1, PackageGrantV1, PackageOutputV1,
+    PackageReceiptV1, PackageResponseV1,
 };
 
 pub(super) struct PackageQuery<'a> {
@@ -61,7 +61,7 @@ impl AnalysisPackageOwner {
                         .store
                         .package_revision(active.key.tenant_id, package, &active.revision)?
                         .ok_or_else(|| Code::Missing.error("installed artifact"))?;
-                    loaded = Self::decode::<PackageArtifactV1>(&stored.artifact)?;
+                    loaded = stored.decode_artifact()?;
                     &loaded
                 }
             };
@@ -179,7 +179,7 @@ impl AnalysisPackageOwner {
             .store
             .package_revision(key.tenant_id, package, &stored.revision)?
             .ok_or_else(|| Code::Missing.error("result artifact"))?;
-        let artifact: PackageArtifactV1 = Self::decode(&revision.artifact)?;
+        let artifact = revision.decode_artifact()?;
         let model = artifact
             .descriptor
             .exports

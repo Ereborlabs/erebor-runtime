@@ -150,6 +150,7 @@ fn domain_refs_require_closure() -> TestResult {
     input.body = serde_json::to_vec(&body)?;
     assert!(store.commit_context(&input).is_err());
     let mut dependent = package("dependent", "v1")?;
+    let mut artifact = dependent.decode_artifact()?;
     let mut descriptor: araphor_analysis_sdk::Package =
         serde_json::from_slice(&dependent.descriptor)?;
     descriptor.exports[0]
@@ -169,6 +170,10 @@ fn domain_refs_require_closure() -> TestResult {
             output: "rows".into(),
         });
     dependent.descriptor = serde_json::to_vec(&descriptor)?;
+    artifact.descriptor = descriptor;
+    let (bytes, encoded_bytes) = crate::package::storage::StoredArtifact::encode(&artifact)?;
+    dependent.artifact = bytes;
+    dependent.encoded_bytes = encoded_bytes;
     dependent.dependencies.push(PackageRevisionRefV1 {
         package_id: "first".into(),
         revision: "v1".into(),

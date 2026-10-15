@@ -19,6 +19,7 @@ mod owner;
 mod removal;
 mod required;
 mod status;
+pub(crate) mod storage;
 mod supervision;
 pub(super) mod wasm;
 mod wire;

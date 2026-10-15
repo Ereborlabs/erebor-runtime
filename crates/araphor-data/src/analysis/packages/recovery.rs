@@ -8,8 +8,10 @@ use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
     pub(super) fn validate_package_contracts(reader: &Connection, root: &Path) -> Result<()> {
-        let mut statement = reader.prepare("SELECT tenant_id, package_id, revision, descriptor, dependencies FROM package_revisions")
-            .context(AnalysisDatabaseSnafu { operation: "prepare retained package contracts" })?;
+        let query = "SELECT tenant_id, package_id, revision, descriptor, dependencies, artifact, encoded_bytes FROM package_revisions";
+        let mut statement = reader.prepare(query).context(AnalysisDatabaseSnafu {
+            operation: "prepare retained package contracts",
+        })?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
@@ -18,20 +20,32 @@ impl AnalysisStore {
                     row.get::<_, String>(2)?,
                     row.get::<_, Vec<u8>>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, u64>(6)?,
                 ))
             })
             .context(AnalysisDatabaseSnafu {
                 operation: "read retained package contracts",
             })?;
         for row in rows {
-            let (tenant, id, revision, descriptor, dependencies) =
-                row.context(AnalysisDatabaseSnafu {
+            let (tenant, id, revision, descriptor, dependencies, artifact, encoded_bytes) = row
+                .context(AnalysisDatabaseSnafu {
                     operation: "decode retained package contract",
                 })?;
             let package: araphor_analysis_sdk::Package =
                 serde_json::from_slice(&descriptor).context(JsonSnafu { path: root })?;
             if package.id != id || package.revision != revision || package.validate().is_err() {
                 return Self::reject_path(root, "the retained package descriptor is invalid");
+            }
+            {
+                let encoded_bytes = usize::try_from(encoded_bytes).map_err(|_| {
+                    crate::PackageErrorCodeV1::Limit.error("retained package bytes")
+                })?;
+                crate::package::storage::StoredArtifact::validate(
+                    &artifact,
+                    &package,
+                    encoded_bytes,
+                )?;
             }
             let dependencies: Vec<PackageRevisionRefV1> =
                 serde_json::from_str(&dependencies).context(JsonSnafu { path: root })?;

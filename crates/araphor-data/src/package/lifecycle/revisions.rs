@@ -20,25 +20,18 @@ impl AnalysisPackageOwner {
             &revision.package_id,
             &revision.revision,
         );
-        let bytes = if matches!(&saved, Ok(Some(_))) {
-            encoded.check_encoding()?;
-            None
-        } else {
-            Some(Self::encode(&encoded)?)
-        };
+        revision.encoded_bytes = super::super::storage::StoredArtifact::count_encoding(&encoded)?;
         if let Some(saved) = saved? {
             if saved.dependencies == revision.dependencies
                 && Self::decode::<araphor_analysis_sdk::Package>(&saved.descriptor)?
                     == artifact.descriptor
-                && Self::decode::<PackageArtifactV1>(&saved.artifact)? == *artifact
+                && saved.decode_artifact()? == *artifact
             {
                 return Ok(saved);
             }
         }
-        revision.artifact = match bytes {
-            Some(bytes) => bytes,
-            None => Self::encode(&encoded)?,
-        };
+        revision.artifact =
+            super::super::storage::StoredArtifact::encode_sized(artifact, revision.encoded_bytes)?;
         Ok(revision)
     }
 
@@ -48,7 +41,9 @@ impl AnalysisPackageOwner {
         artifact: &PackageArtifactV1,
     ) -> Result<PackageRevisionV1> {
         let (mut revision, encoded) = Self::revision_encoding(grant, artifact)?;
-        revision.artifact = Self::encode(&encoded)?;
+        revision.encoded_bytes = super::super::storage::StoredArtifact::count_encoding(&encoded)?;
+        revision.artifact =
+            super::super::storage::StoredArtifact::encode_sized(artifact, revision.encoded_bytes)?;
         Ok(revision)
     }
 
@@ -73,6 +68,7 @@ impl AnalysisPackageOwner {
             revision: artifact.descriptor.revision.clone(),
             descriptor: encoded.descriptor.get().as_bytes().to_vec(),
             artifact: Vec::new(),
+            encoded_bytes: 0,
             dependencies: dependencies
                 .into_iter()
                 .map(|(package_id, revision)| PackageRevisionRefV1 {
@@ -105,9 +101,10 @@ impl AnalysisPackageOwner {
                 .package_revision(tenant, &reference.package_id, &reference.revision)?
                 .ok_or_else(|| Code::Missing.error("installed artifact"))?;
             bytes = bytes
-                .checked_add(record.artifact.len())
+                .checked_add(record.encoded_bytes)
                 .filter(|bytes| *bytes <= MAX_PACKAGE_BYTES)
                 .ok_or_else(|| Code::Limit.error("installed dependency bytes"))?;
+            artifacts.push(record.decode_artifact()?);
             pending.extend(
                 record
                     .dependencies
@@ -117,7 +114,6 @@ impl AnalysisPackageOwner {
                         revision: dependency.revision,
                     }),
             );
-            artifacts.push(Self::decode::<PackageArtifactV1>(&record.artifact)?);
         }
         artifacts.sort_by_key(PackageArtifactV1::reference);
         let bundle = PackageBundleV1 {
@@ -181,8 +177,8 @@ mod tests {
             artifact: vec![0; MAX_PACKAGE_BYTES / 2],
         }];
         let saved = AnalysisPackageOwner::revision(&fixture.grant, &artifact)?;
-        assert!(saved.artifact.len() > MAX_PACKAGE_BYTES);
-        assert!(saved.artifact.len() <= crate::analysis::MAX_PACKAGE_BYTES);
+        assert!(saved.encoded_bytes > MAX_PACKAGE_BYTES);
+        assert!(saved.encoded_bytes <= crate::analysis::MAX_PACKAGE_BYTES);
         fixture
             .store
             .install_package(std::slice::from_ref(&saved), || Ok(()))?;
@@ -202,7 +198,14 @@ mod tests {
             .artifacts
             .remove(0);
         let mut saved = AnalysisPackageOwner::revision(&fixture.grant, &artifact)?;
-        saved.artifact = b"{".to_vec();
+        let mut bytes = Vec::new();
+        minicbor::Encoder::new(&mut bytes)
+            .array(4)?
+            .u32(1)?
+            .u64(saved.encoded_bytes as u64)?
+            .bytes(b"{")?
+            .array(0)?;
+        saved.artifact = bytes;
         fixture
             .store
             .install_package(std::slice::from_ref(&saved), || Ok(()))?;

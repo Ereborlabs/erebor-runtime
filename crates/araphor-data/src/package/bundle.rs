@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{self, Read as _, Write};
 use std::os::unix::fs::OpenOptionsExt as _;
@@ -40,18 +41,53 @@ pub struct PackageArtifactV1 {
 
 #[derive(Serialize)]
 pub(super) struct ArtifactEncoding<'a> {
-    pub(super) descriptor: Box<serde_json::value::RawValue>,
-    implementations: &'a [PackageImplementationV1],
-    fixtures: &'a [PackageFixtureV1],
+    pub(super) descriptor: Cow<'a, serde_json::value::RawValue>,
+    pub(super) implementations: &'a [PackageImplementationV1],
+    pub(super) fixtures: &'a [PackageFixtureV1],
 }
 
-impl ArtifactEncoding<'_> {
-    pub(super) fn check_encoding(&self) -> Result<()> {
-        let mut writer = super::wire::PackageBuffer::from_writer(
-            io::sink(),
-            crate::analysis::MAX_PACKAGE_BYTES as u64,
-        );
-        serde_json::to_writer(&mut writer, self).context(PackageEncodingSnafu)
+impl<'a> ArtifactEncoding<'a> {
+    pub(super) fn new(
+        descriptor: &sdk::Package,
+        implementations: &'a [PackageImplementationV1],
+        fixtures: &'a [PackageFixtureV1],
+        canonical: bool,
+    ) -> Result<Self> {
+        let component = implementations.iter().any(|implementation| {
+            matches!(
+                implementation,
+                PackageImplementationV1::Wasm { .. }
+                    | PackageImplementationV1::Native {
+                        qualification: Some(_),
+                        ..
+                    }
+            )
+        });
+        let descriptor = if canonical || component {
+            descriptor.inspect().context(crate::AnalysisContractSnafu)?
+        } else {
+            serde_json::to_string(descriptor).context(PackageEncodingSnafu)?
+        };
+        Ok(Self {
+            descriptor: Cow::Owned(
+                serde_json::value::RawValue::from_string(descriptor)
+                    .context(PackageEncodingSnafu)?,
+            ),
+            implementations,
+            fixtures,
+        })
+    }
+
+    pub(super) fn borrowed<'b>(
+        &'b self,
+        implementations: &'b [PackageImplementationV1],
+        fixtures: &'b [PackageFixtureV1],
+    ) -> ArtifactEncoding<'b> {
+        ArtifactEncoding {
+            descriptor: Cow::Borrowed(self.descriptor.as_ref()),
+            implementations,
+            fixtures,
+        }
     }
 }
 
@@ -154,19 +190,12 @@ impl PackageArtifactV1 {
     }
 
     pub(super) fn encoding(&self, canonical: bool) -> Result<ArtifactEncoding<'_>> {
-        let descriptor = if canonical || self.has_component() {
-            self.descriptor
-                .inspect()
-                .context(crate::AnalysisContractSnafu)?
-        } else {
-            serde_json::to_string(&self.descriptor).context(PackageEncodingSnafu)?
-        };
-        Ok(ArtifactEncoding {
-            descriptor: serde_json::value::RawValue::from_string(descriptor)
-                .context(PackageEncodingSnafu)?,
-            implementations: &self.implementations,
-            fixtures: &self.fixtures,
-        })
+        ArtifactEncoding::new(
+            &self.descriptor,
+            &self.implementations,
+            &self.fixtures,
+            canonical,
+        )
     }
 
     pub(crate) fn implementation(&self, export: &str) -> Result<&PackageImplementationV1> {
@@ -299,10 +328,17 @@ impl PackageBundleV1 {
     pub fn digest(&self) -> Result<String> {
         let mut digest = Sha256::new();
         digest.update(b"ARAPHOR-ANALYSIS-PACKAGE-V1\0");
-        self.encode_into(&mut super::wire::PackageBuffer::from_writer(
-            &mut digest,
-            MAX_PACKAGE_BYTES as u64,
-        ))?;
+        {
+            let mut writer = io::BufWriter::new(&mut digest);
+            self.encode_into(&mut super::wire::PackageBuffer::from_writer(
+                &mut writer,
+                MAX_PACKAGE_BYTES as u64,
+            ))?;
+            writer
+                .flush()
+                .map_err(serde_json::Error::io)
+                .context(PackageEncodingSnafu)?;
+        }
         Ok(format!("{:x}", digest.finalize()))
     }
 
@@ -326,8 +362,9 @@ mod encoding_tests {
         component.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
             exports: vec!["count".into()],
             inputs: None,
-            artifact: vec![0, 1, 255],
+            artifact: (0_u8..=255).cycle().take(16 * 1024 + 1).collect(),
         }];
+        assert!(component.encode()?.len() > io::BufWriter::new(io::sink()).capacity());
         for package in [sql, component] {
             let bytes = package.encode()?;
             let mut digest = Sha256::new();
