@@ -225,9 +225,10 @@ fn reuse_excludes_other_scope() -> TestResult {
 
 #[test]
 fn reuse_releases_before_loading() -> TestResult {
+    let capacity = 2 * araphor_analysis_builtins::components::RUNTIME.len();
     let mut fixture = Fixture::new_limits(QueryLimits {
-        input_bytes: 8 * 1024 * 1024,
-        input_capacity: 8 * 1024 * 1024,
+        input_bytes: capacity,
+        input_capacity: capacity,
         ..Default::default()
     })?;
     let selected = component();
@@ -273,7 +274,7 @@ fn reuse_releases_before_loading() -> TestResult {
     let context: InstalledContext = AnalysisPackageOwner::decode(&current.pins()[0].metadata)?;
     assert_eq!(context.grant, fixture.grant);
     drop(current);
-    drop(fixture.owner.query.retain_analysis_input(8 * 1024 * 1024)?);
+    drop(fixture.owner.query.retain_analysis_input(capacity)?);
     Ok(())
 }
 
