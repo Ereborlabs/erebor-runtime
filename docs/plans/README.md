@@ -22,9 +22,16 @@ master plan invented for them.
 ## Proposed Master Plans
 
 - [Araphor Data test runtime reduction](araphor-data-test-runtime-reduction.md) —
-  investigate fixture lock waits and repeated package/store preparation; propose
-  ordered reductions that preserve the complete test inventory and owner proof.
-  Diagnostic timing and implementation require explicit approval.
+  the seven approved corrections and final Rust qualification are complete.
+  The record preserves the complete inventory and observed timing limits.
+- [Araphor production data flow simplification](araphor-production-dataflow-simplification.md) —
+  raw executable storage, one SQL operation engine, and the revised typed
+  graph handoff with buffered DuckDB appends are implemented and pass final
+  Rust CI. Current-artifact native execution qualification also passes.
+  The [graph format review](araphor-graph-binary-duckdb-review.md) compares
+  typed values, binary formats, and DuckDB input APIs. The user requires
+  current-format storage and no backward compatibility. New timing workloads
+  and DataFusion work require explicit approval.
 - [Araphor observability](araphor-observability/README.md) — CLI-first SQL and
   bpftrace capture, shared console APIs, and optional finite Trace CRD. Reuses
   shared segment-backed data and DuckDB query facilities and existing execution owners.
