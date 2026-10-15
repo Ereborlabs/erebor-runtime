@@ -45,7 +45,7 @@ impl FindingKey {
             let charge = key
                 .bytes
                 .saturating_add((key.result.len() + key.finding.len() + 32) as u64);
-            if bytes.saturating_add(charge) > GraphRows::MAX_CANONICAL_BYTES as u64 {
+            if bytes.saturating_add(charge) > MAX_READ_BYTES as u64 {
                 break;
             }
             bytes += charge;

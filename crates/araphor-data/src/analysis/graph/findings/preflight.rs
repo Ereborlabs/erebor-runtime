@@ -28,7 +28,7 @@ impl FindingHeaders {
 
     pub(super) fn insert(&mut self, id: String, header: GraphHeader) {
         let charge = header.snapshot_bytes + 384;
-        if self.bytes.saturating_add(charge) > GraphRows::MAX_CANONICAL_BYTES + 384 {
+        if self.bytes.saturating_add(charge) > MAX_READ_BYTES + 384 {
             self.headers.clear();
             self.bytes = 0;
         }
@@ -119,7 +119,7 @@ impl AnalysisStore {
         headers: &mut FindingHeaders,
         charges: &mut BTreeMap<String, u64>,
     ) -> Result<()> {
-        let maximum = GraphRows::MAX_CANONICAL_BYTES as u64;
+        let maximum = MAX_READ_BYTES as u64;
         let header_bytes = GraphHeader::MAX_BYTES as u64;
         let stream_bytes = crate::EvidenceIntakeIdentityV1::MAX_KEY_BYTES as u64;
         let mut values = ids

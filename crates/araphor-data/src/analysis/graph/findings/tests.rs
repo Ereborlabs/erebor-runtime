@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn native_header_read_budget() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let rows = GraphRows::encode(&fixture.snapshot)?;
+    let mut headers = FindingHeaders::default();
+    for id in ["first", "second"] {
+        let mut header = GraphHeader::decode(rows.header())?;
+        header.snapshot_bytes = crate::analysis::MAX_RESULT_BYTES / 2 + 1;
+        headers.insert(id.into(), header);
+    }
+    assert!(headers.get("first").is_some());
+    assert!(headers.get("second").is_some());
+    Ok(())
+}
+
+#[test]
 fn native_header_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
     fixture.snapshot.packages[0].coverage_predicate = "x".repeat(1024 * 1024);
@@ -19,7 +34,7 @@ fn native_header_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 &query,
                 params![
                     fixture.request.result_id,
-                    GraphRows::MAX_CANONICAL_BYTES as u64,
+                    MAX_READ_BYTES as u64,
                     GraphHeader::MAX_BYTES as u64,
                     crate::EvidenceIntakeIdentityV1::MAX_KEY_BYTES as u64
                 ],
@@ -102,7 +117,7 @@ fn native_finding_fallback() -> std::result::Result<(), Box<dyn std::error::Erro
                 ],
             )?;
             for key in selection.keys.iter_mut().take(points) {
-                key.bytes = GraphRows::MAX_CANONICAL_BYTES as u64;
+                key.bytes = MAX_READ_BYTES as u64;
             }
             if points == 1 {
                 selection.headers = FindingHeaders::default();
