@@ -11,7 +11,7 @@ use crate::{AnalysisReadControl, QueryLimits, QuerySql, Result};
 pub(super) struct ModelExecution<'a> {
     pub(super) connection: &'a Connection,
     pub(super) control: &'a AnalysisReadControl,
-    pub(super) evaluation: &'a sdk::Evaluation,
+    time_utc_ns: i64,
     limits: sdk::Limits,
     byte_limit: usize,
     pub(super) bytes: usize,
@@ -23,46 +23,22 @@ impl<'a> ModelExecution<'a> {
     pub(super) fn new(
         connection: &'a Connection,
         control: &'a AnalysisReadControl,
-        evaluation: &'a sdk::Evaluation,
+        time_utc_ns: i64,
+        mut limits: sdk::Limits,
         host: &QueryLimits,
-    ) -> Result<Self> {
-        let mut limits = evaluation.context.limits;
+    ) -> Self {
         limits.max_bytes = limits.max_bytes.min(host.output_capacity as u64);
         limits.max_checkpoint_bytes = limits.max_checkpoint_bytes.min(host.output_capacity as u64);
-        let input = evaluation
-            .inputs
-            .iter()
-            .flat_map(|input| &input.data.batches)
-            .chain(evaluation.parameters.iter())
-            .chain(
-                evaluation
-                    .checkpoint
-                    .iter()
-                    .flat_map(|checkpoint| &checkpoint.datasets)
-                    .flat_map(|dataset| &dataset.batches),
-            )
-            .fold(0usize, |total, batch| {
-                total
-                    .saturating_add(batch.get_array_memory_size())
-                    .saturating_add(batch.num_rows().saturating_mul(8))
-            });
-        if input > host.input_bytes {
-            return crate::QueryLimitSnafu {
-                resource: "model input bytes",
-                limit: host.input_bytes,
-            }
-            .fail();
-        }
-        Ok(Self {
+        Self {
             connection,
             control,
-            evaluation,
+            time_utc_ns,
             limits,
             byte_limit: host.output_capacity,
             bytes: 0,
             rows: 0,
             batches: 0,
-        })
+        }
     }
 
     pub(super) fn bytes(&self) -> usize {
@@ -141,7 +117,7 @@ impl<'a> ModelExecution<'a> {
     ) -> Result<Vec<sdk::RecordBatch>> {
         self.rows = 0;
         self.batches = 0;
-        let now = u64::try_from(self.evaluation.context.time_utc_ns).map_err(|_| {
+        let now = u64::try_from(self.time_utc_ns).map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "model evaluation time",
             }

@@ -95,18 +95,18 @@ impl AnalysisPackageOwner {
         };
         let clocked = artifact.uses_clock(model)?;
         let clock_changed = Self::clock_changed(clocked, saved.context.time_utc_ns, now);
-        let inputs = self.inputs(
-            super::inputs::InputRequest {
+        let inputs = self.query.model_operation(active.key.tenant_id).inputs(
+            crate::query::ModelInputRequest {
                 activation: active,
                 model,
-                context: &context,
+                grant: &context.grant,
                 now,
-                action: PackageActionV1::Inspect,
             },
             control,
+            || self.check(&context.grant, PackageActionV1::Inspect),
         );
         let unchanged = match inputs {
-            Ok(inputs) => {
+            Ok((_operation, inputs)) => {
                 saved.inputs
                     == inputs
                         .inputs

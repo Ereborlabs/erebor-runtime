@@ -33,8 +33,8 @@ pub use query::{
     QueryColumn, QueryCoverage, QueryCoverageRows, QueryCoverageState, QueryErrorCode, QueryFrame,
     QueryGrant, QueryHealth, QueryLimits, QueryMetadata, QueryOperation, QueryOwner, QueryPayload,
     QueryPlan, QueryResult, QuerySql, QueryStream, QueryTemplate, QueryTerminalReason,
-    SqlDatasetOutputV1, SqlModelInputRequestV1, SqlModelInputV1, SqlModelOutputV1, SqlModelV1,
-    SqlReasonV1, SystemQueryClock, WasmLimits, QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
+    SqlDatasetOutputV1, SqlModelOutputV1, SqlModelV1, SqlReasonV1, SystemQueryClock, WasmLimits,
+    QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
 };
 pub use trace::{
     TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,

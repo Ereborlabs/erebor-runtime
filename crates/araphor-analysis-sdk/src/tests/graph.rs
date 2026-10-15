@@ -106,25 +106,27 @@ fn dependency_has_one_binding() -> TestResult {
         vec![Port::new("prior", output.schema.clone())],
         vec![Port::new("selected", output.schema)],
     ));
-    package.exports[1].inputs[0].source = InputSource::Output(OutputRef {
+    package.exports[1].inputs[0].source = InputSource::Table(TableRef::Output(OutputRef {
         package: package.id.clone(),
         revision: package.revision.clone(),
         export: "files.count".into(),
         output: "counts".into(),
-    });
+    }));
     package.validate()?;
     let decoded: Package = serde_json::from_str(&package.inspect()?)?;
     assert_eq!(decoded, package);
     for mode in [InputMode::Provided, InputMode::Resolved] {
-        package.exports[0].inputs[0].source = InputSource::Provided;
+        package.exports[0].inputs[0].source = InputSource::Table(TableRef::Named("events".into()));
         package.exports[0].input_mode = InputMode::Provided;
         package.exports[1].input_mode = mode;
         package.validate()?;
-        for source in [InputSource::Provided, InputSource::Sql("SELECT 1".into())] {
+        for source in [
+            InputSource::Table(TableRef::Named("events".into())),
+            InputSource::Query("SELECT 1".into()),
+        ] {
             let valid = matches!(
                 (mode, &source),
-                (InputMode::Provided, InputSource::Provided)
-                    | (InputMode::Resolved, InputSource::Sql(_))
+                (_, InputSource::Table(_)) | (InputMode::Resolved, InputSource::Query(_))
             );
             package.exports[0].inputs[0].source = source;
             package.exports[0].input_mode = mode;
@@ -137,12 +139,12 @@ fn dependency_has_one_binding() -> TestResult {
     }
     package.exports.remove(0);
     let input = &mut package.exports[0].inputs[0];
-    input.source = InputSource::Output(OutputRef {
+    input.source = InputSource::Table(TableRef::Output(OutputRef {
         package: "example".into(),
         revision: "1".into(),
         export: "run".into(),
         output: "rows".into(),
-    });
+    }));
     package.id = "example".into();
     package.revision = "1".into();
     package.exports[0].name = "run".into();
@@ -151,7 +153,7 @@ fn dependency_has_one_binding() -> TestResult {
     for failure in ["output", "revision", "schema", "kind"] {
         package.exports[0].inputs[0] = original.clone();
         let input = &mut package.exports[0].inputs[0];
-        let InputSource::Output(output) = &mut input.source else {
+        let InputSource::Table(TableRef::Output(output)) = &mut input.source else {
             return Err("output source absent".into());
         };
         match failure {
@@ -183,5 +185,81 @@ fn dependency_has_one_binding() -> TestResult {
             .code(),
         ErrorCode::Limit
     );
+    Ok(())
+}
+
+#[test]
+fn input_sources_keep_identity() -> TestResult {
+    for (source, value) in [
+        (
+            InputSource::Table(TableRef::Named("events".into())),
+            serde_json::json!({"kind": "table", "value": {"kind": "named", "value": "events"}}),
+        ),
+        (
+            InputSource::Table(TableRef::Output(OutputRef {
+                package: "example".into(),
+                revision: "1".into(),
+                export: "run".into(),
+                output: "rows".into(),
+            })),
+            serde_json::json!({"kind": "table", "value": {"kind": "output", "value": {
+                "package": "example", "revision": "1", "export": "run", "output": "rows"
+            }}}),
+        ),
+        (
+            InputSource::Query("SELECT subject FROM events".into()),
+            serde_json::json!({"kind": "query", "value": "SELECT subject FROM events"}),
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(&source)?, value);
+        assert_eq!(serde_json::from_value::<InputSource>(value)?, source);
+    }
+    for value in [
+        serde_json::json!({"kind": "provided"}),
+        serde_json::json!({"kind": "sql", "value": "SELECT 1"}),
+        serde_json::json!({"kind": "output", "value": {
+            "package": "example", "revision": "1", "export": "run", "output": "rows"
+        }}),
+        serde_json::json!({"kind": "table", "value": {
+            "kind": "named", "value": "events", "extra": true
+        }}),
+    ] {
+        assert!(serde_json::from_value::<InputSource>(value).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn named_inputs_check_names() -> TestResult {
+    let mut package = FilesCount::package();
+    assert_eq!(package.exports[0].input_mode, InputMode::Provided);
+    assert_eq!(
+        package.exports[0].inputs[0].source,
+        InputSource::Table(TableRef::Named(
+            package.exports[0].inputs[0].port.name.clone()
+        ))
+    );
+    for mode in [InputMode::Provided, InputMode::Resolved] {
+        package.exports[0].input_mode = mode;
+        package.exports[0].inputs[0].source =
+            InputSource::Table(TableRef::Named("events.v1-current".into()));
+        package.validate()?;
+        for name in [
+            "",
+            "SELECT * FROM events",
+            "events;DROP TABLE events",
+            "évents",
+        ] {
+            package.exports[0].inputs[0].source = InputSource::Table(TableRef::Named(name.into()));
+            assert_eq!(
+                package
+                    .validate()
+                    .err()
+                    .ok_or("invalid table name accepted")?
+                    .code(),
+                ErrorCode::Invalid
+            );
+        }
+    }
     Ok(())
 }

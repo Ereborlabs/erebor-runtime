@@ -15,12 +15,12 @@ fn derived(artifact: &mut PackageArtifactV1, source: &PackageRefV1) {
     input.name = "source".into();
     model.inputs.push(sdk::InputPort {
         port: input,
-        source: sdk::InputSource::Output(sdk::OutputRef {
+        source: sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
             package: source.package_id.clone(),
             revision: source.revision.clone(),
             export: "count".into(),
             output: "rows".into(),
-        }),
+        })),
     });
     artifact.descriptor.exports.push(model);
     artifact.implementations.push(PackageImplementationV1::Sql {

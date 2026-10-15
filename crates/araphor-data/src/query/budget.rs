@@ -237,36 +237,6 @@ impl QueryLease {
         Ok(())
     }
 
-    pub(super) fn input(mut self, bytes: usize) -> Result<Self> {
-        if !matches!(self.kind, LeaseKind::Evaluation) || bytes > self.input_bytes {
-            return crate::QueryLimitSnafu {
-                resource: "model input bytes",
-                limit: self.input_bytes,
-            }
-            .fail();
-        }
-        let mut usage = self
-            .budget
-            .usage
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        usage.evaluations -= 1;
-        if let Some(tenant) = usage.tenants.get_mut(&self.tenant) {
-            tenant.0 -= 1;
-            if *tenant == (0, 0) {
-                usage.tenants.remove(&self.tenant);
-            }
-        }
-        usage.output_bytes -= self.bytes;
-        usage.input_bytes -= self.input_bytes - bytes;
-        self.kind = LeaseKind::Output;
-        self.bytes = 0;
-        self.input_bytes = bytes;
-        drop(usage);
-        self.budget.changed.notify_waiters();
-        Ok(self)
-    }
-
     /// Transfer bytes to a separate output guard. The total charge does not change.
     pub(super) fn split(&mut self, bytes: usize) -> Result<Self> {
         if matches!(self.kind, LeaseKind::Stream) || bytes > self.bytes {

@@ -1,12 +1,19 @@
 # Araphor Binary Package Storage Review
 
 This guide covers binary package storage and the approved local OCI transport.
-This change adds explicit input sources and removes the approved package caps.
+The earlier change at `bf13d846` adds explicit input sources and removes the
+approved package caps.
 The third final Rust procedure and native qualification on Linux x86_64 GNU
 pass. Results at `ab6b5da3` and
 `cffde410` below are historical. E2E reproducibility remains **Not done**.
 The [approved plan](../plans/araphor-production-dataflow-simplification.md)
 defines the package storage scope.
+
+The operation-owned table and query change replaces the source routing below.
+Its source implementation and full Rust procedure are **Done**. Current native
+qualification is **Done** on Linux x86_64 GNU. Read the
+[relation input record](../plans/araphor-production-dataflow-simplification.md#operation-owned-table-and-query-inputs)
+for the approved owner change and its verification.
 
 ## Intended end state
 
@@ -144,23 +151,25 @@ Read [SDK OCI tests](../../crates/araphor-analysis-sdk/src/oci/tests.rs),
 They cover descriptor identity, raw-layer order, malformed input,
 directory links, request framing, changed-content denial, and authority locking.
 These are source test routes. Current-source verification is **Done** on Linux
-x86_64 GNU; read the current source record below.
+x86_64 GNU; read the
+[relation input record](../plans/araphor-production-dataflow-simplification.md#operation-owned-table-and-query-inputs).
 
 ### Explicit input declarations
 
 [InputPort](../../crates/araphor-analysis-sdk/src/model.rs) Each input declares its port and source
   -> [Package::validate](../../crates/araphor-analysis-sdk/src/descriptor.rs) the SDK checks source and mode combinations and exact local output references
   -> [PackageBundleV1::validate](../../crates/araphor-data/src/package/admission.rs) Data checks the dependency closure from output references
-  -> [AnalysisPackageOwner::inputs_with_sql](../../crates/araphor-data/src/package/inputs.rs) the package owner resolves each explicit SQL or output source
+  -> [ModelOperation::inputs](../../crates/araphor-data/src/query/model/operation.rs) the query owner resolves table and query inputs
 
-`InputMode::Provided` accepts `Provided` and `Output` sources. The caller supplies
-all datasets; output references still retain dependency edges. `Resolved` accepts
-`Sql(query)` and `Output(OutputRef)` sources. Zero-input models also declare the
-mode. `Model::new` defaults to `Provided`. There is no separate package dependency
+`InputMode::Provided` accepts table sources. The caller supplies all datasets;
+output references still retain dependency edges. `Resolved` accepts table and
+query sources. A table names a built-in relation or an exact package output.
+Zero-input models also declare the mode. `Model::new` defaults to `Provided`.
+There is no separate package dependency
 list, SQL binding map, or missing-key fallback. Computation ports and the native
 and Wasm evaluation ABI remain unchanged.
 
-### Current source record
+### Qualification at `bf13d846`
 
 The source record covers this change based on `4176a9cb`. Explicit inputs and
 cap removals are implemented. Focused checks pass. The first final Rust procedure fails in

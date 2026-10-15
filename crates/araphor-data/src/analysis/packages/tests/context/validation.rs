@@ -157,12 +157,14 @@ fn domain_refs_require_closure() -> TestResult {
         .inputs
         .push(araphor_analysis_sdk::InputPort {
             port: araphor_analysis_sdk::Port::new("rows", araphor_analysis_sdk::Schema::empty()),
-            source: araphor_analysis_sdk::InputSource::Output(araphor_analysis_sdk::OutputRef {
-                package: "first".into(),
-                revision: "v1".into(),
-                export: "model".into(),
-                output: "rows".into(),
-            }),
+            source: araphor_analysis_sdk::InputSource::Table(
+                araphor_analysis_sdk::TableRef::Output(araphor_analysis_sdk::OutputRef {
+                    package: "first".into(),
+                    revision: "v1".into(),
+                    export: "model".into(),
+                    output: "rows".into(),
+                }),
+            ),
         });
     dependent.descriptor = serde_json::to_vec(&descriptor)?;
     artifact.descriptor = descriptor;

@@ -1,15 +1,17 @@
+use std::collections::BTreeMap;
+
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
 use crate::analysis::{AnalysisExtractLimits, AnalysisExtractionV1, PackageResultRefV1};
-use crate::query::{evaluation::QueryEvaluation, InputProjection, InputRelations, InputRow};
+use crate::query::{InputProjection, InputRelations, InputRow};
 use crate::{
     AnalysisContextRefV1, AnalysisReadControl, AnalysisSelectionV1, AnalysisWitnessV1, QueryOwner,
-    QueryPlan, Result,
+    QueryPlan, QuerySql, Result,
 };
 
 use super::super::{execute::ModelExecution, projection::ModelProjection};
-use super::SqlModelInputRequestV1;
+use super::{ModelInputRequest, ModelSource};
 
 pub(super) struct SourceRows {
     pub(super) extraction: AnalysisExtractionV1<InputRow>,
@@ -59,124 +61,93 @@ impl SourceRows {
             results,
         })
     }
+}
 
-    pub(super) fn evaluate(
+impl super::super::operation::ModelOperation<'_> {
+    pub(in crate::query::model) fn read_input(
         &mut self,
-        owner: &QueryOwner,
-        request: &SqlModelInputRequestV1<'_>,
-        plan: &QueryPlan,
-        byte_limit: usize,
+        request: &ModelInputRequest<'_>,
+        port: &sdk::Port,
+        sql: &QuerySql,
         control: &AnalysisReadControl,
-    ) -> Result<(sdk::Dataset, usize)> {
-        self.evaluate_on(owner, request, plan, byte_limit, control, None)
-    }
-
-    pub(super) fn evaluate_shared(
-        &mut self,
-        owner: &QueryOwner,
-        request: &SqlModelInputRequestV1<'_>,
-        plan: &QueryPlan,
-        byte_limit: usize,
-        control: &AnalysisReadControl,
-        shared: (&duckdb::Connection, &mut crate::query::input::ScopedSources),
-    ) -> Result<(sdk::Dataset, usize)> {
-        self.evaluate_on(owner, request, plan, byte_limit, control, Some(shared))
-    }
-
-    fn evaluate_on(
-        &mut self,
-        owner: &QueryOwner,
-        request: &SqlModelInputRequestV1<'_>,
-        plan: &QueryPlan,
-        byte_limit: usize,
-        control: &AnalysisReadControl,
-        shared: Option<(&duckdb::Connection, &mut crate::query::input::ScopedSources)>,
-    ) -> Result<(sdk::Dataset, usize)> {
-        let input = InputRelations::new(&mut self.extraction, byte_limit, &plan.template)?;
+        catalog: &BTreeMap<String, ModelSource>,
+    ) -> Result<ModelSource> {
+        let owner = self.owner;
+        let bound = ModelExecution::check_input(
+            catalog
+                .iter()
+                .filter(|(name, _)| self.bound.contains_key(*name))
+                .flat_map(|(_, source)| &source.input.data.batches),
+            owner.limits.input_bytes,
+        )?;
+        let inherited: Vec<_> = catalog
+            .iter()
+            .filter_map(|(name, source)| {
+                (self.bound.contains_key(name)
+                    && sql.dependencies().contains(&name.to_ascii_lowercase()))
+                .then_some(source)
+            })
+            .collect();
+        let plan = QueryPlan::model(request.grant.selection.clone(), sql.clone())?;
+        let selection = plan.dependencies(request.now)?;
+        let (connection, sources) = self.engine()?;
+        let bounds = AnalysisExtractLimits {
+            scan_bytes: owner.limits.scan_bytes,
+            input_bytes: owner
+                .limits
+                .input_bytes
+                .saturating_sub(bound)
+                .min(request.model.limits.max_bytes as usize),
+            ..Default::default()
+        };
+        let mut rows = SourceRows::extract(owner, &plan, &selection, request.now, bounds, control)?;
+        let input = InputRelations::new(&mut rows.extraction, bounds.input_bytes, &plan.template)?;
         #[cfg(test)]
         owner.test_input(&input)?;
         let held = input.allocation_bytes();
-        let evaluation = request.evaluation()?;
-        let stage = control.within(owner.limits.evaluate_timeout)?;
-        let (connection, mut sources) = match shared {
-            Some((connection, sources)) => (Some(connection), Some(sources)),
-            None => (None, None),
-        };
-        let owned_connection = if connection.is_none() {
-            Some(QueryEvaluation::connection()?)
-        } else {
-            None
-        };
-        let connection = connection.or(owned_connection.as_ref()).ok_or_else(|| {
+        let time = i64::try_from(request.now).map_err(|_| {
             crate::QueryInvalidSnafu {
-                field: "model source connection",
+                field: "model source time",
             }
             .build()
         })?;
+        let stage = control.within(owner.limits.evaluate_timeout)?;
         let host = crate::QueryLimits {
-            output_capacity: byte_limit.saturating_sub(held),
+            output_capacity: bounds.input_bytes.saturating_sub(held),
             ..owner.limits.clone()
         };
-        let mut executor = ModelExecution::new(connection, &stage, &evaluation, &host)?;
+        let mut executor =
+            ModelExecution::new(connection, &stage, time, request.model.limits, &host);
         let result = stage.query_run(connection, || {
-            if let Some(sources) = sources.as_deref_mut() {
-                input.register_scoped(connection, sources)?;
-            } else {
-                input.register(connection)?;
-            }
-            executor.query(&request.sql, &request.port.schema)
+            input.register_scoped(connection, sources)?;
+            executor.query(sql, &port.schema)
         });
-        let cleanup = sources.map(|sources| sources.clear(connection)).transpose();
+        let cleanup = sources.clear(connection);
         let batches = result?;
         cleanup?;
         let bytes = executor.bytes().saturating_add(held);
-        drop(owned_connection);
         drop(input);
-        if !self.extraction.trace_reads.is_empty() {
+        if !rows.extraction.trace_reads.is_empty() {
             owner.store.check_trace_reads(
-                request.selection.tenant_id,
-                &self.extraction.trace_reads,
+                selection.tenant_id,
+                &rows.extraction.trace_reads,
                 control,
                 owner.store.reserve_reader()?,
             )?;
         }
         let data = sdk::Dataset {
-            name: request.port.name.clone(),
+            name: port.name.clone(),
             batches,
         };
-        let mut model = sdk::Model::new(&request.port.name, Vec::new(), vec![request.port.clone()]);
-        model.limits = request.limits;
-        sdk::Package::new("source", "1", vec![model])
-            .validate_output(
-                &evaluation,
-                &sdk::Output {
-                    datasets: vec![data.clone()],
-                    ..Default::default()
-                },
-            )
+        data.validate(port, request.model.limits)
             .context(crate::AnalysisContractSnafu)?;
-        Ok((data, bytes))
-    }
-}
-
-impl SqlModelInputRequestV1<'_> {
-    fn evaluation(&self) -> Result<sdk::Evaluation> {
-        Ok(sdk::Evaluation {
-            export: self.port.name.clone(),
-            inputs: Vec::new(),
-            parameters: None,
-            checkpoint: None,
-            context: sdk::EvaluationContext {
-                id: "source".into(),
-                time_utc_ns: i64::try_from(self.now_ns).map_err(|_| {
-                    crate::QueryInvalidSnafu {
-                        field: "model source time",
-                    }
-                    .build()
-                })?,
-                seed: None,
-                limits: self.limits,
-            },
-        })
+        rows.finish(
+            owner,
+            sql,
+            selection,
+            data,
+            owner.budget.retained_input(bytes)?,
+            &inherited,
+        )
     }
 }

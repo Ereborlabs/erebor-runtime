@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use araphor_analysis_sdk::{
     CheckpointSpec, DataType, Field, InputMode, InputSource, Model, OutputRef, Package, Port,
-    Schema,
+    Schema, TableRef,
 };
 use araphor_data::{
     PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRefV1, SqlModelV1,
@@ -37,7 +37,7 @@ impl Denials {
             )],
         });
         count.input_mode = InputMode::Resolved;
-        count.inputs[0].source = InputSource::Sql("WITH latest AS (SELECT MAX(owner_revision) AS revision FROM context_versions WHERE owner_id='qualification-window-v1') SELECT d.entity_key AS event,d.lifetime_key AS subject,d.body AS resource FROM context_versions d JOIN latest w ON d.owner_revision=w.revision WHERE d.owner_id='qualification-denials-v1' ORDER BY d.entity_key".into());
+        count.inputs[0].source = InputSource::Query("WITH latest AS (SELECT MAX(owner_revision) AS revision FROM context_versions WHERE owner_id='qualification-window-v1') SELECT d.entity_key AS event,d.lifetime_key AS subject,d.body AS resource FROM context_versions d JOIN latest w ON d.owner_revision=w.revision WHERE d.owner_id='qualification-denials-v1' ORDER BY d.entity_key".into());
         let count = PackageArtifactV1 {
             descriptor: Package::new("denials.count", "1", vec![count]),
             implementations: vec![PackageImplementationV1::Sql {
@@ -57,12 +57,12 @@ impl Denials {
             vec![Model::new("repeated", vec![counts], vec![rows])],
         );
         descriptor.exports[0].input_mode = InputMode::Resolved;
-        descriptor.exports[0].inputs[0].source = InputSource::Output(OutputRef {
+        descriptor.exports[0].inputs[0].source = InputSource::Table(TableRef::Output(OutputRef {
             package: "denials.count".into(),
             revision: "1".into(),
             export: "count".into(),
             output: "counts".into(),
-        });
+        }));
         let sql = if broken {
             "SELECT subject,resource,CAST('invalid' AS UBIGINT) AS count FROM counts".into()
         } else {

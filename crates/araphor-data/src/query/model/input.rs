@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
@@ -7,21 +7,44 @@ use super::{execute::ModelExecution, schema::ModelSchema};
 use crate::Result;
 
 impl ModelExecution<'_> {
-    pub(super) fn register(&self, model: &sdk::Model) -> Result<()> {
+    pub(super) fn register(
+        &self,
+        model: &sdk::Model,
+        evaluation: &sdk::Evaluation,
+        bound: &BTreeMap<String, String>,
+        input_limit: usize,
+    ) -> Result<()> {
+        Self::check_input(
+            evaluation
+                .inputs
+                .iter()
+                .flat_map(|input| &input.data.batches)
+                .chain(evaluation.parameters.iter())
+                .chain(
+                    evaluation
+                        .checkpoint
+                        .iter()
+                        .flat_map(|checkpoint| &checkpoint.datasets)
+                        .flat_map(|dataset| &dataset.batches),
+                ),
+            input_limit,
+        )?;
         for port in &model.inputs {
             let port = &port.port;
+            if bound.contains_key(&port.name) {
+                continue;
+            }
             self.table(
                 &port.name,
                 &port.schema,
-                &self
-                    .evaluation
+                &evaluation
                     .input(&port.name)
                     .context(crate::AnalysisContractSnafu)?
                     .data
                     .batches,
             )?;
         }
-        if let Some(parameters) = &self.evaluation.parameters {
+        if let Some(parameters) = &evaluation.parameters {
             self.table(
                 "parameters",
                 &model.parameters,
@@ -30,8 +53,7 @@ impl ModelExecution<'_> {
         }
         if let Some(spec) = &model.checkpoint {
             for port in &spec.datasets {
-                let batches = self
-                    .evaluation
+                let batches = evaluation
                     .checkpoint
                     .as_ref()
                     .and_then(|state| state.datasets.iter().find(|data| data.name == port.name))
@@ -42,14 +64,43 @@ impl ModelExecution<'_> {
         Ok(())
     }
 
+    pub(super) fn check_input<'a>(
+        batches: impl Iterator<Item = &'a sdk::RecordBatch>,
+        limit: usize,
+    ) -> Result<usize> {
+        let bytes = batches.fold(0usize, |total, batch| {
+            total
+                .saturating_add(batch.get_array_memory_size())
+                .saturating_add(batch.num_rows().saturating_mul(8))
+        });
+        if bytes > limit {
+            return crate::QueryLimitSnafu {
+                resource: "model input bytes",
+                limit,
+            }
+            .fail();
+        }
+        Ok(bytes)
+    }
+
     pub(super) fn table(
         &self,
         name: &str,
         schema: &sdk::Schema,
         batches: &[sdk::RecordBatch],
     ) -> Result<()> {
-        self.control.check()?;
-        self.connection
+        Self::table_on(self.connection, self.control, name, schema, batches)
+    }
+
+    pub(super) fn table_on(
+        connection: &duckdb::Connection,
+        control: &crate::AnalysisReadControl,
+        name: &str,
+        schema: &sdk::Schema,
+        batches: &[sdk::RecordBatch],
+    ) -> Result<()> {
+        control.check()?;
+        connection
             .execute_batch(&format!(
                 "CREATE TABLE {} ({}, __row_index UBIGINT)",
                 ModelSchema::quote(name),
@@ -58,15 +109,14 @@ impl ModelExecution<'_> {
             .context(crate::AnalysisDatabaseSnafu {
                 operation: "create model input",
             })?;
-        let mut appender =
-            self.connection
-                .appender(name)
-                .context(crate::AnalysisDatabaseSnafu {
-                    operation: "open model input",
-                })?;
+        let mut appender = connection
+            .appender(name)
+            .context(crate::AnalysisDatabaseSnafu {
+                operation: "open model input",
+            })?;
         let mut offset = 0u64;
         for batch in batches {
-            self.control.check()?;
+            control.check()?;
             let mut fields = schema.fields().to_vec();
             fields.push(Arc::new(sdk::Field::new(
                 "__row_index",

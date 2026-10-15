@@ -25,11 +25,11 @@ An input correction replaces prior output. Missing input cannot prove a negative
 
 [AnalysisPackageOwner::serve](../../../../../crates/araphor-data/src/package/owner.rs) An input revision or recorded clock tick changes
   -> [PackageBundleV1::order_for](../../../../../crates/araphor-data/src/package/admission.rs) the package owner resolves an acyclic graph of named model dependencies
-  -> [QueryOwner::model_input](../../../../../crates/araphor-data/src/query/model/source.rs) the extractor returns complete bounded authorized inputs and closes readers
+  -> [ModelOperation::inputs](../../../../../crates/araphor-data/src/query/model/operation.rs) the query owner returns complete bounded authorized inputs and closes readers
   -> [QueryOwner::evaluate_model](../../../../../crates/araphor-data/src/query/model.rs) the selected evaluator computes outside the store transaction
   -> [Package::validate_output](../../../../../crates/araphor-analysis-sdk/src/validation.rs) the host validates typed outputs and evidence references
   -> [AnalysisStore::commit_package](../../../../../crates/araphor-data/src/analysis/packages/commit.rs) AnalysisStore commits each model result, checkpoint, progress, references, and quota together
-  -> [AnalysisPackageOwner::inputs](../../../../../crates/araphor-data/src/package/inputs.rs) dependent models select those exact committed result revisions
+  -> [QueryOwner::output_table](../../../../../crates/araphor-data/src/query/model/source/table.rs) dependent models select those exact committed result revisions
 
 Implemented outside this phase: current discovery and graph owners retain domain
 validation and notification routing through their trusted Rust calls. Installed
@@ -41,7 +41,7 @@ explicit unsupported status. Installed compiled domain dispatch belongs to
   -> [AnalysisStore](../../../../../crates/araphor-data/src/analysis/packages/status.rs) the package owner marks affected dependent results stale
   -> [ModelRun](../../../../../crates/araphor-data/src/package/evaluation/preparation.rs) stateful evaluation replays from a valid checkpoint or rebuilds from retained inputs
   -> [AnalysisStore::package_commit_rows](../../../../../crates/araphor-data/src/analysis/packages/commit.rs) a replacement result removes prior contributions for that window
-  -> [AnalysisPackageOwner::inputs](../../../../../crates/araphor-data/src/package/inputs.rs) missing retained input produces incomplete coverage
+  -> [ModelOperation::inputs](../../../../../crates/araphor-data/src/query/model/operation.rs) missing retained input produces incomplete coverage
 
 [AnalysisPackageOwner::install](../../../../../crates/araphor-data/src/package/lifecycle.rs) Operator upgrades or rolls back a package
   -> [activation preparation](../../../../../crates/araphor-data/src/package/lifecycle/activation.rs) the package owner checks dependencies, grants, parameters, and scope

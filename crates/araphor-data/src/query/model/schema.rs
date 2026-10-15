@@ -10,6 +10,36 @@ use crate::Result;
 pub(super) struct ModelSchema;
 
 impl ModelSchema {
+    pub(super) fn sources(model: &sdk::Model) -> Result<BTreeMap<String, Vec<String>>> {
+        let mut relations = crate::query::input::SCHEMAS
+            .iter()
+            .filter(|schema| {
+                matches!(schema.readiness, "available" | "conditional")
+                    || schema.name == "behaviors"
+            })
+            .map(|schema| {
+                (
+                    schema.name.to_owned(),
+                    schema
+                        .columns
+                        .iter()
+                        .map(|field| field.0.to_owned())
+                        .collect(),
+                )
+            })
+            .collect();
+        for input in &model.inputs {
+            if let sdk::InputSource::Table(table) = &input.source {
+                if matches!(table, sdk::TableRef::Named(name) if name.eq_ignore_ascii_case(&input.port.name))
+                {
+                    continue;
+                }
+                Self::relation(&mut relations, &input.port.name, &input.port.schema)?;
+            }
+        }
+        Ok(relations)
+    }
+
     pub(super) fn physical(batch: &sdk::RecordBatch) -> Result<sdk::RecordBatch> {
         let fields = batch
             .schema()

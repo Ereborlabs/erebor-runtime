@@ -4,7 +4,7 @@ use araphor_analysis_sdk as sdk;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-use super::{budget::QueryLease, evaluation::QueryEvaluation, QueryOwner, QuerySql};
+use super::{budget::QueryLease, QueryOwner, QuerySql};
 use crate::{AnalysisReadControl, Result};
 
 mod arrays;
@@ -15,13 +15,12 @@ mod guards;
 mod input;
 mod operation;
 mod output;
-pub(crate) use operation::SqlOperation;
 mod parameters;
 mod projection;
 mod schema;
 mod source;
 pub use datasets::SqlDatasetOutputV1;
-pub use source::{SqlModelInputRequestV1, SqlModelInputV1};
+pub(crate) use source::{ModelInputRequest, ModelInputs};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -76,6 +75,36 @@ impl QueryOwner {
         program.admit(model).map(|_| ())
     }
 
+    pub(crate) fn admit_inputs(model: &sdk::Model) -> Result<BTreeMap<String, QuerySql>> {
+        let relations = schema::ModelSchema::sources(model)?;
+        let mut queries = BTreeMap::new();
+        for input in &model.inputs {
+            let sql = match &input.source {
+                sdk::InputSource::Query(sql) => QuerySql::admit_relations(sql, relations.clone())?,
+                sdk::InputSource::Table(sdk::TableRef::Named(name))
+                    if model.input_mode == sdk::InputMode::Resolved =>
+                {
+                    let fields = input
+                        .port
+                        .schema
+                        .fields()
+                        .iter()
+                        .map(|field| schema::ModelSchema::quote(field.name()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    QuerySql::admit(
+                        &format!("SELECT {fields} FROM {}", schema::ModelSchema::quote(name)),
+                        Vec::new(),
+                        false,
+                    )?
+                }
+                _ => continue,
+            };
+            queries.insert(input.port.name.clone(), sql);
+        }
+        Ok(queries)
+    }
+
     pub fn evaluate_model(
         &self,
         tenant: [u8; 16],
@@ -84,46 +113,8 @@ impl QueryOwner {
         evaluation: &sdk::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<SqlModelOutputV1> {
-        let model = package
-            .exports
-            .iter()
-            .find(|model| model.name == evaluation.export)
-            .ok_or_else(|| {
-                crate::QueryInvalidSnafu {
-                    field: "model export",
-                }
-                .build()
-            })?;
-        let admitted = program.admit(model)?;
-        self.evaluate_analysis(tenant, package, evaluation, control, |control, host| {
-            let connection = QueryEvaluation::connection()?;
-            let mut executor =
-                execute::ModelExecution::new(&connection, control, evaluation, host)?;
-            let output = control.query_run(&connection, || {
-                executor.register(model)?;
-                executor.evaluate(model, program, admitted)
-            })?;
-            let bytes = executor.bytes();
-            drop(connection);
-            Ok((output, bytes))
-        })
-    }
-
-    pub(crate) fn evaluate_analysis(
-        &self,
-        tenant: [u8; 16],
-        package: &sdk::Package,
-        evaluation: &sdk::Evaluation,
-        control: &AnalysisReadControl,
-        execute: impl FnOnce(&AnalysisReadControl, &super::QueryLimits) -> Result<(sdk::Output, usize)>,
-    ) -> Result<SqlModelOutputV1> {
-        self.evaluate_model_reserved(
-            package,
-            evaluation,
-            control,
-            |capacity| self.budget.model(tenant, capacity),
-            |control, host, _lease| execute(control, host),
-        )
+        self.model_operation(tenant)
+            .evaluate(package, program, evaluation, control)
     }
 
     fn evaluate_model_reserved(

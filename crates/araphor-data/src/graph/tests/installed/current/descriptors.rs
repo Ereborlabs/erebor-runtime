@@ -14,12 +14,13 @@ fn mixed_bundle() -> TestResult<PackageBundleV1> {
         vec![sdk::Port::new("rows", graph.inputs[0].port.schema.clone())],
     );
     auxiliary.input_mode = sdk::InputMode::Resolved;
-    artifact.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
-        package: artifact.descriptor.id.clone(),
-        revision: artifact.descriptor.revision.clone(),
-        export: auxiliary.name.clone(),
-        output: auxiliary.outputs[0].name.clone(),
-    });
+    artifact.descriptor.exports[0].inputs[0].source =
+        sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: artifact.descriptor.id.clone(),
+            revision: artifact.descriptor.revision.clone(),
+            export: auxiliary.name.clone(),
+            output: auxiliary.outputs[0].name.clone(),
+        }));
     artifact.implementations.push(PackageImplementationV1::Sql {
         export: auxiliary.name.clone(),
         program: SqlModelV1 {
@@ -35,7 +36,7 @@ fn mixed_bundle() -> TestResult<PackageBundleV1> {
     sql.name = "sql-graph".into();
     sql.input_mode = sdk::InputMode::Resolved;
     for input in &mut sql.inputs {
-        input.source = sdk::InputSource::Sql("SELECT ''::BLOB AS value WHERE false".into());
+        input.source = sdk::InputSource::Query("SELECT ''::BLOB AS value WHERE false".into());
     }
     let queries = |ports: &[sdk::Port]| {
         ports

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::{
     wire, CheckpointSpec, Coverage, CoverageState, DataType, Evaluation, EvaluationContext, Field,
     Input, InputPort, InputSource, Limits, Model, OutputRef, Package, Port, Reason, RecordBatch,
-    Revision, Schema, SourceWindow,
+    Revision, Schema, SourceWindow, TableRef,
 };
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -19,12 +19,12 @@ fn package_reserves_are_charged() -> TestResult {
     );
     package.exports[0].inputs.push(InputPort {
         port: Port::new("input", Schema::empty()),
-        source: InputSource::Output(OutputRef {
+        source: InputSource::Table(TableRef::Output(OutputRef {
             package: "dependency".into(),
             revision: "1".into(),
             export: "run".into(),
             output: "output".into(),
-        }),
+        })),
     });
     let original = serde_json::to_vec(&package)?;
     let initial = package.allocated_bytes();
@@ -34,7 +34,7 @@ fn package_reserves_are_charged() -> TestResult {
     package.id.reserve_exact(256);
     package.revision.reserve_exact(128);
     let input = &mut package.exports[0].inputs[0];
-    let InputSource::Output(dependency) = &mut input.source else {
+    let InputSource::Table(TableRef::Output(dependency)) = &mut input.source else {
         return Err("output source absent".into());
     };
     for value in [
@@ -51,16 +51,22 @@ fn package_reserves_are_charged() -> TestResult {
             >= initial + 32 * size_of::<InputPort>() + 8 * size_of::<Model>() + 704
     );
     assert_eq!(serde_json::to_vec(&package)?, original);
-    package.exports[0].input_mode = crate::InputMode::Resolved;
-    package.exports[0].inputs[0].source = InputSource::Sql("SELECT 1".into());
-    let original = serde_json::to_vec(&package)?;
-    let before = package.allocated_bytes();
-    let InputSource::Sql(sql) = &mut package.exports[0].inputs[0].source else {
-        return Err("SQL source absent".into());
-    };
-    sql.reserve_exact(4096);
-    assert!(package.allocated_bytes() >= before + 4096);
-    assert_eq!(serde_json::to_vec(&package)?, original);
+    for source in [
+        InputSource::Table(TableRef::Named("input".into())),
+        InputSource::Query("SELECT 1".into()),
+    ] {
+        package.exports[0].inputs[0].source = source;
+        let original = serde_json::to_vec(&package)?;
+        let before = package.allocated_bytes();
+        let (InputSource::Table(TableRef::Named(value)) | InputSource::Query(value)) =
+            &mut package.exports[0].inputs[0].source
+        else {
+            return Err("table or query source absent".into());
+        };
+        value.reserve_exact(4096);
+        assert!(package.allocated_bytes() >= before + 4096);
+        assert_eq!(serde_json::to_vec(&package)?, original);
+    }
     Ok(())
 }
 

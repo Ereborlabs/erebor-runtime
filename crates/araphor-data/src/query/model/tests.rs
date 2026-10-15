@@ -157,24 +157,53 @@ fn sql_model_source_bounds() -> TestResult {
     let selection =
         AnalysisSelectionV1::new(fixture.source.tenant_id, vec![fixture.source.clone()]);
     let port = port("events", "id");
-    let sql = QuerySql::admit(
-        "SELECT source_cursor AS id FROM events ORDER BY source_cursor",
-        Vec::new(),
-        false,
-    )?;
-    let first = owner.model_input(
-        SqlModelInputRequestV1 {
-            selection: selection.clone(),
-            sql: sql.clone(),
-            port: &port,
-            limits: sdk::Limits::default(),
-            now_ns: 1000,
-        },
-        &control()?,
-    )?;
+    let mut model = sdk::Model::new("source", Vec::new(), vec![port.clone()]);
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs.push(sdk::InputPort {
+        port: port.clone(),
+        source: sdk::InputSource::Query(
+            "SELECT source_cursor AS id FROM events ORDER BY source_cursor".into(),
+        ),
+    });
+    let revision = fixture.store.meta()?.commit_revision;
+    let read = |selection: AnalysisSelectionV1, now| -> crate::Result<ModelInputs> {
+        let active = crate::analysis::PackageActivationV1 {
+            key: crate::analysis::PackageKeyV1 {
+                tenant_id: selection.tenant_id,
+                scope_id: "scope".into(),
+                package_id: "fixture".into(),
+                export: model.name.clone(),
+            },
+            revision: "1".into(),
+            generation: 0,
+            checkpoint_revision: 0,
+            result_id: None,
+            grant_id: "fixture".into(),
+            metadata: Vec::new(),
+            active: true,
+        };
+        let grant = crate::package::PackageGrantV1 {
+            principal: "fixture".into(),
+            revision: 1,
+            selection,
+            expires_utc_ns: None,
+            authorization_id: None,
+        };
+        let (_, inputs) = owner.model_operation(grant.selection.tenant_id).inputs(
+            ModelInputRequest {
+                activation: &active,
+                model: &model,
+                grant: &grant,
+                now,
+            },
+            &control()?,
+            || Ok(()),
+        )?;
+        Ok(inputs)
+    };
+    let first = read(selection.clone(), 1_000)?;
     assert_eq!(
-        first
-            .input
+        first.inputs[0]
             .data
             .batches
             .iter()
@@ -192,26 +221,17 @@ fn sql_model_source_bounds() -> TestResult {
     ] {
         assert!(first
             .source_revisions
-            .contains(&(relation.into(), first.meta.commit_revision)));
+            .contains(&(relation.into(), revision)));
     }
     assert!(!first
         .source_revisions
         .iter()
         .any(|(name, _)| name == "analysis_results"));
-    let second = owner.model_input(
-        SqlModelInputRequestV1 {
-            selection: selection.clone(),
-            sql: sql.clone(),
-            port: &port,
-            limits: sdk::Limits::default(),
-            now_ns: 2000,
-        },
-        &control()?,
-    )?;
-    assert_eq!(first.input.revision, second.input.revision);
+    let second = read(selection.clone(), 2_000)?;
+    assert_eq!(first.inputs[0].revision, second.inputs[0].revision);
     let result = owner.query_datasets(
         fixture.source.tenant_id,
-        std::slice::from_ref(&first.input.data),
+        std::slice::from_ref(&first.inputs[0].data),
         "SELECT * FROM events WHERE id > 1 ORDER BY id",
         sdk::Limits::default(),
         &control()?,
@@ -221,19 +241,10 @@ fn sql_model_source_bounds() -> TestResult {
     drop(result);
     let mut corrected = selection;
     corrected.received_until = std::ops::Bound::Included(200);
-    let third = owner.model_input(
-        SqlModelInputRequestV1 {
-            selection: corrected,
-            sql,
-            port: &port,
-            limits: sdk::Limits::default(),
-            now_ns: 2000,
-        },
-        &control()?,
-    )?;
-    assert_ne!(first.input.revision, third.input.revision);
-    assert_eq!(third.input.data.batches[0].num_rows(), 2);
-    assert_ne!(third.input.coverage.state, sdk::CoverageState::Complete);
+    let third = read(corrected, 2_000)?;
+    assert_ne!(first.inputs[0].revision, third.inputs[0].revision);
+    assert_eq!(third.inputs[0].data.batches[0].num_rows(), 2);
+    assert_ne!(third.inputs[0].coverage.state, sdk::CoverageState::Complete);
     Ok(())
 }
 

@@ -14,7 +14,7 @@ use super::{
 mod preparation;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct ResultContext {
+pub(crate) struct ResultContext {
     #[serde(default = "ResultContext::sql_target")]
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

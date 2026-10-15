@@ -237,7 +237,7 @@ impl AnalysisPackageOwner {
         Ok(response)
     }
 
-    pub(super) fn permits(grant: &PackageGrantV1, installed: &PackageGrantV1) -> Result<()> {
+    pub(crate) fn permits(grant: &PackageGrantV1, installed: &PackageGrantV1) -> Result<()> {
         Self::permits_selection(grant, &installed.selection)
     }
 

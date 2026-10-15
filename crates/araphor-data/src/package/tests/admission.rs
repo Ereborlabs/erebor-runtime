@@ -10,12 +10,12 @@ fn bind(artifact: &mut PackageArtifactV1, input: &str, source: &PackageRefV1) {
     port.name = input.into();
     artifact.descriptor.exports[0].inputs.push(sdk::InputPort {
         port,
-        source: sdk::InputSource::Output(sdk::OutputRef {
+        source: sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
             package: source.package_id.clone(),
             revision: source.revision.clone(),
             export: "count".into(),
             output: "rows".into(),
-        }),
+        })),
     });
 }
 

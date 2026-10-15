@@ -77,12 +77,13 @@ fn component() -> PackageBundleV1 {
         sdk::Field::new("amount", sdk::DataType::UInt64, false),
     ]);
     let mut descriptor = sdk::Package::new("runtime-fixture", "1", vec![model]);
-    descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
-        package: "test.model".into(),
-        revision: "1".into(),
-        export: "count".into(),
-        output: "rows".into(),
-    });
+    descriptor.exports[0].inputs[0].source =
+        sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: "test.model".into(),
+            revision: "1".into(),
+            export: "count".into(),
+            output: "rows".into(),
+        }));
     let mut source = crate::package::tests::bundle("1", "SELECT 7::UBIGINT AS value")
         .artifacts
         .remove(0);

@@ -1,10 +1,12 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
-use crate::{AnalysisSelectionV1, AnalysisStore, QueryLimits, QuerySql};
+use crate::analysis::{PackageActivationV1, PackageKeyV1};
+use crate::package::PackageGrantV1;
+use crate::query::tests::QueryFixture;
+use crate::{AnalysisSelectionV1, QueryLimits};
 
-type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn port(name: &str) -> sdk::Port {
     sdk::Port::new(
@@ -26,18 +28,60 @@ fn limits() -> QueryLimits {
     }
 }
 
-fn request<'a>(port: &'a sdk::Port, value: u64) -> crate::Result<SqlModelInputRequestV1<'a>> {
-    Ok(SqlModelInputRequestV1 {
-        selection: AnalysisSelectionV1::tenant([1; 16]),
-        sql: QuerySql::admit(
-            &format!("SELECT {value}::UBIGINT AS value FROM catalog LIMIT 1"),
-            Vec::new(),
-            false,
-        )?,
-        port,
-        limits: sdk::Limits::default(),
-        now_ns: 1_000,
-    })
+fn model(values: &[(&str, u64)]) -> sdk::Model {
+    let mut model = sdk::Model::new("evaluate", Vec::new(), vec![port("result")]);
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = values
+        .iter()
+        .map(|(name, value)| sdk::InputPort {
+            port: port(name),
+            source: sdk::InputSource::Query(format!(
+                "SELECT {value}::UBIGINT AS value FROM catalog LIMIT 1"
+            )),
+        })
+        .collect();
+    model
+}
+
+fn scope(selection: AnalysisSelectionV1) -> (PackageGrantV1, PackageActivationV1) {
+    let active = PackageActivationV1 {
+        key: PackageKeyV1 {
+            tenant_id: selection.tenant_id,
+            scope_id: "scope".into(),
+            package_id: "fixture".into(),
+            export: "evaluate".into(),
+        },
+        revision: "1".into(),
+        generation: 0,
+        checkpoint_revision: 0,
+        result_id: None,
+        grant_id: "fixture".into(),
+        metadata: Vec::new(),
+        active: true,
+    };
+    (
+        PackageGrantV1 {
+            principal: "fixture".into(),
+            revision: 1,
+            selection,
+            expires_utc_ns: None,
+            authorization_id: None,
+        },
+        active,
+    )
+}
+
+fn request<'a>(
+    model: &'a sdk::Model,
+    grant: &'a PackageGrantV1,
+    active: &'a PackageActivationV1,
+) -> ModelInputRequest<'a> {
+    ModelInputRequest {
+        activation: active,
+        model,
+        grant,
+        now: 1_000,
+    }
 }
 
 fn evaluation(inputs: Vec<sdk::Input>, model: &sdk::Model) -> sdk::Evaluation {
@@ -56,16 +100,11 @@ fn evaluation(inputs: Vec<sdk::Input>, model: &sdk::Model) -> sdk::Evaluation {
 }
 
 #[test]
-fn sql_operation_matches_standalone_inputs_and_output() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let store = Arc::new(AnalysisStore::open(directory.path().join("analysis"))?);
-    let owner = QueryOwner::new(store, limits())?;
-    let ports = [port("catalog"), port("second")];
-    let model = sdk::Model::new(
-        "evaluate",
-        ports.to_vec(),
-        vec![port("result"), port("other")],
-    );
+fn operation_inputs_match() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let owner = fixture.owner(limits())?;
+    let mut model = model(&[("catalog", 7), ("second", 9)]);
+    model.outputs.push(port("other"));
     let package = sdk::Package::new("sql-operation", "1", vec![model.clone()]);
     let mut program = SqlModelV1::default();
     program
@@ -74,18 +113,18 @@ fn sql_operation_matches_standalone_inputs_and_output() -> TestResult {
     program
         .outputs
         .insert("other".into(), "SELECT value FROM second".into());
-    let baseline = [
-        owner.model_input(request(&ports[0], 7)?, &control()?)?,
-        owner.model_input(request(&ports[1], 9)?, &control()?)?,
-    ];
+    let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
+    let (baseline, expected_inputs) = owner.model_operation([1; 16]).inputs(
+        request(&model, &grant, &active),
+        &control()?,
+        || Ok(()),
+    )?;
+    drop(baseline);
     let expected = owner.evaluate_model(
         [1; 16],
         &package,
         &program,
-        &evaluation(
-            baseline.iter().map(|input| input.input.clone()).collect(),
-            &model,
-        ),
+        &evaluation(expected_inputs.inputs.clone(), &model),
         &control()?,
     )?;
     let expected_bytes = serde_json::to_vec(&crate::package::PackageOutputV1::encode(
@@ -93,19 +132,20 @@ fn sql_operation_matches_standalone_inputs_and_output() -> TestResult {
         &model,
     )?)?;
     drop(expected);
-    let mut operation = owner.sql_operation([1; 16])?;
-    let actual = [
-        operation.model_input(request(&ports[0], 7)?, &control()?)?,
-        operation.model_input(request(&ports[1], 9)?, &control()?)?,
-    ];
-    for (expected, actual) in baseline.iter().zip(&actual) {
-        assert_eq!(expected.input.revision, actual.input.revision);
-        assert_eq!(expected.input.coverage, actual.input.coverage);
-        assert_eq!(expected.input.data.batches, actual.input.data.batches);
-        assert_eq!(expected.source_revisions, actual.source_revisions);
-        assert_eq!(expected.contexts, actual.contexts);
-        assert_eq!(expected.witnesses, actual.witnesses);
+    let (operation, actual) = owner.model_operation([1; 16]).inputs(
+        request(&model, &grant, &active),
+        &control()?,
+        || Ok(()),
+    )?;
+    for (expected, actual) in expected_inputs.inputs.iter().zip(&actual.inputs) {
+        assert_eq!(expected.revision, actual.revision);
+        assert_eq!(expected.coverage, actual.coverage);
+        assert_eq!(expected.data.batches, actual.data.batches);
     }
+    assert_eq!(expected_inputs.source_revisions, actual.source_revisions);
+    assert_eq!(expected_inputs.contexts, actual.contexts);
+    assert_eq!(expected_inputs.witnesses, actual.witnesses);
+    assert_eq!(expected_inputs.dependencies, actual.dependencies);
     assert!(matches!(
         owner.budget.component([1; 16], 0, 0),
         Err(crate::Error::AnalysisBusy {
@@ -116,10 +156,7 @@ fn sql_operation_matches_standalone_inputs_and_output() -> TestResult {
     let output = operation.evaluate(
         &package,
         &program,
-        &evaluation(
-            actual.iter().map(|input| input.input.clone()).collect(),
-            &model,
-        ),
+        &evaluation(actual.inputs.clone(), &model),
         &control()?,
     )?;
     assert_eq!(
@@ -137,37 +174,47 @@ fn sql_operation_matches_standalone_inputs_and_output() -> TestResult {
 }
 
 #[test]
-fn sql_operation_clears_sources_and_preserves_capacity() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let owner = QueryOwner::new(
-        Arc::new(AnalysisStore::open(directory.path().join("analysis"))?),
-        limits(),
-    )?;
-    let input = port("source");
-    let mut operation = owner.sql_operation([1; 16])?;
-    let mut foreign = request(&input, 7)?;
+fn operation_source_cleanup() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let owner = fixture.owner(limits())?;
+    let model = model(&[("source", 7)]);
+    let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
+    let mut foreign = grant.clone();
     foreign.selection.tenant_id = [9; 16];
     assert!(matches!(
-        operation.model_input(foreign, &control()?),
+        owner.model_operation([1; 16]).inputs(
+            request(&model, &foreign, &active),
+            &control()?,
+            || Ok(())
+        ),
         Err(crate::Error::QueryDenied { .. })
     ));
-    let mut invalid = request(&input, 7)?;
-    invalid.sql = QuerySql::admit(
-        "SELECT CAST(relation AS BIGINT) AS value FROM catalog LIMIT 1",
-        Vec::new(),
-        false,
-    )?;
-    assert!(operation.model_input(invalid, &control()?).is_err());
-    assert!(operation
-        .connection
-        .prepare("SELECT * FROM catalog")
+    let mut invalid = model.clone();
+    invalid.inputs[0].source = sdk::InputSource::Query(
+        "SELECT CAST(relation AS BIGINT) AS value FROM catalog LIMIT 1".into(),
+    );
+    assert!(owner
+        .model_operation([1; 16])
+        .inputs(request(&invalid, &grant, &active), &control()?, || Ok(()))
         .is_err());
-    assert!(operation
-        .connection
+    assert!(owner
+        .input_refs
+        .lock()
+        .map_err(|_| "source refs")?
+        .iter()
+        .all(|reference| reference.upgrade().is_none()));
+    drop(owner.budget.evaluate([1; 16])?);
+    let (operation, retained) = owner.model_operation([1; 16]).inputs(
+        request(&model, &grant, &active),
+        &control()?,
+        || Ok(()),
+    )?;
+    let connection = &operation.engine.as_ref().ok_or("missing engine")?.0;
+    assert!(connection.prepare("SELECT * FROM catalog").is_err());
+    assert!(connection
         .query_row("SELECT count(*) FROM _query_catalog()", [], |row| row
             .get::<_, u64>(0))
         .is_err());
-    let retained = operation.model_input(request(&input, 7)?, &control()?)?;
     assert!(matches!(
         owner
             .budget
@@ -189,29 +236,30 @@ fn sql_operation_clears_sources_and_preserves_capacity() -> TestResult {
         })
     ));
     assert!(matches!(
-        operation.model_input(request(&port("second"), 9)?, &control()?),
+        operation.inputs(request(&model, &grant, &active), &control()?, || Ok(())),
         Err(crate::Error::AnalysisBusy {
             resource: "query input capacity",
             ..
         })
     ));
-    drop(operation);
     drop(owner.budget.evaluate([1; 16])?);
     drop(held);
-    let model = sdk::Model::new("evaluate", vec![input.clone()], vec![port("result")]);
+    let (operation, retained) = owner.model_operation([1; 16]).inputs(
+        request(&model, &grant, &active),
+        &control()?,
+        || Ok(()),
+    )?;
     let package = sdk::Package::new("sql-operation", "1", vec![model.clone()]);
     let mut program = SqlModelV1::default();
     program
         .outputs
         .insert("result".into(), "SELECT value FROM source".into());
-    let mut operation = owner.sql_operation([1; 16])?;
-    let retained = operation.model_input(request(&input, 7)?, &control()?)?;
     let full_output = owner.budget.output(owner.limits.output_capacity)?;
     assert!(matches!(
         operation.evaluate(
             &package,
             &program,
-            &evaluation(vec![retained.input.clone()], &model),
+            &evaluation(retained.inputs.clone(), &model),
             &control()?
         ),
         Err(crate::Error::AnalysisBusy {
@@ -227,34 +275,146 @@ fn sql_operation_clears_sources_and_preserves_capacity() -> TestResult {
 }
 
 #[test]
-fn sql_operation_rejects_hidden_source_access() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let owner = QueryOwner::new(
-        Arc::new(AnalysisStore::open(directory.path().join("analysis"))?),
-        limits(),
-    )?;
-    let input = port("source");
-    let model = sdk::Model::new("evaluate", vec![input.clone()], vec![port("result")]);
+fn operation_source_denial() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let owner = fixture.owner(limits())?;
+    let model = model(&[("source", 7)]);
     let package = sdk::Package::new("sql-operation", "1", vec![model.clone()]);
+    let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
     for sql in [
         "SELECT 1::UBIGINT AS value FROM catalog",
         "SELECT 1::UBIGINT AS value FROM _query_catalog()",
         "SELECT value FROM \"araphor:port:0\"",
     ] {
-        let mut operation = owner.sql_operation([1; 16])?;
-        let retained = operation.model_input(request(&input, 7)?, &control()?)?;
+        let (operation, retained) = owner.model_operation([1; 16]).inputs(
+            request(&model, &grant, &active),
+            &control()?,
+            || Ok(()),
+        )?;
         let mut program = SqlModelV1::default();
         program.outputs.insert("result".into(), sql.into());
         assert!(operation
             .evaluate(
                 &package,
                 &program,
-                &evaluation(vec![retained.input.clone()], &model),
+                &evaluation(retained.inputs.clone(), &model),
                 &control()?
             )
             .is_err());
         drop(retained);
         drop(owner.budget.evaluate([1; 16])?);
     }
+    Ok(())
+}
+
+#[test]
+fn named_alias_revision() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    fixture.event(1, 100, 7)?;
+    let owner = fixture.owner(limits())?;
+    let schema = sdk::Schema::new(vec![sdk::Field::new(
+        "source_cursor",
+        sdk::DataType::UInt64,
+        false,
+    )]);
+    let mut model = sdk::Model::new(
+        "evaluate",
+        Vec::new(),
+        vec![sdk::Port::new("result", schema.clone())],
+    );
+    model.input_mode = sdk::InputMode::Resolved;
+    model.inputs = vec![
+        sdk::InputPort {
+            port: sdk::Port::new("selected", schema.clone()),
+            source: sdk::InputSource::Query(
+                "SELECT source_cursor FROM \"activity-log\" WHERE false".into(),
+            ),
+        },
+        sdk::InputPort {
+            port: sdk::Port::new("activity-log", schema),
+            source: sdk::InputSource::Table(sdk::TableRef::Named("events".into())),
+        },
+    ];
+    let (grant, active) = scope(AnalysisSelectionV1::new(
+        fixture.source.tenant_id,
+        vec![fixture.source.clone()],
+    ));
+    let mut previous = None;
+    for cursor in 1..=2 {
+        if cursor == 2 {
+            fixture.event(2, 200, 7)?;
+        }
+        let operation = owner.model_operation(fixture.source.tenant_id);
+        assert!(operation.engine.is_none());
+        let (operation, inputs) =
+            operation.inputs(request(&model, &grant, &active), &control()?, || Ok(()))?;
+        assert_eq!(inputs.inputs[0].data.name, "selected");
+        assert_eq!(inputs.inputs[0].data.batches[0].num_rows(), 0);
+        assert!(!inputs.source_revisions.is_empty());
+        assert_eq!(inputs.witnesses.len(), cursor);
+        if let Some(previous) = previous {
+            assert_ne!(inputs.inputs[0].revision, previous);
+        }
+        previous = Some(inputs.inputs[0].revision.clone());
+        let mut program = SqlModelV1::default();
+        program.outputs.insert(
+            "result".into(),
+            "SELECT source_cursor FROM \"activity-log\"".into(),
+        );
+        let package = sdk::Package::new("fixture", "1", vec![model.clone()]);
+        let result = operation.evaluate(
+            &package,
+            &program,
+            &evaluation(inputs.inputs.clone(), &model),
+            &control()?,
+        )?;
+        assert_eq!(
+            result.output.datasets[0]
+                .batches
+                .iter()
+                .map(sdk::RecordBatch::num_rows)
+                .sum::<usize>(),
+            cursor
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn catalog_name_collision() {
+    let mut model = model(&[]);
+    model.inputs.push(sdk::InputPort {
+        port: port("EVENTS"),
+        source: sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: "fixture".into(),
+            revision: "1".into(),
+            export: "evaluate".into(),
+            output: "result".into(),
+        })),
+    });
+    assert!(QueryOwner::admit_inputs(&model).is_err());
+}
+
+#[test]
+fn operation_input_capacity() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let owner = fixture.owner(QueryLimits {
+        input_capacity: limits().input_bytes,
+        ..limits()
+    })?;
+    let model = model(&[("source", 7)]);
+    let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
+    assert!(matches!(
+        owner.model_operation([1; 16]).inputs(
+            request(&model, &grant, &active),
+            &control()?,
+            || Ok(())
+        ),
+        Err(crate::Error::AnalysisBusy {
+            resource: "query input capacity",
+            ..
+        })
+    ));
+    drop(owner.budget.retained_input(owner.limits.input_capacity)?);
     Ok(())
 }

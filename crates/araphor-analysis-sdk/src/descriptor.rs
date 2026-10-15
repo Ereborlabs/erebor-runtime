@@ -5,7 +5,7 @@ use snafu::ResultExt as _;
 
 use crate::{
     DataType, Error, ErrorCode, Field, InputMode, InputSource, IoSnafu, Limits, Model, Package,
-    Port, Result, Schema, TimeUnit, CONTRACT_VERSION,
+    Port, Result, Schema, TableRef, TimeUnit, CONTRACT_VERSION,
 };
 
 impl Package {
@@ -122,9 +122,10 @@ impl Model {
         self.limits.validate()?;
         Self::ports(self.inputs.iter().map(|input| &input.port))?;
         for input in &self.inputs {
-            match (&self.input_mode, &input.source) {
-                (InputMode::Provided, InputSource::Provided | InputSource::Output(_))
-                | (InputMode::Resolved, InputSource::Output(_) | InputSource::Sql(_)) => {}
+            match &input.source {
+                InputSource::Table(TableRef::Named(name)) => Package::name(name)?,
+                InputSource::Table(TableRef::Output(_)) => {}
+                InputSource::Query(_) if self.input_mode == InputMode::Resolved => {}
                 _ => return Err(Error::contract(ErrorCode::Invalid, "input source mode")),
             }
         }
@@ -172,7 +173,7 @@ impl Model {
         Ok(())
     }
 
-    fn ports<'a>(ports: impl Clone + ExactSizeIterator<Item = &'a Port>) -> Result<()> {
+    pub(crate) fn ports<'a>(ports: impl Clone + ExactSizeIterator<Item = &'a Port>) -> Result<()> {
         if ports.len() > 64 {
             return Err(Error::contract(ErrorCode::Limit, "ports"));
         }

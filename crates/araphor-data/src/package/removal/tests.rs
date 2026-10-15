@@ -18,12 +18,13 @@ fn consumer(name: &str, dependency: &PackageBundleV1) -> PackageBundleV1 {
         )
         .into(),
     );
-    artifact.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
-        package: dependency.root.package_id.clone(),
-        revision: dependency.root.revision.clone(),
-        export: "count".into(),
-        output: "rows".into(),
-    });
+    artifact.descriptor.exports[0].inputs[0].source =
+        sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: dependency.root.package_id.clone(),
+            revision: dependency.root.revision.clone(),
+            export: "count".into(),
+            output: "rows".into(),
+        }));
     package.artifacts.extend(dependency.artifacts.clone());
     package
 }

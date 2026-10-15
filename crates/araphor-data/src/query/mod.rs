@@ -30,7 +30,7 @@ mod graph;
 pub(crate) mod graph_tests;
 mod input;
 mod model;
-pub(crate) use model::SqlOperation;
+pub(crate) use model::{ModelInputRequest, ModelInputs};
 mod notification;
 #[cfg(test)]
 mod owner_tests;
@@ -52,10 +52,7 @@ pub use frame::{
     QUERY_CHECKPOINT_BYTES,
 };
 use input::{InputProjection, InputRelations, InputRow};
-pub use model::{
-    SqlDatasetOutputV1, SqlModelInputRequestV1, SqlModelInputV1, SqlModelOutputV1, SqlModelV1,
-    SqlReasonV1,
-};
+pub use model::{SqlDatasetOutputV1, SqlModelOutputV1, SqlModelV1, SqlReasonV1};
 pub use plan::{QueryOperation, QueryPlan, QueryTemplate, QUERY_SCHEMA_VERSION};
 pub use wasm::WasmLimits;
 

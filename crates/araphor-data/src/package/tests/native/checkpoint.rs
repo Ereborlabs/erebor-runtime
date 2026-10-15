@@ -4,7 +4,13 @@ use super::*;
 #[tokio::test]
 #[ignore = "requires source-built native artifacts in ARAPHOR_NATIVE_DIR"]
 async fn native_checkpoint_retry_and_restart() -> TestResult {
-    let fixture = Fixture::new()?;
+    let fixture = Fixture::new_limits(crate::QueryLimits {
+        global_evaluations: 1,
+        tenant_evaluations: 1,
+        extract_timeout: std::time::Duration::from_secs(30),
+        evaluate_timeout: std::time::Duration::from_secs(30),
+        ..Default::default()
+    })?;
     let package = native(bundle()?)?;
     let installed = fixture.install(package.clone(), None).await?;
     let initial = &installed.exports[0].results[0];
@@ -113,7 +119,7 @@ async fn native_overflow_keeps_checkpoint() -> TestResult {
     let fixture = Fixture::new()?;
     let mut package = bundle()?;
     package.artifacts[0].descriptor.exports[0].inputs[0].source =
-        araphor_analysis_sdk::InputSource::Sql(
+        araphor_analysis_sdk::InputSource::Query(
             "SELECT 18446744073709551615::UBIGINT AS value".into(),
         );
     let installed = fixture.install(native(package)?, None).await?;

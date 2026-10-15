@@ -253,7 +253,7 @@ fn source_bundle(fixture: &Fixture) -> TestResult<PackageBundleV1> {
     let mut input = artifact.descriptor.exports[0].outputs[0].clone();
     input.name = "source".into();
     artifact.descriptor.exports[0].inputs.push(input.into());
-    artifact.descriptor.exports[0].inputs[0].source = araphor_analysis_sdk::InputSource::Sql(
+    artifact.descriptor.exports[0].inputs[0].source = araphor_analysis_sdk::InputSource::Query(
         "SELECT owner_revision AS count FROM context_versions".into(),
     );
     Ok(package)

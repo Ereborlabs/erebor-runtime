@@ -322,7 +322,7 @@ fn reuse_reloads_reinstalled_revision() -> TestResult {
         .package_revision([1; 16], "test.model", "1")?
         .is_some());
     let mut replacement = selected;
-    let sdk::InputSource::Output(source) =
+    let sdk::InputSource::Table(sdk::TableRef::Output(source)) =
         &mut replacement.artifacts[0].descriptor.exports[0].inputs[0].source
     else {
         return Err("dependency input absent".into());

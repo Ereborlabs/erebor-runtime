@@ -19,7 +19,7 @@ async fn automatic_clock_ticks() -> TestResult {
             port.name = "source".into();
             artifact.descriptor.exports[0].inputs.push(sdk::InputPort {
                 port,
-                source: sdk::InputSource::Sql(EXPIRY.into()),
+                source: sdk::InputSource::Query(EXPIRY.into()),
             });
             let PackageImplementationV1::Sql { program, .. } = &mut artifact.implementations[0]
             else {

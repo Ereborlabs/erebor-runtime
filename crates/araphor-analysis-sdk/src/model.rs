@@ -43,8 +43,8 @@ pub struct InputPort {
 impl From<Port> for InputPort {
     fn from(port: Port) -> Self {
         Self {
+            source: InputSource::Table(TableRef::Named(port.name.clone())),
             port,
-            source: InputSource::Provided,
         }
     }
 }
@@ -57,8 +57,19 @@ impl From<Port> for InputPort {
     deny_unknown_fields
 )]
 pub enum InputSource {
-    Provided,
-    Sql(String),
+    Table(TableRef),
+    Query(String),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum TableRef {
+    Named(String),
     Output(OutputRef),
 }
 
@@ -86,7 +97,7 @@ pub struct Model {
 impl Model {
     pub fn dependencies(&self) -> impl Iterator<Item = (&Port, &OutputRef)> {
         self.inputs.iter().filter_map(|input| match &input.source {
-            InputSource::Output(output) => Some((&input.port, output)),
+            InputSource::Table(TableRef::Output(output)) => Some((&input.port, output)),
             _ => None,
         })
     }

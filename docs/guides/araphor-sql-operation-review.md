@@ -5,6 +5,98 @@ This guide covers the single SQL operation implementation at source head
 The [approved plan](../plans/araphor-production-dataflow-simplification.md)
 defines the SQL execution scope.
 
+The user now approves table and query input resolution under `QueryOwner`.
+The current change is based on `bf13d846`. Implementation and the full Rust
+procedure are **Done**. Native qualification is **Done** on Linux x86_64 GNU.
+The sections after the current input flow retain the earlier SQL operation
+record. Read the
+[current relation plan](../plans/araphor-production-dataflow-simplification.md#operation-owned-table-and-query-inputs)
+for the approved change and its current result.
+
+## Current table and query input flow
+
+The SDK declares each input as `Table(TableRef)` or `Query(String)`.
+`TableRef::Named` names a source table. `TableRef::Output` names an exact
+package revision, export, and output. An input port supplies its local name
+and Arrow schema. Separate ports remain separate datasets; the caller must
+write SQL when it needs a join or union.
+
+[AnalysisPackageOwner::prepare_at](../../crates/araphor-data/src/package/evaluation/preparation.rs) checks the installed context and selects the implementation
+  -> [QueryOwner::model_operation](../../crates/araphor-data/src/query/model/operation.rs) creates an operation without opening an engine
+  -> [ModelOperation::inputs](../../crates/araphor-data/src/query/model/operation.rs) admits sources, checks authority, and resolves Table inputs before Query inputs
+  -> [QueryOwner::output_table](../../crates/araphor-data/src/query/model/source/table.rs) reads exact committed package output and checks the retained grant
+  -> [ModelOperation::read_input](../../crates/araphor-data/src/query/model/source/read.rs) evaluates admitted source SQL against built-in tables and declared Table aliases
+  -> [SourceRows::finish](../../crates/araphor-data/src/query/model/source.rs) retains direct provenance and hashes inherited table revisions into Query identity
+  -> [ModelInputs::finish](../../crates/araphor-data/src/query/model/source.rs) normalizes evidence after the operation restores declared input order
+  -> [ModelOperation::evaluate](../../crates/araphor-data/src/query/model/operation.rs) runs a SQL model on the same engine and reuses imported ports
+  -> [ModelRun::commit](../../crates/araphor-data/src/package/evaluation/preparation.rs) prepares the result for the existing package commit owner
+
+```mermaid
+sequenceDiagram
+    participant Package as AnalysisPackageOwner
+    participant Input as ModelOperation
+    participant Store as AnalysisStore
+    Package->>Input: Resolve declared inputs with current grant
+    Input->>Store: Read exact committed Table outputs
+    opt Named source or Query input
+        Input->>Input: Reserve capacity and open engine once
+        Input->>Input: Bind referenced Table aliases and evaluate Query
+        Input->>Input: Clear raw source views after each statement
+    end
+    Input-->>Package: Operation and ordered Arrow inputs with provenance
+    alt SQL implementation
+        Package->>Input: Evaluate model with existing table bindings
+        Input-->>Package: Validated output and output lease
+    else Native or Wasm implementation
+        Package->>Package: Drop input operation, then call existing runtime
+    end
+    Package->>Store: Existing authorized result transaction
+```
+
+Output-only input resolution opens no SQL engine and takes no SQL evaluation
+slot. An engine and its reservation belong to the operation. Input preparation
+consumes the operation; errors release its connection, bindings, and leases
+through Rust ownership. Raw source views are cleared after each statement.
+Only declared Table aliases remain for later Query inputs and model execution.
+Query inputs cannot refer to other Query inputs. Built-in names cannot be
+replaced by package output aliases.
+
+Each original Table input retains its evidence and exact dependency once.
+A derived Query input combines inherited coverage and hashes the inherited
+input revisions, including when SQL returns zero rows. Witness normalization
+precedes duplicate removal, so a raw witness cannot hide expired retained
+evidence. Freshness inspection uses this same input owner. Native and Wasm
+execution release any SQL preparation slot before their runtime acquires one.
+Resolved sources return validated result references directly. The package
+owner no longer reads those references again or keeps a second input copy.
+
+The operation checks imported table bytes, including the internal row index,
+before each import. Tables from earlier queries remain charged. Raw extraction
+and query output use the remaining operation byte budget. The returned Arrow
+inputs retain separate leases. These checks use the existing host limits.
+
+Arrow datasets and source declarations contain no DuckDB type. The engine
+adapter, SQL admission, and source authority remain separate owners. This
+permits later DataFusion work without adding an engine, provider framework,
+or compatibility layer in this change. Dataset-only SQL uses the existing
+dataset validators directly; it creates no synthetic package or evaluation.
+
+The full Rust procedure is **Done** with unchanged source: 2,146 passes, zero
+failures, and 568 existing ignored cases across 90 harnesses. The new
+[relation integration cases](../../crates/araphor-data/src/package/tests/relations.rs)
+and [operation cases](../../crates/araphor-data/src/query/model/operation/tests.rs)
+pass in that run. All 12 selected native Data cases and the installed native
+detector E2E case also pass. The E2E case runs with `PATH` empty. Native
+qualification covers Linux x86_64 GNU with glibc 2.39. Source, library, and test
+binary hashes remain unchanged. Rust evidence:
+`/tmp/araphor-relations-final-ci-source.json`,
+`/tmp/araphor-relations-final-ci.log`, and
+`/tmp/araphor-relations-final-ci-report.json`. Run
+`bash .github/scripts/verify-rust-ci.sh` for the complete Rust gate. The
+native records are `/tmp/araphor-relations-native-build2.json` and
+`/tmp/araphor-relations-native-qualification.json`, with matching `.log` files.
+The remaining sections retain the earlier SQL operation record.
+
 ## Intended end state
 
 Use one private SQL engine for a package operation's source bindings and model.
@@ -15,7 +107,7 @@ output validation, and the existing package commit owner.
 
 [AnalysisPackageOwner::prepare_at](../../crates/araphor-data/src/package/evaluation/preparation.rs) The package owner selects the declared SQL implementation
   -> [QueryOwner::sql_operation](../../crates/araphor-data/src/query/model/operation.rs) the query owner creates one bounded private operation engine
-  -> [AnalysisPackageOwner::inputs_with_sql](../../crates/araphor-data/src/package/inputs.rs) existing source admission and extraction select each input port
+  -> `AnalysisPackageOwner::inputs_with_sql` existing source admission and extraction select each input port
   -> [SqlOperation::model_input](../../crates/araphor-data/src/query/model/operation.rs) each admitted binding produces the existing Arrow input and provenance
   -> [SourceRows::finish](../../crates/araphor-data/src/query/model/source.rs) schema, bounds, revisions, coverage, and witnesses are recorded
   -> [ScopedSources::clear](../../crates/araphor-data/src/query/input.rs) source-only relations are removed before model execution

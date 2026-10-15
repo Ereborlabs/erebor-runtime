@@ -167,12 +167,13 @@ async fn mixed_metadata_install_retry() -> TestResult {
     source.descriptor.exports[0].inputs =
         vec![sdk::Port::new("input", output.schema.clone()).into()];
     source.descriptor.exports[0].outputs[0].schema = output.schema;
-    source.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
-        package: package.root.package_id.clone(),
-        revision: package.root.revision.clone(),
-        export: "atoms".into(),
-        output: output.name,
-    });
+    source.descriptor.exports[0].inputs[0].source =
+        sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: package.root.package_id.clone(),
+            revision: package.root.revision.clone(),
+            export: "atoms".into(),
+            output: output.name,
+        }));
     package.root = source.reference();
     package.artifacts.push(source);
     let digest = package.digest()?;

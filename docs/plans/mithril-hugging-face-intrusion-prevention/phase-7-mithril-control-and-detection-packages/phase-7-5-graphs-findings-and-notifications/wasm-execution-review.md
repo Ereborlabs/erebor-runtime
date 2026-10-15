@@ -40,7 +40,7 @@ Restart and identical retry preserve the committed result.
 
 The generic package scheduler uses the same evaluator. Its named source inputs
 and dependency inputs come from
-[AnalysisPackageOwner::inputs](../../../../../crates/araphor-data/src/package/inputs.rs).
+[ModelOperation::inputs](../../../../../crates/araphor-data/src/query/model/operation.rs).
 The discovery and graph adapters prepare their authorized domain inputs.
 These adapters do not run through the generic table scheduler.
 [InstalledAnalysis::evaluate](../../../../../crates/araphor-data/src/package/installed.rs)

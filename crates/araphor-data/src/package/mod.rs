@@ -8,7 +8,6 @@ mod evaluation;
 mod execution;
 mod fixtures;
 mod freshness;
-mod inputs;
 mod inspect;
 mod installed;
 mod lifecycle;
@@ -26,8 +25,10 @@ pub(super) mod wasm;
 mod wire;
 
 pub use bundle::*;
+pub(crate) use evaluation::ResultContext;
 pub use installed::{InstalledAnalysis, InstalledEvaluation, InstalledRefV1};
 pub use model::*;
+pub(crate) use owner::InstalledContext;
 pub use wire::*;
 
 pub struct AnalysisPackageOwner {

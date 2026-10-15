@@ -12,7 +12,7 @@ use super::{
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct InstalledContext {
+pub(crate) struct InstalledContext {
     pub grant: PackageGrantV1,
     pub root: PackageRefV1,
     pub parameters: Option<serde_json::Value>,
@@ -254,7 +254,7 @@ impl AnalysisPackageOwner {
         result.ok_or_else(|| Code::Denied.error("commit authority"))
     }
 
-    pub(super) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    pub(crate) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
         serde_json::from_slice(bytes).context(PackageEncodingSnafu)
     }
 

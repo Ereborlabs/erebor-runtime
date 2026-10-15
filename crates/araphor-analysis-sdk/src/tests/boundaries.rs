@@ -1,6 +1,115 @@
 use super::*;
 
 #[test]
+fn dataset_checks_shape_and_limits() -> TestResult {
+    let package = FilesCount::package();
+    let fixture = FilesCount::fixture()?;
+    let port = &package.exports[0].inputs[0].port;
+    let mut data = fixture.evaluation.inputs[0].data.clone();
+    let limits = package.exports[0].limits;
+    data.validate(port, limits)?;
+    data.name = "other".into();
+    assert_eq!(
+        data.validate(port, limits).map_err(|error| error.code()),
+        Err(ErrorCode::Invalid)
+    );
+    data.name = port.name.clone();
+    let mut wrong = port.clone();
+    wrong.schema = Schema::empty();
+    assert_eq!(
+        data.validate(&wrong, limits).map_err(|error| error.code()),
+        Err(ErrorCode::Incompatible)
+    );
+    data.batches.push(data.batches[0].clone());
+    for limits in [
+        Limits {
+            max_rows: 5,
+            ..limits
+        },
+        Limits {
+            max_bytes: 1,
+            ..limits
+        },
+        Limits {
+            max_batches: 1,
+            ..limits
+        },
+    ] {
+        assert_eq!(
+            data.validate(port, limits).map_err(|error| error.code()),
+            Err(ErrorCode::Limit)
+        );
+    }
+    data.batches.clear();
+    data.validate(port, limits)?;
+    assert_eq!(
+        data.validate(
+            port,
+            Limits {
+                max_rows: 0,
+                ..limits
+            }
+        )
+        .map_err(|error| error.code()),
+        Err(ErrorCode::Invalid)
+    );
+    wrong.name = port.name.clone();
+    wrong.schema = Schema::new(vec![Field::new("day", DataType::Date32, false)]);
+    assert_eq!(
+        data.validate(&wrong, limits).map_err(|error| error.code()),
+        Err(ErrorCode::Incompatible)
+    );
+    wrong.name = "invalid name".into();
+    data.name = wrong.name.clone();
+    wrong.schema = Schema::empty();
+    assert_eq!(
+        data.validate(&wrong, limits).map_err(|error| error.code()),
+        Err(ErrorCode::Invalid)
+    );
+    Ok(())
+}
+
+#[test]
+fn dataset_collection_keeps_bounds() -> TestResult {
+    let package = FilesCount::package();
+    let fixture = FilesCount::fixture()?;
+    let port = package.exports[0].inputs[0].port.clone();
+    let data = fixture.evaluation.inputs[0].data.clone();
+    let mut other = data.clone();
+    other.name = "other".into();
+    let ports = [
+        port,
+        Port::new(&other.name, data.batches[0].schema().as_ref().clone()),
+    ];
+    let bytes = data.batches[0].get_array_memory_size() as u64
+        + data.name.len().max(other.name.len()) as u64;
+    let datasets = [data, other];
+    for limits in [
+        Limits {
+            max_rows: 5,
+            ..Limits::default()
+        },
+        Limits {
+            max_batches: 1,
+            ..Limits::default()
+        },
+        Limits {
+            max_bytes: bytes,
+            ..Limits::default()
+        },
+    ] {
+        for (data, port) in datasets.iter().zip(&ports) {
+            data.validate(port, limits)?;
+        }
+        assert_eq!(
+            Dataset::validate_all(&datasets, &ports, limits).map_err(|error| error.code()),
+            Err(ErrorCode::Limit)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn output_evidence_is_exact() -> TestResult {
     let package = FilesCount::package();
     let fixture = FilesCount::fixture()?;

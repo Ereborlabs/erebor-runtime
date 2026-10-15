@@ -5,12 +5,12 @@ use crate::analysis::{PackageActivationV1, PackageCommitV1};
 use crate::{AnalysisReadControl, QueryOwner, Result};
 
 use super::ResultContext;
-use crate::package::inputs::{InputRequest, ModelInputs};
 use crate::package::owner::InstalledContext;
 use crate::package::{
     AnalysisPackageOwner, PackageActionV1 as Action, PackageArtifactV1, PackageBundleV1,
     PackageCheckpointV1, PackageErrorCodeV1 as Code, PackageOutputV1,
 };
+use crate::query::{ModelInputRequest, ModelInputs};
 
 struct ModelRun<'a> {
     active: &'a PackageActivationV1,
@@ -71,34 +71,20 @@ impl AnalysisPackageOwner {
         }
         let run = ModelRun::new(active, &context, bundle, id)?;
         let implementation = run.artifact.implementation(&run.model.name)?;
-        let mut sql_operation = if matches!(
-            implementation,
-            crate::package::PackageImplementationV1::Sql { .. }
-        ) && run
-            .model
-            .inputs
-            .iter()
-            .any(|input| matches!(&input.source, sdk::InputSource::Sql(_)))
-        {
-            Some(self.query.sql_operation(active.key.tenant_id)?)
-        } else {
-            None
-        };
         let now = if automatic {
             Self::clock_tick(now)
         } else {
             now
         };
-        let inputs = self.inputs_with_sql(
-            InputRequest {
+        let (operation, inputs) = self.query.model_operation(active.key.tenant_id).inputs(
+            ModelInputRequest {
                 activation: active,
                 model: run.model,
-                context: &context,
+                grant: &context.grant,
                 now,
-                action: Action::Run,
             },
             control,
-            sql_operation.as_mut(),
+            || self.check(&context.grant, Action::Run),
         )?;
         let mut metadata = ResultContext::new(id, now, run.model, &inputs);
         metadata.target = implementation.target().into();
@@ -109,11 +95,12 @@ impl AnalysisPackageOwner {
         let Some(evaluation) = run.evaluation(self, &inputs, &metadata, rebuild, automatic)? else {
             return Ok(None);
         };
-        let evaluated = match (sql_operation, implementation) {
-            (Some(operation), crate::package::PackageImplementationV1::Sql { program, .. }) => {
+        let evaluated = match implementation {
+            crate::package::PackageImplementationV1::Sql { program, .. } => {
                 operation.evaluate(&run.artifact.descriptor, program, &evaluation, control)?
             }
             _ => {
+                drop(operation);
                 self.evaluate_artifact(active.key.tenant_id, run.artifact, &evaluation, control)?
             }
         };
@@ -308,31 +295,8 @@ impl ResultContext {
                 .iter()
                 .map(|input| input.revision.clone())
                 .collect(),
-            coverage: Self::coverage(&input_coverage),
+            coverage: ModelInputs::coverage(input_coverage.iter()),
             input_coverage,
         }
-    }
-
-    fn coverage(values: &[sdk::Coverage]) -> sdk::Coverage {
-        let state = if values
-            .iter()
-            .any(|coverage| coverage.state == sdk::CoverageState::Unknown)
-        {
-            sdk::CoverageState::Unknown
-        } else if values
-            .iter()
-            .any(|coverage| coverage.state == sdk::CoverageState::Gapped)
-        {
-            sdk::CoverageState::Gapped
-        } else {
-            sdk::CoverageState::Complete
-        };
-        let mut limits: Vec<_> = values
-            .iter()
-            .flat_map(|coverage| coverage.limits.iter().cloned())
-            .collect();
-        limits.sort();
-        limits.dedup();
-        sdk::Coverage { state, limits }
     }
 }

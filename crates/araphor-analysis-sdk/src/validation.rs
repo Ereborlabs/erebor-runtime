@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     Checkpoint, Dataset, Error, ErrorCode, Evaluation, Limits, Model, Output, Package, Port,
-    Result, RowRef,
+    Result, RowRef, Schema,
 };
 
 mod batch;
@@ -68,7 +68,7 @@ impl ContractValidator<'_> {
             }
             _ => return Err(Error::contract(ErrorCode::Invalid, "parameters")),
         }
-        self.datasets(
+        Self::datasets(
             self.model.inputs.iter().map(|input| &input.port),
             evaluation.inputs.iter().map(|input| &input.data),
             &mut budget,
@@ -99,7 +99,7 @@ impl ContractValidator<'_> {
 
     pub(crate) fn output(&self, evaluation: &Evaluation, output: &Output) -> Result<()> {
         let mut budget = BatchBudget::new(self.limits.max_bytes, &self.limits);
-        let outputs = self.datasets(
+        let outputs = Self::datasets(
             self.model.outputs.iter(),
             output.datasets.iter(),
             &mut budget,
@@ -158,7 +158,6 @@ impl ContractValidator<'_> {
     }
 
     fn datasets<'a, 'p>(
-        &self,
         ports: impl Clone + ExactSizeIterator<Item = &'p Port>,
         datasets: impl Iterator<Item = &'a Dataset>,
         budget: &mut BatchBudget,
@@ -172,14 +171,7 @@ impl ContractValidator<'_> {
                 .clone()
                 .find(|port| port.name == dataset.name)
                 .ok_or_else(|| Error::contract(ErrorCode::Invalid, "undeclared dataset"))?;
-            let mut rows = 0_u64;
-            budget.bytes(dataset.name.len() as u64)?;
-            for batch in &dataset.batches {
-                budget.batch(batch, &port.schema)?;
-                rows = rows
-                    .checked_add(batch.num_rows() as u64)
-                    .ok_or_else(|| Error::contract(ErrorCode::Limit, "dataset rows"))?;
-            }
+            let rows = dataset.validate_budget(&port.schema, budget)?;
             seen.insert(dataset.name.as_str(), rows);
         }
         if seen.len() != ports.len() {
@@ -207,7 +199,7 @@ impl ContractValidator<'_> {
             (Some(_), None) if !required => Ok(()),
             (Some(spec), Some(checkpoint)) if spec.version == checkpoint.version => {
                 let mut budget = BatchBudget::new(self.limits.max_checkpoint_bytes, &self.limits);
-                self.datasets(
+                Self::datasets(
                     spec.datasets.iter(),
                     checkpoint.datasets.iter(),
                     &mut budget,
@@ -220,6 +212,37 @@ impl ContractValidator<'_> {
 }
 
 impl Dataset {
+    pub fn validate(&self, port: &Port, limits: Limits) -> Result<()> {
+        Self::validate_all(
+            std::slice::from_ref(self),
+            std::slice::from_ref(port),
+            limits,
+        )
+    }
+
+    pub fn validate_all(datasets: &[Self], ports: &[Port], limits: Limits) -> Result<()> {
+        limits.validate()?;
+        Model::ports(ports.iter())?;
+        ContractValidator::datasets(
+            ports.iter(),
+            datasets.iter(),
+            &mut BatchBudget::new(limits.max_bytes, &limits),
+        )?;
+        Ok(())
+    }
+
+    fn validate_budget(&self, schema: &Schema, budget: &mut BatchBudget) -> Result<u64> {
+        let mut rows = 0_u64;
+        budget.bytes(self.name.len() as u64)?;
+        for batch in &self.batches {
+            budget.batch(batch, schema)?;
+            rows = rows
+                .checked_add(batch.num_rows() as u64)
+                .ok_or_else(|| Error::contract(ErrorCode::Limit, "dataset rows"))?;
+        }
+        Ok(rows)
+    }
+
     pub(crate) fn rows(&self) -> u64 {
         self.batches
             .iter()

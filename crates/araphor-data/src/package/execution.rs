@@ -137,11 +137,7 @@ impl AnalysisPackageOwner {
                 Err(error) => return Err(error),
                 _ => return Err(Code::Unsupported.error("model target")),
             }
-            for input in &model.inputs {
-                if let sdk::InputSource::Sql(sql) = &input.source {
-                    crate::QuerySql::admit(sql, Vec::new(), false)?;
-                }
-            }
+            crate::QueryOwner::admit_inputs(model)?;
         }
         Ok(())
     }

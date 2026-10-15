@@ -16,6 +16,10 @@ transport restriction. This change adds explicit input sources and removes the
 user-rejected package caps. The third final Rust procedure and current native
 qualification pass. Native qualification covers Linux x86_64 GNU.
 The earlier results below remain historical. No speed improvement is established.
+The user now approves operation-owned table and query inputs. Implementation
+and the full Rust procedure are **Done**. Current native qualification is
+**Done** on Linux x86_64 GNU. The next section records the approved source
+ownership change.
 
 ## Intended end state
 
@@ -506,7 +510,99 @@ bound, header-cache bound, record bound, exact output limit, ordering, and
 fallback. The [graph review guide](../guides/araphor-graph-commit-review.md)
 links the implementation and current correctness cases.
 
+### Operation-owned table and query inputs
+
+Replace the package owner's source interpreter with one input operation owned
+by `QueryOwner`. The source basis is `bf13d846`. The user approves this change
+after review of the DataFusion table and query model. Keep DuckDB for execution.
+Keep source declarations and Arrow datasets independent of the engine. Use
+Mangroves and GreptimeDB as references for later DataFusion integration. This
+change does not add another engine, service, registry, or durable owner.
+
+A package operation requests its declared inputs
+  -> the package owner checks its current grant and activation
+  -> the query owner opens one operation with the admitted tenant and scope
+  -> the query owner binds built-in tables and exact package-output tables
+  -> a table input selects a named relation without a user-written SQL query
+  -> a query input reads the same admitted relations through the closed SQL binder
+  -> each input retains its batches, exact dependencies, evidence, coverage, and memory lease
+  -> the execution owner receives the resolved named datasets
+  -> the existing package transaction checks source revisions and commits the result
+
+An input fails, authority expires, or cancellation occurs
+  -> the operation returns its existing structured error
+  -> the operation releases source bindings, connection, and memory leases
+  -> the package owner commits no result or checkpoint
+
+Use `InputSource::Table(TableRef)` and `InputSource::Query(sql)`.
+`TableRef::Named` selects a built-in or supplied relation. `TableRef::Output`
+names the exact package, revision, export, and output. Keep the model-level
+host-prepared mode for the existing Discovery and graph callers, including
+zero-input models. Remove the repeated per-port `Provided` state.
+
+Remove the separate package dependency reader, duplicate result-reference and
+evidence lookups, and optional paths for shared and standalone input
+connections.
+The query owner must retain dependencies before SQL execution, including when
+the result has zero rows. A table for a package output reads a committed
+result. It does not execute the package. Multiple table inputs remain separate datasets;
+only an explicit query joins or combines them.
+
+Acceptance requires direct table reads, SQL over bound output tables, exact
+revision and evidence retention, unchanged host-prepared callers, operation
+success with one capacity slot, cleanup after failure, and a net reduction in
+production code. Run focused owner cases, final Rust CI, and current native
+qualification.
+No performance test or new timing workload is approved.
+
+**Done** for source implementation and the full Rust procedure. The separate
+245-line package input reader, standalone source API, optional connection
+handoff, and synthetic source packages and evaluations are removed. One input
+operation serves SQL, native, and Wasm implementations. SQL inputs share one
+engine; SQL models reuse imported table bindings. Native and Wasm execution
+release that engine before runtime admission. Exact output references and
+source evidence stay with the query owner. The package owner keeps commit
+authority. The
+[input ownership review](../guides/araphor-sql-operation-review.md#current-table-and-query-input-flow)
+records the source route and lifetime.
+
+The production Rust code has one fewer line than `bf13d846`. The count excludes
+test files and inline test modules and counts all other lines. Rust tests add
+847 lines. The complete diff grows because tests and documentation are added.
+Evidence: `/tmp/araphor-relations-line-count.json`.
+
+The final procedure `bash .github/scripts/verify-rust-ci.sh` passes with
+unchanged source: 90 outer harnesses, 2,146 passes, zero failures, and 568
+existing ignored cases. SDK has 74 passes; the builder has six. Data has 637
+passes and 19 ignored cases in 915.36 seconds. Control has 188 passes and two
+ignored cases in 107.63 seconds. E2E has 191 passes and 528 ignored cases in
+489.92 seconds. Node has 282 passes and one ignored case in 7.68 seconds.
+The full procedure takes 1,681.14 seconds. These are functional test times;
+they do not establish a runtime speed change. The CI target of less than ten
+minutes remains **Not done**.
+
+Final Rust evidence: `/tmp/araphor-relations-final-ci-source.json`,
+`/tmp/araphor-relations-final-ci.log`, and
+`/tmp/araphor-relations-final-ci-report.json`. The record identifies the
+working tree source based on `bf13d846`; each covered file has a SHA-256 hash.
+Current native qualification is **Done** on Linux x86_64 GNU with glibc 2.39.
+Six current Rust libraries build in 54.15 seconds. All 12 selected Data cases
+pass in 261.05 seconds. The installed native detector E2E case passes in 254.01
+seconds with `PATH` empty. Both test runs have zero failures and zero ignored
+cases. The qualification runner takes 520.26 seconds. Source, native build
+inputs, library hashes, and test binary hashes remain unchanged.
+
+Native evidence: `/tmp/araphor-relations-native-build2.json`,
+`/tmp/araphor-relations-native-build2.log`,
+`/tmp/araphor-relations-native-qualification.json`, and
+`/tmp/araphor-relations-native-qualification.log`.
+**Done** for the approved input ownership change. No runtime speed benchmark
+is run. DataFusion execution and window scheduling remain outside this change.
+
 ### Explicit input sources and removed package caps
+
+This section records the earlier implementation at `bf13d846`. The approved
+operation-owned input change above replaces its source dispatch.
 
 The user approves per-input source declarations and removes parallel routing
 metadata. The implementation uses
@@ -517,7 +613,7 @@ metadata. The implementation uses
 
 [Package::validate](../../crates/araphor-analysis-sdk/src/descriptor.rs) The SDK checks each input declaration and the model mode
   -> [PackageBundleV1::validate](../../crates/araphor-data/src/package/admission.rs) Data derives dependency edges from output sources and validates the closure
-  -> [AnalysisPackageOwner::inputs_with_sql](../../crates/araphor-data/src/package/inputs.rs) the package owner matches each explicit source and retains its provenance
+  -> `AnalysisPackageOwner::inputs_with_sql` the package owner matches each explicit source and retains its provenance
   -> [AnalysisPackageOwner::prepare_run](../../crates/araphor-data/src/package/evaluation/preparation.rs) resolved SQL sources share the existing private operation
 
 `InputMode::Provided` accepts `Provided` and `Output` sources. The caller supplies

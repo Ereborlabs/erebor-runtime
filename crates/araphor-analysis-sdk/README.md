@@ -188,20 +188,24 @@ A stateful export must return its next checkpoint. A wrong version, schema,
 or dataset rejects the complete evaluation.
 
 Each `Model.inputs` entry is an `InputPort` with a `port` and an explicit
-`source`. `InputSource::Provided` selects caller-supplied data.
-`InputSource::Sql(query)` selects an admitted SQL source.
-`InputSource::Output(OutputRef)` names an exact package, revision, export, and
-output. There is no separate package dependency list or backend SQL input map.
+`source`. `InputSource::Table(TableRef::Named(name))` selects a named relation.
+`InputSource::Table(TableRef::Output(OutputRef))` selects an exact package,
+revision, export, and output. `InputSource::Query(query)` selects an admitted SQL
+query. A table name is not SQL. A query can read built-in tables and declared
+table inputs. There is no separate package dependency list or backend SQL input
+map.
 `Model::dependencies()` returns the output references with their input ports.
 Local references check schema, kind, and revision. Package admission owns
 cross-package resolution, cycle rejection, authorization, and scheduling.
 
 `Model::new` accepts `Vec<Port>` and sets `InputMode::Provided`. The constructor
-wraps each port with `InputSource::Provided`. In `Provided` mode, the caller
-supplies every dataset. Output references still declare retained dependencies.
-In `Resolved` mode, every source is `Sql` or `Output`. The package owner resolves
-each source. Zero-input models also declare their mode. The mode does not depend
-on an empty map or a missing SQL key.
+wraps each port with `InputSource::Table(TableRef::Named(port.name.clone()))`.
+In `Provided` mode, every source is a table, and the caller supplies every
+dataset. Output references still declare retained dependencies. In `Resolved`
+mode, every source is a table or query. The query owner resolves each source
+for package execution.
+Zero-input models also declare their mode. The mode does not depend on an empty
+map or a missing SQL key.
 
 For example, change one declared input to a resolved SQL source:
 
@@ -209,7 +213,7 @@ For example, change one declared input to a resolved SQL source:
 use araphor_analysis_sdk::{InputMode, InputSource};
 let mut resolved = package.exports[0].clone();
 resolved.input_mode = InputMode::Resolved;
-resolved.inputs[0].source = InputSource::Sql("SELECT subject,event_id FROM events".into());
+resolved.inputs[0].source = InputSource::Query("SELECT subject,event_id FROM events".into());
 ```
 
 Read input schema fields through `model.inputs[index].port`. Output ports remain
@@ -275,8 +279,14 @@ No package descriptor grants policy or physical authority.
 
 ## Current source qualification
 
-The explicit input declarations and package cap removals based on `4176a9cb`
-pass final Rust CI: 2,135 passed, zero failed, and 568 ignored. All 12 native
-Data cases and the native detector E2E case pass on Linux x86_64 GNU. Read the
-[verification record](../../docs/plans/araphor-production-dataflow-simplification.md#explicit-input-sources-and-removed-package-caps)
+The table and query declarations and dataset validators pass 74 SDK cases and
+six builder cases. The full current Rust procedure passes: 2,146 tests, zero
+failures, and 568 existing ignored cases. It includes the query-owner and
+package relation integration cases. Current native qualification passes all 12
+selected Data cases and the installed detector E2E case on Linux x86_64 GNU.
+The E2E case runs with `PATH` empty. Source and artifact hashes stay unchanged.
+The earlier input and cap change at `bf13d846` passes final Rust CI and native
+qualification on Linux x86_64 GNU. That result does not qualify this change.
+Read the
+[verification record](../../docs/plans/araphor-production-dataflow-simplification.md#operation-owned-table-and-query-inputs)
 for source hashes, fixture corrections, commands, and remaining work.

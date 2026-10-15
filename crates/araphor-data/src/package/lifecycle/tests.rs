@@ -17,12 +17,12 @@ fn graph_accepts_output_sources() {
         .remove(0);
     let model = &mut artifact.descriptor.exports[0];
     let export = model.name.clone();
-    model.inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
+    model.inputs[0].source = sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
         package: "test.upstream".into(),
         revision: "1".into(),
         export: "source".into(),
         output: "rows".into(),
-    });
+    }));
     assert!(matches!(
         super::AnalysisPackageOwner::readiness(&artifact, &export),
         PackageReadinessV1::Ready
@@ -192,12 +192,13 @@ async fn missing_dependency_target_status() -> TestResult {
     let mut input = root.descriptor.exports[0].outputs[0].clone();
     input.name = "source".into();
     root.descriptor.exports[0].inputs.push(input.into());
-    root.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
-        package: "test.upstream".into(),
-        revision: "1".into(),
-        export: "count".into(),
-        output: "rows".into(),
-    });
+    root.descriptor.exports[0].inputs[0].source =
+        sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: "test.upstream".into(),
+            revision: "1".into(),
+            export: "count".into(),
+            output: "rows".into(),
+        }));
     let explicit = crate::PackageBundleV1 {
         schema_version: 1,
         root: upstream.reference(),
@@ -269,12 +270,13 @@ fn shared_bundle(name: &str) -> crate::PackageBundleV1 {
         sdk::DataType::UInt64,
         false,
     )]);
-    root.descriptor.exports[0].inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
-        package: "test.shared".into(),
-        revision: "1".into(),
-        export: "count".into(),
-        output: "rows".into(),
-    });
+    root.descriptor.exports[0].inputs[0].source =
+        sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
+            package: "test.shared".into(),
+            revision: "1".into(),
+            export: "count".into(),
+            output: "rows".into(),
+        }));
     let mut upstream = bundle("1", "SELECT minimum AS count FROM parameters")
         .artifacts
         .remove(0);

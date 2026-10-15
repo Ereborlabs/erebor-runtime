@@ -75,18 +75,28 @@ fn model_output_deadline() -> TestResult {
     };
     let bytes = output.allocated_bytes();
     let caller = control()?;
-    let result = owner.evaluate_analysis([1; 16], &package, &evaluation, &caller, |local, _| {
-        std::thread::sleep(local.remaining()? + Duration::from_millis(1));
-        Ok((output.clone(), bytes))
-    });
+    let result = owner.evaluate_model_reserved(
+        &package,
+        &evaluation,
+        &caller,
+        |capacity| owner.budget.model([1; 16], capacity),
+        |local, _, _| {
+            std::thread::sleep(local.remaining()? + Duration::from_millis(1));
+            Ok((output.clone(), bytes))
+        },
+    );
     assert!(matches!(
         result,
         Err(crate::Error::AnalysisReadDeadline { .. })
     ));
     caller.check()?;
-    let result = owner.evaluate_analysis([1; 16], &package, &evaluation, &caller, |_, _| {
-        Ok((output, bytes))
-    })?;
+    let result = owner.evaluate_model_reserved(
+        &package,
+        &evaluation,
+        &caller,
+        |capacity| owner.budget.model([1; 16], capacity),
+        |_, _, _| Ok((output, bytes)),
+    )?;
     assert_eq!(result.output.datasets[0].batches[0].num_rows(), 1);
     Ok(())
 }

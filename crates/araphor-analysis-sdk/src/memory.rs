@@ -2,6 +2,7 @@ use std::mem::size_of;
 
 use crate::{
     wire, Coverage, InputPort, InputSource, Model, Package, Port, Reason, Revision, Schema,
+    TableRef,
 };
 
 impl Package {
@@ -76,9 +77,10 @@ impl Memory {
                 .saturating_add(input.port.name.capacity())
                 .saturating_add(Self::schema_heap(&input.port.schema));
             bytes = bytes.saturating_add(match &input.source {
-                InputSource::Provided => 0,
-                InputSource::Sql(sql) => sql.capacity(),
-                InputSource::Output(output) => output
+                InputSource::Query(value) | InputSource::Table(TableRef::Named(value)) => {
+                    value.capacity()
+                }
+                InputSource::Table(TableRef::Output(output)) => output
                     .package
                     .capacity()
                     .saturating_add(output.revision.capacity())

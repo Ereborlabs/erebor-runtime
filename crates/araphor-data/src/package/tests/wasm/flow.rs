@@ -7,12 +7,12 @@ fn chain(revision: &str, empty: bool) -> TestResult<PackageBundleV1> {
     let model = &mut artifact.descriptor.exports[0];
     model.name = "count-input".into();
     model.inputs = vec![sdk::Port::new("input", model.outputs[0].schema.clone()).into()];
-    model.inputs[0].source = sdk::InputSource::Output(sdk::OutputRef {
+    model.inputs[0].source = sdk::InputSource::Table(sdk::TableRef::Output(sdk::OutputRef {
         package: "sql-source".into(),
         revision: revision.into(),
         export: "count".into(),
         output: "rows".into(),
-    });
+    }));
     let PackageImplementationV1::Wasm { exports, .. } = &mut artifact.implementations[0] else {
         return Err("Wasm fixture absent".into());
     };
@@ -31,7 +31,7 @@ fn chain(revision: &str, empty: bool) -> TestResult<PackageBundleV1> {
     upstream.descriptor.exports[0].outputs[0].schema = model.outputs[0].schema.clone();
     upstream.descriptor.exports[0].inputs =
         vec![sdk::Port::new("source", model.outputs[0].schema.clone()).into()];
-    upstream.descriptor.exports[0].inputs[0].source = sdk::InputSource::Sql("SELECT max(owner_revision)::UBIGINT AS value FROM context_versions WHERE owner_id = 'fixture'".into());
+    upstream.descriptor.exports[0].inputs[0].source = sdk::InputSource::Query("SELECT max(owner_revision)::UBIGINT AS value FROM context_versions WHERE owner_id = 'fixture'".into());
     package.artifacts.push(upstream);
     Ok(package)
 }
@@ -81,7 +81,13 @@ fn assert_value(fixture: &Fixture, response: &PackageResponseV1, expected: u64) 
 
 #[tokio::test]
 async fn wasm_dependency_replacements() -> TestResult {
-    let fixture = Fixture::new()?;
+    let fixture = Fixture::new_limits(crate::QueryLimits {
+        global_evaluations: 1,
+        tenant_evaluations: 1,
+        extract_timeout: std::time::Duration::from_secs(30),
+        evaluate_timeout: std::time::Duration::from_secs(30),
+        ..Default::default()
+    })?;
     fixture.store.commit_context(&context(1))?;
     let first = fixture
         .install(
