@@ -105,12 +105,16 @@ rtk proxy env CARGO_TARGET_DIR=/tmp/araphor-wasm-build CARGO_INCREMENTAL=0 CONST
 rtk proxy env CARGO_TARGET_DIR=/tmp/araphor-wasm-build cargo run --locked -p araphor-detector-example --example build_package -- /tmp/araphor-wasm-build/wasm32-unknown-unknown/release/araphor_detector_example.wasm /tmp/araphor-burst-package
 ```
 
-`ComponentBuilder::package` writes `descriptor.json`, `analysis.wit`,
-`analysis.h`, `detector.wasm`, and the complete `package.json`. The builder
+`ComponentBuilder::package` writes the SDK declarations and an OCI layout:
+`oci-layout`, `index.json`, and content-addressed files in `blobs/sha256/`.
+The config contains package metadata; a typed raw layer contains the component.
+The builder
 removes core debug names and debug sections, keeps the WIT metadata, and
 validates the component. One component can implement all declared exports.
-The package owner validates the manifest during admission. Operators install
-the built folder. The package owner compiles the component in its bounded
+The package owner validates the manifest and referenced blobs during admission.
+Operators install the built folder or its OCI-layout tar archive. The package
+digest is the exact manifest's `sha256:` identity. The package owner compiles
+the component in its bounded
 compiler process. Installation does not run an author compiler or hook.
 `ComponentBuilder::package_component` writes the same folder from an existing
 component. It preserves the supplied component bytes.

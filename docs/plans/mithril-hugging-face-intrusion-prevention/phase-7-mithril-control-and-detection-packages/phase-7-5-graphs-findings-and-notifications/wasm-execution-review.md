@@ -93,22 +93,32 @@ equal builds and matching ordinary Cargo outputs under `source_build_correction`
 The [final completion review](phase-7-5-4-wasm-execution.md#final-eight-deliverable-review)
 records final installed execution and workspace qualification.
 
-A built folder contains `package.json` and `detector.wasm`.
-`package.json` embeds the component bytes and complete artifact closure.
-Operators install this file or folder. Installation has no author compiler,
-download, or hook. The host compiles admitted bytes in its bounded worker.
-OCI distribution and native execution remain later work.
+A built folder is an OCI layout with `oci-layout`, `index.json`, and
+content-addressed files in `blobs/sha256/`. The Araphor config contains metadata.
+Typed raw layers contain component bytes, native dependency bytes when present,
+and fixture Arrow IPC. Operators install the directory or an OCI-layout tar
+archive. Installation has no author compiler, download, or hook. The host
+compiles admitted Wasm bytes in its bounded worker. Remote registry and
+publisher-verification work remains deferred.
 
 [PackageBundleV1::encode](../../../../../crates/araphor-data/src/package/bundle.rs)
-uses canonical descriptor JSON for every artifact in a component bundle.
+produces the current OCI-layout archive for SQL and component packages.
+All packages use the exact OCI manifest's `sha256:` identity for trust pins.
+The canonical Araphor config and manifest subset permits identity reconstruction
+after loading the immutable package closure. There is no previous JSON bundle
+or bare hexadecimal trust-pin fallback.
 [Immutable revision writes](../../../../../crates/araphor-data/src/package/lifecycle/revisions.rs)
 use canonical descriptor JSON for component revisions. SQL revisions keep
 their checked original bytes.
-Standalone SQL bundles retain their previous encoding and trust pins.
 An identical SQL dependency retains its original stored bytes after a checked
 descriptor, artifact, and dependency comparison.
 Arrow metadata map order cannot change a component digest or an identical
 installation record after decode or restart.
+
+Read the [current package storage and OCI guide](../../../../guides/araphor-binary-package-storage-review.md)
+for format, bounds, request framing, trust, and current verification status.
+The proof records below retain their original source and format. They do not
+qualify subsequent OCI changes unless a current record states that result.
 
 The [installation response correction](../../../../../crates/araphor-data/src/package/lifecycle.rs)
 passes its admitted bundle to

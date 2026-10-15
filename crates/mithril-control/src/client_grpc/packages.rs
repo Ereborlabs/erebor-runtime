@@ -18,12 +18,12 @@ impl ClientGrpcOwner {
         &self,
         request: Request<proto::PackageOperationRequest>,
     ) -> Result<proto::PackageOperationReply, Status> {
-        if request.get_ref().definition_json.len() > MAX_PACKAGE_BYTES + 64 * 1024 {
+        if request.get_ref().definition.len() > PackageRequestV1::MAX_BYTES {
             return Err(Self::package_limit("request bytes"));
         }
         let access = self.authenticate(&request, false).await?;
         let operation: PackageRequestV1 =
-            serde_json::from_slice(&request.get_ref().definition_json)
+            PackageRequestV1::from_bytes(&request.get_ref().definition)
                 .map_err(|_| Status::invalid_argument("The package request is invalid."))?;
         let action = operation.action();
         if action != PackageActionV1::Inspect {

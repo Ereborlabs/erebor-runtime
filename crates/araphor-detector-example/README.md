@@ -23,10 +23,11 @@ rtk proxy env CARGO_TARGET_DIR=/tmp/araphor-wasm-build cargo run --locked -p ara
 rtk proxy cargo test -p araphor-detector-example --lib
 ```
 
-The folder has the SDK declarations, the validated `detector.wasm`, and the
-complete `package.json`. The manifest embeds the exact component bytes. The
-folder builder depends on the SDK and the Rust component encoder. It does not
-require an Araphor host build.
+The folder has the SDK declarations and an OCI layout: `oci-layout`,
+`index.json`, and content-addressed files under `blobs/sha256/`. The OCI config
+contains package metadata. A typed raw layer contains the validated component
+bytes. The folder builder depends on the SDK and the Rust component encoder.
+It does not require an Araphor host build.
 
 Use the same source, lock file, target, and Rust compiler to reproduce the
 artifact. The recorded reproducibility proof uses Rust 1.97.1. The fixed
@@ -40,7 +41,7 @@ The author commands above produce the separate folder for installation.
 
 ## Install the built folder
 
-Compute the bundle digest and pin it in the existing Control `package_trust`
+Compute the OCI manifest digest and pin its exact `sha256:` value in Control `package_trust`
 configuration. Use the package mutation grant for the selected tenant. Read
 the [package operations guide](../../docs/plans/mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/phase-7-5-graphs-findings-and-notifications/package-operations.md)
 for the grant and trust format.

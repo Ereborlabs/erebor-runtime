@@ -8,6 +8,9 @@ mod model;
 mod validation;
 pub mod wire;
 
+#[cfg(all(feature = "oci", not(target_arch = "wasm32")))]
+pub mod oci;
+
 #[cfg(feature = "guest")]
 pub mod guest;
 

@@ -14,6 +14,7 @@ mod installed;
 mod lifecycle;
 mod model;
 pub mod native;
+mod oci;
 mod output;
 mod owner;
 mod removal;

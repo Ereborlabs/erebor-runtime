@@ -178,7 +178,7 @@ impl AnalysisPackageQualification {
         fixture.window(1, 3)?;
         let directory = root.join("built-package");
         fs::create_dir(&directory)?;
-        fs::write(directory.join("package.json"), bundle.encode()?)?;
+        bundle.write_layout(&directory)?;
         let local = PackageBundleV1::read(&directory)?;
         self.check(
             local.digest()? == bundle.digest()?,

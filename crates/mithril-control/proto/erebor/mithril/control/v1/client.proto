@@ -12,7 +12,7 @@ service AraphorClientService {
 }
 
 message PackageOperationRequest {
-  bytes definition_json = 1;
+  bytes definition = 1;
   InputSelection selection = 2;
 }
 

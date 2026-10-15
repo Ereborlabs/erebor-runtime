@@ -1,15 +1,12 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::io::{self, Read as _, Write};
-use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::Path;
 
 use araphor_analysis_sdk as sdk;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use crate::{IoSnafu, PackageEncodingSnafu, Result, SqlModelV1};
+use crate::{PackageEncodingSnafu, Result, SqlModelV1};
 
 use super::{PackageErrorCodeV1 as Code, PackageFixtureV1};
 
@@ -176,19 +173,6 @@ impl PackageImplementationV1 {
 }
 
 impl PackageArtifactV1 {
-    fn has_component(&self) -> bool {
-        self.implementations.iter().any(|implementation| {
-            matches!(
-                implementation,
-                PackageImplementationV1::Wasm { .. }
-                    | PackageImplementationV1::Native {
-                        qualification: Some(_),
-                        ..
-                    }
-            )
-        })
-    }
-
     pub(super) fn encoding(&self, canonical: bool) -> Result<ArtifactEncoding<'_>> {
         ArtifactEncoding::new(
             &self.descriptor,
@@ -254,92 +238,36 @@ impl PackageArtifactV1 {
 
 impl PackageBundleV1 {
     pub fn read(path: &Path) -> Result<Self> {
-        let path = if path.is_dir() {
-            path.join("package.json")
-        } else {
-            path.to_path_buf()
-        };
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
-            )
-            .open(&path)
-            .context(IoSnafu { path: &path })?;
-        let metadata = file.metadata().context(IoSnafu { path: &path })?;
-        if !metadata.is_file() || metadata.len() > MAX_PACKAGE_BYTES as u64 {
-            return Err(Code::Limit.error("package file"));
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_PACKAGE_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .context(IoSnafu { path })?;
-        Self::from_bytes(&bytes)
+        super::oci::PackageOci::read(path)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() > MAX_PACKAGE_BYTES {
-            return Err(Code::Limit.error("package bytes"));
-        }
-        let mut bundle: Self = serde_json::from_slice(bytes).context(PackageEncodingSnafu)?;
-        bundle.artifacts.sort_by_key(PackageArtifactV1::reference);
-        bundle.validate()?;
-        Ok(bundle)
+        super::oci::PackageOci::decode(
+            sdk::oci::Content::from_bytes(bytes, MAX_PACKAGE_BYTES)
+                .context(crate::AnalysisContractSnafu)?,
+        )
     }
 
     pub fn encode(&self) -> Result<Vec<u8>> {
-        let mut bytes = super::wire::PackageBuffer::new(MAX_PACKAGE_BYTES as u64);
-        self.encode_into(&mut bytes)?;
-        Ok(bytes.finish())
+        self.oci()?.encode().context(crate::AnalysisContractSnafu)
+    }
+
+    pub fn write_layout(&self, path: &Path) -> Result<()> {
+        self.oci()?
+            .write(path)
+            .context(crate::AnalysisContractSnafu)
     }
 
     pub(super) fn check_encoding(&self) -> Result<()> {
-        let mut writer =
-            super::wire::PackageBuffer::from_writer(io::sink(), MAX_PACKAGE_BYTES as u64);
-        self.encode_into(&mut writer)
-    }
-
-    fn encode_into(&self, writer: &mut impl Write) -> Result<()> {
-        let canonical = self.artifacts.iter().any(PackageArtifactV1::has_component);
-        let mut artifacts: Vec<_> = self.artifacts.iter().collect();
-        artifacts.sort_by_key(|artifact| artifact.reference());
-        let artifacts = artifacts
-            .into_iter()
-            .map(|artifact| artifact.encoding(canonical))
-            .collect::<Result<Vec<_>>>()?;
-        #[derive(Serialize)]
-        struct Ordered<'a> {
-            schema_version: u32,
-            root: &'a PackageRefV1,
-            artifacts: Vec<ArtifactEncoding<'a>>,
-        }
-        serde_json::to_writer(
-            writer,
-            &Ordered {
-                schema_version: self.schema_version,
-                root: &self.root,
-                artifacts,
-            },
-        )
-        .context(PackageEncodingSnafu)?;
-        Ok(())
+        self.oci().map(|_| ())
     }
 
     pub fn digest(&self) -> Result<String> {
-        let mut digest = Sha256::new();
-        digest.update(b"ARAPHOR-ANALYSIS-PACKAGE-V1\0");
-        {
-            let mut writer = io::BufWriter::new(&mut digest);
-            self.encode_into(&mut super::wire::PackageBuffer::from_writer(
-                &mut writer,
-                MAX_PACKAGE_BYTES as u64,
-            ))?;
-            writer
-                .flush()
-                .map_err(serde_json::Error::io)
-                .context(PackageEncodingSnafu)?;
-        }
-        Ok(format!("{:x}", digest.finalize()))
+        Ok(self.oci()?.digest())
+    }
+
+    fn oci(&self) -> Result<sdk::oci::Layout<'_>> {
+        super::oci::PackageOci::layout(self)
     }
 
     pub(crate) fn artifact(&self, reference: &PackageRefV1) -> Result<&PackageArtifactV1> {
@@ -364,25 +292,20 @@ mod encoding_tests {
             inputs: None,
             artifact: (0_u8..=255).cycle().take(16 * 1024 + 1).collect(),
         }];
-        assert!(component.encode()?.len() > io::BufWriter::new(io::sink()).capacity());
         for package in [sql, component] {
             let bytes = package.encode()?;
-            let mut digest = Sha256::new();
-            digest.update(b"ARAPHOR-ANALYSIS-PACKAGE-V1\0");
-            digest.update(&bytes);
-            assert_eq!(package.digest()?, format!("{:x}", digest.finalize()));
+            let content = sdk::oci::Content::from_bytes(&bytes, MAX_PACKAGE_BYTES)?;
+            use sha2::{Digest as _, Sha256};
+            assert_eq!(
+                package.digest()?,
+                format!("sha256:{:x}", Sha256::digest(&content.manifest))
+            );
             package.check_encoding()?;
-            let mut exact =
-                super::super::wire::PackageBuffer::from_writer(io::sink(), bytes.len() as u64);
-            package.encode_into(&mut exact)?;
-            let mut short =
-                super::super::wire::PackageBuffer::from_writer(io::sink(), bytes.len() as u64 - 1);
-            let error = package
-                .encode_into(&mut short)
-                .err()
-                .ok_or("over-limit encoding accepted")?;
-            assert!(matches!(error, crate::Error::PackageEncoding { source, .. }
-                if source.io_error_kind() == Some(io::ErrorKind::FileTooLarge)));
+            assert_eq!(package.oci()?.archive_size(), bytes.len());
+            assert_eq!(
+                PackageBundleV1::from_bytes(&bytes)?.digest()?,
+                package.digest()?
+            );
         }
         Ok(())
     }

@@ -23,18 +23,18 @@ impl PackageTrustPinV1 {
         );
         let mut result = BTreeSet::new();
         for pin in pins {
+            let digest = pin.bundle_digest.strip_prefix("sha256:");
             let tenant = Uuid::parse_str(&pin.tenant_id)
                 .ok()
                 .filter(|tenant| !tenant.is_nil() && tenant.to_string() == pin.tenant_id);
             ensure!(
                 tenant.is_some()
-                    && pin.bundle_digest.len() == 64
-                    && pin
-                        .bundle_digest
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                    && digest.is_some_and(|digest| digest.len() == 64
+                        && digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))),
                 InvalidConfigurationSnafu {
-                    reason: "package trust requires a canonical tenant UUID and SHA-256 digest"
+                    reason: "package trust requires a canonical tenant UUID and OCI sha256 digest"
                 }
             );
             let tenant = tenant.ok_or_else(|| {

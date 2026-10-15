@@ -7,7 +7,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow = "1"
-araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk", features = ["oci"] }
 clap.workspace = true
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 serde_json.workspace = true

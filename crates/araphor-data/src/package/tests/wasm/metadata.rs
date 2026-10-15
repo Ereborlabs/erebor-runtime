@@ -64,20 +64,14 @@ fn package_metadata_digest_stable() -> TestResult {
 }
 
 #[test]
-fn sql_bundle_encoding_unchanged() -> TestResult {
+fn sql_oci_metadata_unchanged() -> TestResult {
     let package = crate::package::tests::bundle("1", "SELECT 1::UBIGINT AS count");
-    #[derive(serde::Serialize)]
-    struct Ordered<'a> {
-        schema_version: u32,
-        root: &'a PackageRefV1,
-        artifacts: Vec<&'a PackageArtifactV1>,
-    }
-    let expected = serde_json::to_vec(&Ordered {
-        schema_version: package.schema_version,
-        root: &package.root,
-        artifacts: package.artifacts.iter().collect(),
-    })?;
-    assert_eq!(package.encode()?, expected);
+    let content = sdk::oci::Content::from_bytes(&package.encode()?, MAX_PACKAGE_BYTES)?;
+    assert!(content.layers.is_empty());
+    assert_eq!(
+        serde_json::to_value(content.package::<PackageBundleV1>()?)?,
+        serde_json::to_value(&package)?
+    );
     Ok(())
 }
 
@@ -220,6 +214,13 @@ async fn mixed_metadata_install_retry() -> TestResult {
         );
     }
     let fixture = fixture.reopen()?;
+    assert_eq!(
+        fixture
+            .owner
+            .load_bundle([1; 16], &package.root)?
+            .digest()?,
+        digest
+    );
     let installed = fixture
         .install(PackageBundleV1::from_bytes(&package.encode()?)?, None)
         .await?;

@@ -6,7 +6,7 @@ use snafu::{OptionExt as _, ResultExt as _};
 
 use super::args::{Prepared, SelectionArgs};
 use super::error::{
-    ClientSnafu, EncodeSnafu, InterruptedSnafu, InvalidSnafu, PackageSnafu, ProtocolSnafu, Result,
+    ClientSnafu, InterruptedSnafu, InvalidSnafu, PackageSnafu, ProtocolSnafu, Result,
 };
 use super::{wire, CommandRun};
 
@@ -24,7 +24,7 @@ pub(crate) struct PackageArgs {
 enum PackageCommand {
     /// Read the digest used in Control package trust pins.
     Digest { path: PathBuf },
-    /// Admit a built JSON file or directory and activate its supported exports.
+    /// Admit a local OCI layout or archive and activate its supported exports.
     Install {
         path: PathBuf,
         #[arg(long)]
@@ -141,7 +141,7 @@ impl PackageArgs {
             PackageCommand::Digest { .. } => unreachable!("digest is a local operation"),
         };
         Ok(Prepared::Package(wire::PackageOperationRequest {
-            definition_json: serde_json::to_vec(&operation).context(EncodeSnafu)?,
+            definition: operation.encode().context(PackageSnafu)?,
             selection: Some((&self.selection).try_into()?),
         }))
     }
@@ -218,7 +218,7 @@ mod tests {
         let Prepared::Package(request) = command.prepare()? else {
             return Err("package request absent".into());
         };
-        let operation: PackageRequestV1 = serde_json::from_slice(&request.definition_json)?;
+        let operation: PackageRequestV1 = PackageRequestV1::from_bytes(&request.definition)?;
         assert!(
             matches!(operation, PackageRequestV1::Run { scope_id, package_id, evaluation_id, .. }
             if scope_id == "team" && package_id == "denials" && evaluation_id == "retry-1")

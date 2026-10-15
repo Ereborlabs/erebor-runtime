@@ -35,6 +35,7 @@ libbpf-rs.workspace = true
 libc = "0.2.186"
 linux-raw-sys = { version = "0.12.1", features = ["general"] }
 memmap2 = "0.9.11"
+minicbor.workspace = true
 mithril-control = { path = "../mithril-control", features = ["test-fixtures"] }
 mithril-node = { path = "../mithril-node", features = ["test-support"] }
 openidconnect.workspace = true

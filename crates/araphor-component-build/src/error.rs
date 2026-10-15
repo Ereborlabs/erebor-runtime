@@ -12,12 +12,6 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Package manifest encoding failed: {source}"))]
-    Encoding {
-        source: serde_json::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Component encoding failed: {source}"))]
     Component {
         source: anyhow::Error,
@@ -54,10 +48,7 @@ impl ErrorExt for Error {
         match self {
             Self::Contract { source, .. } => source.status_code(),
             Self::Component { .. } => StatusCode::InvalidArguments,
-            Self::Encoding { .. }
-            | Self::Io { .. }
-            | Self::Build { .. }
-            | Self::BuildFailed { .. } => StatusCode::Internal,
+            Self::Io { .. } | Self::Build { .. } | Self::BuildFailed { .. } => StatusCode::Internal,
         }
     }
     fn retry_hint(&self) -> RetryHint {

@@ -23,9 +23,9 @@ struct Metadata {
 mod tests;
 
 #[derive(Serialize)]
-struct MetadataRef<'a> {
-    implementations: Vec<PackageImplementationV1>,
-    fixtures: &'a [PackageFixtureV1],
+pub(super) struct MetadataRef<'a> {
+    pub(super) implementations: Vec<PackageImplementationV1>,
+    pub(super) fixtures: &'a [PackageFixtureV1],
 }
 
 #[derive(Default)]
@@ -128,7 +128,7 @@ impl StoredArtifact {
         Ok(bytes)
     }
 
-    fn split<'a>(
+    pub(super) fn split<'a>(
         implementations: &'a [PackageImplementationV1],
         fixtures: &'a [PackageFixtureV1],
     ) -> (MetadataRef<'a>, Vec<&'a [u8]>) {

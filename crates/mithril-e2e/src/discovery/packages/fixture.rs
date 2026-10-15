@@ -254,7 +254,8 @@ impl Fixture {
         operation: PackageRequestV1,
     ) -> std::result::Result<PackageResponseV1, tonic::Status> {
         let mut request = tonic::Request::new(wire::PackageOperationRequest {
-            definition_json: serde_json::to_vec(&operation)
+            definition: operation
+                .encode()
                 .map_err(|_| tonic::Status::internal("fixture request"))?,
             selection: None,
         });

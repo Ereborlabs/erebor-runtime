@@ -6,6 +6,8 @@ use crate::{AnalysisSelectionV1, Result};
 
 use super::PackageBundleV1;
 
+mod request;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageErrorCodeV1 {
@@ -94,6 +96,7 @@ pub trait PackageAuthorization: Send + Sync + 'static {
 pub enum PackageRequestV1 {
     Install {
         scope_id: String,
+        #[serde(skip_serializing)]
         bundle: PackageBundleV1,
         parameters: Option<serde_json::Value>,
     },
@@ -110,6 +113,7 @@ pub enum PackageRequestV1 {
     },
     Update {
         scope_id: String,
+        #[serde(skip_serializing)]
         bundle: PackageBundleV1,
     },
     Rollback {

@@ -49,7 +49,8 @@ impl Fixture {
         mutation: bool,
     ) -> Result<PackageResponseV1, tonic::Status> {
         let request = proto::PackageOperationRequest {
-            definition_json: serde_json::to_vec(&operation)
+            definition: operation
+                .encode()
                 .map_err(|_| Status::internal("test encoding"))?,
             selection: None,
         };

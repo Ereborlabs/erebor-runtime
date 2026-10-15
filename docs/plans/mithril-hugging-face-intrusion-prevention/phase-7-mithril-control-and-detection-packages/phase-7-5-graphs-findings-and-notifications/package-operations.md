@@ -6,25 +6,27 @@ The CLI and agents call the same package owner. Read the
 [implementation limits](wasm-execution-review.md#limits-and-proof)
 before selecting an input scope.
 
-New analysis stores use schema 20. The
-[schema owner](../../../../../crates/araphor-data/src/analysis/mod.rs) applies
-checked conversions from schemas 19 and 17. Schema 18 remains unsupported and
-is rejected without changes. Read the
-[notice conversion](wasm-execution-review.md#commit-and-recovery) before updating
-a deployment.
+New analysis stores use schema 21 and the current binary package records.
+Use fresh development stores. The
+[schema owner](../../../../../crates/araphor-data/src/analysis/mod.rs) validates
+the current format. There is no schema conversion or compatibility reader.
 
 ## Built package
 
-A built package is one JSON file. A directory supplies the same file as
-`package.json`. The file contains the SDK descriptor, SQL implementations or
-Wasm components, fixtures, and every locked dependency artifact. The complete
-file has a 32 MiB limit. Installation works offline. The installer does not run
+A built package is an OCI layout directory or an OCI-layout tar archive.
+The directory contains `oci-layout`, `index.json`, and content-addressed files
+under `blobs/sha256/`. Its Araphor config contains the SDK descriptors, SQL,
+implementation metadata, fixtures, and dependency locks. Executable code,
+native dependency code, and fixture Arrow IPC are typed raw layers. The
+canonical Araphor manifest and config identify the exact content. The complete
+archive has a 32 MiB limit, including headers and padding. Installation works
+offline. The installer does not run
 an author compiler, hooks, or dependency downloads. The package owner compiles
 admitted Wasm components in its bounded host compiler process.
 
 The [compiled detector example](../../../../../crates/araphor-detector-example/README.md)
-supplies a built folder with a component, declarations, and the complete
-manifest. Install that detector in scope `analysis`. The graph owner supplies
+supplies an OCI folder with declarations, a manifest, and the raw component
+layer. Install that detector in scope `analysis`. The graph owner supplies
 its authorized inputs and validates its findings and checkpoint. The operator
 does not need a Rust compiler.
 
@@ -100,7 +102,7 @@ SQL to the intended authorized query views.
 
 ## Authorize and install
 
-First compute the complete bundle digest:
+First compute the OCI manifest digest:
 
 ```sh
 araphor package digest ./denials
@@ -123,13 +125,17 @@ of that configuration:
   }],
   "package_trust": [{
     "tenant_id": "11111111-1111-1111-1111-111111111111",
-    "bundle_digest": "REPLACE_WITH_THE_64_CHARACTER_DIGEST"
+    "bundle_digest": "sha256:<64lowerhex>"
   }]
 }
 ```
 
+Replace `sha256:<64lowerhex>` with the exact returned value: `sha256:` followed
+by 64 lowercase hexadecimal characters. A bare hexadecimal digest is invalid.
 The digest pins exact content. It is not a publisher signature. Control rejects
 an unpinned bundle and a caller that has only investigation permission.
+Remote registry and publisher-verification work remains deferred under the
+[existing OCI plan](../../../daemon-client/phase-10-oci-registry-trust-hub-and-packaging.md).
 
 ```sh
 araphor --profile ./operator.json package --scope demo install ./denials

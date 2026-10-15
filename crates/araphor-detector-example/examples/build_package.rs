@@ -11,6 +11,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("unexpected argument".into());
     }
     ComponentBuilder::package(&BurstDetector::package(), &core, &directory)?;
-    println!("{}", directory.join("package.json").display());
+    println!("{}", directory.display());
     Ok(())
 }

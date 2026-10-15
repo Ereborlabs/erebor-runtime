@@ -151,12 +151,33 @@ impl DetectorQualification<'_> {
                 artifact,
                 qualification: Some(qualification),
                 ..
-            } => ComponentBuilder::package_native(
-                &BurstDetector::package(),
-                artifact,
-                serde_json::to_value(qualification)?,
-                &directory,
-            )?,
+            } => {
+                let mut metadata = json!({
+                    "exports": qualification.exports,
+                    "target": qualification.target,
+                    "cpu_features": qualification.cpu_features,
+                    "contract_version": qualification.contract_version,
+                    "system_libraries": qualification.system_libraries,
+                    "dependencies": qualification.dependencies.iter().map(|dependency| json!({
+                        "name": dependency.name, "artifact": [], "digest": dependency.digest,
+                    })).collect::<Vec<_>>(),
+                });
+                if let Some(inputs) = &qualification.inputs {
+                    metadata["inputs"] = serde_json::to_value(inputs)?;
+                }
+                let dependencies = qualification
+                    .dependencies
+                    .iter()
+                    .map(|dependency| (dependency.name.as_str(), dependency.artifact.as_slice()))
+                    .collect::<Vec<_>>();
+                ComponentBuilder::package_native(
+                    &BurstDetector::package(),
+                    artifact,
+                    metadata,
+                    &dependencies,
+                    &directory,
+                )?;
+            }
             _ => return Err("detector implementation is not qualified".into()),
         }
         let local = PackageBundleV1::read(&directory)?;
@@ -167,12 +188,34 @@ impl DetectorQualification<'_> {
             bundle: local,
             parameters: Some(parameters.clone()),
         };
-        let request = wire::PackageOperationRequest {
-            definition_json: serde_json::to_vec(&operation)?,
+        let mut request = wire::PackageOperationRequest {
+            definition: operation.encode()?,
             selection: None,
         };
+        if request.encoded_len() <= 4 * 1024 * 1024 {
+            // JSON whitespace preserves the large transport check and the executable identity.
+            let mut decoder = minicbor::Decoder::new(&request.definition);
+            assert_eq!(decoder.array()?, Some(3));
+            assert_eq!(decoder.u32()?, 1);
+            let mut metadata = decoder.bytes()?.to_vec();
+            let archive = decoder.bytes()?;
+            metadata.resize(
+                metadata.len() + 4 * 1024 * 1024 + 1 - request.encoded_len(),
+                b' ',
+            );
+            let mut encoder = minicbor::Encoder::new(Vec::new());
+            encoder.array(3)?.u32(1)?.bytes(&metadata)?.bytes(archive)?;
+            request.definition = encoder.into_writer();
+        }
         let transport_bytes = request.encoded_len();
         assert!(transport_bytes > 4 * 1024 * 1024);
+        assert!(transport_bytes <= PackageRequestV1::MAX_BYTES + 64);
+        let raw_size = match &self.bundle.artifacts[0].implementations[0] {
+            PackageImplementationV1::Wasm { artifact, .. }
+            | PackageImplementationV1::Native { artifact, .. } => artifact.len(),
+            _ => return Err("detector implementation is not qualified".into()),
+        };
+        assert!(transport_bytes >= raw_size);
         let mut credential = tempfile::NamedTempFile::new_in(self.root)?;
         credential.write_all(b"fixture-access")?;
         let (client, server) = fixture

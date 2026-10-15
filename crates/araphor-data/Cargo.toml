@@ -10,7 +10,7 @@ test-fixtures = []
 
 [dependencies]
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
-araphor-analysis-sdk = { path = "../araphor-analysis-sdk", features = ["native"] }
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk", features = ["native", "oci"] }
 arrow-ipc = "=58.4.0"
 arrow-json = "=58.4.0"
 crc32c.workspace = true

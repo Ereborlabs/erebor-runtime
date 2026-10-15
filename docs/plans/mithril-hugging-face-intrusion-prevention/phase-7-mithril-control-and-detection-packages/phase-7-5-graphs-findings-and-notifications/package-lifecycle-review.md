@@ -96,10 +96,20 @@ cannot extend the grant.
 
 ## Package and SQL contract
 
-`PackageBundleV1` is the built local format. A directory contains `package.json`.
-The file contains the root reference and its complete immutable artifact closure.
-There are no installation hooks or dependency downloads. OCI distribution is
-outside this implementation.
+`PackageBundleV1` reads the current OCI layout directory or OCI-layout tar
+archive. The directory contains `oci-layout`, `index.json`, and content-addressed
+files in `blobs/sha256/`. The Araphor config contains the root reference,
+descriptors, implementation metadata, fixtures, and dependency locks. Typed raw
+layers contain executable code, native dependencies, and fixture Arrow IPC.
+All packages, including standalone SQL packages, use the exact OCI manifest's
+`sha256:` identity. Trust pins require this prefix and 64 lowercase hexadecimal
+characters. There are no installation hooks or dependency downloads. Remote
+registry and publisher-verification work remains deferred.
+
+Read the [current package storage and OCI guide](../../../../guides/araphor-binary-package-storage-review.md)
+for the canonical Araphor subset, request framing, bounds, and current proof.
+The retained lifecycle evidence below keeps its original source and format;
+it does not qualify subsequent OCI changes by itself.
 Admission rejects model cycles and cycles between package artifacts before
 storage. A model can depend on an earlier model in the same package.
 
@@ -184,12 +194,13 @@ periodic evaluation task does not scan the full artifact catalogue.
 
 ## Limits and review points
 
-- A local bundle is at most 3 MiB and has at most 64 artifacts and 256 models.
+- A local OCI archive is at most 32 MiB, including tar headers and padding.
+  A package has at most 64 artifacts and 256 models.
 - Four package operations can occupy the owner at once. QueryOwner applies its
   existing per-tenant and global evaluation and memory limits.
 - Package result and checkpoint serialization has a 16 MiB bound. Decoding and
   input accumulation have independent row, batch, byte, and reference limits.
-- An API reply is at most 3 MiB plus 64 KiB. Query a subset of a larger stored
+- An API reply is at most 32 MiB plus 64 KiB. Query a subset of a larger stored
   dataset; the API rejects an oversized reply.
 - Whole-version authorization precedes dependent-result decoding. A narrower grant
   cannot select rows from a result produced under a broader scope.
