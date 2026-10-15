@@ -543,7 +543,7 @@ async fn control_graph_query_mixed_binding_window_keeps_manifest_private() -> Te
 }
 
 #[tokio::test]
-async fn graph_query_formatting_boundary() -> TestResult {
+async fn graph_query_canonical_boundary() -> TestResult {
     let mut fixture = crate::graph::tests::native_storage::CommitFixture::new()
         .map_err(|error| error.to_string())?;
     let bytes = 64 * 1024;
@@ -551,6 +551,14 @@ async fn graph_query_formatting_boundary() -> TestResult {
     assert!(canonical.len() < bytes / 2);
     fixture.request.body = vec![b' '; bytes * 2];
     fixture.request.body.extend_from_slice(&canonical);
+    assert!(matches!(
+        fixture.store.commit_graph(&fixture.request, true),
+        Err(crate::Error::GraphInvalid {
+            field: "graph canonical bytes",
+            ..
+        })
+    ));
+    fixture.request.body = canonical;
     fixture.store.commit_graph(&fixture.request, true)?;
     let source = &fixture.snapshot.scope.identity;
     let finding = &fixture.snapshot.findings[0];
