@@ -1,7 +1,7 @@
 use crate::analysis::{AnalysisProjection, PackageResultRefV1, ProjectionSink};
 use crate::{AnalysisContextRefV1, AnalysisInputV1, AnalysisWitnessV1, Result};
 
-use super::super::{InputProjection, InputRow};
+use super::super::InputProjection;
 
 pub(super) struct ModelProjection<'a> {
     pub(super) inner: InputProjection<'a>,
@@ -15,7 +15,7 @@ impl ModelProjection<'_> {
         &mut self,
         result_id: &str,
         commit_revision: u64,
-        sink: &mut ProjectionSink<'_, InputRow>,
+        sink: &mut ProjectionSink<'_, ()>,
     ) -> Result<()> {
         if let Some(reference) = self
             .results
@@ -45,7 +45,7 @@ impl ModelProjection<'_> {
 }
 
 impl AnalysisProjection for ModelProjection<'_> {
-    type Row = InputRow;
+    type Row = ();
 
     fn decodes_events(&self) -> bool {
         self.inner.decodes_events()
@@ -60,7 +60,7 @@ impl AnalysisProjection for ModelProjection<'_> {
     fn project(
         &mut self,
         input: AnalysisInputV1<'_>,
-        sink: &mut ProjectionSink<'_, InputRow>,
+        sink: &mut ProjectionSink<'_, ()>,
     ) -> Result<bool> {
         match &input {
             AnalysisInputV1::Event {

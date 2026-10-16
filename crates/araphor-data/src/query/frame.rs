@@ -390,6 +390,14 @@ impl From<&crate::Error> for QueryErrorCode {
                 Self::InputTooLarge
             }
             crate::Error::QueryLimit { .. } => Self::ResultTooLarge,
+            crate::Error::QueryEngine { source, .. }
+                if matches!(
+                    source.find_root(),
+                    datafusion::common::DataFusionError::ResourcesExhausted(_)
+                ) =>
+            {
+                Self::ResultTooLarge
+            }
             crate::Error::QueryCursorExpired { .. } | crate::Error::RetainedRangeExpired { .. } => {
                 Self::CursorExpired
             }

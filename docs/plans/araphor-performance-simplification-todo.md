@@ -133,11 +133,23 @@ No new performance test or benchmark is approved. Do not infer speed gains
 from changed test-suite durations. Record removed work from the final source.
 Measure latency only after approval of a specific workload and its limits.
 
-Result: **Not done**. The current source removes 2,036 nonblank production Rust
-lines from `7b7b407a` and 883 from `aa390d9f`. The shared SDK codec changes
-remove 92 from `1fb58d37`. Another 3,964 must be removed to meet the target.
+Result: **Not done**. The current DataFusion working tree removes 7 nonblank
+production Rust lines from `7b7b407a` and adds 1,146 from `aa390d9f`.
+The engine integration adds 2,222 from the redesign baseline `537f9de3`.
+Another 5,993 must be removed to meet the target. The count record is
+`/tmp/araphor-arrow-engine-count8.json`. It includes the new query modules
+and excludes tests and documents. Engine functional qualification passes:
+439 ordinary Data cases, 12 native Data cases, six Control cases, and three
+E2E cases. The final affected build, strict Clippy, and formatting pass. The
+result record is `/tmp/araphor-arrow-engine-qualification-final.json`. The
+[engine plan result](araphor-component-redesign.md#qualification-and-acceptance)
+records the corrected native test, exact source extension, and platform limits.
 Continue component refactoring. Documentation and test deletion do not close
 this result.
+
+Before the engine integration, retained admission removed 2,036 nonblank
+production Rust lines from `7b7b407a` and 883 from `aa390d9f`. The shared SDK
+codec changes removed 92 from `1fb58d37`. These are historical counts.
 
 The shared codec iteration passed the affected SDK, Data, Control, and
 end-to-end test build in 45.44 seconds after cache cleanup. All 107 selected

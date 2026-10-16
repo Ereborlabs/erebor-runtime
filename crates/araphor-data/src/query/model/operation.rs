@@ -1,21 +1,23 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
+
+use datafusion::datasource::MemTable;
+use datafusion::execution::SessionState;
 
 use araphor_analysis_sdk as sdk;
-use snafu::ResultExt as _;
 
 use super::{
-    execute::ModelExecution, schema::ModelSchema, AdmittedExport, ModelInputRequest, ModelInputs,
-    SqlModelOutputV1, SqlModelV1,
+    execute::ModelExecution, AdmittedExport, ModelInputRequest, ModelInputs, SqlModelOutputV1,
+    SqlModelV1,
 };
-use crate::query::{budget::QueryLease, evaluation::QueryEvaluation, input::ScopedSources};
+use crate::query::{budget::QueryLease, engine::QueryEngine};
 use crate::{AnalysisReadControl, QueryOwner, Result};
 
 pub(crate) struct ModelOperation<'a> {
     pub(super) owner: &'a QueryOwner,
     tenant: [u8; 16],
-    engine: Option<(duckdb::Connection, QueryLease)>,
-    pub(super) sources: ScopedSources,
-    pub(super) bound: BTreeMap<String, String>,
+    engine: Option<(SessionState, QueryLease)>,
+    pub(super) bound: BTreeMap<String, Arc<MemTable>>,
+    pub(super) retained_bytes: usize,
 }
 
 impl QueryOwner {
@@ -24,22 +26,30 @@ impl QueryOwner {
             owner: self,
             tenant,
             engine: None,
-            sources: ScopedSources::default(),
             bound: BTreeMap::new(),
+            retained_bytes: 0,
         }
     }
 }
 
 impl ModelOperation<'_> {
-    pub(super) fn engine(&mut self) -> Result<(&duckdb::Connection, &mut ScopedSources)> {
-        let (connection, _) = match &mut self.engine {
+    pub(super) fn engine(&mut self) -> Result<(&SessionState, &QueryLease)> {
+        let (state, lease) = match &mut self.engine {
             Some(engine) => engine,
             slot @ None => {
                 let lease = self.owner.budget.model(self.tenant, 0)?;
-                slot.insert((QueryEvaluation::connection()?, lease))
+                slot.insert((QueryEngine::state()?, lease))
             }
         };
-        Ok((connection, &mut self.sources))
+        Ok((state, lease))
+    }
+
+    pub(crate) fn release_inputs(mut self) -> Result<()> {
+        if let Some((_, mut lease)) = self.engine.take() {
+            lease.shrink_input(self.retained_bytes)?;
+            drop(lease.retained_output(0)?);
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -106,7 +116,7 @@ impl ModelOperation<'_> {
             control.check()?;
             authorize()?;
             let sql = &queries[&input.port.name];
-            for (index, input) in model.inputs.iter().enumerate() {
+            for input in &model.inputs {
                 if !matches!(input.source, sdk::InputSource::Table(_))
                     || !sql
                         .dependencies()
@@ -114,42 +124,81 @@ impl ModelOperation<'_> {
                     || crate::query::input::SCHEMAS
                         .iter()
                         .any(|schema| schema.name.eq_ignore_ascii_case(&input.port.name))
-                    || self.bound.contains_key(&input.port.name)
+                    || self
+                        .bound
+                        .contains_key(&input.port.name.to_ascii_lowercase())
                 {
                     continue;
                 }
                 let source = sources
                     .get(&input.port.name)
                     .ok_or_else(|| crate::PackageErrorCodeV1::Incomplete.error("table binding"))?;
-                let table = format!("araphor:port:{index}");
-                self.bound.insert(input.port.name.clone(), table.clone());
                 ModelExecution::check_input(
                     sources
                         .iter()
-                        .filter(|(name, _)| self.bound.contains_key(*name))
+                        .filter(|(name, _)| {
+                            self.bound.contains_key(&name.to_ascii_lowercase())
+                                || name.as_str() == input.port.name.as_str()
+                        })
                         .flat_map(|(_, source)| &source.input.data.batches),
                     self.owner.limits.input_bytes,
                 )?;
+                let bytes = source
+                    .input
+                    .data
+                    .batches
+                    .iter()
+                    .map(|batch| {
+                        let payload = if matches!(
+                            &input.source,
+                            sdk::InputSource::Table(sdk::TableRef::Output(_))
+                        ) {
+                            QueryEngine::batch_bytes(batch)
+                        } else {
+                            0
+                        };
+                        payload
+                            .saturating_add(QueryLease::batch_overhead(batch))
+                            .saturating_add(QueryLease::index_overhead(batch.num_rows()))
+                    })
+                    .sum::<usize>();
+                let retained = self.retained_bytes.saturating_add(bytes);
+                if retained > self.owner.limits.input_bytes {
+                    return crate::QueryLimitSnafu {
+                        resource: "model source input",
+                        limit: self.owner.limits.input_bytes,
+                    }
+                    .fail();
+                }
                 let stage = control.within(self.owner.limits.evaluate_timeout)?;
-                let (connection, _) = self.engine()?;
-                stage.query_run(connection, || {
-                    ModelExecution::table_on(
-                        connection,
-                        &stage,
-                        &table,
-                        &input.port.schema,
-                        &source.input.data.batches,
-                    )?;
-                    connection
-                        .execute_batch(&format!(
-                            "CREATE TEMP VIEW {} AS SELECT * FROM {}",
-                            ModelSchema::quote(&input.port.name),
-                            ModelSchema::quote(&table)
-                        ))
-                        .context(crate::AnalysisDatabaseSnafu {
-                            operation: "bind source table",
-                        })
-                })?;
+                let (_, lease) = self.engine()?;
+                let table = QueryEngine::table(
+                    Arc::new(input.port.schema.clone()),
+                    &source.input.data.batches,
+                    lease,
+                )?;
+                stage.check()?;
+                self.bound
+                    .insert(input.port.name.to_ascii_lowercase(), table);
+                self.retained_bytes = retained;
+                #[cfg(test)]
+                {
+                    let resident = sources
+                        .iter()
+                        .filter(|(name, _)| self.bound.contains_key(&name.to_ascii_lowercase()))
+                        .flat_map(|(_, source)| &source.input.data.batches)
+                        .fold(0usize, |bytes, batch| {
+                            bytes
+                                .saturating_add(batch.get_array_memory_size())
+                                .saturating_add(batch.num_rows() * std::mem::size_of::<u64>())
+                        });
+                    assert!(
+                        self.retained_bytes >= resident,
+                        "alias={}, retained={}, resident={resident}",
+                        input.port.name,
+                        self.retained_bytes,
+                    );
+                }
             }
             let source = self.read_input(&request, &input.port, sql, control, &sources)?;
             sources.insert(input.port.name.clone(), source);
@@ -217,13 +266,12 @@ impl ModelOperation<'_> {
             .build()
         })?;
         self.engine()?;
-        let (connection, lease) = self.engine.take().ok_or_else(|| {
+        let (state, lease) = self.engine.take().ok_or_else(|| {
             crate::QueryInvalidSnafu {
                 field: "model engine",
             }
             .build()
         })?;
-        self.sources.clear(&connection)?;
         self.owner.evaluate_model_reserved(
             package,
             evaluation,
@@ -233,20 +281,21 @@ impl ModelOperation<'_> {
                 lease.reserve_output(capacity)?;
                 Ok(lease)
             },
-            |control, host, _lease| {
+            |control, host, lease| {
                 let mut executor = ModelExecution::new(
-                    &connection,
+                    self.owner,
+                    &state,
                     control,
+                    lease,
                     evaluation.context.time_utc_ns,
                     evaluation.context.limits,
                     host,
                 );
-                let output = control.query_run(&connection, || {
-                    executor.register(model, evaluation, &self.bound, host.input_bytes)?;
-                    executor.evaluate(model, program, admitted)
-                })?;
+                executor.register(model, evaluation, &self.bound, host.input_bytes)?;
+                let output = executor.evaluate(model, program, admitted)?;
                 let bytes = executor.bytes();
-                drop(connection);
+                drop(executor);
+                drop(state);
                 Ok((output, bytes))
             },
         )

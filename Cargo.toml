@@ -79,7 +79,6 @@ serde_json = { version = "1", features = ["raw_value"] }
 serde-saphyr = "1.0.1"
 sha2 = "0.10"
 snafu = "0.8"
-sqlparser = { version = "=0.63.0", features = ["visitor"] }
 time = { version = "0.3.44", features = ["formatting", "parsing"] }
 thiserror = "2"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

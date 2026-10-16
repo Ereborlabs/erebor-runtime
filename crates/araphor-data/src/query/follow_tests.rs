@@ -104,12 +104,7 @@ fn cursors(frame: &QueryFrame) -> TestResult<Vec<u64>> {
 }
 
 fn inputs_released(owner: &QueryOwner) {
-    let inputs = owner
-        .input_refs
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    assert!(!inputs.is_empty());
-    assert!(inputs.iter().all(|input| input.upgrade().is_none()));
+    owner.test_inputs(false);
 }
 
 async fn cancelled(stream: &mut QueryStream, last: Option<&QueryCheckpoint>) -> TestResult {
@@ -149,7 +144,8 @@ fn query_follow_runtime() -> TestResult {
     let mut stream = owner.follow_clock(plan.clone(), None, clock.clone())?;
     assert_eq!(clock.reads.load(Ordering::SeqCst), 0);
     assert!(owner
-        .input_refs
+        .engine
+        .input_leases
         .lock()
         .map_err(|_| "input reference lock failed")?
         .is_empty());
@@ -407,7 +403,12 @@ async fn query_follow_dependency_reuse() -> TestResult {
     drop(data);
     let complete = checkpoint(&next(&mut stream).await?)?;
     assert_eq!(owner.dependency_reads.load(Ordering::SeqCst), 2);
-    let tables = owner.input_refs.lock().map_err(|_| "input refs")?.len();
+    let tables = owner
+        .engine
+        .input_leases
+        .lock()
+        .map_err(|_| "input refs")?
+        .len();
     let mut foreign = fixture.source.clone();
     foreign.tenant_id = [9; 16];
     fixture.commit_as(&foreign, 0, 1, 4, crate::EvidenceRecord::default())?;
@@ -417,7 +418,12 @@ async fn query_follow_dependency_reuse() -> TestResult {
     ));
     assert_eq!(owner.dependency_reads.load(Ordering::SeqCst), 3);
     assert_eq!(
-        owner.input_refs.lock().map_err(|_| "input refs")?.len(),
+        owner
+            .engine
+            .input_leases
+            .lock()
+            .map_err(|_| "input refs")?
+            .len(),
         tables
     );
     assert!(matches!(
@@ -504,7 +510,8 @@ async fn query_follow_lazy_demand() -> TestResult {
     let mut stream = owner.follow_clock(plan.clone(), None, clock.clone())?;
     assert_eq!(clock.reads.load(Ordering::SeqCst), 0);
     assert!(owner
-        .input_refs
+        .engine
+        .input_leases
         .lock()
         .map_err(|_| "input reference lock failed")?
         .is_empty());

@@ -138,6 +138,13 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Query {operation} failed: {source}"))]
+    QueryEngine {
+        operation: &'static str,
+        source: datafusion::common::DataFusionError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Query relation {relation} is unavailable"))]
     QueryUnsupported {
         relation: &'static str,
@@ -319,6 +326,12 @@ impl ErrorExt for Error {
             | Self::QueryExecution { .. }
             | Self::DiscoveryContext { .. }
             | Self::DiscoveryExecution { .. } => StatusCode::External,
+            Self::QueryEngine { source, .. } => match source.find_root() {
+                datafusion::common::DataFusionError::ResourcesExhausted(_) => {
+                    StatusCode::InvalidArguments
+                }
+                _ => StatusCode::External,
+            },
             Self::GraphContext { .. } => StatusCode::External,
             Self::GraphEncoding { .. } => StatusCode::Internal,
             Self::QueryEncoding { .. } | Self::DiscoveryEncoding { .. } => StatusCode::Internal,

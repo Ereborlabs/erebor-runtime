@@ -153,6 +153,25 @@ async fn native_detectors_match_wasm() -> NativeResult {
             evaluation.inputs.reverse();
             drop(actual);
             drop(expected);
+            let blocked = native
+                .evaluate(
+                    selected.source.tenant_id,
+                    &package.id,
+                    &evaluation,
+                    &control,
+                )
+                .err();
+            assert!(
+                matches!(
+                    blocked.as_ref(),
+                    Some(crate::Error::AnalysisBusy {
+                        resource: "query output capacity",
+                        ..
+                    })
+                ),
+                "{blocked:?}"
+            );
+            evaluation = sdk::wire::Evaluation::encode(&package, &evaluation)?.decode(&package)?;
             let replay = native.evaluate(
                 selected.source.tenant_id,
                 &package.id,

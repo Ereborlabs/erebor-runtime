@@ -59,8 +59,19 @@ fn native_leases_keep_limits() -> TestResult {
     let rest = query.retain_analysis_input(limits.input_capacity - evaluation.allocated_bytes())?;
     assert!(query.retain_analysis_input(1).is_err());
     drop(rest);
+    let alias = output.output.datasets[0].batches[0].column(0).clone();
     drop(output);
+    let rest = query.retain_analysis_input(limits.input_capacity - evaluation.allocated_bytes())?;
+    assert!(query.retain_analysis_input(1).is_err());
+    assert!(query.budget.output(limits.output_capacity).is_err());
+    assert_eq!(
+        alias.to_data(),
+        evaluation.inputs[0].data.batches[0].column(0).to_data()
+    );
+    drop(rest);
+    drop(alias);
     drop(query.retain_analysis_input(limits.input_capacity)?);
+    drop(query.budget.output(limits.output_capacity)?);
     Ok(())
 }
 

@@ -14,6 +14,7 @@ use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 pub struct AnalysisReadControl {
     deadline: Instant,
     cancelled: Arc<AtomicBool>,
+    cancelled_event: Arc<tokio::sync::Notify>,
     interrupt: Arc<Mutex<Option<Arc<duckdb::InterruptHandle>>>>,
     monitor: Arc<ReadMonitor>,
     #[cfg(test)]
@@ -31,6 +32,7 @@ impl AnalysisReadControl {
         Self {
             deadline: Instant::now() + Duration::from_secs(1),
             cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled_event: Arc::new(tokio::sync::Notify::new()),
             interrupt: Arc::new(Mutex::new(None)),
             monitor,
             #[cfg(test)]
@@ -58,6 +60,7 @@ impl AnalysisReadControl {
     pub(crate) fn stage(&self, timeout: Duration) -> Result<Self> {
         Ok(Self {
             cancelled: Arc::clone(&self.cancelled),
+            cancelled_event: Arc::clone(&self.cancelled_event),
             interrupt: Arc::clone(&self.interrupt),
             monitor: Arc::clone(&self.monitor),
             ..Self::with_timeout(timeout)?
@@ -73,6 +76,7 @@ impl AnalysisReadControl {
 
     pub fn cancel(&self) -> Result<()> {
         self.cancelled.store(true, Ordering::Release);
+        self.cancelled_event.notify_waiters();
         let state = self.interrupt.lock().map_err(|_| Self::lock_error())?;
         if let Some(interrupt) = state.as_ref() {
             interrupt.interrupt();
@@ -173,6 +177,26 @@ impl AnalysisReadControl {
         query: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
         let result = self.native_run(&self.monitor, connection.interrupt_handle(), query);
+        self.check()?;
+        result
+    }
+
+    pub(crate) async fn query_async<T>(
+        &self,
+        query: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        let cancelled = self.cancelled_event.notified();
+        tokio::pin!(cancelled);
+        let _registered = cancelled.as_mut().enable();
+        self.check()?;
+        let result = tokio::select! {
+            biased;
+            _ = &mut cancelled => crate::AnalysisReadCancelledSnafu.fail(),
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(self.deadline)) => {
+                crate::AnalysisReadDeadlineSnafu.fail()
+            }
+            result = query => result,
+        };
         self.check()?;
         result
     }

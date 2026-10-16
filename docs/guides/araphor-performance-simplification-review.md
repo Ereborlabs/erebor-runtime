@@ -8,13 +8,24 @@ requires the current verification in the TODO. The user requires relevant
 builds and tests for each iteration. The production Rust deletion target is
 6,000 nonblank lines; tests and documents do not count toward it.
 
+The current working tree uses [DataFusion 53.1.0 and Arrow 58.4.0](../../crates/araphor-data/Cargo.toml).
+[QuerySql](../../crates/araphor-data/src/query/admission.rs) retains an admitted
+LogicalPlan. QueryOwner owns the Tokio execution runtime.
+[QueryEngine::stream](../../crates/araphor-data/src/query/engine/batches.rs)
+returns the physical batch stream. [QueryEvaluation](../../crates/araphor-data/src/query/evaluation.rs)
+reads client values incrementally. [ModelExecution::query_schema](../../crates/araphor-data/src/query/model/execute.rs)
+is the single model batch collector. Affected qualification passes. The
+full production reduction is **Not done**. Read the
+[SQL operation guide](araphor-sql-operation-review.md) for this source route.
+
 ## Intended end state
 
 Owners check relevant changes and due deadlines before they load payloads.
 One operation prepares common inputs once. Existing owners retain immutable
 declarations, artifact identities, and cursors for their required lifetimes.
 Current authorization, exact revisions, evidence, recovery, and physical limits
-remain. DuckDB executes queries. Arrow contracts do not depend on DuckDB.
+remain. DataFusion executes queries on Arrow batches. DuckDB retains durable
+storage. Arrow contracts do not depend on DuckDB.
 
 ## Implementation review flow
 
@@ -66,9 +77,10 @@ owns immutable content, its digest, implementation identities, admitted
 export programs, and one memory lease.
 [BundleMemory](../../crates/araphor-data/src/package/installed/snapshot/memory.rs)
 charges the wrapper, vectors, strings, descriptors, fixtures, code, and retained
-admission data. SQL reserves AST nodes by token count and string storage by
-byte count. Admission tests one export's retained charge before the next
-export. This does not establish a transient parser-memory limit.
+admission data. QuerySql charges retained SQL strings, parameters, source
+facts, LogicalPlan nodes, expressions, schemas, and literals. Admission tests
+one export's retained charge before the next export. This does not establish
+a transient parser-memory limit.
 [PackageBundleRef](../../crates/araphor-data/src/package/bundle.rs) exposes a
 content-derived digest without a caller-supplied digest field.
 [ClientAuth](../../crates/mithril-control/src/client_auth/packages.rs) checks
@@ -84,7 +96,7 @@ releases its content lease.
 [InstalledBundle::new](../../crates/araphor-data/src/package/installed/snapshot.rs) An exact OCI closure is loaded
   -> [InstalledBundle::new](../../crates/araphor-data/src/package/installed/snapshot.rs) the existing InstalledBundle owner verifies its digest and descriptor
   -> [AdmittedExport::admit](../../crates/araphor-data/src/query/model.rs) it performs each export's policy and declaration admission once
-  -> [AdmittedExport](../../crates/araphor-data/src/query/model.rs) it retains parsed SQL, scoped dependencies, relation contracts, and clock use
+  -> [AdmittedExport](../../crates/araphor-data/src/query/model.rs) it retains admitted logical plans, scoped dependencies, relation contracts, and clock use
   -> [InstalledBundle::export](../../crates/araphor-data/src/package/installed/snapshot.rs) it retains export indices and the exact artifact identity
   -> [QuerySql::allocated_bytes](../../crates/araphor-data/src/query/admission.rs) it charges the complete retained plan through the existing QueryLease
 
@@ -104,9 +116,10 @@ reuses one program while new evidence changes its input and revision.
 [admitted_capacity_is_charged](../../crates/araphor-data/src/package/installed/snapshot/memory/tests.rs)
 checks the retained program charge.
 [sql_model_state_provenance](../../crates/araphor-data/src/query/model/tests.rs)
-checks the standalone supplied-input boundary. The current iteration's
-passing evidence belongs in the implementation plan after these cases run.
-DataFusion execution remains **Not implemented** in this source slice.
+checks the standalone supplied-input boundary. DataFusion execution passes
+the affected source and functional checks. The
+[current result](../plans/araphor-component-redesign.md#qualification-and-acceptance)
+records the exact qualification and its platform limits.
 
 [PackageCommitV1](../../crates/araphor-data/src/analysis/packages/model.rs)
 owns the commit contract and its payloads. The stored result retains this
@@ -212,10 +225,11 @@ extraction implementation.
 CTE names keep the production parser's shadowing behavior. Hidden columns
 remain unavailable and fail during admission.
 
-[ScopedSources](../../crates/araphor-data/src/query/input.rs) exposes append
-positions as SQL aliases for existing commit and ordinal columns. Input rows
-retain their original width and values. Each statement still binds an
-independent scan cursor. Source cleanup releases the retained input.
+[QuerySql::append_plan](../../crates/araphor-data/src/query/admission.rs) exposes
+append positions as projection aliases for existing commit and ordinal
+columns. Input batches retain their original width and values. DataFusion
+creates an independent scan stream for each execution. Source buffers retain
+their leases until their last reference is released.
 
 [package provenance reads](../../crates/araphor-data/src/analysis/packages/witnesses.rs)
 validate references before an empty-list return. Empty references need no

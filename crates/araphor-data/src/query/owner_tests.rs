@@ -1,4 +1,10 @@
+use std::pin::Pin;
 use std::sync::mpsc;
+use std::task::{Context, Poll};
+
+use araphor_analysis_sdk as sdk;
+use datafusion::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use futures_core::Stream;
 use std::time::Duration;
 
 use super::tests::QueryFixture;
@@ -10,13 +16,67 @@ use crate::{
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+pub(super) type ScanGate = (mpsc::Sender<()>, mpsc::Receiver<()>);
+
+struct GateStream {
+    source: SendableRecordBatchStream,
+    gate: Option<ScanGate>,
+}
+
+pub(super) fn gate_stream(
+    source: SendableRecordBatchStream,
+    gate: Option<ScanGate>,
+) -> SendableRecordBatchStream {
+    if gate.is_none() {
+        return source;
+    }
+    Box::pin(GateStream { source, gate })
+}
+
+impl Stream for GateStream {
+    type Item = datafusion::common::Result<sdk::RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let item = this.source.as_mut().poll_next(context);
+        if matches!(&item, Poll::Ready(Some(Ok(_)))) {
+            if let Some((entered, release)) = this.gate.take() {
+                let result = (|| -> datafusion::common::Result<()> {
+                    entered.send(()).map_err(|error| {
+                        datafusion::common::DataFusionError::External(Box::new(error))
+                    })?;
+                    release
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(|error| {
+                            datafusion::common::DataFusionError::External(Box::new(error))
+                        })?;
+                    entered.send(()).map_err(|error| {
+                        datafusion::common::DataFusionError::External(Box::new(error))
+                    })?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    return Poll::Ready(Some(Err(error)));
+                }
+            }
+        }
+        item
+    }
+}
+
+impl RecordBatchStream for GateStream {
+    fn schema(&self) -> Arc<sdk::Schema> {
+        self.source.schema()
+    }
+}
+
 impl QueryOwner {
     pub(crate) fn set_scan_gate(
         &self,
         entered: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
     ) -> Result<()> {
-        *self.scan_gate.lock().map_err(|_| {
+        *self.engine.scan_gate.lock().map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "test scan gate",
             }
@@ -25,22 +85,58 @@ impl QueryOwner {
         Ok(())
     }
 
-    pub(super) fn test_input(&self, input: &InputRelations) -> Result<()> {
-        self.input_refs
+    pub(super) fn test_arrays(&self, batches: &[sdk::RecordBatch], lease: &QueryLease) {
+        self.engine
+            .input_refs
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .extend(input.references());
-        input.set_scan_gate(
-            self.scan_gate
+            .extend(
+                batches
+                    .iter()
+                    .flat_map(|batch| batch.columns())
+                    .map(Arc::downgrade),
+            );
+        self.engine
+            .input_leases
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(lease.test_reference());
+    }
+
+    pub(super) fn test_inputs(&self, alive: bool) {
+        let leases = self
+            .engine
+            .input_leases
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(!leases.is_empty());
+        assert!(leases
+            .iter()
+            .all(|lease| QueryLease::test_input_active(lease) == alive));
+        let arrays = self
+            .engine
+            .input_refs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(arrays
+            .iter()
+            .all(|array| array.upgrade().is_some() == alive));
+    }
+
+    pub(super) fn test_inputs_released(&self) -> bool {
+        self.engine
+            .input_leases
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .all(|lease| !QueryLease::test_input_active(lease))
+            && self
+                .engine
+                .input_refs
                 .lock()
-                .map_err(|_| {
-                    crate::QueryInvalidSnafu {
-                        field: "test scan gate",
-                    }
-                    .build()
-                })?
-                .take(),
-        )
+                .unwrap_or_else(|error| error.into_inner())
+                .iter()
+                .all(|array| array.upgrade().is_none())
     }
 }
 
@@ -379,18 +475,33 @@ fn query_scope_native_cancel() -> TestResult {
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let (entered, ready) = mpsc::channel();
     let (release, resumed) = mpsc::channel();
-    *owner.scan_gate.lock().map_err(|_| "scan gate poisoned")? = Some((entered, resumed));
+    *owner
+        .engine
+        .scan_gate
+        .lock()
+        .map_err(|_| "scan gate poisoned")? = Some((entered, resumed));
     std::thread::scope(|scope| -> TestResult {
         let worker = scope.spawn(|| owner.query_cancel(&plan, 100, &control));
         let checks = (|| -> TestResult {
             ready.recv_timeout(Duration::from_secs(5))?;
             {
+                owner.test_inputs(true);
                 let inputs = owner
+                    .engine
                     .input_refs
                     .lock()
                     .map_err(|_| "input references poisoned")?;
                 assert!(!inputs.is_empty());
                 assert!(inputs.iter().all(|input| input.upgrade().is_some()));
+                assert!(inputs
+                    .iter()
+                    .filter_map(std::sync::Weak::upgrade)
+                    .any(|array| {
+                        array
+                            .as_any()
+                            .downcast_ref::<sdk::arrow_array::UInt32Array>()
+                            .is_some_and(|array| array.values().contains(&7))
+                    }));
             }
             assert!(owner.budget.evaluate(fixture.source.tenant_id).is_err());
             assert!(owner.budget.output(1).is_err());
@@ -404,6 +515,7 @@ fn query_scope_native_cancel() -> TestResult {
         let result = worker.join().map_err(|_| "query worker panicked")?;
         checks?;
         assert!(owner
+            .engine
             .native_failed
             .load(std::sync::atomic::Ordering::Acquire));
         assert!(
@@ -413,7 +525,9 @@ fn query_scope_native_cancel() -> TestResult {
         Ok(())
     })?;
     {
+        owner.test_inputs(false);
         let inputs = owner
+            .engine
             .input_refs
             .lock()
             .map_err(|_| "input references poisoned")?;

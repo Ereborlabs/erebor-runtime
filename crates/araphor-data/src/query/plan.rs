@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use duckdb::types::Value;
 
-use super::{QueryGrant, QuerySql};
+use super::{QueryBinding, QueryGrant, QuerySql};
 use crate::{AnalysisSelectionV1, GraphTraversalV1, Result, Selection};
 
 #[cfg(test)]
@@ -220,13 +220,10 @@ impl QueryPlan {
         }
     }
 
-    pub(super) fn evaluation_at(&self, now_ns: u64) -> Result<(String, Vec<Value>)> {
+    pub(super) fn evaluation_at(&self, now_ns: u64) -> Result<QueryBinding> {
         match &self.template {
-            QueryTemplate::Client(sql) => {
-                let bound = sql.bind_at(now_ns)?;
-                Ok((bound.sql, bound.parameters))
-            }
-            _ => Ok((self.sql(), self.parameters(now_ns))),
+            QueryTemplate::Client(sql) => sql.bind_at(now_ns),
+            _ => QueryBinding::trusted(self.sql(), self.parameters(now_ns), now_ns),
         }
     }
 
@@ -346,7 +343,7 @@ impl QueryPlan {
                 "SELECT COUNT(*) AS event_count FROM scoped_events"
             }
             QueryTemplate::FixedBuckets { .. } => {
-                "SELECT time_bucket(CAST(? AS BIGINT) * INTERVAL '1 second', received_at, TIMESTAMP '1970-01-01 00:00:00') AS window_start, COUNT(*) AS event_count FROM scoped_events GROUP BY window_start ORDER BY window_start"
+                "SELECT time_bucket(CAST(? AS INTERVAL), received_at, TIMESTAMP '1970-01-01 00:00:00') AS window_start, COUNT(*) AS event_count FROM scoped_events GROUP BY window_start ORDER BY window_start"
             }
             QueryTemplate::SubjectSequence { .. } => {
                 "SELECT tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, task_cookie, source_cursor, commit_revision, ordinal FROM (SELECT *, lag(operation) OVER subject AS prior_operation, lag(temporal_coverage) OVER subject AS prior_coverage, lag(kernel_sequence) OVER subject AS prior_sequence FROM scoped_events WINDOW subject AS (PARTITION BY tenant_id, node_id, node_boot_id, label_epoch, source_id, source_epoch, cpu_id, task_cookie ORDER BY source_cursor)) ordered WHERE prior_operation = ? AND operation = ? AND task_cookie <> 0 AND temporal_coverage = 1 AND prior_coverage = 1 AND prior_sequence > 0 AND CAST(kernel_sequence AS HUGEINT) = CAST(prior_sequence AS HUGEINT) + 1 ORDER BY commit_revision, ordinal"
@@ -392,7 +389,9 @@ impl QueryPlan {
                 operation,
                 object_id,
             } => vec![Value::UInt(operation), Value::Blob(object_id.to_vec())],
-            QueryTemplate::FixedBuckets { seconds } => vec![Value::BigInt(i64::from(seconds))],
+            QueryTemplate::FixedBuckets { seconds } => {
+                vec![Value::Text(format!("{seconds} seconds"))]
+            }
             QueryTemplate::SubjectSequence { first, second } => {
                 vec![Value::UInt(first), Value::UInt(second)]
             }

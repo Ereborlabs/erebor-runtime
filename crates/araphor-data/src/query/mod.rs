@@ -9,7 +9,6 @@ use crate::{
     StorePositionV1,
 };
 
-mod adapter;
 mod admission;
 mod analysis;
 mod authorization;
@@ -20,6 +19,7 @@ pub(crate) use budget::QueryLease;
 #[cfg(test)]
 mod client_tests;
 mod discovery;
+mod engine;
 mod evaluation;
 mod follow;
 #[cfg(test)]
@@ -37,6 +37,8 @@ mod owner_tests;
 mod plan;
 #[cfg(test)]
 mod tests;
+mod time_bucket;
+mod values;
 mod wasm;
 
 pub use crate::package::native::NativeLimits;
@@ -51,7 +53,7 @@ pub use frame::{
     QueryErrorCode, QueryFrame, QueryHealth, QueryMetadata, QueryPayload, QueryTerminalReason,
     QUERY_CHECKPOINT_BYTES,
 };
-use input::{InputProjection, InputRelations, InputRow};
+use input::{InputProjection, InputRelations};
 pub use model::{SqlDatasetOutputV1, SqlModelOutputV1, SqlModelV1, SqlReasonV1};
 pub use plan::{QueryOperation, QueryPlan, QueryTemplate, QUERY_SCHEMA_VERSION};
 pub use wasm::WasmLimits;
@@ -178,12 +180,7 @@ pub struct QueryOwner {
     identity: AnalysisStoreMetaV1,
     limits: QueryLimits,
     budget: Arc<QueryBudget>,
-    #[cfg(test)]
-    input_refs: std::sync::Mutex<Vec<std::sync::Weak<adapter::InputTable>>>,
-    #[cfg(test)]
-    scan_gate: std::sync::Mutex<Option<adapter::ScanGate>>,
-    #[cfg(test)]
-    native_failed: std::sync::atomic::AtomicBool,
+    engine: engine::QueryEngine,
     #[cfg(test)]
     dependency_reads: std::sync::atomic::AtomicUsize,
 }
@@ -224,12 +221,7 @@ impl QueryOwner {
             identity,
             limits,
             budget,
-            #[cfg(test)]
-            input_refs: std::sync::Mutex::new(Vec::new()),
-            #[cfg(test)]
-            scan_gate: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            native_failed: std::sync::atomic::AtomicBool::new(false),
+            engine: engine::QueryEngine::default(),
             #[cfg(test)]
             dependency_reads: std::sync::atomic::AtomicUsize::new(0),
         })
@@ -358,7 +350,7 @@ impl QueryOwner {
             input_bytes: self.limits.input_bytes,
             ..Default::default()
         };
-        let mut page = if let QueryRead::Append(after) = read {
+        let (mut page, project) = if let QueryRead::Append(after) = read {
             self.store
                 .position_rows(&selection, after, bounds, control, project)?
         } else if plan.reads_raw() {
@@ -368,42 +360,12 @@ impl QueryOwner {
             self.store
                 .metadata_rows(&selection, bounds, control, project)?
         };
-        let next_expiry_ns = match plan.moving_seconds() {
-            Some(seconds) => page
-                .extraction
-                .pages
-                .iter()
-                .filter(|page| page.relation == crate::AnalysisRelationV1::Events)
-                .flat_map(|page| &page.rows)
-                .filter_map(|row| match row.0.get(10) {
-                    Some(Value::UBigInt(time)) => Some(*time),
-                    _ => None,
-                })
-                .min()
-                .and_then(|time| time.checked_add(u64::from(seconds) * 1_000_000_000))
-                .and_then(|time| time.checked_add(1_000_000_000))
-                .map(|time| time / 1_000_000_000 * 1_000_000_000),
-            _ => None,
-        };
-        let input_rows = page
-            .extraction
-            .pages
-            .iter()
-            .map(|page| page.rows.len())
-            .sum();
-        let input = InputRelations::new(
-            &mut page.extraction,
-            self.limits.input_bytes,
-            &plan.template,
-        )?;
-        let input = if plan.grant().is_some() && plan.operation() == QueryOperation::Append {
-            input.append_positions(self.limits.input_bytes)?
-        } else {
-            input
-        };
+        let input = project.finish(&mut page.extraction, control)?;
+        let next_expiry_ns = plan
+            .moving_seconds()
+            .and_then(|seconds| input.next_expiry(seconds));
+        let input_rows = input.input_rows;
         page.extraction.input_bytes = input.allocation_bytes();
-        #[cfg(test)]
-        self.test_input(&input)?;
         let sources: Vec<_> = std::mem::take(&mut page.extraction.sources)
             .into_iter()
             .map(QueryCoverage::from)
@@ -452,11 +414,11 @@ impl QueryOwner {
         }
         self.check_output(summary_bytes)?;
         let evaluation = control.stage(self.limits.evaluate_timeout)?;
-        let (sql, parameters) = plan.evaluation_at(now_ns)?;
+        let binding = plan.evaluation_at(now_ns)?;
         let output = evaluation::QueryEvaluation::run(
+            self,
             &input,
-            &sql,
-            &parameters,
+            &binding,
             evaluation::EvaluationLimits {
                 rows: self.limits.output_rows,
                 bytes: self.limits.output_bytes,
@@ -469,8 +431,7 @@ impl QueryOwner {
             },
             page.scanned_through,
             &evaluation,
-            #[cfg(test)]
-            Some(&self.native_failed),
+            &lease,
         )?;
         drop(input);
         let evaluation::EvaluationResult {
@@ -517,7 +478,9 @@ impl QueryOwner {
             - coverage_bytes
             - read_bytes
             - (std::mem::size_of::<QueryFrame>() - std::mem::size_of::<QueryResult>());
-        result._lease = result._lease.output(owned)?;
+        let output = result._lease.split(owned)?;
+        drop(result._lease.retained_output(0)?);
+        result._lease = output;
         Ok(result)
     }
 
@@ -552,11 +515,13 @@ impl QueryOwner {
             input_bytes: self.limits.input_bytes,
             ..Default::default()
         };
-        let page = self.store.metadata_rows::<InputRow>(
+        let (page, _) = self.store.metadata_rows(
             &selection,
             bounds,
             control,
-            crate::analysis::RecordProjection(|_: crate::AnalysisInputV1<'_>| Ok(None)),
+            crate::analysis::RecordProjection(|_: crate::AnalysisInputV1<'_>| {
+                Ok(None::<((), usize)>)
+            }),
         )?;
         let extraction = page.extraction;
         let sources = extraction
@@ -570,36 +535,6 @@ impl QueryOwner {
         let health = self.store.storage_health()?;
         control.check()?;
         Ok((extraction.meta, sources, health))
-    }
-
-    fn before_row(row: &duckdb::Row<'_>) -> Result<StorePositionV1> {
-        let revision: u64 = row
-            .get("__araphor_commit_revision")
-            .or_else(|_| row.get("commit_revision"))
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "read query commit position",
-            })?;
-        let ordinal: u32 = row
-            .get("__araphor_ordinal")
-            .or_else(|_| row.get("ordinal"))
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "read query ordinal",
-            })?;
-        match ordinal.checked_sub(1) {
-            Some(ordinal) => Ok(StorePositionV1 {
-                commit_revision: revision,
-                ordinal,
-            }),
-            None => Ok(StorePositionV1 {
-                commit_revision: revision.checked_sub(1).ok_or_else(|| {
-                    crate::QueryInvalidSnafu {
-                        field: "append position",
-                    }
-                    .build()
-                })?,
-                ordinal: u32::MAX,
-            }),
-        }
     }
 }
 

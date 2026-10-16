@@ -81,6 +81,87 @@ fn graph_sdk_native_rows() -> TestResult {
 }
 
 #[test]
+fn graph_sdk_buffer_lease() -> TestResult {
+    let fixture = NativeFixture::new(false)?;
+    let owner = fixture.owner(QueryLimits::default())?;
+    let result = owner.graph_inputs(&fixture.selection, &fixture.request, &control()?)?;
+    let charged = owner.input_charge();
+    assert!(charged > 0);
+    let input = result.inputs()[0].clone();
+    let batch = input.data.batches[0].clone();
+    let array = batch
+        .column_by_name("subject_id")
+        .ok_or("subject key absent")?
+        .clone();
+    let expected = array
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or("subject key type")?
+        .value(0)
+        .to_vec();
+    let capacity = array.to_data().buffers()[1].capacity();
+    let sliced = array.slice(0, 1);
+    let buffer = sliced.to_data().buffers()[1].clone();
+    assert_eq!(buffer.capacity(), capacity);
+    drop(result);
+    drop(input);
+    drop(batch);
+    drop(array);
+    assert_eq!(owner.input_charge(), charged);
+    assert_eq!(
+        sliced
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or("sliced key type")?
+            .value(0),
+        expected
+    );
+    assert!(matches!(
+        owner.graph_inputs(&fixture.selection, &fixture.request, &control()?),
+        Err(crate::Error::AnalysisBusy { .. })
+    ));
+    drop(sliced);
+    assert_eq!(owner.input_charge(), charged);
+    assert!(buffer.as_slice().starts_with(&expected));
+    drop(buffer);
+    assert_eq!(owner.input_charge(), 0);
+    owner.graph_inputs(&fixture.selection, &fixture.request, &control()?)?;
+    Ok(())
+}
+
+#[test]
+fn graph_sdk_empty_schemas() -> TestResult {
+    let fixture = NativeFixture::new(false)?;
+    let owner = fixture.owner(QueryLimits::default())?;
+    let result = owner.graph_inputs(&fixture.selection, &fixture.request, &control()?)?;
+    let schemas = result
+        .inputs()
+        .iter()
+        .map(|input| input.data.batches[0].schema())
+        .collect::<Vec<_>>();
+    drop(result);
+    fixture.replace_empty()?;
+    let empty = owner.graph_inputs(&fixture.selection, &fixture.request, &control()?)?;
+    for (input, schema) in empty.inputs().iter().zip(&schemas) {
+        assert_eq!(input.data.batches.len(), 1);
+        assert_eq!(input.data.batches[0].schema(), *schema);
+    }
+    assert_eq!(empty.inputs()[0].data.batches[0].num_rows(), 0);
+    assert_eq!(empty.inputs()[1].data.batches[0].num_rows(), 0);
+    drop(empty);
+    let mut selection = fixture.selection.clone();
+    selection.nodes = vec!["absent-node".into()];
+    let missing = owner.graph_inputs(&selection, &fixture.request, &control()?)?;
+    assert!(missing.traversal.result_ids.is_empty());
+    for (input, schema) in missing.inputs().iter().zip(&schemas) {
+        assert_eq!(input.data.batches.len(), 1);
+        assert_eq!(input.data.batches[0].schema(), *schema);
+        assert_eq!(input.data.batches[0].num_rows(), 0);
+    }
+    Ok(())
+}
+
+#[test]
 fn graph_sdk_empty_history() -> TestResult {
     let fixture = NativeFixture::new(false)?;
     let replacement = fixture.replace_empty()?;
@@ -219,9 +300,9 @@ fn graph_sdk_resource_limits() -> TestResult {
 
 #[test]
 fn graph_sdk_offset_limit() -> TestResult {
-    ArrowRows::check_offsets(i32::MAX as usize)?;
+    crate::query::input::InputBatch::check_offsets(i32::MAX as usize)?;
     assert!(matches!(
-        ArrowRows::check_offsets(i32::MAX as usize + 1),
+        crate::query::input::InputBatch::check_offsets(i32::MAX as usize + 1),
         Err(crate::Error::AnalysisInputTooLarge { .. })
     ));
     Ok(())

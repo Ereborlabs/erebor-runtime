@@ -11,7 +11,13 @@ This proposal supports the
 Before this redesign, the committed code removes 2,229 nonblank production
 Rust lines from `7b7b407a`. The remaining target at that baseline is 3,771.
 None of the source inventories below is a net reduction. Count the complete
-replacement before an implementation claim.
+replacement before a completion claim.
+
+The working tree now routes queries through DataFusion. `QuerySql` retains a
+shared immutable program with its logical plan. `PlannerContext` supplies CTE and derived-query scope. Arrow
+batches supply client, model, and dataset inputs. Affected compilation and
+functional qualification pass on the host below. The whole-code reduction is
+**Not done**. Earlier retained-admission receipts do not qualify this route.
 
 ## Intended end state
 
@@ -23,24 +29,26 @@ durable owner of evidence, progress, results, references, and quotas.
 
 The user approves the SQL engine replacement through the implementation
 request. This approval replaces the earlier DuckDB-only constraint for query
-execution. Use DataFusion 53.1.0 with the existing Arrow 58.4.0. Workspace
-dependency resolution and affected compilation and qualification remain required.
+execution. The working tree selects DataFusion 53.1.0 and Arrow 58.4.0 in
+Cargo.lock. Affected compilation and functional qualification pass.
 DuckDB continues to own retained metadata and graph tables. This proposal
 changes the private in-memory SQL engine only. The native and Wasm execution
 backends do not change.
 
 Coherence review: **Done for owner boundaries**. The review found missing
 parser, SQL binding, caller, resource, and execution-boundary requirements.
-The sections below record them. Compiled integration and behavioral parity
-are **Not done**. The synchronous API boundary remains an open feasibility
-gate until its affected source and functional cases pass.
+The sections below record them. The source now includes the engine and
+synchronous execution route. The affected execution, resource, and parity
+cases pass on Linux x86_64 GNU. The complete production reduction remains
+**Not done**. These checks do not qualify another platform or measure speed.
 
 ## Columnar query operation
 
 A caller submits client SQL or a package input/output query
   -> QueryOwner checks the request grant and constructs its authorized source scope
-  -> Araphor checks SQL length, parameters, recursion, statements, and functions
-  -> the engine planner resolves names and types against canonical Arrow schemas
+  -> Binder checks SQL length, parameters, recursion, statements, and functions
+  -> SqlToRel resolves names and types against canonical Arrow schemas
+  -> QuerySql retains the logical plan and full-query source dependencies
   -> source scans capture exact revisions, witnesses, context references, and coverage
   -> source scans admit bounded Arrow batches before buffer growth
   -> one query operation executes input and output plans over those batches
@@ -71,41 +79,55 @@ A returned batch outlives its run
 
 ### Existing DataFusion composition
 
-Use the existing `EmptyTable` and `MemTable` owners. Add no Araphor
-table-provider framework or physical operator.
+The working tree uses the standard `EmptyTable` and `MemTable` owners. It
+adds no Araphor table-provider framework or physical operator.
 
-The planner needs a schema
-  -> the operation registers an EmptyTable with the canonical Arrow schema
-  -> the engine source resolver captures base-table references from the full AST
-  -> Araphor preserves full-AST name, shape, function, and source checks
-  -> the engine binds the admitted query against the registered schemas
-  -> the operation binds parameters and freezes the current clock
-  -> optimization identifies the required columns for actual execution
-  -> the current extraction owner qualifies inputs and captures required provenance
-  -> the operation replaces each TableScan source with a MemTable over admitted batches
-  -> the engine builds and executes its physical plan
+A query needs admission
+  -> Binder walks every original common table expression (CTE), derived query, and source relation
+  -> SqlContext supplies schema-only EmptyTable sources
+  -> PlannerContext retains bound CTE, derived-query, and FROM plans
+  -> SqlToRel resolves the SELECT clauses against those bound plans
+  -> QuerySql retains the logical plan, dependencies, labels, and clock facts
+
+A run receives admitted batches
+  -> QuerySql::bind_complete binds parameter values and the captured clock
+  -> QueryEngine::plan optimizes the logical plan once
+  -> the current extraction owner has supplied qualified batches and provenance
+  -> QueryEngine::plan replaces each TableScan source with an admitted MemTable
+  -> QueryEngine::stream creates the physical plan and its batch stream
 
 EmptyTable has no data statistics. Treat a schema-only scan as an unknown
-source during planning, never as proof that its eventual result is empty.
-Do not derive dependency or witness scope only from a logical plan. An unused
-CTE is checked during binding but can be absent from the unoptimized outer
-plan. A constant-false predicate can remove a scan during optimization. Use
-the engine AST source resolver before binding, with exact CTE scope. Replacing
-catalog entries alone is insufficient: a bound TableScan owns its source Arc.
-Validate CTE shadowing and duplicate aliases against the current proof
-cases.
+source during planning. Binder records base relations while it walks the full
+original abstract syntax tree (AST), including unused CTEs. A constant-false predicate can remove a
+scan during optimization. The retained source inventory therefore supplies
+dependency and witness scope before pruning. The original AST also supplies
+time bounds, event fields, source-column facts, and append cursor facts.
+The transient planning AST does not replace those facts.
 
-After scan replacement, use the standard query planner's physical planning
-entry point for the optimized logical plan. In DataFusion 53.1.0,
-`SessionState::create_physical_plan` repeats logical optimization. The public
-`query_planner().create_physical_plan` entry point avoids that second pass.
-It still performs physical planning and physical optimization. Add no custom
-physical planner for this composition.
+Binder stores each completed child plan in the standard PlannerContext. A
+transient FROM-only SELECT lets SqlToRel bind joins. The final SELECT refers
+to the bound FROM plan without an added alias. That reference keeps the
+original relation qualifiers. The resulting outer logical plan contains the
+real source scans; it does not depend on the temporary context after admission.
 
-A TableScan projection indexes its original source schema. The replacement
-MemTable must preserve that field order and those types. If extraction emits
-a reduced schema, rebuild the scan and remap its projection to that schema.
-Do not replace only the source Arc and keep old column indices.
+After scan replacement, QueryEngine::stream calls
+`query_planner().create_physical_plan`. It does not call
+`SessionState::create_physical_plan`, which repeats logical optimization in
+DataFusion 53.1.0. The public planner still performs physical planning and
+physical optimization.
+
+Physical execution uses execute_stream_partitioned and reads the final
+output partitions in partition order. The optimizer retains Union instead
+of replacing it with Interleave. This route preserves branch order for the
+model fixture whose final plan is Union. Internal physical operators can
+merge partitions. Use ORDER BY when result order is required. The route
+uses standard stream composition and adds no physical operator.
+
+A TableScan projection indexes its original source schema. QueryEngine::plan
+maps each requested field to the admitted MemTable by exact field name. It
+checks the field type and builds a new TableScan with the mapped indices.
+The scan keeps its filters and fetch bound. Replacing only the provider Arc
+would leave incorrect indices when extraction supplies a reduced schema.
 
 ### Owners to replace
 
@@ -113,7 +135,7 @@ Do not replace only the source Arc and keep old column indices.
 | --- | ---: | --- |
 | `query/admission.rs` | 1,564 | Keep SQL policy, parameter bounds, frozen time, append shape, source scope, and the compatibility checks below. Use engine name and type binding where it preserves those checks. |
 | `query/input.rs` | 2,008 | Keep public relation names, column metadata, event decoding, coverage, catalog, recipes, and exact projection semantics. Produce canonical Arrow batches directly. |
-| `query/adapter.rs` | 206 | Remove the scalar InputTable/InputColumn contract. A DuckDB-only alternative needs one owned Arrow bridge; DataFusion consumes Arrow directly. |
+| `query/adapter.rs` | 206 | Remove the scalar InputTable/InputColumn contract. DataFusion consumes canonical Arrow batches directly. |
 | `query/model/schema.rs` and `arrays.rs` | 337 | Remove DuckDB physical-type copies and reverse normalization if SQL runs on canonical Arrow types. Keep output field and metadata validation. |
 | `query/model/input.rs` | 144 | Remove temporary SQL table creation and Arrow append when the engine consumes registered Arrow sources directly. Keep row indices and input limits. |
 | `query/analysis/rows.rs` | 154 | Remove the second scalar-to-Arrow conversion for graph inputs. Keep graph selection, traversal receipts, and pre-admission bounds. |
@@ -224,9 +246,12 @@ SELECT operation FROM (
 ) x
 ```
 
-The proposed replacement needs scope-aware CTE renaming before the engine
-resolver and binder. Preserve exposed relation and column names. Count the
-rewrite in the replacement budget and retain the existing shadowing tests.
+The working tree resolves each child query with a cloned PlannerContext.
+Binder inserts a completed CTE plan under that query's name. A nested context
+can replace an inherited CTE name. The outer context keeps its own binding.
+This route replaces the proposed AST CTE renaming pass. Exact Expr::Column
+projections preserve partial column aliases and declared names. Keep the
+existing shadowing and duplicate-alias tests.
 
 DataFusion also leaves an unused named window unresolved. Current Araphor
 rejects this query because `missing_field` does not exist:
@@ -236,12 +261,13 @@ SELECT operation FROM events
 WINDOW unused AS (ORDER BY missing_field)
 ```
 
-Keep the narrow full-AST checks for unused window names and expressions.
-Delegating all name checks to the engine would weaken this contract. Eager
-CTE planning does not prove full analyzer/type validation of discarded CTEs.
-Do not claim a new guarantee for all unused expression types. Preserve the
-current name, shape, and function checks and test engine type behavior before
-replacing admission.
+Binder keeps the full-AST checks for window names, shape, and functions. It
+also calls SqlToRel::sql_to_expr for unused window partition and ordering
+expressions against the bound FROM schema. Normal wildcard expansion uses
+that same schema and removes the model row index before SELECT binding.
+DataFusion TableSource has no hidden-column rule for this contract.
+Compilation and functional qualification of these checks remain pending.
+Do not infer a stronger type-validation guarantee for every unused expression.
 
 Preserve HAVING name precedence from `query_admission_having_aliases`: a
 grouped source column takes precedence over an output alias; otherwise use
@@ -252,39 +278,36 @@ admission path and count that code in the replacement.
 
 ## Local DataFusion source basis
 
-The local checkout is `datafusion/`, commit `cdc2fc041`. These source paths
-show the owner boundaries to reuse as design rules:
+The source study read `datafusion/` at commit `cdc2fc041`. The implementation
+uses the local `53.1.0` tag as its API source. The table below names paths in
+that tag:
 
 | Source | Rule to apply |
 | --- | --- |
-| `datafusion/session/src/table.rs`, `TableProvider::schema` and `scan` | A source supplies one Arrow schema and a scan plan. Planning does not require scalar rows. |
+| `datafusion/catalog/src/table.rs`, `TableProvider::schema` and `scan` | A source supplies one Arrow schema and a scan plan. Planning does not require scalar rows. |
 | `datafusion/common/src/dfschema.rs`, `DFSchema` | Add qualifiers to the canonical Arrow schema. Do not maintain another field-type model. |
 | `datafusion/physical-plan/src/execution_plan.rs`, `ExecutionPlan::execute` | Keep executable plan nodes separate from output streams. Create fresh execution state for each run. Do not assume a physical plan is immutable or reusable. |
 | `datafusion/execution/src/stream.rs`, `RecordBatchStream` | Pass Arrow batches between execution stages with one schema, including an empty result. |
 | `datafusion/execution/src/memory_pool/mod.rs`, `MemoryReservation` | A run owns reservations. Drop releases them. The pool does not account for all input and output batches. |
 | `datafusion/physical-plan/src/windows/bounded_window_agg_exec.rs` | Window execution retains and removes bounded state. This owner does not replace durable replay or commit authorization. |
 
-The checkout declares DataFusion 55.1.0, Rust 1.95, and Arrow 60. The current
-SDK and DuckDB use Arrow 58.4.0. Direct integration of this checkout would
-therefore require an Arrow decision. The local `53.1.0` tag declares Arrow
-58.0.0 and Rust 1.88. Its dependency constraints permit the current Arrow
-major version; dependency resolution and compilation are not yet proved.
-Do not add two Arrow versions and copy batches between them.
-
-The workspace currently uses sqlparser 0.63.0. DataFusion 53.1.0 uses 0.61.0.
-These AST types are not interchangeable. For this candidate, port admission
-to the engine-reexported parser instead of passing the workspace AST across
-versions. Preserve parameter, statement, recursion, function, and full-AST
-checks during that port. Count the complete port in the replacement budget.
+The study checkout declares DataFusion 55.1.0, Rust 1.95, and Arrow 60. That
+checkout is not the selected engine dependency. Cargo.lock now selects
+DataFusion 53.1.0, Arrow 58.4.0, and sqlparser 0.61.0. Admission imports the
+parser through DataFusion. The separate workspace sqlparser 0.63.0 dependency
+is removed. The crate enables `sql`, `unicode_expressions`, and
+`recursive_protection`. Compilation and functional qualification remain
+pending. Keep one Arrow version at the SDK and engine boundary.
 
 ### Execution and resource gates
 
 The current `query_at`, `query_cancel`, `evaluate_model`, and `query_datasets`
 APIs are synchronous. Ordinary Rust tests call them without a Tokio runtime.
-Production result inspection also calls `query_datasets`. QueryOwner does
-not retain an execution runtime. Its asynchronous client path uses the
-caller's runtime and a blocking worker. The authority watch's private runtime
-only serves its notification worker.
+Production result inspection also calls `query_datasets`. QueryOwner now
+owns QueryEngine, which creates one Tokio execution runtime on first use.
+ModelOperation creates SessionState and its query lease on first SQL use.
+Client evaluation creates SessionState for that evaluation. The authority
+watch retains its separate notification runtime.
 
 DataFusion SQL-to-logical planning is synchronous. Physical planning and
 stream consumption are asynchronous. Some physical
@@ -292,9 +315,11 @@ operators spawn Tokio tasks. A future executor alone does not prove that
 these plans can run outside Tokio. `RuntimeEnv` configures engine resources;
 it is not a Tokio executor.
 
-Before replacement, select and prove the execution boundary for all four
-synchronous APIs and their callers. Preserve their supported contract. An
-API change requires an explicit decision. Require cases outside Tokio,
+QueryEngine::run dispatches physical planning and stream consumption to its
+owned runtime. It returns the result through a synchronous channel. The
+operation retains its control and leases while the dispatched work runs.
+Qualify this boundary for all four synchronous APIs and their callers.
+Preserve their supported contract. An API change requires an explicit decision. Require cases outside Tokio,
 inside current-thread and multithread runtimes, and through the current
 blocking-worker path. Exercise a plan that starts child work, cancellation,
 and final lease release. Do not assume nested `block_on` calls work. Do not
@@ -302,9 +327,10 @@ add a per-query runtime or another runtime/pool framework to hide this gap.
 This gate is **Not done**.
 
 The current
-[engine configuration](../../crates/araphor-data/src/query/evaluation.rs:190)
-sets a 64 MiB engine memory limit, one execution thread, no temporary
-storage, and no external access or extension loading. DataFusion's defaults
+[engine configuration](../../crates/araphor-data/src/query/engine.rs)
+sets a 64 MiB memory pool, one execution partition, planning concurrency one,
+and disabled spill storage. SqlContext exposes only admitted relations and
+registered functions. DataFusion's defaults
 use an unbounded memory pool, operating-system temporary storage, and
 CPU-count concurrency. Those defaults do not preserve current behavior.
 
@@ -315,7 +341,8 @@ resource policy; add no new user option or package cap. Keep QueryLease
 charges for input, output, schema, and aliased buffers. The engine pool omits
 some streamed allocations and cannot replace those charges. Prove that
 exhaustion returns the existing structured failure, writes no spill files,
-and releases reservations. Equivalent resource behavior is **Not done**.
+and releases reservations. The affected resource cases pass in the
+qualification below. Other platforms remain unqualified.
 
 Retain the original full buffer allocation charge through Arrow clones,
 slices, nested children, and validity buffers. A result wrapper or TaskContext
@@ -349,7 +376,7 @@ selected current APIs for implementation; do not port these old API calls.
 | --- | --- | --- |
 | [SQL planner](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/plan/planner.rs:44) | Ordinary SQL goes to `SqlToRel`. Subscribe is a separate top-level operation over the resulting engine plan. | Use engine SQL planning directly. Keep package scheduling, follow checkpoints, and durable commits in their existing Araphor owners. Add no second logical-plan hierarchy. |
 | [Chain table](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/chain/src/table.rs:167) and [batch stream](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/chain/src/datastream.rs:84) | A domain table supplies a schema and scan plan. Each execution produces Arrow batches. | Make Arrow the internal query data format. Use standard `EmptyTable` and `MemTable` for this implementation. Keep source admission in the existing extraction owner. |
-| [Query execution](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/execution/query.rs:30) and [session creation](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/context.rs:223) | A query creates fresh session state and calls `execute_stream`. | Reuse immutable admitted programs. Create each run's authorized catalog, bindings, physical plan, streams, clock, and checkpoint state separately. Use public session builders. |
+| [Query execution](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/execution/query.rs:30) and [session creation](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/context.rs:223) | A query creates fresh session state and calls `execute_stream`. | Reuse immutable admitted programs. Create each run's admitted source map, value bindings, physical plan, streams, clock, and checkpoint state separately. Use public session builders. |
 | [Source notification](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/chain/src/schema.rs:117) and [subscription wait](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/execution/subscribe.rs:109) | The source reports progress and wakes a waiting query. | Use existing Data and authority revision subscriptions and recorded deadlines. Keep source progress separate from query output. A wake is a reason to check state; it is not a durable acknowledgement. |
 | [Source wrapper](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/table_source.rs:13) and [physical planner](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/execution/planner.rs:394) | A custom logical source retains its schema provider. A local physical planner unwraps that source and implements standard engine operations. | Keep progress subscriptions beside the admitted dependency set. Use standard engine table sources and the standard planner. Add a public UDF or extension hook only for a required operation that standard composition cannot express. |
 | [Plan adapters](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/common/query/src/physical_plan.rs:39), [table adapters](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/table/src/table/adapter.rs:52), and [batch adapters](/home/navid/go/src/github.com/mangrovesdb/mangroves/src/common/recordbatch/src/adapter.rs:59) | Separate domain and engine plan, table, schema, and batch types require adapters in both directions. | Retain canonical Arrow schemas, batches, and engine plans. Add no engine-neutral copies of DataFusion's traits. Keep Araphor metadata only where it supplies authority, evidence, progress, or resource ownership. |
@@ -431,14 +458,14 @@ power-loss durability guarantee for Araphor. The root SQL golden tests import
 An exact OCI closure is loaded
   -> the existing InstalledBundle owner verifies its digest and descriptor
   -> it performs each export's policy and declaration admission once
-  -> it retains parsed SQL, scoped dependencies, relation contracts, and clock use
+  -> it retains admitted logical plans, scoped dependencies, relation contracts, and clock use
   -> it retains export indices and the exact artifact identity
   -> it charges the complete retained plan through the existing QueryLease
 
 A caller selects an export
   -> the owner pairs the immutable plan with the exact activation and current grant
   -> a run owns inputs, parameters, checkpoint, context, control, and leases
-  -> the run creates its catalog, bindings, physical plan, and streams
+  -> the run binds values and admitted Arrow sources, then creates its physical plan and streams
   -> the existing native, Wasm, or SQL execution owner performs the selected computation
   -> current authority is checked again at the existing commit boundary
 
@@ -451,11 +478,16 @@ An activation changes
   -> an old selection cannot commit after the activation changes
   -> this proposal does not claim an existing activation cancellation watch
 
-The immutable program contains parsed, policy-checked SQL and admitted
-declarations. It does not retain live providers, streams, or physical plans.
-Descriptor schemas and code-owned built-in schemas define its relation
-contracts. Each run still resolves engine names and types against those
-schemas. Do not claim that engine binding happens only once.
+The immutable program contains QuerySql values with retained LogicalPlan
+objects and admitted declarations. Descriptor schemas and code-owned built-in
+schemas define the relation contracts. Admission resolves engine names and
+types once for each retained query. The logical plans retain schema-only
+EmptyTable sources. They retain no input batches, MemTables, streams, or physical
+plans. QuerySql clones share the complete admitted program, including its SQL,
+parameters, labels, dependencies, and plan. The existing retained-byte charge
+includes that program and its Arc allocation. Each run binds its parameter and clock values, optimizes a plan clone,
+and substitutes its admitted Arrow sources. Code-owned QueryPlan templates
+still use QueryBinding::trusted for their evaluation-time binding.
 
 Each run supplies its own tenant, grant, source batches, clock, checkpoint,
 bindings, and mutable execution state. A historical snapshot does not permit
@@ -505,9 +537,10 @@ an independent deliverable and can precede the engine replacement.
    existing assertion. Check the complete replacement budget before wider
    migration. Do not use a partial engine demo as parity or size proof.
 4. Route every package caller through the retained admitted program. Preserve
-   checked transient calls, current grants, and per-run engine binding.
-5. Remove the old query engine path after parity passes. Keep DuckDB only for
-   the existing durable storage owners. Add no fallback backend.
+   checked transient calls, current grants, and per-run value and source binding.
+5. Verify that client, model, source, and dataset SQL use one DataFusion
+   backend. Remove obsolete query adapters. Keep DuckDB for the existing
+   durable storage owners. Add no fallback backend.
 6. Count the actual complete production replacement after that deletion with
    the current syntax counter. Include resources, compatibility code, adapters,
    and callers. Exclude tests, documentation, blank lines, and code movement.
@@ -532,16 +565,16 @@ native/Wasm parity, exact package revision, trust revocation, checkpoint retry,
 stale dependencies, crash recovery, backup, and all durable commit checks.
 
 Require exact `HUGEINT`, unsigned integer, and Decimal value parity. The
-proposed DataFusion version does not support every current DuckDB cast name.
+selected DataFusion version does not support every current DuckDB cast name.
 Aggregate result widths and overflow behavior also differ. For example,
 DataFusion's integer SUM types do not by themselves preserve DuckDB's wider
 integer result. Test promotion and overflow as well as cast names. Count
 each required rewrite and output conversion in the replacement.
 
 Include function result types in that proof. DataFusion returns UInt64 for
-`row_number`, `rank`, and `dense_rank`; the current query engine returns BIGINT.
-For Utf8 input, DataFusion `length` returns Int32; the current engine returns
-BIGINT. Preserve values and public type labels. A final cast cannot repair an
+`row_number`, `rank`, and `dense_rank`; the public SQL contract requires BIGINT.
+For Utf8 input, DataFusion `length` returns Int32; the public SQL contract
+requires BIGINT. Preserve values and public type labels. A final cast cannot repair an
 aggregate that already overflowed during execution.
 Select the engine features required by the admitted functions. For example,
 `length` requires DataFusion's `unicode_expressions` feature. A SQL-only
@@ -555,9 +588,10 @@ race. Separately prove rejection when cancellation is observed at the final
 check. Preserve the existing authorization lock and activation comparison
 at commit.
 
-The query engine choice must pass parity before the previous engine path is
-removed. The final implementation has one query backend, no fallback path, and
-no older-format reader. Functional timing is not a performance benchmark.
+The query engine choice must pass parity before acceptance. The working tree
+now has one query backend, no fallback path, and no older-format reader.
+DuckDB value types remain at the public client boundary; QueryValues reads
+Arrow arrays directly and does not open a DuckDB query connection. Functional timing is not a performance benchmark.
 No performance result is claimed by this source study.
 
 Keeping DuckDB for storage also keeps its build dependency. Adding DataFusion
@@ -569,8 +603,9 @@ input and model queries. Installed execution borrows them. Standalone model
 and dataset calls retain their checked transient boundaries. Current grants,
 activation comparisons, backend code lifetimes, and commit owners remain.
 
-The affected Data, Control, and E2E test build passes in 422.31 seconds. Strict
-Clippy passes in 72.60 seconds. All 57 final selected functional cases pass.
+The retained-admission Data, Control, and E2E test build passed in 422.31
+seconds. Strict Clippy passed in 72.60 seconds. All 57 final selected
+functional cases passed.
 These include the two corrected owner and capacity cases, long SQL literals,
 program reuse, changed source revisions, provenance, clock classification,
 current trust, six native Data cases, and the installed native detector E2E
@@ -586,11 +621,53 @@ The first selection reported 184 passed, two failed, and 12 ignored. The final
 checks above resolve those two failures. Ignored native cases are not counted
 as passing cases; the named native qualification runs them explicitly.
 
-This deliverable adds 193 nonblank production Rust lines from `537f9de3`.
-The total reduction from `7b7b407a` is now 2,036 lines. The remaining target is
-3,964 lines. The record is `/tmp/araphor-redesign-program-count3.json`.
+The retained-admission deliverable added 193 nonblank production Rust lines
+from `537f9de3`. Its total reduction from `7b7b407a` was 2,036 lines. Its
+remaining target was 3,964 lines. The record is
+`/tmp/araphor-redesign-program-count3.json`. This record does not count the
+current engine integration.
 
-Result: **Not done**. The DataFusion replacement is not integrated or qualified.
-No performance result is established.
-The source review corrects the proposal's ownership and compatibility scope;
-it does not pass the execution, resource, parity, or net-reduction gates.
+The current engine integration adds 2,222 nonblank production Rust lines from
+`537f9de3`. The complete change removes 7 from `7b7b407a` and adds 1,146 from
+`aa390d9f`. Another 5,993 must be removed to meet the required target. The
+record is `/tmp/araphor-arrow-engine-count8.json`. This count includes the new
+query modules, buffer leases, and SQL compatibility code. It excludes tests
+and documents. It does not establish a simpler complete redesign.
+
+Engine execution: **Done** for the affected host checks. The Data, Control,
+and E2E test build passes in 153.29 seconds. Strict Clippy passes in 12.40
+seconds. Formatting passes for all 46 changed Rust files. All 174 local
+document links resolve.
+
+All 460 distinct selected cases pass: 439 ordinary Data cases, 12 native
+Data cases, six Control cases, and three E2E cases. The ordinary Data run
+selects 456 cases and reports 439 passed and 17 ignored. The separate native
+checks run all 12 native cases. Four compiler-worker entry points and one
+release-history case remain ignored. The native detector E2E case runs with
+PATH empty. Native qualification covers Linux, x86_64-unknown-linux-gnu,
+and glibc 2.39. It does not qualify other targets.
+
+The first native run reports 11 passed and one failed. The failing test clones
+a checkpoint that retains the prior output lease. The next full-capacity
+reservation correctly returns Busy. The test now checks that exact denial,
+reloads the checkpoint through the standard wire codec, and proves successful
+replay. All prior parity assertions and limits remain. Production already
+loads checkpoint bytes from storage. Only that test changes after the 439
+ordinary Data cases and the first eight caller cases pass. Production source
+and manifests remain identical. The corrected native case and native E2E
+case pass against the final build. Source, native artifacts, and test binary
+hashes remain fixed within each check.
+
+The records are `/tmp/araphor-arrow-engine-qualification-final.json`,
+`/tmp/araphor-arrow-engine-testbuild11.json`,
+`/tmp/araphor-arrow-engine-clippy8.json`,
+`/tmp/araphor-arrow-engine-final-data.json`,
+`/tmp/araphor-arrow-engine-integration1-tests.json`,
+`/tmp/araphor-engine-native-qualification1.json`,
+`/tmp/araphor-engine-native-retry2.json`, and
+`/tmp/araphor-arrow-engine-qualified-source-extension.json`.
+
+Complete redesign result: **Not done**. The execution, resource, and parity
+checks above do not close the production reduction target. The earlier
+retained-admission receipts remain separate evidence. No performance result
+is established. Continue removal of custom planning and source stages.

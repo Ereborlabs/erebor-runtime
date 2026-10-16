@@ -299,6 +299,7 @@ impl ClientFixture {
         let (release, released) = mpsc::channel();
         *self
             .owner
+            .engine
             .scan_gate
             .lock()
             .map_err(|_| "scan gate lock failed")? = Some((entered, released));
@@ -329,28 +330,14 @@ impl ClientFixture {
     }
 
     fn inputs(&self, alive: bool) -> TestResult {
-        let inputs = self
-            .owner
-            .input_refs
-            .lock()
-            .map_err(|_| "input reference lock failed")?;
-        assert!(!inputs.is_empty());
-        assert!(inputs
-            .iter()
-            .all(|input| input.upgrade().is_some() == alive));
+        self.owner.test_inputs(alive);
         Ok(())
     }
 
     async fn released(&self) -> TestResult {
         tokio::time::timeout(WAIT, async {
             loop {
-                let released = self
-                    .owner
-                    .input_refs
-                    .lock()
-                    .map_err(|_| "input reference lock failed")?
-                    .iter()
-                    .all(|input| input.upgrade().is_none());
+                let released = self.owner.test_inputs_released();
                 if released {
                     break;
                 }
@@ -370,7 +357,8 @@ impl ClientFixture {
     fn input_count(&self) -> TestResult<usize> {
         Ok(self
             .owner
-            .input_refs
+            .engine
+            .input_leases
             .lock()
             .map_err(|_| "input reference lock failed")?
             .len())
@@ -1805,7 +1793,8 @@ fn query_client_trusted_entry() -> TestResult {
     ));
     assert!(fixture
         .owner
-        .input_refs
+        .engine
+        .input_leases
         .lock()
         .map_err(|_| "input reference lock failed")?
         .is_empty());
@@ -1821,14 +1810,7 @@ async fn query_client_in_process() -> TestResult {
     let result = fixture.query(&plan).await?;
     assert_eq!(result.rows, vec![vec![Value::BigInt(1)]]);
     drop(result);
-    let inputs = fixture
-        .owner
-        .input_refs
-        .lock()
-        .map_err(|_| "input reference lock failed")?;
-    assert!(!inputs.is_empty());
-    assert!(inputs.iter().all(|input| input.upgrade().is_none()));
-    drop(inputs);
+    fixture.owner.test_inputs(false);
     let trusted = fixture.data.plan(super::QueryTemplate::OperationCounts)?;
     let result = fixture.owner.query_at(&trusted, 100)?;
     assert_eq!(result.rows, vec![vec![Value::UInt(7), Value::BigInt(1)]]);
@@ -2194,7 +2176,7 @@ async fn query_client_interruptions() -> TestResult {
             );
         }
         fixture.released().await?;
-        assert!(fixture.owner.native_failed.load(Ordering::Acquire));
+        assert!(fixture.owner.engine.native_failed.load(Ordering::Acquire));
         fixture.inputs(false)?;
         assert_eq!(fixture.data.store.meta()?, before);
         fixture.commit(2, 2, 8, 4)?;
@@ -2273,7 +2255,8 @@ async fn query_client_capacity() -> TestResult {
             Err(crate::Error::QueryInvalid { .. })
         ));
         assert!(owner
-            .input_refs
+            .engine
+            .input_leases
             .lock()
             .map_err(|_| "input reference lock failed")?
             .is_empty());
@@ -2310,7 +2293,8 @@ async fn query_client_expired_authority() -> TestResult {
     ));
     assert!(fixture
         .owner
-        .input_refs
+        .engine
+        .input_leases
         .lock()
         .map_err(|_| "input reference lock failed")?
         .is_empty());

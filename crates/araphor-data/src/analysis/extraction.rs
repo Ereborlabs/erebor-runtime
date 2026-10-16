@@ -444,9 +444,8 @@ impl<T> ProjectionSink<'_, T> {
         self.control.check()
     }
 
-    pub(crate) fn emit(&mut self, relation: AnalysisRelationV1, row: (T, usize)) -> Result<bool> {
+    pub(crate) fn admit(&mut self, bytes: usize) -> Result<bool> {
         self.control.check()?;
-        let bytes = row.1.saturating_add(size_of::<T>());
         if let Some(used) = &mut self.row_bytes {
             if used.saturating_add(bytes) > self.output.limits.page_bytes {
                 if **used == 0 || self.emitted != 0 {
@@ -459,9 +458,35 @@ impl<T> ProjectionSink<'_, T> {
             }
             **used += bytes;
         }
-        self.output.push(relation, row)?;
         self.emitted += 1;
         Ok(true)
+    }
+
+    pub(crate) fn emit(&mut self, relation: AnalysisRelationV1, row: (T, usize)) -> Result<bool> {
+        if !self.admit(row.1.saturating_add(size_of::<T>()))? {
+            return Ok(false);
+        }
+        self.output.push(relation, row)?;
+        Ok(true)
+    }
+
+    pub(crate) fn used_bytes(&self) -> usize {
+        self.output.input_bytes
+    }
+
+    pub(crate) fn projected(&mut self, bytes: usize) {
+        self.output.projected_bytes += bytes;
+    }
+
+    pub(crate) fn remaining_bytes(&self) -> usize {
+        self.output
+            .limits
+            .input_bytes
+            .saturating_sub(self.output.input_bytes)
+    }
+
+    pub(crate) fn page_rows(&self) -> usize {
+        self.output.limits.page_rows.min(MAX_ANALYSIS_PAGE_RECORDS)
     }
 
     pub(crate) fn grow<U>(&mut self, values: &mut Vec<U>) -> Result<()> {
@@ -556,6 +581,18 @@ struct SelectedTrace<'a> {
 }
 
 impl<T> AnalysisExtractionV1<T> {
+    pub(crate) fn sink<'a>(
+        &'a mut self,
+        control: &'a AnalysisReadControl,
+    ) -> ProjectionSink<'a, T> {
+        ProjectionSink {
+            output: self,
+            control,
+            row_bytes: None,
+            emitted: 0,
+        }
+    }
+
     fn grow<U>(values: &mut Vec<U>, used: usize, limit: usize) -> Result<usize> {
         if values.len() < values.capacity() {
             return Ok(0);
@@ -1119,53 +1156,56 @@ impl AnalysisStore {
         )
     }
 
-    pub(crate) fn extract_rows<T>(
+    pub(crate) fn extract_rows<P: AnalysisProjection>(
         &self,
         selection: &AnalysisSelectionV1,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        mut project: impl AnalysisProjection<Row = T>,
-    ) -> Result<AnalysisPositionPageV1<T>> {
-        self.extract_mode(
+        mut project: P,
+    ) -> Result<(AnalysisPositionPageV1<P::Row>, P)> {
+        let page = self.extract_mode(
             selection,
             ExtractMode::Complete,
             limits,
             control,
             &mut project,
-        )
+        )?;
+        Ok((page, project))
     }
 
-    pub(crate) fn position_rows<T>(
+    pub(crate) fn position_rows<P: AnalysisProjection>(
         &self,
         selection: &AnalysisSelectionV1,
         after: Option<StorePositionV1>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        mut project: impl AnalysisProjection<Row = T>,
-    ) -> Result<AnalysisPositionPageV1<T>> {
-        self.extract_mode(
+        mut project: P,
+    ) -> Result<(AnalysisPositionPageV1<P::Row>, P)> {
+        let page = self.extract_mode(
             selection,
             ExtractMode::Page(after),
             limits,
             control,
             &mut project,
-        )
+        )?;
+        Ok((page, project))
     }
 
-    pub(crate) fn metadata_rows<T>(
+    pub(crate) fn metadata_rows<P: AnalysisProjection>(
         &self,
         selection: &AnalysisSelectionV1,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        mut project: impl AnalysisProjection<Row = T>,
-    ) -> Result<AnalysisPositionPageV1<T>> {
-        self.extract_mode(
+        mut project: P,
+    ) -> Result<(AnalysisPositionPageV1<P::Row>, P)> {
+        let page = self.extract_mode(
             selection,
             ExtractMode::Metadata,
             limits,
             control,
             &mut project,
-        )
+        )?;
+        Ok((page, project))
     }
 
     fn extract_mode<T>(
@@ -2965,7 +3005,7 @@ mod tests {
                 }),
             );
             if limit == required {
-                let output = result?.extraction;
+                let output = result?.0.extraction;
                 assert_eq!(output.input_bytes, required);
                 assert_eq!(output.input_bytes, owned_bytes(&output));
             } else {

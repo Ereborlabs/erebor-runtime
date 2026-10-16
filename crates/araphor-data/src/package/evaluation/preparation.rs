@@ -247,7 +247,7 @@ impl ModelRun<'_> {
                 )?
             }
             _ => {
-                drop(self.operation);
+                self.operation.release_inputs()?;
                 self.owner.evaluate_artifact(
                     self.active.key.tenant_id,
                     self.artifact,

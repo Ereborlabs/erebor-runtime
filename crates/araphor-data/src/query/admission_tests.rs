@@ -6,6 +6,29 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 struct Fixture;
 
 #[test]
+fn admitted_program_sharing() -> TestResult {
+    let sql = Fixture::admit("SELECT CAST(? AS BIGINT) AS value", vec![Value::Int(7)])?;
+    let copied = sql.clone();
+    assert!(Arc::ptr_eq(&sql.program, &copied.program));
+    assert_eq!(sql, copied);
+    assert_eq!(sql.allocated_bytes(), copied.allocated_bytes());
+    assert!(sql.allocated_bytes() >= std::mem::size_of::<AdmittedSql>());
+    assert!(std::mem::size_of::<crate::QueryTemplate>() <= 64);
+    assert_eq!(
+        sql,
+        Fixture::admit("SELECT CAST(? AS BIGINT) AS value", vec![Value::Int(7)])?
+    );
+    assert_ne!(
+        sql,
+        Fixture::admit("SELECT CAST(? AS BIGINT) AS value", vec![Value::Int(8)])?
+    );
+    assert!(format!("{sql:?}").contains(sql.original()));
+    drop(sql);
+    assert_eq!(copied.bind_complete(0)?.parameters, vec![Value::Int(7)]);
+    Ok(())
+}
+
+#[test]
 fn retained_literal_charge() -> TestResult {
     let short = Fixture::admit("SELECT 'x' AS value", vec![])?;
     let long = Fixture::admit(&format!("SELECT '{}' AS value", "x".repeat(8_000)), vec![])?;
@@ -29,10 +52,21 @@ impl Fixture {
                 } else {
                     vec!["operation"]
                 };
-                (
-                    (*relation).to_owned(),
-                    fields.into_iter().map(str::to_owned).collect(),
-                )
+                let fields = fields
+                    .into_iter()
+                    .map(|name| {
+                        let kind = match name {
+                            "id" => datafusion::arrow::datatypes::DataType::Int64,
+                            "received_at" => datafusion::arrow::datatypes::DataType::Timestamp(
+                                datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                                None,
+                            ),
+                            _ => datafusion::arrow::datatypes::DataType::Utf8,
+                        };
+                        Field::new(name, kind, true)
+                    })
+                    .collect::<Vec<_>>();
+                ((*relation).to_owned(), Arc::new(Schema::new(fields)))
             })
             .collect();
         QuerySql::admit_with(sql, parameters, false, Some(relations))
@@ -62,7 +96,7 @@ impl Fixture {
             let fields = schema
                 .columns
                 .iter()
-                .map(|field| format!("\"{}\" {:?}", field.0, field.1))
+                .map(|field| format!("\"{}\" {}", field.0, field.sql_type()))
                 .collect::<Vec<_>>()
                 .join(", ");
             let positions = if schema.name == "events" {
@@ -537,6 +571,45 @@ fn query_admission_append_positions() -> TestResult {
         assert_eq!(admitted.operation(), QueryOperation::Replace);
         assert!(!admitted.bind_at(1)?.append);
     }
+    Ok(())
+}
+
+#[test]
+fn query_admission_normal_stack() -> TestResult {
+    std::thread::Builder::new()
+        .name("query-parser-stack".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| -> crate::Result<()> {
+            let valid = format!("SELECT {}1{} AS value", "(".repeat(32), ")".repeat(32),);
+            let admitted = Fixture::admit(&valid, Vec::new())?;
+            let bound = admitted.bind_complete(0)?;
+            assert_eq!(bound.plan.schema().fields().len(), 1);
+            assert_eq!(bound.plan.schema().field(0).name(), "value");
+            let trusted = QueryBinding::trusted(valid, Vec::new(), 0)?;
+            assert_eq!(trusted.plan.schema().field(0).name(), "value");
+            let rejected = format!(
+                "SELECT {}1{}",
+                "(".repeat(AST_DEPTH + 1),
+                ")".repeat(AST_DEPTH + 1),
+            );
+            assert!(matches!(
+                Fixture::admit(&rejected, Vec::new()),
+                Err(crate::Error::QueryInvalid {
+                    field: "SQL syntax",
+                    ..
+                }),
+            ));
+            assert!(matches!(
+                QueryBinding::trusted(rejected, Vec::new(), 0),
+                Err(crate::Error::QueryInvalid {
+                    field: "trusted SQL syntax",
+                    ..
+                }),
+            ));
+            Ok(())
+        })?
+        .join()
+        .map_err(|_| "parser thread panicked")??;
     Ok(())
 }
 

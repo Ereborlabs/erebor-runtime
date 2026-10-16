@@ -30,13 +30,25 @@ enum LeaseKind {
     Output,
 }
 
+#[derive(Clone)]
 pub(crate) struct QueryLease {
+    charge: Arc<LeaseCharge>,
+}
+
+struct LeaseCharge {
     budget: Arc<QueryBudget>,
     tenant: [u8; 16],
+    state: Mutex<LeaseState>,
+}
+
+struct LeaseState {
     kind: LeaseKind,
     bytes: usize,
     input_bytes: usize,
 }
+
+#[path = "budget/buffers.rs"]
+mod buffers;
 
 impl QueryBudget {
     pub(super) fn new(limits: QueryLimits) -> Arc<Self> {
@@ -180,25 +192,63 @@ impl QueryBudget {
         usage.output_bytes = output_bytes;
         usage.input_bytes = total_input;
         Ok(QueryLease {
-            budget: self.clone(),
-            tenant,
-            kind,
-            bytes,
-            input_bytes,
+            charge: Arc::new(LeaseCharge {
+                budget: self.clone(),
+                tenant,
+                state: Mutex::new(LeaseState {
+                    kind,
+                    bytes,
+                    input_bytes,
+                }),
+            }),
         })
     }
 }
 
 impl QueryLease {
+    #[cfg(test)]
+    pub(in crate::query) fn test_reference(
+        &self,
+    ) -> std::sync::Weak<dyn std::any::Any + Send + Sync> {
+        let charge: Arc<dyn std::any::Any + Send + Sync> = self.charge.clone();
+        Arc::downgrade(&charge)
+    }
+
+    #[cfg(test)]
+    pub(in crate::query) fn test_input_active(
+        reference: &std::sync::Weak<dyn std::any::Any + Send + Sync>,
+    ) -> bool {
+        reference
+            .upgrade()
+            .and_then(|charge| charge.downcast::<LeaseCharge>().ok())
+            .is_some_and(|charge| {
+                let state = charge
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                matches!(state.kind, LeaseKind::Evaluation) || state.input_bytes != 0
+            })
+    }
+
+    fn state(&self) -> Result<std::sync::MutexGuard<'_, LeaseState>> {
+        self.charge.state.lock().map_err(|_| {
+            crate::QueryInvalidSnafu {
+                field: "query lease lock",
+            }
+            .build()
+        })
+    }
+
     pub(crate) fn grow_input(&mut self, bytes: usize) -> Result<()> {
-        if matches!(self.kind, LeaseKind::Stream) {
+        let mut state = self.state()?;
+        if matches!(state.kind, LeaseKind::Stream) {
             return crate::QueryLimitSnafu {
                 resource: "query input bytes",
-                limit: self.input_bytes,
+                limit: state.input_bytes,
             }
             .fail();
         }
-        let mut usage = self.budget.usage.lock().map_err(|_| {
+        let mut usage = self.charge.budget.usage.lock().map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "query budget lock",
             }
@@ -207,7 +257,7 @@ impl QueryLease {
         let total = usage
             .input_bytes
             .checked_add(bytes)
-            .filter(|total| *total <= self.budget.limits.input_capacity)
+            .filter(|total| *total <= self.charge.budget.limits.input_capacity)
             .ok_or_else(|| {
                 crate::AnalysisBusySnafu {
                     resource: "query input capacity",
@@ -215,18 +265,19 @@ impl QueryLease {
                 .build()
             })?;
         usage.input_bytes = total;
-        self.input_bytes += bytes;
+        state.input_bytes += bytes;
         Ok(())
     }
 
     pub(super) fn reserve_output(&mut self, bytes: usize) -> Result<()> {
-        if !matches!(self.kind, LeaseKind::Evaluation) || self.bytes != 0 {
+        let mut state = self.state()?;
+        if !matches!(state.kind, LeaseKind::Evaluation) || state.bytes != 0 {
             return crate::QueryInvalidSnafu {
                 field: "model output reservation",
             }
             .fail();
         }
-        let mut usage = self.budget.usage.lock().map_err(|_| {
+        let mut usage = self.charge.budget.usage.lock().map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "query budget lock",
             }
@@ -235,53 +286,61 @@ impl QueryLease {
         usage.output_bytes = usage
             .output_bytes
             .checked_add(bytes)
-            .filter(|total| *total <= self.budget.limits.output_capacity)
+            .filter(|total| *total <= self.charge.budget.limits.output_capacity)
             .ok_or_else(|| {
                 crate::AnalysisBusySnafu {
                     resource: "query output capacity",
                 }
                 .build()
             })?;
-        self.bytes = bytes;
+        state.bytes = bytes;
         Ok(())
     }
 
     pub(super) fn shrink_input(&mut self, bytes: usize) -> Result<()> {
-        if matches!(self.kind, LeaseKind::Stream) || bytes > self.input_bytes {
+        let mut state = self.state()?;
+        if matches!(state.kind, LeaseKind::Stream) || bytes > state.input_bytes {
             return crate::QueryLimitSnafu {
                 resource: "query input bytes",
-                limit: self.input_bytes,
+                limit: state.input_bytes,
             }
             .fail();
         }
         let mut usage = self
+            .charge
             .budget
             .usage
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        usage.input_bytes -= self.input_bytes - bytes;
-        self.input_bytes = bytes;
+        usage.input_bytes -= state.input_bytes - bytes;
+        state.input_bytes = bytes;
         drop(usage);
-        self.budget.changed.notify_waiters();
+        drop(state);
+        self.charge.budget.changed.notify_waiters();
         Ok(())
     }
 
     /// Transfer bytes to a separate output guard. The total charge does not change.
     pub(super) fn split(&mut self, bytes: usize) -> Result<Self> {
-        if matches!(self.kind, LeaseKind::Stream) || bytes > self.bytes {
+        let mut state = self.state()?;
+        if matches!(state.kind, LeaseKind::Stream) || bytes > state.bytes {
             return crate::QueryLimitSnafu {
                 resource: "query output bytes",
-                limit: self.bytes,
+                limit: state.bytes,
             }
             .fail();
         }
-        self.bytes -= bytes;
+        state.bytes -= bytes;
         Ok(Self {
-            budget: self.budget.clone(),
-            tenant: self.tenant,
-            kind: LeaseKind::Output,
-            bytes,
-            input_bytes: 0,
+            charge: Arc::new(LeaseCharge {
+                budget: self.charge.budget.clone(),
+                tenant: self.charge.tenant,
+                state: Mutex::new(LeaseState {
+                    kind: LeaseKind::Output,
+                    bytes,
+                    input_bytes: 0,
+                }),
+            }),
         })
     }
 
@@ -294,59 +353,73 @@ impl QueryLease {
         self.finish_output(bytes, true)
     }
 
-    fn finish_output(mut self, bytes: usize, retain_input: bool) -> Result<Self> {
-        if matches!(self.kind, LeaseKind::Stream) || bytes > self.bytes {
+    fn finish_output(self, bytes: usize, retain_input: bool) -> Result<Self> {
+        let mut state = self.state()?;
+        if matches!(state.kind, LeaseKind::Stream) || bytes > state.bytes {
             return crate::QueryLimitSnafu {
                 resource: "query output bytes",
-                limit: self.bytes,
+                limit: state.bytes,
             }
             .fail();
         }
         let mut usage = self
+            .charge
             .budget
             .usage
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let LeaseKind::Evaluation = self.kind {
+        if let LeaseKind::Evaluation = state.kind {
             usage.evaluations -= 1;
-            if let Some(tenant) = usage.tenants.get_mut(&self.tenant) {
+            if let Some(tenant) = usage.tenants.get_mut(&self.charge.tenant) {
                 tenant.0 -= 1;
                 if *tenant == (0, 0) {
-                    usage.tenants.remove(&self.tenant);
+                    usage.tenants.remove(&self.charge.tenant);
                 }
             }
-            self.kind = LeaseKind::Output;
+            state.kind = LeaseKind::Output;
             if !retain_input {
-                usage.input_bytes -= self.input_bytes;
-                self.input_bytes = 0;
+                usage.input_bytes -= state.input_bytes;
+                state.input_bytes = 0;
             }
         }
-        usage.output_bytes -= self.bytes - bytes;
-        self.bytes = bytes;
+        usage.output_bytes -= state.bytes - bytes;
+        state.bytes = bytes;
         drop(usage);
-        self.budget.changed.notify_waiters();
+        drop(state);
+        self.charge.budget.changed.notify_waiters();
         Ok(self)
+    }
+
+    #[cfg(test)]
+    fn input_bytes(&self) -> usize {
+        self.charge
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .input_bytes
     }
 }
 
-impl Drop for QueryLease {
+impl Drop for LeaseCharge {
     fn drop(&mut self) {
+        let state = self
+            .state
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner());
         let mut usage = self
             .budget
             .usage
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        match self.kind {
-            LeaseKind::Evaluation => {
-                usage.evaluations -= 1;
-            }
+        match state.kind {
+            LeaseKind::Evaluation => usage.evaluations -= 1,
             LeaseKind::Stream => usage.streams -= 1,
             LeaseKind::Output => {}
         }
-        usage.output_bytes -= self.bytes;
-        usage.input_bytes -= self.input_bytes;
+        usage.output_bytes -= state.bytes;
+        usage.input_bytes -= state.input_bytes;
         if let Some(tenant) = usage.tenants.get_mut(&self.tenant) {
-            match self.kind {
+            match state.kind {
                 LeaseKind::Evaluation => tenant.0 -= 1,
                 LeaseKind::Stream => tenant.1 -= 1,
                 LeaseKind::Output => {}
@@ -382,6 +455,136 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_evaluation_charge_drops_with_last_clone() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            input_capacity: 10,
+            global_evaluations: 1,
+            ..Default::default()
+        });
+        let lease = budget.component([1; 16], 0, 10)?;
+        let shared = lease.clone();
+        drop(lease);
+        assert!(matches!(
+            budget.component([2; 16], 0, 0),
+            Err(crate::Error::AnalysisBusy {
+                resource: "query evaluation capacity",
+                ..
+            }),
+        ));
+        assert!(budget.retained_input(1).is_err());
+        drop(shared);
+        drop(budget.component([2; 16], 0, 10)?);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            (usage.evaluations, usage.input_bytes, usage.output_bytes),
+            (0, 0, 0)
+        );
+        assert!(usage.tenants.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn shared_charge_mutations_and_output_transition() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            input_capacity: 10,
+            output_bytes: 10,
+            output_capacity: 20,
+            ..Default::default()
+        });
+        let mut lease = budget.component([1; 16], 0, 6)?;
+        let mut shared = lease.clone();
+        lease.grow_input(4)?;
+        assert_eq!(shared.input_bytes(), 10);
+        shared.shrink_input(8)?;
+        assert_eq!(lease.input_bytes(), 8);
+        lease.reserve_output(10)?;
+        assert!(shared.reserve_output(1).is_err());
+        let split = shared.split(3)?;
+        assert_eq!(lease.state()?.bytes, 7);
+        let output = shared.retained_output(4)?;
+        assert!(lease.clone().output(5).is_err());
+        {
+            let usage = budget
+                .usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!(
+                (usage.evaluations, usage.input_bytes, usage.output_bytes),
+                (0, 8, 7)
+            );
+            assert!(usage.tenants.is_empty());
+        }
+        drop(output);
+        assert_eq!(lease.input_bytes(), 8);
+        drop(lease);
+        let usage = budget
+            .usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!((usage.input_bytes, usage.output_bytes), (0, 3));
+        drop(usage);
+        drop(split);
+        assert_eq!(
+            budget
+                .usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .output_bytes,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn separate_scalar_output_does_not_retain_input() -> Result<()> {
+        let budget = QueryBudget::new(QueryLimits {
+            input_bytes: 10,
+            input_capacity: 10,
+            output_bytes: 10,
+            output_capacity: 10,
+            ..Default::default()
+        });
+        let mut lease = budget.evaluate([1; 16])?;
+        let output = lease.split(3)?;
+        drop(lease.retained_output(0)?);
+        {
+            let usage = budget
+                .usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!(
+                (usage.evaluations, usage.input_bytes, usage.output_bytes),
+                (0, 0, 3)
+            );
+        }
+        let shared = output.clone();
+        drop(output);
+        assert_eq!(
+            budget
+                .usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .output_bytes,
+            3
+        );
+        drop(shared);
+        assert_eq!(
+            budget
+                .usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .output_bytes,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
     fn retained_input_growth() -> Result<()> {
         let budget = QueryBudget::new(QueryLimits {
             input_bytes: 1,
@@ -399,7 +602,7 @@ mod tests {
                     ..
                 })
             ));
-            assert_eq!(retained.input_bytes, 8);
+            assert_eq!(retained.input_bytes(), 8);
             assert_eq!(
                 budget
                     .usage

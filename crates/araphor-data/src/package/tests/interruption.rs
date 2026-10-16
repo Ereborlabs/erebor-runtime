@@ -172,6 +172,28 @@ async fn package_busy_preserves_result() -> TestResult {
     fixture.install(package.clone(), None).await?;
     let installed = fixture.owner.load_installed([1; 16], &package.root)?;
     let before = fixture.activation("test.model")?;
+    fixture.store.commit_context(&AnalysisContextVersionV1 {
+        key: AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: "fixture".into(),
+            entity_key: b"event".to_vec(),
+            lifetime_key: b"lifetime".to_vec(),
+            owner_revision: 2,
+        },
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+        sensitivity: ContextSensitivityV1::Tenant,
+        body: b"later".to_vec(),
+    })?;
+    assert!(fixture
+        .store
+        .package_current(
+            &before,
+            crate::package::AnalysisPackageOwner::now(),
+            true,
+            &AnalysisReadControl::default(),
+        )?
+        .is_none());
     let (entered, ready) = mpsc::channel();
     let (release, resumed) = mpsc::channel();
     fixture.owner.query.set_scan_gate(entered, resumed)?;
@@ -186,18 +208,23 @@ async fn package_busy_preserves_result() -> TestResult {
     })
     .await??;
     let checks = (|| -> TestResult {
-        assert!(matches!(
+        let inspected = fixture
+            .owner
+            .inspect(&fixture.grant, "test", "test.model", None, &control);
+        assert!(
+            matches!(&inspected, Err(crate::Error::AnalysisBusy { .. })),
+            "inspect while execution is held: {:?}",
+            inspected.as_ref().map(|_| ())
+        );
+        let evaluated =
             fixture
                 .owner
-                .inspect(&fixture.grant, "test", "test.model", None, &control),
-            Err(crate::Error::AnalysisBusy { .. })
-        ));
-        assert!(matches!(
-            fixture
-                .owner
-                .evaluate_active(&before, "automatic", true, &installed, &control),
-            Err(crate::Error::AnalysisBusy { .. })
-        ));
+                .evaluate_active(&before, "automatic", true, &installed, &control);
+        assert!(
+            matches!(&evaluated, Err(crate::Error::AnalysisBusy { .. })),
+            "evaluate while execution is held: {:?}",
+            evaluated.as_ref().map(|_| ())
+        );
         assert_eq!(
             fixture.store.package_activation(&before.key)?.as_ref(),
             Some(&before)

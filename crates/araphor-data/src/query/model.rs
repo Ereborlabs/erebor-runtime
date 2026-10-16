@@ -235,10 +235,44 @@ impl QueryOwner {
             output_capacity: capacity,
             ..self.limits.clone()
         };
-        let (output, bytes) = execute(&control, &host, &mut lease)?;
+        let (mut output, bytes) = execute(&control, &host, &mut lease)?;
         package
             .validate_output(evaluation, &output)
             .context(crate::AnalysisContractSnafu)?;
+        let bytes = output
+            .datasets
+            .iter()
+            .chain(
+                output
+                    .checkpoint
+                    .iter()
+                    .flat_map(|checkpoint| &checkpoint.datasets),
+            )
+            .flat_map(|dataset| &dataset.batches)
+            .chain(output.reasons.iter().map(|reason| &reason.details))
+            .fold(bytes, |bytes, batch| {
+                bytes.saturating_add(QueryLease::batch_overhead(batch))
+            });
+        if bytes > capacity {
+            return crate::QueryLimitSnafu {
+                resource: "query output bytes",
+                limit: capacity,
+            }
+            .fail();
+        }
+        for dataset in output.datasets.iter_mut().chain(
+            output
+                .checkpoint
+                .iter_mut()
+                .flat_map(|checkpoint| &mut checkpoint.datasets),
+        ) {
+            for batch in &mut dataset.batches {
+                *batch = lease.retain_batch(batch)?;
+            }
+        }
+        for reason in &mut output.reasons {
+            reason.details = lease.retain_batch(&reason.details)?;
+        }
         control.check()?;
         Ok(SqlModelOutputV1 {
             output,
@@ -322,7 +356,7 @@ impl SqlModelV1 {
     fn queries(
         ports: &[sdk::Port],
         queries: &BTreeMap<String, String>,
-        relations: &BTreeMap<String, Vec<String>>,
+        relations: &BTreeMap<String, std::sync::Arc<sdk::Schema>>,
     ) -> Result<BTreeMap<String, QuerySql>> {
         if ports.len() != queries.len() {
             return crate::QueryInvalidSnafu {
@@ -333,7 +367,7 @@ impl SqlModelV1 {
         ports
             .iter()
             .map(|port| {
-                schema::ModelSchema::fields(&port.schema)?;
+                schema::ModelSchema::validate(&port.schema)?;
                 let sql = queries.get(&port.name).ok_or_else(|| {
                     crate::QueryInvalidSnafu {
                         field: "model output query",

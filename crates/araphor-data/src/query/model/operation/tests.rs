@@ -120,7 +120,7 @@ fn operation_inputs_match() -> TestResult {
         &control()?,
         || Ok(()),
     )?;
-    drop(baseline);
+    baseline.release_inputs()?;
     let expected = owner.evaluate_model(
         [1; 16],
         &package,
@@ -200,37 +200,32 @@ fn operation_source_cleanup() -> TestResult {
         .model_operation([1; 16])
         .inputs(request(&invalid, &grant, &active), &control()?, || Ok(()))
         .is_err());
-    assert!(owner
-        .input_refs
-        .lock()
-        .map_err(|_| "source refs")?
-        .iter()
-        .all(|reference| reference.upgrade().is_none()));
+    assert_eq!(owner.input_charge(), 0);
     drop(owner.budget.evaluate([1; 16])?);
     let (operation, retained) = owner.model_operation([1; 16]).inputs(
         request(&model, &grant, &active),
         &control()?,
         || Ok(()),
     )?;
-    let connection = &operation.engine.as_ref().ok_or("missing engine")?.0;
-    assert!(connection.prepare("SELECT * FROM catalog").is_err());
-    assert!(connection
-        .query_row("SELECT count(*) FROM _query_catalog()", [], |row| row
-            .get::<_, u64>(0))
-        .is_err());
-    assert!(matches!(
-        owner
-            .budget
-            .retained_input(owner.limits.input_capacity - owner.limits.input_bytes),
-        Err(crate::Error::AnalysisBusy {
-            resource: "query input capacity",
-            ..
-        })
-    ));
-    drop(retained);
+    let state = &operation.engine.as_ref().ok_or("missing engine")?.0;
+    assert!(operation.bound.is_empty());
+    assert!(state.table_functions().is_empty());
+    for name in state.catalog_list().catalog_names() {
+        let catalog = state
+            .catalog_list()
+            .catalog(&name)
+            .ok_or("missing catalog")?;
+        for name in catalog.schema_names() {
+            assert!(catalog
+                .schema(&name)
+                .ok_or("missing schema")?
+                .table_names()
+                .is_empty());
+        }
+    }
     let held = owner
         .budget
-        .retained_input(owner.limits.input_capacity - owner.limits.input_bytes)?;
+        .retained_input(owner.limits.input_capacity - owner.input_charge())?;
     assert!(matches!(
         owner.budget.retained_input(1),
         Err(crate::Error::AnalysisBusy {
@@ -239,12 +234,18 @@ fn operation_source_cleanup() -> TestResult {
         })
     ));
     assert!(matches!(
-        operation.inputs(request(&model, &grant, &active), &control()?, || Ok(())),
+        owner.model_operation([1; 16]).inputs(
+            request(&model, &grant, &active),
+            &control()?,
+            || Ok(())
+        ),
         Err(crate::Error::AnalysisBusy {
             resource: "query input capacity",
             ..
         })
     ));
+    drop(retained);
+    operation.release_inputs()?;
     drop(owner.budget.evaluate([1; 16])?);
     drop(held);
     let (operation, retained) = owner.model_operation([1; 16]).inputs(
@@ -456,6 +457,7 @@ fn operation_input_capacity() -> TestResult {
     })?;
     let model = model(&[("source", 7)]);
     let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
+    let pressure = owner.budget.retained_input(1)?;
     assert!(matches!(
         owner.model_operation([1; 16]).inputs(
             request(&model, &grant, &active),
@@ -467,6 +469,43 @@ fn operation_input_capacity() -> TestResult {
             ..
         })
     ));
+    drop(pressure);
+    let (operation, inputs) = owner.model_operation([1; 16]).inputs(
+        request(&model, &grant, &active),
+        &control()?,
+        || Ok(()),
+    )?;
+    operation.release_inputs()?;
+    drop(inputs);
     drop(owner.budget.retained_input(owner.limits.input_capacity)?);
+    Ok(())
+}
+
+#[test]
+fn aggregate_output_rows_stop_before_reference_tables() -> TestResult {
+    let fixture = QueryFixture::new()?;
+    let owner = fixture.owner(limits())?;
+    let mut model = model(&[]);
+    model.outputs.push(port("other"));
+    model.limits.max_rows = 1;
+    let package = sdk::Package::new("output-limits", "1", vec![model.clone()]);
+    let mut program = SqlModelV1::default();
+    for name in ["result", "other"] {
+        program
+            .outputs
+            .insert(name.into(), "SELECT 1::UBIGINT AS value".into());
+    }
+    assert!(matches!(
+        owner.evaluate_model(
+            [1; 16],
+            &package,
+            &program,
+            &evaluation(Vec::new(), &model),
+            &control()?,
+        ),
+        Err(crate::Error::QueryLimit { .. }),
+    ));
+    drop(owner.budget.evaluate([1; 16])?);
+    assert_eq!(owner.input_charge(), 0);
     Ok(())
 }

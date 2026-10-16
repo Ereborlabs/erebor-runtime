@@ -1,9 +1,8 @@
 use araphor_analysis_sdk as sdk;
-use duckdb::types::Value;
 
 use super::*;
 use crate::analysis::{AnalysisProjection, ProjectionSink};
-use crate::{AnalysisInputV1, AnalysisRelationV1, DiscoveryCoverageStateV1};
+use crate::{AnalysisInputV1, DiscoveryCoverageStateV1};
 
 pub(super) struct GraphProjection<'a> {
     pub(super) rows: InputProjection<'a>,
@@ -56,7 +55,7 @@ impl GraphProjection<'_> {
     fn coverage(
         &mut self,
         graph: &crate::GraphSnapshotV1,
-        sink: &mut ProjectionSink<'_, InputRow>,
+        sink: &mut ProjectionSink<'_, ()>,
     ) -> Result<()> {
         if graph.input_manifest.coverage.is_empty()
             && self.coverage.state != sdk::CoverageState::Gapped
@@ -86,7 +85,7 @@ impl GraphProjection<'_> {
         Ok(())
     }
 
-    fn limit(&mut self, reason: &str, sink: &mut ProjectionSink<'_, InputRow>) -> Result<()> {
+    fn limit(&mut self, reason: &str, sink: &mut ProjectionSink<'_, ()>) -> Result<()> {
         if !self.coverage.limits.iter().any(|limit| limit == reason) {
             sink.charge(reason.len())?;
             sink.grow(&mut self.coverage.limits)?;
@@ -97,7 +96,7 @@ impl GraphProjection<'_> {
 }
 
 impl AnalysisProjection for GraphProjection<'_> {
-    type Row = InputRow;
+    type Row = ();
 
     fn graph_headers(&self) -> bool {
         true
@@ -106,15 +105,15 @@ impl AnalysisProjection for GraphProjection<'_> {
     fn project(
         &mut self,
         input: AnalysisInputV1<'_>,
-        sink: &mut ProjectionSink<'_, InputRow>,
+        sink: &mut ProjectionSink<'_, ()>,
     ) -> Result<bool> {
         let AnalysisInputV1::Graph {
             result_id,
             graph,
             commit_revision,
             sensitivity,
-            traversal_depths,
-        } = input
+            ..
+        } = &input
         else {
             return Ok(true);
         };
@@ -123,28 +122,23 @@ impl AnalysisProjection for GraphProjection<'_> {
             return crate::QueryDeniedSnafu.fail();
         }
         self.coverage(graph, sink)?;
-        let mut row = InputRow::graph_base(graph, result_id, commit_revision, sensitivity)?;
-        row.0.extend([
-            Value::UBigInt(graph.first_cursor),
-            Value::UBigInt(graph.last_cursor),
-            graph
-                .previous_result_id
-                .clone()
-                .map_or(Value::Null, Value::Text),
-            Value::UBigInt(graph.graph.subjects.len() as u64),
-            Value::UBigInt(graph.graph.edges.len() as u64),
-            Value::UInt(self.max_hops),
-            Value::Boolean(false),
-        ]);
-        let bytes = row.allocation_bytes()?;
-        sink.emit(AnalysisRelationV1::Results, (row, bytes))?;
-        self.rows.graph_rows(
-            graph,
-            result_id,
-            commit_revision,
-            sensitivity,
-            traversal_depths,
+        let mut cache = (None, None);
+        let (source, manifest) =
+            InputRelations::graph_prefix(&mut cache, graph, None, false, sink)?;
+        self.rows.inputs.manifest(
             sink,
-        )
+            None,
+            (
+                graph,
+                result_id,
+                *commit_revision,
+                *sensitivity,
+                source,
+                manifest,
+                self.max_hops,
+                false,
+            ),
+        )?;
+        self.rows.graph_rows(&input, &mut cache, sink)
     }
 }

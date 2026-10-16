@@ -1,17 +1,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use araphor_analysis_sdk as sdk;
+use datafusion::datasource::MemTable;
 use snafu::ResultExt as _;
 
-use super::{execute::ModelExecution, schema::ModelSchema};
+use super::execute::ModelExecution;
+use crate::query::{budget::QueryLease, engine::QueryEngine};
 use crate::Result;
 
 impl ModelExecution<'_> {
     pub(super) fn register(
-        &self,
+        &mut self,
         model: &sdk::Model,
         evaluation: &sdk::Evaluation,
-        bound: &BTreeMap<String, String>,
+        bound: &BTreeMap<String, Arc<MemTable>>,
         input_limit: usize,
     ) -> Result<()> {
         Self::check_input(
@@ -29,9 +31,14 @@ impl ModelExecution<'_> {
                 ),
             input_limit,
         )?;
+        self.tables.extend(
+            bound
+                .iter()
+                .map(|(name, table)| (name.clone(), Arc::clone(table))),
+        );
         for port in &model.inputs {
             let port = &port.port;
-            if bound.contains_key(&port.name) {
+            if bound.contains_key(&port.name.to_ascii_lowercase()) {
                 continue;
             }
             self.table(
@@ -70,8 +77,9 @@ impl ModelExecution<'_> {
     ) -> Result<usize> {
         let bytes = batches.fold(0usize, |total, batch| {
             total
-                .saturating_add(batch.get_array_memory_size())
-                .saturating_add(batch.num_rows().saturating_mul(8))
+                .saturating_add(QueryEngine::batch_bytes(batch))
+                .saturating_add(QueryLease::batch_overhead(batch))
+                .saturating_add(QueryLease::index_overhead(batch.num_rows()))
         });
         if bytes > limit {
             return crate::QueryLimitSnafu {
@@ -84,67 +92,16 @@ impl ModelExecution<'_> {
     }
 
     pub(super) fn table(
-        &self,
+        &mut self,
         name: &str,
         schema: &sdk::Schema,
         batches: &[sdk::RecordBatch],
     ) -> Result<()> {
-        Self::table_on(self.connection, self.control, name, schema, batches)
-    }
-
-    pub(super) fn table_on(
-        connection: &duckdb::Connection,
-        control: &crate::AnalysisReadControl,
-        name: &str,
-        schema: &sdk::Schema,
-        batches: &[sdk::RecordBatch],
-    ) -> Result<()> {
-        control.check()?;
-        connection
-            .execute_batch(&format!(
-                "CREATE TABLE {} ({}, __row_index UBIGINT)",
-                ModelSchema::quote(name),
-                ModelSchema::fields(schema)?
-            ))
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "create model input",
-            })?;
-        let mut appender = connection
-            .appender(name)
-            .context(crate::AnalysisDatabaseSnafu {
-                operation: "open model input",
-            })?;
-        let mut offset = 0u64;
-        for batch in batches {
-            control.check()?;
-            let mut fields = schema.fields().to_vec();
-            fields.push(Arc::new(sdk::Field::new(
-                "__row_index",
-                sdk::DataType::UInt64,
-                false,
-            )));
-            let mut columns = batch.columns().to_vec();
-            let end = offset.checked_add(batch.num_rows() as u64).ok_or_else(|| {
-                crate::QueryInvalidSnafu {
-                    field: "model row index",
-                }
-                .build()
-            })?;
-            columns.push(Arc::new(sdk::arrow_array::UInt64Array::from_iter_values(
-                offset..end,
-            )));
-            let batch = sdk::RecordBatch::try_new(Arc::new(sdk::Schema::new(fields)), columns)
-                .map_err(sdk::Error::from)
-                .context(crate::AnalysisContractSnafu)?;
-            appender
-                .append_record_batch(ModelSchema::physical(&batch)?)
-                .context(crate::AnalysisDatabaseSnafu {
-                    operation: "append model input",
-                })?;
-            offset = end;
-        }
-        appender.flush().context(crate::AnalysisDatabaseSnafu {
-            operation: "finish model input",
-        })
+        self.control.check()?;
+        let name = name.to_ascii_lowercase();
+        let table = QueryEngine::table(Arc::new(schema.clone()), batches, self.lease)?;
+        self.control.check()?;
+        self.tables.insert(name, table);
+        Ok(())
     }
 }

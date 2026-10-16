@@ -200,7 +200,7 @@ fn sql_model_source_bounds() -> TestResult {
             expires_utc_ns: None,
             authorization_id: None,
         };
-        let (_, inputs) = owner.model_operation(grant.selection.tenant_id).inputs(
+        let (operation, inputs) = owner.model_operation(grant.selection.tenant_id).inputs(
             ModelInputRequest {
                 activation: &active,
                 model: &model,
@@ -210,6 +210,16 @@ fn sql_model_source_bounds() -> TestResult {
             &control()?,
             || Ok(()),
         )?;
+        assert!(matches!(
+            owner.budget.component(grant.selection.tenant_id, 0, 0),
+            Err(crate::Error::AnalysisBusy {
+                resource: "query evaluation capacity",
+                ..
+            })
+        ));
+        operation.release_inputs()?;
+        assert!(owner.input_charge() > 0);
+        drop(owner.budget.component(grant.selection.tenant_id, 0, 0)?);
         Ok(inputs)
     };
     let first = read(selection.clone(), 1_000)?;
@@ -256,6 +266,20 @@ fn sql_model_source_bounds() -> TestResult {
     assert_ne!(first.inputs[0].revision, third.inputs[0].revision);
     assert_eq!(third.inputs[0].data.batches[0].num_rows(), 2);
     assert_ne!(third.inputs[0].coverage.state, sdk::CoverageState::Complete);
+    let alias = first.inputs[0].data.batches[0].column(0).slice(0, 1);
+    drop((first, second, third));
+    assert!(owner.input_charge() > 0);
+    assert_eq!(
+        alias
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("model input index")?
+            .value(0),
+        1
+    );
+    drop(owner.budget.component(fixture.source.tenant_id, 0, 0)?);
+    drop(alias);
+    assert_eq!(owner.input_charge(), 0);
     Ok(())
 }
 

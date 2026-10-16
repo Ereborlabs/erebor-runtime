@@ -3,7 +3,6 @@ use std::sync::Arc;
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
-use super::schema::ModelSchema;
 use crate::{QueryOwner, Result};
 
 impl QueryOwner {
@@ -27,9 +26,7 @@ impl QueryOwner {
             .build()
         })?;
         ParameterShape::object(schema.fields(), value)?;
-        let physical =
-            ModelSchema::physical(&sdk::RecordBatch::new_empty(Arc::new(schema.clone())))?.schema();
-        let mut decoder = arrow_json::reader::ReaderBuilder::new(physical)
+        let mut decoder = arrow_json::reader::ReaderBuilder::new(Arc::new(schema.clone()))
             .with_batch_size(1)
             .with_strict_mode(true)
             .build_decoder()
@@ -42,16 +39,17 @@ impl QueryOwner {
         decoder
             .flush()
             .map_err(sdk::Error::from)
-            .context(crate::AnalysisContractSnafu)?
-            .map(|batch| ModelSchema::normalize(batch, schema))
-            .transpose()
+            .context(crate::AnalysisContractSnafu)
     }
 }
 
 struct ParameterShape;
 
 impl ParameterShape {
-    fn object(fields: &duckdb::arrow::datatypes::Fields, value: &serde_json::Value) -> Result<()> {
+    fn object(
+        fields: &datafusion::arrow::datatypes::Fields,
+        value: &serde_json::Value,
+    ) -> Result<()> {
         let object = value.as_object().ok_or_else(|| {
             crate::QueryInvalidSnafu {
                 field: "model parameter object",

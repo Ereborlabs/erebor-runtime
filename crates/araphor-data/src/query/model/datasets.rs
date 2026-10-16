@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
-use super::super::{budget::QueryLease, evaluation::QueryEvaluation};
+use super::super::{budget::QueryLease, engine::QueryEngine};
 use super::{execute::ModelExecution, schema::ModelSchema};
 use crate::{AnalysisReadControl, QueryClock as _, QueryOwner, QuerySql, Result, SystemQueryClock};
 
@@ -50,24 +50,28 @@ impl QueryOwner {
             .build()
         })?;
         let capacity = (limits.max_bytes as usize).min(self.limits.output_capacity);
-        let lease = self.budget.model(tenant, capacity)?;
+        let mut lease = self.budget.model(tenant, capacity)?;
         let control = control.within(self.limits.evaluate_timeout)?;
-        let connection = QueryEvaluation::connection()?;
+        let input_bytes = ModelExecution::check_input(
+            inputs.iter().flat_map(|input| &input.batches),
+            self.limits.input_bytes,
+        )?;
+        lease.shrink_input(input_bytes)?;
+        let state = QueryEngine::state()?;
         let host = crate::QueryLimits {
             output_capacity: capacity,
             ..self.limits.clone()
         };
-        let mut executor = ModelExecution::new(&connection, &control, now, limits, &host);
-        let batches = control.query_run(&connection, || {
-            ModelExecution::check_input(
-                inputs.iter().flat_map(|input| &input.batches),
-                host.input_bytes,
-            )?;
-            for (port, data) in ports.iter().zip(inputs) {
-                executor.table(&port.name, &port.schema, &data.batches)?;
-            }
-            executor.query_schema(&query, None)
-        })?;
+        let mut executor = ModelExecution::new(self, &state, &control, &lease, now, limits, &host);
+        for (port, data) in ports.iter().zip(inputs) {
+            executor.table(&port.name, &port.schema, &data.batches)?;
+        }
+        let batches = executor.query_schema(&query, None)?;
+        let bytes = batches.iter().fold(executor.bytes(), |bytes, batch| {
+            bytes.saturating_add(QueryLease::batch_overhead(batch))
+        });
+        drop(executor);
+        drop(state);
         let schema = batches
             .first()
             .ok_or_else(|| {
@@ -77,15 +81,21 @@ impl QueryOwner {
                 .build()
             })?
             .schema();
-        let data = sdk::Dataset {
+        let mut data = sdk::Dataset {
             name: "query".into(),
             batches,
         };
         data.validate(&sdk::Port::new("query", schema.as_ref().clone()), limits)
             .context(crate::AnalysisContractSnafu)?;
+        control.check()?;
+        let output = lease.split(bytes)?;
+        for batch in &mut data.batches {
+            *batch = output.retain_batch(batch)?;
+        }
+        drop(lease.retained_output(0)?);
         Ok(SqlDatasetOutputV1 {
             data,
-            _lease: lease.output(executor.bytes())?,
+            _lease: output,
         })
     }
 }

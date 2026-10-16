@@ -1,21 +1,20 @@
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
-use super::{InputProjection, InputRow, QueryLease, QueryOwner};
+use super::{InputProjection, InputRelations, QueryLease, QueryOwner};
 use crate::{
     AnalysisReadControl, AnalysisSelectionV1, AnalysisStoreMetaV1, GraphTraversalReceiptV1,
     GraphTraversalV1, Result,
 };
 
 mod projection;
-mod rows;
 mod schema;
 #[cfg(test)]
 mod tests;
 
 use projection::GraphProjection;
-use rows::ArrowRows;
 use schema::GraphTable;
+pub(super) use schema::MANIFEST;
 
 #[derive(Debug)]
 pub struct GraphAnalysisInputsV1 {
@@ -26,7 +25,7 @@ pub struct GraphAnalysisInputsV1 {
 }
 
 impl GraphAnalysisInputsV1 {
-    /// Keep this owner alive while an evaluation uses its Arrow buffers.
+    /// Each Arrow buffer retains its resource lease.
     pub fn inputs(&self) -> &[sdk::Input] {
         &self.inputs
     }
@@ -52,7 +51,7 @@ impl QueryOwner {
             input_bytes: self.limits.input_bytes,
             ..Default::default()
         };
-        let page = self.store.metadata_rows(
+        let (mut page, projection) = self.store.metadata_rows(
             &selection,
             bounds,
             &control,
@@ -62,8 +61,9 @@ impl QueryOwner {
                 max_hops: request.max_hops,
             },
         )?;
-        let extraction = page.extraction;
-        let traversal = extraction.graph_traversal.ok_or_else(|| {
+        let mut input = projection.rows.finish(&mut page.extraction, &control)?;
+        let mut extraction = page.extraction;
+        let traversal = extraction.graph_traversal.take().ok_or_else(|| {
             crate::QueryInvalidSnafu {
                 field: "graph input traversal receipt",
             }
@@ -82,38 +82,33 @@ impl QueryOwner {
         coverage.limits.sort();
         coverage.limits.dedup();
         let revision = Self::graph_revision(&extraction.meta, &selection, request)?;
-        let mut batches = [0_usize; 3];
-        for page in &extraction.pages {
-            batches[GraphTable::try_from(page.relation)?.index()] += 1;
-        }
-        let batches = batches.map(|count| count.max(1));
-        let held = extraction
-            .input_bytes
-            .saturating_add(GraphTable::input_bytes(&revision, &coverage, batches));
-        let mut encoder = ArrowRows::new(held, self.limits.input_bytes, &control)?;
-        let mut inputs = GraphTable::inputs(&revision, &coverage, batches);
-        for mut page in extraction.pages {
-            control.check()?;
-            let table = GraphTable::try_from(page.relation)?;
-            if table == GraphTable::Manifest {
-                for row in &mut page.rows {
-                    let boundary = row.0.last_mut().ok_or_else(|| {
-                        crate::QueryInvalidSnafu {
-                            field: "graph manifest boundary",
-                        }
-                        .build()
-                    })?;
-                    *boundary = duckdb::types::Value::Boolean(traversal.hop_boundary);
-                }
-            }
-            let batch = encoder.batch(table, &page.rows)?;
-            inputs[table.index()].data.batches.push(batch);
-        }
+        input.set_boundary(traversal.hop_boundary, &mut extraction.sink(&control))?;
+        let counts = GraphTable::ALL.map(|table| {
+            input
+                .tables
+                .get(table.source())
+                .map_or(1, |table| table.batches.len())
+        });
+        extraction
+            .sink(&control)
+            .charge(GraphTable::input_bytes(&revision, &coverage, counts))?;
+        let mut inputs = GraphTable::inputs(&revision, &coverage, counts);
         for table in GraphTable::ALL {
-            let batches = &mut inputs[table.index()].data.batches;
-            if batches.is_empty() {
-                batches.push(encoder.batch(table, &[])?);
+            let mut batches = input
+                .tables
+                .remove(table.source())
+                .ok_or_else(|| {
+                    crate::QueryInvalidSnafu {
+                        field: "graph input relation",
+                    }
+                    .build()
+                })?
+                .batches;
+            for batch in &mut batches {
+                control.check()?;
+                *batch = lease.retain_batch(batch)?;
             }
+            inputs[table.index()].data.batches = batches;
         }
         control.check()?;
         Ok(GraphAnalysisInputsV1 {

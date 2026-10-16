@@ -2,7 +2,20 @@
 
 The [approved plan](../plans/araphor-production-dataflow-simplification.md)
 defines input ownership. The [current verification](../plans/araphor-performance-simplification-todo.md)
-records the source and checks. Earlier qualification does not cover later edits.
+records the source and checks. The
+[component redesign](../plans/araphor-component-redesign.md) defines the current
+engine replacement. Earlier qualification does not cover later edits.
+
+This guide covers the working tree based on `82cd717e`. The source contains
+the DataFusion route below. Affected compilation and functional qualification
+pass on Linux x86_64 GNU. The whole-code reduction is **Not done**.
+
+## Intended end state
+
+One admitted logical plan reads authorized Arrow sources and produces client
+values or model datasets. Each run owns its source batches, physical plan,
+stream, control, and leases. The existing store remains the durable result and
+progress owner. The host checks below qualify the current engine route.
 
 ## Current table and query input flow
 
@@ -14,12 +27,12 @@ write SQL when it needs a join or union.
 
 [AnalysisPackageOwner::prepare_at](../../crates/araphor-data/src/package/evaluation/preparation.rs) checks the installed context and selects the implementation
   -> [QueryOwner::model_operation](../../crates/araphor-data/src/query/model/operation.rs) creates an operation without opening an engine
-  -> [ModelOperation::inputs](../../crates/araphor-data/src/query/model/operation.rs) admits sources, checks authority, and resolves Table inputs before Query inputs
+  -> [ModelOperation::inputs_admitted](../../crates/araphor-data/src/query/model/operation.rs) uses retained source plans, checks authority, and resolves Table inputs before Query inputs
   -> [QueryOwner::output_table](../../crates/araphor-data/src/query/model/source/table.rs) reads exact committed package output and checks the retained grant
   -> [ModelOperation::read_input](../../crates/araphor-data/src/query/model/source/read.rs) evaluates admitted source SQL against built-in tables and declared Table aliases
   -> [SourceRows::finish](../../crates/araphor-data/src/query/model/source.rs) retains direct provenance and hashes inherited table revisions into Query identity
   -> [ModelInputs::finish](../../crates/araphor-data/src/query/model/source.rs) normalizes evidence after the operation restores declared input order
-  -> [ModelOperation::evaluate](../../crates/araphor-data/src/query/model/operation.rs) runs a SQL model on the same engine and reuses imported ports
+  -> [ModelOperation::evaluate_admitted](../../crates/araphor-data/src/query/model/operation.rs) runs the retained SQL model plans and reuses admitted Arrow tables
   -> [ModelRun::evaluate](../../crates/araphor-data/src/package/evaluation/preparation.rs) prepares the result for the existing package commit owner
 
 ```mermaid
@@ -27,30 +40,37 @@ sequenceDiagram
     participant Package as AnalysisPackageOwner
     participant Input as ModelOperation
     participant Store as AnalysisStore
-    Package->>Input: Resolve declared inputs with current grant
+    participant Engine as QueryEngine
+    Package->>Input: Resolve admitted inputs with current grant
     Input->>Store: Read exact committed Table outputs
     opt Named source or Query input
-        Input->>Input: Reserve capacity and open engine once
-        Input->>Input: Bind referenced Table aliases and evaluate Query
-        Input->>Input: Clear raw source views after each statement
+        Input->>Input: Reserve capacity and create SessionState once
+        Input->>Store: Extract qualified Arrow batches and provenance
+        Input->>Input: Bind values and the captured clock
+        Input->>Engine: Execute retained plan with admitted MemTables
+        Engine->>Engine: Optimize the logical plan
+        Engine->>Engine: Replace scans and read the physical stream
+        Engine-->>Input: Bounded Arrow output
     end
-    Input-->>Package: Operation and ordered Arrow inputs with provenance
+    Input-->>Package: Ordered Arrow inputs and provenance
     alt SQL implementation
-        Package->>Input: Evaluate model with existing table bindings
+        Package->>Input: Evaluate with the retained Arrow tables
+        Input->>Engine: Execute output, checkpoint, evidence, and reason plans
         Input-->>Package: Validated output and output lease
     else Native or Wasm implementation
-        Package->>Package: Drop input operation, then call existing runtime
+        Package->>Package: Release SQL preparation slot and call runtime
     end
     Package->>Store: Existing authorized result transaction
 ```
 
-Output-only input resolution opens no SQL engine and takes no SQL evaluation
-slot. An engine and its reservation belong to the operation. Input preparation
-consumes the operation; errors release its connection, bindings, and leases
-through Rust ownership. Raw source views are cleared after each statement.
-Only declared Table aliases remain for later Query inputs and model execution.
-Query inputs cannot refer to other Query inputs. Built-in names cannot be
-replaced by package output aliases.
+Output-only input resolution creates no SQL state and takes no SQL evaluation
+slot. ModelOperation creates SessionState and its query lease on first SQL
+use. The operation retains admitted Table aliases as MemTables. Each source
+statement adds its extracted built-in batches to a local ModelExecution table
+map. Dropping that executor drops the local map. Running execution retains
+its source owners and leases. Query inputs cannot refer to other Query inputs. Built-in names cannot be replaced
+by package output aliases. Errors release the operation state and leases
+through Rust ownership.
 
 Each original Table input retains its evidence and exact dependency once.
 A derived Query input combines inherited coverage and hashes the inherited
@@ -61,40 +81,80 @@ execution release any SQL preparation slot before their runtime acquires one.
 Resolved sources return validated result references directly. The package
 owner no longer reads those references again or keeps a second input copy.
 
-The operation checks imported table bytes, including the internal row index,
-before each import. Tables from earlier queries remain charged. Raw extraction
-and query output use the remaining operation byte budget. The returned Arrow
-inputs retain separate leases. These checks use the existing host limits.
+The operation checks admitted table bytes, including the internal row index,
+before it creates each MemTable. Earlier Table aliases remain charged. Raw
+extraction and query output use the remaining operation byte budget. The
+returned Arrow inputs retain their buffer leases. These checks use the
+existing host limits.
 
-Arrow datasets and source declarations contain no DuckDB type. The engine
-adapter, SQL admission, and source authority remain separate owners. This
-permits later DataFusion work without adding an engine, provider framework,
-or compatibility layer in this change. Dataset-only SQL uses the existing
-dataset validators directly; it creates no synthetic package or evaluation.
+Source declarations and datasets use canonical Arrow 58 schemas and batches.
+The query engine is DataFusion 53.1.0. Dataset-only SQL uses the existing
+dataset validators and ModelExecution directly. It creates no synthetic
+package or evaluation. DuckDB remains the durable storage engine. Public
+client values still use the existing DuckDB value types; this interface does
+not open a DuckDB query connection.
 
 ## Source access and failure
 
-[InputSource](../../crates/araphor-data/src/query/adapter.rs) holds the current
-source projection. Each table-function bind takes an immutable `Arc` for that
-query. `ScopedSources` removes source views and clears their slots after each
-statement, including a failed statement. Empty slots reject table-function
-calls. Model registration creates only the declared input, parameter, and
-checkpoint relations after source cleanup.
+[QuerySql](../../crates/araphor-data/src/query/admission.rs) shares one immutable
+program with its SQL, parameters, labels, dependencies, and logical plan.
+The plan retains schema-only EmptyTable sources. Binder checks the original abstract
+syntax tree (AST). It records every base source, including sources in unused
+common table expressions (CTEs). PlannerContext
+holds each bound CTE, derived-query, and FROM plan. SqlToRel resolves the
+SELECT clauses against those plans. Binder also checks unused windows and
+excludes the model row index during wildcard expansion. The original AST
+supplies time bounds, event fields, source-column facts, and append facts.
 
-[ModelSchema](../../crates/araphor-data/src/query/model/schema.rs) and SQL
-admission still restrict model relations. A private table name alone does not
-authorize access. A failed input does not execute the model or commit state.
-Dropping the operation closes its connection and releases its reservations.
+[ModelSchema](../../crates/araphor-data/src/query/model/schema.rs) supplies the
+allowed Arrow schema map for each stage. Source SQL sees authorized built-in
+sources and declared Table aliases. Output SQL sees model inputs, parameters,
+and prior checkpoint tables. Checkpoint, evidence, and reason SQL also see
+completed output tables. A private table name alone does not authorize access.
+The retained plan can reference only its admitted sources.
+
+[QueryEngine::plan](../../crates/araphor-data/src/query/engine/batches.rs)
+optimizes a plan clone, then replaces each bound TableScan source with an
+admitted MemTable. The replacement maps requested columns by exact field name
+and checks their types. QuerySql keeps the source inventory. SourceRows
+captures provenance before predicate pruning. The optimized plan does not
+define that scope. A failed source read does not execute the model or commit
+state. Dropping the operation releases its state and
+reservations. Returned batches retain the leases for their buffers.
 
 ## Execution and verification
 
-Client and model evaluation use one SQL prepare and Arrow execution path.
-Client rows read that result through the existing DuckDB row converter. Model
-outputs retain the existing Arrow normalization. Input types and null handling
-remain on the native adapter. The operation owns its connection, scoped source
-registry, aggregate input reservation, stage deadline, and cancellation guard.
-The result and its retained input leases survive until commit preparation ends.
-A prepared result becomes durable only after the authorized store transaction.
+[QuerySql::bind_complete](../../crates/araphor-data/src/query/admission.rs)
+binds parameter values and one captured clock to the retained LogicalPlan.
+Name and type binding does not repeat for those admitted queries. Code-owned
+QueryPlan templates use QueryBinding::trusted for their current statement.
+
+[QueryEngine::state](../../crates/araphor-data/src/query/engine.rs) configures
+the function registry, one execution partition, planning concurrency one, a
+64 MiB memory pool, and disabled spill storage. QueryOwner owns the lazy Tokio
+execution runtime. QueryEngine::run dispatches physical planning and stream
+consumption to that runtime. The public query methods remain synchronous.
+
+[QueryEngine::stream](../../crates/araphor-data/src/query/engine/batches.rs)
+calls the public physical planner after logical optimization and source
+replacement. It calls execute_stream_partitioned and reads the returned
+final output partitions in partition order. The optimizer retains Union
+instead of replacing it with Interleave. This route preserves branch order
+for the qualified model fixture. Internal physical operators can merge
+partitions. Use ORDER BY when result order is required. The planner does not
+repeat logical optimization.
+[QueryEvaluation](../../crates/araphor-data/src/query/evaluation.rs)
+checks client row and byte limits while it reads batches.
+[QueryValues](../../crates/araphor-data/src/query/values.rs) reads Arrow scalars
+into the existing public values and type labels. ModelExecution checks model
+row, byte, and batch limits during one stream traversal. It checks raw and
+normalized bytes before it retains each output batch. ModelSchema validates
+declared output names and types, then shares the declared Arrow schema and metadata.
+
+The operation retains its control, reservations, and input leases while work
+runs. Output tables receive one dataset-global row index across all batches.
+Checkpoint, evidence, and reason plans reuse those tables. A completed stream
+becomes durable only after the existing authorized store transaction.
 
 [Operation tests](../../crates/araphor-data/src/query/model/operation/tests.rs)
 compare exact inputs, revisions, provenance, and encoded output with standalone
@@ -105,9 +165,30 @@ source rejection.
 checkpoint, parameters, provenance, and source bounds.
 [Package lifecycle tests](../../crates/araphor-data/src/package/tests/lifecycle.rs)
 check historical scope, retry, cancellation, and capacity.
+[Admission tests](../../crates/araphor-data/src/query/admission_tests.rs) and
+the [engine cases](../../crates/araphor-data/src/query/admission.rs) cover
+CTE scope, unused windows, aliases, source inventory, and public labels.
+[Runtime and lease cases](../../crates/araphor-data/src/query/owner_tests.rs)
+cover source retention and cancellation. The final affected build and strict
+Clippy pass. All 460 distinct selected cases pass: 439 ordinary Data cases,
+12 native Data cases, six Control cases, and three E2E cases. The native
+detector E2E case runs with PATH empty. Qualification covers Linux,
+x86_64-unknown-linux-gnu, and glibc 2.39. Other targets remain unqualified.
+
+The first native checkpoint replay correctly reports Busy while the test
+retains a checkpoint alias from its prior output. The corrected test proves
+that denial, then reloads checkpoint bytes through the standard wire codec
+and proves replay. Production already uses stored checkpoint bytes. All
+ordinary Data cases and eight caller cases pass before that test-only edit.
+Production source and manifests stay identical. The final build covers the
+corrected native case and native E2E. The result record is
+`/tmp/araphor-arrow-engine-qualification-final.json`. The
+[plan result](../plans/araphor-component-redesign.md#qualification-and-acceptance)
+lists the source, test, artifact, and platform receipts.
 
 The complete earlier receipts remain at
 `7b7b407adf347d389984553a4d212bfce37b75b5:docs/guides/araphor-sql-operation-review.md`.
 They include failed attempts, corrections, source hashes, and Linux x86_64 GNU
-native qualification. They establish no causal SQL speed improvement. A new
-performance workload is not part of this deletion work.
+native qualification. They establish no causal SQL speed improvement. They
+do not qualify the current DataFusion integration. The complete production reduction remains **Not done**.
+A new performance workload is not part of this deletion work.

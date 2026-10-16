@@ -226,7 +226,17 @@ async fn output_read_shares_capacity() -> TestResult {
             commit_revision: receipt.commit_revision,
         }]
     );
-    drop((operation, inputs, held, held_inputs));
+    operation.release_inputs()?;
+    held.release_inputs()?;
+    let released = fixture.owner.query.query_datasets(
+        [1; 16],
+        &[],
+        "SELECT 1::UBIGINT AS count",
+        sdk::Limits::default(),
+        &control,
+    )?;
+    assert_eq!(released.data.batches[0].num_rows(), 1);
+    drop((released, inputs, held_inputs));
     Ok(())
 }
 
@@ -307,7 +317,7 @@ async fn alias_import_budget() -> TestResult {
                     ),
                 },
             ];
-            (physical + 64 * 1024, "query input bytes")
+            (physical + 64 * 1024, "selected input bytes")
         } else {
             let mut right = source.clone();
             right.port.name = "right_input".into();
@@ -339,10 +349,35 @@ async fn alias_import_budget() -> TestResult {
             },
         )?;
         let mut calls = 0;
-        assert!(matches!(owner.model_operation([1; 16]).inputs(
-            ModelInputRequest { activation: &active, model: &model, grant: &fixture.grant, now },
-            &control, || { calls += 1; Ok(()) },
-        ), Err(crate::Error::QueryLimit { resource: actual, .. }) if actual == resource));
+        let result = owner.model_operation([1; 16]).inputs(
+            ModelInputRequest {
+                activation: &active,
+                model: &model,
+                grant: &fixture.grant,
+                now,
+            },
+            &control,
+            || {
+                calls += 1;
+                Ok(())
+            },
+        );
+        let denied = if combined {
+            matches!(&result, Err(crate::Error::AnalysisInputTooLarge { resource: actual, .. }) if *actual == resource)
+        } else {
+            matches!(&result, Err(crate::Error::QueryLimit { resource: actual, .. }) if *actual == resource)
+        };
+        assert!(
+            denied,
+            "combined={combined}, calls={calls}, expected={resource}, result={:?}",
+            result.as_ref().map(|_| ())
+        );
+        assert_eq!(
+            crate::query::QueryErrorCode::from(
+                result.as_ref().err().ok_or("input budget denial absent")?
+            ),
+            crate::query::QueryErrorCode::InputTooLarge,
+        );
         assert_eq!(calls, 3);
         let released = owner.query_datasets(
             [1; 16],
@@ -381,7 +416,8 @@ async fn alias_import_budget() -> TestResult {
             .batches
             .iter()
             .all(|batch| batch.num_rows() == 0));
-        drop((operation, inputs));
+        operation.release_inputs()?;
+        drop(inputs);
     }
     Ok(())
 }

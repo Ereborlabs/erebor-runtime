@@ -94,14 +94,26 @@ fn selected_descriptor_keeps_auxiliary() -> TestResult {
     let revision = direct.revision.clone();
     let context = direct.evaluation.context.clone();
     let parameters = direct.evaluation.parameters.clone();
+    let schema = &descriptor.exports[0].outputs[0].schema;
+    let expected =
+        sdk::wire::Dataset::encode(&direct.output.datasets[0], schema, sdk::Limits::default())?
+            .decode(schema, sdk::Limits::default())?;
     let batches = direct.output.datasets[0].batches.clone();
     drop(direct);
+    assert!(matches!(
+        snapshot.evaluate([1; 16], &descriptor.id, &evaluation, &control),
+        Err(crate::Error::AnalysisBusy {
+            resource: "query output capacity",
+            ..
+        })
+    ));
+    drop(batches);
     let result = snapshot.evaluate([1; 16], &descriptor.id, &evaluation, &control)?;
     assert_eq!(&result.descriptor, descriptor);
     assert_eq!(result.revision, revision);
     assert_eq!(result.evaluation.context, context);
     assert_eq!(result.evaluation.parameters, parameters);
-    assert_eq!(result.output.datasets[0].batches, batches);
+    assert_eq!(result.output.datasets[0].batches, expected.batches);
     assert_output(&result)?;
     Ok(())
 }

@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
 use araphor_analysis_sdk as sdk;
-use sdk::arrow_array::{
-    Array as _, ArrayRef, FixedSizeListArray, ListArray, NullArray, StructArray,
-    TimestampNanosecondArray,
-};
+use datafusion::arrow::array::{make_array, new_null_array, ArrayRef};
+use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use snafu::ResultExt as _;
 
 use crate::Result;
@@ -19,84 +15,49 @@ impl ModelArrays {
             }
             .build()
         };
-        Ok(match kind {
-            sdk::DataType::Null => {
-                if array.null_count() != array.len() {
-                    return Err(invalid());
-                }
-                Arc::new(NullArray::new(array.len()))
+        if *kind == sdk::DataType::Null {
+            if array.logical_null_count() != array.len() {
+                return Err(invalid());
             }
-            sdk::DataType::Timestamp(sdk::TimeUnit::Nanosecond, Some(zone))
-                if zone.as_ref() == "UTC" =>
-            {
-                let timestamp = array
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .ok_or_else(invalid)?;
-                Arc::new(timestamp.clone().with_timezone("UTC"))
+            return Ok(new_null_array(kind, array.len()));
+        }
+        let fields = match kind {
+            sdk::DataType::List(field) | sdk::DataType::FixedSizeList(field, _) => {
+                std::slice::from_ref(field)
             }
-            sdk::DataType::List(field) => {
-                let list = array
-                    .as_any()
-                    .downcast_ref::<ListArray>()
-                    .ok_or_else(invalid)?;
-                Arc::new(
-                    ListArray::try_new(
-                        field.clone(),
-                        list.offsets().clone(),
-                        Self::cast(list.values(), field.data_type())?,
-                        list.nulls().cloned(),
-                    )
-                    .map_err(sdk::Error::from)
-                    .context(crate::AnalysisContractSnafu)?,
+            sdk::DataType::Struct(fields) => fields.as_ref(),
+            _ => {
+                return cast_with_options(
+                    array.as_ref(),
+                    kind,
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
                 )
+                .map_err(sdk::Error::from)
+                .context(crate::AnalysisContractSnafu);
             }
-            sdk::DataType::FixedSizeList(field, size) => {
-                let list = array
-                    .as_any()
-                    .downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(invalid)?;
-                Arc::new(
-                    FixedSizeListArray::try_new(
-                        field.clone(),
-                        *size,
-                        Self::cast(list.values(), field.data_type())?,
-                        list.nulls().cloned(),
-                    )
-                    .map_err(sdk::Error::from)
-                    .context(crate::AnalysisContractSnafu)?,
-                )
-            }
-            sdk::DataType::Struct(fields) => {
-                let structure = array
-                    .as_any()
-                    .downcast_ref::<StructArray>()
-                    .ok_or_else(invalid)?;
-                if fields.len() != structure.num_columns() {
-                    return Err(invalid());
-                }
-                let columns = structure
-                    .columns()
-                    .iter()
-                    .zip(fields)
-                    .map(|(array, field)| Self::cast(array, field.data_type()))
-                    .collect::<Result<Vec<_>>>()?;
-                Arc::new(
-                    StructArray::try_new(fields.clone(), columns, structure.nulls().cloned())
-                        .map_err(sdk::Error::from)
-                        .context(crate::AnalysisContractSnafu)?,
-                )
-            }
-            _ => duckdb::arrow::compute::cast_with_options(
-                array,
-                kind,
-                &duckdb::arrow::compute::CastOptions {
-                    safe: false,
-                    ..Default::default()
-                },
-            )
+        };
+        let data = array.to_data();
+        if data.child_data().len() != fields.len() {
+            return Err(invalid());
+        }
+        let children = data
+            .child_data()
+            .iter()
+            .zip(fields)
+            .map(|(child, field)| {
+                Self::cast(&make_array(child.clone()), field.data_type())
+                    .map(|array| array.to_data())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        data.into_builder()
+            .data_type(kind.clone())
+            .child_data(children)
+            .build()
+            .map(make_array)
             .map_err(sdk::Error::from)
-            .context(crate::AnalysisContractSnafu)?,
-        })
+            .context(crate::AnalysisContractSnafu)
     }
 }

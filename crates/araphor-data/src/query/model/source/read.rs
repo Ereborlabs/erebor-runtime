@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
 use crate::analysis::{AnalysisExtractLimits, AnalysisExtractionV1, PackageResultRefV1};
-use crate::query::{InputProjection, InputRelations, InputRow};
+use crate::query::{budget::QueryLease, engine::QueryEngine, InputProjection, InputRelations};
 use crate::{
     AnalysisContextRefV1, AnalysisReadControl, AnalysisSelectionV1, AnalysisWitnessV1, QueryOwner,
     QueryPlan, QuerySql, Result,
@@ -14,7 +15,8 @@ use super::super::{execute::ModelExecution, projection::ModelProjection};
 use super::{ModelInputRequest, ModelSource};
 
 pub(super) struct SourceRows {
-    pub(super) extraction: AnalysisExtractionV1<InputRow>,
+    pub(super) extraction: AnalysisExtractionV1<()>,
+    pub(super) inputs: InputRelations,
     pub(super) witnesses: Vec<AnalysisWitnessV1>,
     pub(super) contexts: Vec<AnalysisContextRefV1>,
     pub(super) results: Vec<PackageResultRefV1>,
@@ -39,7 +41,7 @@ impl SourceRows {
             contexts: &mut contexts,
             results: &mut results,
         };
-        let page = if plan.reads_raw() {
+        let (mut page, project) = if plan.reads_raw() {
             owner
                 .store
                 .extract_rows(selection, bounds, &stage, project)?
@@ -54,8 +56,10 @@ impl SourceRows {
             }
             .fail();
         }
+        let inputs = project.inner.finish(&mut page.extraction, &stage)?;
         Ok(Self {
             extraction: page.extraction,
+            inputs,
             witnesses,
             contexts,
             results,
@@ -73,38 +77,44 @@ impl super::super::operation::ModelOperation<'_> {
         catalog: &BTreeMap<String, ModelSource>,
     ) -> Result<ModelSource> {
         let owner = self.owner;
-        let bound = ModelExecution::check_input(
-            catalog
-                .iter()
-                .filter(|(name, _)| self.bound.contains_key(*name))
-                .flat_map(|(_, source)| &source.input.data.batches),
-            owner.limits.input_bytes,
-        )?;
         let inherited: Vec<_> = catalog
             .iter()
             .filter_map(|(name, source)| {
-                (self.bound.contains_key(name)
+                (self.bound.contains_key(&name.to_ascii_lowercase())
                     && sql.dependencies().contains(&name.to_ascii_lowercase()))
                 .then_some(source)
             })
             .collect();
         let plan = QueryPlan::model(request.grant.selection.clone(), sql.clone())?;
         let selection = plan.dependencies(request.now)?;
-        let (connection, sources) = self.engine()?;
+        let tables = self.bound.clone();
         let bounds = AnalysisExtractLimits {
             scan_bytes: owner.limits.scan_bytes,
             input_bytes: owner
                 .limits
                 .input_bytes
-                .saturating_sub(bound)
+                .saturating_sub(self.retained_bytes)
                 .min(request.model.limits.max_bytes as usize),
             ..Default::default()
         };
+        self.engine()?;
         let mut rows = SourceRows::extract(owner, &plan, &selection, request.now, bounds, control)?;
-        let input = InputRelations::new(&mut rows.extraction, bounds.input_bytes, &plan.template)?;
-        #[cfg(test)]
-        owner.test_input(&input)?;
-        let held = input.allocation_bytes();
+        let input = std::mem::take(&mut rows.inputs);
+        let held = input.allocation_bytes().saturating_add(
+            input
+                .tables
+                .values()
+                .flat_map(|table| &table.batches)
+                .map(|batch| QueryLease::index_overhead(batch.num_rows()))
+                .sum::<usize>(),
+        );
+        if held > bounds.input_bytes {
+            return crate::QueryLimitSnafu {
+                resource: "model source input",
+                limit: bounds.input_bytes,
+            }
+            .fail();
+        }
         let time = i64::try_from(request.now).map_err(|_| {
             crate::QueryInvalidSnafu {
                 field: "model source time",
@@ -116,17 +126,41 @@ impl super::super::operation::ModelOperation<'_> {
             output_capacity: bounds.input_bytes.saturating_sub(held),
             ..owner.limits.clone()
         };
-        let mut executor =
-            ModelExecution::new(connection, &stage, time, request.model.limits, &host);
-        let result = stage.query_run(connection, || {
-            input.register(connection, sources)?;
-            executor.query(sql, &port.schema)
-        });
-        let cleanup = sources.clear(connection);
-        let batches = result?;
-        cleanup?;
-        let bytes = executor.bytes().saturating_add(held);
+        let (state, lease) = self.engine()?;
+        let retained = lease.clone();
+        let mut executor = ModelExecution::new(
+            owner,
+            state,
+            &stage,
+            lease,
+            time,
+            request.model.limits,
+            &host,
+        );
+        executor.tables = tables;
+        for (name, table) in &input.tables {
+            stage.check()?;
+            executor.tables.insert(
+                (*name).to_owned(),
+                QueryEngine::table(Arc::clone(&table.schema), &table.batches, lease)?,
+            );
+        }
+        let batches = executor.query(sql, &port.schema)?;
+        let bytes = batches
+            .iter()
+            .fold(executor.bytes().saturating_add(held), |bytes, batch| {
+                bytes.saturating_add(QueryLease::batch_overhead(batch))
+            });
+        if bytes > bounds.input_bytes {
+            return crate::QueryLimitSnafu {
+                resource: "model source input",
+                limit: bounds.input_bytes,
+            }
+            .fail();
+        }
+        drop(executor);
         drop(input);
+        self.retained_bytes = self.retained_bytes.saturating_add(bytes);
         if !rows.extraction.trace_reads.is_empty() {
             owner.store.check_trace_reads(
                 selection.tenant_id,
@@ -135,19 +169,15 @@ impl super::super::operation::ModelOperation<'_> {
                 owner.store.reserve_reader()?,
             )?;
         }
-        let data = sdk::Dataset {
+        let mut data = sdk::Dataset {
             name: port.name.clone(),
             batches,
         };
         data.validate(port, request.model.limits)
             .context(crate::AnalysisContractSnafu)?;
-        rows.finish(
-            owner,
-            sql,
-            selection,
-            data,
-            owner.budget.retained_input(bytes)?,
-            &inherited,
-        )
+        for batch in &mut data.batches {
+            *batch = retained.retain_batch(batch)?;
+        }
+        rows.finish(owner, sql, selection, data, retained, &inherited)
     }
 }

@@ -1,6 +1,6 @@
 use std::ops::Bound;
 
-use duckdb::{params_from_iter, Config, Connection};
+use duckdb::{appender_params_from_iter, params_from_iter, Config, Connection};
 use prost::Message as _;
 
 use super::*;
@@ -96,8 +96,6 @@ impl QueryFixture {
     }
 
     fn baseline(&self, plan: &QueryPlan, now_ns: u64) -> TestResult<Vec<Vec<Value>>> {
-        use super::adapter::{InputColumn, InputTable};
-
         let mut selection = plan.base_selection().clone();
         selection.received_from = Bound::Unbounded;
         selection.received_until = Bound::Unbounded;
@@ -128,21 +126,24 @@ impl QueryFixture {
             .iter()
             .find(|schema| schema.name == relation)
             .ok_or("input schema absent")?;
-        let input = Arc::new(InputTable {
-            columns: schema
-                .columns
-                .iter()
-                .map(|field| InputColumn(field.0, field.1))
-                .collect(),
-            rows: result.rows,
-            ..Default::default()
-        });
         let config = Config::default()
             .enable_external_access(false)?
             .enable_autoload_extension(false)?
             .threads(1)?;
         let connection = Connection::open_in_memory_with_flags(config)?;
-        input::ScopedSources::default().register(&connection, &input, "baseline_rows", relation)?;
+        let fields = schema
+            .columns
+            .iter()
+            .map(|field| format!("\"{}\" {}", field.0, field.sql_type()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        connection.execute_batch(&format!("CREATE TABLE {relation} ({fields})"))?;
+        let mut appender = connection.appender(relation)?;
+        for row in &result.rows {
+            appender.append_row(appender_params_from_iter(row.iter()))?;
+        }
+        appender.flush()?;
+        drop(appender);
         let mut statement = connection.prepare(&plan.sql())?;
         let parameters = plan.parameters(now_ns);
         let mut rows = statement.query(params_from_iter(parameters.iter()))?;
@@ -332,23 +333,17 @@ fn query_input_output_bounds() -> TestResult {
     fixture.event(1, 1, 7)?;
     let plan = fixture.plan(QueryTemplate::Events { operation: None })?;
     let owner = fixture.owner(QueryLimits::default())?;
-    let result = owner.query_at(&plan, 0)?;
+    let expected = owner.query_at(&plan, 0)?;
     let (input_bytes, output_bytes, scan_bytes) = (
-        result.input_bytes.ok_or("input counter absent")?,
-        result.output_bytes,
-        result.scanned_bytes.ok_or("scan counter absent")?,
+        expected.input_bytes.ok_or("input counter absent")?,
+        expected.output_bytes,
+        expected.scanned_bytes.ok_or("scan counter absent")?,
     );
-    drop(result);
-    for (field, limit) in [
-        ("input", input_bytes),
-        ("output", output_bytes),
-        ("scan", scan_bytes),
-    ] {
+    for (field, limit) in [("output", output_bytes), ("scan", scan_bytes)] {
         for excess in [false, true] {
             let mut limits = QueryLimits::default();
             let value = limit - usize::from(excess);
             match field {
-                "input" => limits.input_bytes = value,
                 "output" => limits.output_bytes = value,
                 _ => limits.scan_bytes = value,
             }
@@ -357,6 +352,42 @@ fn query_input_output_bounds() -> TestResult {
             assert_eq!(result.is_err(), excess, "{field} bound {value}: {result:?}");
         }
     }
+    for limit in [input_bytes, input_bytes - 1, 1] {
+        let owner = fixture.owner(QueryLimits {
+            input_bytes: limit,
+            input_capacity: limit,
+            ..QueryLimits::default()
+        })?;
+        match owner.query_at(&plan, 0) {
+            Ok(result) => {
+                assert_ne!(limit, 1);
+                assert!(result.input_bytes.ok_or("input counter absent")? <= limit);
+                assert_eq!(result.columns, expected.columns);
+                assert_eq!(result.rows, expected.rows);
+                assert_eq!(result.meta, expected.meta);
+                assert_eq!(&result.sources[..], &expected.sources[..]);
+                assert_eq!(result.missing_contexts, expected.missing_contexts);
+                assert_eq!(result.graph_traversal, expected.graph_traversal);
+                assert_eq!(result.input_rows, expected.input_rows);
+                assert_eq!(result.evaluated_utc_ns, expected.evaluated_utc_ns);
+                assert_eq!(result.scanned_bytes, expected.scanned_bytes);
+                assert_eq!(result.scanned_through, expected.scanned_through);
+                assert_eq!(result.exhausted, expected.exhausted);
+                assert_eq!(result.limited, expected.limited);
+                assert_eq!(result.next_expiry_ns, expected.next_expiry_ns);
+                assert_eq!(result.positions, expected.positions);
+            }
+            Err(error) => {
+                assert!(limit < input_bytes);
+                assert!(
+                    matches!(error, crate::Error::AnalysisInputTooLarge { .. }),
+                    "input bound {limit}: {error:?}"
+                );
+            }
+        }
+        drop(owner.budget.evaluate(fixture.source.tenant_id)?);
+    }
+    drop(expected);
     fixture.event(2, 2, 8)?;
     let owner = fixture.owner(QueryLimits {
         output_rows: 1,
