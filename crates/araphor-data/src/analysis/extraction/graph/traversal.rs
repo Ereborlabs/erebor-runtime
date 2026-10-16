@@ -14,7 +14,7 @@ impl AnalysisStore {
         request: &GraphTraversalV1,
         output: &mut AnalysisExtractionV1<T>,
         control: &AnalysisReadControl,
-        project: &mut impl AnalysisProjection<Row = T>,
+        project: &mut dyn AnalysisProjection<Row = T>,
     ) -> Result<()> {
         let (ids, versions) = self.traversal_versions(snapshot, selection, output, control)?;
         self.traversal_work(snapshot, &ids, output, control)?;

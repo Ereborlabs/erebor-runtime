@@ -4,44 +4,25 @@ use crate::{
     AnalysisDatabaseSnafu, AnalysisReadControl, GraphInvalidSnafu, GraphSubjectKeyV1, Result,
 };
 use duckdb::{params, params_from_iter, types::Value, Appender, Connection, Row};
-use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct SubjectRow {
-    tenant: Vec<u8>,
-    kind: String,
-    authority: Vec<u8>,
-    identity: Vec<u8>,
-}
+const COLUMNS: &str = "ordinal, tenant_id, subject_kind, authority, identity";
 
-impl SubjectRow {
-    pub(super) const COLUMNS: &str = "ordinal, tenant_id, subject_kind, authority, identity";
-
-    pub(super) fn encode(subject: &GraphSubjectKeyV1) -> Result<Self> {
-        Ok(Self {
-            tenant: subject.tenant_id.to_vec(),
-            kind: GraphRows::label(&subject.kind)?,
-            authority: GraphRows::json(&subject.authority)?,
-            identity: subject.identity.clone(),
-        })
-    }
-
-    pub(super) fn insert(
-        &self,
+impl GraphRows {
+    pub(super) fn insert_subject(
         writer: &mut Appender<'_>,
         result_id: &str,
         ordinal: usize,
+        subject: &GraphSubjectKeyV1,
     ) -> Result<()> {
         writer
             .append_row(params![
                 result_id,
                 ordinal as u32,
-                &self.tenant,
-                &self.kind,
-                &self.authority,
-                &self.identity
+                subject.tenant_id.as_slice(),
+                Self::label(&subject.kind)?,
+                Self::json(&subject.authority)?,
+                &subject.identity
             ])
             .context(AnalysisDatabaseSnafu {
                 operation: "insert native graph subject",
@@ -49,37 +30,23 @@ impl SubjectRow {
         Ok(())
     }
 
-    pub(super) fn bytes(&self) -> usize {
-        256 + self.tenant.len() + self.kind.len() + self.authority.len() + self.identity.len()
-    }
-
-    fn columns(row: &Row<'_>) -> duckdb::Result<Self> {
-        Ok(Self {
-            tenant: row.get(1)?,
-            kind: row.get(2)?,
-            authority: row.get(3)?,
-            identity: row.get(4)?,
-        })
-    }
-
-    fn decode(self) -> Result<GraphSubjectKeyV1> {
+    fn decode_subject(row: &Row<'_>) -> Result<GraphSubjectKeyV1> {
         let subject = GraphSubjectKeyV1 {
-            tenant_id: self.tenant.try_into().map_err(|_| {
-                GraphInvalidSnafu {
-                    field: "subject tenant bytes",
-                }
-                .build()
-            })?,
-            kind: GraphRows::parse(&self.kind)?,
-            authority: GraphRows::decode(&self.authority)?,
-            identity: self.identity,
+            tenant_id: Self::borrowed(row, 1, |value| value.as_blob())?
+                .try_into()
+                .map_err(|_| {
+                    GraphInvalidSnafu {
+                        field: "subject tenant bytes",
+                    }
+                    .build()
+                })?,
+            kind: Self::label_column(row, 2)?,
+            authority: Self::json_column(row, 3)?,
+            identity: Self::column(row, 4)?,
         };
         subject.validate()?;
         Ok(subject)
     }
-}
-
-impl GraphRows {
     pub(in crate::analysis) fn subject_permission(binding_scope: bool) -> &'static str {
         if !binding_scope {
             return "TRUE";
@@ -95,12 +62,11 @@ impl GraphRows {
     }
 
     pub(in crate::analysis) fn subject_fields(subject: &GraphSubjectKeyV1) -> Result<[Value; 4]> {
-        let row = SubjectRow::encode(subject)?;
         Ok([
-            Value::Blob(row.tenant),
-            Value::Text(row.kind),
-            Value::Blob(row.authority),
-            Value::Blob(row.identity),
+            Value::Blob(subject.tenant_id.to_vec()),
+            Value::Text(Self::label(&subject.kind)?),
+            Value::Blob(Self::json(&subject.authority)?),
+            Value::Blob(subject.identity.clone()),
         ])
     }
 
@@ -123,7 +89,7 @@ impl GraphRows {
                 parameters.extend(Self::subject_fields(key)?);
             }
             parameters.push(Value::Text(result_id.to_owned()));
-            let columns = SubjectRow::COLUMNS
+            let columns = COLUMNS
                 .split(',')
                 .map(|column| format!("subject.{}", column.trim()))
                 .collect::<Vec<_>>()
@@ -156,13 +122,10 @@ impl GraphRows {
                     }
                     .fail();
                 }
-                selected.push(
-                    SubjectRow::columns(row)
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "decode selected graph subject columns",
-                        })?
-                        .decode()?,
-                );
+                selected.push(Self::column_operation(
+                    Self::decode_subject(row),
+                    "decode selected graph subject columns",
+                )?);
             }
         }
         selected.sort();
@@ -178,19 +141,11 @@ impl GraphRows {
         Self::load(
             writer,
             "graph_subjects",
-            SubjectRow::COLUMNS,
+            COLUMNS,
             result_id,
             2048,
             control,
-            SubjectRow::columns,
-        )?
-        .into_iter()
-        .map(|row| {
-            if let Some(control) = control {
-                control.check()?;
-            }
-            row.decode()
-        })
-        .collect()
+            Self::decode_subject,
+        )
     }
 }

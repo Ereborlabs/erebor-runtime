@@ -1412,6 +1412,37 @@ impl TimeTest {
                 Self::predicate(left, alias, parameters, tests);
                 Self::predicate(right, alias, parameters, tests);
             }
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Or,
+                right,
+            } => {
+                let lower = |expr| {
+                    let mut branch = Vec::new();
+                    Self::predicate(expr, alias, parameters, &mut branch);
+                    branch
+                        .into_iter()
+                        .filter_map(|test| match (test.op, test.value) {
+                            (BinaryOperator::GtEq, TimeValue::Fixed(value)) => Some((value, false)),
+                            (BinaryOperator::Gt, TimeValue::Fixed(value)) => Some((value, true)),
+                            _ => None,
+                        })
+                        .max()
+                };
+                if let Some((value, strict)) = lower(left)
+                    .zip(lower(right))
+                    .map(|(left, right)| left.min(right))
+                {
+                    tests.push(Self {
+                        op: if strict {
+                            BinaryOperator::Gt
+                        } else {
+                            BinaryOperator::GtEq
+                        },
+                        value: TimeValue::Fixed(value),
+                    });
+                }
+            }
             Expr::BinaryOp { left, op, right }
                 if matches!(
                     op,

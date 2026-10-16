@@ -15,7 +15,6 @@ use crate::{
     MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
 };
 
-mod admission;
 mod backup;
 mod capacity;
 mod connection;

@@ -5,9 +5,9 @@ fn native_json_encoding_roundtrip() -> TestResult {
     let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
     let snapshot = &fixture.snapshot;
     let canonical = serde_json::to_vec(snapshot)?;
-    let rows = GraphRows::encode_body(snapshot, &canonical)?;
+    let encoded_header = GraphRows::encode_body(snapshot, &canonical)?;
     assert_eq!(
-        GraphHeader::decode(rows.header())?.body(snapshot)?,
+        GraphHeader::decode(&encoded_header)?.body(snapshot)?,
         canonical
     );
     for source in [
@@ -37,8 +37,8 @@ fn native_json_encoding_roundtrip() -> TestResult {
 #[test]
 fn native_json_encoding_bounds() -> TestResult {
     let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
-    let rows = GraphRows::encode(&fixture.snapshot)?;
-    let mut encoded = rows.header().to_vec();
+    let encoded_header = GraphRows::encode(&fixture.snapshot)?;
+    let mut encoded = encoded_header.clone();
     encoded.push(0);
     assert!(GraphHeader::decode(&encoded).is_err());
     let mut snapshot = fixture.snapshot;
@@ -73,9 +73,9 @@ fn native_header_finding_bound() -> TestResult {
         finding.revision = snapshot.input_manifest.clone();
     }
     snapshot.validate()?;
-    let rows = GraphRows::encode(&snapshot)?;
-    GraphHeader::decode(rows.header())?;
-    let mut decoder = minicbor::Decoder::new(rows.header());
+    let encoded_header = GraphRows::encode(&snapshot)?;
+    GraphHeader::decode(&encoded_header)?;
+    let mut decoder = minicbor::Decoder::new(&encoded_header);
     assert_eq!(decoder.array()?, Some(6));
     let mut fields = [0_u32; 5];
     for field in &mut fields {
@@ -110,9 +110,9 @@ fn native_json_string_spans() -> TestResult {
     snapshot.findings[0].limits = vec!["quote\" slash\\ brackets[],:".into(), "é\n😀".into()];
     snapshot.findings[0].limits.sort();
     let canonical = serde_json::to_vec(&snapshot)?;
-    let rows = GraphRows::encode_body(&snapshot, &canonical)?;
+    let encoded_header = GraphRows::encode_body(&snapshot, &canonical)?;
     assert_eq!(
-        GraphHeader::decode(rows.header())?.body(&snapshot)?,
+        GraphHeader::decode(&encoded_header)?.body(&snapshot)?,
         canonical
     );
     Ok(())
@@ -122,8 +122,8 @@ fn native_json_string_spans() -> TestResult {
 fn native_header_metadata_current_format() -> TestResult {
     let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
     let snapshot = &fixture.snapshot;
-    let rows = GraphRows::encode(snapshot)?;
-    let mut decoder = minicbor::Decoder::new(rows.header());
+    let encoded_header = GraphRows::encode(snapshot)?;
+    let mut decoder = minicbor::Decoder::new(&encoded_header);
     assert_eq!(decoder.array()?, Some(6));
     assert_eq!(decoder.u32()?, 2);
     assert_eq!(decoder.u32()? as usize, snapshot.graph.subjects.len());
@@ -134,9 +134,9 @@ fn native_header_metadata_current_format() -> TestResult {
     assert!(metadata.get("findings").is_none());
     assert!(metadata["graph"].get("subjects").is_none());
     assert!(metadata["graph"].get("edges").is_none());
-    assert_eq!(decoder.position(), rows.header().len());
+    assert_eq!(decoder.position(), encoded_header.len());
     assert_eq!(
-        GraphHeader::decode(rows.header())?.body(snapshot)?,
+        GraphHeader::decode(&encoded_header)?.body(snapshot)?,
         serde_json::to_vec(snapshot)?
     );
     Ok(())

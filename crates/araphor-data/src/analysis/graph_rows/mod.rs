@@ -1,5 +1,9 @@
-use duckdb::{params, Connection, Row};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use duckdb::{
+    params,
+    types::{FromSql, FromSqlError, FromSqlResult, ValueRef},
+    Connection, Row,
+};
+use serde::{de::DeserializeOwned, Serialize};
 use snafu::ResultExt as _;
 
 use super::AnalysisReadControl;
@@ -19,14 +23,7 @@ mod tests;
 
 pub(super) use header::GraphHeader;
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct GraphRows {
-    header: Vec<u8>,
-    subjects: Vec<subjects::SubjectRow>,
-    edges: Vec<relationships::RelationshipRow>,
-    findings: Vec<findings::FindingRow>,
-}
+pub(super) struct GraphRows;
 
 pub(crate) struct CanonicalGraph {
     snapshot: GraphSnapshotV1,
@@ -75,7 +72,7 @@ impl CanonicalGraph {
 
 impl GraphRows {
     pub(super) const MAX_CANONICAL_BYTES: usize = super::MAX_RESULT_BYTES;
-    pub(super) fn encode_body(snapshot: &GraphSnapshotV1, body: &[u8]) -> Result<Self> {
+    pub(super) fn encode_body(snapshot: &GraphSnapshotV1, body: &[u8]) -> Result<Vec<u8>> {
         snapshot.validate()?;
         let canonical = Self::json(snapshot)?;
         if canonical != body {
@@ -87,40 +84,21 @@ impl GraphRows {
         Self::encode_canonical(snapshot, body)
     }
 
-    pub(super) fn encode_canonical(snapshot: &GraphSnapshotV1, body: &[u8]) -> Result<Self> {
+    pub(super) fn encode_canonical(snapshot: &GraphSnapshotV1, body: &[u8]) -> Result<Vec<u8>> {
         snapshot.validate()?;
-        Ok(Self {
-            header: GraphHeader::encode(snapshot, body)?,
-            subjects: snapshot
-                .graph
-                .subjects
-                .iter()
-                .map(subjects::SubjectRow::encode)
-                .collect::<Result<_>>()?,
-            edges: snapshot
-                .graph
-                .edges
-                .iter()
-                .map(relationships::RelationshipRow::encode)
-                .collect::<Result<_>>()?,
-            findings: snapshot
-                .findings
-                .iter()
-                .map(findings::FindingRow::encode)
-                .collect::<Result<_>>()?,
-        })
-    }
-
-    pub(super) fn header(&self) -> &[u8] {
-        &self.header
+        GraphHeader::encode(snapshot, body)
     }
 
     #[cfg(test)]
-    pub(super) fn encode(snapshot: &GraphSnapshotV1) -> Result<Self> {
+    pub(super) fn encode(snapshot: &GraphSnapshotV1) -> Result<Vec<u8>> {
         Self::encode_body(snapshot, &Self::json(snapshot)?)
     }
 
-    pub(super) fn insert(&self, writer: &Connection, result_id: &str) -> Result<()> {
+    pub(super) fn insert(
+        snapshot: &GraphSnapshotV1,
+        writer: &Connection,
+        result_id: &str,
+    ) -> Result<i64> {
         {
             let mut appender =
                 writer
@@ -128,8 +106,8 @@ impl GraphRows {
                     .context(AnalysisDatabaseSnafu {
                         operation: "prepare native graph subjects",
                     })?;
-            for (ordinal, subject) in self.subjects.iter().enumerate() {
-                subject.insert(&mut appender, result_id, ordinal)?;
+            for (ordinal, subject) in snapshot.graph.subjects.iter().enumerate() {
+                Self::insert_subject(&mut appender, result_id, ordinal, subject)?;
             }
             appender.flush().context(AnalysisDatabaseSnafu {
                 operation: "flush native graph subjects",
@@ -142,8 +120,8 @@ impl GraphRows {
                     .context(AnalysisDatabaseSnafu {
                         operation: "prepare native graph relationships",
                     })?;
-            for (ordinal, edge) in self.edges.iter().enumerate() {
-                edge.insert(&mut appender, result_id, ordinal)?;
+            for (ordinal, edge) in snapshot.graph.edges.iter().enumerate() {
+                Self::insert_edge(&mut appender, result_id, ordinal, edge)?;
             }
             appender.flush().context(AnalysisDatabaseSnafu {
                 operation: "flush native graph relationships",
@@ -156,32 +134,14 @@ impl GraphRows {
                     .context(AnalysisDatabaseSnafu {
                         operation: "prepare native graph findings",
                     })?;
-            for (ordinal, finding) in self.findings.iter().enumerate() {
-                finding.insert(&mut appender, result_id, ordinal)?;
+            for (ordinal, finding) in snapshot.findings.iter().enumerate() {
+                Self::insert_finding(&mut appender, result_id, ordinal, finding)?;
             }
             appender.flush().context(AnalysisDatabaseSnafu {
                 operation: "flush native graph findings",
             })?;
         }
-        Ok(())
-    }
-
-    pub(super) fn bytes(&self, result_id: &str) -> Result<i64> {
-        let bytes = self
-            .subjects
-            .iter()
-            .map(subjects::SubjectRow::bytes)
-            .chain(self.edges.iter().map(relationships::RelationshipRow::bytes))
-            .chain(self.findings.iter().map(findings::FindingRow::bytes))
-            .try_fold(0_usize, |sum, bytes| {
-                sum.checked_add(bytes)?.checked_add(result_id.len())
-            })
-            .ok_or_else(|| {
-                GraphInvalidSnafu {
-                    field: "graph storage bytes",
-                }
-                .build()
-            })?;
+        let bytes = Self::stored_bytes(writer, result_id)?;
         i64::try_from(bytes).map_err(|_| {
             GraphInvalidSnafu {
                 field: "graph storage bytes",
@@ -221,7 +181,7 @@ impl GraphRows {
         result_id: &str,
         maximum: usize,
         control: Option<&AnalysisReadControl>,
-        decode: impl Fn(&Row<'_>) -> duckdb::Result<T>,
+        decode: impl Fn(&Row<'_>) -> Result<T>,
     ) -> Result<Vec<T>> {
         let mut statement = writer
             .prepare(&format!(
@@ -257,9 +217,10 @@ impl GraphRows {
                 }
                 .fail();
             }
-            values.push(decode(row).context(AnalysisDatabaseSnafu {
-                operation: "decode native graph columns",
-            })?);
+            if let Some(control) = control {
+                control.check()?;
+            }
+            values.push(decode(row)?);
         }
         Ok(values)
     }
@@ -282,5 +243,59 @@ impl GraphRows {
     fn parse<T: DeserializeOwned>(label: &str) -> Result<T> {
         serde_json::from_value(serde_json::Value::String(label.to_owned()))
             .context(GraphEncodingSnafu)
+    }
+
+    fn column<T: FromSql>(row: &Row<'_>, index: usize) -> Result<T> {
+        row.get(index).context(AnalysisDatabaseSnafu {
+            operation: "decode native graph columns",
+        })
+    }
+
+    fn borrowed<'a, T>(
+        row: &'a Row<'_>,
+        index: usize,
+        decode: impl FnOnce(ValueRef<'a>) -> FromSqlResult<T>,
+    ) -> Result<T> {
+        let native = || {
+            let value = row.get_ref(index)?;
+            let name = row.as_ref().column_name(index)?;
+            decode(value).map_err(|source| match source {
+                FromSqlError::InvalidType => {
+                    duckdb::Error::InvalidColumnType(index, name.clone(), value.data_type())
+                }
+                FromSqlError::Other(source) => {
+                    duckdb::Error::FromSqlConversionFailure(index, value.data_type(), source)
+                }
+                source => duckdb::Error::FromSqlConversionFailure(
+                    index,
+                    value.data_type(),
+                    Box::new(source),
+                ),
+            })
+        };
+        native().context(AnalysisDatabaseSnafu {
+            operation: "decode native graph columns",
+        })
+    }
+
+    fn json_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {
+        Self::decode(Self::borrowed(row, index, |value| value.as_blob())?)
+    }
+
+    fn label_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> Result<T> {
+        Self::parse(Self::borrowed(row, index, |value| value.as_str())?)
+    }
+
+    fn column_operation<T>(result: Result<T>, operation: &'static str) -> Result<T> {
+        result.map_err(|error| match error {
+            crate::Error::AnalysisDatabase {
+                source, location, ..
+            } => crate::Error::AnalysisDatabase {
+                operation,
+                source,
+                location,
+            },
+            error => error,
+        })
     }
 }

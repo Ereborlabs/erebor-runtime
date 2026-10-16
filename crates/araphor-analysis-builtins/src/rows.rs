@@ -37,31 +37,33 @@ impl Rows {
             return Err(sdk::Error::contract(sdk::ErrorCode::Limit, "row count"));
         }
         let mut builder = BinaryBuilder::new();
-        let mut remaining = usize::try_from(bounds.max_bytes)
+        let limit = usize::try_from(bounds.max_bytes)
             .unwrap_or(usize::MAX)
             .min(i32::MAX as usize);
         for value in values {
-            let mut buffer = RowBuffer {
-                builder: &mut builder,
-                remaining: &mut remaining,
-                limited: false,
-            };
+            let remaining = limit - builder.values_slice().len();
             let result = {
-                let mut writer = BufWriter::with_capacity(8192.min(*buffer.remaining), &mut buffer);
+                let buffer = sdk::wire::BoundedBuffer::from_writer(&mut builder, remaining as u64);
+                let mut writer = BufWriter::with_capacity(8192.min(remaining), buffer);
                 let serialized = serde_json::to_writer(&mut writer, value);
-                serialized.and(writer.flush().map_err(serde_json::Error::io))
+                writer
+                    .flush()
+                    .map_err(serde_json::Error::io)
+                    .and(serialized)
             };
             if let Err(source) = result {
-                return Err(if buffer.limited {
-                    sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes")
-                } else {
-                    sdk::Error::Encoding {
-                        source,
-                        location: snafu::location!(),
-                    }
-                });
+                return Err(
+                    if source.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) {
+                        sdk::Error::contract(sdk::ErrorCode::Limit, "row bytes")
+                    } else {
+                        sdk::Error::Encoding {
+                            source,
+                            location: snafu::location!(),
+                        }
+                    },
+                );
             }
-            buffer.builder.append_value(b"");
+            builder.append_value(b"");
         }
         let mut array = builder.finish();
         array.shrink_to_fit();
@@ -158,34 +160,6 @@ impl Rows {
         {
             return Err(sdk::Error::contract(sdk::ErrorCode::Invalid, "row port"));
         }
-        Ok(())
-    }
-}
-
-struct RowBuffer<'a> {
-    builder: &'a mut BinaryBuilder,
-    remaining: &'a mut usize,
-    limited: bool,
-}
-
-impl Write for RowBuffer<'_> {
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let Some(remaining) = self.remaining.checked_sub(bytes.len()) else {
-            self.limited = true;
-            return Err(std::io::Error::other("row bytes exceed the limit"));
-        };
-        let count = self.builder.write(bytes)?;
-        *self.remaining = remaining;
-        Ok(count)
-    }
-
-    #[inline]
-    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
-        self.write(bytes).map(|_| ())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }

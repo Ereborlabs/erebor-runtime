@@ -187,29 +187,30 @@ fn row_error_precedence() -> sdk::Result<()> {
 
 #[test]
 fn row_byte_limit() -> std::io::Result<()> {
-    let mut remaining = 5;
     let mut builder = BinaryBuilder::new();
-    let mut buffer = RowBuffer {
-        builder: &mut builder,
-        remaining: &mut remaining,
-        limited: false,
-    };
-    buffer.write_all(b"")?;
-    assert!(buffer.builder.values_slice().is_empty());
-    assert_eq!(*buffer.remaining, 5);
-    assert!(!buffer.limited);
-    buffer.write_all(b"abc")?;
-    assert_eq!(buffer.builder.values_slice(), b"abc");
-    assert_eq!(*buffer.remaining, 2);
-    assert!(!buffer.limited);
-    buffer.write_all(b"")?;
-    assert_eq!(*buffer.remaining, 2);
-    assert!(buffer.write_all(b"def").is_err());
-    assert_eq!(buffer.builder.values_slice(), b"abc");
-    assert_eq!(*buffer.remaining, 2);
-    assert!(buffer.limited);
-    buffer.builder.append_value(b"");
-    let rows = buffer.builder.finish();
+    for (bytes, expected, remaining, limited) in [
+        (b"".as_slice(), b"".as_slice(), 5, false),
+        (b"abc".as_slice(), b"abc".as_slice(), 2, false),
+        (b"".as_slice(), b"abc".as_slice(), 2, false),
+        (b"def".as_slice(), b"abc".as_slice(), 2, true),
+    ] {
+        let available = 5 - builder.values_slice().len();
+        let mut buffer = sdk::wire::BoundedBuffer::from_writer(&mut builder, available as u64);
+        let result = buffer.write_all(bytes);
+        let builder = buffer.finish();
+        assert_eq!(builder.values_slice(), expected);
+        assert_eq!(5 - builder.values_slice().len(), remaining);
+        if limited {
+            assert_eq!(
+                result.err().map(|source| source.kind()),
+                Some(std::io::ErrorKind::FileTooLarge)
+            );
+        } else {
+            result?;
+        }
+    }
+    builder.append_value(b"");
+    let rows = builder.finish();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows.value(0), b"abc");
     Ok(())

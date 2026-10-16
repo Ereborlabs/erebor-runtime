@@ -5,64 +5,33 @@ use crate::{
     Result,
 };
 use duckdb::{params, params_from_iter, types::Value, Appender, Connection, Row};
-use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct RelationshipRow {
-    from: Vec<u8>,
-    to: Vec<u8>,
-    edge_type: String,
-    package: String,
-    cause: String,
-    evidence: Vec<u8>,
-    proof: Vec<u8>,
-    coverage: Vec<u8>,
-    first: u64,
-    last: u64,
-}
-
-impl RelationshipRow {
-    pub(super) const COLUMNS: &str = "ordinal, from_subject_id, to_subject_id, edge_type,
+const COLUMNS: &str = "ordinal, from_subject_id, to_subject_id, edge_type,
         package_id, cause, evidence, proof_quality, required_coverage_interval_ids,
         first_boottime_ns, last_boottime_ns";
 
-    pub(super) fn encode(edge: &GraphEdgeV1) -> Result<Self> {
-        Ok(Self {
-            from: GraphRows::json(&edge.key.from)?,
-            to: GraphRows::json(&edge.key.to)?,
-            edge_type: GraphRows::label(&edge.key.edge_type)?,
-            package: edge.key.package_id.clone(),
-            cause: GraphRows::label(&edge.key.cause)?,
-            evidence: GraphRows::json(&edge.key.evidence)?,
-            proof: GraphRows::json(&edge.proof_quality)?,
-            coverage: GraphRows::json(&edge.required_coverage_interval_ids)?,
-            first: edge.first_boottime_ns,
-            last: edge.last_boottime_ns,
-        })
-    }
-
-    pub(super) fn insert(
-        &self,
+impl GraphRows {
+    pub(super) fn insert_edge(
         writer: &mut Appender<'_>,
         result_id: &str,
         ordinal: usize,
+        edge: &GraphEdgeV1,
     ) -> Result<()> {
         writer
             .append_row(params![
                 result_id,
                 ordinal as u32,
-                &self.from,
-                &self.to,
-                &self.edge_type,
-                &self.package,
-                &self.cause,
-                &self.evidence,
-                &self.proof,
-                &self.coverage,
-                self.first,
-                self.last
+                Self::json(&edge.key.from)?,
+                Self::json(&edge.key.to)?,
+                Self::label(&edge.key.edge_type)?,
+                &edge.key.package_id,
+                Self::label(&edge.key.cause)?,
+                Self::json(&edge.key.evidence)?,
+                Self::json(&edge.proof_quality)?,
+                Self::json(&edge.required_coverage_interval_ids)?,
+                edge.first_boottime_ns,
+                edge.last_boottime_ns
             ])
             .context(AnalysisDatabaseSnafu {
                 operation: "insert native graph relationship",
@@ -70,46 +39,20 @@ impl RelationshipRow {
         Ok(())
     }
 
-    pub(super) fn bytes(&self) -> usize {
-        256 + self.from.len()
-            + self.to.len()
-            + self.edge_type.len()
-            + self.package.len()
-            + self.cause.len()
-            + self.evidence.len()
-            + self.proof.len()
-            + self.coverage.len()
-    }
-
-    fn columns(row: &Row<'_>) -> duckdb::Result<Self> {
-        Ok(Self {
-            from: row.get(1)?,
-            to: row.get(2)?,
-            edge_type: row.get(3)?,
-            package: row.get(4)?,
-            cause: row.get(5)?,
-            evidence: row.get(6)?,
-            proof: row.get(7)?,
-            coverage: row.get(8)?,
-            first: row.get(9)?,
-            last: row.get(10)?,
-        })
-    }
-
-    fn decode(self) -> Result<GraphEdgeV1> {
+    fn decode_edge(row: &Row<'_>) -> Result<GraphEdgeV1> {
         let edge = GraphEdgeV1 {
             key: GraphEdgeKeyV1 {
-                from: GraphRows::decode(&self.from)?,
-                to: GraphRows::decode(&self.to)?,
-                edge_type: GraphRows::parse(&self.edge_type)?,
-                package_id: self.package,
-                evidence: GraphRows::decode(&self.evidence)?,
-                cause: GraphRows::parse(&self.cause)?,
+                from: Self::json_column(row, 1)?,
+                to: Self::json_column(row, 2)?,
+                edge_type: Self::label_column(row, 3)?,
+                package_id: Self::column(row, 4)?,
+                evidence: Self::json_column(row, 6)?,
+                cause: Self::label_column(row, 5)?,
             },
-            proof_quality: GraphRows::decode(&self.proof)?,
-            required_coverage_interval_ids: GraphRows::decode(&self.coverage)?,
-            first_boottime_ns: self.first,
-            last_boottime_ns: self.last,
+            proof_quality: Self::json_column(row, 7)?,
+            required_coverage_interval_ids: Self::json_column(row, 8)?,
+            first_boottime_ns: Self::column(row, 9)?,
+            last_boottime_ns: Self::column(row, 10)?,
         };
         edge.key.from.validate()?;
         edge.key.to.validate()?;
@@ -121,9 +64,6 @@ impl RelationshipRow {
         }
         Ok(edge)
     }
-}
-
-impl GraphRows {
     pub(in crate::analysis) fn edge_name(kind: &crate::GraphEdgeTypeV1) -> Result<String> {
         Self::label(kind)
     }
@@ -151,7 +91,7 @@ impl GraphRows {
                 .map(|ordinal| Value::UInt(*ordinal))
                 .collect::<Vec<_>>();
             parameters.push(Value::Text(result_id.to_owned()));
-            let columns = RelationshipRow::COLUMNS
+            let columns = COLUMNS
                 .split(',')
                 .map(|column| format!("edge.{}", column.trim()))
                 .collect::<Vec<_>>()
@@ -184,13 +124,10 @@ impl GraphRows {
                     }
                     .fail();
                 }
-                selected.push(
-                    RelationshipRow::columns(row)
-                        .context(AnalysisDatabaseSnafu {
-                            operation: "decode selected graph relationship columns",
-                        })?
-                        .decode()?,
-                );
+                selected.push(Self::column_operation(
+                    Self::decode_edge(row),
+                    "decode selected graph relationship columns",
+                )?);
             }
             if selected.len() - start != ordinals.len() {
                 return GraphInvalidSnafu {
@@ -211,19 +148,11 @@ impl GraphRows {
         Self::load(
             writer,
             "graph_relationships",
-            RelationshipRow::COLUMNS,
+            COLUMNS,
             result_id,
             4096,
             control,
-            RelationshipRow::columns,
-        )?
-        .into_iter()
-        .map(|row| {
-            if let Some(control) = control {
-                control.check()?;
-            }
-            row.decode()
-        })
-        .collect()
+            Self::decode_edge,
+        )
     }
 }

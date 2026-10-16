@@ -396,7 +396,7 @@ impl DiscoveryOwner {
             }
         }
         if !records.is_empty() {
-            let mut input = DiscoveryInputManifestV1 {
+            let input = DiscoveryInputManifestV1 {
                 schema_version: DISCOVERY_SCHEMA_VERSION,
                 tenant_id: source.tenant_id,
                 source_revision: "live-v1".into(),
@@ -407,22 +407,12 @@ impl DiscoveryOwner {
                 exclusions: Vec::new(),
                 lifecycle: Vec::new(),
             };
-            let admitted = self.bound_page(&profile, &status, &input, &facts, now, &execution)?;
-            bounded |= admitted < input.records.len();
-            if admitted > 0 {
-                input.records.truncate(admitted);
-                consumed = input
-                    .records
-                    .last()
-                    .map_or(expected, |record| record.id.durable_cursor);
-                input
-                    .contexts
-                    .retain(|context| context.record_id.durable_cursor <= consumed);
-                input.coverage = Self::coverage(&status, &input.records)?;
-                let next = Self::derive_recorded(&input, &execution)?.snapshot;
-                profile.snapshot = profile.snapshot.merge(&next, &execution)?;
-                bytes = Self::input_size(&input)?;
-                add(&mut profile.input_bytes, bytes)?;
+            let candidate = self.bound_page(&profile, &status, &input, &facts, now, &execution)?;
+            bounded |= candidate.as_ref().map_or(0, |(count, _, _)| *count) < input.records.len();
+            if let Some((admitted, snapshot, input_bytes)) = candidate {
+                consumed = input.records[admitted - 1].id.durable_cursor;
+                profile.snapshot = snapshot;
+                profile.input_bytes = input_bytes;
                 let mut distinct = BTreeSet::new();
                 for context in facts.into_iter().filter_map(|(record, context)| {
                     (record.durable_cursor <= consumed).then_some(context)
@@ -552,7 +542,7 @@ impl DiscoveryOwner {
         facts: &BTreeMap<DiscoveryRecordIdV1, AnalysisContextVersionV1>,
         now: u64,
         execution: &crate::InstalledAnalysis,
-    ) -> Result<usize> {
+    ) -> Result<Option<(usize, BehaviorSnapshotV1, u64)>> {
         let mut count = input.records.len();
         loop {
             let records = input.records[..count].to_vec();
@@ -580,7 +570,7 @@ impl DiscoveryOwner {
             if atom_count > self.config.atom_limit {
                 if count <= 1 {
                     require(profile.snapshot.accepted_records > 0, "single result limit")?;
-                    return Ok(0);
+                    return Ok(None);
                 }
                 count /= 2;
                 continue;
@@ -618,11 +608,11 @@ impl DiscoveryOwner {
                 commit_revision: u64::MAX,
             });
             if self.profile_fits(&next) {
-                return Ok(count);
+                return Ok(Some((count, next.snapshot, next.input_bytes)));
             }
             if count <= 1 {
                 require(profile.snapshot.accepted_records > 0, "single result limit")?;
-                return Ok(0);
+                return Ok(None);
             }
             count /= 2;
         }

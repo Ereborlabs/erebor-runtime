@@ -3,10 +3,10 @@ use super::*;
 #[test]
 fn native_header_read_budget() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
-    let rows = GraphRows::encode(&fixture.snapshot)?;
+    let encoded_header = GraphRows::encode(&fixture.snapshot)?;
     let mut headers = FindingHeaders::default();
     for id in ["first", "second"] {
-        let mut header = GraphHeader::decode(rows.header())?;
+        let mut header = GraphHeader::decode(&encoded_header)?;
         header.snapshot_bytes = crate::analysis::MAX_RESULT_BYTES / 2 + 1;
         headers.insert(id.into(), header);
     }

@@ -112,6 +112,21 @@ fact ordinals and order. [Detector declarations](../../crates/araphor-analysis-b
 and [Discovery declarations](../../crates/araphor-analysis-builtins/src/discovery/mod.rs)
 use `OnceLock`. Public descriptor methods return independent clones.
 
+[Discovery page admission](../../crates/araphor-data/src/discovery/live.rs)
+returns the accepted record count, merged snapshot, and total input bytes.
+The live owner uses that checked result. It does not execute the detector and
+merge again for the same accepted page. Candidate size checks still include
+the largest possible context references before any profile commit.
+
+[Native graph storage](../../crates/araphor-data/src/analysis/graph_rows/mod.rs)
+appends borrowed canonical subjects, relationships, and findings. It retains
+no second row DTO family or complete encoded row buffer. Each native appender
+is flushed before the existing result-scoped SQL charge is read. The same
+transaction checks quota and commits. Reads decode native cells directly into
+canonical values and keep header, byte, ordinal, tenant, and value checks.
+They report faults in row order. If several rows are corrupt, the first error
+can differ from the former buffered decoder.
+
 ```mermaid
 sequenceDiagram
     participant Graph as Graph owner
@@ -146,6 +161,16 @@ complete path. [InputProjection](../../crates/araphor-data/src/query/input.rs)
 keeps commit position fields. Model provenance is collected before pruning.
 `InputRelations` creates only admitted built-in tables. Unreferenced built-ins do
 not enter the operation catalog.
+
+The production admission owner also owns the former offline parser tests.
+The offline parser is removed. Fixed lower bounds under `OR` use the weaker
+bound only when both branches prove a lower bound. Moving-clock disjunctions
+retain the complete fallback or rejection path. The private extraction
+pipeline accepts the existing borrowed `AnalysisProjection` trait with its
+row type fixed. A new caller closure does not require another complete
+extraction implementation.
+CTE names keep the production parser's shadowing behavior. Hidden columns
+remain unavailable and fail during admission.
 
 [ScopedSources](../../crates/araphor-data/src/query/input.rs) exposes append
 positions as SQL aliases for existing commit and ordinal columns. Input rows

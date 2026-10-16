@@ -668,7 +668,7 @@ impl<T> AnalysisExtractionV1<T> {
 
     fn project(
         &mut self,
-        projection: &mut impl AnalysisProjection<Row = T>,
+        projection: &mut dyn AnalysisProjection<Row = T>,
         input: AnalysisInputV1<'_>,
         control: &AnalysisReadControl,
         row_bytes: Option<&mut usize>,
@@ -1083,7 +1083,7 @@ impl AnalysisStore {
             ExtractMode::Complete,
             AnalysisExtractLimits::default(),
             control,
-            RecordProjection(|input: AnalysisInputV1<'_>| {
+            &mut RecordProjection(|input: AnalysisInputV1<'_>| {
                 project(input).map(|row| {
                     row.map(|row| {
                         let bytes = row.len();
@@ -1108,7 +1108,7 @@ impl AnalysisStore {
             ExtractMode::Page(after),
             AnalysisExtractLimits::default(),
             control,
-            RecordProjection(|input: AnalysisInputV1<'_>| {
+            &mut RecordProjection(|input: AnalysisInputV1<'_>| {
                 project(input).map(|row| {
                     row.map(|row| {
                         let bytes = row.len();
@@ -1124,9 +1124,15 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        project: impl AnalysisProjection<Row = T>,
+        mut project: impl AnalysisProjection<Row = T>,
     ) -> Result<AnalysisPositionPageV1<T>> {
-        self.extract_mode(selection, ExtractMode::Complete, limits, control, project)
+        self.extract_mode(
+            selection,
+            ExtractMode::Complete,
+            limits,
+            control,
+            &mut project,
+        )
     }
 
     pub(crate) fn position_rows<T>(
@@ -1135,14 +1141,14 @@ impl AnalysisStore {
         after: Option<StorePositionV1>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        project: impl AnalysisProjection<Row = T>,
+        mut project: impl AnalysisProjection<Row = T>,
     ) -> Result<AnalysisPositionPageV1<T>> {
         self.extract_mode(
             selection,
             ExtractMode::Page(after),
             limits,
             control,
-            project,
+            &mut project,
         )
     }
 
@@ -1151,9 +1157,15 @@ impl AnalysisStore {
         selection: &AnalysisSelectionV1,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        project: impl AnalysisProjection<Row = T>,
+        mut project: impl AnalysisProjection<Row = T>,
     ) -> Result<AnalysisPositionPageV1<T>> {
-        self.extract_mode(selection, ExtractMode::Metadata, limits, control, project)
+        self.extract_mode(
+            selection,
+            ExtractMode::Metadata,
+            limits,
+            control,
+            &mut project,
+        )
     }
 
     fn extract_mode<T>(
@@ -1162,7 +1174,7 @@ impl AnalysisStore {
         mode: ExtractMode,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        mut project: impl AnalysisProjection<Row = T>,
+        project: &mut dyn AnalysisProjection<Row = T>,
     ) -> Result<AnalysisPositionPageV1<T>> {
         control.check()?;
         if !selection.valid() {
@@ -1328,7 +1340,7 @@ impl AnalysisStore {
                     output.trace_reads.push(identity.request_id);
                 }
                 output.project(
-                    &mut project,
+                    project,
                     AnalysisInputV1::Trace {
                         state: &state,
                         intent: &intent,
@@ -1396,7 +1408,7 @@ impl AnalysisStore {
                                     });
                             if selected {
                                 output.project(
-                                    &mut project,
+                                    project,
                                     AnalysisInputV1::Event {
                                         identity,
                                         cpu_id: cpu.ok_or_else(|| {
@@ -1443,7 +1455,7 @@ impl AnalysisStore {
                                 }
                             };
                             output.project(
-                                &mut project,
+                                project,
                                 AnalysisInputV1::TraceOutput {
                                     identity,
                                     target_index: trace.target_index,
@@ -1469,7 +1481,7 @@ impl AnalysisStore {
                 match Self::read_context_from(snapshot, &self.root, key)? {
                     Some((context, _)) => {
                         output.project(
-                            &mut project,
+                            project,
                             AnalysisInputV1::Context(&context),
                             control,
                             None,
@@ -1510,7 +1522,7 @@ impl AnalysisStore {
                     })?;
                 let discovery_enabled = output.discovery_enabled;
                 output.project(
-                    &mut project,
+                    project,
                     AnalysisInputV1::Profile {
                         result_id: id,
                         body: &body,
@@ -1523,7 +1535,7 @@ impl AnalysisStore {
                 )?;
             }
             if let Some(request) = &selection.graph_traversal {
-                self.traverse_graphs(snapshot, selection, request, &mut output, control, &mut project)?;
+                self.traverse_graphs(snapshot, selection, request, &mut output, control, project)?;
             }
             for id in selection.graphs.iter().filter(|_| selection.graph_traversal.is_none()) {
                 control.check()?;
@@ -1556,7 +1568,7 @@ impl AnalysisStore {
                     }
                 }
                 graph.validate()?;
-                output.project(&mut project, AnalysisInputV1::Graph {
+                output.project(project, AnalysisInputV1::Graph {
                     result_id: id, graph: &graph, commit_revision: revision, sensitivity,
                     traversal_depths: None,
                 }, control, None)?;
@@ -1594,7 +1606,7 @@ impl AnalysisStore {
                         effect.binding_id.is_none_or(|binding| !selection.binding_ids.contains(&binding))
                     })
                 }) { continue; }
-                output.project(&mut project, AnalysisInputV1::Notification {
+                output.project(project, AnalysisInputV1::Notification {
                     obligation: &obligation, finding: finding.as_ref(), commit_revision: revision,
                 }, control, None)?;
             }
@@ -1603,7 +1615,7 @@ impl AnalysisStore {
                 match self.read_result_from(snapshot, selection.tenant_id, id)? {
                     Some(body) => {
                         output.project(
-                            &mut project,
+                            project,
                             AnalysisInputV1::Result {
                                 result_id: id,
                                 body: &body,

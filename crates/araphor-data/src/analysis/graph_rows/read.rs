@@ -58,17 +58,20 @@ impl GraphRows {
         result_id: &str,
         header: &GraphHeader,
     ) -> Result<()> {
+        header.check_bytes(result_id, Self::stored_bytes(writer, result_id)?)
+    }
+
+    pub(super) fn stored_bytes(writer: &Connection, result_id: &str) -> Result<u64> {
         let query = format!(
             "WITH analysis_results AS (
             SELECT result_id, tenant_id FROM main.analysis_results WHERE result_id = ?
             ) SELECT coalesce(sum(bytes), 0)::UBIGINT FROM ({})",
             Self::CHARGES
         );
-        let stored: u64 = writer
+        writer
             .query_row(&query, params![result_id], |row| row.get(0))
             .context(AnalysisDatabaseSnafu {
                 operation: "check native graph bytes",
-            })?;
-        header.check_bytes(result_id, stored)
+            })
     }
 }

@@ -10,6 +10,36 @@ impl Fixture {
         QuerySql::admit(sql, parameters, false)
     }
 
+    fn scope_sql(sql: &str, parameters: Vec<Value>, allowed: &[&str]) -> Result<QuerySql> {
+        let relations = allowed
+            .iter()
+            .map(|relation| {
+                let fields = if *relation == "events" {
+                    vec!["id", "received_at", "operation"]
+                } else {
+                    vec!["operation"]
+                };
+                (
+                    (*relation).to_owned(),
+                    fields.into_iter().map(str::to_owned).collect(),
+                )
+            })
+            .collect();
+        QuerySql::admit_with(sql, parameters, false, Some(relations))
+    }
+
+    fn scope_database() -> std::result::Result<Connection, Box<dyn std::error::Error>> {
+        let config = duckdb::Config::default()
+            .enable_external_access(false)?
+            .enable_autoload_extension(false)?;
+        let connection = Connection::open_in_memory_with_flags(config)?;
+        connection.execute_batch(
+            "CREATE TABLE events(id BIGINT, received_at TIMESTAMP, operation VARCHAR);
+             CREATE TABLE coverage(operation VARCHAR);",
+        )?;
+        Ok(connection)
+    }
+
     fn database(
         binding: Option<&QueryBinding>,
     ) -> std::result::Result<Connection, Box<dyn std::error::Error>> {
@@ -423,6 +453,8 @@ fn query_admission_moving_rejection() -> TestResult {
         "SELECT COUNT(*) FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '5 minutes'",
         "SELECT COUNT(*) FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '86401 seconds'",
         "SELECT COUNT(*) FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '300 seconds' OR operation = 0",
+        "SELECT COUNT(*) FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '300 seconds' OR received_at >= CURRENT_TIMESTAMP - INTERVAL '60 seconds'",
+        "SELECT COUNT(*) FROM events WHERE (received_at >= CURRENT_TIMESTAMP - INTERVAL '300 seconds' AND received_at >= TIMESTAMP '1970-01-01 00:00:00') OR received_at >= TIMESTAMP '1970-01-01 00:00:00'",
         "SELECT COUNT(*) FROM events WHERE NOT(received_at < CURRENT_TIMESTAMP - INTERVAL '300 seconds')",
         "SELECT COUNT(*) FROM events WHERE received_at <= CURRENT_TIMESTAMP - INTERVAL '300 seconds'",
         "WITH recent AS (SELECT operation FROM events WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '300 seconds') SELECT COUNT(*) FROM recent",
@@ -523,5 +555,242 @@ fn query_admission_parameters() -> TestResult {
         ")".repeat(AST_DEPTH + 1)
     );
     assert!(Fixture::admit(&nested, vec![]).is_err());
+    Ok(())
+}
+
+#[test]
+fn analysis_sql_admission_dependencies() -> TestResult {
+    for (sql, parameters, expected) in [
+        (
+            "WITH recent AS (SELECT e.operation FROM \"events\" e WHERE e.received_at >= ?)
+             SELECT r.operation, COUNT(*) FROM recent r LEFT JOIN coverage c ON c.operation = r.operation
+             WHERE r.operation IS NOT NULL GROUP BY r.operation",
+            vec![Value::Timestamp(TimeUnit::Microsecond, 0)],
+            &["coverage", "events"][..],
+        ),
+        (
+            "WITH recent AS (SELECT operation FROM coverage) SELECT * FROM recent",
+            vec![],
+            &["coverage"][..],
+        ),
+        (
+            "WITH recent AS (SELECT operation FROM events) SELECT a.operation FROM recent a JOIN recent b ON a.operation = b.operation",
+            vec![],
+            &["events"][..],
+        ),
+        (
+            "WITH events AS (SELECT operation FROM coverage) SELECT * FROM events",
+            vec![],
+            &["coverage"][..],
+        ),
+    ] {
+        let admitted = Fixture::scope_sql(sql, parameters, &["events", "coverage"])?;
+        assert_eq!(
+            admitted.dependencies(),
+            &expected
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<BTreeSet<_>>(),
+            "{sql}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn analysis_sql_admission_escapes() {
+    for sql in [
+        "SELECT * FROM events; DELETE FROM events",
+        "COPY events TO '/tmp/forbidden.csv'",
+        "SELECT * INTO copy FROM events",
+        "SELECT * FROM read_csv('/etc/passwd')",
+        "SELECT read_text('/etc/passwd') FROM events",
+        "SELECT * FROM main.events",
+        "SELECT * FROM coverage",
+    ] {
+        assert!(
+            Fixture::scope_sql(sql, vec![], &["events"]).is_err(),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn analysis_sql_authorized_binding() -> TestResult {
+    let worker = Fixture::scope_database()?;
+    for sql in [
+        "SELECT id FROM events WHERE received_at >= TIMESTAMP '2026-01-01 00:00:00'",
+        "WITH recent AS (SELECT operation FROM events) SELECT r.operation FROM recent r LEFT JOIN coverage c ON c.operation = r.operation",
+        "SELECT id FROM events WHERE (operation IS NULL OR id = 3)",
+        "SELECT \"operation\", COUNT(*) FROM \"events\" GROUP BY \"operation\"",
+    ] {
+        let admitted = Fixture::scope_sql(sql, vec![], &["events", "coverage"])?;
+        worker.prepare(sql)?;
+        worker.prepare(&admitted.bind_complete(1)?.sql)?;
+    }
+    for sql in [
+        "SELECT secret FROM events",
+        "SELECT id FROM events WHERE secret = 'x'",
+        "SELECT id FROM events ORDER BY secret",
+        "SELECT COUNT(secret) FROM events",
+    ] {
+        assert!(
+            matches!(
+                Fixture::scope_sql(sql, vec![], &["events", "coverage"]),
+                Err(crate::Error::QueryInvalid { .. })
+            ),
+            "{sql}"
+        );
+        assert!(worker.prepare(sql).is_err(), "bound hidden column in {sql}");
+    }
+    assert!(worker
+        .prepare("SELECT * FROM read_csv('/etc/passwd')")
+        .is_err());
+    Ok(())
+}
+
+#[test]
+fn analysis_sql_bound_equivalence() -> TestResult {
+    const BOUND: i64 = 1_767_225_600_000_000;
+    let cases = [
+        (
+            "SELECT COUNT(*) FROM events WHERE received_at >= TIMESTAMP '2026-01-01 00:00:00'",
+            vec![],
+            Some(BOUND as u64 * 1_000),
+            None,
+            2,
+        ),
+        (
+            "SELECT COUNT(*) FROM events e WHERE e.received_at >= ? AND e.operation = 'normal'",
+            vec![Value::Timestamp(TimeUnit::Microsecond, BOUND)],
+            Some(BOUND as u64 * 1_000),
+            None,
+            2,
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE received_at > TIMESTAMP '2026-01-01 00:00:00'",
+            vec![],
+            Some((BOUND as u64 + 1) * 1_000),
+            None,
+            1,
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE received_at BETWEEN TIMESTAMP '2026-01-01 00:00:00' AND TIMESTAMP '2026-01-01 00:00:01'",
+            vec![],
+            Some(BOUND as u64 * 1_000),
+            Some((BOUND as u64 + 1_000_000) * 1_000 + 999),
+            2,
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE operation = 'rare' OR received_at >= TIMESTAMP '2026-01-01 00:00:00'",
+            vec![],
+            None,
+            None,
+            3,
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE (received_at >= TIMESTAMP '2026-01-01 00:00:00' AND operation = 'normal') OR received_at >= TIMESTAMP '2025-12-31 23:59:59'",
+            vec![],
+            Some((BOUND as u64 - 1_000_000) * 1_000),
+            None,
+            3,
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE received_at >= CAST(NULL AS TIMESTAMP)",
+            vec![],
+            None,
+            None,
+            0,
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE (received_at >= TIMESTAMP '2025-12-31 23:59:59' AND received_at >= TIMESTAMP '2026-01-01 00:00:00' AND operation = 'normal') OR received_at >= TIMESTAMP '2026-01-01 00:00:01'",
+            vec![],
+            Some(BOUND as u64 * 1_000),
+            None,
+            2,
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE (received_at > TIMESTAMP '2026-01-01 00:00:00' AND operation = 'normal') OR received_at > TIMESTAMP '2025-12-31 23:59:59'",
+            vec![],
+            Some((BOUND as u64 - 1_000_000 + 1) * 1_000),
+            None,
+            2,
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE received_at > TIMESTAMP '2026-01-01 00:00:00' OR received_at >= TIMESTAMP '2026-01-01 00:00:00'",
+            vec![],
+            Some(BOUND as u64 * 1_000),
+            None,
+            2,
+        ),
+    ];
+    for (sql, parameters, first, last, expected) in cases {
+        let admitted = Fixture::scope_sql(sql, parameters.clone(), &["events"])?;
+        let binding = admitted.bind_complete(BOUND as u64 * 1_000)?;
+        assert_eq!(
+            binding.received_from,
+            first.map_or(Bound::Unbounded, Bound::Included),
+            "{sql}"
+        );
+        assert_eq!(
+            binding.received_until,
+            last.map_or(Bound::Unbounded, Bound::Included),
+            "{sql}"
+        );
+        let full = Fixture::scope_database()?;
+        let extracted = Fixture::scope_database()?;
+        for (id, timestamp, operation) in [
+            (1_i64, BOUND - 1_000_000, "rare"),
+            (2, BOUND, "normal"),
+            (3, BOUND + 1_000_000, "normal"),
+        ] {
+            let value = Value::Timestamp(TimeUnit::Microsecond, timestamp);
+            full.execute(
+                "INSERT INTO events VALUES (?, ?, ?)",
+                params![id, value.clone(), operation],
+            )?;
+            if Fixture::contains(&binding, timestamp as u64 * 1_000) {
+                extracted.execute(
+                    "INSERT INTO events VALUES (?, ?, ?)",
+                    params![id, value, operation],
+                )?;
+            }
+        }
+        let full_count: i64 =
+            full.query_row(sql, params_from_iter(parameters.iter()), |row| row.get(0))?;
+        let extracted_count: i64 = extracted.query_row(
+            &binding.sql,
+            params_from_iter(binding.parameters.iter()),
+            |row| row.get(0),
+        )?;
+        assert_eq!(full_count, expected, "{sql}");
+        assert_eq!(extracted_count, full_count, "partial input changed {sql}");
+    }
+    for (sql, parameters, allowed) in [
+        (
+            "SELECT COUNT(*) FROM events WHERE received_at >= ?",
+            vec![Value::Text("2026-01-01".to_owned())],
+            &["events"][..],
+        ),
+        (
+            "SELECT COUNT(*) FROM events WHERE received_at NOT BETWEEN TIMESTAMP '2026-01-01 00:00:00' AND TIMESTAMP '2026-01-01 00:00:01'",
+            vec![],
+            &["events"][..],
+        ),
+        (
+            "WITH recent AS (SELECT * FROM events) SELECT COUNT(*) FROM recent",
+            vec![],
+            &["events"][..],
+        ),
+        (
+            "SELECT COUNT(*) FROM events e JOIN coverage c ON e.operation = c.operation WHERE e.received_at >= TIMESTAMP '2026-01-01 00:00:00'",
+            vec![],
+            &["events", "coverage"][..],
+        ),
+    ] {
+        let binding = Fixture::scope_sql(sql, parameters, allowed)?.bind_complete(1)?;
+        assert_eq!(binding.received_from, Bound::Unbounded, "{sql}");
+        assert_eq!(binding.received_until, Bound::Unbounded, "{sql}");
+    }
     Ok(())
 }

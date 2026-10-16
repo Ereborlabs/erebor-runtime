@@ -715,7 +715,7 @@ impl AnalysisStore {
         if request.len() > MAX_RESULT_META_BYTES {
             return self.reject("the analysis result metadata exceeds its byte bound");
         }
-        let rows = graph
+        let graph_header = graph
             .map(|graph| {
                 if canonical {
                     super::graph_rows::GraphRows::encode_canonical(graph, &input.body)
@@ -724,9 +724,7 @@ impl AnalysisStore {
                 }
             })
             .transpose()?;
-        let body = rows
-            .as_ref()
-            .map_or(input.body.as_slice(), |rows| rows.header());
+        let body = graph_header.as_deref().unwrap_or(input.body.as_slice());
         let key = input.scope.identity.key();
         let mut writer_guard = self.maintenance_writer()?;
         let writer = writer_guard.get_mut()?;
@@ -946,9 +944,8 @@ impl AnalysisStore {
                     operation: "insert analysis result",
                 })?;
         }
-        let row_bytes = if let Some(rows) = &rows {
-            rows.insert(&transaction, &input.result_id)?;
-            rows.bytes(&input.result_id)?
+        let row_bytes = if let Some(graph) = graph {
+            super::graph_rows::GraphRows::insert(graph, &transaction, &input.result_id)?
         } else {
             0
         };
@@ -998,7 +995,7 @@ impl AnalysisStore {
             })?;
         }
         let mut relations = vec!["analysis_results"];
-        if rows.is_some() {
+        if graph.is_some() {
             relations.extend(["graph_subjects", "graph_relationships", "graph_findings"]);
         }
         if advance {

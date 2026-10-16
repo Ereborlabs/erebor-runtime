@@ -36,8 +36,8 @@ fn native_rows_integrity() -> TestResult {
     assert!(!graph.graph.subjects.is_empty());
     assert!(!graph.graph.edges.is_empty());
     assert!(!graph.findings.is_empty());
-    let rows = GraphRows::encode(graph)?;
-    let metadata = GraphHeader::decode(rows.header())?;
+    let encoded_header = GraphRows::encode(graph)?;
+    let metadata = GraphHeader::decode(&encoded_header)?;
     assert!(metadata.snapshot.findings.is_empty());
     assert!(metadata.snapshot.graph.subjects.is_empty());
     assert!(metadata.snapshot.graph.edges.is_empty());
@@ -54,13 +54,13 @@ fn native_rows_integrity() -> TestResult {
         params![
             graph.scope.identity.tenant_id.as_slice(),
             crate::GRAPH_PROCESSOR,
-            rows.header(),
+            &encoded_header,
             graph.scope.identity.key().as_slice(),
             graph.scope.method_version,
             graph.first_cursor
         ],
     )?;
-    rows.insert(&writer, "version")?;
+    let inserted_bytes = GraphRows::insert(graph, &writer, "version")?;
     let header = GraphRows::read_header(&writer, graph.scope.identity.tenant_id, "version")?
         .ok_or("missing header")?;
     assert_eq!(GraphRows::read(&writer, "version", &header)?, *graph);
@@ -74,7 +74,39 @@ fn native_rows_integrity() -> TestResult {
         [],
         |row| row.get(0),
     )?;
-    assert_eq!(charged, rows.bytes("version")?);
+    assert_eq!(charged, inserted_bytes);
+    assert_eq!(GraphRows::stored_bytes(&writer, "absent")?, 0);
+    {
+        let transaction = writer.transaction()?;
+        let other = "versión";
+        transaction.execute(
+            "INSERT INTO analysis_results SELECT ?, tenant_id, processor_id, body,
+            stream_key, method_version, first_cursor FROM analysis_results WHERE result_id = ?",
+            params![other, "version"],
+        )?;
+        let other_bytes = GraphRows::insert(graph, &transaction, other)?;
+        let count =
+            (graph.graph.subjects.len() + graph.graph.edges.len() + graph.findings.len()) as i64;
+        assert_eq!(
+            other_bytes,
+            inserted_bytes + (other.len() as i64 - "version".len() as i64) * count
+        );
+        assert_eq!(
+            GraphRows::stored_bytes(&transaction, "version")?,
+            inserted_bytes as u64
+        );
+        assert_eq!(
+            GraphRows::stored_bytes(&transaction, other)?,
+            other_bytes as u64
+        );
+        let total: i64 = transaction.query_row(
+            &format!("SELECT sum(bytes)::BIGINT FROM ({})", GraphRows::CHARGES),
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(total, inserted_bytes + other_bytes);
+        transaction.rollback()?;
+    }
     assert!(GraphRows::read_header(&writer, [9; 16], "version")?.is_none());
     assert_eq!(
         GraphRows::read_finding(
@@ -92,6 +124,11 @@ fn native_rows_integrity() -> TestResult {
         "UPDATE graph_findings SET severity = 'INVALID'",
         "UPDATE graph_findings SET ordinal = ordinal + 1",
         "UPDATE graph_subjects SET identity = repeat('x', 16777217)::BLOB WHERE ordinal = 0",
+        "UPDATE graph_subjects SET tenant_id = 'short'::BLOB WHERE ordinal = 0",
+        "UPDATE graph_subjects SET authority = '{'::BLOB WHERE ordinal = 0",
+        "UPDATE graph_relationships SET evidence = '{'::BLOB WHERE ordinal = 0",
+        "UPDATE graph_findings SET tenant_id = 'short'::BLOB WHERE ordinal = 0",
+        "UPDATE graph_findings SET effects = '{'::BLOB WHERE ordinal = 0",
     ] {
         let transaction = writer.transaction()?;
         transaction.execute(mutation, [])?;
@@ -100,6 +137,96 @@ fn native_rows_integrity() -> TestResult {
             "{mutation}"
         );
         transaction.rollback()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn native_borrowed_columns() -> TestResult {
+    let writer = Connection::open_in_memory()?;
+    let json = |sql: &str| {
+        writer.query_row(sql, [], |row| {
+            Ok(GraphRows::json_column::<Vec<String>>(row, 0))
+        })
+    };
+    assert_eq!(json("SELECT '[\"value\"]'::BLOB")??, vec!["value"]);
+    for sql in ["SELECT 1 AS value", "SELECT NULL::BLOB AS value"] {
+        assert!(matches!(
+            json(sql)?,
+            Err(crate::Error::AnalysisDatabase {
+                source: duckdb::Error::InvalidColumnType(0, name, _),
+                ..
+            }) if name == "value"
+        ));
+    }
+    assert!(matches!(
+        json("SELECT '{'::BLOB")?,
+        Err(crate::Error::GraphEncoding { .. })
+    ));
+    let label = writer.query_row("SELECT 1 AS value", [], |row| {
+        Ok(GraphRows::label_column::<crate::GraphEdgeTypeV1>(row, 0))
+    })?;
+    assert!(matches!(
+        label,
+        Err(crate::Error::AnalysisDatabase {
+            source: duckdb::Error::InvalidColumnType(0, name, _),
+            ..
+        }) if name == "value"
+    ));
+    let label = writer.query_row("SELECT 'INVALID'", [], |row| {
+        Ok(GraphRows::label_column::<crate::GraphEdgeTypeV1>(row, 0))
+    })?;
+    assert!(matches!(label, Err(crate::Error::GraphEncoding { .. })));
+    let ordinal = writer.query_row("SELECT -1::BIGINT", [], |row| {
+        Ok(GraphRows::column::<u32>(row, 0))
+    })?;
+    assert!(matches!(
+        ordinal,
+        Err(crate::Error::AnalysisDatabase {
+            source: duckdb::Error::IntegralValueOutOfRange(0, -1),
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn native_row_read_cancel() -> TestResult {
+    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    fixture.store.commit_graph(&fixture.request, true)?;
+    let writer = fixture.store.writer_access()?;
+    let writer = writer.get()?;
+    let result = &fixture.request.result_id;
+    let header = GraphRows::read_header(writer, fixture.snapshot.scope.identity.tenant_id, result)?
+        .ok_or("missing header")?;
+    let control = AnalysisReadControl::default();
+    control.cancel()?;
+    for read in [
+        GraphRows::read_subjects(writer, result, Some(&control)).map(|_| ()),
+        GraphRows::read_edges(writer, result, Some(&control)).map(|_| ()),
+        GraphRows::read_findings(writer, result, &header, Some(&control)).map(|_| ()),
+        GraphRows::read_finding(
+            writer,
+            result,
+            &fixture.snapshot.findings[0].finding_id,
+            &header,
+            Some(&control),
+        )
+        .map(|_| ()),
+        GraphRows::selected_subjects(
+            writer,
+            result,
+            &fixture.snapshot.graph.subjects,
+            &control,
+            false,
+        )
+        .map(|_| ()),
+        GraphRows::selected_edges(writer, result, &[0], &control).map(|_| ()),
+    ] {
+        assert!(matches!(
+            read,
+            Err(crate::Error::AnalysisReadCancelled { .. })
+        ));
     }
     Ok(())
 }
