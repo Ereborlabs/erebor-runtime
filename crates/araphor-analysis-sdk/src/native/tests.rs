@@ -361,6 +361,23 @@ fn rust_layout_matches_header() -> TestResult {
     }
     layout!(Bytes, "araphor_analysis_bytes_v1");
     layout!(NativeLimits, "araphor_analysis_limits_v1");
+    writeln!(input, "#include <stddef.h>")?;
+    for (field, offset) in [
+        (
+            "max_batches",
+            std::mem::offset_of!(NativeLimits, max_batches),
+        ),
+        ("max_rows", std::mem::offset_of!(NativeLimits, max_rows)),
+        ("max_bytes", std::mem::offset_of!(NativeLimits, max_bytes)),
+        (
+            "max_checkpoint_bytes",
+            std::mem::offset_of!(NativeLimits, max_checkpoint_bytes),
+        ),
+    ] {
+        writeln!(input,
+            "_Static_assert(offsetof(araphor_analysis_limits_v1, {field}) == {offset}, \"offset\");"
+        )?;
+    }
     layout!(Context, "araphor_analysis_context_v1");
     layout!(Window, "araphor_analysis_window_v1");
     layout!(Revision, "araphor_analysis_revision_v1");

@@ -39,7 +39,7 @@ Documentation and test consolidation do not establish that result.
 | Component | Required replacement | Result |
 | --- | --- | --- |
 | Control context | One ordered source index and one replay cursor replace separate change maps and domain cursors. Preserve distinct-source conflicts, bounded replay, and retry after a failed durable write. | Not done |
-| Package transport | SDK wire types own datasets, inputs, reasons, outputs, and checkpoints. Remove Data's second wire model. Keep each boundary's current limits and error classes. | Not done |
+| Package transport | SDK wire types and codecs own datasets, inputs, reasons, outputs, and checkpoints. Data uses these codecs. Each boundary keeps its limits and error classes. | Done |
 | Raw storage | The raw journal owns its physical segments, append decision, and recovery scan. Remove the generic segment owner and second frame decode. Keep acknowledgement before SQL publication, sealed length checks, leases, pins, quota, and recovery after database loss. | Done |
 | Discovery and graph values | The existing built-ins crate owns shared pure values. Data retains source qualification and host output checks. Remove mirrored values and field conversion owners. Execute the selected installed artifact. | Done |
 | Follow positions | SQL views expose position aliases from existing columns. Remove copied hidden values from each input row. Keep position type checks, repeat-call denial, bounds, and source cleanup. | Done |
@@ -122,11 +122,36 @@ No new performance test or benchmark is approved. Do not infer speed gains
 from changed test-suite durations. Record removed work from the final source.
 Measure latency only after approval of a specific workload and its limits.
 
-Result: **Not done**. The current source removes 2,137 nonblank production Rust
-lines from `7b7b407a` and 984 from `aa390d9f`. The package contract and transport
-changes remove 18 from `6509fa70`. Another 3,863 must be removed to meet the target.
+Result: **Not done**. The current source removes 2,229 nonblank production Rust
+lines from `7b7b407a` and 1,076 from `aa390d9f`. The shared SDK codec changes
+remove 92 from `1fb58d37`. Another 3,771 must be removed to meet the target.
 Continue component refactoring. Documentation and test deletion do not close
 this result.
+
+The shared codec iteration passed the affected SDK, Data, Control, and
+end-to-end test build in 45.44 seconds after cache cleanup. All 107 selected
+functional cases passed: 74 SDK cases, 31 Data cases, and two Control cases.
+These include wire bounds, native C layout, independent storage reason
+budgets, aggregate execution budgets, checkpoints, OCI fixtures, source
+cleanup, and package authorization. Strict Clippy passed for these four
+crates and their test targets in 71.55 seconds. Formatting passed. Source and
+test binary hashes stayed fixed. The records are `/tmp/araphor-codec-build3.json`,
+`/tmp/araphor-codec-tests1.json`, and `/tmp/araphor-codec-clippy1.json`.
+
+The final codec adjustment removes an unnecessary decoded-memory count from
+storage encoding. Execution accounting and decoding do not change. The
+affected test build passed in 88.23 seconds. All 74 SDK cases and the package
+IPC limit case passed again. Strict Clippy passed in 32.42 seconds. The records
+are `/tmp/araphor-codec-build4.json`, `/tmp/araphor-codec-branch-tests1.json`,
+and `/tmp/araphor-codec-clippy2.json`. The source count record is
+`/tmp/araphor-codec-syntax-counts2.json`.
+
+The final source-built native libraries passed six selected Data cases and the
+installed detector end-to-end case in 340.91 seconds. The latter ran with
+`PATH` empty. Source, artifact, and test binary hashes stayed fixed. These
+checks cover Linux, `x86_64-unknown-linux-gnu`, and glibc 2.39. The records are
+`/tmp/araphor-codec-native-build3.json` and
+`/tmp/araphor-codec-native-final-qualification.json`.
 
 The package contract and transport iteration passed the affected Data,
 Control, and end-to-end test build in 179.37 seconds. All 83 selected Data
@@ -149,7 +174,7 @@ glibc 2.39. They do not qualify other targets. The records are
 `/tmp/araphor-deletion-native-qualification.json`. This qualification covers
 the shared values, direct graph storage, and package contract changes.
 
-The current count record is `/tmp/araphor-contract-syntax-counts2.json`.
+The package contract count record is `/tmp/araphor-contract-syntax-counts2.json`.
 The count also excludes code that is available only through the
 `test-fixtures` or `test-support` features. Other feature code remains
 production code. This correction changes the earlier `aa390d9f` comparison

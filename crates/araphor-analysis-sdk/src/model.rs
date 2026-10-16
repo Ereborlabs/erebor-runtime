@@ -171,6 +171,7 @@ pub struct NumericTolerance {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+#[repr(C)]
 pub struct Limits {
     pub max_batches: u32,
     pub max_rows: u64,

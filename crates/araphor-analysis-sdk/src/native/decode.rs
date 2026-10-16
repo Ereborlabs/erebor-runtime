@@ -22,7 +22,7 @@ impl Decoder {
         package: &'a Package,
         request: &abi::Request,
     ) -> Result<(Evaluation, &'a crate::Model)> {
-        let limits = request.context.limits.into();
+        let limits = request.context.limits;
         let mut decoder = Self::new(limits);
         let export = unsafe { decoder.text(request.export_name)? };
         let model = package.wire_validator(&export, limits)?;

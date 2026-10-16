@@ -32,36 +32,7 @@ pub struct Context {
     pub limits: NativeLimits,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NativeLimits {
-    pub max_batches: u32,
-    pub max_rows: u64,
-    pub max_bytes: u64,
-    pub max_checkpoint_bytes: u64,
-}
-
-impl From<Limits> for NativeLimits {
-    fn from(value: Limits) -> Self {
-        Self {
-            max_batches: value.max_batches,
-            max_rows: value.max_rows,
-            max_bytes: value.max_bytes,
-            max_checkpoint_bytes: value.max_checkpoint_bytes,
-        }
-    }
-}
-
-impl From<NativeLimits> for Limits {
-    fn from(value: NativeLimits) -> Self {
-        Self {
-            max_batches: value.max_batches,
-            max_rows: value.max_rows,
-            max_bytes: value.max_bytes,
-            max_checkpoint_bytes: value.max_checkpoint_bytes,
-        }
-    }
-}
+pub type NativeLimits = Limits;
 
 #[repr(C)]
 pub struct Window {

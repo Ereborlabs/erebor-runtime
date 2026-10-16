@@ -186,25 +186,31 @@ pub(super) struct Codec {
     decoded: u64,
     rows: u64,
     batches: u32,
+    aggregate: bool,
 }
 
 impl Codec {
-    pub(super) fn new(limits: Limits) -> Self {
+    pub(super) fn new(limits: Limits, aggregate: bool) -> Self {
         Self {
             limits,
             encoded: 0,
             decoded: 0,
             rows: 0,
             batches: 0,
+            aggregate,
         }
     }
 
-    fn remaining(&self) -> Limits {
+    fn remaining(&self, encode: bool) -> Limits {
+        let bytes = if self.aggregate {
+            self.encoded.max(self.decoded)
+        } else if encode {
+            self.encoded
+        } else {
+            self.decoded
+        };
         Limits {
-            max_bytes: self
-                .limits
-                .max_bytes
-                .saturating_sub(self.encoded.max(self.decoded)),
+            max_bytes: self.limits.max_bytes.saturating_sub(bytes),
             max_rows: self.limits.max_rows.saturating_sub(self.rows),
             max_batches: self.limits.max_batches.saturating_sub(self.batches),
             ..self.limits
@@ -217,19 +223,34 @@ impl Codec {
             self.decoded = self
                 .decoded
                 .saturating_add(batch.get_array_memory_size() as u64);
-            self.rows = self.rows.saturating_add(batch.num_rows() as u64);
-            self.batches = self.batches.saturating_add(1);
+            if self.aggregate {
+                self.rows = self.rows.saturating_add(batch.num_rows() as u64);
+                self.batches = self.batches.saturating_add(1);
+            }
         }
     }
 
     pub(super) fn encode(&mut self, data: &crate::Dataset, schema: &Schema) -> Result<Dataset> {
-        let encoded = Dataset::encode(data, schema, self.remaining())?;
-        self.account(data, encoded.arrow_ipc.len());
+        let encoded = Dataset::encode(data, schema, self.remaining(true))?;
+        if self.aggregate {
+            self.account(data, encoded.arrow_ipc.len());
+        } else {
+            self.encoded = self.encoded.saturating_add(encoded.arrow_ipc.len() as u64);
+        }
         Ok(encoded)
     }
 
-    pub(super) fn decode(&mut self, data: &Dataset, schema: &Schema) -> Result<crate::Dataset> {
-        let decoded = data.decode(schema, self.remaining())?;
+    pub(super) fn decode<'a>(
+        &mut self,
+        data: &Dataset,
+        ports: impl IntoIterator<Item = &'a crate::Port>,
+    ) -> Result<crate::Dataset> {
+        if !self.aggregate
+            && self.encoded.saturating_add(data.arrow_ipc.len() as u64) > self.limits.max_bytes
+        {
+            return Err(Error::contract(ErrorCode::Limit, "encoded datasets"));
+        }
+        let decoded = data.decode(Self::schema(ports, &data.name)?, self.remaining(false))?;
         self.account(&decoded, data.arrow_ipc.len());
         Ok(decoded)
     }
@@ -240,10 +261,22 @@ impl Codec {
         bytes: &[u8],
         schema: &Schema,
     ) -> Result<RecordBatch> {
-        let mut data = Dataset::decode_ipc(name, bytes, Some(schema), self.remaining())?;
-        self.account(&data, bytes.len());
+        let limits = if self.aggregate {
+            self.remaining(false)
+        } else {
+            self.limits
+        };
+        let mut data = Dataset::decode_ipc(name, bytes, Some(schema), limits)?;
+        if self.aggregate {
+            self.account(&data, bytes.len());
+        }
         if data.batches.len() != 1 || data.batches[0].num_rows() != 1 {
-            return Err(Error::contract(ErrorCode::Invalid, "single row batch"));
+            let field = if self.aggregate {
+                "single row batch"
+            } else {
+                "reason details"
+            };
+            return Err(Error::contract(ErrorCode::Invalid, field));
         }
         Ok(data.batches.remove(0))
     }

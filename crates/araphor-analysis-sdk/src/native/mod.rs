@@ -125,7 +125,7 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
                 time_utc_ns: context.time_utc_ns,
                 seed: context.seed.unwrap_or_default(),
                 has_seed: u8::from(context.seed.is_some()),
-                limits: context.limits.into(),
+                limits: context.limits,
             },
             checkpoint: self.exchange.checkpoint_ptr(),
             cancelled: Some(cancel_callback::<F>),

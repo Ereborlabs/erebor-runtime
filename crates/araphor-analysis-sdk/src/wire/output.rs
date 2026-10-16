@@ -17,10 +17,31 @@ impl Output {
         output: &crate::Output,
     ) -> Result<Self> {
         checked.validate_output(output)?;
-        let evaluation = checked.evaluation();
-        let limits = evaluation.context.limits;
-        let model = checked.model();
-        let mut codec = Codec::new(limits);
+        Self::encode_parts(
+            output,
+            checked.model(),
+            checked.evaluation().context.limits,
+            true,
+        )
+    }
+
+    /// Encode output values with per-dataset row and batch limits.
+    /// The caller must validate the model and output contract.
+    pub fn encode_model(
+        output: &crate::Output,
+        model: &crate::Model,
+        limits: crate::Limits,
+    ) -> Result<Self> {
+        Self::encode_parts(output, model, limits, false)
+    }
+
+    fn encode_parts(
+        output: &crate::Output,
+        model: &crate::Model,
+        limits: crate::Limits,
+        aggregate: bool,
+    ) -> Result<Self> {
+        let mut codec = Codec::new(limits, aggregate);
         let datasets = output
             .datasets
             .iter()
@@ -56,7 +77,7 @@ impl Output {
             checkpoint: output
                 .checkpoint
                 .as_ref()
-                .map(|checkpoint| Checkpoint::encode(checkpoint, model, limits))
+                .map(|checkpoint| Checkpoint::encode(checkpoint, model, limits, aggregate))
                 .transpose()?,
         })
     }
@@ -68,11 +89,29 @@ impl Output {
     ) -> Result<crate::Output> {
         let limits = evaluation.context.limits;
         let model = package.wire_validator(&evaluation.export, limits)?;
-        let mut codec = Codec::new(limits);
+        let output = self.decode_parts(model, limits, true)?;
+        model.input(evaluation)?;
+        model.output(evaluation, &output)?;
+        Ok(output)
+    }
+
+    /// Decode output values with per-dataset row and batch limits.
+    /// The caller must validate the model and output contract.
+    pub fn decode_model(&self, model: &crate::Model) -> Result<crate::Output> {
+        self.decode_parts(model, model.limits, false)
+    }
+
+    fn decode_parts(
+        &self,
+        model: &crate::Model,
+        limits: crate::Limits,
+        aggregate: bool,
+    ) -> Result<crate::Output> {
+        let mut codec = Codec::new(limits, aggregate);
         let datasets = self
             .datasets
             .iter()
-            .map(|data| codec.decode(data, Codec::schema(&model.outputs, &data.name)?))
+            .map(|data| codec.decode(data, &model.outputs))
             .collect::<Result<_>>()?;
         let reasons = self
             .reasons
@@ -90,18 +129,15 @@ impl Output {
                 })
             })
             .collect::<Result<_>>()?;
-        let output = crate::Output {
+        Ok(crate::Output {
             datasets,
             evidence: self.evidence.clone(),
             reasons,
             checkpoint: self
                 .checkpoint
                 .as_ref()
-                .map(|checkpoint| checkpoint.decode(model, limits))
+                .map(|checkpoint| checkpoint.decode(model, limits, aggregate))
                 .transpose()?,
-        };
-        model.input(evaluation)?;
-        model.output(evaluation, &output)?;
-        Ok(output)
+        })
     }
 }

@@ -317,6 +317,17 @@ Data's existing per-port row/batch limits, aggregate encoded/decoded byte limits
 checkpoint checks, and error classes. These policies differ from the ABI's
 aggregate budget. Sharing a representation does not replace either boundary.
 
+The SDK now also owns output, reason, and checkpoint codec traversal.
+[Output codecs](../../crates/araphor-analysis-sdk/src/wire/output.rs) and
+[checkpoint codecs](../../crates/araphor-analysis-sdk/src/wire/evaluation.rs)
+retain separate storage and execution budgets. The raw model codec methods
+do not validate a complete execution contract. Their caller must do that
+check. Storage encoding counts encoded bytes without another decoded-memory
+walk. Data keeps its 16 MiB encoding caps and package error fields. Native
+requests use the same C-layout `Limits` value as the SDK. The
+[native layout test](../../crates/araphor-analysis-sdk/src/native/tests.rs)
+checks each field offset against the C header.
+
 ## Functional review checks
 
 These are source test routes. This table does not report a passed run.

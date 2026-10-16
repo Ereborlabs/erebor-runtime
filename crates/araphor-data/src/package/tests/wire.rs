@@ -86,6 +86,27 @@ fn package_ipc_limits() -> TestResult {
     let decoded = AnalysisPackageOwner::decode_output(&packet, &model)?;
     assert_eq!(decoded.datasets[1].batches, data.batches);
     assert_eq!(decoded.checkpoint.ok_or("checkpoint")?.datasets.len(), 2);
+    let package = sdk::Package::new("codec", "1", vec![model.clone()]);
+    let evaluation = sdk::Evaluation {
+        export: model.name.clone(),
+        inputs: Vec::new(),
+        parameters: None,
+        context: sdk::EvaluationContext {
+            id: "codec.bounds".into(),
+            time_utc_ns: 0,
+            seed: None,
+            limits: model.limits,
+        },
+        checkpoint: None,
+    };
+    assert_eq!(
+        packet
+            .decode(&package, &evaluation)
+            .err()
+            .ok_or("aggregate limits")?
+            .code(),
+        sdk::ErrorCode::Limit
+    );
     packet.datasets[1].name = "unknown".into();
     let mut limited = model.clone();
     limited.limits.max_bytes -= 1;

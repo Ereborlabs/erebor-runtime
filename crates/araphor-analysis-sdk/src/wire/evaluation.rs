@@ -8,7 +8,7 @@ impl Evaluation {
         let model = package.validator(evaluation)?;
         model.input(evaluation)?;
         let limits = evaluation.context.limits;
-        let mut codec = Codec::new(limits);
+        let mut codec = Codec::new(limits, true);
         let inputs = evaluation
             .inputs
             .iter()
@@ -49,7 +49,7 @@ impl Evaluation {
             checkpoint: evaluation
                 .checkpoint
                 .as_ref()
-                .map(|checkpoint| Checkpoint::encode(checkpoint, model, limits))
+                .map(|checkpoint| Checkpoint::encode(checkpoint, model, limits, true))
                 .transpose()?,
         })
     }
@@ -65,19 +65,14 @@ impl Evaluation {
     ) -> Result<(crate::Evaluation, &'a crate::Model)> {
         let limits = self.context.limits;
         let model = package.wire_validator(&self.export_name, limits)?;
-        let mut codec = Codec::new(limits);
+        let mut codec = Codec::new(limits, true);
         let inputs = self
             .inputs
             .iter()
             .map(|input| {
                 Ok(crate::Input {
-                    data: codec.decode(
-                        &input.data,
-                        Codec::schema(
-                            model.inputs.iter().map(|input| &input.port),
-                            &input.data.name,
-                        )?,
-                    )?,
+                    data: codec
+                        .decode(&input.data, model.inputs.iter().map(|input| &input.port))?,
                     revision: input.revision.clone(),
                     coverage: input.coverage.clone(),
                 })
@@ -95,7 +90,7 @@ impl Evaluation {
             checkpoint: self
                 .checkpoint
                 .as_ref()
-                .map(|checkpoint| checkpoint.decode(model, limits))
+                .map(|checkpoint| checkpoint.decode(model, limits, true))
                 .transpose()?,
         };
         model.input(&evaluation)?;
@@ -104,19 +99,29 @@ impl Evaluation {
 }
 
 impl Checkpoint {
+    /// Decode checkpoint values with per-dataset row and batch limits.
+    /// The caller must validate the model and checkpoint contract.
+    pub fn decode_model(&self, model: &crate::Model) -> Result<crate::Checkpoint> {
+        self.decode(model, model.limits, false)
+    }
+
     pub(super) fn encode(
         checkpoint: &crate::Checkpoint,
         model: &crate::Model,
         limits: crate::Limits,
+        aggregate: bool,
     ) -> Result<Self> {
         let spec = model
             .checkpoint
             .as_ref()
             .ok_or_else(|| Error::contract(ErrorCode::Invalid, "checkpoint declaration"))?;
-        let mut codec = Codec::new(crate::Limits {
-            max_bytes: limits.max_checkpoint_bytes,
-            ..limits
-        });
+        let mut codec = Codec::new(
+            crate::Limits {
+                max_bytes: limits.max_checkpoint_bytes,
+                ..limits
+            },
+            aggregate,
+        );
         let datasets = checkpoint
             .datasets
             .iter()
@@ -132,6 +137,7 @@ impl Checkpoint {
         &self,
         model: &crate::Model,
         limits: crate::Limits,
+        aggregate: bool,
     ) -> Result<crate::Checkpoint> {
         let spec = model
             .checkpoint
@@ -139,18 +145,25 @@ impl Checkpoint {
             .ok_or_else(|| Error::contract(ErrorCode::Invalid, "checkpoint declaration"))?;
         if spec.version != self.version {
             return Err(Error::contract(
-                ErrorCode::Incompatible,
+                if aggregate {
+                    ErrorCode::Incompatible
+                } else {
+                    ErrorCode::Invalid
+                },
                 "checkpoint version",
             ));
         }
-        let mut codec = Codec::new(crate::Limits {
-            max_bytes: limits.max_checkpoint_bytes,
-            ..limits
-        });
+        let mut codec = Codec::new(
+            crate::Limits {
+                max_bytes: limits.max_checkpoint_bytes,
+                ..limits
+            },
+            aggregate,
+        );
         let datasets = self
             .datasets
             .iter()
-            .map(|data| codec.decode(data, Codec::schema(&spec.datasets, &data.name)?))
+            .map(|data| codec.decode(data, &spec.datasets))
             .collect::<Result<_>>()?;
         Ok(crate::Checkpoint {
             version: self.version,
