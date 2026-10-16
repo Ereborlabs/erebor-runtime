@@ -205,19 +205,10 @@ impl QueryOwner {
         ) -> Result<(sdk::Output, usize)>,
     ) -> Result<SqlModelOutputV1> {
         self.check_analysis_input(evaluation)?;
-        package
-            .validate_evaluation(evaluation)
+        let checked = package
+            .check_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
-        let model = package
-            .exports
-            .iter()
-            .find(|model| model.name == evaluation.export)
-            .ok_or_else(|| {
-                crate::QueryInvalidSnafu {
-                    field: "model export",
-                }
-                .build()
-            })?;
+        let model = checked.model();
         let requested =
             evaluation
                 .context
@@ -236,8 +227,8 @@ impl QueryOwner {
             ..self.limits.clone()
         };
         let (mut output, bytes) = execute(&control, &host, &mut lease)?;
-        package
-            .validate_output(evaluation, &output)
+        checked
+            .validate_output(&output)
             .context(crate::AnalysisContractSnafu)?;
         let bytes = output
             .datasets

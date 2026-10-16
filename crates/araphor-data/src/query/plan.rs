@@ -38,6 +38,7 @@ pub enum QueryOperation {
 pub struct QueryPlan {
     scope: QueryScope,
     pub(super) template: QueryTemplate,
+    binding: Option<QueryBinding>,
     graph_traversal: Option<GraphTraversalV1>,
 }
 
@@ -112,11 +113,14 @@ impl QueryPlan {
             }
             _ => {}
         }
-        Ok(Self {
+        let mut plan = Self {
             scope: QueryScope::Trusted(Arc::new(selection)),
             template,
+            binding: None,
             graph_traversal: None,
-        })
+        };
+        plan.binding = Some(QueryBinding::trusted(plan.sql(), plan.parameters(0), 0)?);
+        Ok(plan)
     }
 
     pub(super) fn model(selection: AnalysisSelectionV1, sql: QuerySql) -> Result<Self> {
@@ -129,6 +133,7 @@ impl QueryPlan {
         Ok(Self {
             scope: QueryScope::Trusted(Arc::new(selection)),
             template: QueryTemplate::Client(sql),
+            binding: None,
             graph_traversal: None,
         })
     }
@@ -141,6 +146,7 @@ impl QueryPlan {
         Ok(Self {
             scope: QueryScope::Client(Arc::new(grant)),
             template: QueryTemplate::Client(sql),
+            binding: None,
             graph_traversal: None,
         })
     }
@@ -223,7 +229,17 @@ impl QueryPlan {
     pub(super) fn evaluation_at(&self, now_ns: u64) -> Result<QueryBinding> {
         match &self.template {
             QueryTemplate::Client(sql) => sql.bind_at(now_ns),
-            _ => QueryBinding::trusted(self.sql(), self.parameters(now_ns), now_ns),
+            _ => {
+                let mut binding = self.binding.clone().ok_or_else(|| {
+                    crate::QueryInvalidSnafu {
+                        field: "template plan",
+                    }
+                    .build()
+                })?;
+                binding.parameters = self.parameters(now_ns);
+                binding.evaluated_utc_ns = now_ns;
+                Ok(binding)
+            }
         }
     }
 
@@ -405,5 +421,178 @@ impl QueryPlan {
             _ => Vec::new(),
         });
         parameters
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_template_labels() -> Result<()> {
+        let mut selection = AnalysisSelectionV1::tenant([1; 16]);
+        selection.contexts = Selection::Exact(
+            [1, 2]
+                .map(|owner_revision| crate::AnalysisContextKeyV1 {
+                    tenant_id: [1; 16],
+                    owner_id: "owner".into(),
+                    entity_key: vec![1],
+                    lifetime_key: vec![1],
+                    owner_revision,
+                })
+                .to_vec(),
+        );
+        for (template, relation, expected) in [
+            (
+                QueryTemplate::Events { operation: None },
+                Some("events"),
+                vec![],
+            ),
+            (
+                QueryTemplate::Events { operation: Some(7) },
+                Some("events"),
+                vec![],
+            ),
+            (
+                QueryTemplate::ExactMatch {
+                    operation: 7,
+                    object_id: [2; 16],
+                },
+                Some("events"),
+                vec![],
+            ),
+            (
+                QueryTemplate::OperationCounts,
+                None,
+                vec!["operation", "event_count"],
+            ),
+            (
+                QueryTemplate::MovingCount { seconds: 1 },
+                None,
+                vec!["event_count"],
+            ),
+            (
+                QueryTemplate::FixedBuckets { seconds: 300 },
+                None,
+                vec!["window_start", "event_count"],
+            ),
+            (
+                QueryTemplate::SubjectSequence {
+                    first: 1,
+                    second: 2,
+                },
+                None,
+                vec![
+                    "tenant_id",
+                    "node_id",
+                    "node_boot_id",
+                    "label_epoch",
+                    "source_id",
+                    "source_epoch",
+                    "cpu_id",
+                    "task_cookie",
+                    "source_cursor",
+                    "commit_revision",
+                    "ordinal",
+                ],
+            ),
+            (
+                QueryTemplate::RevisionDifference,
+                None,
+                vec!["old_revision", "new_revision", "changed"],
+            ),
+            (QueryTemplate::Coverage, Some("coverage"), vec![]),
+            (
+                QueryTemplate::ContextVersions,
+                Some("context_versions"),
+                vec![],
+            ),
+            (QueryTemplate::Catalog, Some("catalog"), vec![]),
+        ] {
+            let expected = if let Some(relation) = relation {
+                crate::query::input::SCHEMAS
+                    .iter()
+                    .find(|schema| schema.name == relation)
+                    .ok_or_else(|| {
+                        crate::QueryInvalidSnafu {
+                            field: "test input schema",
+                        }
+                        .build()
+                    })?
+                    .columns
+                    .iter()
+                    .map(|field| field.0)
+                    .collect::<Vec<_>>()
+            } else {
+                expected
+            };
+            let plan = QueryPlan::new(selection.clone(), template)?;
+            let first = plan.evaluation_at(1_000_000_000)?;
+            let later = plan.evaluation_at(2_000_000_000)?;
+            assert!(Arc::ptr_eq(&first.plan, &later.plan));
+            let logical = later.plan()?;
+            let schema = later.output_schema(logical.schema().as_arrow())?;
+            assert_eq!(
+                schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{:?}",
+                plan.template()
+            );
+            assert_eq!(later.received_from, Bound::Unbounded);
+            assert_eq!(later.received_until, Bound::Unbounded);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn retained_template_parameters() -> Result<()> {
+        let template = QueryTemplate::MovingCount { seconds: 1 };
+        let plan = QueryPlan::new(AnalysisSelectionV1::tenant([1; 16]), template.clone())?;
+        let retained = plan.binding.as_ref().ok_or_else(|| {
+            crate::QueryInvalidSnafu {
+                field: "test template plan",
+            }
+            .build()
+        })?;
+        let cloned = plan.clone();
+        for (now, first) in [(500_000_000, 0), (1_500_000_000, 500_000_000)] {
+            let binding = cloned.evaluation_at(now)?;
+            assert_eq!(cloned.template(), &template);
+            assert_eq!(
+                binding.parameters,
+                vec![Value::UBigInt(first), Value::UBigInt(u64::MAX)]
+            );
+            assert_eq!(binding.evaluated_utc_ns, now);
+            assert!(!binding.append);
+            assert!(Arc::ptr_eq(&binding.plan, &retained.plan));
+            assert!(binding
+                .plan()?
+                .get_parameter_names()
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "test bound parameters",
+                    }
+                    .build()
+                })?
+                .is_empty());
+        }
+        assert_eq!(
+            retained
+                .plan
+                .get_parameter_names()
+                .map_err(|_| {
+                    crate::QueryInvalidSnafu {
+                        field: "test retained parameters",
+                    }
+                    .build()
+                })?
+                .len(),
+            2
+        );
+        Ok(())
     }
 }

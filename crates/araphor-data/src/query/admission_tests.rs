@@ -583,10 +583,10 @@ fn query_admission_normal_stack() -> TestResult {
             let valid = format!("SELECT {}1{} AS value", "(".repeat(32), ")".repeat(32),);
             let admitted = Fixture::admit(&valid, Vec::new())?;
             let bound = admitted.bind_complete(0)?;
-            assert_eq!(bound.plan.schema().fields().len(), 1);
-            assert_eq!(bound.plan.schema().field(0).name(), "value");
+            assert_eq!(bound.plan()?.schema().fields().len(), 1);
+            assert_eq!(bound.plan()?.schema().field(0).name(), "value");
             let trusted = QueryBinding::trusted(valid, Vec::new(), 0)?;
-            assert_eq!(trusted.plan.schema().field(0).name(), "value");
+            assert_eq!(trusted.plan()?.schema().field(0).name(), "value");
             let rejected = format!(
                 "SELECT {}1{}",
                 "(".repeat(AST_DEPTH + 1),

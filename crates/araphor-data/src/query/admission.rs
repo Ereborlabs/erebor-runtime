@@ -72,7 +72,7 @@ pub struct QueryBinding {
     pub received_until: Bound<u64>,
     pub evaluated_utc_ns: u64,
     pub append: bool,
-    pub(super) plan: LogicalPlan,
+    pub(super) plan: Arc<LogicalPlan>,
     output_names: Option<Vec<String>>,
 }
 
@@ -474,18 +474,10 @@ impl QuerySql {
         if append {
             output_names.extend(POSITION_FIELDS.map(str::to_owned));
         }
-        let values = QueryEngine::parameters(&parameters)?;
-        let plan = self
-            .program
-            .plan
-            .as_ref()
-            .clone()
-            .with_param_values(values)
-            .map_err(|_| Binder::invalid("SQL parameters"))?;
         let plan = if append {
-            Self::append_plan(plan)?
+            Arc::new(Self::append_plan(self.program.plan.as_ref().clone())?)
         } else {
-            plan
+            Arc::clone(&self.program.plan)
         };
         Ok(QueryBinding {
             sql: if append {
@@ -672,12 +664,10 @@ impl QueryBinding {
             state: &state,
             relations: &relations,
         }
-        .plan(query, &SqlContext::parameter_fields(&values))?
-        .with_param_values(values)
-        .map_err(|_| Binder::invalid("SQL parameters"))?;
+        .plan(query, &SqlContext::parameter_fields(&values))?;
         Ok(Self {
             sql,
-            plan,
+            plan: Arc::new(plan),
             parameters,
             received_from: Bound::Unbounded,
             received_until: Bound::Unbounded,
@@ -685,6 +675,14 @@ impl QueryBinding {
             append: false,
             output_names,
         })
+    }
+
+    pub(super) fn plan(&self) -> Result<LogicalPlan> {
+        self.plan
+            .as_ref()
+            .clone()
+            .with_param_values(QueryEngine::parameters(&self.parameters)?)
+            .map_err(|_| Binder::invalid("SQL parameters"))
     }
 
     pub(super) fn output_schema(&self, schema: &Schema) -> Result<SchemaRef> {
@@ -1518,11 +1516,11 @@ impl Binder {
         Ident::with_quote('"', format!("__araphor_{prefix}_{}", self.next))
     }
 
-    fn projection(&mut self, select: &mut Select) {
+    fn projection(&mut self, select: &mut Select, schema: &DFSchema) {
         for window in &mut select.named_window {
             window.0.value.make_ascii_lowercase();
         }
-        Self::having(select);
+        Self::having(select, schema);
         let mut names = BTreeSet::new();
         for item in &mut select.projection {
             if let SelectItem::UnnamedExpr(expr) = item {
@@ -1553,7 +1551,7 @@ impl Binder {
         }
     }
 
-    fn having(select: &mut Select) {
+    fn having(select: &mut Select, schema: &DFSchema) {
         let aliases: BTreeMap<_, _> = select
             .projection
             .iter()
@@ -1568,17 +1566,39 @@ impl Binder {
             GroupByExpr::Expressions(items, _) => items
                 .iter()
                 .map(|expr| {
-                    if let Some(ordinal) = Binder::integer(expr) {
-                        if let Some(
-                            SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. },
-                        ) = select.projection.get(ordinal.saturating_sub(1) as usize)
+                    let mut expr = Binder::integer(expr)
+                        .and_then(|ordinal| {
+                            select.projection.get(ordinal.saturating_sub(1) as usize)
+                        })
+                        .and_then(|item| match item {
+                            SelectItem::UnnamedExpr(expr)
+                            | SelectItem::ExprWithAlias { expr, .. } => Some(expr),
+                            _ => None,
+                        })
+                        .unwrap_or(expr);
+                    while let Expr::Nested(inner) = expr {
+                        expr = inner.as_ref();
+                    }
+                    let mut expr = match expr {
+                        Expr::Identifier(name)
+                            if !schema.has_column_with_unqualified_name(&name.value) =>
                         {
-                            return expr.clone();
+                            aliases
+                                .get(&name.value.to_ascii_lowercase())
+                                .unwrap_or(expr)
                         }
+                        _ => expr,
+                    };
+                    while let Expr::Nested(inner) = expr {
+                        expr = inner.as_ref();
                     }
                     if let Expr::Identifier(name) = expr {
-                        if let Some(expr) = aliases.get(&name.value.to_ascii_lowercase()) {
-                            return expr.clone();
+                        if let Ok((qualifier, field)) =
+                            schema.qualified_field_with_unqualified_name(&name.value)
+                        {
+                            if let Ok(expr) = Self::column(&Column::from((qualifier, field))) {
+                                return expr;
+                            }
                         }
                     }
                     expr.clone()
@@ -1651,9 +1671,8 @@ impl Binder {
         }
         let mut planned = Box::new(query.clone());
         planned.with = None;
-        let template = planned.clone();
         let (mut output, input, mut labels, source_labels) =
-            self.body(&mut query.body, &mut planned.body, &template, &mut context)?;
+            self.body(&mut query.body, &mut planned.body, &mut context)?;
         if let Some(order) = &query.order_by {
             let OrderByKind::Expressions(items) = &order.kind else {
                 return Err(Self::invalid("SQL ordering"));
@@ -1691,6 +1710,23 @@ impl Binder {
         }
         Self::fold(&mut planned);
         let plan = self.statement(planned, &mut context)?;
+        plan.apply(|plan| {
+            if matches!(plan, LogicalPlan::SubqueryAlias(_)) {
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            if let LogicalPlan::Join(join) = plan {
+                if !join.on.is_empty()
+                    || !join
+                        .filter
+                        .as_ref()
+                        .is_some_and(|expr| Self::equijoin(expr, join.right.schema()))
+                {
+                    return Err(datafusion::common::DataFusionError::Plan("SQL join".into()));
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .map_err(|_| Self::invalid("SQL join"))?;
         if plan.schema().fields().len() != labels.len() {
             return Err(Self::invalid("SQL result width"));
         }
@@ -1729,7 +1765,6 @@ impl Binder {
         &mut self,
         original: &mut SetExpr,
         planned: &mut SetExpr,
-        template: &Query,
         context: &mut PlannerContext,
     ) -> Result<BoundSelect> {
         self.depth += 1;
@@ -1738,11 +1773,11 @@ impl Binder {
         }
         let result = match (original, planned) {
             (SetExpr::Select(select), SetExpr::Select(target)) => {
-                self.select(select, target, template, context)
+                self.select(select, target, context)
             }
             (SetExpr::Query(query), target) => {
                 let (output, plan, labels) = self.query(query, context)?;
-                *target = self.reference(plan, template, context)?;
+                *target = self.reference(plan, &query.body, context)?;
                 let source_labels = vec![false; labels.len()];
                 Ok((output, DFSchema::empty(), labels, source_labels))
             }
@@ -1761,9 +1796,8 @@ impl Binder {
                 },
             ) => {
                 self.aggregate = true;
-                let (output, _, labels, source_labels) =
-                    self.body(left, target_left, template, context)?;
-                let (right, _, _, _) = self.body(right, target_right, template, context)?;
+                let (output, _, labels, source_labels) = self.body(left, target_left, context)?;
+                let (right, _, _, _) = self.body(right, target_right, context)?;
                 if output.len() != right.len() {
                     return Err(Self::invalid("SQL set columns"));
                 }
@@ -1779,7 +1813,6 @@ impl Binder {
         &mut self,
         select: &mut Select,
         target: &mut Select,
-        template: &Query,
         context: &mut PlannerContext,
     ) -> Result<BoundSelect> {
         if select.into.is_some()
@@ -1802,12 +1835,16 @@ impl Binder {
             return Err(Self::invalid("SQL select"));
         }
         let mut from = select.from.clone();
+        let mut schema = DFSchema::empty();
         let mut aliases = BTreeSet::new();
         for (source, target) in select.from.iter_mut().zip(&mut from) {
             let (name, plan) = self.table(&mut source.relation, context)?;
             if !aliases.insert(name) {
                 return Err(Self::invalid("SQL alias"));
             }
+            schema = schema
+                .join(plan.schema())
+                .map_err(|_| Self::invalid("SQL source"))?;
             target.relation = self.table_reference(plan, context);
             for (source, target) in source.joins.iter_mut().zip(&mut target.joins) {
                 if source.global {
@@ -1817,6 +1854,9 @@ impl Binder {
                 if !aliases.insert(name) {
                     return Err(Self::invalid("SQL alias"));
                 }
+                schema = schema
+                    .join(plan.schema())
+                    .map_err(|_| Self::invalid("SQL source"))?;
                 target.relation = self.table_reference(plan, context);
                 let constraint = match &mut source.join_operator {
                     JoinOperator::Join(value)
@@ -1834,47 +1874,6 @@ impl Binder {
                 self.expression(expr, &BTreeMap::new())?;
             }
         }
-        let input = if from.is_empty() {
-            LogicalPlanBuilder::empty(true)
-                .build()
-                .map_err(|_| Self::invalid("SQL source"))?
-        } else {
-            let mut query = Self::wrapper(template, SetExpr::Select(Box::new(select.clone())));
-            let SetExpr::Select(source) = query.body.as_mut() else {
-                return Err(Self::invalid("SQL source"));
-            };
-            source.from = from;
-            source.projection = vec![SelectItem::Wildcard(Default::default())];
-            source.selection = None;
-            source.group_by = GroupByExpr::Expressions(Vec::new(), Vec::new());
-            source.having = None;
-            source.distinct = None;
-            source.named_window.clear();
-            Self::fold(&mut query);
-            match self.statement(query, context)? {
-                LogicalPlan::Projection(projection) => Arc::unwrap_or_clone(projection.input),
-                _ => return Err(Self::invalid("SQL source")),
-            }
-        };
-        input
-            .apply(|plan| {
-                if matches!(plan, LogicalPlan::SubqueryAlias(_)) {
-                    return Ok(TreeNodeRecursion::Jump);
-                }
-                if let LogicalPlan::Join(join) = plan {
-                    if !join.on.is_empty()
-                        || !join
-                            .filter
-                            .as_ref()
-                            .is_some_and(|expr| Self::equijoin(expr, join.right.schema()))
-                    {
-                        return Err(datafusion::common::DataFusionError::Plan("SQL join".into()));
-                    }
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })
-            .map_err(|_| Self::invalid("SQL join"))?;
-        let schema = input.schema().as_ref().clone();
         let label_windows = select
             .named_window
             .iter()
@@ -1921,7 +1920,7 @@ impl Binder {
                 SelectItem::Wildcard(options) => {
                     Self::wildcard(&options)?;
                     Self::expand(
-                        &input,
+                        &schema,
                         None,
                         self.model,
                         &mut projection,
@@ -1935,7 +1934,7 @@ impl Binder {
                 ) => {
                     Self::wildcard(&options)?;
                     Self::expand(
-                        &input,
+                        &schema,
                         Some(&Self::name(&name)?),
                         self.model,
                         &mut projection,
@@ -1988,14 +1987,7 @@ impl Binder {
             Self::aliases(expr, &schema, &output, true)?;
         }
         *target = select.clone();
-        target.from = if target.from.is_empty() {
-            Vec::new()
-        } else {
-            vec![datafusion::sql::sqlparser::ast::TableWithJoins {
-                relation: self.table_reference(input, context),
-                joins: Vec::new(),
-            }]
-        };
+        target.from = from;
         Self::fold(target);
         for item in &mut target.projection {
             if let SelectItem::ExprWithAlias { alias, .. } = item {
@@ -2003,37 +1995,7 @@ impl Binder {
                 alias.quote_style = Some('"');
             }
         }
-        let planner = SqlContext {
-            state: &self.state,
-            relations: &self.relations,
-        };
-        let planner = SqlToRel::new(&planner);
-        let mut qualify = |expr: &mut Expr| -> Result<()> {
-            if let Ok(EngineExpression::Column(column)) =
-                planner.sql_to_expr(expr.clone(), &schema, context)
-            {
-                *expr = Self::column(&column)?;
-            }
-            Ok(())
-        };
-        for item in &mut target.projection {
-            match item {
-                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. }
-                    if Self::simple_column(expr) =>
-                {
-                    qualify(expr)?
-                }
-                _ => {}
-            }
-        }
-        if let GroupByExpr::Expressions(items, _) = &mut target.group_by {
-            for expr in items {
-                if Self::simple_column(expr) {
-                    qualify(expr)?;
-                }
-            }
-        }
-        self.projection(target);
+        self.projection(target, &schema);
         Ok((output, schema, labels, source_labels))
     }
 
@@ -2182,7 +2144,7 @@ impl Binder {
     fn reference(
         &mut self,
         plan: LogicalPlan,
-        template: &Query,
+        body: &SetExpr,
         context: &mut PlannerContext,
     ) -> Result<SetExpr> {
         fn select(body: &SetExpr) -> Option<&Select> {
@@ -2194,7 +2156,7 @@ impl Binder {
             }
         }
         let mut select = Box::new(
-            select(&template.body)
+            select(body)
                 .cloned()
                 .ok_or_else(|| Self::invalid("SQL body"))?,
         );
@@ -2209,15 +2171,6 @@ impl Binder {
         select.distinct = None;
         select.named_window.clear();
         Ok(SetExpr::Select(select))
-    }
-
-    fn wrapper(template: &Query, body: SetExpr) -> Box<Query> {
-        let mut query = Box::new(template.clone());
-        query.with = None;
-        query.body = Box::new(body);
-        query.order_by = None;
-        query.limit_clause = None;
-        query
     }
 
     fn statement(
@@ -2320,14 +2273,6 @@ impl Binder {
         }
     }
 
-    fn simple_column(expr: &Expr) -> bool {
-        match expr {
-            Expr::Identifier(_) | Expr::CompoundIdentifier(_) => true,
-            Expr::Nested(expr) => Self::simple_column(expr),
-            _ => false,
-        }
-    }
-
     fn column(column: &Column) -> Result<Expr> {
         let Some(table) = &column.relation else {
             return Err(Self::invalid("SQL column"));
@@ -2339,7 +2284,7 @@ impl Binder {
     }
 
     fn expand(
-        input: &LogicalPlan,
+        schema: &DFSchema,
         target: Option<&str>,
         model: bool,
         projection: &mut Vec<SelectItem>,
@@ -2349,11 +2294,15 @@ impl Binder {
         let columns = if let Some(target) = target {
             datafusion::logical_expr::utils::expand_qualified_wildcard(
                 &TableReference::bare(target),
-                input.schema(),
+                schema,
                 None,
             )
         } else {
-            datafusion::logical_expr::utils::expand_wildcard(input.schema(), input, None)
+            Ok(schema
+                .columns()
+                .into_iter()
+                .map(EngineExpression::Column)
+                .collect())
         }
         .map_err(|_| Self::invalid("SQL wildcard"))?;
         for expr in columns {
@@ -2363,8 +2312,7 @@ impl Binder {
             if model && column.name == "__row_index" {
                 continue;
             }
-            let (_, field) = input
-                .schema()
+            let (_, field) = schema
                 .qualified_field_with_name(column.relation.as_ref(), &column.name)
                 .map_err(|_| Self::invalid("SQL wildcard"))?;
             let name = field
@@ -3237,8 +3185,9 @@ mod engine_tests {
                     Value::Timestamp(TimeUnit::Microsecond, micros)
                 ]
             );
+            assert!(Arc::ptr_eq(&binding.plan, &sql.program.plan));
             assert!(binding
-                .plan
+                .plan()?
                 .get_parameter_names()
                 .map_err(|_| Binder::invalid("test plan"))?
                 .is_empty());
@@ -3267,11 +3216,12 @@ mod engine_tests {
         let sql = QuerySql::admit("SELECT operation FROM events", Vec::new(), false)?;
         assert_eq!(sql.program.plan.schema().fields().len(), 1);
         let appended = sql.bind_at(1)?;
-        assert!(matches!(appended.plan, LogicalPlan::Sort(_)));
-        assert_eq!(appended.plan.schema().fields().len(), 3);
-        assert_eq!(appended.plan.schema().field(1).name(), POSITION_FIELDS[0]);
-        assert_eq!(appended.plan.schema().field(2).name(), POSITION_FIELDS[1]);
-        assert_eq!(sql.bind_complete(1)?.plan.schema().fields().len(), 1);
+        let plan = appended.plan()?;
+        assert!(matches!(&plan, LogicalPlan::Sort(_)));
+        assert_eq!(plan.schema().fields().len(), 3);
+        assert_eq!(plan.schema().field(1).name(), POSITION_FIELDS[0]);
+        assert_eq!(plan.schema().field(2).name(), POSITION_FIELDS[1]);
+        assert_eq!(sql.bind_complete(1)?.plan()?.schema().fields().len(), 1);
         assert_eq!(sql.program.plan.schema().fields().len(), 1);
         Ok(())
     }
@@ -3378,8 +3328,54 @@ mod engine_tests {
     fn nested_cte_scope() -> Result<()> {
         let sql = QuerySql::admit("WITH t AS (SELECT operation FROM events) SELECT operation FROM (WITH t AS (SELECT operation FROM events) SELECT operation FROM t) x", Vec::new(), false)?;
         assert_eq!(sql.dependencies(), &BTreeSet::from(["events".to_owned()]));
-        let plan = sql.bind_complete(0)?.plan;
+        let plan = sql.bind_complete(0)?.plan()?;
         assert_eq!(plan.schema().field(0).data_type(), &ArrowType::UInt32);
+        Ok(())
+    }
+
+    #[test]
+    fn full_query_child_compatibility_before_pruning() -> Result<()> {
+        let relations = BTreeMap::from([
+            (
+                "events".to_owned(),
+                SCHEMAS
+                    .iter()
+                    .find(|schema| schema.name == "events")
+                    .ok_or_else(|| Binder::invalid("test event schema"))?
+                    .arrow_schema(),
+            ),
+            (
+                "data".to_owned(),
+                Arc::new(Schema::new(vec![
+                    Field::new("CamelCase", ArrowType::Int64, false),
+                    Field::new("SourceCursor", ArrowType::UInt64, false),
+                ])),
+            ),
+        ]);
+        let query = "WITH unused AS (SELECT operation FROM events), t(AliasName) AS (SELECT camelcase, sourcecursor FROM data) SELECT d.innername AS \"Pick\", d.sourcecursor FROM (WITH t(InnerName) AS (SELECT camelcase, sourcecursor FROM data) SELECT innername, sourcecursor FROM t WINDOW unused AS (ORDER BY sourcecursor)) d WHERE false";
+        let sql = QuerySql::admit_relations(query, relations.clone())?;
+        assert_eq!(
+            sql.dependencies(),
+            &BTreeSet::from(["data".to_owned(), "events".to_owned()])
+        );
+        let binding = sql.bind_complete(0)?;
+        assert_eq!(binding.plan.schema().field(0).name(), "Pick");
+        assert_eq!(binding.plan.schema().field(1).name(), "SourceCursor");
+        let plan = QueryEngine::state()?
+            .optimize(&binding.plan)
+            .map_err(|_| Binder::invalid("test optimized plan"))?;
+        let mut scans = 0;
+        plan.apply(|plan| {
+            scans += usize::from(matches!(plan, LogicalPlan::TableScan(_)));
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .map_err(|_| Binder::invalid("test optimized sources"))?;
+        assert_eq!(scans, 0);
+        assert!(QuerySql::admit_relations(
+            &query.replace("ORDER BY sourcecursor", "ORDER BY missing"),
+            relations,
+        )
+        .is_err());
         Ok(())
     }
 
@@ -3391,7 +3387,7 @@ mod engine_tests {
             false,
         )?;
         let binding = sql.bind_complete(0)?;
-        let plan = &binding.plan;
+        let plan = binding.plan()?;
         assert_eq!(plan.schema().field(0).name(), "Pick");
         assert_eq!(
             binding
@@ -3415,12 +3411,12 @@ mod engine_tests {
             sources.clone(),
         )?;
         let binding = sql.bind_complete(0)?;
-        let plan = &binding.plan;
+        let plan = binding.plan()?;
         assert_eq!(plan.schema().fields().len(), 2);
         assert_eq!(plan.schema().field(0).name(), "value");
         assert_eq!(plan.schema().field(1).name(), "right_index");
         let sql = QuerySql::admit("WITH t(first) AS (SELECT operation, source_cursor FROM events) SELECT first, source_cursor FROM t", Vec::new(), false)?;
-        assert_eq!(sql.bind_complete(0)?.plan.schema().fields().len(), 2);
+        assert_eq!(sql.bind_complete(0)?.plan()?.schema().fields().len(), 2);
         Ok(())
     }
 
@@ -3434,7 +3430,7 @@ mod engine_tests {
             let sources = BTreeMap::from([("data".to_owned(), Arc::new(Schema::new(fields)))]);
             let sql =
                 QuerySql::admit_relations("SELECT * FROM data GROUP BY value", sources.clone())?;
-            let plan = sql.bind_complete(0)?.plan;
+            let plan = sql.bind_complete(0)?.plan()?;
             assert_eq!(plan.schema().fields().len(), 1);
             assert_eq!(plan.schema().field(0).name(), "value");
         }
@@ -3475,7 +3471,7 @@ mod engine_tests {
         ] {
             let sql = QuerySql::admit_relations(query, relations.clone())?;
             let binding = sql.bind_complete(0)?;
-            let plan = &binding.plan;
+            let plan = binding.plan()?;
             assert_eq!(plan.schema().field(0).name(), expected);
             assert_eq!(
                 binding
@@ -3498,7 +3494,7 @@ mod engine_tests {
             ),
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
-            let plan = sql.bind_complete(0)?.plan;
+            let plan = sql.bind_complete(0)?.plan()?;
             assert_eq!(plan.schema().field(0).data_type(), &expected);
         }
         Ok(())
@@ -3528,7 +3524,7 @@ mod engine_tests {
             ),
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
-            let plan = sql.bind_complete(0)?.plan;
+            let plan = sql.bind_complete(0)?.plan()?;
             assert_eq!(plan.schema().field(0).data_type(), &expected);
         }
         Ok(())
@@ -3543,7 +3539,7 @@ mod engine_tests {
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
             let binding = sql.bind_complete(0)?;
-            let plan = &binding.plan;
+            let plan = binding.plan()?;
             assert_eq!(
                 binding
                     .output_schema(plan.schema().as_arrow())?
@@ -3574,7 +3570,7 @@ mod engine_tests {
             Vec::new(),
             false,
         )?;
-        let plan = sql.bind_complete(0)?.plan;
+        let plan = sql.bind_complete(0)?.plan()?;
         assert_eq!(
             plan.schema().field(0).data_type(),
             &ArrowType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None)
@@ -3585,13 +3581,13 @@ mod engine_tests {
     #[test]
     fn parameter_projection_type() -> Result<()> {
         let sql = QuerySql::admit("SELECT $1 AS value", vec![Value::Int(7)], false)?;
-        let plan = sql.bind_complete(0)?.plan;
+        let plan = sql.bind_complete(0)?.plan()?;
         assert_eq!(plan.schema().field(0).data_type(), &ArrowType::Int32);
         let sql = QuerySql::admit("SELECT $1 AS value", vec![Value::BigInt(7)], false)?;
-        let plan = sql.bind_complete(0)?.plan;
+        let plan = sql.bind_complete(0)?.plan()?;
         assert_eq!(plan.schema().field(0).data_type(), &ArrowType::Int64);
         let sql = QuerySql::admit("SELECT 7 AS value", Vec::new(), false)?;
-        let plan = sql.bind_complete(0)?.plan;
+        let plan = sql.bind_complete(0)?.plan()?;
         assert_eq!(plan.schema().field(0).data_type(), &ArrowType::Int32);
         Ok(())
     }
@@ -3627,7 +3623,7 @@ mod engine_tests {
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
             let binding = sql.bind_complete(123_000)?;
-            let plan = &binding.plan;
+            let plan = binding.plan()?;
             let schema = binding.output_schema(plan.schema().as_arrow())?;
             assert_eq!(
                 schema
@@ -3646,7 +3642,7 @@ mod engine_tests {
     #[test]
     fn trusted_wildcard_schema() -> Result<()> {
         let binding = QueryBinding::trusted("SELECT * FROM events".into(), Vec::new(), 0)?;
-        let plan = &binding.plan;
+        let plan = binding.plan()?;
         assert_eq!(
             binding.output_schema(plan.schema().as_arrow())?.as_ref(),
             plan.schema().as_arrow()
@@ -3667,7 +3663,7 @@ mod engine_tests {
             ("SELECT SUM(operation) OVER (ORDER BY source_cursor ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS value FROM events", ArrowType::Decimal256(39, 0)),
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
-            let plan = sql.bind_complete(0)?.plan;
+            let plan = sql.bind_complete(0)?.plan()?;
             assert_eq!(plan.schema().field(0).data_type(), &expected, "{query}");
         }
         Ok(())
@@ -3762,7 +3758,7 @@ mod engine_tests {
             })
             .map_err(|_| Binder::invalid("test plan"))?;
         assert_eq!(scans, ["events", "events"]);
-        assert_eq!(sql.bind_complete(0)?.plan.schema().fields().len(), 1);
+        assert_eq!(sql.bind_complete(0)?.plan()?.schema().fields().len(), 1);
         Ok(())
     }
 
@@ -3795,6 +3791,7 @@ mod engine_tests {
         )?;
         for query in [
             "SELECT a.operation FROM events a JOIN events b ON a.source_cursor = a.commit_revision",
+            "SELECT a.operation FROM events a JOIN events b ON a.source_cursor = a.commit_revision WHERE false LIMIT 0",
             "SELECT a.operation FROM events a JOIN events b ON a.source_cursor = b.source_cursor JOIN events c ON a.source_cursor = b.source_cursor",
             "SELECT a.operation FROM events a JOIN events b ON a.source_cursor = b.source_cursor AND b.operation = 1",
             "SELECT a.operation FROM events a JOIN events b ON a.source_cursor + 0 = b.source_cursor",
@@ -3826,7 +3823,7 @@ mod engine_tests {
         let bound = sql.bind_at(2_000)?;
         assert!(bound.append);
         assert_eq!(bound.received_from, Bound::Included(1_000));
-        assert_eq!(bound.plan.schema().fields().len(), 3);
+        assert_eq!(bound.plan()?.schema().fields().len(), 3);
         assert!(!bound.sql.contains("__araphor_bound"));
         Ok(())
     }
@@ -3837,6 +3834,7 @@ mod engine_tests {
             "SELECT COUNT(*) AS operation FROM events GROUP BY operation HAVING operation = 2",
             "SELECT COUNT(*) AS operation FROM events GROUP BY (operation) HAVING operation = 2",
             "SELECT operation AS key, COUNT(*) AS operation FROM events GROUP BY 1 HAVING operation = 2",
+            "SELECT operation AS key, COUNT(*) AS operation FROM events GROUP BY key HAVING operation = 2",
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
             let mut source = false;
@@ -3865,7 +3863,7 @@ mod engine_tests {
             0,
         )?;
         assert_eq!(
-            binding.plan.schema().field(0).data_type(),
+            binding.plan()?.schema().field(0).data_type(),
             &ArrowType::UInt32
         );
         Ok(())
@@ -3881,10 +3879,13 @@ mod engine_tests {
             .iter()
             .find(|schema| schema.name == "events")
             .ok_or_else(|| Binder::invalid("test schema"))?;
-        assert_eq!(binding.plan.schema().fields().len(), schema.columns.len());
+        assert_eq!(
+            binding.plan()?.schema().fields().len(),
+            schema.columns.len()
+        );
         assert_eq!(
             binding
-                .output_schema(binding.plan.schema().as_arrow())?
+                .output_schema(binding.plan()?.schema().as_arrow())?
                 .fields()
                 .len(),
             schema.columns.len()

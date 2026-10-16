@@ -6,7 +6,8 @@ records the source and checks. The
 [component redesign](../plans/araphor-component-redesign.md) defines the current
 engine replacement. Earlier qualification does not cover later edits.
 
-This guide covers the working tree based on `82cd717e`. The source contains
+This guide covers engine commit `34a8199c` and the following plan changes.
+The source contains
 the DataFusion route below. Affected compilation and functional qualification
 pass on Linux x86_64 GNU. The whole-code reduction is **Not done**.
 
@@ -66,8 +67,10 @@ sequenceDiagram
 Output-only input resolution creates no SQL state and takes no SQL evaluation
 slot. ModelOperation creates SessionState and its query lease on first SQL
 use. The operation retains admitted Table aliases as MemTables. Each source
-statement adds its extracted built-in batches to a local ModelExecution table
-map. Dropping that executor drops the local map. Running execution retains
+statement moves its leased built-in batches into ordinary MemTables in a
+local ModelExecution table map. Built-in tables receive no model row index.
+Dataset aliases retain their dataset-global row indices. Dropping that
+executor drops the local map. Running execution retains
 its source owners and leases. Query inputs cannot refer to other Query inputs. Built-in names cannot be replaced
 by package output aliases. Errors release the operation state and leases
 through Rust ownership.
@@ -101,8 +104,9 @@ program with its SQL, parameters, labels, dependencies, and logical plan.
 The plan retains schema-only EmptyTable sources. Binder checks the original abstract
 syntax tree (AST). It records every base source, including sources in unused
 common table expressions (CTEs). PlannerContext
-holds each bound CTE, derived-query, and FROM plan. SqlToRel resolves the
-SELECT clauses against those plans. Binder also checks unused windows and
+holds each bound CTE and derived-query plan. SqlToRel plans each full SELECT
+directly. Binder uses the admitted source schemas for policy and compatibility
+checks. It checks joins before optimizer pruning. Binder also checks unused windows and
 excludes the model row index during wildcard expansion. The original AST
 supplies time bounds, event fields, source-column facts, and append facts.
 
@@ -125,9 +129,11 @@ reservations. Returned batches retain the leases for their buffers.
 ## Execution and verification
 
 [QuerySql::bind_complete](../../crates/araphor-data/src/query/admission.rs)
-binds parameter values and one captured clock to the retained LogicalPlan.
-Name and type binding does not repeat for those admitted queries. Code-owned
-QueryPlan templates use QueryBinding::trusted for their current statement.
+supplies parameter values, one captured clock, and a shared retained plan.
+QueryBinding::plan substitutes those values once before logical optimization.
+Name and type binding does not repeat for admitted queries. QueryPlan::new
+admits each code-owned template once. Repeated evaluations share that plan
+and supply fresh values.
 
 [QueryEngine::state](../../crates/araphor-data/src/query/engine.rs) configures
 the function registry, one execution partition, planning concurrency one, a
@@ -169,8 +175,8 @@ check historical scope, retry, cancellation, and capacity.
 the [engine cases](../../crates/araphor-data/src/query/admission.rs) cover
 CTE scope, unused windows, aliases, source inventory, and public labels.
 [Runtime and lease cases](../../crates/araphor-data/src/query/owner_tests.rs)
-cover source retention and cancellation. The final affected build and strict
-Clippy pass. All 460 distinct selected cases pass: 439 ordinary Data cases,
+cover source retention and cancellation. At engine commit `34a8199c`, the
+affected build and strict Clippy pass. All 460 distinct selected cases pass: 439 ordinary Data cases,
 12 native Data cases, six Control cases, and three E2E cases. The native
 detector E2E case runs with PATH empty. Qualification covers Linux,
 x86_64-unknown-linux-gnu, and glibc 2.39. Other targets remain unqualified.
@@ -185,6 +191,15 @@ corrected native case and native E2E. The result record is
 `/tmp/araphor-arrow-engine-qualification-final.json`. The
 [plan result](../plans/araphor-component-redesign.md#qualification-and-acceptance)
 lists the source, test, artifact, and platform receipts.
+
+The following direct plan change passes the affected Data build and 262
+selected cases: 256 query cases, four package cases, and two explicit native
+error/checkpoint cases. The first query run reaches the host filesystem
+reserve. Only its 88 failed cases run again after obsolete generated binaries
+are removed; all pass. Strict Clippy passes for Data, Control, and E2E test
+targets. Their runtime integration cases are not repeated for this change.
+The [plan result](../plans/araphor-component-redesign.md#qualification-and-acceptance)
+lists those separate receipts and the current production count.
 
 The complete earlier receipts remain at
 `7b7b407adf347d389984553a4d212bfce37b75b5:docs/guides/araphor-sql-operation-review.md`.

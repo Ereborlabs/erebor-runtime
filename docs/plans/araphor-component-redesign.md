@@ -85,7 +85,7 @@ adds no Araphor table-provider framework or physical operator.
 A query needs admission
   -> Binder walks every original common table expression (CTE), derived query, and source relation
   -> SqlContext supplies schema-only EmptyTable sources
-  -> PlannerContext retains bound CTE, derived-query, and FROM plans
+  -> PlannerContext retains bound CTE and derived-query plans
   -> SqlToRel resolves the SELECT clauses against those bound plans
   -> QuerySql retains the logical plan, dependencies, labels, and clock facts
 
@@ -104,11 +104,12 @@ dependency and witness scope before pruning. The original AST also supplies
 time bounds, event fields, source-column facts, and append cursor facts.
 The transient planning AST does not replace those facts.
 
-Binder stores each completed child plan in the standard PlannerContext. A
-transient FROM-only SELECT lets SqlToRel bind joins. The final SELECT refers
-to the bound FROM plan without an added alias. That reference keeps the
-original relation qualifiers. The resulting outer logical plan contains the
-real source scans; it does not depend on the temporary context after admission.
+Binder stores each completed child plan in the standard PlannerContext.
+SqlToRel plans the full SELECT directly. Binder uses the admitted child
+schemas for wildcard, window, and compatibility checks. It checks the final
+unoptimized joins before constant pruning. The source no longer creates a
+synthetic FROM-only SELECT or a temporary FROM plan. The retained logical
+plan contains real source scans and does not depend on the transient context.
 
 After scan replacement, QueryEngine::stream calls
 `query_planner().create_physical_plan`. It does not call
@@ -266,7 +267,7 @@ also calls SqlToRel::sql_to_expr for unused window partition and ordering
 expressions against the bound FROM schema. Normal wildcard expansion uses
 that same schema and removes the model row index before SELECT binding.
 DataFusion TableSource has no hidden-column rule for this contract.
-Compilation and functional qualification of these checks remain pending.
+The affected compilation and functional checks pass in the receipts below.
 Do not infer a stronger type-validation guarantee for every unused expression.
 
 Preserve HAVING name precedence from `query_admission_having_aliases`: a
@@ -486,8 +487,10 @@ EmptyTable sources. They retain no input batches, MemTables, streams, or physica
 plans. QuerySql clones share the complete admitted program, including its SQL,
 parameters, labels, dependencies, and plan. The existing retained-byte charge
 includes that program and its Arc allocation. Each run binds its parameter and clock values, optimizes a plan clone,
-and substitutes its admitted Arrow sources. Code-owned QueryPlan templates
-still use QueryBinding::trusted for their evaluation-time binding.
+and substitutes its admitted Arrow sources. QueryPlan::new admits each
+code-owned template once. QueryBinding shares its immutable plan through an
+Arc. Each evaluation supplies fresh parameter and clock values. Parameter
+substitution occurs once before logical optimization.
 
 Each run supplies its own tenant, grant, source batches, clock, checkpoint,
 bindings, and mutable execution state. A historical snapshot does not permit
@@ -627,9 +630,9 @@ remaining target was 3,964 lines. The record is
 `/tmp/araphor-redesign-program-count3.json`. This record does not count the
 current engine integration.
 
-The current engine integration adds 2,222 nonblank production Rust lines from
-`537f9de3`. The complete change removes 7 from `7b7b407a` and adds 1,146 from
-`aa390d9f`. Another 5,993 must be removed to meet the required target. The
+Engine commit `34a8199c` adds 2,222 nonblank production Rust lines from
+`537f9de3`. At that commit, the complete change removes 7 from `7b7b407a`
+and adds 1,146 from `aa390d9f`. Another 5,993 must be removed at that point. The
 record is `/tmp/araphor-arrow-engine-count8.json`. This count includes the new
 query modules, buffer leases, and SQL compatibility code. It excludes tests
 and documents. It does not establish a simpler complete redesign.
@@ -671,3 +674,35 @@ Complete redesign result: **Not done**. The execution, resource, and parity
 checks above do not close the production reduction target. The earlier
 retained-admission receipts remain separate evidence. No performance result
 is established. Continue removal of custom planning and source stages.
+
+The next deliverable removes the synthetic FROM planning pass. Full SELECT
+planning uses SqlToRel directly. Code-owned QueryPlan templates retain their
+admitted plans and bind fresh values for each evaluation. Built-in source
+tables use ordinary leased MemTables without an inaccessible model row index.
+Dataset aliases retain their row indices. Model output validation reuses the
+SDK CheckedEvaluation instead of checking the full input a second time.
+
+Direct plan binding: **Done**. The affected Data test build passes in 229.46
+seconds. Strict Clippy passes for Data, Control, and E2E test targets in 39.84
+seconds. All 262 distinct selected cases pass: 256 query cases, four package
+cases, and two explicit native error/checkpoint cases. The first query run
+reports 168 passed and 88 failed because the host reaches its filesystem
+reserve. After removal of obsolete generated test binaries, only those 88
+cases run again and all pass. Production storage checks remain unchanged.
+Source and test binary hashes remain fixed during each check. No Control or
+E2E runtime test is repeated for this internal change. Their engine-commit
+results remain separate evidence.
+
+The records are `/tmp/araphor-df-plan-stage-build2.json`,
+`/tmp/araphor-df-plan-stage-query1.json`,
+`/tmp/araphor-df-plan-stage-query-failed2.json`,
+`/tmp/araphor-df-plan-stage-packages1.json`,
+`/tmp/araphor-df-plan-stage-native1.json`, and
+`/tmp/araphor-df-plan-stage-callers1.json`.
+
+This deliverable removes 42 nonblank production Rust lines from `34a8199c`.
+The complete redesign still adds 2,180 from `537f9de3`. The complete change
+removes 49 from `7b7b407a` and adds 1,104 from `aa390d9f`. Another 5,951
+must be removed to meet the required target. The records are
+`/tmp/araphor-df-plan-stage-count1.json` and
+`/tmp/araphor-arrow-engine-count9.json`. Complete redesign: **Not done**.

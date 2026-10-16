@@ -133,17 +133,21 @@ No new performance test or benchmark is approved. Do not infer speed gains
 from changed test-suite durations. Record removed work from the final source.
 Measure latency only after approval of a specific workload and its limits.
 
-Result: **Not done**. The current DataFusion working tree removes 7 nonblank
-production Rust lines from `7b7b407a` and adds 1,146 from `aa390d9f`.
-The engine integration adds 2,222 from the redesign baseline `537f9de3`.
-Another 5,993 must be removed to meet the target. The count record is
-`/tmp/araphor-arrow-engine-count8.json`. It includes the new query modules
+Result: **Not done**. The current DataFusion working tree removes 49 nonblank
+production Rust lines from `7b7b407a` and adds 1,104 from `aa390d9f`.
+The redesign adds 2,180 from the baseline `537f9de3`.
+Another 5,951 must be removed to meet the target. The count record is
+`/tmp/araphor-arrow-engine-count9.json`. It includes the new query modules
 and excludes tests and documents. Engine functional qualification passes:
 439 ordinary Data cases, 12 native Data cases, six Control cases, and three
 E2E cases. The final affected build, strict Clippy, and formatting pass. The
 result record is `/tmp/araphor-arrow-engine-qualification-final.json`. The
 [engine plan result](araphor-component-redesign.md#qualification-and-acceptance)
 records the corrected native test, exact source extension, and platform limits.
+The following direct plan change removes 42 production lines from the engine
+commit. It passes 256 query cases, four package cases, two native cases,
+and strict Clippy for Data and its Control/E2E callers. The plan records the
+host disk-reserve failure and the successful retry of its 88 affected cases.
 Continue component refactoring. Documentation and test deletion do not close
 this result.
 

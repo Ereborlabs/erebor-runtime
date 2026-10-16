@@ -68,7 +68,7 @@ impl QueryEngine {
         tables: &BTreeMap<String, Arc<MemTable>>,
         fetch: Option<usize>,
     ) -> Result<(LogicalPlan, Arc<sdk::Schema>)> {
-        let mut plan = binding.plan.clone();
+        let mut plan = binding.plan()?;
         if let Some(fetch) = fetch {
             plan = LogicalPlanBuilder::from(plan)
                 .limit(0, Some(fetch))

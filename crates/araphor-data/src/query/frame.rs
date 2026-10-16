@@ -1154,8 +1154,10 @@ mod tests {
             checkpoint.validate(&fixture.plan, &current, None)?,
             Some(position)
         );
-        let mut replace = fixture.plan.clone();
-        replace.template = QueryTemplate::OperationCounts;
+        let replace = QueryPlan::new(
+            fixture.plan.base_selection().clone(),
+            QueryTemplate::OperationCounts,
+        )?;
         assert!(checkpoint.validate(&replace, &current, None).is_err());
         let replacement = QueryCheckpoint::new(&replace, &fixture.meta, position)?;
         assert_eq!(replacement.validate(&replace, &current, Some(floor))?, None);
@@ -1260,8 +1262,10 @@ mod tests {
         };
         assert!(QueryFrame::data(&fixture.plan, unscanned).is_err());
 
-        let mut replace = fixture.plan.clone();
-        replace.template = QueryTemplate::OperationCounts;
+        let replace = QueryPlan::new(
+            fixture.plan.base_selection().clone(),
+            QueryTemplate::OperationCounts,
+        )?;
         for change in 0..2 {
             let mut result = fixture.result()?;
             if change == 0 {
@@ -1652,8 +1656,10 @@ mod tests {
             assert!(fixture.result().is_err());
         }
 
-        let mut moving = fixture.plan.clone();
-        moving.template = QueryTemplate::MovingCount { seconds: 60 };
+        let moving = QueryPlan::new(
+            fixture.plan.base_selection().clone(),
+            QueryTemplate::MovingCount { seconds: 60 },
+        )?;
         let mut count = fixture.result()?;
         count.columns = vec![Column {
             name: "event_count".into(),

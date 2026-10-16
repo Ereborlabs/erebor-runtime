@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use araphor_analysis_sdk as sdk;
+use datafusion::datasource::MemTable;
 use snafu::ResultExt as _;
 
 use crate::analysis::{AnalysisExtractLimits, AnalysisExtractionV1, PackageResultRefV1};
-use crate::query::{budget::QueryLease, engine::QueryEngine, InputProjection, InputRelations};
+use crate::query::{budget::QueryLease, InputProjection, InputRelations};
 use crate::{
     AnalysisContextRefV1, AnalysisReadControl, AnalysisSelectionV1, AnalysisWitnessV1, QueryOwner,
     QueryPlan, QuerySql, Result,
@@ -100,14 +101,7 @@ impl super::super::operation::ModelOperation<'_> {
         self.engine()?;
         let mut rows = SourceRows::extract(owner, &plan, &selection, request.now, bounds, control)?;
         let input = std::mem::take(&mut rows.inputs);
-        let held = input.allocation_bytes().saturating_add(
-            input
-                .tables
-                .values()
-                .flat_map(|table| &table.batches)
-                .map(|batch| QueryLease::index_overhead(batch.num_rows()))
-                .sum::<usize>(),
-        );
+        let held = input.allocation_bytes();
         if held > bounds.input_bytes {
             return crate::QueryLimitSnafu {
                 resource: "model source input",
@@ -138,11 +132,20 @@ impl super::super::operation::ModelOperation<'_> {
             &host,
         );
         executor.tables = tables;
-        for (name, table) in &input.tables {
+        for (name, mut table) in input.tables {
             stage.check()?;
+            for batch in &mut table.batches {
+                *batch = lease.retain_batch(batch)?;
+            }
             executor.tables.insert(
-                (*name).to_owned(),
-                QueryEngine::table(Arc::clone(&table.schema), &table.batches, lease)?,
+                name.to_owned(),
+                Arc::new(
+                    MemTable::try_new(table.schema, vec![table.batches]).context(
+                        crate::QueryEngineSnafu {
+                            operation: "register source Arrow input",
+                        },
+                    )?,
+                ),
             );
         }
         let batches = executor.query(sql, &port.schema)?;
@@ -159,7 +162,6 @@ impl super::super::operation::ModelOperation<'_> {
             .fail();
         }
         drop(executor);
-        drop(input);
         self.retained_bytes = self.retained_bytes.saturating_add(bytes);
         if !rows.extraction.trace_reads.is_empty() {
             owner.store.check_trace_reads(
