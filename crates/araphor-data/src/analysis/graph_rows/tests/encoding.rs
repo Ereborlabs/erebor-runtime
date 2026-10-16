@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn native_json_encoding_roundtrip() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     let snapshot = &fixture.snapshot;
     let canonical = serde_json::to_vec(snapshot)?;
     let encoded_header = GraphRows::encode_body(snapshot, &canonical)?;
@@ -36,7 +36,7 @@ fn native_json_encoding_roundtrip() -> TestResult {
 
 #[test]
 fn native_json_encoding_bounds() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     let encoded_header = GraphRows::encode(&fixture.snapshot)?;
     let mut encoded = encoded_header.clone();
     encoded.push(0);
@@ -60,7 +60,7 @@ fn native_json_encoding_bounds() -> TestResult {
 
 #[test]
 fn native_header_finding_bound() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     let mut snapshot = fixture.snapshot;
     snapshot
         .input_manifest
@@ -105,7 +105,7 @@ fn native_header_finding_bound() -> TestResult {
 
 #[test]
 fn native_json_string_spans() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     let mut snapshot = fixture.snapshot;
     snapshot.findings[0].limits = vec!["quote\" slash\\ brackets[],:".into(), "é\n😀".into()];
     snapshot.findings[0].limits.sort();
@@ -120,7 +120,7 @@ fn native_json_string_spans() -> TestResult {
 
 #[test]
 fn native_header_metadata_current_format() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     let snapshot = &fixture.snapshot;
     let encoded_header = GraphRows::encode(snapshot)?;
     let mut decoder = minicbor::Decoder::new(&encoded_header);

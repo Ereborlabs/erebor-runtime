@@ -60,6 +60,20 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Araphor query test failed: {source}"))]
+    Query {
+        #[snafu(source(from(araphor_query::Error, Box::new)))]
+        source: Box<araphor_query::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Araphor analysis test failed: {source}"))]
+    Analysis {
+        #[snafu(source(from(araphor_analysis::Error, Box::new)))]
+        source: Box<araphor_analysis::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril node identity test failed: {source}"))]
     Node {
         #[snafu(source(from(mithril_node::Error, Box::new)))]
@@ -85,6 +99,8 @@ impl ErrorExt for Error {
             Self::Timeout { .. } => StatusCode::DeadlineExceeded,
             Self::Interceptor { source, .. } => source.status_code(),
             Self::Data { source, .. } => source.status_code(),
+            Self::Query { source, .. } => source.status_code(),
+            Self::Analysis { source, .. } => source.status_code(),
             Self::Node { source, .. } => source.status_code(),
             Self::Policy { source, .. } => source.status_code(),
         }
@@ -99,6 +115,8 @@ impl ErrorExt for Error {
             | Self::Timeout { .. } => RetryHint::NonRetryable,
             Self::Interceptor { source, .. } => source.retry_hint(),
             Self::Data { source, .. } => source.retry_hint(),
+            Self::Query { source, .. } => source.retry_hint(),
+            Self::Analysis { source, .. } => source.retry_hint(),
             Self::Node { source, .. } => source.retry_hint(),
             Self::Policy { source, .. } => source.retry_hint(),
         }

@@ -1,23 +1,8 @@
-use std::sync::{Arc, Mutex};
-
-use crate::{AnalysisContextVersionV1, AnalysisStore, DiscoveryRecordV1, Result};
-
-mod chunks;
-mod commit;
 mod contract;
-mod coverage;
-mod derive;
-mod expiry;
 mod input;
-mod installed;
-mod live;
 mod model;
 mod proof;
-mod read;
-#[cfg(test)]
-pub(crate) mod tests;
 mod traversal;
-mod window;
 
 pub use model::*;
 pub use proof::*;
@@ -30,66 +15,17 @@ pub const GRAPH_WINDOW_BYTES: usize = 4 * 1024 * 1024;
 pub const GRAPH_WINDOW_NS: u64 = 300_000_000_000;
 pub const GRAPH_WITNESS_TTL_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
-pub trait GraphContextProvider: Send + Sync {
-    fn facts(&self, record: &DiscoveryRecordV1) -> Result<Vec<AnalysisContextVersionV1>>;
-
-    fn revision(&self, _source: &crate::EvidenceIntakeIdentityV1) -> Result<u64> {
-        Ok(0)
-    }
-}
-
-pub struct GraphAndFindingOwner {
-    store: Arc<AnalysisStore>,
-    execution: crate::InstalledAnalysis,
-    provider: Arc<dyn GraphContextProvider>,
-    operation: Mutex<(
-        Option<crate::EvidenceIntakeIdentityV1>,
-        Option<crate::InstalledAnalysis>,
-    )>,
-}
-
-impl GraphAndFindingOwner {
-    pub fn new(
-        store: Arc<AnalysisStore>,
-        provider: Arc<dyn GraphContextProvider>,
-        execution: crate::InstalledAnalysis,
-    ) -> Result<Self> {
-        store.enable_graph_owner()?;
-        let owner = Self {
-            store,
-            execution,
-            provider,
-            operation: Mutex::new((None, None)),
-        };
-        let mut tenant = None;
-        loop {
-            let tenants = owner.store.tenant_page(tenant)?;
-            if tenants.is_empty() {
-                break;
-            }
-            tenant = tenants.last().copied();
-            for tenant in tenants {
-                let mut after = None;
-                loop {
-                    let sources = owner.store.source_page(tenant, after.as_ref())?;
-                    if sources.is_empty() {
-                        break;
-                    }
-                    after = sources.last().cloned();
-                    for source in sources {
-                        owner.store.register_graph(&source)?;
-                    }
-                }
-            }
+impl GraphSnapshotV1 {
+    pub fn package_key(
+        source: &crate::EvidenceIntakeIdentityV1,
+        result_id: &str,
+    ) -> crate::AnalysisContextKeyV1 {
+        crate::AnalysisContextKeyV1 {
+            tenant_id: source.tenant_id,
+            owner_id: "graph-packages-v1".into(),
+            entity_key: result_id.as_bytes().to_vec(),
+            lifetime_key: source.key(),
+            owner_revision: GRAPH_SCHEMA_VERSION as u64,
         }
-        Ok(owner)
-    }
-}
-
-impl Drop for GraphAndFindingOwner {
-    fn drop(&mut self) {
-        self.store
-            .graph_owner
-            .store(false, std::sync::atomic::Ordering::Release);
     }
 }

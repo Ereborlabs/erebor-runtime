@@ -27,7 +27,7 @@ pub enum NotificationErrorCodeV1 {
 }
 
 impl NotificationErrorCodeV1 {
-    pub(crate) fn require(self, value: bool, field: &'static str) -> Result<()> {
+    pub fn require(self, value: bool, field: &'static str) -> Result<()> {
         if value {
             Ok(())
         } else {
@@ -126,7 +126,7 @@ impl NotificationGrantV1 {
         )
     }
 
-    pub(crate) fn identifier(value: &str, limit: usize) -> bool {
+    pub fn identifier(value: &str, limit: usize) -> bool {
         !value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control)
     }
 }

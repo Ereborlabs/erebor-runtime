@@ -9,6 +9,12 @@ architecture. Use the [phase plan](README.md) for implementation order and
 the segment/metadata and subscription contracts. Source tests below do not qualify that
 target until they run against its implementation.
 
+The current SQL route uses native DataFusion planning and Arrow execution.
+The user approves native SQL rules and visible dataset row indices. Read the
+[SQL operation review](../../../guides/araphor-sql-operation-review.md) for the
+current source route. Qualification of this native source is **Not done**.
+The historical result records below do not qualify this change.
+
 Read the [native traversal review](phase-7-5-graphs-findings-and-notifications/native-traversal-review.md)
 for the bounded graph request, native read flow, qualification proof, and limits.
 
@@ -50,11 +56,12 @@ is part of this change.
 
 [QueryPlan::new](../../../../crates/araphor-data/src/query/plan.rs) Trusted code supplies a reviewed read plan, typed parameters and exact tenant/source scope.<br>
 -> [QueryOwner::new](../../../../crates/araphor-data/src/query/mod.rs) QueryOwner validates its configured limits and reads the store identity.<br>
+-> [QueryEngine::prepare](../../../../crates/araphor-data/src/query/engine/batches.rs) The engine binds fresh values and optimizes the admitted logical plan.<br>
 -> [AnalysisStore::extract_rows](../../../../crates/araphor-data/src/analysis/extraction.rs) AnalysisStore captures source membership, metadata revision and committed segment ends.<br>
 -> [EvidenceRecord::try_from](../../../../crates/araphor-data/src/evidence.rs) The shared decoder reads bounded segment records into temporary typed pages.<br>
--> [InputProjection](../../../../crates/araphor-data/src/query/input.rs) Query-owned projection expands SQL views through the store-owned byte limit.<br>
--> [InputScan](../../../../crates/araphor-data/src/query/adapter.rs) The built-in DuckDB table function exposes those pages as logical relations.<br>
--> [QueryOwner::evaluate](../../../../crates/araphor-data/src/query/mod.rs) QueryOwner evaluates its fixed SQL template against these pages in memory.<br>
+-> [InputProjection](../../../../crates/araphor-data/src/query/input.rs) Query-owned projection emits canonical Arrow batches within the store-owned byte limit.<br>
+-> [QueryEngine::bind_sources](../../../../crates/araphor-data/src/query/engine/batches.rs) Standard MemTables replace the schema-only sources in that plan.<br>
+-> [QueryEvaluation::run](../../../../crates/araphor-data/src/query/evaluation.rs) The shared query operation reads the physical Arrow stream and checks result limits.<br>
 -> [QueryCheckpoint::from_result](../../../../crates/araphor-data/src/query/frame.rs) The owner returns rows, coverage, read revision and a checked internal checkpoint.
 
 [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) A batch arrives before an earlier source range.<br>
@@ -90,13 +97,14 @@ sequenceDiagram
     participant H as Trusted host
     participant Q as QueryOwner
     participant S as AnalysisStore
-    participant D as Temporary DuckDB
+    participant D as QueryEngine
     H->>Q: Fixed plan and exact scope
+    Q->>D: Optimize the admitted plan with fresh values
     Q->>S: Capture and extract bounded input
-    S-->>Q: Owned rows; storage leases closed
-    Q->>D: Register input and evaluate fixed SQL
+    S-->>Q: Leased Arrow input; segment readers closed
+    Q->>D: Supply MemTables and read the physical stream
     D-->>Q: Bounded rows or error
-    Q->>D: Drop connection and input
+    Q->>D: Drop the query stream
     Q-->>H: Result or stream frame
 ```
 
@@ -111,13 +119,16 @@ while it decodes selected frames. Rotation releases the raw-directory mutex
 before it waits for exclusive protection. Cancellation and deadlines also
 apply to directory-lock waits.
 
-InputRelations owns temporary typed rows. InputTable registers an `Arc` with
-one temporary DuckDB connection through the VTab trait. Each scan has its own
-row offset. The connection exposes temporary views, not stored event tables.
-No process-wide input registry exists. QueryOwner drops the connection and
-input before it returns rows or waits for capacity. Native external
-access, automatic extension loading, and temporary files are disabled.
-These settings are not an operating-system memory or security boundary.
+InputRelations owns bounded Arrow batches and canonical schemas. QueryEngine
+replaces admitted source scans with standard MemTables. Each run creates fresh
+physical plans and streams over that fixed input. Repeated scans have
+independent execution state. Returned buffer aliases retain their source
+leases. The engine has no external table factory or spill storage. SqlPolicy
+checks the original AST before one whole-query SqlToRel call. DataFusion owns
+name binding, types, CTE scope, aliases, and wildcard expansion. Dataset tables
+contain an ordinary UInt64 `__row_index` column, including in `*` output.
+Built-in source schemas add no dataset row index. These settings are not an
+operating-system memory or security boundary.
 
 QueryStream owns one QueryRun value. Ready holds the query state. Pending
 holds the next-frame future and that same state. Closed holds neither value.
@@ -138,7 +149,7 @@ only when the authorized frame is returned. Paused consumption starts no
 further evaluation. The stream checks exact dependency revisions before it
 waits. It closes the storage snapshot before native SQL execution. A paused
 output cannot retain a segment lease. Cancellation wakes the pending future
-and interrupts native work. Drop releases state and charged frames. A native
+and cancels query streams. Drop releases state and charged frames. A native
 task retains its capacity until cleanup returns.
 Construction needs no runtime. Polling needs Tokio with its timer enabled.
 A poll outside Tokio returns a typed error and closes the stream.
@@ -170,10 +181,10 @@ the same exact source/task partition, complete row coverage, and adjacent
 nonzero kernel sequences. This match does not prove source-wide health or
 the absence of another action.
 
-`received_utc_ns` keeps exact intake nanoseconds. `received_at` is a DuckDB
+`received_utc_ns` keeps exact intake nanoseconds. `received_at` is an Arrow
 timestamp with microsecond precision. SQL input bounds use the nanosecond
 field. Moving windows bind one evaluation instant and use one-second expiry
-resolution. Fixed buckets use native `time_bucket` with an explicit UTC
+resolution. Fixed buckets use native `date_bin` with an explicit UTC
 origin. Late source evidence retains its source time but enters its intake
 bucket. Replacements contain complete snapshots; consumers must not add
 successive counts together.
@@ -197,8 +208,8 @@ Use these source tests to check each owner boundary:
 | Snapshot and rotation | [extraction tests](../../../../crates/araphor-data/src/analysis/extraction.rs): `analysis_extract_rotation`, `analysis_extract_lock_waits`, and position-page cases. |
 | Selection bounds | [extraction tests](../../../../crates/araphor-data/src/analysis/extraction.rs): `analysis_selection_key_limits` fills the combined six-list budget and the separate Node budget. One extra key rejects each input. |
 | Native reader recovery | [read tests](../../../../crates/araphor-data/src/analysis/read.rs): `query_scope_reader_recovery`, `query_input_native_cancel`, `analysis_read_cancel_cleanup`. |
-| Temporary input ownership | [adapter tests](../../../../crates/araphor-data/src/query/adapter.rs): value, repeated-scan, error, and Weak-reference lifetime checks. [input tests](../../../../crates/araphor-data/src/query/input.rs) check generated relations and exact allocation bounds. |
-| Fixed templates | [query tests](../../../../crates/araphor-data/src/query/tests.rs): `QueryFixture::baseline` evaluates complete scoped input through the pinned DuckDB adapter. Each trusted template compares against that result. |
+| Temporary input ownership | [engine tests](../../../../crates/araphor-data/src/query/engine.rs) check repeated scans, source lifetime, resource limits, and cancellation. [input tests](../../../../crates/araphor-data/src/query/input.rs) check generated relations and exact allocation bounds. |
+| Fixed templates | [query tests](../../../../crates/araphor-data/src/query/tests.rs) check exact values, time bounds, bucket boundaries, and UInt64 sequence adjacency. QueryFixture retains a test-only DuckDB comparison for the reviewed templates. |
 | Stream lifecycle | [follow tests](../../../../crates/araphor-data/src/query/follow_tests.rs): snapshot race, empty progress, coalesced output, lazy construction, paused demand, drop, and `query_follow_autonomous_expiry` without a clock notification or heartbeat wake. `query_follow_staged_cancel` cancels after metadata or data, before a checkpoint. The terminal contains no undisclosed checkpoint. Output, evaluation and stream capacity are available after closure. `query_follow_runtime` checks construction outside Tokio and a typed error for polling without a runtime. [frame tests](../../../../crates/araphor-data/src/query/frame.rs) check envelopes, binding, identity, and shared byte reservations. |
 | Active evaluation cancellation | [owner tests](../../../../crates/araphor-data/src/query/owner_tests.rs): `query_scope_native_cancel` pauses inside a real native input scan, requires native failure after cancellation, and checks input/capacity release and later intake/query. Its barrier and native-error flag are test-only. |
 | Pending frame checks | [client tests](../../../../crates/araphor-data/src/query/client_tests.rs): `query_trace_stream_stop` checks cancel, revoke and drop during a blocked native retained-read check. Reader and stream capacity remain charged until native cleanup. |
@@ -583,15 +594,20 @@ QueryStream checks cancellation and signals AnalysisReadControl.
 The native evaluation task retains its reservations until evaluation and
 cleanup return. Stream drop does not abort a task that owns running native work.
 
-QuerySql uses the pinned sqlparser DuckDbDialect. It expands stars
-and binds nested names against the static available schemas. It preserves the full predicate.
+QuerySql uses DataFusion's pinned sqlparser dependency with GenericDialect.
+SqlPolicy checks the original AST, including unused CTEs and windows, and
+records every admitted base source. SqlContext delegates the complete query
+to SqlToRel once. DataFusion supplies native names, types, scope rules, and
+wildcard expansion. Dataset `__row_index` columns remain visible. Function
+and window policy still applies to unused expressions. Native planning can
+leave an unused window column unresolved. The full predicate remains in SQL.
 Unproved OR, CTE, join, renamed-time and precision shapes use complete bounded
 input. Unsupported syntax fails. A moving predicate uses one frozen evaluation
 clock. Follow rejects unsupported volatile expressions.
 
 AnalysisStore remains the only durable data owner. Segment readers close before
-evaluation. InputRelations owns temporary typed pages with all available
-columns. SQL predicates select targets. Private positions support replay;
+evaluation. InputRelations owns bounded Arrow batches from the selected
+sources. SQL predicates select targets. Private positions support replay;
 they are not public SQL fields. Client output omits global byte counters
 because those counters can include other tenants. Tenant-selected coverage
 and catalog join keys need no additional user permission.
@@ -605,11 +621,14 @@ or replay currently authorized rows, but cannot create authorization.
 QueryOwner::query_client returns a future and reserves capacity before
 spawn_blocking. QueryOwner::evaluate_reserved retains that lease. QueryTask
 signals cancellation if the caller
-drops the future. AnalysisReadControl supplies deadlines and DuckDB interruption.
-QueryEvaluation uses the same temporary table adapter for trusted and client SQL.
-The evaluator disables external access, extension loading and native spill.
-DuckDB settings bound native memory and threads; these settings are not a hard
-process-memory limit or process-crash containment. Task failure and native SQL
+drops the future. AnalysisReadControl supplies deadlines and query-stream
+cancellation. QueryEvaluation uses the same Arrow operation for trusted and
+client SQL. QueryEngine creates fresh physical execution on its owned Tokio
+runtime. It sets one execution partition, planning concurrency one, a 64 MiB
+memory pool, and disabled spill storage. The standard Utf8 setting preserves
+declared SDK string schemas. Native scalar functions include `date_bin`;
+SqlPolicy limits which functions caller SQL can use. These settings are not a
+hard process-memory limit or process-crash containment. Task failure and SQL
 failure return typed errors. The query executable, bubblewrap launcher and IPC
 owner are removed.
 
@@ -2201,7 +2220,7 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | [context.rs tests](../../../../crates/araphor-data/src/discovery/context.rs), [store context tests](../../../../crates/araphor-data/src/analysis/context.rs) | Cutoffs, sensitivity, conflicts, immutable document history, and document/revision bounds. |
 | [roundtrip.rs](../../../../crates/mithril-e2e/src/discovery/roundtrip.rs) | Context, WAL, mTLS, live profiles, delayed exact facts, frozen replay, and restart use production owners with synthetic external inputs. |
 | [storage.rs](../../../../crates/mithril-e2e/src/discovery/storage.rs) | Historical temporary-store experiments. They do not prove the current direct-read discovery implementation. |
-| [storage_contract.rs](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs), [analysis/mod.rs tests](../../../../crates/araphor-data/src/analysis/mod.rs), [admission.rs tests](../../../../crates/araphor-data/src/analysis/admission.rs) | Offline DuckDB commits, duplicate rejection, reopen, coverage digest, post-commit process exit, SQL admission and authorized-input equivalence. No live intake or QueryOwner proof. |
+| [storage_contract.rs](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs), [analysis/mod.rs tests](../../../../crates/araphor-data/src/analysis/mod.rs), [admission tests](../../../../crates/araphor-data/src/query/admission_tests.rs) | Offline DuckDB commits, duplicate rejection, reopen, coverage digest, post-commit process exit, SQL admission and authorized-input equivalence. No live intake or QueryOwner proof. |
 | [context.rs tests](../../../../crates/araphor-data/src/analysis/context.rs), [retention.rs tests](../../../../crates/araphor-data/src/analysis/retention.rs), [progress.rs tests](../../../../crates/araphor-data/src/analysis/progress.rs), [backup.rs tests](../../../../crates/araphor-data/src/analysis/backup.rs) | Temporary databases prove exact context versions and corrupt-body rejection, required-progress protection, exact witness expiry, byte-pressure cleanup, optional gaps, bounded restart state, result progress, and backup/restore. These tests do not prove production intake or physical disk reuse. |
 
 ### Diagnostic tests and physical harnesses

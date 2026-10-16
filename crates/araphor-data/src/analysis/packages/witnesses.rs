@@ -11,7 +11,7 @@ use super::PackageResultRefV1;
 type PackageEvidence = (Vec<AnalysisWitnessV1>, Vec<AnalysisContextRefV1>);
 
 impl AnalysisStore {
-    pub(crate) fn package_contexts(
+    pub fn package_contexts(
         &self,
         tenant: [u8; 16],
         keys: &[AnalysisContextKeyV1],
@@ -40,7 +40,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn package_result_refs(
+    pub fn package_result_refs(
         &self,
         tenant: [u8; 16],
         ids: &[String],
@@ -83,11 +83,7 @@ impl AnalysisStore {
         Ok(revision)
     }
 
-    pub(crate) fn package_evidence(
-        &self,
-        tenant: [u8; 16],
-        ids: &[String],
-    ) -> Result<PackageEvidence> {
+    pub fn package_evidence(&self, tenant: [u8; 16], ids: &[String]) -> Result<PackageEvidence> {
         if ids.len() > 64 {
             return self.reject("the package evidence sources exceed their limit");
         }

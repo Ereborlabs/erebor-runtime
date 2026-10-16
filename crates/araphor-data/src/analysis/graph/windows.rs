@@ -16,7 +16,7 @@ const GRAPH_HEADS: &str = "SELECT result_id, commit_revision, first_cursor,
 type GraphPage = (Vec<(String, GraphSnapshotV1, u64)>, Option<String>);
 
 impl AnalysisStore {
-    pub(crate) fn graph_window_headers(
+    pub fn graph_window_headers(
         &self,
         source: &EvidenceIntakeIdentityV1,
         after: Option<u64>,
@@ -64,7 +64,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn graph_window_page(
+    pub fn graph_window_page(
         &self,
         source: &EvidenceIntakeIdentityV1,
         first: u64,
@@ -158,6 +158,3 @@ impl AnalysisStore {
         Ok(header)
     }
 }
-
-#[cfg(test)]
-mod tests;

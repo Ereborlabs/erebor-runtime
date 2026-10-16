@@ -1,31 +1,13 @@
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
 
-use super::{DeclaredFindingReasonV1, FindingReasonV1, FindingV1, GraphAndFindingOwner};
+use super::{DeclaredFindingReasonV1, FindingReasonV1, FindingV1};
 use crate::{AnalysisContractSnafu, GraphEncodingSnafu, GraphInvalidSnafu, Result};
 
-impl GraphAndFindingOwner {
-    pub fn supports_analysis(model: &sdk::Model) -> bool {
-        let expected = araphor_analysis_builtins::graph::Detector::Process.descriptor();
-        let expected = &expected.exports[0];
-        model
-            .inputs
-            .iter()
-            .map(|input| &input.port)
-            .eq(expected.inputs.iter().map(|input| &input.port))
-            && model.outputs == expected.outputs
-            && model.checkpoint == expected.checkpoint
-    }
+#[cfg(test)]
+mod tests;
 
-    pub fn analysis_package(package_id: &str) -> Result<sdk::Package> {
-        Self::contract_id(package_id)?;
-        let package = araphor_analysis_builtins::graph::Detector::from_id(package_id)
-            .context(AnalysisContractSnafu)?
-            .descriptor();
-        package.validate().context(AnalysisContractSnafu)?;
-        Ok(package)
-    }
-
+impl FindingReasonV1 {
     fn contract_id(package_id: &str) -> Result<()> {
         if FindingV1::PACKAGES.contains(&package_id) {
             Ok(())
@@ -36,15 +18,13 @@ impl GraphAndFindingOwner {
             .fail()
         }
     }
-}
 
-impl FindingReasonV1 {
     pub fn analysis_code(&self, package_id: &str) -> Result<String> {
         if let Self::Declared(reason) = self {
             reason.validate(package_id)?;
             return Ok(reason.code.clone());
         }
-        GraphAndFindingOwner::contract_id(package_id)?;
+        Self::contract_id(package_id)?;
         let value = serde_json::to_value(self).context(GraphEncodingSnafu)?;
         let code = value.as_str().ok_or_else(|| {
             GraphInvalidSnafu {
@@ -56,7 +36,7 @@ impl FindingReasonV1 {
     }
 
     pub fn from_analysis_code(package_id: &str, code: &str) -> Result<Self> {
-        GraphAndFindingOwner::contract_id(package_id)?;
+        Self::contract_id(package_id)?;
         let local = code
             .strip_prefix(&format!("{package_id}."))
             .ok_or_else(|| {
@@ -72,7 +52,7 @@ impl FindingReasonV1 {
             .build()
         })
     }
-    pub(crate) fn label(&self) -> Result<String> {
+    pub fn label(&self) -> Result<String> {
         match self {
             Self::Declared(reason) => Ok(reason.code.clone()),
             _ => serde_json::to_value(self)
@@ -88,14 +68,14 @@ impl FindingReasonV1 {
         }
     }
 
-    pub(crate) fn storage(&self) -> Result<String> {
+    pub fn storage(&self) -> Result<String> {
         match self {
             Self::Declared(_) => serde_json::to_string(self).context(GraphEncodingSnafu),
             _ => self.label(),
         }
     }
 
-    pub(crate) fn restore(value: &str) -> Result<Self> {
+    pub fn restore(value: &str) -> Result<Self> {
         if value.starts_with('{') {
             serde_json::from_str(value).context(GraphEncodingSnafu)
         } else {
@@ -107,13 +87,13 @@ impl FindingReasonV1 {
     pub(super) fn validate(&self, package: &str) -> Result<()> {
         match self {
             Self::Declared(reason) => reason.validate(package),
-            _ => GraphAndFindingOwner::contract_id(package),
+            _ => Self::contract_id(package),
         }
     }
 }
 
 impl DeclaredFindingReasonV1 {
-    pub(super) fn from_value(value: &sdk::ReasonValue, limits: sdk::Limits) -> Result<Self> {
+    pub fn from_value(value: &sdk::ReasonValue, limits: sdk::Limits) -> Result<Self> {
         let schema = value.details.schema().as_ref().clone();
         let encoded = sdk::wire::Dataset::encode(
             &sdk::Dataset {
@@ -166,6 +146,3 @@ impl DeclaredFindingReasonV1 {
         .context(AnalysisContractSnafu)
     }
 }
-
-#[cfg(test)]
-mod tests;

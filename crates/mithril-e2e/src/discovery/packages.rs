@@ -88,7 +88,7 @@ impl AnalysisPackageQualification {
         } else {
             Vec::new()
         };
-        let required = araphor_data::AnalysisPackageOwner::required_bundles();
+        let required = araphor_analysis::AnalysisPackageOwner::required_bundles();
         config.package_trust = bundles
             .iter()
             .chain(std::iter::once(&wasm_bundle))

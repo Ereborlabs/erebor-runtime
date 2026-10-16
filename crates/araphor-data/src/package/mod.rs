@@ -1,44 +1,42 @@
-use std::sync::Arc;
-
-use crate::{AnalysisStore, QueryOwner};
-
 mod admission;
 mod bundle;
-mod evaluation;
-mod execution;
-mod fixtures;
-mod freshness;
-mod inspect;
-mod installed;
-mod lifecycle;
+mod formats;
 mod model;
 pub mod native;
 mod oci;
-mod output;
-mod owner;
-mod removal;
-mod required;
-mod status;
+mod parameters;
+mod provenance;
 pub(crate) mod storage;
-mod supervision;
-pub(super) mod wasm;
 
+pub use admission::ModelRef;
 pub use bundle::*;
-pub(crate) use evaluation::ResultContext;
-pub use fixtures::PackageFixtureV1;
-pub use installed::{InstalledAnalysis, InstalledEvaluation, InstalledRefV1};
+pub use formats::*;
 pub use model::*;
-pub(crate) use owner::InstalledContext;
+pub use native::{Dependency, LibraryRequirement, Qualification};
+pub use parameters::decode_parameters;
+pub use storage::StoredArtifact;
 
-pub struct AnalysisPackageOwner {
-    store: Arc<AnalysisStore>,
-    query: Arc<QueryOwner>,
-    authority: Arc<dyn PackageAuthorization>,
-    operations: Arc<tokio::sync::Semaphore>,
-    lifecycle: Arc<std::sync::Mutex<()>>,
-    wasm: wasm::WasmExecution,
-    native: native::NativeExecution,
+pub fn parameter_values<'a>(
+    parameters: Option<&'a serde_json::Value>,
+    package: &str,
+    export: &str,
+) -> Option<&'a serde_json::Value> {
+    parameters
+        .and_then(|value| value.get(package))
+        .and_then(|value| value.get(export))
+}
+
+pub fn validate_package_name(value: &str) -> crate::Result<()> {
+    if value.is_empty()
+        || value.len() > 256
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+    {
+        return Err(PackageErrorCodeV1::Invalid.error("package operation name"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;

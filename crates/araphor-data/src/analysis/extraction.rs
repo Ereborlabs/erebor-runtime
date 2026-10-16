@@ -18,6 +18,7 @@ use crate::{
     Result, TraceIdentityV1, TraceIntentV1, TraceMeasurementV1, TraceOutputReceiptV1, TraceStateV1,
 };
 
+mod changes;
 mod graph;
 
 const MAX_EXTRACT_KEYS: usize = 1024;
@@ -25,7 +26,7 @@ const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct AnalysisExtractLimits {
+pub struct AnalysisExtractLimits {
     pub scan_bytes: usize,
     pub input_bytes: usize,
     pub page_bytes: usize,
@@ -52,6 +53,10 @@ pub enum Selection<T> {
 impl<T> Selection<T> {
     pub fn is_all(&self) -> bool {
         matches!(self, Self::All)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Exact(keys) if keys.is_empty())
     }
 
     pub fn as_slice(&self) -> &[T] {
@@ -84,13 +89,10 @@ pub struct AnalysisSelectionV1 {
     pub sources: Selection<EvidenceIntakeIdentityV1>,
     pub(crate) targets: bool,
     pub(crate) targets_only: bool,
-    pub(crate) discovery: bool,
-    pub(crate) profiles: Vec<String>,
-    pub(crate) graph: bool,
-    pub(crate) graphs: Vec<String>,
+    pub(crate) profiles: Selection<String>,
+    pub(crate) graphs: Selection<String>,
     pub(crate) graph_traversal: Option<crate::GraphTraversalV1>,
-    pub(crate) notifications: bool,
-    pub(crate) obligations: Vec<AnalysisContextKeyV1>,
+    pub(crate) obligations: Selection<AnalysisContextKeyV1>,
     pub traces: Selection<TraceIdentityV1>,
     /// Node IDs narrow evidence, coverage, and targets, not context versions.
     pub nodes: Vec<String>,
@@ -108,13 +110,10 @@ impl AnalysisSelectionV1 {
             sources: Selection::Exact(sources),
             targets: false,
             targets_only: false,
-            discovery: false,
-            profiles: Vec::new(),
-            graph: false,
-            graphs: Vec::new(),
+            profiles: Selection::Exact(Vec::new()),
+            graphs: Selection::Exact(Vec::new()),
             graph_traversal: None,
-            notifications: false,
-            obligations: Vec::new(),
+            obligations: Selection::Exact(Vec::new()),
             traces: Selection::Exact(Vec::new()),
             nodes: Vec::new(),
             binding_ids: Vec::new(),
@@ -134,7 +133,116 @@ impl AnalysisSelectionV1 {
         }
     }
 
-    pub(crate) fn valid(&self) -> bool {
+    pub fn select_targets(&mut self, enabled: bool, only: bool) -> Result<()> {
+        if only && !enabled {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("target selection"));
+        }
+        self.targets = enabled;
+        self.targets_only = only;
+        Ok(())
+    }
+
+    pub fn targets(&self) -> bool {
+        self.targets
+    }
+
+    pub fn select_profiles(&mut self, profiles: Selection<String>) -> Result<()> {
+        let mut selected = self.clone();
+        selected.profiles = profiles;
+        self.replace_selection(selected)
+    }
+
+    pub fn select_graphs(
+        &mut self,
+        graphs: Selection<String>,
+        traversal: Option<crate::GraphTraversalV1>,
+    ) -> Result<()> {
+        let mut selected = self.clone();
+        selected.graphs = graphs;
+        selected.graph_traversal = traversal;
+        self.replace_selection(selected)
+    }
+
+    pub fn graphs(&self) -> &[String] {
+        self.graphs.as_slice()
+    }
+
+    pub fn profiles(&self) -> &[String] {
+        self.profiles.as_slice()
+    }
+
+    pub fn notification_keys(&self) -> &[AnalysisContextKeyV1] {
+        self.obligations.as_slice()
+    }
+
+    pub fn graph_traversal(&self) -> Option<&crate::GraphTraversalV1> {
+        self.graph_traversal.as_ref()
+    }
+
+    pub fn select_notifications(
+        &mut self,
+        obligations: Selection<AnalysisContextKeyV1>,
+    ) -> Result<()> {
+        let mut selected = self.clone();
+        selected.obligations = obligations;
+        self.replace_selection(selected)
+    }
+
+    fn replace_selection(&mut self, selected: Self) -> Result<()> {
+        if !selected.valid() {
+            return Err(crate::PackageErrorCodeV1::Invalid.error("source selection"));
+        }
+        *self = selected;
+        Ok(())
+    }
+
+    pub fn source_revisions(&self, revision: u64) -> Vec<(String, u64)> {
+        let mut relations = BTreeSet::new();
+        if !self.sources.is_empty() {
+            relations.extend([
+                "events",
+                "source_receipts",
+                "source_bindings",
+                "coverage",
+                "expired_ranges",
+                "recovery_gaps",
+                "replay_floors",
+            ]);
+        }
+        if !self.contexts.is_empty()
+            || self.targets
+            || !self.obligations.is_empty()
+            || !self.profiles.is_empty()
+            || !self.graphs.is_empty()
+        {
+            relations.insert("context_versions");
+        }
+        if !self.profiles.is_empty() {
+            relations.insert("analysis_results");
+        }
+        if !self.graphs.is_empty() || !self.obligations.is_empty() {
+            relations.extend(["graph_subjects", "graph_relationships", "graph_findings"]);
+        }
+        if !self.traces.is_empty() {
+            relations.extend([
+                "traces",
+                "trace_receipts",
+                "trace_output",
+                "expired_ranges",
+                "recovery_gaps",
+                "replay_floors",
+            ]);
+        }
+        if !self.nodes.is_empty() || !self.binding_ids.is_empty() {
+            relations.insert("source_bindings");
+        }
+        relations
+            .into_iter()
+            .map(|name| (name.into(), revision))
+            .collect()
+    }
+
+    pub fn valid(&self) -> bool {
         self.tenant_id != [0; 16]
             && self.graph_traversal.as_ref().is_none_or(|request| {
                 request.validate().is_ok()
@@ -166,13 +274,15 @@ impl AnalysisSelectionV1 {
                 .all(|id| !id.is_empty() && id.len() <= 256)
             && self
                 .profiles
+                .as_slice()
                 .iter()
                 .all(|id| !id.is_empty() && id.len() <= 256)
             && self
                 .graphs
+                .as_slice()
                 .iter()
                 .all(|id| !id.is_empty() && id.len() <= 256)
-            && self.obligations.iter().all(|key| {
+            && self.obligations.as_slice().iter().all(|key| {
                 key.tenant_id == self.tenant_id
                     && key.owner_id == crate::NOTIFICATION_STATE_OWNER
                     && key.valid()
@@ -192,9 +302,22 @@ impl AnalysisSelectionV1 {
                 .len()
                 == self.contexts.as_slice().len()
             && self.results.iter().collect::<BTreeSet<_>>().len() == self.results.len()
-            && self.profiles.iter().collect::<BTreeSet<_>>().len() == self.profiles.len()
-            && self.graphs.iter().collect::<BTreeSet<_>>().len() == self.graphs.len()
-            && self.obligations.iter().collect::<BTreeSet<_>>().len() == self.obligations.len()
+            && self
+                .profiles
+                .as_slice()
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == self.profiles.as_slice().len()
+            && self.graphs.as_slice().iter().collect::<BTreeSet<_>>().len()
+                == self.graphs.as_slice().len()
+            && self
+                .obligations
+                .as_slice()
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == self.obligations.as_slice().len()
             && self
                 .traces
                 .as_slice()
@@ -208,14 +331,14 @@ impl AnalysisSelectionV1 {
         self.sources.as_slice().len()
             + self.contexts.as_slice().len()
             + self.results.len()
-            + self.profiles.len()
-            + self.graphs.len()
-            + self.obligations.len()
+            + self.profiles.as_slice().len()
+            + self.graphs.as_slice().len()
+            + self.obligations.as_slice().len()
             + self.traces.as_slice().len()
             + self.binding_ids.len()
     }
 
-    pub(crate) fn permits_graph(&self, graph: &crate::GraphSnapshotV1) -> bool {
+    pub fn permits_graph(&self, graph: &crate::GraphSnapshotV1) -> bool {
         self.binding_ids.is_empty()
             || graph.input_manifest.evidence.iter().all(|record| {
                 graph.findings.iter().any(|finding| {
@@ -229,7 +352,7 @@ impl AnalysisSelectionV1 {
             })
     }
 
-    fn allocation_bytes(&self) -> usize {
+    pub fn allocation_bytes(&self) -> usize {
         let mut bytes = size_of::<Self>()
             .saturating_add(
                 self.sources
@@ -266,7 +389,12 @@ impl AnalysisSelectionV1 {
         for source in self.sources.as_slice() {
             bytes = bytes.saturating_add(source.node_id.capacity());
         }
-        for key in self.contexts.as_slice().iter().chain(&self.obligations) {
+        for key in self
+            .contexts
+            .as_slice()
+            .iter()
+            .chain(self.obligations.as_slice())
+        {
             bytes = bytes
                 .saturating_add(key.owner_id.capacity())
                 .saturating_add(key.entity_key.capacity())
@@ -276,8 +404,8 @@ impl AnalysisSelectionV1 {
             .nodes
             .iter()
             .chain(&self.results)
-            .chain(&self.profiles)
-            .chain(&self.graphs)
+            .chain(self.profiles.as_slice())
+            .chain(self.graphs.as_slice())
         {
             bytes = bytes.saturating_add(key.capacity());
         }
@@ -287,7 +415,7 @@ impl AnalysisSelectionV1 {
         bytes
     }
 
-    pub(crate) fn time_range(&self) -> Option<(u64, u64)> {
+    pub fn time_range(&self) -> Option<(u64, u64)> {
         let first = match self.received_from {
             Bound::Unbounded => 0,
             Bound::Included(value) => value,
@@ -311,6 +439,12 @@ pub enum AnalysisInputV1<'a> {
         record: &'a AnalysisRecordV1,
         decoded: Option<&'a EvidenceRecord>,
     },
+    RawRemoval {
+        identity: &'a super::AnalysisStreamIdentityV1,
+        first_cursor: u64,
+        last_cursor: u64,
+        position: StorePositionV1,
+    },
     Context(&'a AnalysisContextVersionV1),
     DiscoveryContext(&'a AnalysisContextVersionV1),
     Behavior {
@@ -333,6 +467,8 @@ pub enum AnalysisInputV1<'a> {
     Graph {
         result_id: &'a str,
         graph: &'a crate::GraphSnapshotV1,
+        subject_count: usize,
+        relationship_count: usize,
         commit_revision: u64,
         sensitivity: crate::ContextSensitivityV1,
         traversal_depths: Option<&'a [(crate::GraphSubjectKeyV1, u32)]>,
@@ -366,28 +502,7 @@ pub enum AnalysisInputV1<'a> {
     },
 }
 
-impl AnalysisInputV1<'_> {
-    fn relation(&self) -> AnalysisRelationV1 {
-        match self {
-            Self::Event { .. } => AnalysisRelationV1::Events,
-            Self::Context(_) => AnalysisRelationV1::Context,
-            Self::DiscoveryContext(_) => AnalysisRelationV1::DiscoveryContext,
-            Self::Behavior { .. } => AnalysisRelationV1::Behaviors,
-            Self::Target { .. } => AnalysisRelationV1::Targets,
-            Self::TraceMeasurement { .. } => AnalysisRelationV1::TraceMeasurements,
-            Self::Profile { .. } => AnalysisRelationV1::Behaviors,
-            Self::Graph { .. } => AnalysisRelationV1::Results,
-            Self::Notification { .. } => AnalysisRelationV1::Notifications,
-            Self::Trace { .. } => AnalysisRelationV1::Traces,
-            Self::TraceOutput { .. } => AnalysisRelationV1::TraceOutput,
-            Self::Result { .. } => AnalysisRelationV1::Results,
-        }
-    }
-}
-
-pub(crate) trait AnalysisProjection {
-    type Row;
-
+pub trait AnalysisProjection {
     fn decodes_events(&self) -> bool {
         false
     }
@@ -407,44 +522,23 @@ pub(crate) trait AnalysisProjection {
     fn project(
         &mut self,
         input: AnalysisInputV1<'_>,
-        sink: &mut ProjectionSink<'_, Self::Row>,
+        sink: &mut ProjectionSink<'_>,
     ) -> Result<bool>;
 }
 
-pub(crate) struct RecordProjection<F>(pub(crate) F);
-
-impl<F, T> AnalysisProjection for RecordProjection<F>
-where
-    F: FnMut(AnalysisInputV1<'_>) -> Result<Option<(T, usize)>>,
-{
-    type Row = T;
-
-    fn project(
-        &mut self,
-        input: AnalysisInputV1<'_>,
-        sink: &mut ProjectionSink<'_, T>,
-    ) -> Result<bool> {
-        let relation = input.relation();
-        match (self.0)(input)? {
-            Some(row) => sink.emit(relation, row),
-            None => Ok(true),
-        }
-    }
-}
-
-pub(crate) struct ProjectionSink<'a, T> {
-    output: &'a mut AnalysisExtractionV1<T>,
+pub struct ProjectionSink<'a> {
+    output: &'a mut AnalysisExtractionV1,
     control: &'a AnalysisReadControl,
     row_bytes: Option<&'a mut usize>,
     emitted: usize,
 }
 
-impl<T> ProjectionSink<'_, T> {
-    pub(crate) fn check(&self) -> Result<()> {
+impl ProjectionSink<'_> {
+    pub fn check(&self) -> Result<()> {
         self.control.check()
     }
 
-    pub(crate) fn admit(&mut self, bytes: usize) -> Result<bool> {
+    pub fn admit(&mut self, bytes: usize) -> Result<bool> {
         self.control.check()?;
         if let Some(used) = &mut self.row_bytes {
             if used.saturating_add(bytes) > self.output.limits.page_bytes {
@@ -462,35 +556,23 @@ impl<T> ProjectionSink<'_, T> {
         Ok(true)
     }
 
-    pub(crate) fn emit(&mut self, relation: AnalysisRelationV1, row: (T, usize)) -> Result<bool> {
-        if !self.admit(row.1.saturating_add(size_of::<T>()))? {
-            return Ok(false);
-        }
-        self.output.push(relation, row)?;
-        Ok(true)
-    }
-
-    pub(crate) fn used_bytes(&self) -> usize {
-        self.output.input_bytes
-    }
-
-    pub(crate) fn projected(&mut self, bytes: usize) {
+    pub fn projected(&mut self, bytes: usize) {
         self.output.projected_bytes += bytes;
     }
 
-    pub(crate) fn remaining_bytes(&self) -> usize {
+    pub fn remaining_bytes(&self) -> usize {
         self.output
             .limits
             .input_bytes
             .saturating_sub(self.output.input_bytes)
     }
 
-    pub(crate) fn page_rows(&self) -> usize {
+    pub fn page_rows(&self) -> usize {
         self.output.limits.page_rows.min(MAX_ANALYSIS_PAGE_RECORDS)
     }
 
-    pub(crate) fn grow<U>(&mut self, values: &mut Vec<U>) -> Result<()> {
-        let added = AnalysisExtractionV1::<T>::grow(
+    pub fn grow<U>(&mut self, values: &mut Vec<U>) -> Result<()> {
+        let added = AnalysisExtractionV1::grow(
             values,
             self.output.input_bytes,
             self.output.limits.input_bytes,
@@ -498,36 +580,9 @@ impl<T> ProjectionSink<'_, T> {
         self.output.charge(added)
     }
 
-    pub(crate) fn charge(&mut self, bytes: usize) -> Result<()> {
+    pub fn charge(&mut self, bytes: usize) -> Result<()> {
         self.output.charge(bytes)
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AnalysisRelationV1 {
-    Events,
-    Context,
-    DiscoveryContext,
-    Behaviors,
-    Targets,
-    Results,
-    Traces,
-    TraceOutput,
-    TraceMeasurements,
-    Findings,
-    Relationships,
-    GraphSubjects,
-    GraphBranches,
-    CorrelationPackages,
-    PolicyObservations,
-    Notifications,
-}
-
-#[derive(Debug)]
-pub struct AnalysisInputPageV1<T = Box<[u8]>> {
-    pub relation: AnalysisRelationV1,
-    pub rows: Vec<T>,
-    pub input_bytes: usize,
 }
 
 #[derive(Debug)]
@@ -541,7 +596,7 @@ pub struct AnalysisSourceSnapshotV1 {
 }
 
 #[derive(Debug)]
-pub struct AnalysisExtractionV1<T = Box<[u8]>> {
+pub struct AnalysisExtractionV1 {
     pub discovery_enabled: bool,
     pub graph_enabled: bool,
     pub notification_enabled: bool,
@@ -549,11 +604,12 @@ pub struct AnalysisExtractionV1<T = Box<[u8]>> {
     pub sources: Vec<AnalysisSourceSnapshotV1>,
     pub missing_contexts: Vec<AnalysisContextKeyV1>,
     pub missing_results: Vec<String>,
-    pub pages: Vec<AnalysisInputPageV1<T>>,
+    pub context_refs: Vec<crate::AnalysisContextRefV1>,
+    pub result_refs: Vec<crate::analysis::PackageResultRefV1>,
     pub replay_floor: Option<StorePositionV1>,
     pub scanned_bytes: usize,
     pub projected_bytes: usize,
-    /// Includes projected bytes, row descriptors, page headers, and coverage metadata.
+    /// Includes retained projection bytes and source metadata.
     pub input_bytes: usize,
     pub(crate) trace_reads: Vec<[u8; 16]>,
     pub(crate) graph_traversal: Option<crate::GraphTraversalReceiptV1>,
@@ -561,8 +617,8 @@ pub struct AnalysisExtractionV1<T = Box<[u8]>> {
 }
 
 #[derive(Debug)]
-pub struct AnalysisPositionPageV1<T = Box<[u8]>> {
-    pub extraction: AnalysisExtractionV1<T>,
+pub struct AnalysisPositionPageV1 {
+    pub extraction: AnalysisExtractionV1,
     /// Includes scanned rows that did not pass the projection.
     pub scanned_through: StorePositionV1,
     pub exhausted: bool,
@@ -572,6 +628,75 @@ enum ExtractMode {
     Complete,
     Metadata,
     Page(Option<StorePositionV1>),
+    Changes(StorePositionV1),
+}
+
+impl AnalysisExtractionV1 {
+    pub fn allocation_bytes(&self) -> usize {
+        let mut bytes = size_of::<Self>()
+            .saturating_add(
+                self.sources
+                    .capacity()
+                    .saturating_mul(size_of::<AnalysisSourceSnapshotV1>()),
+            )
+            .saturating_add(
+                self.missing_contexts
+                    .capacity()
+                    .saturating_mul(size_of::<AnalysisContextKeyV1>()),
+            )
+            .saturating_add(
+                self.missing_results
+                    .capacity()
+                    .saturating_mul(size_of::<String>()),
+            )
+            .saturating_add(
+                self.context_refs
+                    .capacity()
+                    .saturating_mul(size_of::<crate::AnalysisContextRefV1>()),
+            )
+            .saturating_add(
+                self.result_refs
+                    .capacity()
+                    .saturating_mul(size_of::<super::PackageResultRefV1>()),
+            )
+            .saturating_add(
+                self.trace_reads
+                    .capacity()
+                    .saturating_mul(size_of::<[u8; 16]>()),
+            )
+            .saturating_add(
+                self.graph_traversal
+                    .as_ref()
+                    .map_or(0, crate::GraphTraversalReceiptV1::heap_bytes),
+            );
+        for source in &self.sources {
+            bytes = bytes
+                .saturating_add(source.receipt.identity.node_id.capacity())
+                .saturating_add(source.coverage_report.as_ref().map_or(0, Vec::capacity));
+            for gaps in [&source.expired, &source.recovery, &source.pending] {
+                bytes = bytes
+                    .saturating_add(gaps.capacity().saturating_mul(size_of::<AnalysisGapV1>()));
+            }
+        }
+        for key in self
+            .missing_contexts
+            .iter()
+            .chain(self.context_refs.iter().map(|reference| &reference.key))
+        {
+            bytes = bytes
+                .saturating_add(key.owner_id.capacity())
+                .saturating_add(key.entity_key.capacity())
+                .saturating_add(key.lifetime_key.capacity());
+        }
+        for result in self.missing_results.iter().chain(
+            self.result_refs
+                .iter()
+                .map(|reference| &reference.result_id),
+        ) {
+            bytes = bytes.saturating_add(result.capacity());
+        }
+        bytes
+    }
 }
 
 struct SelectedTrace<'a> {
@@ -580,11 +705,82 @@ struct SelectedTrace<'a> {
     selected: bool,
 }
 
-impl<T> AnalysisExtractionV1<T> {
-    pub(crate) fn sink<'a>(
-        &'a mut self,
-        control: &'a AnalysisReadControl,
-    ) -> ProjectionSink<'a, T> {
+impl AnalysisExtractionV1 {
+    fn reference_context(&mut self, key: &AnalysisContextKeyV1, revision: u64) -> Result<()> {
+        let index = match self
+            .context_refs
+            .binary_search_by(|reference| reference.key.cmp(key))
+        {
+            Ok(index) if self.context_refs[index].commit_revision == revision => return Ok(()),
+            Ok(_) => {
+                return Err(crate::AnalysisStateSnafu {
+                    path: std::path::Path::new("<extraction>"),
+                    reason: "the captured context revision changed",
+                }
+                .build());
+            }
+            Err(index) => index,
+        };
+        let key = key.clone();
+        self.charge(
+            key.owner_id.capacity() + key.entity_key.capacity() + key.lifetime_key.capacity(),
+        )?;
+        let added = Self::grow(
+            &mut self.context_refs,
+            self.input_bytes,
+            self.limits.input_bytes,
+        )?;
+        self.charge(added)?;
+        self.context_refs.insert(
+            index,
+            crate::AnalysisContextRefV1 {
+                key,
+                commit_revision: revision,
+            },
+        );
+        Ok(())
+    }
+
+    fn reference_result(&mut self, id: &str, revision: u64) -> Result<()> {
+        let index = match self
+            .result_refs
+            .binary_search_by(|reference| reference.result_id.as_str().cmp(id))
+        {
+            Ok(index) if self.result_refs[index].commit_revision == revision => return Ok(()),
+            Ok(_) => {
+                return Err(crate::AnalysisStateSnafu {
+                    path: std::path::Path::new("<extraction>"),
+                    reason: "the captured result revision changed",
+                }
+                .build());
+            }
+            Err(index) => index,
+        };
+        let result_id = id.to_owned();
+        self.charge(result_id.capacity())?;
+        let added = Self::grow(
+            &mut self.result_refs,
+            self.input_bytes,
+            self.limits.input_bytes,
+        )?;
+        self.charge(added)?;
+        self.result_refs.insert(
+            index,
+            crate::analysis::PackageResultRefV1 {
+                result_id,
+                commit_revision: revision,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn trace_reads(&self) -> &[[u8; 16]] {
+        &self.trace_reads
+    }
+    pub fn graph_traversal(&self) -> Option<&crate::GraphTraversalReceiptV1> {
+        self.graph_traversal.as_ref()
+    }
+    pub fn sink<'a>(&'a mut self, control: &'a AnalysisReadControl) -> ProjectionSink<'a> {
         ProjectionSink {
             output: self,
             control,
@@ -658,54 +854,9 @@ impl<T> AnalysisExtractionV1<T> {
         Ok(())
     }
 
-    fn push(&mut self, relation: AnalysisRelationV1, (row, heap): (T, usize)) -> Result<()> {
-        let bytes = heap
-            .checked_add(size_of::<T>())
-            .filter(|bytes| *bytes <= self.limits.page_bytes)
-            .ok_or_else(|| {
-                AnalysisInputTooLargeSnafu {
-                    resource: "projected row bytes",
-                }
-                .build()
-            })?;
-        let new_page = self.pages.last().is_none_or(|page| {
-            page.relation != relation
-                || page.rows.len() == self.limits.page_rows
-                || page
-                    .input_bytes
-                    .checked_add(bytes)
-                    .is_none_or(|total| total > self.limits.page_bytes)
-        });
-        self.charge(heap)?;
-        if new_page {
-            let added = Self::grow(&mut self.pages, self.input_bytes, self.limits.input_bytes)?;
-            self.charge(added)?;
-            self.pages.push(AnalysisInputPageV1 {
-                relation,
-                rows: Vec::new(),
-                input_bytes: 0,
-            });
-        }
-        let missing = || {
-            crate::AnalysisStateSnafu {
-                path: std::path::Path::new("<extraction>"),
-                reason: "the charged input page is absent",
-            }
-            .build()
-        };
-        let page = self.pages.last_mut().ok_or_else(missing)?;
-        let added = Self::grow(&mut page.rows, self.input_bytes, self.limits.input_bytes)?;
-        self.charge(added)?;
-        self.projected_bytes += heap;
-        let page = self.pages.last_mut().ok_or_else(missing)?;
-        page.input_bytes += bytes;
-        page.rows.push(row);
-        Ok(())
-    }
-
     fn project(
         &mut self,
-        projection: &mut dyn AnalysisProjection<Row = T>,
+        projection: &mut dyn AnalysisProjection,
         input: AnalysisInputV1<'_>,
         control: &AnalysisReadControl,
         row_bytes: Option<&mut usize>,
@@ -734,18 +885,22 @@ impl AnalysisStore {
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
         }
-        if (selection.graph || selection.graph_traversal.is_some()) && !self.graph_enabled() {
-            return crate::QueryUnsupportedSnafu {
+        if (selection.graphs.is_all()
+            || !selection.graphs.as_slice().is_empty()
+            || selection.graph_traversal.is_some())
+            && !self.graph_enabled()
+        {
+            return crate::AnalysisUnavailableSnafu {
                 relation: "graph owner disabled",
             }
             .fail();
         }
-        if selection.notifications
+        if (selection.obligations.is_all() || !selection.obligations.as_slice().is_empty())
             && !self
                 .notification_owner
                 .load(std::sync::atomic::Ordering::Acquire)
         {
-            return crate::QueryUnsupportedSnafu {
+            return crate::AnalysisUnavailableSnafu {
                 relation: "notification owner disabled",
             }
             .fail();
@@ -754,9 +909,9 @@ impl AnalysisStore {
             && !selection.contexts.is_all()
             && !selection.traces.is_all()
             && !selection.targets_only
-            && !selection.discovery
-            && !selection.graph
-            && !selection.notifications
+            && !selection.profiles.is_all()
+            && !selection.graphs.is_all()
+            && !selection.obligations.is_all()
             && selection.nodes.is_empty()
         {
             return Ok((Cow::Borrowed(selection), 0));
@@ -783,9 +938,18 @@ impl AnalysisStore {
             Selection::All => Vec::new(),
             Selection::Exact(keys) => keys,
         });
-        resolved.discovery = false;
-        resolved.graph = false;
-        resolved.notifications = false;
+        resolved.profiles = Selection::Exact(match resolved.profiles {
+            Selection::All => Vec::new(),
+            Selection::Exact(keys) => keys,
+        });
+        resolved.graphs = Selection::Exact(match resolved.graphs {
+            Selection::All => Vec::new(),
+            Selection::Exact(keys) => keys,
+        });
+        resolved.obligations = Selection::Exact(match resolved.obligations {
+            Selection::All => Vec::new(),
+            Selection::Exact(keys) => keys,
+        });
         if selection.targets_only {
             resolved
                 .contexts
@@ -830,7 +994,7 @@ impl AnalysisStore {
                     let sources = resolved.sources.exact_mut().ok_or_else(|| {
                         self.state_error("the resolved source selection is not exact")
                     })?;
-                    let added = AnalysisExtractionV1::<()>::grow(sources, bytes, limit)?;
+                    let added = AnalysisExtractionV1::grow(sources, bytes, limit)?;
                     bytes = bytes
                         .checked_add(added)
                         .and_then(|bytes| bytes.checked_add(source.node_id.capacity()))
@@ -881,7 +1045,7 @@ impl AnalysisStore {
                 let contexts = resolved.contexts.exact_mut().ok_or_else(|| {
                     self.state_error("the resolved context selection is not exact")
                 })?;
-                let added = AnalysisExtractionV1::<()>::grow(contexts, bytes, limit)?;
+                let added = AnalysisExtractionV1::grow(contexts, bytes, limit)?;
                 bytes = bytes
                     .checked_add(added)
                     .and_then(|bytes| bytes.checked_add(key.owner_id.capacity()))
@@ -915,7 +1079,7 @@ impl AnalysisStore {
                     Self::read_trace_intent(snapshot, &self.root, selection.tenant_id, request)?
                         .ok_or_else(|| self.state_error("the tenant trace is absent"))?;
                 if state.read_revoked {
-                    return crate::QueryDeniedSnafu.fail();
+                    return crate::AnalysisReadDeniedSnafu.fail();
                 }
                 for binding in intent.bindings {
                     let identity = binding.identity;
@@ -933,7 +1097,7 @@ impl AnalysisStore {
                     let traces = resolved.traces.exact_mut().ok_or_else(|| {
                         self.state_error("the resolved trace selection is not exact")
                     })?;
-                    let added = AnalysisExtractionV1::<()>::grow(traces, bytes, limit)?;
+                    let added = AnalysisExtractionV1::grow(traces, bytes, limit)?;
                     bytes = bytes
                         .checked_add(added)
                         .and_then(|bytes| bytes.checked_add(identity.node_id.capacity()))
@@ -943,7 +1107,7 @@ impl AnalysisStore {
                 }
             }
         }
-        if selection.discovery {
+        if selection.profiles.is_all() {
             let mut statement = snapshot
                 .prepare(
                     "SELECT result_id FROM analysis_results
@@ -985,20 +1149,26 @@ impl AnalysisStore {
                     if resolved.key_count() == MAX_EXTRACT_KEYS {
                         return Err(error());
                     }
-                    let added =
-                        AnalysisExtractionV1::<()>::grow(&mut resolved.profiles, bytes, limit)?;
+                    let profiles = resolved.profiles.exact_mut().ok_or_else(|| {
+                        self.state_error("the resolved profile selection is not exact")
+                    })?;
+                    let added = AnalysisExtractionV1::grow(profiles, bytes, limit)?;
                     bytes = bytes
                         .checked_add(added)
                         .and_then(|bytes| bytes.checked_add(id.capacity()))
                         .filter(|bytes| *bytes <= limit)
                         .ok_or_else(error)?;
-                    resolved.profiles.push(id);
+                    profiles.push(id);
                 }
             }
-            resolved.profiles.sort();
-            resolved.profiles.dedup();
+            let profiles = resolved
+                .profiles
+                .exact_mut()
+                .ok_or_else(|| self.state_error("the resolved profile selection is not exact"))?;
+            profiles.sort();
+            profiles.dedup();
         }
-        if selection.graph {
+        if selection.graphs.is_all() {
             let mut statement = snapshot.prepare(
                 "SELECT result_id FROM analysis_results
                  WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND stream_key = ?
@@ -1033,18 +1203,20 @@ impl AnalysisStore {
                     if resolved.key_count() == MAX_EXTRACT_KEYS {
                         return Err(error());
                     }
-                    let added =
-                        AnalysisExtractionV1::<()>::grow(&mut resolved.graphs, bytes, limit)?;
+                    let graphs = resolved.graphs.exact_mut().ok_or_else(|| {
+                        self.state_error("the resolved graph selection is not exact")
+                    })?;
+                    let added = AnalysisExtractionV1::grow(graphs, bytes, limit)?;
                     bytes = bytes
                         .checked_add(added)
                         .and_then(|bytes| bytes.checked_add(id.capacity()))
                         .filter(|bytes| *bytes <= limit)
                         .ok_or_else(error)?;
-                    resolved.graphs.push(id);
+                    graphs.push(id);
                 }
             }
         }
-        if selection.notifications {
+        if selection.obligations.is_all() {
             let remaining = MAX_EXTRACT_KEYS - resolved.key_count();
             let mut statement = snapshot
                 .prepare(
@@ -1088,8 +1260,10 @@ impl AnalysisStore {
                 if resolved.key_count() == MAX_EXTRACT_KEYS {
                     return Err(error());
                 }
-                let added =
-                    AnalysisExtractionV1::<()>::grow(&mut resolved.obligations, bytes, limit)?;
+                let obligations = resolved.obligations.exact_mut().ok_or_else(|| {
+                    self.state_error("the resolved notification selection is not exact")
+                })?;
+                let added = AnalysisExtractionV1::grow(obligations, bytes, limit)?;
                 bytes = bytes
                     .checked_add(added)
                     .and_then(|bytes| {
@@ -1101,68 +1275,20 @@ impl AnalysisStore {
                     })
                     .filter(|bytes| *bytes <= limit)
                     .ok_or_else(error)?;
-                resolved.obligations.push(key);
+                obligations.push(key);
             }
         }
         control.check()?;
         Ok((Cow::Owned(resolved), bytes))
     }
 
-    /// Project permitted rows and fields without caller I/O. No partial input escapes an error.
-    pub fn extract(
-        &self,
-        selection: &AnalysisSelectionV1,
-        control: &AnalysisReadControl,
-        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
-    ) -> Result<AnalysisExtractionV1> {
-        self.extract_mode(
-            selection,
-            ExtractMode::Complete,
-            AnalysisExtractLimits::default(),
-            control,
-            &mut RecordProjection(|input: AnalysisInputV1<'_>| {
-                project(input).map(|row| {
-                    row.map(|row| {
-                        let bytes = row.len();
-                        (row.into_boxed_slice(), bytes)
-                    })
-                })
-            }),
-        )
-        .map(|page| page.extraction)
-    }
-
-    /// Read a bounded page in durable commit order, including pending source ranges.
-    pub fn read_positions(
-        &self,
-        selection: &AnalysisSelectionV1,
-        after: Option<StorePositionV1>,
-        control: &AnalysisReadControl,
-        mut project: impl FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
-    ) -> Result<AnalysisPositionPageV1> {
-        self.extract_mode(
-            selection,
-            ExtractMode::Page(after),
-            AnalysisExtractLimits::default(),
-            control,
-            &mut RecordProjection(|input: AnalysisInputV1<'_>| {
-                project(input).map(|row| {
-                    row.map(|row| {
-                        let bytes = row.len();
-                        (row.into_boxed_slice(), bytes)
-                    })
-                })
-            }),
-        )
-    }
-
-    pub(crate) fn extract_rows<P: AnalysisProjection>(
+    pub fn extract_rows<P: AnalysisProjection>(
         &self,
         selection: &AnalysisSelectionV1,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
         mut project: P,
-    ) -> Result<(AnalysisPositionPageV1<P::Row>, P)> {
+    ) -> Result<(AnalysisPositionPageV1, P)> {
         let page = self.extract_mode(
             selection,
             ExtractMode::Complete,
@@ -1173,14 +1299,14 @@ impl AnalysisStore {
         Ok((page, project))
     }
 
-    pub(crate) fn position_rows<P: AnalysisProjection>(
+    pub fn position_rows<P: AnalysisProjection>(
         &self,
         selection: &AnalysisSelectionV1,
         after: Option<StorePositionV1>,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
         mut project: P,
-    ) -> Result<(AnalysisPositionPageV1<P::Row>, P)> {
+    ) -> Result<(AnalysisPositionPageV1, P)> {
         let page = self.extract_mode(
             selection,
             ExtractMode::Page(after),
@@ -1191,13 +1317,36 @@ impl AnalysisStore {
         Ok((page, project))
     }
 
-    pub(crate) fn metadata_rows<P: AnalysisProjection>(
+    /// Read raw inserts and retirements through one captured revision.
+    /// This read does not emit changes to context, result, or trace state rows.
+    pub fn change_rows<P: AnalysisProjection>(
+        &self,
+        selection: &AnalysisSelectionV1,
+        after: StorePositionV1,
+        limits: AnalysisExtractLimits,
+        control: &AnalysisReadControl,
+        mut project: P,
+    ) -> Result<(AnalysisPositionPageV1, P)> {
+        if after.ordinal != u32::MAX {
+            return self.reject("the raw change frontier is not a complete commit");
+        }
+        let page = self.extract_mode(
+            selection,
+            ExtractMode::Changes(after),
+            limits,
+            control,
+            &mut project,
+        )?;
+        Ok((page, project))
+    }
+
+    pub fn metadata_rows<P: AnalysisProjection>(
         &self,
         selection: &AnalysisSelectionV1,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
         mut project: P,
-    ) -> Result<(AnalysisPositionPageV1<P::Row>, P)> {
+    ) -> Result<(AnalysisPositionPageV1, P)> {
         let page = self.extract_mode(
             selection,
             ExtractMode::Metadata,
@@ -1208,14 +1357,14 @@ impl AnalysisStore {
         Ok((page, project))
     }
 
-    fn extract_mode<T>(
+    fn extract_mode(
         &self,
         selection: &AnalysisSelectionV1,
         mode: ExtractMode,
         limits: AnalysisExtractLimits,
         control: &AnalysisReadControl,
-        project: &mut dyn AnalysisProjection<Row = T>,
-    ) -> Result<AnalysisPositionPageV1<T>> {
+        project: &mut dyn AnalysisProjection,
+    ) -> Result<AnalysisPositionPageV1> {
         control.check()?;
         if !selection.valid() {
             return self.reject("the extraction selection has invalid, duplicate, or foreign keys");
@@ -1245,6 +1394,7 @@ impl AnalysisStore {
             let mut after = match mode {
                 ExtractMode::Complete | ExtractMode::Metadata => None,
                 ExtractMode::Page(after) => after,
+                ExtractMode::Changes(after) => Some(after),
             };
             if after.is_some_and(|position| position > end) {
                 return self.reject("the position read starts beyond the captured revision");
@@ -1259,7 +1409,8 @@ impl AnalysisStore {
                 sources: Vec::new(),
                 missing_contexts: Vec::new(),
                 missing_results: Vec::new(),
-                pages: Vec::new(),
+                context_refs: Vec::new(),
+                result_refs: Vec::new(),
                 scanned_bytes: 0,
                 projected_bytes: 0,
                 input_bytes: 0,
@@ -1268,15 +1419,13 @@ impl AnalysisStore {
                 limits,
                 replay_floor: Self::replay_floor_from(snapshot, selection.tenant_id)?,
             };
-            output.charge(size_of::<AnalysisExtractionV1<T>>())?;
+            output.charge(size_of::<AnalysisExtractionV1>())?;
             output.charge(key_bytes)?;
-            if let (ExtractMode::Page(Some(position)), Some(floor)) = (&mode, output.replay_floor) {
-                if *position < floor {
-                    return crate::QueryCursorExpiredSnafu {
-                        position: *position,
-                        floor,
+            if matches!(mode, ExtractMode::Page(_) | ExtractMode::Changes(_)) {
+                if let (Some(position), Some(floor)) = (after, output.replay_floor) {
+                    if position < floor {
+                        return crate::AnalysisReplayExpiredSnafu { position, floor }.fail();
                     }
-                    .fail();
                 }
             }
             for identity in selection.sources.as_slice() {
@@ -1296,7 +1445,7 @@ impl AnalysisStore {
                 output.charge(pending.capacity() * size_of::<AnalysisGapV1>())?;
                 let coverage_report = self.read_coverage_from(snapshot, &receipt)?;
                 output.charge(coverage_report.as_ref().map_or(0, Vec::capacity))?;
-                let added = AnalysisExtractionV1::<T>::grow(
+                let added = AnalysisExtractionV1::grow(
                     &mut output.sources,
                     output.input_bytes,
                     output.limits.input_bytes,
@@ -1321,7 +1470,7 @@ impl AnalysisStore {
                 )?
                 .ok_or_else(|| self.state_error("the selected trace is absent"))?;
                 if state.read_revoked {
-                    return crate::QueryDeniedSnafu.fail();
+                    return crate::AnalysisReadDeniedSnafu.fail();
                 }
                 let index = intent
                     .bindings
@@ -1336,7 +1485,7 @@ impl AnalysisStore {
                 if receipt.commit_revision > output.meta.commit_revision {
                     return self.reject("the selected trace receipt exceeds its snapshot");
                 }
-                let added = AnalysisExtractionV1::<T>::grow(
+                let added = AnalysisExtractionV1::grow(
                     &mut trace_info,
                     output.input_bytes,
                     limits.input_bytes,
@@ -1360,7 +1509,7 @@ impl AnalysisStore {
                             ordinal: 0,
                         });
                         if position < floor {
-                            return crate::QueryCursorExpiredSnafu { position, floor }.fail();
+                            return crate::AnalysisReplayExpiredSnafu { position, floor }.fail();
                         }
                     } else {
                         return crate::RetainedRangeExpiredSnafu {
@@ -1371,7 +1520,7 @@ impl AnalysisStore {
                     }
                 }
                 if !output.trace_reads.contains(&identity.request_id) {
-                    let added = AnalysisExtractionV1::<T>::grow(
+                    let added = AnalysisExtractionV1::grow(
                         &mut output.trace_reads,
                         output.input_bytes,
                         limits.input_bytes,
@@ -1379,18 +1528,26 @@ impl AnalysisStore {
                     output.charge(added)?;
                     output.trace_reads.push(identity.request_id);
                 }
-                output.project(
-                    project,
-                    AnalysisInputV1::Trace {
-                        state: &state,
-                        intent: &intent,
-                        target_index: index as u32,
-                        receipt: &receipt,
-                    },
-                    control,
-                    None,
-                )?;
+                if !matches!(mode, ExtractMode::Changes(_)) {
+                    output.project(
+                        project,
+                        AnalysisInputV1::Trace {
+                            state: &state,
+                            intent: &intent,
+                            target_index: index as u32,
+                            receipt: &receipt,
+                        },
+                        control,
+                        None,
+                    )?;
+                }
             }
+            let removals = if let ExtractMode::Changes(after) = mode {
+                self.raw_removals(snapshot, selection, &trace_info, after, control, &mut output)?
+            } else {
+                Vec::new()
+            };
+            let mut removals = removals.into_iter().peekable();
             let mut scanned = 0;
             let mut row_bytes = 0_usize;
             let mut exhausted = false;
@@ -1402,7 +1559,9 @@ impl AnalysisStore {
                     break;
                 }
                 let limit = match mode {
-                    ExtractMode::Complete | ExtractMode::Metadata => usize::MAX,
+                    ExtractMode::Complete | ExtractMode::Metadata | ExtractMode::Changes(_) => {
+                        usize::MAX
+                    }
                     ExtractMode::Page(_) => limits.page_rows - scanned,
                 };
                 if limit == 0 {
@@ -1430,6 +1589,11 @@ impl AnalysisStore {
                 output.scan(range.scan_bytes)?;
                 for record in range.read(&self.root)? {
                     control.check()?;
+                    while let Some(removal) = removals.next_if(|removal| {
+                        removal.revision < record.position.commit_revision
+                    }) {
+                        output.remove_raw(project, &removal, control)?;
+                    }
                     let page_bytes = matches!(mode, ExtractMode::Page(_)).then_some(&mut row_bytes);
                     let consumed = match &identity {
                         RawIdentity::Evidence(identity) => {
@@ -1510,16 +1674,34 @@ impl AnalysisStore {
                         }
                     };
                     if !consumed {
+                        if matches!(mode, ExtractMode::Changes(_)) {
+                            return AnalysisInputTooLargeSnafu {
+                                resource: "complete change input",
+                            }
+                            .fail();
+                        }
                         break 'scan;
                     }
                     scanned += 1;
                     after = Some(record.position);
                 }
             }
+            if matches!(mode, ExtractMode::Changes(_)) {
+                for removal in removals {
+                    output.remove_raw(project, &removal, control)?;
+                }
+                control.check()?;
+                return Ok(AnalysisPositionPageV1 {
+                    extraction: output,
+                    scanned_through: end,
+                    exhausted: true,
+                });
+            }
             for key in selection.contexts.as_slice() {
                 control.check()?;
                 match Self::read_context_from(snapshot, &self.root, key)? {
-                    Some((context, _)) => {
+                    Some((context, revision)) => {
+                        output.reference_context(&context.key, revision)?;
                         output.project(
                             project,
                             AnalysisInputV1::Context(&context),
@@ -1534,7 +1716,7 @@ impl AnalysisStore {
                                 + key.entity_key.capacity()
                                 + key.lifetime_key.capacity(),
                         )?;
-                        let added = AnalysisExtractionV1::<T>::grow(
+                        let added = AnalysisExtractionV1::grow(
                             &mut output.missing_contexts,
                             output.input_bytes,
                             output.limits.input_bytes,
@@ -1544,7 +1726,7 @@ impl AnalysisStore {
                     }
                 }
             }
-            for id in &selection.profiles {
+            for id in selection.profiles.as_slice() {
                 control.check()?;
                 let body = self
                     .read_result_from(snapshot, selection.tenant_id, id)?
@@ -1561,6 +1743,7 @@ impl AnalysisStore {
                         operation: "read discovery profile revision",
                     })?;
                 let discovery_enabled = output.discovery_enabled;
+                output.reference_result(id, revision)?;
                 output.project(
                     project,
                     AnalysisInputV1::Profile {
@@ -1577,7 +1760,7 @@ impl AnalysisStore {
             if let Some(request) = &selection.graph_traversal {
                 self.traverse_graphs(snapshot, selection, request, &mut output, control, project)?;
             }
-            for id in selection.graphs.iter().filter(|_| selection.graph_traversal.is_none()) {
+            for id in selection.graphs.as_slice().iter().filter(|_| selection.graph_traversal.is_none()) {
                 control.check()?;
                 let (key, revision): (Vec<u8>, u64) = snapshot.query_row(
                     "SELECT stream_key, commit_revision FROM analysis_results
@@ -1608,12 +1791,15 @@ impl AnalysisStore {
                     }
                 }
                 graph.validate()?;
+                output.reference_result(id, revision)?;
                 output.project(project, AnalysisInputV1::Graph {
                     result_id: id, graph: &graph, commit_revision: revision, sensitivity,
+                    subject_count: header.subject_count,
+                    relationship_count: header.edge_count,
                     traversal_depths: None,
                 }, control, None)?;
             }
-            for key in &selection.obligations {
+            for key in selection.obligations.as_slice() {
                 control.check()?;
                 let (context, revision) = Self::read_context_from(snapshot, &self.root, key)?
                     .ok_or_else(|| self.state_error("the selected notification state is absent"))?;
@@ -1621,22 +1807,23 @@ impl AnalysisStore {
                 output.charge(context.body.capacity().saturating_mul(2))?;
                 let obligation = crate::NotificationObligationV1::try_from(&context)?;
                 let finding = if let Some(reference) = &obligation.finding {
-                    let metadata: Option<Vec<u8>> = snapshot.query_row(
-                        "SELECT stream_key FROM analysis_results
+                    let metadata: Option<(Vec<u8>, u64)> = snapshot.query_row(
+                        "SELECT stream_key, commit_revision FROM analysis_results
                          WHERE tenant_id = ? AND processor_id = ? AND method_version = ? AND result_id = ?
                             AND stream_key IS NOT NULL",
                         params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR,
-                            crate::GRAPH_SCHEMA_VERSION, reference.result_id], |row| row.get(0),
+                            crate::GRAPH_SCHEMA_VERSION, reference.result_id], |row| Ok((row.get(0)?, row.get(1)?)),
                     ).optional().context(AnalysisDatabaseSnafu {
                         operation: "read notification graph source",
                     })?;
-                    if let Some(source_key) = metadata {
+                    if let Some((source_key, graph_revision)) = metadata {
                         let Some(source) = selection.sources.as_slice().iter().find(|source| source.key() == source_key) else { continue; };
                         let header = self.graph_input(snapshot, selection.tenant_id,
                             &reference.result_id, &mut output, control)?;
                         let mut graph = header.snapshot;
                         if graph.scope.identity != *source { return self.reject("the notification graph source differs from its index"); }
                         if !selection.permits_graph(&graph) { continue; }
+                        output.reference_result(&reference.result_id, graph_revision)?;
                         graph.findings.iter().position(|finding| finding.finding_id == reference.finding_id)
                             .map(|index| graph.findings.swap_remove(index))
                     } else if unscoped_notifications { None } else { continue; }
@@ -1646,6 +1833,7 @@ impl AnalysisStore {
                         effect.binding_id.is_none_or(|binding| !selection.binding_ids.contains(&binding))
                     })
                 }) { continue; }
+                output.reference_context(&context.key, revision)?;
                 output.project(project, AnalysisInputV1::Notification {
                     obligation: &obligation, finding: finding.as_ref(), commit_revision: revision,
                 }, control, None)?;
@@ -1654,6 +1842,12 @@ impl AnalysisStore {
                 control.check()?;
                 match self.read_result_from(snapshot, selection.tenant_id, id)? {
                     Some(body) => {
+                        let revision: u64 = snapshot.query_row(
+                            "SELECT commit_revision FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+                            params![selection.tenant_id.as_slice(), id],
+                            |row| row.get(0),
+                        ).context(AnalysisDatabaseSnafu { operation: "read retained result revision" })?;
+                        output.reference_result(id, revision)?;
                         output.project(
                             project,
                             AnalysisInputV1::Result {
@@ -1667,7 +1861,7 @@ impl AnalysisStore {
                     None => {
                         let id = id.clone();
                         output.charge(id.capacity())?;
-                        let added = AnalysisExtractionV1::<T>::grow(
+                        let added = AnalysisExtractionV1::grow(
                             &mut output.missing_results,
                             output.input_bytes,
                             output.limits.input_bytes,
@@ -1766,13 +1960,13 @@ impl AnalysisStore {
         Ok(())
     }
 
-    fn extract_gaps<T>(
+    fn extract_gaps(
         &self,
         snapshot: &Connection,
         identity: &EvidenceIntakeIdentityV1,
         recovery: bool,
         control: &AnalysisReadControl,
-        output: &mut AnalysisExtractionV1<T>,
+        output: &mut AnalysisExtractionV1,
     ) -> Result<Vec<AnalysisGapV1>> {
         // Expired ranges have no time proof. A time filter cannot hide these gaps.
         let sql = if recovery {
@@ -1802,7 +1996,7 @@ impl AnalysisStore {
         let mut gaps = Vec::new();
         for row in rows {
             control.check()?;
-            let added = AnalysisExtractionV1::<T>::grow(
+            let added = AnalysisExtractionV1::grow(
                 &mut gaps,
                 output.input_bytes,
                 output.limits.input_bytes,
@@ -1825,6 +2019,56 @@ mod tests {
     };
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    struct Bytes<F> {
+        project: F,
+        rows: Vec<Box<[u8]>>,
+        page_bytes: usize,
+    }
+
+    impl<F> Bytes<F> {
+        fn new(project: F) -> Self {
+            Self {
+                project,
+                rows: Vec::new(),
+                page_bytes: MAX_ANALYSIS_PAGE_BYTES,
+            }
+        }
+    }
+
+    impl<F> AnalysisProjection for Bytes<F>
+    where
+        F: FnMut(AnalysisInputV1<'_>) -> Result<Option<Vec<u8>>>,
+    {
+        fn project(
+            &mut self,
+            input: AnalysisInputV1<'_>,
+            sink: &mut ProjectionSink<'_>,
+        ) -> Result<bool> {
+            let Some(row) = (self.project)(input)? else {
+                return Ok(true);
+            };
+            let row = row.into_boxed_slice();
+            let bytes = row
+                .len()
+                .checked_add(size_of::<Box<[u8]>>())
+                .filter(|bytes| *bytes <= self.page_bytes)
+                .ok_or_else(|| {
+                    AnalysisInputTooLargeSnafu {
+                        resource: "projected row bytes",
+                    }
+                    .build()
+                })?;
+            if !sink.admit(bytes)? {
+                return Ok(false);
+            }
+            sink.charge(row.len())?;
+            sink.grow(&mut self.rows)?;
+            sink.projected(row.len());
+            self.rows.push(row);
+            Ok(true)
+        }
+    }
 
     fn identity(tenant: u8) -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
@@ -1879,7 +2123,7 @@ mod tests {
             owner_revision: 1,
         }]);
         selection.results.push("result".into());
-        selection.profiles.push("profile".into());
+        selection.profiles = Selection::Exact(vec!["profile".into()]);
         selection.binding_ids.push([5; 16]);
         selection.traces = Selection::Exact(
             (1..=MAX_EXTRACT_KEYS as u128 - 5)
@@ -1929,6 +2173,139 @@ mod tests {
         );
     }
 
+    #[test]
+    fn analysis_exact_builtin_selection() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        store.enable_graph_owner()?;
+        store.enable_notification_owner()?;
+        let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
+        let key = AnalysisContextKeyV1 {
+            tenant_id: [1; 16],
+            owner_id: crate::NOTIFICATION_STATE_OWNER.into(),
+            entity_key: vec![1],
+            lifetime_key: vec![2],
+            owner_revision: 1,
+        };
+        let mut exact = AnalysisSelectionV1::new([1; 16], Vec::new());
+        exact.select_profiles(Selection::Exact(vec!["profile:exact".into()]))?;
+        exact.select_graphs(Selection::Exact(vec!["graph:exact".into()]), None)?;
+        exact.select_notifications(Selection::Exact(vec![key.clone()]))?;
+        let mut reader = store.reader_until(&control)?;
+        control.run(&mut reader, |snapshot| {
+            let (resolved, bytes) =
+                store.resolve_selection(snapshot, &exact, &control, usize::MAX)?;
+            assert!(matches!(resolved, Cow::Borrowed(_)));
+            assert_eq!(resolved.as_ref(), &exact);
+            assert_eq!(bytes, 0);
+
+            let mut expanded_sources = exact.clone();
+            expanded_sources.sources = Selection::All;
+            let (resolved, bytes) =
+                store.resolve_selection(snapshot, &expanded_sources, &control, usize::MAX)?;
+            assert_eq!(resolved.profiles(), &["profile:exact"]);
+            assert_eq!(resolved.graphs(), &["graph:exact"]);
+            assert_eq!(resolved.notification_keys(), &[key]);
+            assert!(bytes >= resolved.allocation_bytes());
+            Ok(())
+        })?;
+        drop(reader);
+
+        let relations = exact.source_revisions(7);
+        for expected in ["context_versions", "analysis_results", "graph_findings"] {
+            assert!(relations
+                .iter()
+                .any(|(name, revision)| name == expected && *revision == 7));
+        }
+        let disabled = AnalysisSelectionV1::new([1; 16], Vec::new());
+        store.release_graph_owner();
+        store.release_notification_owner();
+        let mut reader = store.reader_until(&control)?;
+        control.run(&mut reader, |snapshot| {
+            assert!(store
+                .resolve_selection(snapshot, &disabled, &control, usize::MAX)
+                .is_ok());
+            for selection in [
+                {
+                    let mut selection = disabled.clone();
+                    selection.select_graphs(Selection::Exact(vec!["graph:exact".into()]), None)?;
+                    selection
+                },
+                {
+                    let mut selection = disabled.clone();
+                    selection.select_notifications(exact.obligations.clone())?;
+                    selection
+                },
+            ] {
+                assert!(matches!(
+                    store.resolve_selection(snapshot, &selection, &control, usize::MAX),
+                    Err(crate::Error::AnalysisUnavailable { .. })
+                ));
+            }
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_exact_graph_history() -> TestResult {
+        use super::super::graph_rows::{tests::fixture::CommitFixture, GraphRows};
+
+        let fixture = CommitFixture::new()?;
+        fixture.store.commit_graph(&fixture.request, true)?;
+        let mut snapshot = fixture.snapshot.clone();
+        snapshot.previous_result_id = Some(fixture.request.result_id.clone());
+        snapshot.graph.edges.clear();
+        let mut replacement = fixture.request.clone();
+        replacement.result_id = "graph:replacement".into();
+        replacement.expected_cursor = replacement.consumed_cursor;
+        replacement.created_utc_ns += 1;
+        replacement.body = serde_json::to_vec(&snapshot)?;
+        fixture.store.commit_graph(&replacement, false)?;
+        let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
+        let source = fixture.snapshot.scope.identity.clone();
+        let ids = vec![
+            fixture.request.result_id.clone(),
+            replacement.result_id.clone(),
+        ];
+        let mut exact = AnalysisSelectionV1::new(source.tenant_id, vec![source]);
+        exact.select_graphs(Selection::Exact(ids.clone()), None)?;
+        let mut reader = fixture.store.reader_until(&control)?;
+        control.run(&mut reader, |reader| {
+            let (resolved, _) =
+                fixture
+                    .store
+                    .resolve_selection(reader, &exact, &control, usize::MAX)?;
+            assert_eq!(resolved.graphs(), ids);
+            let mut read = Vec::new();
+            GraphRows::visit_headers(
+                reader,
+                exact.tenant_id,
+                resolved.graphs(),
+                usize::MAX,
+                &control,
+                |id, _, _, _| {
+                    read.push(id.to_owned());
+                    Ok(())
+                },
+            )?;
+            read.sort();
+            let mut expected = ids.clone();
+            expected.sort();
+            assert_eq!(read, expected);
+
+            let mut all = exact.clone();
+            all.select_graphs(Selection::All, None)?;
+            let (resolved, _) =
+                fixture
+                    .store
+                    .resolve_selection(reader, &all, &control, usize::MAX)?;
+            assert_eq!(resolved.graphs(), &[replacement.result_id]);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     fn batch(first: u64, count: usize, received: u64) -> ValidatedEvidenceBatchV1 {
         ValidatedEvidenceBatchV1 {
             cpu_id: 0,
@@ -1963,17 +2340,37 @@ mod tests {
         })?;
         assert!(store.read_page(&identity, 1)?.records.is_empty());
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
-        let complete = store.extract(&selection, &AnalysisReadControl::default(), |input| {
-            let AnalysisInputV1::Event { record, .. } = input else {
-                return store.reject("unexpected relation");
-            };
-            Ok(Some(vec![record.cursor as u8]))
-        })?;
-        assert_eq!(complete.pages[0].rows.len(), 10);
+        let (
+            _,
+            Bytes {
+                rows: complete_rows,
+                ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
+                let AnalysisInputV1::Event { record, .. } = input else {
+                    return store.reject("unexpected relation");
+                };
+                Ok(Some(vec![record.cursor as u8]))
+            }),
+        )?;
+        assert_eq!(complete_rows.len(), 10);
         let before = store.meta()?;
         let mut positions = Vec::new();
-        let first =
-            store.read_positions(&selection, None, &AnalysisReadControl::default(), |input| {
+        let (
+            first,
+            Bytes {
+                rows: first_rows, ..
+            },
+        ) = store.position_rows(
+            &selection,
+            None,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
                 let AnalysisInputV1::Event {
                     record,
                     received_utc_ns,
@@ -1988,7 +2385,8 @@ mod tests {
                 assert_eq!(received_utc_ns, 10);
                 positions.push(record.position);
                 Ok(Some(vec![record.cursor as u8]))
-            })?;
+            }),
+        )?;
         assert!(first.exhausted);
         assert_eq!(first.extraction.meta, before);
         let source = &first.extraction.sources[0];
@@ -2003,18 +2401,20 @@ mod tests {
             (1, 10)
         );
         assert_eq!(
-            first.extraction.pages[0]
-                .rows
-                .iter()
-                .map(|row| row[0])
-                .collect::<Vec<_>>(),
+            first_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
             (11..=20).collect::<Vec<_>>()
         );
-        let next = store.read_positions(
+        let (
+            next,
+            Bytes {
+                rows: next_rows, ..
+            },
+        ) = store.position_rows(
             &selection,
             Some(first.scanned_through),
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |input| {
+            Bytes::new(|input: AnalysisInputV1<'_>| {
                 let AnalysisInputV1::Event {
                     record,
                     received_utc_ns,
@@ -2027,17 +2427,13 @@ mod tests {
                 assert_eq!(received_utc_ns, 20);
                 positions.push(record.position);
                 Ok(Some(vec![record.cursor as u8]))
-            },
+            }),
         )?;
         assert!(next.exhausted);
         assert_eq!(next.extraction.sources[0].receipt.contiguous_cursor, 20);
         assert!(next.extraction.sources[0].pending.is_empty());
         assert_eq!(
-            next.extraction.pages[0]
-                .rows
-                .iter()
-                .map(|row| row[0])
-                .collect::<Vec<_>>(),
+            next_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
             (1..=10).collect::<Vec<_>>()
         );
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
@@ -2055,13 +2451,21 @@ mod tests {
         let meta = store.meta()?;
         store.accept_validated_batch(identity.clone(), batch(11, 10, 10))?;
         assert_eq!(store.meta()?, meta);
-        let retry = store.read_positions(
+        let (
+            retry,
+            Bytes {
+                rows: retry_rows, ..
+            },
+        ) = store.position_rows(
             &selection,
             Some(next.scanned_through),
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |_| store.reject("an exact retry produced another query row"),
+            Bytes::new(|_: AnalysisInputV1<'_>| {
+                store.reject("an exact retry produced another query row")
+            }),
         )?;
-        assert!(retry.exhausted && retry.extraction.pages.is_empty());
+        assert!(retry.exhausted && retry_rows.is_empty());
         assert_eq!(retry.scanned_through, next.scanned_through);
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
@@ -2086,8 +2490,17 @@ mod tests {
         let selection =
             AnalysisSelectionV1::new(identity.tenant_id, vec![other.clone(), identity.clone()]);
         let mut seen = Vec::new();
-        let first =
-            store.read_positions(&selection, None, &AnalysisReadControl::default(), |input| {
+        let (
+            first,
+            Bytes {
+                rows: first_rows, ..
+            },
+        ) = store.position_rows(
+            &selection,
+            None,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
                 let AnalysisInputV1::Event {
                     identity: source,
                     record,
@@ -2099,16 +2512,23 @@ mod tests {
                 assert_eq!(source, &identity);
                 seen.push(record.position);
                 Ok(None)
-            })?;
+            }),
+        )?;
         assert!(!first.exhausted);
         assert_eq!(seen.len(), 256);
-        assert!(first.extraction.pages.is_empty());
+        assert!(first_rows.is_empty());
         assert_eq!(first.scanned_through, seen[255]);
-        let next = store.read_positions(
+        let (
+            next,
+            Bytes {
+                rows: next_rows, ..
+            },
+        ) = store.position_rows(
             &selection,
             Some(first.scanned_through),
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |input| {
+            Bytes::new(|input: AnalysisInputV1<'_>| {
                 let AnalysisInputV1::Event {
                     identity: source,
                     record,
@@ -2120,15 +2540,11 @@ mod tests {
                 assert_eq!(source.tenant_id, identity.tenant_id);
                 seen.push(record.position);
                 Ok(Some(vec![source.source_epoch as u8]))
-            },
+            }),
         )?;
         assert!(next.exhausted);
         assert_eq!(
-            next.extraction.pages[0]
-                .rows
-                .iter()
-                .map(|row| row[0])
-                .collect::<Vec<_>>(),
+            next_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
             vec![1, 2]
         );
         assert!(seen.windows(2).all(|pair| pair[0] < pair[1]));
@@ -2151,43 +2567,52 @@ mod tests {
         store.accept_validated_batch(identity.clone(), batch(1, 10, 2))?;
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         let mut positions = Vec::new();
-        let page =
-            store.read_positions(&selection, None, &AnalysisReadControl::default(), |input| {
+        let (
+            page,
+            Bytes {
+                rows: page_rows, ..
+            },
+        ) = store.position_rows(
+            &selection,
+            None,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
                 let AnalysisInputV1::Event { record, .. } = input else {
                     return store.reject("unexpected relation");
                 };
                 positions.push(record.position);
                 Ok(Some(vec![record.cursor as u8]))
-            })?;
+            }),
+        )?;
         let expected = [3, 7, 1, 2, 4, 5, 6, 8, 9, 10];
+        assert!(page.exhausted);
+        assert_eq!(page.scanned_through.ordinal, u32::MAX);
         assert_eq!(
-            page.extraction.pages[0]
-                .rows
-                .iter()
-                .map(|row| row[0])
-                .collect::<Vec<_>>(),
+            page_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
             expected
         );
         for (index, position) in positions.iter().enumerate() {
-            let page = store.read_positions(
+            let (
+                page,
+                Bytes {
+                    rows: page_rows, ..
+                },
+            ) = store.position_rows(
                 &selection,
                 Some(*position),
+                AnalysisExtractLimits::default(),
                 &AnalysisReadControl::default(),
-                |input| {
+                Bytes::new(|input: AnalysisInputV1<'_>| {
                     let AnalysisInputV1::Event { record, .. } = input else {
                         return store.reject("unexpected relation");
                     };
                     Ok(Some(vec![record.cursor as u8]))
-                },
+                }),
             )?;
             assert!(page.exhausted);
             assert_eq!(
-                page.extraction
-                    .pages
-                    .iter()
-                    .flat_map(|page| &page.rows)
-                    .map(|row| row[0])
-                    .collect::<Vec<_>>(),
+                page_rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
                 expected[index + 1..]
             );
         }
@@ -2209,37 +2634,57 @@ mod tests {
         store.accept_validated_batch(identity.clone(), batch(1, 3, 1))?;
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity]);
         let mut positions = Vec::new();
-        let first =
-            store.read_positions(&selection, None, &AnalysisReadControl::default(), |input| {
+        let (
+            first,
+            Bytes {
+                rows: first_rows, ..
+            },
+        ) = store.position_rows(
+            &selection,
+            None,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
                 let AnalysisInputV1::Event { record, .. } = input else {
                     return store.reject("unexpected relation");
                 };
                 positions.push(record.position);
                 Ok((record.cursor != 2).then(|| vec![record.cursor as u8; 600 * 1024]))
-            })?;
+            }),
+        )?;
         assert!(!first.exhausted);
-        assert_eq!(first.extraction.pages[0].rows.len(), 1);
-        assert_eq!(first.extraction.pages[0].rows[0][0], 1);
+        assert_eq!(first_rows.len(), 1);
+        assert_eq!(first_rows[0][0], 1);
         assert_eq!(first.scanned_through, positions[1]);
-        let next = store.read_positions(
+        let (
+            next,
+            Bytes {
+                rows: next_rows, ..
+            },
+        ) = store.position_rows(
             &selection,
             Some(first.scanned_through),
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |input| {
+            Bytes::new(|input: AnalysisInputV1<'_>| {
                 let AnalysisInputV1::Event { record, .. } = input else {
                     return store.reject("unexpected relation");
                 };
                 assert_eq!(record.cursor, 3);
                 Ok(Some(vec![3; 600 * 1024]))
-            },
+            }),
         )?;
         assert!(next.exhausted);
-        assert_eq!(next.extraction.pages[0].rows.len(), 1);
-        assert_eq!(next.extraction.pages[0].rows[0][0], 3);
+        assert_eq!(next_rows.len(), 1);
+        assert_eq!(next_rows[0][0], 3);
         assert!(store
-            .read_positions(&selection, None, &AnalysisReadControl::default(), |_| Ok(
-                Some(vec![0; MAX_ANALYSIS_PAGE_BYTES])
-            ))
+            .position_rows(
+                &selection,
+                None,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![0; MAX_ANALYSIS_PAGE_BYTES]))),
+            )
             .is_err());
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
@@ -2302,56 +2747,68 @@ mod tests {
                     },
                 )
             });
-            let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
+            let output = store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|input: AnalysisInputV1<'_>| {
+                    let AnalysisInputV1::Event {
+                        identity, record, ..
+                    } = input
+                    else {
+                        return store.reject("unexpected relation");
+                    };
+                    if identity == &first {
+                        start
+                            .send(())
+                            .map_err(|_| store.state_error("the writer left its barrier"))?;
+                        rotation.recv_timeout(Duration::from_secs(2)).map_err(|_| {
+                            store.state_error("the writer did not request rotation")
+                        })?;
+                    }
+                    Ok(Some(vec![identity.source_epoch as u8, record.cursor as u8]))
+                }),
+            );
+            assert_eq!(
+                writer.join().map_err(|_| "writer panicked")??,
+                crate::EvidenceStoreOutcomeV1::Accepted
+            );
+            let (
+                output,
+                Bytes {
+                    rows: output_rows, ..
+                },
+            ) = output?;
+            let output = output.extraction;
+            assert_eq!(output.meta, before);
+            assert_eq!(output.sources[1].receipt.contiguous_cursor, 3);
+            let rows: Vec<_> = output_rows.iter().map(|row| row.as_ref()).collect();
+            assert_eq!(rows, [&[1, 1], &[2, 1], &[2, 2], &[2, 3]]);
+            Ok(())
+        })?;
+        let (
+            later,
+            Bytes {
+                rows: later_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
                 let AnalysisInputV1::Event {
                     identity, record, ..
                 } = input
                 else {
                     return store.reject("unexpected relation");
                 };
-                if identity == &first {
-                    start
-                        .send(())
-                        .map_err(|_| store.state_error("the writer left its barrier"))?;
-                    rotation
-                        .recv_timeout(Duration::from_secs(2))
-                        .map_err(|_| store.state_error("the writer did not request rotation"))?;
-                }
                 Ok(Some(vec![identity.source_epoch as u8, record.cursor as u8]))
-            });
-            assert_eq!(
-                writer.join().map_err(|_| "writer panicked")??,
-                crate::EvidenceStoreOutcomeV1::Accepted
-            );
-            let output = output?;
-            assert_eq!(output.meta, before);
-            assert_eq!(output.sources[1].receipt.contiguous_cursor, 3);
-            let rows: Vec<_> = output
-                .pages
-                .iter()
-                .flat_map(|page| &page.rows)
-                .map(|row| row.as_ref())
-                .collect();
-            assert_eq!(rows, [&[1, 1], &[2, 1], &[2, 2], &[2, 3]]);
-            Ok(())
-        })?;
-        let later = store.extract(&selection, &AnalysisReadControl::default(), |input| {
-            let AnalysisInputV1::Event {
-                identity, record, ..
-            } = input
-            else {
-                return store.reject("unexpected relation");
-            };
-            Ok(Some(vec![identity.source_epoch as u8, record.cursor as u8]))
-        })?;
+            }),
+        )?;
+        let later = later.extraction;
         assert_eq!(later.meta.commit_revision, before.commit_revision + 1);
         assert_eq!(later.sources[1].receipt.contiguous_cursor, 4);
-        let rows: Vec<_> = later
-            .pages
-            .iter()
-            .flat_map(|page| &page.rows)
-            .map(|row| row.as_ref())
-            .collect();
+        let rows: Vec<_> = later_rows.iter().map(|row| row.as_ref()).collect();
         assert_eq!(rows, [&[1, 1], &[2, 1], &[2, 2], &[2, 3], &[2, 4]]);
         assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 3);
         assert!(store.maintenance.try_write().is_ok());
@@ -2453,23 +2910,34 @@ mod tests {
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(20);
         selection.received_until = Bound::Excluded(30);
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
-            let AnalysisInputV1::Event {
-                identity: source,
-                cpu_id,
-                record,
-                received_utc_ns,
-                decoded,
-            } = input
-            else {
-                return store.reject("unexpected relation");
-            };
-            assert!(decoded.is_none());
-            assert_eq!(source, &identity);
-            assert_eq!(cpu_id, 0);
-            assert_eq!(received_utc_ns, 20);
-            Ok(Some(record.cursor.to_be_bytes().to_vec()))
-        })?;
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
+                let AnalysisInputV1::Event {
+                    identity: source,
+                    cpu_id,
+                    record,
+                    received_utc_ns,
+                    decoded,
+                } = input
+                else {
+                    return store.reject("unexpected relation");
+                };
+                assert!(decoded.is_none());
+                assert_eq!(source, &identity);
+                assert_eq!(cpu_id, 0);
+                assert_eq!(received_utc_ns, 20);
+                Ok(Some(record.cursor.to_be_bytes().to_vec()))
+            }),
+        )?;
+        let output = output.extraction;
         assert_eq!(output.meta, before);
         assert_eq!(
             output.scanned_bytes,
@@ -2484,7 +2952,7 @@ mod tests {
                 .sum::<usize>()
         );
         assert_eq!(output.projected_bytes, 8);
-        assert_eq!(output.pages[0].rows[0].as_ref(), &3_u64.to_be_bytes());
+        assert_eq!(output_rows[0].as_ref(), &3_u64.to_be_bytes());
         assert_eq!(output.sources[0].receipt.contiguous_cursor, 3);
         assert_eq!(store.meta()?, before);
         for (from, until) in [
@@ -2494,25 +2962,51 @@ mod tests {
         ] {
             selection.received_from = from;
             selection.received_until = until;
-            let empty = store.extract(&selection, &AnalysisReadControl::default(), |_| {
-                store.reject("empty range decoded input")
-            })?;
-            assert!(empty.pages.is_empty());
+            let (
+                empty,
+                Bytes {
+                    rows: empty_rows, ..
+                },
+            ) = store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| store.reject("empty range decoded input")),
+            )?;
+            let empty = empty.extraction;
+            assert!(empty_rows.is_empty());
             assert_eq!(empty.scanned_bytes, 0);
         }
         selection.sources = Selection::Exact(Vec::new());
         assert!(store
-            .extract(&selection, &AnalysisReadControl::default(), |_| store
-                .reject("empty source scope is not a wildcard"))?
-            .pages
+            .extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(
+                    |_: AnalysisInputV1<'_>| store.reject("empty source scope is not a wildcard")
+                ),
+            )?
+            .1
+            .rows
             .is_empty());
         selection.sources = Selection::Exact(vec![foreign]);
         assert!(store
-            .extract(&selection, &AnalysisReadControl::default(), |_| Ok(None))
+            .extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+            )
             .is_err());
         selection.sources = Selection::Exact(vec![identity.clone(), identity]);
         assert!(store
-            .extract(&selection, &AnalysisReadControl::default(), |_| Ok(None))
+            .extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+            )
             .is_err());
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
@@ -2544,38 +3038,67 @@ mod tests {
         let selection = AnalysisSelectionV1::tenant(first.tenant_id);
         let before = store.meta()?;
         let mut calls = 0;
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
-            let AnalysisInputV1::Event { identity, .. } = input else {
-                return store.reject("a late context entered the snapshot");
-            };
-            assert_eq!(identity, &first);
-            calls += 1;
-            store.accept_validated_batch(next.clone(), batch(1, 1, 20))?;
-            store.commit_context(&context)?;
-            Ok(Some(vec![7]))
-        })?;
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
+                let AnalysisInputV1::Event { identity, .. } = input else {
+                    return store.reject("a late context entered the snapshot");
+                };
+                assert_eq!(identity, &first);
+                calls += 1;
+                store.accept_validated_batch(next.clone(), batch(1, 1, 20))?;
+                store.commit_context(&context)?;
+                Ok(Some(vec![7]))
+            }),
+        )?;
+        let output = output.extraction;
         assert_eq!(calls, 1);
         assert_eq!(output.meta, before);
         assert_eq!(output.sources.len(), 1);
-        assert_eq!(output.pages.len(), 1);
+        assert_eq!(output_rows.len(), 1);
         assert!(output.missing_contexts.is_empty());
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |input| {
-            Ok(Some(match input {
-                AnalysisInputV1::Event { identity, .. } => vec![identity.source_id[0]],
-                AnalysisInputV1::Context(context) => context.body.clone(),
-                _ => return store.reject("an unselected result entered the snapshot"),
-            }))
-        })?;
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
+                Ok(Some(match input {
+                    AnalysisInputV1::Event { identity, .. } => vec![identity.source_id[0]],
+                    AnalysisInputV1::Context(context) => context.body.clone(),
+                    _ => return store.reject("an unselected result entered the snapshot"),
+                }))
+            }),
+        )?;
+        let output = output.extraction;
         assert_eq!(output.sources.len(), 2);
-        assert_eq!(output.pages.len(), 2);
-        assert_eq!(output.pages[0].rows.len(), 2);
-        assert_eq!(output.pages[1].rows[0].as_ref(), &[42]);
+        assert_eq!(output_rows.len(), 3);
+        assert_eq!(output_rows[0].as_ref(), &[first.source_id[0]]);
+        assert_eq!(output_rows[1].as_ref(), &[next.source_id[0]]);
+        assert_eq!(output_rows[2].as_ref(), &[42]);
         let empty = AnalysisSelectionV1::new(first.tenant_id, vec![]);
         assert!(store
-            .extract(&empty, &AnalysisReadControl::default(), |_| {
-                store.reject("an empty explicit list selected input")
-            })?
-            .pages
+            .extract_rows(
+                &empty,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| {
+                    store.reject("an empty explicit list selected input")
+                }),
+            )?
+            .1
+            .rows
             .is_empty());
         Ok(())
     }
@@ -2599,14 +3122,25 @@ mod tests {
                 .collect(),
         );
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
-        let output = store.extract(&selection, &control, |_| Ok(None))?;
+        let (output, _) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &control,
+            Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+        )?;
+        let output = output.extraction;
         assert_eq!(output.sources.len(), 1);
         assert_eq!(output.missing_contexts.len(), MAX_EXTRACT_KEYS - 1);
         let mut next = first.clone();
         next.source_id = [4; 16];
         store.accept_validated_batch(next, batch(1, 1, 20))?;
         assert!(matches!(
-            store.extract(&selection, &control, |_| Ok(None)),
+            store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &control,
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+            ),
             Err(crate::Error::AnalysisInputTooLarge {
                 resource: "selected input keys",
                 ..
@@ -2621,14 +3155,19 @@ mod tests {
                     ..Default::default()
                 },
                 &control,
-                RecordProjection(|_: AnalysisInputV1<'_>| Ok(None::<((), usize)>))
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None))
             ),
             Err(crate::Error::AnalysisInputTooLarge { .. })
         ));
         let cancelled = AnalysisReadControl::default();
         cancelled.cancel()?;
         assert!(matches!(
-            store.extract(&selection, &cancelled, |_| Ok(None)),
+            store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &cancelled,
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+            ),
             Err(crate::Error::AnalysisReadCancelled { .. })
         ));
         let mut invalid = selection.clone();
@@ -2674,61 +3213,99 @@ mod tests {
         let before = store.meta()?;
         let control = AnalysisReadControl::with_timeout(std::time::Duration::from_secs(30))?;
         let mut calls = 0;
-        let output = store.extract(&selection, &control, |input| {
-            let AnalysisInputV1::Event { record, .. } = input else {
-                return store.reject("late metadata entered snapshot");
-            };
-            assert_eq!(record.cursor, 1);
-            calls += 1;
-            store.accept_validated_batch(identity.clone(), batch(2, 1, 5))?;
-            store.commit_context(&context)?;
-            store.commit_result(&AnalysisResultCommitV1 {
-                body: vec![43],
-                created_utc_ns: 20,
-                ..crate::analysis::tests::result(scope.clone(), "late".into())
-            })?;
-            Ok(Some(vec![1]))
-        })?;
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &control,
+            Bytes::new(|input: AnalysisInputV1<'_>| {
+                let AnalysisInputV1::Event { record, .. } = input else {
+                    return store.reject("late metadata entered snapshot");
+                };
+                assert_eq!(record.cursor, 1);
+                calls += 1;
+                store.accept_validated_batch(identity.clone(), batch(2, 1, 5))?;
+                store.commit_context(&context)?;
+                store.commit_result(&AnalysisResultCommitV1 {
+                    body: vec![43],
+                    created_utc_ns: 20,
+                    ..crate::analysis::tests::result(scope.clone(), "late".into())
+                })?;
+                Ok(Some(vec![1]))
+            }),
+        )?;
+        let output = output.extraction;
         assert_eq!(calls, 1);
         assert_eq!(output.meta, before);
         assert_eq!(output.sources[0].receipt.contiguous_cursor, 1);
         assert_eq!(output.missing_contexts, vec![context.key]);
         assert_eq!(output.missing_results, vec!["late"]);
-        let output = store.extract(&selection, &control, |input| {
-            Ok(Some(match input {
-                AnalysisInputV1::Event { record, .. } => vec![record.cursor as u8],
-                AnalysisInputV1::Context(context) => context.body.clone(),
-                AnalysisInputV1::Result { body, .. } => body.to_vec(),
-                AnalysisInputV1::Trace { .. }
-                | AnalysisInputV1::TraceOutput { .. }
-                | AnalysisInputV1::TraceMeasurement { .. }
-                | AnalysisInputV1::Target { .. }
-                | AnalysisInputV1::DiscoveryContext(_)
-                | AnalysisInputV1::Profile { .. }
-                | AnalysisInputV1::Graph { .. }
-                | AnalysisInputV1::Notification { .. }
-                | AnalysisInputV1::Behavior { .. } => {
-                    return store.reject("unselected input entered an evidence-only snapshot")
-                }
-            }))
-        })?;
+        assert_eq!(output_rows.len(), 1);
+        assert_eq!(output_rows[0].as_ref(), &[1]);
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &control,
+            Bytes::new(|input: AnalysisInputV1<'_>| {
+                Ok(Some(match input {
+                    AnalysisInputV1::Event { record, .. } => vec![record.cursor as u8],
+                    AnalysisInputV1::Context(context) => context.body.clone(),
+                    AnalysisInputV1::Result { body, .. } => body.to_vec(),
+                    AnalysisInputV1::Trace { .. }
+                    | AnalysisInputV1::RawRemoval { .. }
+                    | AnalysisInputV1::TraceOutput { .. }
+                    | AnalysisInputV1::TraceMeasurement { .. }
+                    | AnalysisInputV1::Target { .. }
+                    | AnalysisInputV1::DiscoveryContext(_)
+                    | AnalysisInputV1::Profile { .. }
+                    | AnalysisInputV1::Graph { .. }
+                    | AnalysisInputV1::Notification { .. }
+                    | AnalysisInputV1::Behavior { .. } => {
+                        return store.reject("unselected input entered an evidence-only snapshot");
+                    }
+                }))
+            }),
+        )?;
+        let output = output.extraction;
         assert!(output.missing_contexts.is_empty() && output.missing_results.is_empty());
         assert_eq!(output.meta, store.meta()?);
-        assert_eq!(output.pages.len(), 3);
-        assert_eq!(output.pages[0].rows.len(), 2);
-        assert_eq!(output.pages[1].rows[0].as_ref(), &[42]);
-        assert_eq!(output.pages[2].rows[0].as_ref(), &[43]);
+        assert_eq!(output_rows.len(), 4);
+        assert_eq!(output_rows[0].as_ref(), &[1]);
+        assert_eq!(output_rows[1].as_ref(), &[2]);
+        assert_eq!(output_rows[2].as_ref(), &[42]);
+        assert_eq!(output_rows[3].as_ref(), &[43]);
         selection.received_from = Bound::Included(100);
-        let output = store.extract(&selection, &control, |input| {
-            Ok(Some(match input {
-                AnalysisInputV1::Context(context) => context.body.clone(),
-                AnalysisInputV1::Result { body, .. } => body.to_vec(),
-                _ => return store.reject("old event entered a new window"),
-            }))
-        })?;
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &control,
+            Bytes::new(|input: AnalysisInputV1<'_>| {
+                Ok(Some(match input {
+                    AnalysisInputV1::Context(context) => context.body.clone(),
+                    AnalysisInputV1::Result { body, .. } => body.to_vec(),
+                    _ => return store.reject("old event entered a new window"),
+                }))
+            }),
+        )?;
+        let output = output.extraction;
         assert_eq!(output.scanned_bytes, 0);
-        assert_eq!(output.pages.len(), 2);
-        assert_eq!(output.pages[0].relation, AnalysisRelationV1::Context);
+        assert_eq!(output_rows.len(), 2);
+        assert_eq!(output_rows[0].as_ref(), &[42]);
+        assert_eq!(output_rows[1].as_ref(), &[43]);
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
@@ -2742,16 +3319,23 @@ mod tests {
             store.accept_validated_batch(identity.clone(), batch(cursor, 1, 10))?;
         }
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
-        let output = store.extract(
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
             &selection,
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |input| match input {
+            Bytes::new(|input: AnalysisInputV1<'_>| match input {
                 AnalysisInputV1::Event { record, .. } => {
                     Ok(Some(record.cursor.to_be_bytes().to_vec()))
                 }
                 _ => store.reject("unexpected relation"),
-            },
+            }),
         )?;
+        let output = output.extraction;
         assert_eq!(
             output.scanned_bytes,
             store
@@ -2764,15 +3348,18 @@ mod tests {
                 .sum::<usize>()
         );
         assert!(matches!(
-            store.extract(&selection, &AnalysisReadControl::default(), |_| {
-                Ok(Some(vec![0; 512 * 1024]))
-            }),
+            store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| { Ok(Some(vec![0; 512 * 1024])) }),
+            ),
             Err(crate::Error::AnalysisInputTooLarge {
                 resource: "selected input bytes",
                 ..
             })
         ));
-        let rows: Vec<_> = output.pages.iter().flat_map(|page| &page.rows).collect();
+        let rows: Vec<_> = output_rows.iter().collect();
         assert_eq!(rows.len(), 257);
         for (index, row) in rows.into_iter().enumerate() {
             assert_eq!(row.as_ref(), &(index as u64 + 1).to_be_bytes());
@@ -2820,21 +3407,39 @@ mod tests {
         let hidden = directory.path().join("hidden.seg");
         std::fs::rename(&path, &hidden)?;
         assert!(matches!(
-            store.extract(&selection, &AnalysisReadControl::default(), |_| Ok(None)),
+            store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+            ),
             Err(crate::Error::Io { .. })
         ));
         std::fs::rename(&hidden, &path)?;
         let file = std::fs::OpenOptions::new().write(true).open(&path)?;
         file.write_all_at(&[8], offset)?;
         assert!(matches!(
-            store.extract(&selection, &AnalysisReadControl::default(), |_| Ok(None)),
+            store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+            ),
             Err(crate::Error::AnalysisState { .. })
         ));
         file.write_all_at(&[7], offset)?;
-        let result = store.extract(&selection, &AnalysisReadControl::default(), |_| {
-            Ok(Some(vec![7]))
-        })?;
-        assert_eq!(result.pages[0].rows[0].as_ref(), &[7]);
+        let (
+            _,
+            Bytes {
+                rows: result_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![7]))),
+        )?;
+        assert_eq!(result_rows[0].as_ref(), &[7]);
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
@@ -2859,10 +3464,19 @@ mod tests {
         store.record_recovery_floor(&identity, 4)?;
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(99);
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |_| {
-            Ok(Some(vec![2]))
-        })?;
-        assert_eq!(output.input_bytes, owned_bytes(&output));
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![2]))),
+        )?;
+        let output = output.extraction;
+        assert_eq!(output.input_bytes, owned_bytes(&output, &output_rows));
         assert_eq!(
             output.scanned_bytes,
             store
@@ -2897,26 +3511,24 @@ mod tests {
             .ranges
             .remove(&(identity.key(), 2));
         assert!(store
-            .extract(&selection, &AnalysisReadControl::default(), |_| Ok(None))
+            .extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(None)),
+            )
             .is_err());
         assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
 
-    fn owned_bytes(output: &AnalysisExtractionV1) -> usize {
+    fn owned_bytes(output: &AnalysisExtractionV1, rows: &Vec<Box<[u8]>>) -> usize {
         size_of::<AnalysisExtractionV1>()
-            + output.pages.capacity() * size_of::<AnalysisInputPageV1>()
             + output.sources.capacity() * size_of::<AnalysisSourceSnapshotV1>()
             + output.missing_contexts.capacity() * size_of::<AnalysisContextKeyV1>()
             + output.missing_results.capacity() * size_of::<String>()
-            + output
-                .pages
-                .iter()
-                .map(|page| {
-                    page.rows.capacity() * size_of::<Box<[u8]>>()
-                        + page.rows.iter().map(|row| row.len()).sum::<usize>()
-                })
-                .sum::<usize>()
+            + rows.capacity() * size_of::<Box<[u8]>>()
+            + rows.iter().map(|row| row.len()).sum::<usize>()
             + output
                 .sources
                 .iter()
@@ -2981,12 +3593,21 @@ mod tests {
                 });
             selection.results.push(format!("missing-{revision}"));
         }
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |_| {
-            Ok(Some(vec![1]))
-        })?;
-        let required = owned_bytes(&output);
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
+        )?;
+        let output = output.extraction;
+        let required = owned_bytes(&output, &output_rows);
         assert_eq!(output.input_bytes, required);
-        assert_eq!(output.pages[0].rows.len(), 4);
+        assert_eq!(output_rows.len(), 4);
         assert_eq!(output.sources[0].pending.len(), 1);
         assert_eq!(output.sources[0].recovery.len(), 1);
         assert_eq!(output.missing_contexts.len(), 4);
@@ -3000,14 +3621,13 @@ mod tests {
                     ..Default::default()
                 },
                 &AnalysisReadControl::default(),
-                RecordProjection(|_: AnalysisInputV1<'_>| {
-                    Ok(Some((vec![1].into_boxed_slice(), 1)))
-                }),
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
             );
             if limit == required {
-                let output = result?.0.extraction;
+                let (page, rows) = result?;
+                let output = page.extraction;
                 assert_eq!(output.input_bytes, required);
-                assert_eq!(output.input_bytes, owned_bytes(&output));
+                assert_eq!(output.input_bytes, owned_bytes(&output, &rows.rows));
             } else {
                 assert!(matches!(
                     result,
@@ -3030,17 +3650,38 @@ mod tests {
         store.accept_validated_batch(identity.clone(), batch(1, 257, 1))?;
         let selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         let before = store.meta()?;
-        let output = store.extract(&selection, &AnalysisReadControl::default(), |_| {
-            Ok(Some(vec![1]))
-        })?;
-        assert_eq!(
-            output
-                .pages
-                .iter()
-                .map(|page| page.rows.len())
-                .collect::<Vec<_>>(),
-            vec![256, 1]
-        );
+        let (
+            output,
+            Bytes {
+                rows: output_rows, ..
+            },
+        ) = store.extract_rows(
+            &selection,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
+        )?;
+        let output = output.extraction;
+        assert_eq!(output_rows.len(), 257);
+        let (first, rows) = store.position_rows(
+            &selection,
+            None,
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
+        )?;
+        assert_eq!(rows.rows.len(), 256);
+        assert!(!first.exhausted);
+        let (next, rows) = store.position_rows(
+            &selection,
+            Some(first.scanned_through),
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![1]))),
+        )?;
+        assert_eq!(rows.rows.len(), 1);
+        assert!(next.exhausted);
+        assert!(next.scanned_through > first.scanned_through);
         assert_eq!(
             output.scanned_bytes,
             store
@@ -3055,19 +3696,26 @@ mod tests {
         let control = AnalysisReadControl::default();
         let mut calls = 0;
         assert!(matches!(
-            store.extract(&selection, &control, |_| {
-                calls += 1;
-                control.cancel()?;
-                Ok(Some(vec![1]))
-            }),
+            store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &control,
+                Bytes::new(|_: AnalysisInputV1<'_>| {
+                    calls += 1;
+                    control.cancel()?;
+                    Ok(Some(vec![1]))
+                }),
+            ),
             Err(crate::Error::AnalysisReadCancelled { .. })
         ));
         assert_eq!(calls, 1);
-        let mut output = store.extract(
+        let (output, _) = store.extract_rows(
             &AnalysisSelectionV1::new(identity.tenant_id, vec![]),
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |_| store.reject("empty selection"),
+            Bytes::new(|_: AnalysisInputV1<'_>| store.reject("empty selection")),
         )?;
+        let mut output = output.extraction;
         output.scan(MAX_SCAN_BYTES)?;
         assert!(matches!(
             output.scan(1),
@@ -3086,29 +3734,50 @@ mod tests {
         ));
         assert!(output.charge(usize::MAX).is_err());
         assert!(output.scan(usize::MAX).is_err());
-        let mut output = store.extract(
-            &AnalysisSelectionV1::new(identity.tenant_id, vec![]),
+        let (first, rows) = store.position_rows(
+            &selection,
+            None,
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |_| store.reject("empty selection"),
+            Bytes::new(|input: AnalysisInputV1<'_>| {
+                let AnalysisInputV1::Event { record, .. } = input else {
+                    return store.reject("unexpected relation");
+                };
+                Ok(Some(if record.cursor == 1 {
+                    vec![0; MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>()]
+                } else {
+                    Vec::new()
+                }))
+            }),
         )?;
-        output.push(
-            AnalysisRelationV1::Events,
-            (
-                vec![0; MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>()].into_boxed_slice(),
-                MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>(),
-            ),
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(
+            rows.rows[0].len() + size_of::<Box<[u8]>>(),
+            MAX_ANALYSIS_PAGE_BYTES
+        );
+        assert!(!first.exhausted);
+        let (next, rows) = store.position_rows(
+            &selection,
+            Some(first.scanned_through),
+            AnalysisExtractLimits::default(),
+            &AnalysisReadControl::default(),
+            Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(Vec::new()))),
         )?;
-        assert_eq!(output.pages[0].input_bytes, MAX_ANALYSIS_PAGE_BYTES);
-        output.push(AnalysisRelationV1::Events, (Box::default(), 0))?;
-        assert_eq!(output.pages.len(), 2);
+        assert_eq!(rows.rows.len(), 256);
+        assert!(rows.rows.iter().all(|row| row.is_empty()));
+        assert!(next.exhausted);
+        assert!(next.scanned_through > first.scanned_through);
         assert!(matches!(
-            output.push(
-                AnalysisRelationV1::Events,
-                (
-                    vec![0; MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>() + 1]
-                        .into_boxed_slice(),
-                    MAX_ANALYSIS_PAGE_BYTES - size_of::<Box<[u8]>>() + 1,
-                )
+            store.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                Bytes::new(|_: AnalysisInputV1<'_>| Ok(Some(vec![
+                    0;
+                    MAX_ANALYSIS_PAGE_BYTES
+                        - size_of::<Box<[u8]>>()
+                        + 1
+                ]))),
             ),
             Err(crate::Error::AnalysisInputTooLarge {
                 resource: "projected row bytes",
@@ -3152,16 +3821,18 @@ mod tests {
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(20);
         let started = std::time::Instant::now();
-        let recent = store.extract(
+        let (recent, _) = store.extract_rows(
             &selection,
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |input| match input {
+            Bytes::new(|input: AnalysisInputV1<'_>| match input {
                 AnalysisInputV1::Event { record, .. } => {
                     Ok(Some(record.cursor.to_be_bytes().to_vec()))
                 }
                 _ => store.reject("unexpected relation"),
-            },
+            }),
         )?;
+        let recent = recent.extraction;
         let recent_us = started.elapsed().as_micros();
         assert_eq!(
             recent.scanned_bytes,
@@ -3178,16 +3849,18 @@ mod tests {
         assert_eq!(recent.projected_bytes, 32 * 8);
         selection.received_from = Bound::Unbounded;
         let started = std::time::Instant::now();
-        let sparse = store.extract(
+        let (sparse, _) = store.extract_rows(
             &selection,
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |input| match input {
+            Bytes::new(|input: AnalysisInputV1<'_>| match input {
                 AnalysisInputV1::Event { record, .. } => {
                     Ok((record.cursor % 32 == 1).then(|| record.cursor.to_be_bytes().to_vec()))
                 }
                 _ => store.reject("unexpected relation"),
-            },
+            }),
         )?;
+        let sparse = sparse.extraction;
         let sparse_us = started.elapsed().as_micros();
         assert_eq!(
             sparse.scanned_bytes,
@@ -3201,13 +3874,14 @@ mod tests {
                 .sum::<usize>()
         );
         assert_eq!(sparse.projected_bytes, 18 * 8);
-        let full = store.extract(
+        let full = store.extract_rows(
             &selection,
+            AnalysisExtractLimits::default(),
             &AnalysisReadControl::default(),
-            |input| match input {
+            Bytes::new(|input: AnalysisInputV1<'_>| match input {
                 AnalysisInputV1::Event { record, .. } => Ok(Some(record.framed_record.clone())),
                 _ => store.reject("unexpected relation"),
-            },
+            }),
         );
         assert!(
             matches!(
@@ -3217,7 +3891,8 @@ mod tests {
                     ..
                 })
             ),
-            "{full:?}"
+            "{:?}",
+            full.as_ref().map(|(page, _)| &page.extraction)
         );
         assert!(store.maintenance.try_write().is_ok());
         let scope = ProcessorScopeV1 {
@@ -3270,9 +3945,17 @@ mod tests {
             pin_commit_us,
             usage_us
         );
-        eprintln!("history_bytes={} recent_scan={} recent_input={} recent_us={} sparse_scan={} sparse_input={} sparse_us={} debug={}",
-            72 * 1024 * 1024, recent.scanned_bytes, recent.input_bytes, recent_us,
-            sparse.scanned_bytes, sparse.input_bytes, sparse_us, cfg!(debug_assertions));
+        eprintln!(
+            "history_bytes={} recent_scan={} recent_input={} recent_us={} sparse_scan={} sparse_input={} sparse_us={} debug={}",
+            72 * 1024 * 1024,
+            recent.scanned_bytes,
+            recent.input_bytes,
+            recent_us,
+            sparse.scanned_bytes,
+            sparse.input_bytes,
+            sparse_us,
+            cfg!(debug_assertions)
+        );
         Ok(())
     }
 }

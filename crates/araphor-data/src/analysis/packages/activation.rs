@@ -5,7 +5,7 @@ use super::{PackageActivationV1, PackageCommitV1, PackageKeyV1};
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStore, Result};
 
 impl AnalysisStore {
-    pub(crate) fn activate_package(
+    pub fn activate_package(
         &self,
         input: &PackageActivationV1,
         expected: Option<u64>,
@@ -184,7 +184,7 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub(crate) fn remove_package(
+    pub fn remove_package(
         &self,
         key: &PackageKeyV1,
         generation: u64,
@@ -193,7 +193,7 @@ impl AnalysisStore {
         self.stop_package(key, generation, true, check)
     }
 
-    pub(crate) fn suspend_package(
+    pub fn suspend_package(
         &self,
         key: &PackageKeyV1,
         generation: u64,

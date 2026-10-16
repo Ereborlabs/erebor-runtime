@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
-use duckdb::types::Value;
-use tokio::sync::watch;
+use araphor_query::datafusion::arrow::array::RecordBatch;
+use araphor_query::execution::{Engine, Limits, Read};
+use araphor_query::planner::Planner;
+use datafusion_common::ScalarValue;
+use futures_util::TryStreamExt;
 
 use super::*;
 
@@ -14,11 +17,6 @@ const TRAVERSAL_SQL: &str =
      JOIN graph_subjects destination
      ON r.tenant_id = destination.tenant_id AND r.graph_result_id = destination.graph_result_id
         AND r.to_subject_id = destination.subject_id";
-
-struct TraversalAccess {
-    tenant: [u8; 16],
-    revision: watch::Sender<u64>,
-}
 
 struct TraversalSelection<'a> {
     subjects: BTreeSet<GraphSubjectKeyV1>,
@@ -53,36 +51,12 @@ impl<'a> TraversalSelection<'a> {
     }
 
     fn chunks(&self) -> Vec<&[&'a GraphEdgeV1]> {
-        let limit = QueryLimits::default()
-            .output_rows
-            .min(QuerySql::PARAMETER_COUNT);
+        let limit = Limits::default().output_rows.min(Planner::PARAMETER_COUNT);
         if self.edges.len() <= limit {
             vec![self.edges.as_slice()]
         } else {
             self.edges.chunks(limit).collect()
         }
-    }
-}
-
-impl QueryAuthorization for TraversalAccess {
-    fn check(&self, grant: &QueryGrant) -> Result<()> {
-        if grant.principal != "qualification-graph"
-            || grant.selection.tenant_id != self.tenant
-            || grant.revision != *self.revision.borrow()
-        {
-            return Err(Error::QueryDenied {
-                location: snafu::Location::default(),
-            });
-        }
-        Ok(())
-    }
-
-    fn changes(&self) -> watch::Receiver<u64> {
-        self.revision.subscribe()
-    }
-
-    fn expires_ns(&self) -> Option<u64> {
-        None
     }
 }
 
@@ -98,29 +72,43 @@ impl GraphNotificationQualification {
         let selected = TraversalSelection::new(snapshot, seed);
         let chunks = selected.chunks();
         let paged = chunks.len() > 1;
-        let access = Arc::new(TraversalAccess {
-            tenant: finding.tenant_id,
-            revision: watch::channel(1).0,
-        });
-        let query = Arc::new(QueryOwner::new(data, QueryLimits::default())?);
+        assert_eq!(finding.tenant_id, snapshot.scope.identity.tenant_id);
+        let mut selection =
+            AnalysisSelectionV1::new(finding.tenant_id, vec![snapshot.scope.identity.clone()]);
+        selection.select_graphs(
+            Selection::Exact(vec![result_id.to_owned()]),
+            Some(Self::traversal_request(seed, result_id)),
+        )?;
+        let engine = Engine::new(data, Limits::default())?;
         let mut receipt = None;
         let mut returned = BTreeSet::new();
         for chunk in &chunks {
-            let plan = Self::traversal_plan(snapshot, seed, result_id, paged.then_some(*chunk))?;
-            let result = query
-                .clone()
-                .query_client(
-                    plan,
-                    access.clone(),
-                    now,
-                    Arc::new(AnalysisReadControl::default()),
+            let edges = if paged { *chunk } else { &[] };
+            let parameters = edges
+                .iter()
+                .map(|edge| {
+                    serde_json::to_vec(&edge.key).map(|bytes| ScalarValue::Binary(Some(bytes)))
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let (plan, sources) = engine
+                .prepare(
+                    &Self::traversal_sql(paged.then_some(chunk.len())),
+                    parameters,
                 )
                 .await?;
-            for key in Self::check_traversal(&result, chunk, seed, result_id)? {
+            let session =
+                engine.session(selection.clone(), &AnalysisReadControl::default(), now)?;
+            let (snapshot, stream) = session.stream(&plan, &sources, Read::Snapshot).await?;
+            let batches = stream.try_collect::<Vec<_>>().await?;
+            assert!(snapshot.page.exhausted);
+            for key in Self::check_traversal(&batches, chunk, seed, result_id)? {
                 assert!(returned.insert(key));
             }
-            let current = result
-                .graph_traversal
+            let current = snapshot
+                .page
+                .extraction
+                .graph_traversal()
+                .cloned()
                 .ok_or("the traversal receipt is absent")?;
             Self::check_receipt(&current, &selected, result_id);
             if let Some(previous) = &receipt {
@@ -143,11 +131,11 @@ impl GraphNotificationQualification {
             .any(|edge| edge.key.evidence.contains(&denied.evidence)));
         let receipt = receipt.ok_or("the traversal receipt is absent")?;
         Ok(json!({
-            "result": "PASS", "caller": "QueryOwner::query_client",
+            "result": "PASS", "caller": "araphor_query::execution::Session::stream",
             "exact_version_selected": true, "exact_subject_and_version_joins": true,
             "evidence_and_proof_preserved": true, "required_coverage_preserved": true,
             "denied_record_reached": true, "receipt": receipt,
-            "query_authorization": "fixed qualification grant",
+            "query_scope": "exact tenant, source, and graph result",
             "performance_claim": false, "cross_node_physical_qualified": false,
             "input": Self::traversal_input(snapshot, finding, result_id),
             "sql_chunks": chunks.len(), "returned_relationships": returned.len(),
@@ -159,7 +147,7 @@ impl GraphNotificationQualification {
         finding: &FindingV1,
         result_id: &str,
     ) -> serde_json::Value {
-        let limits = QueryLimits::default();
+        let limits = Limits::default();
         let selected = TraversalSelection::new(snapshot, &finding.subject_id);
         let chunks = selected.chunks();
         let queries = chunks
@@ -201,41 +189,12 @@ impl GraphNotificationQualification {
         }
     }
 
-    fn traversal_plan(
-        snapshot: &GraphSnapshotV1,
-        seed: &GraphSubjectKeyV1,
-        result_id: &str,
-        edges: Option<&[&GraphEdgeV1]>,
-    ) -> Result<QueryPlan> {
-        let sql = Self::traversal_sql(edges.map(|edges| edges.len()));
-        let parameters = edges
-            .unwrap_or_default()
-            .iter()
-            .map(|edge| serde_json::to_vec(&edge.key).map(Value::Blob))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|source| Error::GraphEncoding {
-                source,
-                location: snafu::Location::default(),
-            })?;
-        QueryPlan::client_graph(
-            QueryGrant {
-                principal: "qualification-graph".into(),
-                revision: 1,
-                selection: AnalysisSelectionV1::new(
-                    snapshot.scope.identity.tenant_id,
-                    vec![snapshot.scope.identity.clone()],
-                ),
-            },
-            QuerySql::admit(&sql, parameters, false)?,
-            Self::traversal_request(seed, result_id),
-        )
-    }
-
     fn traversal_sql(keys: Option<usize>) -> String {
         match keys {
             Some(keys) => format!(
                 "{TRAVERSAL_SQL} WHERE r.relationship_key IN ({})",
-                std::iter::repeat_n("?", keys)
+                (1..=keys)
+                    .map(|index| format!("${index}"))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -257,37 +216,46 @@ impl GraphNotificationQualification {
     }
 
     fn check_traversal(
-        result: &QueryResult,
+        batches: &[RecordBatch],
         expected: &[&GraphEdgeV1],
         seed: &GraphSubjectKeyV1,
         result_id: &str,
     ) -> std::result::Result<BTreeSet<GraphEdgeKeyV1>, Box<dyn StdError>> {
-        assert!(!result.limited);
-        assert_eq!(result.rows.len(), expected.len());
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            expected.len()
+        );
         let mut returned = BTreeSet::new();
-        for row in &result.rows {
-            let [Value::Blob(key), Value::Blob(proof), Value::Blob(coverage), Value::Text(version), Value::UInt(from), Value::UInt(to)] =
-                row.as_slice()
-            else {
-                return Err("the graph traversal join row is invalid".into());
-            };
-            let key: GraphEdgeKeyV1 = serde_json::from_slice(key)?;
-            assert!(returned.insert(key.clone()));
-            let edge = expected
-                .iter()
-                .find(|edge| edge.key == key)
-                .ok_or("the traversal returned an unexpected edge")?;
-            assert_eq!(
-                serde_json::from_slice::<ProofQualityV1>(proof)?,
-                edge.proof_quality
-            );
-            assert_eq!(
-                serde_json::from_slice::<Vec<[u8; 16]>>(coverage)?,
-                edge.required_coverage_interval_ids
-            );
-            assert_eq!(version, result_id);
-            assert_eq!(*from, u32::from(key.from != *seed));
-            assert_eq!(*to, u32::from(key.to != *seed));
+        for batch in batches {
+            for row in 0..batch.num_rows() {
+                let row = batch
+                    .columns()
+                    .iter()
+                    .map(|array| ScalarValue::try_from_array(array, row))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let [ScalarValue::Binary(Some(key)), ScalarValue::Binary(Some(proof)), ScalarValue::Binary(Some(coverage)), ScalarValue::Utf8(Some(version)), ScalarValue::UInt32(Some(from)), ScalarValue::UInt32(Some(to))] =
+                    row.as_slice()
+                else {
+                    return Err("the graph traversal join row is invalid".into());
+                };
+                let key: GraphEdgeKeyV1 = serde_json::from_slice(key)?;
+                assert!(returned.insert(key.clone()));
+                let edge = expected
+                    .iter()
+                    .find(|edge| edge.key == key)
+                    .ok_or("the traversal returned an unexpected edge")?;
+                assert_eq!(
+                    serde_json::from_slice::<ProofQualityV1>(proof)?,
+                    edge.proof_quality
+                );
+                assert_eq!(
+                    serde_json::from_slice::<Vec<[u8; 16]>>(coverage)?,
+                    edge.required_coverage_interval_ids
+                );
+                assert_eq!(version, result_id);
+                assert_eq!(*from, u32::from(key.from != *seed));
+                assert_eq!(*to, u32::from(key.to != *seed));
+            }
         }
         assert_eq!(
             returned,

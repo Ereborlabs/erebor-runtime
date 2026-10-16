@@ -13,11 +13,7 @@ pub(super) mod traversal;
 mod windows;
 
 impl AnalysisStore {
-    pub(crate) fn graph_set_health(
-        &self,
-        source: &EvidenceIntakeIdentityV1,
-        failed: bool,
-    ) -> Result<()> {
+    pub fn graph_set_health(&self, source: &EvidenceIntakeIdentityV1, failed: bool) -> Result<()> {
         if failed {
             self.graph_failures
                 .lock()
@@ -98,7 +94,7 @@ impl AnalysisStore {
         self.graph_owner.load(Ordering::Acquire)
     }
 
-    pub(crate) fn enable_graph_owner(&self) -> Result<()> {
+    pub fn enable_graph_owner(&self) -> Result<()> {
         let _writer = self.writer_access()?;
         self.graph_owner
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -106,7 +102,7 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub(crate) fn register_graph(&self, identity: &EvidenceIntakeIdentityV1) -> Result<()> {
+    pub fn register_graph(&self, identity: &EvidenceIntakeIdentityV1) -> Result<()> {
         let mut writer = self.writer_access()?;
         let floor = Self::read_receipt_from(writer.get()?, &self.root, identity, &identity.key())?
             .map_or(0, |receipt| receipt.retained_floor);
@@ -169,7 +165,7 @@ impl AnalysisStore {
         Ok(true)
     }
 
-    pub(crate) fn graph_coverage_versions(
+    pub fn graph_coverage_versions(
         &self,
         source: &EvidenceIntakeIdentityV1,
         frozen: &std::collections::BTreeSet<u64>,
@@ -194,7 +190,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn graph_snapshot(
+    pub fn graph_snapshot(
         &self,
         source: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<GraphSnapshotV1>> {
@@ -233,8 +229,8 @@ impl AnalysisStore {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn graph_snapshots(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn graph_snapshots(
         &self,
         tenant: [u8; 16],
         source: Option<&EvidenceIntakeIdentityV1>,
@@ -247,7 +243,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn graph_source(
+    pub fn graph_source(
         &self,
         tenant: [u8; 16],
         result_id: &str,
@@ -261,7 +257,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn graph_result(
+    pub fn graph_result(
         &self,
         tenant: [u8; 16],
         result_id: &str,

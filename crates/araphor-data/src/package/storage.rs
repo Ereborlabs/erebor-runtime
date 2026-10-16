@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{PackageEncodingSnafu, Result};
 
-pub(crate) struct StoredArtifact;
+pub struct StoredArtifact;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,7 +27,7 @@ pub(super) struct MetadataRef<'a> {
 }
 
 impl StoredArtifact {
-    pub(crate) fn encode(artifact: &PackageArtifactV1) -> Result<Vec<u8>> {
+    pub fn encode(artifact: &PackageArtifactV1) -> Result<Vec<u8>> {
         let (metadata, binaries) = Self::split(&artifact.implementations, &artifact.fixtures);
         let metadata = serde_json::to_vec(&metadata).context(PackageEncodingSnafu)?;
         let mut bytes = Vec::new();
@@ -114,7 +114,7 @@ impl StoredArtifact {
         )
     }
 
-    pub(crate) fn decode(bytes: &[u8], descriptor: &sdk::Package) -> Result<PackageArtifactV1> {
+    pub fn decode(bytes: &[u8], descriptor: &sdk::Package) -> Result<PackageArtifactV1> {
         let (mut metadata, mut decoder) = Self::metadata(bytes)?;
         let invalid = |_| Code::Invalid.error("retained package frame");
         for implementation in &mut metadata.implementations {
@@ -142,7 +142,7 @@ impl StoredArtifact {
         })
     }
 
-    pub(crate) fn validate(bytes: &[u8]) -> Result<()> {
+    pub fn validate(bytes: &[u8]) -> Result<()> {
         Self::metadata(bytes).map(|_| ())
     }
 

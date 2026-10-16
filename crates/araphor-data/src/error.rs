@@ -6,14 +6,14 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-    #[snafu(display("Package {code:?} rejects {field}"))]
+    #[snafu(display("Package {code:?} rejects {field}"), visibility(pub))]
     Package {
         code: crate::PackageErrorCodeV1,
         field: &'static str,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Package encoding failed: {source}"))]
+    #[snafu(display("Package encoding failed: {source}"), visibility(pub))]
     PackageEncoding {
         source: serde_json::Error,
         #[snafu(implicit)]
@@ -25,49 +25,32 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Package Wasm {operation} failed: {source}"))]
-    PackageWasm {
-        code: crate::PackageErrorCodeV1,
-        operation: &'static str,
-        #[snafu(source(from(wasmtime::Error, wasmtime::Error::into_boxed_dyn_error)))]
-        source: Box<dyn std::error::Error + Send + Sync>,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Package native {operation} failed: {source}"))]
-    PackageNative {
-        code: crate::PackageErrorCodeV1,
-        operation: &'static str,
-        source: Box<dyn std::error::Error + Send + Sync>,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Analysis contract failed: {source}"))]
+    #[snafu(display("Analysis contract failed: {source}"), visibility(pub))]
     AnalysisContract {
         source: araphor_analysis_sdk::Error,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Notification {code:?} rejects {field}"))]
+    #[snafu(display("Notification {code:?} rejects {field}"), visibility(pub))]
     Notification {
         code: crate::NotificationErrorCodeV1,
         field: &'static str,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Notification encoding failed: {source}"))]
+    #[snafu(display("Notification encoding failed: {source}"), visibility(pub))]
     NotificationEncoding {
         source: serde_json::Error,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Graph {field} is invalid"))]
+    #[snafu(display("Graph {field} is invalid"), visibility(pub))]
     GraphInvalid {
         field: &'static str,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Graph encoding failed: {source}"))]
+    #[snafu(display("Graph encoding failed: {source}"), visibility(pub))]
     GraphEncoding {
         source: serde_json::Error,
         #[snafu(implicit)]
@@ -79,19 +62,22 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Discovery {field} is invalid"))]
+    #[snafu(display("Discovery {field} is invalid"), visibility(pub))]
     DiscoveryInvalid {
         field: &'static str,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Discovery {kind} conflicts with retained state"))]
+    #[snafu(
+        display("Discovery {kind} conflicts with retained state"),
+        visibility(pub)
+    )]
     DiscoveryConflict {
         kind: &'static str,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Discovery encoding failed: {source}"))]
+    #[snafu(display("Discovery encoding failed: {source}"), visibility(pub))]
     DiscoveryEncoding {
         source: serde_json::Error,
         #[snafu(implicit)]
@@ -121,56 +107,6 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Query {field} is invalid"))]
-    QueryInvalid {
-        field: &'static str,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Query disclosure is not authorized"))]
-    QueryDenied {
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Query execution task failed: {source}"))]
-    QueryExecution {
-        source: tokio::task::JoinError,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Query {operation} failed: {source}"))]
-    QueryEngine {
-        operation: &'static str,
-        source: datafusion::common::DataFusionError,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Query relation {relation} is unavailable"))]
-    QueryUnsupported {
-        relation: &'static str,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Query {resource} exceeds its limit of {limit}"))]
-    QueryLimit {
-        resource: &'static str,
-        limit: usize,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Query checkpoint cannot replay below the tenant retention floor"))]
-    QueryCursorExpired {
-        position: crate::StorePositionV1,
-        floor: crate::StorePositionV1,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Query metadata encoding failed: {source}"))]
-    QueryEncoding {
-        source: serde_json::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("{reason}"))]
     EvidenceFrame {
         reason: &'static str,
@@ -178,7 +114,7 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("evidence record protobuf is invalid"))]
+    #[snafu(display("evidence record protobuf is invalid"), visibility(pub))]
     EvidenceDecode {
         frame_bytes: usize,
         source: prost::DecodeError,
@@ -188,6 +124,24 @@ pub enum Error {
     #[snafu(display("Analysis extraction reached its {resource} limit"))]
     AnalysisInputTooLarge {
         resource: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Analysis read is not authorized"))]
+    AnalysisReadDenied {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Analysis relation {relation} is unavailable"))]
+    AnalysisUnavailable {
+        relation: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Analysis replay position precedes its retained floor"))]
+    AnalysisReplayExpired {
+        position: crate::StorePositionV1,
+        floor: crate::StorePositionV1,
         #[snafu(implicit)]
         location: Location,
     },
@@ -238,7 +192,10 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Analysis evidence range {first_cursor}..={last_cursor} has expired"))]
+    #[snafu(
+        display("Analysis evidence range {first_cursor}..={last_cursor} has expired"),
+        visibility(pub)
+    )]
     RetainedRangeExpired {
         first_cursor: u64,
         last_cursor: u64,
@@ -271,9 +228,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::Package { code, .. }
-            | Self::PackageWasm { code, .. }
-            | Self::PackageNative { code, .. } => match code {
+            Self::Package { code, .. } => match code {
                 crate::PackageErrorCodeV1::Invalid | crate::PackageErrorCodeV1::Limit => {
                     StatusCode::InvalidArguments
                 }
@@ -299,13 +254,11 @@ impl ErrorExt for Error {
             Self::CanonicalEncoding { .. }
             | Self::DiscoveryInvalid { .. }
             | Self::TraceInvalid { .. }
-            | Self::QueryInvalid { .. }
-            | Self::QueryLimit { .. }
             | Self::AnalysisInputTooLarge { .. } => StatusCode::InvalidArguments,
             Self::GraphInvalid { .. } => StatusCode::InvalidArguments,
-            Self::QueryUnsupported { .. } => StatusCode::Unsupported,
-            Self::QueryDenied { .. } => StatusCode::PermissionDenied,
-            Self::QueryCursorExpired { .. } | Self::RetainedRangeExpired { .. } => {
+            Self::AnalysisReadDenied { .. } => StatusCode::PermissionDenied,
+            Self::AnalysisUnavailable { .. } => StatusCode::Unsupported,
+            Self::AnalysisReplayExpired { .. } | Self::RetainedRangeExpired { .. } => {
                 StatusCode::NotFound
             }
             Self::AnalysisReadCancelled { .. } => StatusCode::Cancelled,
@@ -323,18 +276,11 @@ impl ErrorExt for Error {
             | Self::Json { .. } => StatusCode::IllegalState,
             Self::AnalysisDatabase { .. }
             | Self::Io { .. }
-            | Self::QueryExecution { .. }
             | Self::DiscoveryContext { .. }
             | Self::DiscoveryExecution { .. } => StatusCode::External,
-            Self::QueryEngine { source, .. } => match source.find_root() {
-                datafusion::common::DataFusionError::ResourcesExhausted(_) => {
-                    StatusCode::InvalidArguments
-                }
-                _ => StatusCode::External,
-            },
             Self::GraphContext { .. } => StatusCode::External,
             Self::GraphEncoding { .. } => StatusCode::Internal,
-            Self::QueryEncoding { .. } | Self::DiscoveryEncoding { .. } => StatusCode::Internal,
+            Self::DiscoveryEncoding { .. } => StatusCode::Internal,
         }
     }
 

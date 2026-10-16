@@ -26,7 +26,7 @@ pub struct UnconfirmedNotificationConcernV1 {
 }
 
 impl UnconfirmedNotificationConcernV1 {
-    pub(crate) fn validate(&self, tenant: [u8; 16]) -> Result<()> {
+    pub fn validate(&self, tenant: [u8; 16]) -> Result<()> {
         NotificationErrorCodeV1::Invalid.require(
             self.concern_id != [0; 16]
                 && NotificationGrantV1::identifier(&self.model_label, 128)

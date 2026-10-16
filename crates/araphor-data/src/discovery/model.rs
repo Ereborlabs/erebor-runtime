@@ -28,7 +28,7 @@ pub const MAX_DISCOVERY_ATOMS: usize = 50_000;
 pub const DISCOVERY_PIN_BYTES: usize = 32 * 1024;
 pub const MAX_DISCOVERY_SAMPLES: usize = 8;
 
-pub(crate) struct InputByteLimit(pub(crate) usize);
+pub struct InputByteLimit(pub usize);
 
 impl std::io::Write for InputByteLimit {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

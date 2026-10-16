@@ -732,39 +732,76 @@ impl DataStoreQualification {
         let (release, released) = std::sync::mpsc::channel();
         let extract_started = Instant::now();
         let extraction = tokio::task::spawn_blocking(move || {
-            use araphor_data::{AnalysisInputV1, AnalysisReadControl, AnalysisSelectionV1};
-            use prost::Message as _;
+            use araphor_data::{
+                AnalysisExtractLimits, AnalysisInputV1, AnalysisProjection, AnalysisReadControl,
+                AnalysisSelectionV1, ProjectionSink,
+            };
             use std::ops::Bound;
+
+            struct SelectedRows {
+                entered: Option<tokio::sync::oneshot::Sender<()>>,
+                release: std::sync::mpsc::Receiver<()>,
+                rows: Vec<[u8; 4]>,
+            }
+
+            impl AnalysisProjection for SelectedRows {
+                fn decodes_events(&self) -> bool {
+                    true
+                }
+
+                fn project(
+                    &mut self,
+                    input: AnalysisInputV1<'_>,
+                    sink: &mut ProjectionSink<'_>,
+                ) -> araphor_data::Result<bool> {
+                    let AnalysisInputV1::Event {
+                        record, decoded, ..
+                    } = input
+                    else {
+                        return Ok(true);
+                    };
+                    if let Some(entered) = self.entered.take() {
+                        let _sent = entered.send(());
+                        self.release
+                            .recv_timeout(Duration::from_millis(500))
+                            .map_err(|error| araphor_data::Error::AnalysisState {
+                                path: PathBuf::from("<qualified-projection>"),
+                                reason: format!("policy probe did not release extraction: {error}"),
+                                location: snafu::Location::default(),
+                            })?;
+                    }
+                    let wire = decoded.ok_or_else(|| araphor_data::Error::AnalysisState {
+                        path: PathBuf::from("<qualified-projection>"),
+                        reason: "the selected evidence was not decoded".into(),
+                        location: snafu::Location::default(),
+                    })?;
+                    if record.cursor != 2 {
+                        return Ok(true);
+                    }
+                    if !sink.admit(size_of::<[u8; 4]>())? {
+                        return Ok(false);
+                    }
+                    sink.grow(&mut self.rows)?;
+                    sink.projected(size_of::<[u8; 4]>());
+                    self.rows.push(wire.operation.to_be_bytes());
+                    Ok(true)
+                }
+            }
 
             let mut selection =
                 AnalysisSelectionV1::new(selected_source.tenant_id, vec![selected_source]);
             selection.received_from = Bound::Included(START);
             selection.received_until = Bound::Included(START);
-            let mut entered = Some(entered);
-            selected_data.extract(&selection, &AnalysisReadControl::default(), |input| {
-                let AnalysisInputV1::Event { record, .. } = input else {
-                    return Ok(None);
-                };
-                if let Some(entered) = entered.take() {
-                    let _sent = entered.send(());
-                    released
-                        .recv_timeout(Duration::from_millis(500))
-                        .map_err(|error| araphor_data::Error::AnalysisState {
-                            path: PathBuf::from("<qualified-projection>"),
-                            reason: format!("policy probe did not release extraction: {error}"),
-                            location: snafu::Location::default(),
-                        })?;
-                }
-                let length = record.framed_record.len();
-                let wire =
-                    mithril_control::EvidenceRecord::decode(&record.framed_record[4..length - 4])
-                        .map_err(|error| araphor_data::Error::AnalysisState {
-                        path: PathBuf::from("<qualified-projection>"),
-                        reason: error.to_string(),
-                        location: snafu::Location::default(),
-                    })?;
-                Ok((record.cursor == 2).then(|| wire.operation.to_be_bytes().to_vec()))
-            })
+            selected_data.extract_rows(
+                &selection,
+                AnalysisExtractLimits::default(),
+                &AnalysisReadControl::default(),
+                SelectedRows {
+                    entered: Some(entered),
+                    release: released,
+                    rows: Vec::new(),
+                },
+            )
         });
         tokio::time::timeout(Duration::from_millis(500), reading).await??;
         connection.policy_inventory(None, Vec::new()).await?;
@@ -773,22 +810,24 @@ impl DataStoreQualification {
             "extraction ended before the policy probe",
         )?;
         release.send(())?;
-        let extracted = extraction.await??;
+        let (page, rows) = extraction.await??;
+        let extracted = page.extraction;
         let extraction_us = extract_started.elapsed().as_micros();
         let segment_bytes = fs::read_dir(data_root.join("segments"))?
             .try_fold(0_u64, |total, entry| -> std::io::Result<u64> {
                 Ok(total + entry?.metadata()?.len())
             })?;
         self.check(
-            extracted.meta.commit_revision >= page.read_revision
+            extracted.meta.commit_revision == page.scanned_through.commit_revision
+                && page.scanned_through.ordinal == u32::MAX
+                && page.exhausted
                 && extracted.sources[0].receipt.contiguous_cursor == 2
                 && extracted.sources[0].receipt.cpu_id == 3
                 && extracted.scanned_bytes > wire.framed_records.len()
                 && extracted.scanned_bytes as u64 <= segment_bytes
                 && extracted.projected_bytes == 4
-                && extracted.pages.len() == 1
-                && extracted.pages[0].rows.len() == 1
-                && extracted.pages[0].rows[0].as_ref() == 1_u32.to_be_bytes(),
+                && rows.rows.len() == 1
+                && rows.rows[0] == 1_u32.to_be_bytes(),
             "selected extraction changed scope, projection, or snapshot",
         )?;
         let snapshot = observations

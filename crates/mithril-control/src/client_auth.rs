@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use araphor_data::{QueryAuthorization, QueryGrant};
 use openidconnect::core::{
     CoreAuthenticationFlow, CoreClient, CoreProviderMetadata, CoreTokenIntrospectionResponse,
     CoreTokenResponse, CoreTokenType,
@@ -954,6 +953,10 @@ impl ClientAccess {
         self.expires_ns
     }
 
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.owner.changes.subscribe()
+    }
+
     pub fn check(&self) -> Result<()> {
         self.check_at(ClientAuth::now()?)
     }
@@ -991,29 +994,6 @@ impl ClientAccess {
             );
         }
         Ok(())
-    }
-}
-
-impl QueryAuthorization for ClientAccess {
-    fn check(&self, grant: &QueryGrant) -> araphor_data::Result<()> {
-        if grant.principal != self.subject
-            || grant.revision != self.revision
-            || grant.selection.tenant_id != self.tenant_id
-            || self.check().is_err()
-        {
-            return Err(araphor_data::Error::QueryDenied {
-                location: snafu::Location::default(),
-            });
-        }
-        Ok(())
-    }
-
-    fn changes(&self) -> watch::Receiver<u64> {
-        self.owner.changes.subscribe()
-    }
-
-    fn expires_ns(&self) -> Option<u64> {
-        Some(self.expires_ns)
     }
 }
 

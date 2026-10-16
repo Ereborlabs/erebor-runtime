@@ -4,7 +4,7 @@ use snafu::ResultExt as _;
 use super::*;
 
 impl AnalysisStore {
-    pub(crate) fn context_head_page(
+    pub fn context_head_page(
         &self,
         tenant: [u8; 16],
         owner: &str,
@@ -86,7 +86,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn context_heads(
+    pub fn context_heads(
         &self,
         tenant: [u8; 16],
         owner: &str,

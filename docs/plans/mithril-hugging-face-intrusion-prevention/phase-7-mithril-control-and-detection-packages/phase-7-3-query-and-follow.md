@@ -17,6 +17,13 @@ Observability 3 adds client SQL admission, current caller grants, disclosure,
 unsigned bookmark checks, and bounded Tokio execution before
 public SQL access. This phase must not expose arbitrary SQL through a service.
 
+The approved [component redesign](../../araphor-component-redesign.md) replaces
+the original DuckDB query adapter with native DataFusion planning and Arrow
+execution. Read the current
+[SQL operation review](../../../guides/araphor-sql-operation-review.md) for the
+source route. Qualification of this native source is **Not done**. The result
+records below remain evidence for their original source revisions.
+
 ## Implementation flow
 
 ```text
@@ -24,9 +31,9 @@ Trusted code supplies a reviewed read plan, typed parameters and exact tenant/so
   -> QueryOwner validates the plan and its configured limits
   -> AnalysisStore captures source membership, metadata revision and committed segment ends
   -> shared decoder decodes each selected event once when binding checks or projection require it
-  -> query-owned projection expands SQL views through the store-owned byte limit
-  -> built-in DuckDB table function exposes those pages as logical relations
-  -> QueryOwner evaluates its fixed SQL template against these pages in memory
+  -> query-owned projection emits canonical Arrow batches within the store-owned byte limit
+  -> standard MemTables replace schema-only scans in the admitted DataFusion plan
+  -> QueryOwner evaluates that plan through a fresh physical Arrow stream
   -> owner returns rows, coverage, read revision and checked internal checkpoint
 
 A batch arrives before an earlier source range
@@ -90,19 +97,21 @@ Reader cancels or disconnects
    append/replace behavior. No network request, client attachment, stored
    document or caller SQL string can construct a trusted plan. Reuse one
    evaluator when Observability 3 adds its asynchronous client entry point.
-   Use a temporary in-memory connection, never the persistent metadata
-   connection. Keep native external access and extension loading disabled.
-   Implement the [built-in input adapter](engine-design.md#built-in-duckdb-input-adapter)
-   with the existing DuckDB `VTab` trait. Register query-owned input and expose
-   SQL views over it; do not insert raw records into DuckDB tables. Reuse the
-   same adapter for client execution. No loadable plugin is required.
+   Use the [built-in Arrow input](engine-design.md#built-in-arrow-input)
+   route. SqlContext supplies only allowed schema-only sources. Standard
+   MemTables replace those scans for each run. Create fresh physical plans and
+   streams. Keep the persistent metadata connection outside query execution.
+   Use the same operation for trusted and client SQL. SqlPolicy checks the
+   original AST before one whole-query SqlToRel call. DataFusion owns SQL
+   names, types, aliases, CTE scope, and wildcard expansion. Dataset tables
+   expose their ordinary `__row_index` columns through `*`.
    Keep target, context, profile and trace-measurement expansion in the query
    projection. AnalysisStore supplies retained inputs from one snapshot. It
    owns selection, segment leases, byte limits, cancellation and page progress.
    Binding checks and event rows use the same decoded event. Raw-only reads
    do not require decoding. Charge projection state and every emitted row.
    A page must not disclose part of one expanded raw record.
-5. Implement typed rows and internal frames for `catalog`, `events`, `coverage`
+5. Implement canonical Arrow input and internal frames for `catalog`, `events`, `coverage`
    and `context_versions`. Document units, nulls, exact join keys and proof
    limits. `received_at` is Control intake time; source boot-relative time is
    separate. Metadata/results use their existing owner reads. Add later views
@@ -151,7 +160,7 @@ Reader cancels or disconnects
    templates under the [window contract](engine-design.md#intake-time-windows).
    Bind one evaluation instant to moving selection and SQL. Use a controllable
    clock and an expiry timer; quiet streams still lose expired rows. Report
-   clock changes. Fixed buckets use DuckDB `time_bucket`, UTC, an explicit
+   clock changes. Fixed buckets use native DataFusion `date_bin`, UTC, an explicit
    origin and separate input bounds. Both return complete replacements.
    Preserve late evidence and label intake time separately from source time.
    Defer overlapping windows, sessions and event-time finality. Do not add
@@ -187,7 +196,7 @@ This is a correctness check, not a performance benchmark.
 Unit tests `query_input_`, `query_scope_`, `query_follow_` must cover decoding,
 exact source selection, cross-tenant keys, snapshot consistency, input/output
 N/N+1, cancellation and cleanup. Use small configured limits for boundary tests.
-For the adapter, compare decoded values with query output, including nulls,
+For Arrow input, compare decoded values with query output, including nulls,
 bytes, unknown enum values and timestamp precision. Scan one input twice and
 through a self-join. Use drop counters to prove input release after success,
 error, cancellation and repeated follow evaluations. No process-lifetime
@@ -196,8 +205,10 @@ Check every emitted append, replace, checkpoint, health, error and terminal
 frame against its fields and ordering. A closed stream is not a trace terminal
 result. Public SQL admission, unsigned bookmark checks, current caller grants,
 disclosure, bounded asynchronous execution and wire-level gRPC tests belong
-to Observability 3. Compare each trusted template with full scoped-input
-execution in the pinned DuckDB.
+to Observability 3. Check each trusted template against its exact expected
+output over full scoped input. Keep any DuckDB comparison as a test-only
+oracle for that template's declared behavior. Check native SQL names, types,
+quoted lookup, aliases, and visible dataset row indices separately.
 Check that construction performs no query work and that paused consumption
 starts no further evaluation. Drop a pending stream and require cancellation
 and capacity release. Revoke authority or invalidate retained trace reads

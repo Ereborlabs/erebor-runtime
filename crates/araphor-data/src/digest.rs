@@ -3,10 +3,10 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{CanonicalEncodingSnafu, Result};
 
-pub(crate) struct InputRevision;
+pub struct InputRevision;
 
 impl InputRevision {
-    pub(crate) fn of(value: &impl Serialize) -> serde_json::Result<String> {
+    pub fn of(value: &impl Serialize) -> serde_json::Result<String> {
         let mut hash = Sha256::new();
         hash.update(b"ARAPHOR-ANALYSIS-INPUT-V1\0");
         serde_json::to_writer(&mut hash, value)?;

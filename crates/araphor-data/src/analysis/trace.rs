@@ -89,18 +89,24 @@ pub struct TraceIntentPageV1 {
     pub next_request: Option<[u8; 16]>,
 }
 
+pub struct TraceReadPermit(tokio::sync::OwnedSemaphorePermit);
+
 impl AnalysisStore {
-    pub(crate) fn check_trace_reads(
+    pub fn reserve_trace_read(&self) -> Result<TraceReadPermit> {
+        self.reserve_reader().map(TraceReadPermit)
+    }
+
+    pub fn check_trace_reads(
         &self,
         tenant: [u8; 16],
         requests: &[[u8; 16]],
         control: &AnalysisReadControl,
-        permit: tokio::sync::OwnedSemaphorePermit,
+        permit: TraceReadPermit,
     ) -> Result<()> {
         if tenant == [0; 16] || requests.len() > 1024 || requests.contains(&[0; 16]) {
-            return crate::QueryDeniedSnafu.fail();
+            return crate::AnalysisReadDeniedSnafu.fail();
         }
-        let mut reader = self.reader_wait(Some(control), permit)?;
+        let mut reader = self.reader_wait(Some(control), permit.0)?;
         control.run(&mut reader, |snapshot| {
             let mut statement = snapshot
                 .prepare("SELECT read_revoked FROM traces WHERE tenant_id = ? AND request_id = ?")
@@ -118,13 +124,13 @@ impl AnalysisStore {
                     operation: "read current trace row",
                 })?;
                 let Some(row) = row else {
-                    return crate::QueryDeniedSnafu.fail();
+                    return crate::AnalysisReadDeniedSnafu.fail();
                 };
                 let revoked: bool = row.get(0).context(AnalysisDatabaseSnafu {
                     operation: "decode current trace state",
                 })?;
                 if revoked {
-                    return crate::QueryDeniedSnafu.fail();
+                    return crate::AnalysisReadDeniedSnafu.fail();
                 }
             }
             control.check()

@@ -1,21 +1,13 @@
-use std::sync::{Arc, Mutex};
-
 use serde::{Deserialize, Serialize};
-
-use crate::{AnalysisStore, Result};
 
 mod context;
 mod derive;
-mod installed;
-mod live;
 mod model;
-mod replay;
-mod sdk;
+mod profile;
 
 pub use context::*;
-pub use live::DiscoveryProfileV1;
 pub use model::*;
-pub use replay::DiscoveryReplayV1;
+pub use profile::{DiscoveryProfileV1, DiscoveryReplayV1};
 
 pub const DISCOVERY_PROCESSOR: &str = "discovery";
 
@@ -52,50 +44,5 @@ impl DiscoveryConfigV1 {
             && self.seal_interval_ns > 0
             && self.witness_age_ns > 0
             && self.witness_age_ns <= 7 * 24 * 60 * 60 * 1_000_000_000
-    }
-}
-
-pub trait DiscoveryContextProvider: Send + Sync {
-    fn context(&self, record: &DiscoveryRecordV1) -> Result<DiscoveryContextJoinV1>;
-
-    fn revision(&self, _source: &crate::EvidenceIntakeIdentityV1) -> Result<u64> {
-        Ok(0)
-    }
-}
-
-pub struct DiscoveryOwner {
-    store: Arc<AnalysisStore>,
-    execution: crate::InstalledAnalysis,
-    provider: Arc<dyn DiscoveryContextProvider>,
-    config: DiscoveryConfigV1,
-    operation: Mutex<Option<crate::EvidenceIntakeIdentityV1>>,
-}
-
-impl DiscoveryOwner {
-    pub fn new(
-        store: Arc<AnalysisStore>,
-        provider: Arc<dyn DiscoveryContextProvider>,
-        config: DiscoveryConfigV1,
-        execution: crate::InstalledAnalysis,
-    ) -> Result<Self> {
-        model::require(config.valid(), "configuration")?;
-        store
-            .discovery_owners
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        Ok(Self {
-            store,
-            execution,
-            provider,
-            config,
-            operation: Mutex::new(None),
-        })
-    }
-}
-
-impl Drop for DiscoveryOwner {
-    fn drop(&mut self) {
-        self.store
-            .discovery_owners
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }

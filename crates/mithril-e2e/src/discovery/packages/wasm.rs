@@ -1,11 +1,12 @@
 use std::{io::Write as _, path::Path, sync::Arc, time::SystemTime};
 
+use araphor_analysis::GraphAndFindingOwner;
 use araphor_analysis_sdk as sdk;
 use araphor_component_build::ComponentBuilder;
 use araphor_data::{
-    EvidenceIntakeIdentityV1, FindingReasonV1, FindingStateV1, GraphAndFindingOwner,
-    GraphPackageStateV1, GraphSnapshotV1, InstalledRefV1, PackageArtifactV1, PackageBundleV1,
-    PackageImplementationV1, PackageRequestV1, PackageResponseV1,
+    EvidenceIntakeIdentityV1, FindingReasonV1, FindingStateV1, GraphPackageStateV1,
+    GraphSnapshotV1, InstalledRefV1, PackageArtifactV1, PackageBundleV1, PackageImplementationV1,
+    PackageRequestV1, PackageResponseV1,
 };
 use araphor_detector_example::BurstDetector;
 use erebor_runtime_ipc::araphor as wire;

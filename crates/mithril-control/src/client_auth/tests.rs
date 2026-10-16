@@ -1,4 +1,3 @@
-use araphor_data::AnalysisSelectionV1;
 use erebor_runtime_error::{ErrorExt as _, RetryHint, StatusCode};
 use openidconnect::core::{
     CoreEdDsaPrivateSigningKey, CoreIdToken, CoreIdTokenClaims, CoreIdTokenFields,
@@ -137,20 +136,16 @@ fn client_auth_browser() -> std::result::Result<(), Box<dyn std::error::Error>> 
     assert_eq!(trace.principal, "alice");
     assert_eq!(trace.valid_until_unix_ns, session.expires_ns);
     assert!(!trace.revoked);
-    let mut grant = QueryGrant {
-        principal: access.principal().into(),
-        revision: access.revision(),
-        selection: AnalysisSelectionV1::tenant(access.tenant_id()),
-    };
-    QueryAuthorization::check(&access, &grant)?;
-    grant.selection.tenant_id = [2; 16];
-    assert!(QueryAuthorization::check(&access, &grant).is_err());
-    grant.selection.tenant_id = [1; 16];
-    grant.principal = "bob".into();
-    assert!(QueryAuthorization::check(&access, &grant).is_err());
-    grant.principal = "alice".into();
-    grant.revision += 1;
-    assert!(QueryAuthorization::check(&access, &grant).is_err());
+    let mut changed = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
+    changed.check()?;
+    changed.tenant_id = [2; 16];
+    assert!(changed.check().is_err());
+    changed.tenant_id = [1; 16];
+    changed.subject = "bob".into();
+    assert!(changed.check().is_err());
+    changed.subject = "alice".into();
+    changed.revision += 1;
+    assert!(changed.check().is_err());
 
     for (origin, csrf, mutation) in [
         (
@@ -214,7 +209,7 @@ fn client_auth_revocation() -> std::result::Result<(), Box<dyn std::error::Error
     let owner = owner()?;
     let session = session(&owner)?;
     let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
-    let mut changes = QueryAuthorization::changes(&access);
+    let mut changes = access.changes();
     owner.replace_grants(config().investigators)?;
     assert!(!changes.has_changed()?);
     let mut grants = config().investigators;
@@ -317,10 +312,7 @@ fn client_auth_expiry_capacity() -> std::result::Result<(), Box<dyn std::error::
     let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
     access.check_at(access.expires_ns() - 1)?;
     assert!(access.check_at(access.expires_ns()).is_err());
-    assert_eq!(
-        QueryAuthorization::expires_ns(&access),
-        Some(session.expires_ns)
-    );
+    assert_eq!(access.expires_ns(), session.expires_ns);
     let now = ClientAuth::now()?;
     let expires_ns = ClientAuth::deadline(now, 120)?;
     let mut state = owner.state()?;

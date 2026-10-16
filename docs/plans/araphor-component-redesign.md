@@ -5,6 +5,11 @@ implementation of this redesign and requires a commit for each deliverable.
 The source baseline is `537f9de3`. DataFusion and Mangroves supply the source
 lessons below. The complete redesign must reduce real production Rust code.
 
+The required route is SQL parser, logical planner, optimizer, physical planner,
+and execution. Use native DataFusion stages and registered table providers.
+Add an extension only for a required Araphor behavior that the native stage
+does not supply.
+
 This proposal supports the
 [performance simplification TODO](araphor-performance-simplification-todo.md).
 
@@ -13,13 +18,195 @@ Rust lines from `7b7b407a`. The remaining target at that baseline is 3,771.
 None of the source inventories below is a net reduction. Count the complete
 replacement before a completion claim.
 
-The working tree now routes queries through DataFusion. `QuerySql` retains a
-shared immutable program with its logical plan. `PlannerContext` supplies CTE and derived-query scope. Arrow
-batches supply client, model, and dataset inputs. Affected compilation and
-functional qualification pass on the host below. The whole-code reduction is
-**Not done**. Earlier retained-admission receipts do not qualify this route.
+The user rejects the implementation that retains `QuerySql`. The complete
+`araphor-query/src` tree from that implementation is deleted. The replacement
+starts with native parser, catalog, planner, source, and execution modules.
+Caller migration compiles across Query, Analysis, Control, and E2E. Functional
+qualification is **Not done**. The checks below apply to their recorded
+source states.
+
+### Replacement checks on 2026-10-16
+
+| Check | Result |
+| --- | --- |
+| `cargo test --offline -p araphor-query --lib -- --nocapture` | 60 passed. Test execution took 9.12 seconds. This check covers native parsing, planning, sources, memory, sessions, follow, and cursor bindings. |
+| `cargo check --offline -p mithril-control -p mithril-e2e --tests --message-format=short` | Passed in 40.33 seconds. This check compiles test callers; it does not execute them. |
+| `ARAPHOR_NATIVE_DIR=/tmp/araphor-engine-native-final cargo test --offline -p araphor-analysis --lib -- --nocapture` | 303 passed, 9 failed, and 16 ignored. Build time was 52.46 seconds. Test execution took 357.51 seconds. Fixture corrections and isolated failure checks remain open. Ignored native cases require a separate explicit run. |
+
+The Analysis check includes the sliced and masked NULL conversion cases and
+the reused-session deadline case. These cases pass. The nine failures prevent
+qualification of the complete Analysis replacement. Later edits require new
+affected checks.
+
+The follow-up Analysis selection passes all 40 cases in 71.40 seconds. This
+selection includes all model cases and the five remaining failed cases. The four
+deadline failures pass without source changes when run separately. Their test
+execution takes 96.94 seconds. The complete Analysis suite has not run again.
+
+The Data library check reports 213 passed, one deadline failure, and three
+ignored cases in 322.59 seconds. The unchanged deadline case passes in a
+separate run after the native build ends. The two new exact-selection cases
+pass in 3.67 seconds. Only `Selection::All` now enumerates records. An exact
+selection of profiles, graph results, or notifications retains its exact keys.
+One enum replaces each former boolean and key-vector pair.
+
+The later Query check passes all 63 cases in 14.95 seconds. This check includes
+local SQL without a Data read, local output bounds, and local cancellation.
+It precedes the append compaction change. Append now uses native Arrow
+`interleave_record_batch` in place of fragments, concatenation, and an identity
+take. Its admitted source, filter, alias, and projection shapes produce at
+most one output row per raw position. Other shapes use replacement. Actual
+allocation checks, view compaction, and cursor progress remain. Qualification
+of this change is **Not done**.
+
+The last complete source count removes 3,037 nonblank production Rust lines
+from `7b7b407a`, 1,884 from `aa390d9f`, and 808 from `537f9de3`. The record is
+`/tmp/araphor-native-rewrite-count3.json`. This count includes standard Cargo
+formatting of the replacement crates. Later edits are not included in this
+count. The required 6,000-line reduction is **Not done**.
 
 ## Intended end state
+
+### RisingWave source correction
+
+Source study on 2026-10-16: **Done**. Implementation: **Not done**. The user
+requires the local RisingWave source to guide subscription and stream
+processing ownership. The reference checkout is `risingwave/` at
+`bbcb64604a47f4ef31b01fbfdda48764091baa43`.
+
+RisingWave separates maintained query execution from subscription cursors.
+Its streaming planner produces operators with output keys and change
+properties. Operators process row changes and retain state. A subscription
+catalog entry names a maintained table. Its cursor reads a pinned initial
+snapshot, then exact committed change-log epochs. The protocol consumes the
+cursor's output. The cursor can start a bounded log-read query for each epoch;
+this does not execute the original relational query again.
+
+| Source | Required lesson |
+| --- | --- |
+| [Stream conversion](../../risingwave/src/frontend/src/optimizer/plan_node/convert.rs) and [stream metadata](../../risingwave/src/frontend/src/optimizer/plan_node/stream.rs) | Stream planning must establish keys, change kinds, and time progress before execution. A page-shape test cannot supply these properties. |
+| [Executor contract and messages](../../risingwave/src/stream/src/executor/mod.rs) and [filter](../../risingwave/src/stream/src/executor/filter.rs) | Operators consume upstream change chunks and propagate progress. Inserts, deletes, and updates remain explicit. |
+| [Hash aggregation](../../risingwave/src/stream/src/executor/aggregate/hash_agg.rs) and [barrier alignment](../../risingwave/src/stream/src/executor/barrier_align.rs) | Stateful operators apply changes and finish the same input frontier before output progress advances. |
+| [Time-dependent filter planning](../../risingwave/src/frontend/src/optimizer/rule/stream/filter_with_now_to_join_rule.rs) and [dynamic filter](../../risingwave/src/stream/src/executor/dynamic_filter.rs) | Time progress is a processing input. Window expiry belongs to the query runtime. |
+| [Subscription catalog](../../risingwave/src/frontend/src/catalog/subscription_catalog.rs) and [cursor manager](../../risingwave/src/frontend/src/session/cursor_manager.rs) | A subscriber owns its snapshot-to-change-log position, buffered rows, and lifetime. It consumes maintained output. |
+| [Snapshot notification](../../risingwave/src/frontend/src/scheduler/snapshot.rs) and [FETCH handler](../../risingwave/src/frontend/src/handler/fetch_cursor.rs) | The query owner registers a notification before checking progress, waits on change or cancellation, and returns rows through the normal protocol response. |
+
+The current Araphor `State::evaluate` starts a bounded native query after a
+source or time change. Replacement suppression hashes complete results.
+`page_plan` selects append paging for a small set of source shapes. These
+mechanisms do not retain aggregate or join state between changes. The new
+`Delivery` owner removes duplicate Control lifecycle code, but it does not
+complete the required stream-processing redesign. Its passing tests qualify
+that delivery behavior only.
+
+The corrected owner flow is:
+
+Data committed changes and time progress
+  -> Query stream planning and retained operator state
+  -> maintained output and a committed output frontier
+  -> Query snapshot-to-change-log cursor
+  -> Control encoding or an Analysis detector consumer
+
+Data remains the durable owner of source changes, retention, and transactions.
+Query owns processing, windows, output progress, and subscription cursors.
+Source revision watches are wake signals; retained changes establish replay
+truth. Preserve exact authorized selection, original source provenance,
+current grants, native reservations, and commit checks across this flow.
+Clients consume the returned stream. They do not schedule source checks,
+query evaluation, window expiry, or subscription progress.
+
+Use DataFusion's native plans, expressions, Arrow arrays, and supported
+accumulator operations. A native `RecordBatchStream` alone does not carry
+row-change operations, a commit frontier, or a watermark. Native boundedness
+and emission properties do not establish incremental aggregate or join
+semantics. Justify each required extension against that actual API gap.
+Do not add RisingWave's distributed actor, exchange, or storage services.
+The local design needs the owner boundaries and processing semantics above.
+
+### Native pipeline correction
+
+Implementation: **Not done**. The user requires the standard SQL parser,
+logical planner, optimizer, physical planner, and execution sequence. DataFusion
+owns the ordinary SQL stages. Araphor uses registered table providers and
+extension hooks for its source and subscription requirements.
+
+The working tree adds one native Subscribe logical extension. The registered
+QueryPlanner delegates to DefaultPhysicalPlanner with an ExtensionPlanner for
+that node. The native logical and physical optimizers remain in the path.
+SubscribeExec owns physical execution. Its private kernel calls native COUNT
+accumulators only during that execution. Native MemorySourceConfig supplies
+Arrow input to the compiled native filter and projection plans.
+
+The direct Processor path, standalone aggregate helper, and SourceBatch bridge
+are deleted. SourceBatch duplicated source binding and had no required role.
+The source partition now resolves its snapshot from the actual TaskContext.
+DataFusion RecordBatchStream has no commit or Araphor receipt item. The actual
+planned SubscribeExec supplies one committed output stream for those values;
+its native execute delegates to that same execution.
+
+The physical source registers its revision watch before capture. It waits for
+a later revision before another capture. One evaluation permit remains held
+through the blocking read, native processing, and completed output. One deadline
+covers all native processing for the commit. The first maintained operator
+remains ordinary global COUNT over events. Other maintained operators, shared
+query ownership, and clock processing remain **Not done**.
+
+The native pipeline and count execution checks are **Done** for the selected
+host cases. The Query run passes 96 cases in 16.60 seconds. A later test calls
+the actual native ExecutionPlan::execute entry; it passes in 1.96 seconds.
+It proves a pending read between commits, a changed count after a commit,
+release of the evaluation slot while idle, cancellation, and full input and
+output capacity recovery before stream EOF.
+
+The affected checks also pass 25 Data extraction cases, 35 Analysis model
+cases, one Analysis discovery transaction case, 34 Control cases, and three
+E2E cases. The Data run ignores one release-history case. The E2E cases cover
+query follow, owner isolation, and the Data load contract. These checks pass
+195 distinct selected cases. They do not constitute a complete Analysis or
+workspace test run. Existing native backend records remain separate evidence.
+Functional execution times do not establish a performance improvement.
+The qualification record is `/tmp/araphor-native-pipeline-qualification1.json`.
+
+Strict Clippy passes for the six affected crates and their test targets.
+The final targeted Query lint check also passes in 16.87 seconds. The affected
+runtime source stays fixed during each test run. Later harness edits change
+only error boxing and a conditional with the same inputs and results.
+
+The last source count adds 1,008 nonblank production Rust lines from
+`537f9de3`. It removes 1,221 from `7b7b407a` and 68 from `aa390d9f`.
+The record is `/tmp/araphor-native-rewrite-count7.json`. The complete redesign
+still requires 4,779 more net production deletions. It is **Not done**.
+
+The obsolete Data extraction row-page framework is also deleted. Query already
+owns Arrow batches through its actual projection callback. Data retains atomic
+snapshots, receipts, read guards, byte bounds, and complete source frontiers.
+The first affected Data extraction run passes 25 cases and ignores one release
+history case. Test execution takes 7.03 seconds. Later test-only frontier
+assertions and the new physical pipeline still require qualification.
+
+### Shared subscription owner
+
+The user requires Query to own subscription behavior used by Control and
+E2E. Implementation: **Not done**. Native SQL preparation and source
+capability checks belong to Query. The existing native `Subscription` remains
+a stream of Arrow updates. Direct callers can consume that stream.
+
+Query must also own shared delivery state: pending update, delivery stages,
+last complete checkpoint, read checks, cancellation, authorization changes
+and expiry, duration, output wait, and conversion reservations. Control
+supplies current client authorization and protobuf encoding. Trace terminal
+validation and per-target result assembly remain at their trace owner. An
+encoding adapter returns its protocol value directly; add no query frame or
+query program wrapper.
+
+Check authorization after each asynchronous read and before each frame.
+Advance the complete checkpoint only when its frame is returned. Keep the
+pending Arrow update until its checkpoint. Release a failed conversion
+immediately. A successful frame keeps its conversion charge until the next
+poll or drop. Apply output wait on renewed demand, not while waiting for
+source changes. Preserve the existing Control assertions for these cases.
+E2E retains its independent result, cursor, paging, health, and cleanup
+assertions; its repeated preparation calls use the Query entry point.
 
 Use one Arrow schema and one columnar query operation from authorized source
 selection to SQL output. The existing package owner retains one immutable
@@ -30,23 +217,358 @@ durable owner of evidence, progress, results, references, and quotas.
 The user approves the SQL engine replacement through the implementation
 request. This approval replaces the earlier DuckDB-only constraint for query
 execution. The working tree selects DataFusion 53.1.0 and Arrow 58.4.0 in
-Cargo.lock. Affected compilation and functional qualification pass.
+Cargo.lock. Qualification of the replacement is **Not done**.
 DuckDB continues to own retained metadata and graph tables. This proposal
 changes the private in-memory SQL engine only. The native and Wasm execution
 backends do not change.
 
 Coherence review: **Done for owner boundaries**. The review found missing
 parser, SQL binding, caller, resource, and execution-boundary requirements.
-The sections below record them. The source now includes the engine and
-synchronous execution route. The affected execution, resource, and parity
-cases pass on Linux x86_64 GNU. The complete production reduction remains
-**Not done**. These checks do not qualify another platform or measure speed.
+The sections below record them. The replacement includes a native execution
+owner and a synchronous entry point. Tests for the new stages and execution
+owner are written but have not run. The complete production reduction remains
+**Not done**. No performance result is claimed for the replacement.
+
+## Proposed crate ownership correction
+
+Status on 2026-10-16: **Approved. Implementation not done.** The user explicitly
+requires separate crate owners and a query engine written from the start
+with the native DataFusion parser, planner, catalog, and execution APIs.
+Moving the old query modules does not satisfy this requirement.
+
+Before each change to `araphor-query`, answer: Is this a new implementation
+that uses DataFusion directly, or a change to the old design? State the
+native API and the old mechanism that it replaces. Stop a change that only
+adapts the old design. Do not retain compatibility wrappers for the old
+query plan, binding, frame, or scalar result types.
+
+The rejected implementation kept query, model execution, package execution,
+and storage in `araphor-data`. Its later file moves also did not complete
+the redesign. The earlier checks do not qualify the replacement. The
+existing code and receipts remain implementation history.
+
+### Crates and dependencies
+
+| Crate | State and behavior it owns | Dependencies within this design |
+| --- | --- | --- |
+| `araphor-data` | Durable evidence, records, retained package format, source revisions, context references, progress, transactions, recovery, retention, quotas, and storage read control. | Existing SDK, built-in contracts, and DuckDB. No dependency on Query or Analysis. |
+| `araphor-query` | Native SQL parsing and planning, authorized source catalog, bounded Arrow source capture, execution sessions, native memory reservations, and commit-driven follow. | Data and the existing SDK. DataFusion supplies the statement, logical plan, optimizer, physical planner, and streams. |
+| `araphor-analysis` | Package admission and lifecycle, retained executable programs, detector input bindings, model output/checkpoint/evidence/reason execution, scheduling, native and Wasm execution, and discovery/graph/notification execution. | Query, Data, the existing SDK, and existing execution backends. |
+
+The existing SDK continues to own plugin declarations, Arrow contracts, and
+native/Wasm ABI contracts. Control and E2E import each actual owner. Data
+does not re-export Query or Analysis. This design adds no facade crate.
+
+```mermaid
+flowchart TD
+    Control[Control and other callers] --> Analysis[araphor-analysis]
+    Control --> Query[araphor-query]
+    Analysis --> Query
+    Analysis --> Data[araphor-data]
+    Query --> Data
+    Query --> Engine[DataFusion and Arrow]
+    Data --> Store[DuckDB and retained segments]
+```
+
+Query uses `parser`, `planner`, `execution`, and `follow` module families and
+standard DataFusion catalogs. Follow uses native logical plans, Arrow batches,
+source revision notifications, and recorded deadlines. These owners use native
+DataFusion types. A module name does not
+justify another parser, logical-plan type, table trait, or batch type.
+Ordinary SQL uses the native parser and `SqlToRel`. Use a public extension
+hook only when an approved operation requires behavior that native SQL and
+standard plan composition cannot supply.
+
+### Runtime flow and removed mechanisms
+
+A client submits SQL or Analysis selects a detector input query
+  -> the caller checks its current authority and supplies an authorized selection
+  -> Parser returns a native DataFusion statement
+  -> Planner calls native statement_to_plan against registered providers and binds parameters once
+  -> the caller retains the native LogicalPlan and original resolved source names
+
+A run starts for a native logical plan
+  -> Session supplies its selection, clock, control, and local Arrow tables
+  -> native SessionConfig extensions bind the run without changing retained scans
+  -> create_physical_plan performs native optimization and physical planning once
+  -> native TableProvider scans record requested canonical columns
+  -> Data captures all original source receipts and requested rows in one bounded snapshot
+  -> the native physical stream reads the fixed Arrow batches
+  -> native reservations retain input and output buffers through borrowed aliases
+
+The parser does not walk SQL scopes or collect table names. Native
+`SessionState::resolve_table_references` supplies the original source
+inventory, including unused CTEs. Native `statement_to_plan` resolves actual
+table providers through the standard memory catalog and schema providers.
+The custom Araphor `ContextProvider` implementation is deleted. Registered
+table names, including `__araphor_` names, have no additional name ban.
+The plan does not retain source data, a tenant, a store handle, SQL text,
+or a second parameter vector.
+
+### Justification of custom implementations
+
+A custom implementation needs a current requirement, a reason that the
+standard API is insufficient, and a test of the required behavior. A trait
+implementation in another project is not sufficient justification. A future
+subscription extension does not justify a second ordinary-SQL context now.
+
+| Implementation | Current requirement and reason | Verification state |
+| --- | --- | --- |
+| `SourceProvider` and `SnapshotPartition` | Native scan projections must be known before Data captures rows. All original source receipts must come from the same snapshot before SQL filtering. A retained provider has a name and schema; SessionConfig supplies each run. A populated MemTable would bind one run's data to the retained plan. Native StreamingTableExec supplies execution. | Five source tests pass. They cover scope, original receipts, empty page progress, zero-column counts, and binary-buffer lifetime. |
+| `LocalTable` | A retained plan must read a different exact-schema local dataset for each run. The provider resolves that dataset through SessionConfig and delegates its scan to native MemTable. | Session tests pass for rebinding, schema rejection, input capacity, and buffer lifetime. |
+| Native Arrow reservation bridge | A borrowed Arrow buffer must retain its capacity charge after its producer closes. Arrow buffer claims hold one reservation; separate input and output consumers must retain their own allocation charges. Native memory pools enforce capacity. The allocation registry holds weak references only. | Six memory tests pass for aliases, nested buffers, separate engine consumers, cancellation, capacity pressure, and cleanup. |
+| Parser and planner boundary | Admit one bounded read statement, native parameters, and the existing resource policy. DataFusion owns syntax, names, types, functions, catalogs, and plans. Policy checks belong at admission; source lookup does not enforce spelling rules. | Native stage tests pass for names, CTE scope, parameters, functions, joins, windows, writes, and redacted errors. |
+
+The pinned native parser has no stack growth checkpoint in its nested-expression
+cycle. On a default test thread, a query with 65 nested parentheses exhausted
+the stack before the configured recursion limit returned an error. The same
+test passed with an 8 MiB thread stack. The parser boundary now uses the existing
+`stacker` dependency to supply that stack space on the same thread. It keeps the
+native parser and the recursion limit of 64. The unchanged test passes on the
+default test thread.
+
+The current core check is `cargo test --offline -p araphor-query --lib`:
+39 passed, 0 failed, with 7.86 seconds of test execution. This check covers
+the parser, planner, source, memory, and session code before the follow module
+is added. It does not qualify follow, Analysis, Control, or the complete redesign.
+
+Output preparation reserves the currently available part of the configured
+output bound. It does not require the complete maximum to be free before each
+query. A prior output can share a buffer with a retained input; that buffer
+must keep its output charge while an alias exists. Native buffer claims charge
+new retained allocations before disclosure. The logical output bound and the
+shared retained-output capacity do not change.
+
+This resource contract does not intercept all temporary Arrow allocations.
+The native execution pool accounts for registered operators. Arrow buffer
+claims account for retained input and output. Native compute calls can make
+temporary allocations before a returned batch is checked. Do not describe
+these checks as complete allocation interception.
+
+The review found three incorrect adaptations: a table-name prefix ban,
+timestamp parameter restrictions inherited from DuckDB microseconds, and a
+function registration filter that omitted native `character_length` and
+its `length` alias. The source corrects these cases, and their new tests pass.
+The review also found temporary projection allocations charged to retained
+receipts. The corrected receipt retains its metadata charge. Borrowed binary
+buffers retain their separate allocation charges until their last owner drops.
+
+The [ToyDB SQL session](https://github.com/erikgrinaker/toydb/blob/main/src/sql/execution/session.rs)
+uses separate parse, plan, optimize, and execute stages. Its catalog supplies
+planning facts. The Mangroves parser and planner below use the same division
+with DataFusion for ordinary SQL. These source examples define the owner
+boundaries. They do not justify a new Araphor statement or logical-plan type.
+  -> the result retains Arrow batches and their buffer leases
+
+A source disappears from the optimized plan
+  -> its original dependency remains subject to authorization and source observation
+  -> its provenance does not depend on a physical scan that will never execute
+
+Analysis runs an admitted detector
+  -> one runtime operation resolves its declared inputs in dependency order
+  -> source SQL uses the same Query run interface as client SQL
+  -> completed input and output datasets enter that operation's catalog
+  -> native, Wasm, or SQL execution produces the selected model output
+  -> checkpoint, evidence, and reason queries read the materialized output once
+  -> Analysis checks current authority and prepares one commit
+  -> Data checks activation, dependencies, cancellation, and checkpoint revision before commit
+
+Data reports a relevant source change or an existing window deadline arrives
+  -> Query follow or the Analysis scheduler selects the affected operation
+  -> the owner checks current authority and source progress
+  -> the owner starts a fresh run when its existing window policy requires one
+  -> the owner waits on the next source notification or recorded deadline
+
+A transport renders a result
+  -> the transport reserves response and conversion memory through the shared output lease
+  -> the transport converts Arrow values to the existing response format once
+  -> the transport preserves the current value, metadata, and error contracts
+  -> the final consumer releases the result leases
+
+The source provider stores immutable source identity and schema. A run supplies
+its own fixed data through the native `SessionConfig` extension mechanism.
+A provider does not refresh a global catalog or read a newer source revision
+after the run fixes its input. Repeated scans within one query run use the
+same captured source. Different selections remain distinct. Before sharing
+an extraction across statements, prepare those statements and combine their
+required canonical fields. A narrow result from one statement cannot serve
+a later statement that needs another field. Do not add cache backfill or
+claim shared extraction when the complete required field set is not known.
+
+Keep projection before Arrow materialization. Eagerly building every column
+would break existing narrow-projection input budgets. Full original source
+inventory does not mean full column materialization. Keep record fanout
+admission, latest-finding selection, zero-column row counts, and empty-output
+cursor progress in the source read owner. An extraction result fixes the
+data it returns; this proposal does not claim a new atomic snapshot across
+all durable tables.
+
+The provider route replaces the current schema-only `EmptyTable` plan,
+runtime `MemTable` substitution, and `TableScan` rewrite. Standard in-memory
+execution can remain inside a provider. Do not retain both source binding
+routes. Add no custom physical operator when the standard scan can execute
+the admitted Arrow batches.
+
+Each statement retains the stage-specific relation set in
+[Statement scope and output rows](#statement-scope-and-output-rows). A shared
+operation does not expose every completed table to every statement. An output
+dataset has one fixed batch order and one dataset-global `__row_index`.
+Each statement fixes its table view before execution. Different selections
+have distinct source bindings. Concurrent runs share no mutable bindings.
+Retained source providers report unknown data statistics. They never retain
+one run's row counts for another run's optimization. Source filter and limit
+pushdown cannot bypass provenance or complete-record admission. A missing
+run extension or source binding fails closed.
+
+Native scan projections index the provider's full canonical schema.
+Extraction can return fewer columns. The provider maps requested fields to
+those batches by exact name and type before the standard scan executes.
+This field mapping remains necessary. The logical-plan rewrite does not.
+
+Arrow remains the query data format through the result boundary. Remove
+internal `Vec<Vec<duckdb::Value>>`, reverse type normalization, and
+`QueryValues`. Query parameters use native `ScalarValue`. DuckDB remains in
+Data for storage. The existing transport format remains a transport concern.
+Update frame validation, content hashing, append positions, and checkpoint
+handling to read the same Arrow result. Keep deterministic content identity.
+Do not add another retained scalar result for these operations. Preserve row,
+retained-buffer, and response limits. Reserve conversion growth before
+allocation or publication through the same output lease.
+
+Move model and backend orchestration out of `QueryOwner`. Query exposes one
+concrete operation for admitted SQL, source inputs, and local Arrow tables.
+Analysis composes that operation with plugin execution. Query does not select
+native/Wasm backends or apply backend-specific limits. Analysis uses the same
+budget owner and leases; it does not create a second admission pool.
+
+Replace the current `ModelRun`, `ModelOperation`, and `ModelExecution`
+coordination with one model run and its Query operation. Remove the
+`(operation, inputs)` return protocol and table-map transfers between those
+owners. Select the executable implementation once for the admitted export.
+Keep SQL output validation and native/Wasm boundary validation at their
+respective owners.
+
+### Dependency cycles to remove
+
+| Current coupling | Required owner change |
+| --- | --- |
+| `analysis/packages/{model,revisions,recovery}.rs` calls `package/storage.rs`. | Keep the retained artifact codec and serialized descriptor types in Data. These types include `SqlModelV1`, `SqlReasonV1`, native `Qualification` and `Dependency`, and `InstalledRefV1`. Keep executable admission and loading in Analysis. Recovery still validates the retained format. |
+| `InstalledRefV1::validate_parameters` calls `QueryOwner::model_parameters`. | Keep the retained reference and shared parameter contract validation below execution in Data or the existing SDK. Query and Analysis call that same validation owner. |
+| `QueryOwner::component_limits` calls `WasmExecution::limits`. | Analysis owns native/Wasm configuration and backend validation. Query owns only its query configuration. |
+| Discovery and graph execution owners contain `InstalledAnalysis`. | Move these execution owners into Analysis. Keep their durable records and store commit methods in Data. Apply the same rule to notification execution. |
+| One `Error` enum imports DataFusion and Wasmtime errors. | Data owns store and format errors. Query owns SQL and engine errors. Analysis owns package and backend errors. Preserve structured sources and existing `ErrorExt` status and retry categories. |
+| Store and runtime share private lifecycle state. | Expose the required concrete store operations. Preserve one lifecycle lock and the final transactional checks. Add no general host trait. |
+| `AnalysisReadControl::query_async` accepts a future with the current Data result type. | Keep storage interruption in Data. Give Query's execution wrapper a narrow control API that preserves typed cancellation and Query errors without a dependency from Data to Query. |
+
+Separate data definitions from executable admission methods during this move.
+Rust does not permit another crate to add inherent methods to a Data-owned
+type. Put executable admission on the runtime program that owns its result.
+Do not make storage depend on a runtime type to preserve an old method path.
+Preserve structured cancellation, deadline, busy, and source errors when a
+native stream wraps them in `DataFusionError::External` or `Context`. Do not
+map every wrapped domain failure to one engine-error category.
+
+### Source basis for this correction
+
+GreptimeDB source was read at
+`095c288f16f4ee359a515c9a30cc355d6f6f8310`. Its
+[query interface](https://github.com/GreptimeTeam/greptimedb/blob/095c288f16f4ee359a515c9a30cc355d6f6f8310/src/query/src/query_engine.rs#L59)
+accepts native logical plans. Its
+[planner](https://github.com/GreptimeTeam/greptimedb/blob/095c288f16f4ee359a515c9a30cc355d6f6f8310/src/query/src/planner.rs#L258)
+delegates ordinary SQL to `SqlToRel`. Its
+[context provider](https://github.com/GreptimeTeam/greptimedb/blob/095c288f16f4ee359a515c9a30cc355d6f6f8310/src/query/src/datafusion/planner.rs#L63)
+supplies resolved source tables. Its
+[session construction](https://github.com/GreptimeTeam/greptimedb/blob/095c288f16f4ee359a515c9a30cc355d6f6f8310/src/query/src/datafusion.rs#L554)
+uses native session state and typed extensions. Apply these owner boundaries.
+Do not copy its separate SQL extensions or table adapters without a local
+requirement.
+
+The Mangroves reading route below shows the same direct ordinary-SQL
+delegation, fresh execution state, and source notifications. The selected
+DataFusion 53.1.0 source supplies `TableProvider::scan` and
+`SessionConfig::{with_extension,get_extension}`. These are the proposed
+integration seams. No dependency upgrade is part of this correction.
+
+### Delivery and acceptance
+
+1. Remove store-to-runtime dependencies. Extract Query and Analysis with
+   their actual state and callers. Verify the dependency graph and owner
+   errors. Count file movement as zero reduction.
+2. Replace source substitution with one run catalog and native providers.
+   Remove the old binding route. Prove source scope, pruning, projection,
+   fanout, progress, cancellation, and returned-buffer lifetime.
+3. Keep Arrow at the result boundary and migrate each transport and caller.
+   Remove scalar query storage and reverse normalization. Preserve each
+   distinct value, resource, checkpoint, and evidence assertion.
+4. Compose detector execution in Analysis. Remove package/backend methods
+   from QueryOwner and parallel source/result representations. Qualify SQL,
+   native, and Wasm execution against the same declared input and output
+   contracts. Preserve producer release and native library lifetime.
+5. Verify the complete affected source and update the review guide. Count all
+   new crates, callers, resource code, and transport conversion in the same
+   production Rust total. Meet the user's 6,000-line nonblank production Rust
+   reduction from `7b7b407a` before a complete redesign claim.
+
+Use relevant builds and tests during each delivery. Commit each qualified
+delivery. Do not add a benchmark or use file movement, deleted tests,
+documentation, or blank lines as production reduction.
+
+Snapshot `d20ee0fd` contains the native SQL source changes. Its package check
+reports 134 passed, one failed, and 12 ignored in
+`/tmp/araphor-native-sql-packages1.json`. The failed case is
+`package::tests::wasm::metadata::mixed_metadata_install_retry`. Its changed
+fixture query uses unsupported `BLOB` syntax. SQL admission stops before the
+revision-conflict check. The corrected fixture uses a different valid query
+with the same binary schema. The conflict and retained-revision assertions
+remain. Current-source qualification and the crate redesign are **Not done**.
+Do not treat earlier successful subsets as qualification for either complete
+change.
+
+The fixture correction is **Done** at `00a821f5`. The final Data test build passes in
+123.60 seconds. All 49 selected admission and fixture cases pass in 58.86
+seconds. Strict Clippy for the Data library and test targets passes in 11.91
+seconds. Scoped formatting passes. Source and binary hashes stay fixed during
+the checks. The records are `/tmp/araphor-native-sql-build5.json`,
+`/tmp/araphor-native-sql-fixture-final1.json`,
+`/tmp/araphor-native-sql-fixture-clippy2.json`, and
+`/tmp/araphor-native-sql-fixture-qualification1.json`. These checks qualify
+the fixture correction and test import placement. They do not qualify the
+complete native SQL replacement or the proposed crate design.
+
+The current Rust count is unchanged by this correction. The complete redesign
+adds 404 nonblank production Rust lines from `537f9de3`. The tree removes
+1,825 from `7b7b407a`; another 4,175 must be removed to meet the production
+target. The count record is `/tmp/araphor-arrow-engine-count15.json`. The
+record excludes tests, documentation, and blank lines from production totals.
+The user now requires this crate design and a new native query engine.
+Implementation and verification remain **Not done**. The count above
+applies to the earlier source. Count all replacement crates before the next
+reduction claim.
 
 ## Columnar query operation
 
+The user approves native DataFusion SQL behavior on 2026-10-16. This approval
+supersedes the earlier name, numeric, scope, wildcard, and function compatibility
+requirements in this document. DataFusion expands `SELECT *` from the table
+schema. Model and dataset tables include `__row_index` as an ordinary column.
+No engine extension or hidden-column rule is required.
+
+One whole-query `SqlToRel` call replaces the recursive Araphor binder. The
+original AST still supplies syntax policy, source dependencies, parameters,
+clock use, source selection, and append facts. Current grants, provenance,
+limits, cancellation, buffer leases, and durable commit checks remain required.
+Use native generated names, numeric types, arithmetic, CTE scope, quoted names,
+aliases, HAVING precedence, and unused-window binding. Code-owned bucket
+queries use `date_bin`. Fixed SDK outputs select their declared fields.
+The standard engine setting keeps SQL strings as Arrow Utf8 for SDK schemas.
+
+Native planner implementation and qualification are **Not done** until the
+result below records the final source and affected checks. Earlier engine
+qualification does not qualify this replacement.
+
 A caller submits client SQL or a package input/output query
   -> QueryOwner checks the request grant and constructs its authorized source scope
-  -> Binder checks SQL length, parameters, recursion, statements, and functions
+  -> SqlPolicy checks SQL length, parameters, recursion, statements, and functions
   -> SqlToRel resolves names and types against canonical Arrow schemas
   -> QuerySql retains the logical plan and full-query source dependencies
   -> source scans capture exact revisions, witnesses, context references, and coverage
@@ -83,11 +605,10 @@ The working tree uses the standard `EmptyTable` and `MemTable` owners. It
 adds no Araphor table-provider framework or physical operator.
 
 A query needs admission
-  -> Binder walks every original common table expression (CTE), derived query, and source relation
+  -> SqlPolicy walks every original common table expression (CTE), derived query, and source relation
   -> SqlContext supplies schema-only EmptyTable sources
-  -> PlannerContext retains bound CTE and derived-query plans
-  -> SqlToRel resolves the SELECT clauses against those bound plans
-  -> QuerySql retains the logical plan, dependencies, labels, and clock facts
+  -> SqlToRel binds the complete query with native scope, names, types, and projections
+  -> QuerySql retains the logical plan, dependencies, and clock facts
 
 A run prepares its fixed source selection
   -> QuerySql::bind_complete binds parameter values and the captured clock
@@ -98,7 +619,7 @@ A run prepares its fixed source selection
   -> QueryEngine::stream creates the physical plan and its batch stream
 
 EmptyTable has no data statistics. Treat a schema-only scan as an unknown
-source during planning. Binder records base relations while it walks the full
+source during planning. SqlPolicy records base relations while it walks the full
 original abstract syntax tree (AST), including unused CTEs. A constant-false predicate can remove a
 scan during optimization. The retained source inventory therefore supplies
 dependency and witness scope before pruning. The original AST also supplies
@@ -113,12 +634,11 @@ one existing canonical field so its real buffer retains the source lease.
 Its physical scan can still project zero columns. Finding inputs also retain
 the keys required to select their latest revision before SQL filtering.
 
-Binder stores each completed child plan in the standard PlannerContext.
-SqlToRel plans the full SELECT directly. Binder uses the admitted child
-schemas for wildcard, window, and compatibility checks. It checks the final
-unoptimized joins before constant pruning. The source no longer creates a
-synthetic FROM-only SELECT or a temporary FROM plan. The retained logical
-plan contains real source scans and does not depend on the transient context.
+SqlToRel owns child planning, wildcard expansion, and output names. SqlPolicy
+checks the original ON expression shape. The final unoptimized plan supplies
+join-side and output-width checks before constant pruning. The retained
+logical plan contains real source scans. No Araphor child-plan registry or
+parallel schema binder remains.
 
 After scan replacement, QueryEngine::stream calls
 `query_planner().create_physical_plan`. It does not call
@@ -222,8 +742,8 @@ A zero-column Arrow batch must retain its row count for `COUNT(*)`.
 
 One operation does not grant every statement access to every relation. Keep
 the current stage-specific relation sets from
-[model schema construction](../../crates/araphor-data/src/query/model/schema.rs:13)
-and [model evaluation](../../crates/araphor-data/src/query/model.rs:201):
+[model schema construction](../../crates/araphor-analysis/src/model/schema.rs)
+and [model evaluation](../../crates/araphor-analysis/src/model/execute.rs):
 
 | Statement | Allowed relations |
 | --- | --- |
@@ -242,7 +762,11 @@ Keep dataset-global ordinals across batch boundaries. A new batch must not
 restart the row index. Preserve source cleanup between statements and denial
 of undeclared sources. Do not re-execute a model output to serve a later query.
 
-### Binding behavior that must remain
+### Previous binding requirements
+
+This section records the contract before the native SQL approval above. These
+compatibility requirements no longer define the target. Full-AST source,
+function, syntax, and stage policy still applies before optimizer pruning.
 
 DuckDB's binder skips unused CTEs and removes duplicate derived column names.
 Araphor's current tests reject an invalid unused CTE and duplicate aliases.
@@ -351,7 +875,7 @@ add a per-query runtime or another runtime/pool framework to hide this gap.
 This gate is **Not done**.
 
 The current
-[engine configuration](../../crates/araphor-data/src/query/engine.rs)
+[engine configuration](../../crates/araphor-query/src/execution.rs)
 sets a 64 MiB memory pool, one execution partition, planning concurrency one,
 and disabled spill storage. SqlContext exposes only admitted relations and
 registered functions. DataFusion's defaults
@@ -459,7 +983,7 @@ these transferred lessons in the affected test groups:
 - Preserve reordered and non-prefix column projections after replacing a scan
   source. Check column values, names, types, metadata, and output order.
 - Preserve both witnesses in the existing
-  [pruned source evidence case](../../crates/araphor-data/src/query/model/operation/tests.rs:278),
+  [pruned source evidence case](../../crates/araphor-analysis/src/model/operation/tests.rs),
   including `operation = 7 AND false`.
 - Keep a run's captured revision while new data arrives. Preserve independent
   cursors for repeated scans, joins, and a second invocation.
@@ -593,6 +1117,13 @@ an independent deliverable and can precede the engine replacement.
    the current syntax counter. Include resources, compatibility code, adapters,
    and callers. Exclude tests, documentation, blank lines, and code movement.
    Meet the net reduction target before declaring this redesign complete.
+
+The native SQL approval supersedes the compatibility assertions in the
+following paragraphs. Verify native values, result names and types, quoted
+scope, CTE aliases, HAVING precedence, visible row indices, and `date_bin`.
+Keep each distinct authorization, source, resource, evidence, cursor, and
+cleanup assertion. Old compatibility-only cases can change to native results
+or native rejection. Do not retain compatibility code to make old results pass.
 
 Run only affected builds and tests in each iteration, as the user requires.
 After the final code edit, run the affected build, formatting, strict Clippy,

@@ -57,7 +57,7 @@ impl AnalysisReadControl {
         })
     }
 
-    pub(crate) fn stage(&self, timeout: Duration) -> Result<Self> {
+    pub fn stage(&self, timeout: Duration) -> Result<Self> {
         Ok(Self {
             cancelled: Arc::clone(&self.cancelled),
             cancelled_event: Arc::clone(&self.cancelled_event),
@@ -67,7 +67,7 @@ impl AnalysisReadControl {
         })
     }
 
-    pub(crate) fn within(&self, timeout: Duration) -> Result<Self> {
+    pub fn within(&self, timeout: Duration) -> Result<Self> {
         self.check()?;
         let mut stage = self.stage(timeout)?;
         stage.deadline = stage.deadline.min(self.deadline);
@@ -85,7 +85,7 @@ impl AnalysisReadControl {
     }
 
     #[track_caller]
-    pub(crate) fn check(&self) -> Result<()> {
+    pub fn check(&self) -> Result<()> {
         if self.cancelled.load(Ordering::Acquire) {
             return crate::AnalysisReadCancelledSnafu.fail();
         }
@@ -95,7 +95,7 @@ impl AnalysisReadControl {
         Ok(())
     }
 
-    pub(crate) fn remaining(&self) -> Result<Duration> {
+    pub fn remaining(&self) -> Result<Duration> {
         self.check()?;
         Ok(self.deadline.saturating_duration_since(Instant::now()))
     }
@@ -181,19 +181,19 @@ impl AnalysisReadControl {
         result
     }
 
-    pub(crate) async fn query_async<T>(
+    pub async fn query_async<T, E: From<crate::Error>>(
         &self,
-        query: impl std::future::Future<Output = Result<T>>,
-    ) -> Result<T> {
+        query: impl std::future::Future<Output = std::result::Result<T, E>>,
+    ) -> std::result::Result<T, E> {
         let cancelled = self.cancelled_event.notified();
         tokio::pin!(cancelled);
         let _registered = cancelled.as_mut().enable();
         self.check()?;
         let result = tokio::select! {
             biased;
-            _ = &mut cancelled => crate::AnalysisReadCancelledSnafu.fail(),
+            _ = &mut cancelled => Err(crate::AnalysisReadCancelledSnafu.build().into()),
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(self.deadline)) => {
-                crate::AnalysisReadDeadlineSnafu.fail()
+                Err(crate::AnalysisReadDeadlineSnafu.build().into())
             }
             result = query => result,
         };

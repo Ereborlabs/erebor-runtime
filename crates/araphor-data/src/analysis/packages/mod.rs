@@ -9,7 +9,7 @@ mod schema;
 mod status;
 mod witnesses;
 
-pub(crate) use model::*;
+pub use model::*;
 
 #[cfg(test)]
 mod tests;

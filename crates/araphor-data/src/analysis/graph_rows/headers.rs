@@ -3,8 +3,8 @@ use snafu::ResultExt as _;
 
 use super::{GraphHeader, GraphRows};
 use crate::{
-    AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, AnalysisReadControl, GraphInvalidSnafu,
-    QueryDeniedSnafu, Result,
+    AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, AnalysisReadControl,
+    AnalysisReadDeniedSnafu, GraphInvalidSnafu, Result,
 };
 
 mod sql;
@@ -48,12 +48,12 @@ impl GraphRows {
                     .context(AnalysisDatabaseSnafu {
                         operation: "advance native graph headers",
                     })?
-                    .ok_or_else(|| QueryDeniedSnafu.build())?;
+                    .ok_or_else(|| AnalysisReadDeniedSnafu.build())?;
                 let id: String = row.get(0).context(AnalysisDatabaseSnafu {
                     operation: "decode native graph header identity",
                 })?;
                 if id != bound.id {
-                    return QueryDeniedSnafu.fail();
+                    return AnalysisReadDeniedSnafu.fail();
                 }
                 let bytes: Vec<u8> = row.get(1).context(AnalysisDatabaseSnafu {
                     operation: "decode native graph header bytes",
@@ -79,7 +79,7 @@ impl GraphRows {
                 })?
                 .is_some()
             {
-                return QueryDeniedSnafu.fail();
+                return AnalysisReadDeniedSnafu.fail();
             }
         }
         control.check()?;
@@ -123,7 +123,7 @@ impl GraphRows {
                 operation: "decode native graph header identity",
             })?;
             if expected.get(bounds.len()).copied() != Some(id.as_str()) {
-                return QueryDeniedSnafu.fail();
+                return AnalysisReadDeniedSnafu.fail();
             }
             let length: u64 = row.get(4).context(AnalysisDatabaseSnafu {
                 operation: "decode native graph header length",
@@ -175,7 +175,7 @@ impl GraphRows {
             });
         }
         if bounds.len() != expected.len() {
-            return QueryDeniedSnafu.fail();
+            return AnalysisReadDeniedSnafu.fail();
         }
         Ok(bounds)
     }

@@ -10,15 +10,19 @@ publish = false
 araphor-analysis-builtins = { path = "../araphor-analysis-builtins" }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
+araphor-query = { path = "../araphor-query", features = ["test-fixtures"] }
+araphor-analysis = { path = "../araphor-analysis", features = ["test-fixtures"] }
 araphor-component-build = { path = "../araphor-component-build" }
 araphor-detector-example = { path = "../araphor-detector-example" }
 araphor-observability = { path = "../araphor-observability", features = ["test-support"] }
+arrow-schema = "=58.4.0"
 axum.workspace = true
 axum-server.workspace = true
 clap.workspace = true
 containerd-client.workspace = true
 crc32c.workspace = true
 duckdb.workspace = true
+datafusion-common = { version = "=53.1.0", default-features = false }
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-interceptor = { path = "../erebor-interceptor", features = ["test-fixtures"] }

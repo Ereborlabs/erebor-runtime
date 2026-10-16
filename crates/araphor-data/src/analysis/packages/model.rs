@@ -2,12 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AnalysisContextRefV1, AnalysisWitnessV1};
 
-pub(crate) const MAX_PACKAGE_METADATA_BYTES: usize = 1024 * 1024;
+pub const MAX_PACKAGE_METADATA_BYTES: usize = 1024 * 1024;
 
-pub(crate) const MAX_PACKAGE_ROWS: usize = 1024;
+pub const MAX_PACKAGE_ROWS: usize = 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct PackageKeyV1 {
+pub struct PackageKeyV1 {
     pub tenant_id: [u8; 16],
     pub scope_id: String,
     pub package_id: String,
@@ -15,13 +15,13 @@ pub(crate) struct PackageKeyV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct PackageRevisionRefV1 {
+pub struct PackageRevisionRefV1 {
     pub package_id: String,
     pub revision: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct PackageRevisionV1 {
+pub struct PackageRevisionV1 {
     pub tenant_id: [u8; 16],
     pub package_id: String,
     pub revision: String,
@@ -31,7 +31,7 @@ pub(crate) struct PackageRevisionV1 {
 }
 
 impl PackageRevisionV1 {
-    pub(crate) fn decode_artifact(&self) -> crate::Result<crate::PackageArtifactV1> {
+    pub fn decode_artifact(&self) -> crate::Result<crate::PackageArtifactV1> {
         use snafu::ResultExt as _;
         let descriptor =
             serde_json::from_slice(&self.descriptor).context(crate::PackageEncodingSnafu)?;
@@ -40,7 +40,7 @@ impl PackageRevisionV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct PackageActivationV1 {
+pub struct PackageActivationV1 {
     pub key: PackageKeyV1,
     pub revision: String,
     pub generation: u64,
@@ -52,20 +52,20 @@ pub(crate) struct PackageActivationV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct PackageResultRefV1 {
+pub struct PackageResultRefV1 {
     pub result_id: String,
     pub commit_revision: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PackageResultV1 {
+pub struct PackageResultV1 {
     pub commit: PackageCommitV1,
     pub commit_revision: u64,
     pub stale: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct PackageCommitV1 {
+pub struct PackageCommitV1 {
     pub activation: PackageActivationV1,
     #[serde(rename = "checkpoint_revision")]
     pub expected_checkpoint_revision: u64,

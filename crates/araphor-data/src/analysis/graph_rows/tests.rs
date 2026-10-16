@@ -1,37 +1,18 @@
 use super::*;
 
+mod bounds;
 mod encoding;
+pub(in crate::analysis) mod fixture;
 mod headers;
 mod packages;
-mod recovery;
 mod schema;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
-
-impl crate::analysis::AnalysisStore {
-    pub(crate) fn fault_write(&self, query: &str, values: &[&dyn duckdb::ToSql]) -> TestResult {
-        let mut writer = self.writer_access()?;
-        let writer = writer.get_mut()?;
-        writer.execute_batch(&format!(
-            "SET memory_limit='{}B'",
-            4 * crate::analysis::NATIVE_MEMORY_BYTES
-        ))?;
-        let mutation = writer
-            .execute(query, values)
-            .and_then(|_| writer.execute_batch("CHECKPOINT"));
-        let restored = writer.execute_batch(&format!(
-            "SET memory_limit='{}B'",
-            crate::analysis::NATIVE_MEMORY_BYTES
-        ));
-        mutation?;
-        restored?;
-        Ok(())
-    }
-}
+use fixture::CommitFixture;
 
 #[test]
 fn native_rows_integrity() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     let graph = &fixture.snapshot;
     assert!(!graph.graph.subjects.is_empty());
     assert!(!graph.graph.edges.is_empty());
@@ -192,7 +173,7 @@ fn native_borrowed_columns() -> TestResult {
 
 #[test]
 fn native_row_read_cancel() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     fixture.store.commit_graph(&fixture.request, true)?;
     let writer = fixture.store.writer_access()?;
     let writer = writer.get()?;
@@ -233,7 +214,7 @@ fn native_row_read_cancel() -> TestResult {
 
 #[test]
 fn native_finding_tenant() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     fixture.store.commit_graph(&fixture.request, true)?;
     let mut writer = fixture.store.writer_access()?;
     let transaction = writer.get_mut()?.transaction()?;
@@ -274,7 +255,7 @@ fn native_finding_tenant() -> TestResult {
 
 #[test]
 fn native_selected_byte_bounds() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     fixture.store.commit_graph(&fixture.request, true)?;
     let original: Vec<u8> = {
         let mut writer = fixture.store.writer_access()?;
@@ -356,8 +337,14 @@ fn native_selected_byte_bounds() -> TestResult {
     )?;
     assert_eq!(
         fixture
-            .owner
-            .current_findings(fixture.snapshot.scope.identity.tenant_id)?
+            .store
+            .graph_findings(
+                fixture.snapshot.scope.identity.tenant_id,
+                None,
+                None,
+                usize::MAX,
+                usize::MAX
+            )?
             .len(),
         1
     );
@@ -366,7 +353,7 @@ fn native_selected_byte_bounds() -> TestResult {
 
 #[test]
 fn native_retry_byte_bounds() -> TestResult {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     let receipt = fixture.store.commit_graph(&fixture.request, true)?;
     let result = &fixture.request.result_id;
     let original: (Vec<u8>, Vec<u8>, Vec<u8>) = {

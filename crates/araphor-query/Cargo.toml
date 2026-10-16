@@ -1,0 +1,37 @@
+[package]
+name = "araphor-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+test-fixtures = ["araphor-data/test-fixtures"]
+
+[dependencies]
+araphor-data = { path = "../araphor-data" }
+araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
+async-trait = "0.1"
+arrow-buffer = { version = "=58.4.0", features = ["pool"] }
+chrono = "0.4"
+datafusion = { version = "=53.1.0", default-features = false, features = ["sql", "unicode_expressions", "recursive_protection"] }
+erebor-runtime-error = { path = "../erebor-runtime-error" }
+futures-core = "0.3"
+futures-util.workspace = true
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+stacker = "=0.1.25"
+time.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+crc32c.workspace = true
+araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
+tempfile = "3.23.0"
+
+[lints]
+workspace = true

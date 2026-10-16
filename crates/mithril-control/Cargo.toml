@@ -7,17 +7,21 @@ repository.workspace = true
 build = "build.rs"
 
 [features]
-test-fixtures = ["araphor-data/test-fixtures", "araphor-observability/test-support"]
+test-fixtures = ["araphor-data/test-fixtures", "araphor-query/test-fixtures", "araphor-analysis/test-fixtures", "araphor-observability/test-support"]
 
 [dependencies]
 araphor-data = { path = "../araphor-data" }
+araphor-query = { path = "../araphor-query" }
+araphor-analysis = { path = "../araphor-analysis" }
 araphor-observability = { path = "../araphor-observability" }
+arrow-array = "=58.4.0"
+arrow-schema = "=58.4.0"
 axum.workspace = true
 axum-server.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 crc32c.workspace = true
-duckdb.workspace = true
+datafusion-common = { version = "=53.1.0", default-features = false }
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
@@ -56,6 +60,8 @@ tonic-build.workspace = true
 
 [dev-dependencies]
 araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
+araphor-query = { path = "../araphor-query", features = ["test-fixtures"] }
+araphor-analysis = { path = "../araphor-analysis", features = ["test-fixtures"] }
 araphor-analysis-sdk = { path = "../araphor-analysis-sdk" }
 araphor-observability = { path = "../araphor-observability", features = ["test-support"] }
 prost-types.workspace = true

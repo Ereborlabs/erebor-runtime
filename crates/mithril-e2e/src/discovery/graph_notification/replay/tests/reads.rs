@@ -58,9 +58,11 @@ fn read_completion_keeps_scope() -> crate::platform::TestResult<()> {
         let foreign = ReplayQualification::borrowed_completion(&input, &network.id, [8; 16])?;
         assert!(matches!(
             GraphAndFindingOwner::derive(&foreign, &fixture.execution),
-            Err(Error::GraphInvalid {
-                field: "credential read completion",
-                ..
+            Err(araphor_analysis::Error::Data {
+                source: Error::GraphInvalid {
+                    field: "credential read completion",
+                    ..
+                }
             })
         ));
         let borrowed = ReplayQualification::borrowed_completion(&input, &read.id, [88; 16])?;

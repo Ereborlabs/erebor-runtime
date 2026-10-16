@@ -14,14 +14,12 @@ araphor-analysis-sdk = { path = "../araphor-analysis-sdk", features = ["native",
 arrow-ipc = "=58.4.0"
 arrow-json = "=58.4.0"
 crc32c.workspace = true
-datafusion = { version = "=53.1.0", default-features = false, features = ["sql", "unicode_expressions", "recursive_protection"] }
 duckdb = { workspace = true, features = ["json", "vtab", "appender-arrow"] }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 futures-core = "0.3"
 futures-util.workspace = true
 minicbor.workspace = true
-libloading = "=0.9.0"
 object = { version = "=0.40.0", default-features = false, features = ["read", "std"] }
 prost.workspace = true
 rustix = { version = "1.1.4", features = ["fs", "process"] }
@@ -30,20 +28,16 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
-stacker = "=0.1.25"
 time.workspace = true
 tempfile = { version = "3.23.0" }
 tokio.workspace = true
 uuid.workspace = true
-wasmtime = { version = "=49.0.2", default-features = false, features = ["component-model", "runtime", "cranelift", "std"] }
-wasmparser = "=0.258.3"
 
 [build-dependencies]
 prost-build.workspace = true
 
 [dev-dependencies]
 tempfile = "3.23.0"
-wat = "=1.258.3"
 
 [lints]
 workspace = true

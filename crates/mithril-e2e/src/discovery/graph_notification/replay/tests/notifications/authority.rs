@@ -46,26 +46,32 @@ fn notification_agent_cannot_acknowledge() -> crate::platform::TestResult<()> {
     foreign.tenant_id = [99; 16];
     assert!(matches!(
         router.record_agent(&foreign, key, [4; 16], advisory, NOW + 2),
-        Err(Error::Notification {
-            code: NotificationErrorCodeV1::Denied,
-            ..
+        Err(araphor_analysis::Error::Data {
+            source: Error::Notification {
+                code: NotificationErrorCodeV1::Denied,
+                ..
+            }
         })
     ));
     assert!(matches!(
         router.acknowledge(&grants[2], key, revision, [5; 16], NOW + 2),
-        Err(Error::Notification {
-            code: NotificationErrorCodeV1::Denied,
-            field: "human acknowledgement",
-            ..
+        Err(araphor_analysis::Error::Data {
+            source: Error::Notification {
+                code: NotificationErrorCodeV1::Denied,
+                field: "human acknowledgement",
+                ..
+            }
         })
     ));
     let mut foreign = grants[1].clone();
     foreign.tenant_id = [99; 16];
     assert!(matches!(
         router.acknowledge(&foreign, key, revision, [6; 16], NOW + 101),
-        Err(Error::Notification {
-            code: NotificationErrorCodeV1::Denied,
-            ..
+        Err(araphor_analysis::Error::Data {
+            source: Error::Notification {
+                code: NotificationErrorCodeV1::Denied,
+                ..
+            }
         })
     ));
     assert_eq!(router.obligations(&grants[1], NOW + 101)?, vec![receipt]);

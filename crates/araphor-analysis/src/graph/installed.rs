@@ -1,0 +1,116 @@
+use std::collections::BTreeSet;
+
+use snafu::ResultExt as _;
+
+use super::*;
+use crate::{
+    AnalysisContextRefV1, ContextSensitivityV1, GraphEncodingSnafu, InstalledAnalysis,
+    InstalledRefV1,
+};
+
+impl GraphAndFindingOwner {
+    pub fn installed_refs(
+        &self,
+        tenant: [u8; 16],
+        result_id: &str,
+    ) -> Result<Option<Vec<InstalledRefV1>>> {
+        let Some(source) = self.store.graph_source(tenant, result_id)? else {
+            return Ok(None);
+        };
+        let key = GraphSnapshotV1::package_key(&source, result_id);
+        let Some(context) = self.store.context_version(&key)? else {
+            return Ok(None);
+        };
+        Ok(InstalledRefV1::context_refs(&context)?)
+    }
+
+    pub(super) fn analysis_refs(
+        execution: &InstalledAnalysis,
+        snapshot: &GraphSnapshotV1,
+    ) -> Result<Vec<InstalledRefV1>> {
+        Ok(
+            Self::compatible_refs(execution, snapshot.scope.identity.tenant_id)?
+                .into_iter()
+                .filter(|reference| {
+                    snapshot
+                        .packages
+                        .iter()
+                        .any(|package| package.package_id == reference.package_id)
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn compatible_refs(
+        execution: &InstalledAnalysis,
+        tenant: [u8; 16],
+    ) -> Result<Vec<InstalledRefV1>> {
+        let descriptors = execution.descriptors(tenant)?;
+        Ok(execution
+            .refs()?
+            .into_iter()
+            .filter(|reference| {
+                descriptors.iter().any(|package| {
+                    package.id == reference.package_id
+                        && execution.prepared_models(package).any(|model| {
+                            model.name == reference.export && Self::supports_analysis(model)
+                        })
+                })
+            })
+            .collect())
+    }
+
+    pub(super) fn installed_current(
+        &self,
+        result_id: &str,
+        snapshot: &GraphSnapshotV1,
+        installed: &mut Option<InstalledAnalysis>,
+    ) -> Result<bool> {
+        let tenant = snapshot.scope.identity.tenant_id;
+        let execution = self.installed_snapshot(tenant, installed)?;
+        let references = Self::compatible_refs(&execution, tenant)?;
+        if self.installed_refs(tenant, result_id)?.as_ref() != Some(&references) {
+            return Ok(false);
+        }
+        execution.authorize(tenant, &Self::package_revisions(&references), || Ok(true))
+    }
+
+    pub(super) fn installed_snapshot(
+        &self,
+        tenant: [u8; 16],
+        previous: &mut Option<InstalledAnalysis>,
+    ) -> Result<InstalledAnalysis> {
+        let execution = self.execution.snapshot_reusing(tenant, previous.take())?;
+        *previous = Some(execution.clone());
+        Ok(execution)
+    }
+
+    pub(super) fn package_revisions(references: &[InstalledRefV1]) -> Vec<(String, String)> {
+        references
+            .iter()
+            .map(|reference| (reference.package_id.clone(), reference.revision.clone()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    pub(super) fn package_context(
+        &self,
+        snapshot: &GraphSnapshotV1,
+        result_id: &str,
+        refs: &[InstalledRefV1],
+    ) -> araphor_data::Result<AnalysisContextRefV1> {
+        let context = AnalysisContextVersionV1 {
+            key: GraphSnapshotV1::package_key(&snapshot.scope.identity, result_id),
+            valid_from_utc_ns: None,
+            valid_until_utc_ns: None,
+            sensitivity: ContextSensitivityV1::Tenant,
+            body: serde_json::to_vec(&serde_json::json!({"installed_packages": refs}))
+                .context(GraphEncodingSnafu)?,
+        };
+        Ok(AnalysisContextRefV1 {
+            key: context.key.clone(),
+            commit_revision: self.store.commit_context(&context)?,
+        })
+    }
+}

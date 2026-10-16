@@ -134,7 +134,7 @@ fn package_commit_holds_authority() -> std::result::Result<(), Box<dyn std::erro
     let session = super::super::tests::session(&owner)?;
     let access = owner.browser(&session.token, [1; 16], &owner.origin, None, false)?;
     let grant = access.package_grant(AnalysisSelectionV1::tenant([1; 16]), PackageActionV1::Run)?;
-    let bundle = bundle("SELECT 1::UBIGINT AS count");
+    let bundle = bundle("SELECT 1::BIGINT UNSIGNED AS count");
     assert!(bundle.digest()?.starts_with("sha256:"));
     owner.replace_package_trust(vec![PackageTrustPinV1 {
         tenant_id: Uuid::from_bytes([1; 16]).to_string(),
@@ -151,7 +151,7 @@ fn package_commit_holds_authority() -> std::result::Result<(), Box<dyn std::erro
         Ok(())
     })?;
     assert!(committed);
-    let changed = self::bundle("SELECT 2::UBIGINT AS count");
+    let changed = self::bundle("SELECT 2::BIGINT UNSIGNED AS count");
     assert_ne!(bundle.digest()?, changed.digest()?);
     let changed_ref = araphor_data::PackageBundleRef::new(&changed)?;
     assert!(owner.admit(&grant, &changed_ref).is_err());

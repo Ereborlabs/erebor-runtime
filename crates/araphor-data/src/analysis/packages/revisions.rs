@@ -5,7 +5,7 @@ use super::{PackageRevisionV1, MAX_PACKAGE_ROWS};
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
-    pub(crate) fn install_package(
+    pub fn install_package(
         &self,
         revisions: &[PackageRevisionV1],
         check: impl FnOnce() -> Result<()>,

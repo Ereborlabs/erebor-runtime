@@ -89,7 +89,7 @@ pub struct ControlRuntimeParts {
     pub kubernetes_nodes: Option<KubernetesNodeReadinessOwner>,
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
     pub data_error: Option<crate::Error>,
-    pub discovery: Option<Arc<araphor_data::DiscoveryOwner>>,
+    pub discovery: Option<Arc<araphor_analysis::DiscoveryOwner>>,
     pub discovery_error: Option<crate::Error>,
 }
 
@@ -139,7 +139,7 @@ impl ControlConfig {
                 let (discovery, discovery_error) = match self
                     .discovery
                     .map(|config| -> Result<_> {
-                        Ok(araphor_data::DiscoveryOwner::new(
+                        Ok(araphor_analysis::DiscoveryOwner::new(
                             data.clone(),
                             Arc::new(store.clone()),
                             config,

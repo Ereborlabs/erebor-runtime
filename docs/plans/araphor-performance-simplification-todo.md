@@ -73,6 +73,28 @@ records the source findings, replacement owners, and required proof. The
 study is complete. The user approves implementation of the redesign and
 requires a commit for each deliverable. The 6,000-line production target
 remains in force.
+The [crate ownership correction](araphor-component-redesign.md#proposed-crate-ownership-correction)
+defines separate Data, Query, and Analysis owners. The user explicitly
+requires this design and a query engine written from the start with native
+DataFusion APIs. Moving or adapting the old query tree does not satisfy the
+request. Implementation and verification remain **Not done**.
+The current count adds 404 nonblank production Rust lines from `537f9de3`
+and removes 1,825 from `7b7b407a`. Another 4,175 must be removed for the
+6,000-line target. The count record is
+`/tmp/araphor-arrow-engine-count15.json`. Complete redesign: **Not done**.
+The user approves native DataFusion SQL behavior and ordinary visible
+`__row_index` table columns. The component redesign must remove the custom
+SQL binder, wildcard expansion, name repair, and numeric compatibility owners.
+This approval requires no DataFusion extension.
+The latest correction registers a Subscribe logical extension for the Follow
+request. Ordinary SQL parsing, optimization, physical planning, and operators
+remain native. The physical subscription node owns the commit and receipt
+contract that a native batch stream does not supply. The direct Processor,
+standalone aggregate helper, SourceBatch bridge, and obsolete Data row-page
+framework are deleted. The selected host checks pass 195 distinct cases.
+The last count adds 1,008 production lines from `537f9de3` and removes 1,221
+from `7b7b407a`. The record is `/tmp/araphor-native-rewrite-count7.json`.
+The required 6,000-line reduction and the complete redesign are **Not done**.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

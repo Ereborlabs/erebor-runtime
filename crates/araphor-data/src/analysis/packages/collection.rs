@@ -5,7 +5,7 @@ use super::PackageRevisionRefV1;
 use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
-    pub(crate) fn collect_package_admissions(&self) -> Result<()> {
+    pub fn collect_package_admissions(&self) -> Result<()> {
         let mut after: Option<([u8; 16], String, String)> = None;
         loop {
             let page = self.read_snapshot(|reader| {
@@ -51,12 +51,7 @@ impl AnalysisStore {
         }
     }
 
-    pub(crate) fn collect_package(
-        &self,
-        tenant: [u8; 16],
-        package: &str,
-        version: &str,
-    ) -> Result<()> {
+    pub fn collect_package(&self, tenant: [u8; 16], package: &str, version: &str) -> Result<()> {
         let mut guard = self.writer()?;
         let transaction = guard
             .get_mut()?

@@ -4,6 +4,12 @@ This design defines discovery in `crates/araphor-data`. Mithril 7 owns shared
 processing and the discovery backend. Discovery methods produce review artifacts;
 they do not own evidence intake, physical enforcement, or response execution.
 
+The approved [component redesign](../../araphor-component-redesign.md) now
+uses native DataFusion SQL. Read the current
+[SQL operation review](../../../guides/araphor-sql-operation-review.md) for the
+source route. Qualification of this native implementation is **Not done**.
+Earlier result records apply only to their recorded source.
+
 ## Input and persistence contracts
 
 Use accepted `ObservationEnvelopeV1` records and their exact source, epoch,
@@ -14,8 +20,8 @@ unresolved. Do not recover historical identity from a current PID, path, or Pod
 name. Do not infer application verbs from opaque network effects.
 
 AnalysisStore owns one segment store for raw events and diagnostic output.
-DuckDB stores the segment catalog, receipts, context, and derived state. It
-also runs SQL queries over bounded authorized input on Tokio blocking tasks. Raw payloads
+DuckDB stores the segment catalog, receipts, context, and derived state.
+DataFusion runs SQL queries over bounded authorized Arrow input. Raw payloads
 are not copied into DuckDB or discovery archives. Durable segment acceptance
 precedes each source acknowledgement; catalogue publication does not delay it.
 ControlStore keeps policy, trust, rollout,
@@ -526,10 +532,10 @@ the first noise controls; optional classification is not a release dependency.
 
 Use one AnalysisStore in `araphor-data`. Reuse the existing segment codec,
 checksums, bounded append, and reader from Control. Retain the pinned DuckDB
-binding for file lifecycle state, derived-state transactions,
-and bounded asynchronous SQL evaluation. Raw acceptance uses the original segment writer
+binding for file lifecycle state and derived-state transactions. Use
+DataFusion for bounded in-memory SQL evaluation. Raw acceptance uses the original segment writer
 inside `araphor-data`; it does not commit DuckDB per raw batch.
-Do not add SQLite, DataFusion, a broker, an ORM, or a storage-driver framework.
+Do not add SQLite, a broker, an ORM, or a storage-driver framework.
 
 ### Storage owner and schema
 
@@ -849,7 +855,7 @@ Keep the wire package, field numbers and segment format. Control keeps source
 authentication and policy checks. Move only the record definitions and decoder,
 not the full Control validation model. Discovery reuses the decoder in 7.4.
 
-Decode selected records into temporary typed pages. Map identities, integer
+Decode selected records into canonical Arrow columns. Map identities, integer
 positions, enums, optional context, bytes and timestamps to documented SQL
 columns. Preserve exact integer timestamp units; SQL timestamp conversion
 must state its precision. Unknown enum values and absent fields remain explicit.
@@ -857,47 +863,47 @@ must state its precision. Unknown enum values and absent fields remain explicit.
 No raw-event table, second archive or persistent query cache is created.
 
 AnalysisStore selects and decodes bounded input, then releases storage guards.
-Temporary conversion and evaluation buffers are required; they are not a
-durable raw replica. Release them on success, error and cancellation.
-Observability 3 runs the same evaluator on the host's Tokio runtime. It uses
+Temporary Arrow and evaluation buffers are required. Release each buffer
+when its last owner drops after success, error, or cancellation.
+Client entry points schedule bounded work on the host's Tokio runtime.
+QueryEngine owns the runtime for physical planning and stream reads. It uses
 authorized input and no persistent database connection. Remote placement runs
 the same extractor beside its segments;
 no query depends on Control-local files.
 
-### Built-in DuckDB input adapter
+### Built-in Arrow input
 
-Implement one internal table-function adapter in `araphor-data/src/query/`.
-Use the pinned DuckDB Rust binding's `VTab` trait and its registration API.
-Expose logical relations such as `events` as SQL views over bounded typed
-input. Map fields to ordinary SQL columns; do not add custom SQL types,
-a loadable extension, a plugin registry, or a new stored event format.
+Use canonical Arrow schemas and batches in `araphor-data/src/query/`.
+SqlContext supplies schema-only EmptyTable sources during admission.
+QueryEngine replaces the admitted scans with standard MemTable sources for
+each run. DataFusion consumes the same fields that emission, projection,
+catalog rows, and result metadata use. Add no custom SQL type, table-provider
+framework, or stored event format.
 
 ```text
 AnalysisStore selects committed segment records
-  -> shared decoder produces bounded typed input
-  -> storage readers and leases close
-  -> internal table function supplies DuckDB execution chunks
-  -> SQL returns a bounded result
-  -> evaluation connection and input are released
+  -> shared decoder and projection produce bounded Arrow input
+  -> storage readers and segment leases close
+  -> standard MemTables supply the admitted logical plan
+  -> DataFusion returns a bounded Arrow stream
+  -> streams close and returned batches retain their buffer leases
 ```
 
-Register query-owned input through `register_table_function_with_extra_info`.
-Each scan has its own position; repeated references and joins must not share
-one consumed iterator. Keep input alive through evaluation, then release it
-on success, error or cancellation. Do not use the pinned binding's
-`arrow_recordbatch_to_query_params` process-lifetime batch registry for this
-path. Input ownership must not grow with the number of follow evaluations.
+Each run owns its source map, bound values, physical plan, and streams.
+Repeated references and joins read the same fixed input independently.
+Retain input through evaluation and any returned buffer aliases. Release
+each buffer lease when its last owner drops. Input ownership must not grow
+with the number of follow evaluations.
 
-The internal function accepts no client-supplied pointer, segment path or
-storage handle. Only owner-created views can invoke it. Client SQL still
-passes the closed admission rules. DuckDB vectors and execution buffers are
-temporary; no raw-event table or persistent query copy is created. Conversion
-can copy values, so this contract does not claim zero-copy execution.
+SqlContext exposes only the admitted relation map. Client SQL passes the
+closed statement, relation, and function policy before engine planning.
+No client pointer, segment path, or storage handle reaches a table source.
+Arrow input and execution buffers are temporary. This contract does not
+claim zero-copy execution.
 
-Phase 7.3 uses this adapter for trusted internal evaluation. Observability 3
-reuses it in a bounded Tokio blocking task over authorized input. The
+Trusted internal and client evaluation use this same Arrow route. The
 evaluator does not read segment files. Embedded and remote data hosts use the
-same decoder and adapter. AnalysisStore remains the only segment owner.
+same decoder and query engine. AnalysisStore remains the only segment owner.
 
 ### One query contract
 
@@ -927,9 +933,16 @@ Support projection/filter, nonrecursive CTEs, qualified equijoins, aggregates
 and bounded window functions used by the reviewed recipes. Require explicit
 stable ordering where output order matters. Reject writes, multiple statements,
 recursion, unapproved catalogs/functions, loadable extensions and direct
-client calls to table functions. The owner-created input views use only the
-built-in adapter above.
+client calls to table functions. Input relations use the standard Arrow
+sources above.
 LIMIT limits output, not work. Freeze the authorized relation set before binding.
+
+DataFusion owns generated names, arithmetic, result types, quoted-name lookup,
+CTE scope, alias counts, HAVING resolution, and wildcard expansion. The
+standard `map_string_types_to_utf8view=false` setting retains SDK Utf8 schemas.
+Dataset relations contain an ordinary UInt64 `__row_index` column. Native
+`*` includes that column. Use explicit projections when a declared output
+schema excludes the index. Built-in source schemas add no dataset row index.
 
 Return schema, rows, read revision, metadata, coverage, owner lag and limits.
 Normal results above 200 rows or 1 MiB have an explicit limited state. Never
@@ -941,14 +954,14 @@ Expired evidence limits replay.
 
 ### SQL-derived input bounds
 
-Use [sqlparser-rs](https://docs.rs/sqlparser/0.63.0/sqlparser/) with
-[DuckDbDialect](https://docs.rs/sqlparser/0.63.0/sqlparser/dialect/struct.DuckDbDialect.html).
-Phase 7.1 pins a compatible parser/engine pair and tests the admitted subset.
-The parser supplies an AST, not authorization, name binding or a sandbox.
-Observability 3 extends the existing syntax/relation guard with production
-column binding against the available static schemas. The current guard is not that
-binder. Phase 7.3 uses declared bounds in reviewed templates, not this public
-SQL admission path.
+Use DataFusion's pinned sqlparser dependency with GenericDialect.
+SqlPolicy checks the original abstract syntax tree (AST), including unused
+CTEs and windows. It records all base-source dependencies before pruning.
+SqlContext calls SqlToRel once for the complete query against the allowed
+Arrow schema map. DataFusion binds names and types. SqlPolicy checks bound
+equijoins and projection limits before optimization. Native rules permit an
+unresolved column in an unused window; function and window policy still apply.
+The parser and planner do not grant source access or provide a sandbox.
 Do not build a second SQL parser or a general query optimizer.
 
 The SQL predicate is the source of the time bound. No duplicate window flag
@@ -986,7 +999,7 @@ Do not apply an event-time filter to the creation date of a referenced policy
 or context record; preserve its exact identity and validity.
 
 The proposed 64-MiB extraction budget applies after safe tenant/selection/range
-selection. Qualify it with measurements; it is not a DuckDB capacity claim. Reject
+selection. Qualify it with measurements; it is not an engine capacity claim. Reject
 overflow before returning any aggregate. Use existing exact behavior buckets
 for supported historical summaries; do not claim raw-query equivalence for
 dimensions those buckets do not retain.
@@ -1100,7 +1113,7 @@ This uses the useful pattern in the local Mangroves
 `src/sql/src/execution/subscribe.rs`: dependency notification, evaluation,
 then batches on the same stream. Durable positions, bounded replacement
 semantics, failure propagation and access checks are Araphor contracts.
-DuckDB executes SQL; Mangroves and DataFusion are not runtime dependencies.
+DataFusion executes SQL. Mangroves supplies source lessons only.
 
 The shared protobuf stream envelope has one typed message per frame. Metadata
 precedes data. Frame operations are append, replace, checkpoint, health, error
@@ -1128,7 +1141,7 @@ revision, completeness state and authorized missing ranges.
 Implement moving intake-time windows and fixed intake-time buckets in 7.3.
 Use trusted templates there. Observability 3 admits their SQL forms through
 the public query boundary. Both deployments use the same QueryOwner and
-DuckDB adapter. No new window flag, service or subscription database is needed.
+Arrow query route. No new window flag, service or subscription database is needed.
 
 A moving window answers a current question, such as the number of records
 received during the last five minutes:
@@ -1147,13 +1160,12 @@ replaces 2 with 1; it does not add the counts. Use the existing one-second
 expiry resolution and report clock changes.
 
 Fixed buckets answer a history question, such as the number of records in
-each five-minute interval. Use DuckDB's existing
-[`time_bucket`](https://duckdb.org/docs/current/sql/functions/timestamp)
-with UTC and an explicit origin:
+each five-minute interval. Use native DataFusion `date_bin` with UTC and an
+explicit Unix epoch origin:
 
 ```sql
-SELECT time_bucket(INTERVAL '5 minutes', received_at,
-                   TIMESTAMP '1970-01-01 00:00:00') AS window_start,
+SELECT date_bin(INTERVAL '5 minutes', received_at,
+                TIMESTAMP '1970-01-01 00:00:00') AS window_start,
        COUNT(*) AS event_count
 FROM events
 WHERE received_at >= $1 AND received_at < $2
@@ -1207,10 +1219,11 @@ New performance measurements require separate user approval.
 Observability 3 implements and qualifies this production boundary before
 public SQL access. Phase 7.3 proves trusted evaluation only.
 
-Read-only SQL is not a sandbox. Follow [DuckDB security guidance](https://duckdb.org/docs/current/operations_manual/securing_duckdb/overview).
-QueryOwner uses a maintained parser plus a closed relation/function binder.
-Resolve aliases, nested expressions, CTEs and star expansion against available
-schemas. Reject unsupported syntax; do not use regex or a SELECT-prefix test.
+Read-only SQL is not a sandbox. QueryOwner checks a closed statement, relation,
+and function policy before native DataFusion planning. DataFusion resolves
+aliases, nested expressions, CTEs, and wildcard expansion against the allowed
+Arrow schemas. Reject unsupported syntax; do not use regex or a SELECT-prefix
+test.
 
 Trusted bounded extraction applies the authenticated tenant and selected
 sources, contexts and time range before evaluation. All available columns
@@ -1223,13 +1236,14 @@ target scope; do not execute arbitrary client expressions in the persistent DB.
 
 `QueryOwner::query_client` returns a future on the existing Tokio runtime.
 Reserve evaluation and buffer capacity before scheduling `spawn_blocking`.
-The blocking task evaluates authorized input with the shared in-memory DuckDB
-evaluator. It does not receive a persistent connection or store path. Disable
-external access, extension installation, autoload and configuration changes.
-Use one DuckDB thread and its configured memory limit. Use the existing
-native interrupt owner for deadlines and cancellation. Future drop requests
-interruption; the blocking task retains its capacity until cleanup returns.
-Return native errors and task failures as typed errors.
+The blocking task evaluates authorized input with the shared Arrow operation.
+QueryEngine dispatches physical planning and stream reads to its owned Tokio
+runtime. It uses one execution partition, planning concurrency one, a 64 MiB
+memory pool, and disabled spill storage. The closed relation and function
+policy prevents external reads and configuration changes. AnalysisReadControl
+cancels query streams on deadline, explicit cancellation, or future drop.
+Running child work retains its input and capacity until cleanup returns.
+Return engine errors and task failures as typed errors.
 
 Follow implements `futures::Stream<Item = Result<QueryFrame>>`. Relevant
 commit and expiry notifications schedule one evaluation at a time. Append

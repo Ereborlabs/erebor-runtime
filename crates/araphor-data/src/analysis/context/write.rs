@@ -10,7 +10,7 @@ impl AnalysisStore {
             .map(|reference| reference.commit_revision)
     }
 
-    pub(crate) fn commit_context_checked(
+    pub fn commit_context_checked(
         &self,
         input: &AnalysisContextVersionV1,
         expected: u64,
@@ -19,10 +19,7 @@ impl AnalysisStore {
             .map(|reference| reference.commit_revision)
     }
 
-    pub(crate) fn intern_context(
-        &self,
-        input: &AnalysisContextVersionV1,
-    ) -> Result<AnalysisContextRefV1> {
+    pub fn intern_context(&self, input: &AnalysisContextVersionV1) -> Result<AnalysisContextRefV1> {
         if !matches!(
             input.key.owner_id.as_str(),
             "discovery-facts-v1" | "discovery-source-v1"

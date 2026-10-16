@@ -44,7 +44,7 @@ impl<'a> PackageBundleRef<'a> {
         &self.digest
     }
 
-    pub(super) fn retained(value: &'a PackageBundleV1, digest: &'a str) -> Self {
+    pub fn retained(value: &'a PackageBundleV1, digest: &'a str) -> Self {
         Self {
             value,
             digest: digest.into(),
@@ -111,7 +111,7 @@ impl PackageImplementationV1 {
         }
     }
 
-    pub(crate) fn identity(&self) -> Result<Option<super::PackageArtifactIdentityV1>> {
+    pub fn identity(&self) -> Result<Option<super::PackageArtifactIdentityV1>> {
         let identity = match self {
             Self::Wasm { artifact, .. } => super::PackageArtifactIdentityV1 {
                 digest: super::native::Qualification::digest(artifact),
@@ -134,14 +134,14 @@ impl PackageImplementationV1 {
 }
 
 impl PackageArtifactV1 {
-    pub(super) fn descriptor_bytes(&self) -> Result<Vec<u8>> {
+    pub fn descriptor_bytes(&self) -> Result<Vec<u8>> {
         self.descriptor
             .inspect()
             .map(String::into_bytes)
             .context(crate::AnalysisContractSnafu)
     }
 
-    pub(crate) fn implementation(&self, export: &str) -> Result<&PackageImplementationV1> {
+    pub fn implementation(&self, export: &str) -> Result<&PackageImplementationV1> {
         let mut implementations = self
             .implementations
             .iter()
@@ -166,7 +166,7 @@ impl PackageArtifactV1 {
         Ok(implementation)
     }
 
-    pub(crate) fn prepared(&self, export: &str) -> bool {
+    pub fn prepared(&self, export: &str) -> bool {
         self.descriptor
             .exports
             .iter()
@@ -210,7 +210,7 @@ impl PackageBundleV1 {
             .context(crate::AnalysisContractSnafu)
     }
 
-    pub(super) fn check_encoding(&self) -> Result<()> {
+    pub fn check_encoding(&self) -> Result<()> {
         self.oci().map(|_| ())
     }
 
@@ -222,7 +222,7 @@ impl PackageBundleV1 {
         super::oci::PackageOci::layout(self)
     }
 
-    pub(crate) fn artifact(&self, reference: &PackageRefV1) -> Result<&PackageArtifactV1> {
+    pub fn artifact(&self, reference: &PackageRefV1) -> Result<&PackageArtifactV1> {
         self.artifacts
             .iter()
             .find(|artifact| artifact.reference() == *reference)

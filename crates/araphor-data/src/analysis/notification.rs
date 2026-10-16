@@ -4,13 +4,13 @@ use snafu::ResultExt as _;
 use super::AnalysisStore;
 use crate::{AnalysisContextVersionV1, AnalysisDatabaseSnafu, Result};
 
-pub(crate) enum NotificationLookup<'a> {
+pub enum NotificationLookup<'a> {
     Finding(&'a str, Option<&'a str>),
     Concern([u8; 16], &'a str),
 }
 
 impl AnalysisStore {
-    pub(crate) fn notification_states(
+    pub fn notification_states(
         &self,
         tenant: [u8; 16],
         lookup: NotificationLookup<'_>,

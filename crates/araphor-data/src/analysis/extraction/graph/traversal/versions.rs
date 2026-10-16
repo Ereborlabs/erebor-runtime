@@ -8,11 +8,11 @@ pub(super) struct TraversalVersion {
 }
 
 impl AnalysisStore {
-    pub(super) fn traversal_versions<T>(
+    pub(super) fn traversal_versions(
         &self,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
-        output: &mut AnalysisExtractionV1<T>,
+        output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<(Vec<String>, Vec<TraversalVersion>)> {
         let mut ids = Vec::new();
@@ -27,7 +27,7 @@ impl AnalysisStore {
         GraphRows::visit_headers(
             snapshot,
             selection.tenant_id,
-            &selection.graphs,
+            selection.graphs.as_slice(),
             header_bytes,
             control,
             |id, mut header, revision, bytes| {
@@ -49,13 +49,13 @@ impl AnalysisStore {
                 {
                     let id = id.to_owned();
                     output.charge(id.capacity().saturating_add(bytes.capacity()))?;
-                    let added = AnalysisExtractionV1::<T>::grow(
+                    let added = AnalysisExtractionV1::grow(
                         &mut ids,
                         output.input_bytes,
                         output.limits.input_bytes,
                     )?;
                     output.charge(added)?;
-                    let added = AnalysisExtractionV1::<T>::grow(
+                    let added = AnalysisExtractionV1::grow(
                         &mut versions,
                         output.input_bytes,
                         output.limits.input_bytes,
@@ -76,13 +76,13 @@ impl AnalysisStore {
         Ok((ids, versions))
     }
 
-    pub(super) fn traversal_header<T>(
+    pub(super) fn traversal_header(
         &self,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         id: &str,
         version: &TraversalVersion,
-        output: &mut AnalysisExtractionV1<T>,
+        output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<GraphHeader> {
         control.check()?;
@@ -92,13 +92,13 @@ impl AnalysisStore {
         Ok(header)
     }
 
-    pub(super) fn traversal_scope<T>(
+    pub(super) fn traversal_scope(
         &self,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         id: &str,
         header: &mut GraphHeader,
-        output: &mut AnalysisExtractionV1<T>,
+        output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<crate::ContextSensitivityV1> {
         control.check()?;
@@ -108,19 +108,19 @@ impl AnalysisStore {
             .as_slice()
             .contains(&header.snapshot.scope.identity)
         {
-            return crate::QueryDeniedSnafu.fail();
+            return crate::AnalysisReadDeniedSnafu.fail();
         }
         self.traversal_findings(snapshot, selection, id, header, output, control)?;
         self.graph_sensitivity(snapshot, &header.snapshot.input_manifest, control)
     }
 
-    fn traversal_findings<T>(
+    fn traversal_findings(
         &self,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         id: &str,
         header: &mut GraphHeader,
-        output: &mut AnalysisExtractionV1<T>,
+        output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         if !selection.binding_ids.is_empty() {
@@ -135,9 +135,9 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub(super) fn traversal_memory<T>(
+    pub(super) fn traversal_memory(
         &self,
-        output: &AnalysisExtractionV1<T>,
+        output: &AnalysisExtractionV1,
         bytes: usize,
     ) -> Result<()> {
         if output
@@ -153,11 +153,11 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub(super) fn traversal_work<T>(
+    pub(super) fn traversal_work(
         &self,
         snapshot: &Connection,
         ids: &[String],
-        output: &mut AnalysisExtractionV1<T>,
+        output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<()> {
         if ids.is_empty() {

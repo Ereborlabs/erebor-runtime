@@ -4,7 +4,7 @@ use araphor_data::PackageResponseV1;
 use snafu::ResultExt as _;
 
 use super::*;
-use crate::cli::araphor::error::PackageSnafu;
+use crate::cli::araphor::error::AnalysisSnafu;
 
 impl Output {
     pub(in crate::cli::araphor) fn package(
@@ -14,9 +14,10 @@ impl Output {
         let output = response
             .output
             .take()
-            .map(|output| araphor_data::AnalysisPackageOwner::output_rows(&output))
-            .transpose()
-            .context(PackageSnafu)?;
+            .map(|output| {
+                araphor_analysis::AnalysisPackageOwner::output_rows(&output).context(AnalysisSnafu)
+            })
+            .transpose()?;
         if matches!(self.mode, OutputMode::Jsonl) {
             let mut document = serde_json::to_value(&response).context(EncodeSnafu)?;
             if let Some(output) = output {

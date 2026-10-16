@@ -132,6 +132,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "araphor-analysis"
+version = "0.1.0"
+dependencies = [
+ "araphor-analysis-builtins",
+ "araphor-analysis-sdk",
+ "araphor-data",
+ "araphor-query",
+ "arrow-cast",
+ "arrow-ipc",
+ "arrow-json",
+ "arrow-schema",
+ "crc32c",
+ "duckdb",
+ "erebor-interceptor-abi",
+ "erebor-runtime-error",
+ "futures-util",
+ "libloading",
+ "minicbor",
+ "object 0.40.0",
+ "prost",
+ "rustix 1.1.4",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "tempfile",
+ "time",
+ "tokio",
+ "uuid",
+ "wasmparser",
+ "wasmtime",
+ "wat",
+]
+
+[[package]]
 name = "araphor-analysis-builtins"
 version = "0.1.0"
 dependencies = [
@@ -169,6 +205,7 @@ dependencies = [
 name = "araphor-cli"
 version = "0.1.0"
 dependencies = [
+ "araphor-analysis",
  "araphor-data",
  "clap",
  "comfy-table",
@@ -232,13 +269,11 @@ dependencies = [
  "arrow-ipc",
  "arrow-json",
  "crc32c",
- "datafusion",
  "duckdb",
  "erebor-interceptor-abi",
  "erebor-runtime-error",
  "futures-core",
  "futures-util",
- "libloading",
  "minicbor",
  "object 0.40.0",
  "prost",
@@ -249,14 +284,10 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snafu",
- "stacker",
  "tempfile",
  "time",
  "tokio",
  "uuid",
- "wasmparser",
- "wasmtime",
- "wat",
 ]
 
 [[package]]
@@ -309,6 +340,32 @@ version = "0.1.0"
 dependencies = [
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
+]
+
+[[package]]
+name = "araphor-query"
+version = "0.1.0"
+dependencies = [
+ "araphor-analysis-sdk",
+ "araphor-data",
+ "arrow-buffer",
+ "async-trait",
+ "chrono",
+ "crc32c",
+ "datafusion",
+ "erebor-runtime-error",
+ "futures-core",
+ "futures-util",
+ "prost",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "stacker",
+ "tempfile",
+ "time",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -4861,15 +4918,19 @@ dependencies = [
 name = "mithril-control"
 version = "0.1.0"
 dependencies = [
+ "araphor-analysis",
  "araphor-analysis-sdk",
  "araphor-data",
  "araphor-observability",
+ "araphor-query",
+ "arrow-array",
+ "arrow-schema",
  "axum",
  "axum-server",
  "clap",
  "crc32c",
  "crossterm 0.29.0",
- "duckdb",
+ "datafusion-common",
  "ed25519-dalek 3.0.0",
  "erebor-interceptor-abi",
  "erebor-runtime-error",
@@ -4912,17 +4973,21 @@ dependencies = [
 name = "mithril-e2e"
 version = "0.1.0"
 dependencies = [
+ "araphor-analysis",
  "araphor-analysis-builtins",
  "araphor-analysis-sdk",
  "araphor-component-build",
  "araphor-data",
  "araphor-detector-example",
  "araphor-observability",
+ "araphor-query",
+ "arrow-schema",
  "axum",
  "axum-server",
  "clap",
  "containerd-client",
  "crc32c",
+ "datafusion-common",
  "duckdb",
  "ed25519-dalek 3.0.0",
  "erebor-interceptor",

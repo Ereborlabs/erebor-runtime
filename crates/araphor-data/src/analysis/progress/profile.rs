@@ -3,13 +3,13 @@ use snafu::ResultExt as _;
 use super::{AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisStore, MAX_RESULT_BYTES};
 use crate::{DiscoveryEncodingSnafu, DiscoveryProfileV1, Result};
 
-pub(crate) struct PreparedProfile {
+pub struct PreparedProfile {
     profile: DiscoveryProfileV1,
     body: Vec<u8>,
 }
 
 impl PreparedProfile {
-    pub(crate) fn new(profile: DiscoveryProfileV1) -> Result<Self> {
+    pub fn new(profile: DiscoveryProfileV1) -> Result<Self> {
         profile.validate()?;
         let mut output = araphor_analysis_sdk::wire::BoundedBuffer::new(MAX_RESULT_BYTES as u64);
         if let Err(source) = serde_json::to_writer(&mut output, &profile) {
@@ -29,7 +29,7 @@ impl PreparedProfile {
 }
 
 impl AnalysisStore {
-    pub(crate) fn commit_working_profile(
+    pub fn commit_working_profile(
         &self,
         mut input: AnalysisResultCommitV1,
         prepared: PreparedProfile,
@@ -45,7 +45,7 @@ impl AnalysisStore {
         self.commit_progress(&input, previous, true, Some(&prepared.profile), None, false)
     }
 
-    pub(crate) fn commit_sealed_profile(
+    pub fn commit_sealed_profile(
         &self,
         mut input: AnalysisResultCommitV1,
         prepared: PreparedProfile,

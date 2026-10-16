@@ -1,10 +1,10 @@
 use std::{error::Error, sync::Arc};
 
+use araphor_analysis::DiscoveryOwner;
 use araphor_data::{
     AnalysisContextKeyV1, AnalysisStore, ContextSensitivityV1, DiscoveryContextAccessV1,
     DiscoveryContextBindingV1, DiscoveryContextEvidenceV1, DiscoveryContextRequestV1,
-    DiscoveryContextViewV1, DiscoveryMethodV1, DiscoveryOwner, DiscoveryProofKindV1,
-    DiscoveryRecordV1,
+    DiscoveryMethodV1, DiscoveryProofKindV1, DiscoveryRecordV1,
 };
 
 mod component;
@@ -49,10 +49,10 @@ pub(super) async fn check(
         missing_facts: Vec::new(),
     };
     let input = DiscoveryOwner::context_input(&request, &[])?;
-    let selected = DiscoveryContextViewV1::try_from(&input)?;
+    let selected = DiscoveryOwner::decode_context(&input)?;
     let component = component::ContextComponent::install(store, record.id.stream.tenant_id).await?;
     let transported = component.evaluate(&input)?;
-    if serde_json::to_value(DiscoveryContextViewV1::try_from(&transported)?)?
+    if serde_json::to_value(DiscoveryOwner::decode_context(&transported)?)?
         != serde_json::to_value(&selected)?
     {
         return Err("the installed component changed selected context identities".into());
@@ -76,9 +76,9 @@ pub(super) async fn check(
     }
     request.cutoff_utc_ns = 1999;
     let cutoff = DiscoveryOwner::context_input(&request, &[])?;
-    let selected = DiscoveryContextViewV1::try_from(&cutoff)?;
+    let selected = DiscoveryOwner::decode_context(&cutoff)?;
     let transported = component.evaluate(&cutoff)?;
-    if serde_json::to_value(DiscoveryContextViewV1::try_from(&transported)?)?
+    if serde_json::to_value(DiscoveryOwner::decode_context(&transported)?)?
         != serde_json::to_value(&selected)?
     {
         return Err("the installed component changed context cutoff or omissions".into());

@@ -21,7 +21,7 @@ pub enum PackageErrorCodeV1 {
 }
 
 impl PackageErrorCodeV1 {
-    pub(crate) fn error(self, field: &'static str) -> crate::Error {
+    pub fn error(self, field: &'static str) -> crate::Error {
         crate::PackageSnafu { code: self, field }.build()
     }
 }
@@ -37,7 +37,7 @@ pub struct PackageArtifactIdentityV1 {
 }
 
 impl PackageArtifactIdentityV1 {
-    pub(crate) fn allocated_bytes(&self) -> usize {
+    pub fn allocated_bytes(&self) -> usize {
         self.digest.capacity()
             + self.closure_digest.as_ref().map_or(0, String::capacity)
             + self.platform.as_ref().map_or(0, String::capacity)
@@ -174,6 +174,37 @@ pub struct PackageExportStatusV1 {
     pub activation_revision: u64,
     pub results: Vec<PackageReceiptV1>,
     pub fixtures: Vec<String>,
+}
+
+impl PackageExportStatusV1 {
+    pub fn new(
+        artifact: &super::PackageArtifactV1,
+        model: &sdk::Model,
+        active: &crate::analysis::PackageActivationV1,
+        readiness: PackageReadinessV1,
+        results: Vec<PackageReceiptV1>,
+    ) -> Self {
+        Self {
+            descriptor: model.clone(),
+            revision: active.revision.clone(),
+            targets: artifact
+                .implementations
+                .iter()
+                .filter(|target| target.implements(&model.name))
+                .map(|target| target.target().into())
+                .collect(),
+            readiness,
+            active: active.active,
+            activation_revision: active.generation,
+            results,
+            fixtures: artifact
+                .fixtures
+                .iter()
+                .filter(|fixture| fixture.export == model.name)
+                .map(|fixture| fixture.name.clone())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

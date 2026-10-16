@@ -15,8 +15,9 @@ pub fn run() {
 #[cfg(test)]
 #[test]
 #[ignore]
-fn araphor_component_compiler() -> araphor_data::Result<()> {
-    araphor_data::AnalysisPackageOwner::run_compiler_worker()
+fn araphor_component_compiler() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    araphor_analysis::AnalysisPackageOwner::run_compiler_worker()?;
+    Ok(())
 }
 
 fn exit_on_error(result: Result<(), error::CliError>) {

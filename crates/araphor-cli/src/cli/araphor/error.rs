@@ -14,6 +14,13 @@ pub(crate) enum AraphorCommandError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("{source}"))]
+    Analysis {
+        #[snafu(source(from(araphor_analysis::Error, Box::new)))]
+        source: Box<araphor_analysis::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Araphor command is invalid: {field}"))]
     Invalid {
         field: &'static str,
@@ -89,6 +96,11 @@ impl AraphorCommandError {
                 StatusCode::PermissionDenied | StatusCode::PolicyDenied => 3,
                 _ => 5,
             },
+            Self::Analysis { source, .. } => match source.status_code() {
+                StatusCode::InvalidArguments => 2,
+                StatusCode::PermissionDenied | StatusCode::PolicyDenied => 3,
+                _ => 5,
+            },
             Self::Partial { .. } | Self::Uncertain { .. } | Self::OutputDeadline { .. } => 4,
             Self::Output { source, .. } if source.kind() == io::ErrorKind::BrokenPipe => 4,
             Self::Interrupted { .. } => 130,
@@ -108,6 +120,7 @@ impl ErrorExt for AraphorCommandError {
         match self {
             Self::Invalid { .. } => StatusCode::InvalidArguments,
             Self::Package { source, .. } => source.status_code(),
+            Self::Analysis { source, .. } => source.status_code(),
             Self::Protocol { .. } => StatusCode::IllegalState,
             Self::Input { .. } | Self::Output { .. } => StatusCode::External,
             Self::Client { source, .. } => source.status_code(),

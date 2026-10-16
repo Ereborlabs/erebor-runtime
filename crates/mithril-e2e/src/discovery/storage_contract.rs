@@ -1,8 +1,9 @@
 use std::{error::Error as StdError, fs, path::Path};
 
+use araphor_analysis::{DiscoveryOwner, InstalledAnalysis};
 use araphor_data::{
-    AnalysisStore, DiscoveryInputManifestV1, DiscoveryOwner, EvidenceStoreOutcomeV1,
-    InstalledAnalysis, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
+    AnalysisStore, DiscoveryInputManifestV1, EvidenceStoreOutcomeV1, ValidatedCoverageV1,
+    ValidatedEvidenceBatchV1,
 };
 use mithril_control::ControlStore;
 use snafu::ensure;

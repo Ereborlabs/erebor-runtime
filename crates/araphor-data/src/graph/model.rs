@@ -308,7 +308,7 @@ pub struct FindingV1 {
 }
 
 impl FindingV1 {
-    pub(super) const PACKAGES: [&'static str; 3] = ["HF-PROC-001", "HF-DW-001", "HF-XNODE-001"];
+    pub const PACKAGES: [&'static str; 3] = ["HF-PROC-001", "HF-DW-001", "HF-XNODE-001"];
 
     pub fn validate(&self) -> Result<()> {
         self.subject_id.validate()?;

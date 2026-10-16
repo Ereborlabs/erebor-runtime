@@ -5,7 +5,7 @@ use super::{PackageActivationV1, PackageKeyV1};
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStore, Result};
 
 impl AnalysisStore {
-    pub(crate) fn mark_package_stale(&self, expected: &PackageActivationV1) -> Result<()> {
+    pub fn mark_package_stale(&self, expected: &PackageActivationV1) -> Result<()> {
         let mut guard = self.writer()?;
         let transaction = guard
             .get_mut()?
@@ -30,7 +30,7 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub(crate) fn update_package_metadata(
+    pub fn update_package_metadata(
         &self,
         key: &PackageKeyV1,
         generation: u64,
@@ -40,7 +40,7 @@ impl AnalysisStore {
         self.write_package_status(key, generation, None, metadata, check)
     }
 
-    pub(crate) fn fail_package(
+    pub fn fail_package(
         &self,
         expected: &PackageActivationV1,
         metadata: &[u8],
@@ -123,7 +123,7 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub(crate) fn renew_package(
+    pub fn renew_package(
         &self,
         expected: &PackageActivationV1,
         metadata: &[u8],

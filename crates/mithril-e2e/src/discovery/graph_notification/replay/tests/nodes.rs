@@ -30,9 +30,11 @@ fn node_streams_stay_separate() -> crate::platform::TestResult<()> {
     mixed.records.push(fixture.record(&remote, 1)?);
     assert!(matches!(
         GraphAndFindingOwner::derive(&mixed, &fixture.execution),
-        Err(Error::GraphInvalid {
-            field: "replay record identity",
-            ..
+        Err(araphor_analysis::Error::Data {
+            source: Error::GraphInvalid {
+                field: "replay record identity",
+                ..
+            }
         })
     ));
     fixture.partial_node_input(&local, &remote)?;

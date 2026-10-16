@@ -1,0 +1,60 @@
+use duckdb::params;
+use snafu::ResultExt as _;
+
+use super::AnalysisStore;
+use crate::{AnalysisDatabaseSnafu, Result};
+
+impl AnalysisStore {
+    pub fn fault_write(&self, query: &str, values: &[&dyn duckdb::ToSql]) -> Result<()> {
+        let mut writer = self.writer_access()?;
+        let writer = writer.get_mut()?;
+        writer
+            .execute_batch(&format!(
+                "SET memory_limit='{}B'",
+                4 * crate::analysis::NATIVE_MEMORY_BYTES
+            ))
+            .context(AnalysisDatabaseSnafu {
+                operation: "set fixture memory limit",
+            })?;
+        let mutation = writer
+            .execute(query, values)
+            .and_then(|_| writer.execute_batch("CHECKPOINT"));
+        let restored = writer.execute_batch(&format!(
+            "SET memory_limit='{}B'",
+            crate::analysis::NATIVE_MEMORY_BYTES
+        ));
+        mutation.context(AnalysisDatabaseSnafu {
+            operation: "inject fixture mutation",
+        })?;
+        restored.context(AnalysisDatabaseSnafu {
+            operation: "restore fixture memory limit",
+        })?;
+        Ok(())
+    }
+}
+
+impl AnalysisStore {
+    pub fn verify_usage(&self) -> Result<()> {
+        Self::validate_usage(self.writer()?.get()?, &self.root)
+    }
+
+    pub fn frozen_result(&self, result_id: &str) -> Result<(Vec<u8>, Vec<u8>, u64)> {
+        self.read_snapshot(|reader| {
+            reader.query_row(
+                "SELECT body, request_meta, commit_revision FROM analysis_results WHERE result_id = ?",
+                params![result_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).context(AnalysisDatabaseSnafu { operation: "read frozen result fixture" })
+        })
+    }
+
+    pub fn tenant_usage(&self, tenant: [u8; 16]) -> Result<(u64, u64, u64, u64)> {
+        self.read_snapshot(|reader| {
+            reader.query_row(
+                "SELECT logical_bytes, coverage_count, context_count, result_count FROM tenant_usage WHERE tenant_id = ?",
+                params![tenant.as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            ).context(AnalysisDatabaseSnafu { operation: "read tenant usage fixture" })
+        })
+    }
+}

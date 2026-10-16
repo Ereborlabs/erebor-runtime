@@ -19,24 +19,24 @@ mod relationships;
 mod schema;
 mod subjects;
 #[cfg(test)]
-mod tests;
+pub(in crate::analysis) mod tests;
 
 pub(super) use header::GraphHeader;
 
 pub(super) struct GraphRows;
 
-pub(crate) struct CanonicalGraph {
+pub struct CanonicalGraph {
     snapshot: GraphSnapshotV1,
     body: Vec<u8>,
 }
 
 impl CanonicalGraph {
     #[cfg(test)]
-    pub(crate) fn new(snapshot: GraphSnapshotV1) -> Result<Self> {
+    pub fn new(snapshot: GraphSnapshotV1) -> Result<Self> {
         Self::bounded(snapshot, GraphRows::MAX_CANONICAL_BYTES)
     }
 
-    pub(crate) fn bounded(snapshot: GraphSnapshotV1, limit: usize) -> Result<Self> {
+    pub fn bounded(snapshot: GraphSnapshotV1, limit: usize) -> Result<Self> {
         snapshot.validate()?;
         let mut writer = araphor_analysis_sdk::wire::BoundedBuffer::new(
             limit.min(GraphRows::MAX_CANONICAL_BYTES) as u64,
@@ -56,12 +56,12 @@ impl CanonicalGraph {
         })
     }
 
-    pub(crate) fn snapshot(&self) -> &GraphSnapshotV1 {
+    pub fn snapshot(&self) -> &GraphSnapshotV1 {
         &self.snapshot
     }
 
     #[cfg(test)]
-    pub(crate) fn body(&self) -> &[u8] {
+    pub fn body(&self) -> &[u8] {
         &self.body
     }
 

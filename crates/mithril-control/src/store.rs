@@ -4590,7 +4590,7 @@ mod tests {
         );
         assert_eq!(pin.control_commit_index, store.commit_index());
         assert_eq!(
-            araphor_data::DiscoveryContextProvider::revision(&store, &record.id.stream)?,
+            araphor_analysis::DiscoveryContextProvider::revision(&store, &record.id.stream)?,
             store.commit_index()
         );
         assert_eq!(
@@ -4698,7 +4698,7 @@ mod tests {
             ) {
                 assert!(store.discovery_context(&changed).is_err(), "{scenario}");
                 let Err(araphor_data::Error::DiscoveryContext { source, .. }) =
-                    araphor_data::DiscoveryContextProvider::context(&store, &changed)
+                    araphor_analysis::DiscoveryContextProvider::context(&store, &changed)
                 else {
                     return Err("the context provider lost the Control error source".into());
                 };

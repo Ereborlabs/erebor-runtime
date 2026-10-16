@@ -7,10 +7,10 @@ use std::{
 };
 
 use araphor_data::{
-    AnalysisSelectionV1, DiscoveryReplayV1, EvidenceRetentionOwner, QueryLimits, QueryOwner,
-    QueryPlan, QueryTemplate,
+    AnalysisReadControl, AnalysisSelectionV1, DiscoveryReplayV1, EvidenceRetentionOwner,
 };
-use duckdb::types::Value;
+use araphor_query::execution::{Engine, Limits};
+use datafusion_common::ScalarValue;
 use mithril_control::{
     EvidenceIdV1, IntakeClock, PolicyDesiredStateConfigV1, PolicySignerConfigV1,
     PolicySignerTrustV1, ProfileSealRequestV1, TraceBatchV1, TraceExchangeV1, TraceFrameKindV1,
@@ -158,14 +158,19 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
             }
         );
         let source = sources.into_iter().next().ok_or("source absent")?;
-        let query = QueryOwner::new(data.clone(), QueryLimits::default())?;
-        let plan = QueryPlan::new(
-            AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]),
-            QueryTemplate::OperationCounts,
-        )?;
-        let queried = query.query_at(&plan, now)?;
+        let query = Engine::new(data.clone(), Limits::default())?;
+        let (plan, sources) = query.prepare("SELECT operation, COUNT(*) AS event_count FROM events GROUP BY operation ORDER BY operation", vec![]).await?;
+        let plan = Arc::new(plan);
+        let selection = AnalysisSelectionV1::new(source.tenant_id, vec![source.clone()]);
+        let (_, queried) = query
+            .session(selection.clone(), &AnalysisReadControl::default(), now)?
+            .execute(Arc::clone(&plan), &sources)?;
         ensure!(
-            queried.rows == [vec![Value::UInt(1), Value::BigInt(2)]],
+            queried.iter().map(|batch| batch.num_rows()).sum::<usize>() == 1
+                && ScalarValue::try_from_array(queried[0].column(0), 0)?
+                    == ScalarValue::UInt32(Some(1))
+                && ScalarValue::try_from_array(queried[0].column(1), 0)?
+                    == ScalarValue::Int64(Some(2)),
             InvalidInputSnafu {
                 path: output,
                 reason: "discovery blocked or changed the raw evidence query",
@@ -302,15 +307,27 @@ pub(super) async fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
         accept_record(output, &observations, &mut connection, 3).await?;
         let resumed_at = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
         ensure!(
-            query.query_at(&plan, resumed_at)?.rows == [vec![Value::UInt(1), Value::BigInt(1)]]
-                && TraceOwner::new(data.clone()).output(
-                    source.tenant_id,
-                    request.request_id,
-                    0,
-                    &access,
-                    resumed_at,
-                    0,
-                )? == output_batches
+            {
+                let (_, result) = query
+                    .session(
+                        selection.clone(),
+                        &AnalysisReadControl::default(),
+                        resumed_at,
+                    )?
+                    .execute(Arc::clone(&plan), &sources)?;
+                result.iter().map(|batch| batch.num_rows()).sum::<usize>() == 1
+                    && ScalarValue::try_from_array(result[0].column(0), 0)?
+                        == ScalarValue::UInt32(Some(1))
+                    && ScalarValue::try_from_array(result[0].column(1), 0)?
+                        == ScalarValue::Int64(Some(1))
+            } && TraceOwner::new(data.clone()).output(
+                source.tenant_id,
+                request.request_id,
+                0,
+                &access,
+                resumed_at,
+                0,
+            )? == output_batches
                 && data
                     .source_receipt(&source)?
                     .is_some_and(|receipt| receipt.contiguous_cursor == 3)

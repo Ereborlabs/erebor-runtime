@@ -7,7 +7,7 @@ use super::{
 use crate::{AnalysisDatabaseSnafu, Result, DISCOVERY_PROCESSOR, DISCOVERY_SCHEMA_VERSION};
 
 impl AnalysisStore {
-    pub(crate) fn profile_notices(
+    pub fn profile_notices(
         &self,
         scope: &ProcessorScopeV1,
         facts_revision: u64,
@@ -149,7 +149,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare context dependencies",
                 })?;
-            for key in selection.contexts.as_slice().iter().chain(&selection.obligations) {
+            for key in selection.contexts.as_slice().iter().chain(selection.obligations.as_slice()) {
                 control.check()?;
                 let changed: Option<u64> = contexts
                     .query_row(
@@ -177,7 +177,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "prepare discovery dependencies",
                 })?;
-            for id in &selection.profiles {
+            for id in selection.profiles.as_slice() {
                 control.check()?;
                 let changed: Option<u64> = profiles
                     .query_row(
@@ -193,7 +193,7 @@ impl AnalysisStore {
                 "SELECT MAX(commit_revision) FROM analysis_results
                  WHERE tenant_id = ? AND processor_id = ? AND result_id = ? AND commit_revision <= ?",
             ).context(AnalysisDatabaseSnafu { operation: "prepare graph dependencies" })?;
-            for id in &selection.graphs {
+            for id in selection.graphs.as_slice() {
                 control.check()?;
                 let changed: Option<u64> = graphs.query_row(
                     params![selection.tenant_id.as_slice(), crate::GRAPH_PROCESSOR, id, meta.commit_revision],
@@ -261,7 +261,6 @@ impl AnalysisStore {
 #[cfg(test)]
 mod tests {
     use std::ops::Bound;
-    use std::sync::Arc;
 
     use prost::Message as _;
 
@@ -307,85 +306,6 @@ mod tests {
         store
             .dependency_revision(selection, &AnalysisReadControl::default())
             .map(|(meta, revision)| (meta.commit_revision, revision))
-    }
-
-    fn result_row(store: &AnalysisStore, id: &str) -> Result<(Vec<u8>, Vec<u8>, u64)> {
-        store.read_snapshot(|reader| {
-            reader.query_row(
-                "SELECT body, request_meta, commit_revision FROM analysis_results WHERE result_id = ?",
-                params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            ).context(AnalysisDatabaseSnafu { operation: "read frozen result test" })
-        })
-    }
-
-    struct NoContext;
-
-    impl crate::DiscoveryContextProvider for NoContext {
-        fn context(&self, _: &crate::DiscoveryRecordV1) -> Result<crate::DiscoveryContextJoinV1> {
-            Ok(crate::DiscoveryContextJoinV1::Unresolved(
-                crate::DiscoveryContextUnavailableV1::MissingDecisionCatalog,
-            ))
-        }
-    }
-
-    #[test]
-    fn discovery_notice_cache() -> TestResult {
-        let input = crate::DiscoveryInputManifestV1::try_from(
-            include_bytes!("../../../mithril-e2e/fixtures/discovery/manifest.json").as_slice(),
-        )?;
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("analysis");
-        let store = Arc::new(AnalysisStore::open(&root)?);
-        let record = &input.records[0];
-        store.accept_validated_batch(
-            record.id.stream.clone(),
-            ValidatedEvidenceBatchV1 {
-                cpu_id: record.id.cpu_id,
-                first_cursor: record.id.durable_cursor,
-                last_cursor: record.id.durable_cursor,
-                intake_utc_ns: 1,
-                framed_records: record.wire_record.clone().into(),
-                frame_ends: vec![record.wire_record.len()],
-            },
-        )?;
-        let owner = crate::DiscoveryOwner::new(
-            store.clone(),
-            Arc::new(NoContext),
-            crate::DiscoveryConfigV1 {
-                interval_records: 1,
-                ..Default::default()
-            },
-            crate::InstalledAnalysis::testing(Some(store.clone()), input.tenant_id)?,
-        )?;
-        owner.process(10)?;
-        let profile = owner.profile(&record.id.stream)?.ok_or("profile absent")?;
-        assert!(profile.sealed);
-        let head = store.processor_result(&profile.scope)?;
-        let health = store.processor_health(&profile.scope)?;
-        let meta = store.meta()?;
-        let frozen = result_row(&store, &profile.profile_id)?;
-        let notices = vec![(profile.profile_id.clone(), frozen.2)];
-        assert_eq!(store.profile_notices(&profile.scope, 2, 2)?, notices);
-        store.mark_notice(&profile, frozen.2, 2, 2)?;
-        assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
-        store.mark_notice(&profile, frozen.2, 1, 1)?;
-        assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
-        assert!(store.mark_notice(&profile, frozen.2 + 1, 3, 3).is_err());
-        assert_eq!(result_row(&store, &profile.profile_id)?, frozen);
-        assert_eq!(store.processor_result(&profile.scope)?, head);
-        assert_eq!(store.processor_health(&profile.scope)?, health);
-        assert_eq!(store.meta()?, meta);
-        drop(owner);
-        drop(store);
-        let store = AnalysisStore::open(&root)?;
-        assert_eq!(result_row(&store, &profile.profile_id)?, frozen);
-        assert_eq!(store.processor_result(&profile.scope)?, head);
-        assert_eq!(store.processor_health(&profile.scope)?, health);
-        assert_eq!(store.meta()?, meta);
-        assert!(store.profile_notices(&profile.scope, 2, 2)?.is_empty());
-        assert_eq!(store.profile_notices(&profile.scope, 3, 2)?, notices);
-        Ok(())
     }
 
     #[test]

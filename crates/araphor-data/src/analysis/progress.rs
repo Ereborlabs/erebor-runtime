@@ -11,11 +11,11 @@ use crate::{
 mod notices;
 mod profile;
 
-pub(crate) use profile::PreparedProfile;
+pub use profile::PreparedProfile;
 
-pub(crate) const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESULT_META_BYTES: usize = 16 * 1024 * 1024;
-pub(crate) const MAX_RESULT_REFS: usize = 8_192;
+pub const MAX_RESULT_REFS: usize = 8_192;
 const MAX_CONTEXT_REFS: usize = 256;
 const MAX_WITNESS_AGE_NS: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
 
@@ -531,7 +531,7 @@ impl AnalysisStore {
         self.commit_progress(input, None, true, None, None, false)
     }
 
-    pub(crate) fn commit_graph(
+    pub fn commit_graph(
         &self,
         input: &AnalysisResultCommitV1,
         advance: bool,
@@ -543,7 +543,7 @@ impl AnalysisStore {
         self.commit_graph_inner(input, &graph, advance, false)
     }
 
-    pub(crate) fn commit_graph_snapshot(
+    pub fn commit_graph_snapshot(
         &self,
         mut input: AnalysisResultCommitV1,
         prepared: super::graph_rows::CanonicalGraph,
@@ -649,7 +649,7 @@ impl AnalysisStore {
         }
         let header = if let Some(graph) = graph {
             let package_key =
-                crate::GraphAndFindingOwner::package_key(&graph.scope.identity, &input.result_id);
+                crate::GraphSnapshotV1::package_key(&graph.scope.identity, &input.result_id);
             if graph.scope != input.scope
                 || graph.input_manifest.context
                     != input
@@ -1019,12 +1019,12 @@ impl AnalysisStore {
             input.created_utc_ns,
         )?;
         Self::record_revision(&transaction, revision, &relations)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("result.before");
         #[cfg(any(test, feature = "test-fixtures"))]
         self.run_commit_hook(super::AnalysisCommitStage::BeforeResultCommit)?;
         self.commit_metadata(transaction, "commit analysis result")?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         self.crash_at("result.after");
         self.revision.send_replace(revision);
         Ok(AnalysisResultReceiptV1 {

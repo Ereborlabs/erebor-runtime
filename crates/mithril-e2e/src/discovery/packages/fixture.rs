@@ -28,7 +28,7 @@ pub(super) struct Fixture {
 
 pub(super) struct Worker {
     stop: tokio::sync::watch::Sender<bool>,
-    task: Option<tokio::task::JoinHandle<araphor_data::Result<()>>>,
+    task: Option<tokio::task::JoinHandle<araphor_analysis::Result<()>>>,
 }
 
 impl Fixture {
@@ -203,7 +203,7 @@ impl Fixture {
             &receipt.result_id,
         )?;
         let checkpoint =
-            araphor_data::AnalysisPackageOwner::decode_output(&output, &export.descriptor)?
+            araphor_analysis::AnalysisPackageOwner::decode_output(&output, &export.descriptor)?
                 .checkpoint
                 .ok_or("checkpoint is absent")?;
         if checkpoint.version != 1 || checkpoint.datasets.len() != 1 {
@@ -315,7 +315,7 @@ impl Fixture {
                 sql: "SELECT count FROM rows ORDER BY count".into(),
             })
             .await?;
-        let rows = araphor_data::AnalysisPackageOwner::output_rows(
+        let rows = araphor_analysis::AnalysisPackageOwner::output_rows(
             &response.output.ok_or("query output is absent")?,
         )?;
         rows.get("query")

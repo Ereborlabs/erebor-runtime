@@ -1,28 +1,39 @@
 use std::mem::size_of;
 
 use araphor_data::{
-    AnalysisContextKeyV1, AnalysisGapV1, QueryCheckpoint, QueryColumn, QueryCoverage,
-    QueryCoverageState, QueryFrame, QueryOperation, QueryPayload, QueryResult, QuerySql,
-    StorePositionV1,
+    AnalysisContextKeyV1, AnalysisGapV1, AnalysisSourceSnapshotV1, StorePositionV1,
 };
-use duckdb::types::{TimeUnit, Value};
+use araphor_query::{
+    follow::{Cursor, Operation},
+    planner::Planner,
+    sources::ArrowSnapshot,
+};
+use arrow_array::types::{
+    validate_decimal_precision_and_scale, Decimal128Type, Decimal256Type, DecimalType,
+};
+use arrow_array::{
+    Array, BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
+    RecordBatch, StringArray, StringViewArray,
+};
+use arrow_schema::{DataType, Field, TimeUnit};
+use datafusion_common::ScalarValue;
 use erebor_runtime_ipc::araphor as proto;
 use tonic::Status;
 
-pub(super) struct Parameters(pub(super) Vec<Value>);
+pub(super) struct Parameters(pub(super) Vec<ScalarValue>);
 
 impl TryFrom<Vec<proto::QueryValue>> for Parameters {
     type Error = Status;
 
     fn try_from(values: Vec<proto::QueryValue>) -> Result<Self, Self::Error> {
-        if values.len() > QuerySql::PARAMETER_COUNT {
+        if values.len() > Planner::PARAMETER_COUNT {
             return Err(Status::invalid_argument(
                 "SQL parameter count exceeds its bound.",
             ));
         }
         let mut bytes = 0_usize;
         for value in &values {
-            bytes = bytes.saturating_add(size_of::<Value>());
+            bytes = bytes.saturating_add(size_of::<ScalarValue>());
             match value.kind.as_ref() {
                 Some(proto::query_value::Kind::Null(true))
                 | Some(proto::query_value::Kind::Boolean(_))
@@ -38,9 +49,21 @@ impl TryFrom<Vec<proto::QueryValue>> for Parameters {
                 Some(proto::query_value::Kind::Timestamp(value)) => {
                     Self::timestamp(value)?;
                 }
+                Some(proto::query_value::Kind::Decimal(value)) => {
+                    bytes = bytes.saturating_add(value.unscaled.capacity());
+                }
+                Some(proto::query_value::Kind::Date(_))
+                | Some(proto::query_value::Kind::Time(_))
+                | Some(proto::query_value::Kind::Interval(_)) => {}
+                Some(proto::query_value::Kind::Integer128(_))
+                | Some(proto::query_value::Kind::Unsigned128(_)) => {
+                    return Err(Status::unimplemented(
+                        "SQL 128-bit integer parameters have no native Arrow type.",
+                    ))
+                }
                 _ => return Err(Status::invalid_argument("SQL parameter type is invalid.")),
             }
-            if bytes > QuerySql::PARAMETER_BYTES {
+            if bytes > Planner::PARAMETER_BYTES {
                 return Err(Status::invalid_argument(
                     "SQL parameters exceed their byte bound.",
                 ));
@@ -52,14 +75,20 @@ impl TryFrom<Vec<proto::QueryValue>> for Parameters {
             .map_err(|_| Status::resource_exhausted("SQL parameter allocation failed."))?;
         for value in values {
             let value = match value.kind {
-                Some(proto::query_value::Kind::Null(true)) => Value::Null,
-                Some(proto::query_value::Kind::Boolean(value)) => Value::Boolean(value),
-                Some(proto::query_value::Kind::Signed(value)) => Value::BigInt(value),
-                Some(proto::query_value::Kind::Unsigned(value)) => Value::UBigInt(value),
-                Some(proto::query_value::Kind::Real(value)) => Value::Double(value),
-                Some(proto::query_value::Kind::Text(value)) => Value::Text(value),
-                Some(proto::query_value::Kind::Binary(value)) => Value::Blob(value),
+                Some(proto::query_value::Kind::Null(true)) => ScalarValue::Null,
+                Some(proto::query_value::Kind::Boolean(value)) => ScalarValue::Boolean(Some(value)),
+                Some(proto::query_value::Kind::Signed(value)) => ScalarValue::Int64(Some(value)),
+                Some(proto::query_value::Kind::Unsigned(value)) => ScalarValue::UInt64(Some(value)),
+                Some(proto::query_value::Kind::Real(value)) => ScalarValue::Float64(Some(value)),
+                Some(proto::query_value::Kind::Text(value)) => ScalarValue::Utf8(Some(value)),
+                Some(proto::query_value::Kind::Binary(value)) => ScalarValue::Binary(Some(value)),
                 Some(proto::query_value::Kind::Timestamp(value)) => Self::timestamp(&value)?,
+                Some(proto::query_value::Kind::Decimal(value)) => Self::decimal(&value)?,
+                Some(proto::query_value::Kind::Date(value)) => ScalarValue::Date32(Some(value)),
+                Some(proto::query_value::Kind::Time(value)) => Self::time(&value)?,
+                Some(proto::query_value::Kind::Interval(value)) => {
+                    ScalarValue::new_interval_mdn(value.months, value.days, value.nanoseconds)
+                }
                 _ => return Err(Status::invalid_argument("SQL parameter type is invalid.")),
             };
             parameters.push(value);
@@ -69,131 +98,167 @@ impl TryFrom<Vec<proto::QueryValue>> for Parameters {
 }
 
 impl Parameters {
-    fn timestamp(value: &proto::QueryTimestamp) -> Result<Value, Status> {
+    fn decimal(value: &proto::QueryDecimal) -> Result<ScalarValue, Status> {
+        let invalid = || Status::invalid_argument("SQL decimal parameter is invalid.");
+        let precision = u8::try_from(value.width).map_err(|_| invalid())?;
+        let scale = i8::try_from(value.scale).map_err(|_| invalid())?;
+        if precision <= 38 {
+            let unscaled = value.unscaled.parse::<i128>().map_err(|_| invalid())?;
+            validate_decimal_precision_and_scale::<Decimal128Type>(precision, scale)
+                .map_err(|_| invalid())?;
+            Decimal128Type::validate_decimal_precision(unscaled, precision, scale)
+                .map_err(|_| invalid())?;
+            ScalarValue::try_new_decimal128(unscaled, precision, scale).map_err(|_| invalid())
+        } else {
+            let unscaled = value
+                .unscaled
+                .parse::<araphor_query::datafusion::arrow::datatypes::i256>()
+                .map_err(|_| invalid())?;
+            validate_decimal_precision_and_scale::<Decimal256Type>(precision, scale)
+                .map_err(|_| invalid())?;
+            Decimal256Type::validate_decimal_precision(unscaled, precision, scale)
+                .map_err(|_| invalid())?;
+            Ok(ScalarValue::Decimal256(Some(unscaled), precision, scale))
+        }
+    }
+
+    fn time(value: &proto::QueryTimestamp) -> Result<ScalarValue, Status> {
+        use arrow_array::temporal_conversions::{
+            time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
+        };
+        let invalid = || Status::invalid_argument("SQL time parameter is invalid.");
+        match value.unit.as_str() {
+            "second" => {
+                let value = i32::try_from(value.value).map_err(|_| invalid())?;
+                time32s_to_time(value).ok_or_else(invalid)?;
+                Ok(ScalarValue::Time32Second(Some(value)))
+            }
+            "millisecond" => {
+                let value = i32::try_from(value.value).map_err(|_| invalid())?;
+                time32ms_to_time(value).ok_or_else(invalid)?;
+                Ok(ScalarValue::Time32Millisecond(Some(value)))
+            }
+            "microsecond" => {
+                time64us_to_time(value.value).ok_or_else(invalid)?;
+                Ok(ScalarValue::Time64Microsecond(Some(value.value)))
+            }
+            "nanosecond" => {
+                time64ns_to_time(value.value).ok_or_else(invalid)?;
+                Ok(ScalarValue::Time64Nanosecond(Some(value.value)))
+            }
+            _ => Err(invalid()),
+        }
+    }
+
+    fn timestamp(value: &proto::QueryTimestamp) -> Result<ScalarValue, Status> {
         let unit = match value.unit.as_str() {
-            "second" if value.value.checked_mul(1_000_000).is_some() => TimeUnit::Second,
-            "millisecond" if value.value.checked_mul(1_000).is_some() => TimeUnit::Millisecond,
+            "second" => TimeUnit::Second,
+            "millisecond" => TimeUnit::Millisecond,
             "microsecond" => TimeUnit::Microsecond,
-            "nanosecond" if value.value % 1_000 == 0 => TimeUnit::Nanosecond,
+            "nanosecond" => TimeUnit::Nanosecond,
             _ => {
                 return Err(Status::invalid_argument(
                     "SQL timestamp parameter is invalid.",
                 ))
             }
         };
-        Ok(Value::Timestamp(unit, value.value))
+        Ok(match unit {
+            TimeUnit::Second => ScalarValue::TimestampSecond(Some(value.value), None),
+            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(value.value), None),
+            TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(value.value), None),
+            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(value.value), None),
+        })
     }
 }
 
-pub(super) struct WireFrame {
-    pub(super) message: proto::QueryFrame,
-    // Keep the native output lease until the transport advances or closes.
-    pub(super) owner: QueryFrame,
-}
+pub(super) struct Wire;
 
-impl TryFrom<QueryFrame> for WireFrame {
-    type Error = Status;
-
-    fn try_from(mut owner: QueryFrame) -> Result<Self, Self::Error> {
-        use proto::query_frame::Payload;
-
-        let mut message = Self::header(&owner);
-        let payload = match &mut owner.payload {
-            QueryPayload::Metadata(metadata) => Payload::Metadata(proto::QueryMetadata {
-                columns: std::mem::take(&mut metadata.columns)
-                    .into_iter()
-                    .map(Self::column)
-                    .collect(),
-                evaluated_utc_ns: metadata.evaluated_utc_ns,
-                dependency_revision: metadata.dependency_revision,
-                row_limit: metadata.row_limit as u64,
-                byte_limit: metadata.byte_limit as u64,
-                moving_resolution_ns: metadata.moving_resolution_ns,
-                resume_semantics: metadata.resume_semantics.into(),
-            }),
-            QueryPayload::Append { result } | QueryPayload::Replace { result } => {
-                Payload::Rows(Self::rows(result)?)
-            }
-            QueryPayload::Checkpoint { checkpoint, .. } => {
-                Payload::Checkpoint(Self::bookmark(Some(checkpoint))?)
-            }
-            QueryPayload::Health {
-                dependency_revision,
-                storage_health,
-                ..
-            } => Payload::Health(proto::QueryHealth {
-                dependency_revision: *dependency_revision,
-                write_ready: storage_health.write_ready,
-                retention_healthy: storage_health.retention_healthy,
-                intake_capacity: storage_health.intake_capacity,
-                maintenance_capacity: storage_health.maintenance_capacity,
-            }),
-            QueryPayload::Error {
-                code,
-                reason,
-                position,
-                floor,
-                last_checkpoint,
-                ..
-            } => Payload::Error(proto::QueryError {
-                code: format!("{code:?}"),
-                reason: (*reason).into(),
-                last_checkpoint: Self::bookmark(last_checkpoint.as_ref())?,
-                position: position.map(Self::position),
-                floor: floor.map(Self::position),
-            }),
-            QueryPayload::Terminal {
-                reason,
-                last_checkpoint,
-                ..
-            } => Payload::Terminal(proto::QueryTerminal {
-                reason: format!("{reason:?}"),
-                last_checkpoint: Self::bookmark(last_checkpoint.as_ref())?,
-            }),
-        };
-        message.payload = Some(payload);
-        Ok(Self { message, owner })
-    }
-}
-
-impl WireFrame {
-    fn value(value: Value) -> Result<proto::QueryValue, Status> {
+impl Wire {
+    fn value(value: ScalarValue) -> Result<proto::QueryValue, Status> {
         use proto::query_value::Kind;
-
+        if value.is_null() {
+            return Ok(proto::QueryValue {
+                kind: Some(Kind::Null(true)),
+            });
+        }
         let kind = match value {
-            Value::Null => Kind::Null(true),
-            Value::Boolean(value) => Kind::Boolean(value),
-            Value::TinyInt(value) => Kind::Signed(i64::from(value)),
-            Value::SmallInt(value) => Kind::Signed(i64::from(value)),
-            Value::Int(value) => Kind::Signed(i64::from(value)),
-            Value::BigInt(value) => Kind::Signed(value),
-            Value::HugeInt(value) => Kind::Integer128(value.to_string()),
-            Value::UHugeInt(value) => Kind::Unsigned128(value.to_string()),
-            Value::UTinyInt(value) => Kind::Unsigned(u64::from(value)),
-            Value::USmallInt(value) => Kind::Unsigned(u64::from(value)),
-            Value::UInt(value) => Kind::Unsigned(u64::from(value)),
-            Value::UBigInt(value) => Kind::Unsigned(value),
-            Value::Float(value) => Kind::Real(f64::from(value)),
-            Value::Double(value) => Kind::Real(value),
-            Value::Decimal(value) => Kind::Decimal(proto::QueryDecimal {
-                width: u32::from(value.width()),
-                scale: u32::from(value.scale()),
-                unscaled: value.value().to_string(),
-            }),
-            Value::Timestamp(unit, value) => Kind::Timestamp(Self::timestamp(unit, value)),
-            Value::Text(value) => Kind::Text(value),
-            Value::Blob(value) => Kind::Binary(value),
-            Value::Date32(value) => Kind::Date(value),
-            Value::Time64(unit, value) => Kind::Time(Self::timestamp(unit, value)),
-            Value::Interval {
+            ScalarValue::Boolean(Some(value)) => Kind::Boolean(value),
+            ScalarValue::Int8(Some(value)) => Kind::Signed(i64::from(value)),
+            ScalarValue::Int16(Some(value)) => Kind::Signed(i64::from(value)),
+            ScalarValue::Int32(Some(value)) => Kind::Signed(i64::from(value)),
+            ScalarValue::Int64(Some(value)) => Kind::Signed(value),
+            ScalarValue::UInt8(Some(value)) => Kind::Unsigned(u64::from(value)),
+            ScalarValue::UInt16(Some(value)) => Kind::Unsigned(u64::from(value)),
+            ScalarValue::UInt32(Some(value)) => Kind::Unsigned(u64::from(value)),
+            ScalarValue::UInt64(Some(value)) => Kind::Unsigned(value),
+            ScalarValue::Float16(Some(value)) => Kind::Real(f64::from(value)),
+            ScalarValue::Float32(Some(value)) => Kind::Real(f64::from(value)),
+            ScalarValue::Float64(Some(value)) => Kind::Real(value),
+            ScalarValue::Decimal32(Some(value), width, scale) => {
+                Self::decimal(width, scale, value.to_string())?
+            }
+            ScalarValue::Decimal64(Some(value), width, scale) => {
+                Self::decimal(width, scale, value.to_string())?
+            }
+            ScalarValue::Decimal128(Some(value), width, scale) => {
+                Self::decimal(width, scale, value.to_string())?
+            }
+            ScalarValue::Decimal256(Some(value), width, scale) => {
+                Self::decimal(width, scale, value.to_string())?
+            }
+            ScalarValue::TimestampSecond(Some(value), _) => {
+                Kind::Timestamp(Self::timestamp(TimeUnit::Second, value))
+            }
+            ScalarValue::TimestampMillisecond(Some(value), _) => {
+                Kind::Timestamp(Self::timestamp(TimeUnit::Millisecond, value))
+            }
+            ScalarValue::TimestampMicrosecond(Some(value), _) => {
+                Kind::Timestamp(Self::timestamp(TimeUnit::Microsecond, value))
+            }
+            ScalarValue::TimestampNanosecond(Some(value), _) => {
+                Kind::Timestamp(Self::timestamp(TimeUnit::Nanosecond, value))
+            }
+            ScalarValue::Utf8(Some(value))
+            | ScalarValue::Utf8View(Some(value))
+            | ScalarValue::LargeUtf8(Some(value)) => Kind::Text(value),
+            ScalarValue::Binary(Some(value))
+            | ScalarValue::BinaryView(Some(value))
+            | ScalarValue::LargeBinary(Some(value))
+            | ScalarValue::FixedSizeBinary(_, Some(value)) => Kind::Binary(value),
+            ScalarValue::Date32(Some(value)) => Kind::Date(value),
+            ScalarValue::Date64(Some(value)) if value % 86_400_000 == 0 => Kind::Date(
+                i32::try_from(value / 86_400_000)
+                    .map_err(|_| Status::unimplemented("The query date exceeds the wire range."))?,
+            ),
+            ScalarValue::Time32Second(Some(value)) => {
+                Kind::Time(Self::timestamp(TimeUnit::Second, i64::from(value)))
+            }
+            ScalarValue::Time32Millisecond(Some(value)) => {
+                Kind::Time(Self::timestamp(TimeUnit::Millisecond, i64::from(value)))
+            }
+            ScalarValue::Time64Microsecond(Some(value)) => {
+                Kind::Time(Self::timestamp(TimeUnit::Microsecond, value))
+            }
+            ScalarValue::Time64Nanosecond(Some(value)) => {
+                Kind::Time(Self::timestamp(TimeUnit::Nanosecond, value))
+            }
+            ScalarValue::IntervalYearMonth(Some(months)) => Kind::Interval(proto::QueryInterval {
                 months,
-                days,
-                nanos,
-            } => Kind::Interval(proto::QueryInterval {
-                months,
-                days,
-                nanoseconds: nanos,
+                days: 0,
+                nanoseconds: 0,
             }),
+            ScalarValue::IntervalDayTime(Some(value)) => Kind::Interval(proto::QueryInterval {
+                months: 0,
+                days: value.days,
+                nanoseconds: i64::from(value.milliseconds) * 1_000_000,
+            }),
+            ScalarValue::IntervalMonthDayNano(Some(value)) => {
+                Kind::Interval(proto::QueryInterval {
+                    months: value.months,
+                    days: value.days,
+                    nanoseconds: value.nanoseconds,
+                })
+            }
             _ => {
                 return Err(Status::unimplemented(
                     "The query value type is unsupported.",
@@ -201,6 +266,29 @@ impl WireFrame {
             }
         };
         Ok(proto::QueryValue { kind: Some(kind) })
+    }
+
+    fn decimal(width: u8, scale: i8, unscaled: String) -> Result<proto::query_value::Kind, Status> {
+        Ok(proto::query_value::Kind::Decimal(proto::QueryDecimal {
+            width: u32::from(width),
+            scale: u32::try_from(scale)
+                .map_err(|_| Status::unimplemented("The query decimal scale is unsupported."))?,
+            unscaled,
+        }))
+    }
+
+    #[cfg(test)]
+    fn signed128(value: i128) -> proto::QueryValue {
+        proto::QueryValue {
+            kind: Some(proto::query_value::Kind::Integer128(value.to_string())),
+        }
+    }
+
+    #[cfg(test)]
+    fn unsigned128(value: u128) -> proto::QueryValue {
+        proto::QueryValue {
+            kind: Some(proto::query_value::Kind::Unsigned128(value.to_string())),
+        }
     }
 
     fn timestamp(unit: TimeUnit, value: i64) -> proto::QueryTimestamp {
@@ -216,41 +304,244 @@ impl WireFrame {
         }
     }
 
-    pub(super) fn header(owner: &QueryFrame) -> proto::QueryFrame {
+    pub(super) fn header(
+        snapshot: &ArrowSnapshot,
+        operation: Operation,
+        clock_changed: bool,
+    ) -> proto::QueryFrame {
+        let extraction = &snapshot.page.extraction;
+        let meta = &extraction.meta;
         proto::QueryFrame {
-            schema_version: owner.schema_version,
-            operation: match owner.operation {
-                QueryOperation::Append => proto::QueryOperation::Append as i32,
-                QueryOperation::Replace => proto::QueryOperation::Replace as i32,
+            schema_version: 1,
+            operation: match operation {
+                Operation::Append => proto::QueryOperation::Append as i32,
+                Operation::Replace => proto::QueryOperation::Replace as i32,
             },
-            store_uuid: owner.store_uuid.to_vec(),
-            recovery_epoch: owner.recovery_epoch,
-            read_revision: owner.read_revision,
-            clock_changed: owner.clock_changed,
-            coverage: owner.coverage().iter().map(Self::coverage).collect(),
+            store_uuid: meta.store_uuid.as_bytes().to_vec(),
+            recovery_epoch: meta.recovery_epoch,
+            read_revision: meta.commit_revision,
+            clock_changed,
+            coverage: extraction.sources.iter().map(Self::coverage).collect(),
             payload: None,
         }
     }
 
-    fn rows(result: &mut QueryResult) -> Result<proto::QueryRows, Status> {
+    pub(super) fn conversion_bytes(batches: &[RecordBatch]) -> Result<usize, Status> {
+        let mut bytes = batches
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>()
+            .saturating_mul(size_of::<proto::QueryRow>());
+        for batch in batches {
+            bytes = bytes.saturating_add(
+                batch
+                    .num_rows()
+                    .saturating_mul(batch.num_columns())
+                    .saturating_mul(size_of::<proto::QueryValue>()),
+            );
+            for array in batch.columns() {
+                for row in 0..array.len() {
+                    if array.is_null(row) {
+                        continue;
+                    }
+                    let extra = match array.data_type() {
+                        DataType::Utf8 => array
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .map(|array| array.value(row).len()),
+                        DataType::LargeUtf8 => array
+                            .as_any()
+                            .downcast_ref::<LargeStringArray>()
+                            .map(|array| array.value(row).len()),
+                        DataType::Utf8View => array
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .map(|array| array.value(row).len()),
+                        DataType::Binary => array
+                            .as_any()
+                            .downcast_ref::<BinaryArray>()
+                            .map(|array| array.value(row).len()),
+                        DataType::LargeBinary => array
+                            .as_any()
+                            .downcast_ref::<LargeBinaryArray>()
+                            .map(|array| array.value(row).len()),
+                        DataType::BinaryView => array
+                            .as_any()
+                            .downcast_ref::<BinaryViewArray>()
+                            .map(|array| array.value(row).len()),
+                        DataType::FixedSizeBinary(_) => array
+                            .as_any()
+                            .downcast_ref::<FixedSizeBinaryArray>()
+                            .map(|array| array.value(row).len()),
+                        DataType::Decimal32(_, _)
+                        | DataType::Decimal64(_, _)
+                        | DataType::Decimal128(_, _)
+                        | DataType::Decimal256(_, _) => Some(160),
+                        DataType::Timestamp(_, _) | DataType::Time32(_) | DataType::Time64(_) => {
+                            Some("microsecond".len())
+                        }
+                        _ => Some(0),
+                    }
+                    .ok_or_else(|| Status::internal("The query Arrow type is invalid."))?;
+                    bytes = bytes.saturating_add(extra);
+                }
+            }
+        }
+        Ok(bytes)
+    }
+
+    pub(super) fn receipt_bytes(snapshot: &ArrowSnapshot) -> usize {
+        let extraction = &snapshot.page.extraction;
+        let mut bytes = size_of::<proto::QueryFrame>() + 16;
+        for source in &extraction.sources {
+            bytes = bytes.saturating_add(
+                size_of::<proto::QueryCoverage>()
+                    + size_of::<proto::SourceIdentity>()
+                    + 48
+                    + source.receipt.identity.node_id.len()
+                    + "Reported".len(),
+            );
+            bytes = bytes.saturating_add(
+                (source.expired.len() + source.recovery.len() + source.pending.len())
+                    .saturating_mul(size_of::<proto::SourceGap>()),
+            );
+        }
+        bytes
+    }
+
+    pub(super) fn row_receipts(snapshot: &ArrowSnapshot) -> usize {
+        let extraction = &snapshot.page.extraction;
+        let mut bytes = 0_usize;
+        for key in &extraction.missing_contexts {
+            bytes = bytes.saturating_add(
+                size_of::<proto::ContextKey>()
+                    + key.owner_id.len()
+                    + key.entity_key.len()
+                    + key.lifetime_key.len(),
+            );
+        }
+        if let Some(receipt) = extraction.graph_traversal() {
+            bytes = bytes.saturating_add(size_of::<proto::GraphTraversalReceipt>());
+            for result in &receipt.result_ids {
+                bytes = bytes.saturating_add(size_of::<String>() + result.len());
+            }
+        }
+        bytes
+    }
+
+    pub(super) fn column_bytes(column: &Field) -> usize {
+        let metadata = column.metadata();
+        size_of::<proto::QueryColumn>()
+            + column.name().len()
+            + column.data_type().to_string().len().saturating_mul(2)
+            + [
+                "araphor.units",
+                "araphor.null_meaning",
+                "araphor.join_keys",
+                "araphor.owner",
+                "araphor.readiness",
+            ]
+            .iter()
+            .map(|key| metadata.get(*key).map_or(16, String::len))
+            .sum::<usize>()
+    }
+
+    pub(super) fn trace_detail_bytes(detail: &proto::TraceDetail) -> usize {
+        let mut bytes = size_of::<proto::TraceDetail>()
+            + detail.source.capacity()
+            + detail.recipe.capacity()
+            + detail.principal.capacity()
+            + detail.finding_reference.capacity()
+            + detail
+                .targets
+                .capacity()
+                .saturating_mul(size_of::<proto::TraceTarget>())
+            + detail
+                .unresolved
+                .capacity()
+                .saturating_mul(size_of::<proto::TraceParticipant>());
+        if let Some(receipt) = &detail.receipt {
+            bytes = bytes
+                .saturating_add(receipt.trace_id.capacity() + receipt.source_sha256.capacity());
+        }
+        for target in &detail.targets {
+            bytes = bytes.saturating_add(
+                target.node_boot_id.capacity()
+                    + target.binding_id.capacity()
+                    + target.node_id.capacity()
+                    + target.cluster_uid.capacity()
+                    + target.namespace_uid.capacity()
+                    + target.pod_uid.capacity()
+                    + target.container_id.capacity()
+                    + target.container_name.capacity()
+                    + target.namespace_name.capacity()
+                    + target.pod_name.capacity(),
+            );
+        }
+        for participant in &detail.unresolved {
+            bytes = bytes
+                .saturating_add(participant.fact_digest.capacity() + participant.state.capacity());
+        }
+        if let Some(selection) = &detail.requested {
+            bytes = bytes.saturating_add(
+                selection.target.capacity()
+                    + selection.cluster.capacity()
+                    + selection.container.capacity()
+                    + selection
+                        .node_ids
+                        .capacity()
+                        .saturating_mul(size_of::<String>())
+                    + selection
+                        .node_ids
+                        .iter()
+                        .map(String::capacity)
+                        .sum::<usize>(),
+            );
+        }
+        bytes
+    }
+
+    pub(super) fn rows(
+        batches: &[RecordBatch],
+        snapshot: &ArrowSnapshot,
+        positions: &[StorePositionV1],
+        evaluated_utc_ns: u64,
+        limited: bool,
+    ) -> Result<proto::QueryRows, Status> {
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(batches.iter().map(RecordBatch::num_rows).sum())
+            .map_err(|_| Status::resource_exhausted("The query row allocation failed."))?;
+        for batch in batches {
+            for row in 0..batch.num_rows() {
+                let mut values = Vec::new();
+                values.try_reserve_exact(batch.num_columns()).map_err(|_| {
+                    Status::resource_exhausted("The query value allocation failed.")
+                })?;
+                for array in batch.columns() {
+                    let scalar = ScalarValue::try_from_array(array, row).map_err(|_| {
+                        Status::unimplemented("The query Arrow type is unsupported.")
+                    })?;
+                    values.push(Self::value(scalar)?);
+                }
+                rows.push(proto::QueryRow { values });
+            }
+        }
         Ok(proto::QueryRows {
-            rows: std::mem::take(&mut result.rows)
-                .into_iter()
-                .map(Self::row)
-                .collect::<Result<_, _>>()?,
-            positions: std::mem::take(&mut result.positions)
-                .into_iter()
-                .map(Self::position)
-                .collect(),
-            limited: result.limited,
-            evaluated_utc_ns: result.evaluated_utc_ns,
-            missing_contexts: std::mem::take(&mut result.missing_contexts)
-                .into_iter()
+            rows,
+            positions: positions.iter().copied().map(Self::position).collect(),
+            limited,
+            evaluated_utc_ns,
+            missing_contexts: snapshot
+                .page
+                .extraction
+                .missing_contexts
+                .iter()
+                .cloned()
                 .map(Self::context)
                 .collect(),
-            graph_traversal: result.graph_traversal.take().map(|receipt| {
+            graph_traversal: snapshot.page.extraction.graph_traversal().map(|receipt| {
                 proto::GraphTraversalReceipt {
-                    result_ids: receipt.result_ids,
+                    result_ids: receipt.result_ids.clone(),
                     unique_subject_count: receipt.unique_subject_count as u64,
                     versioned_subject_count: receipt.versioned_subject_count as u64,
                     relationship_count: receipt.relationship_count as u64,
@@ -261,7 +552,8 @@ impl WireFrame {
         })
     }
 
-    fn row(values: Vec<Value>) -> Result<proto::QueryRow, Status> {
+    #[cfg(test)]
+    fn scalar_row(values: Vec<ScalarValue>) -> Result<proto::QueryRow, Status> {
         Ok(proto::QueryRow {
             values: values
                 .into_iter()
@@ -270,15 +562,24 @@ impl WireFrame {
         })
     }
 
-    fn column(column: QueryColumn) -> proto::QueryColumn {
+    pub(super) fn column(column: &Field) -> proto::QueryColumn {
+        let metadata = column.metadata();
+        let property = |name: &str, default: &str| {
+            metadata
+                .get(name)
+                .map_or_else(|| default.to_owned(), Clone::clone)
+        };
         proto::QueryColumn {
-            name: column.name,
-            data_type: column.data_type,
-            units: column.units.into(),
-            null_meaning: column.null_meaning.into(),
-            join_keys: column.join_keys.into(),
-            owner: column.owner.into(),
-            readiness: column.readiness.into(),
+            name: column.name().clone(),
+            data_type: column.data_type().to_string(),
+            units: property("araphor.units", ""),
+            null_meaning: property(
+                "araphor.null_meaning",
+                if column.is_nullable() { "SQL NULL" } else { "" },
+            ),
+            join_keys: property("araphor.join_keys", ""),
+            owner: property("araphor.owner", "query"),
+            readiness: property("araphor.readiness", "available"),
         }
     }
 
@@ -298,7 +599,7 @@ impl WireFrame {
         }
     }
 
-    pub(super) fn bookmark(checkpoint: Option<&QueryCheckpoint>) -> Result<Vec<u8>, Status> {
+    pub(super) fn bookmark(checkpoint: Option<&Cursor>) -> Result<Vec<u8>, Status> {
         checkpoint.map_or_else(
             || Ok(Vec::new()),
             |checkpoint| {
@@ -309,7 +610,7 @@ impl WireFrame {
         )
     }
 
-    pub(super) fn coverage(coverage: &QueryCoverage) -> proto::QueryCoverage {
+    pub(super) fn coverage(coverage: &AnalysisSourceSnapshotV1) -> proto::QueryCoverage {
         let receipt = &coverage.receipt;
         let identity = &receipt.identity;
         proto::QueryCoverage {
@@ -325,10 +626,15 @@ impl WireFrame {
             contiguous_cursor: receipt.contiguous_cursor,
             coverage_revision: receipt.coverage_revision,
             retained_floor: receipt.retained_floor,
-            state: match coverage.state {
-                QueryCoverageState::Unknown => "Unknown",
-                QueryCoverageState::Reported => "Reported",
-                QueryCoverageState::Gapped => "Gapped",
+            state: if !coverage.expired.is_empty()
+                || !coverage.recovery.is_empty()
+                || !coverage.pending.is_empty()
+            {
+                "Gapped"
+            } else if coverage.coverage_report.is_some() {
+                "Reported"
+            } else {
+                "Unknown"
             }
             .into(),
             expired: coverage.expired.iter().copied().map(Self::gap).collect(),
@@ -350,29 +656,29 @@ impl WireFrame {
 mod tests {
     use super::*;
     use araphor_data::{AnalysisSourceReceiptV1, EvidenceIntakeIdentityV1};
-    use duckdb::types::Decimal;
     use proto::query_value::Kind;
 
     #[test]
     fn integer_precision_is_exact() -> Result<(), Status> {
         for (native, kind) in [
-            (Value::BigInt(i64::MIN), Kind::Signed(i64::MIN)),
-            (Value::UBigInt(u64::MAX), Kind::Unsigned(u64::MAX)),
+            (ScalarValue::Int64(Some(i64::MIN)), Kind::Signed(i64::MIN)),
             (
-                Value::HugeInt(i128::MIN),
-                Kind::Integer128(i128::MIN.to_string()),
-            ),
-            (
-                Value::HugeInt(i128::MAX),
-                Kind::Integer128(i128::MAX.to_string()),
-            ),
-            (
-                Value::UHugeInt(u128::MAX),
-                Kind::Unsigned128(u128::MAX.to_string()),
+                ScalarValue::UInt64(Some(u64::MAX)),
+                Kind::Unsigned(u64::MAX),
             ),
         ] {
-            assert_eq!(WireFrame::value(native)?.kind, Some(kind));
+            assert_eq!(Wire::value(native)?.kind, Some(kind));
         }
+        for value in [i128::MIN, i128::MAX] {
+            assert_eq!(
+                Wire::signed128(value).kind,
+                Some(Kind::Integer128(value.to_string()))
+            );
+        }
+        assert_eq!(
+            Wire::unsigned128(u128::MAX).kind,
+            Some(Kind::Unsigned128(u128::MAX.to_string()))
+        );
         let parameters = Parameters::try_from(vec![
             proto::QueryValue {
                 kind: Some(Kind::Signed(i64::MIN)),
@@ -383,7 +689,10 @@ mod tests {
         ])?;
         assert_eq!(
             parameters.0,
-            vec![Value::BigInt(i64::MIN), Value::UBigInt(u64::MAX)]
+            vec![
+                ScalarValue::Int64(Some(i64::MIN)),
+                ScalarValue::UInt64(Some(u64::MAX))
+            ]
         );
         Ok(())
     }
@@ -391,25 +700,23 @@ mod tests {
     #[test]
     fn scalar_payload_is_exact() -> Result<(), Box<dyn std::error::Error>> {
         let values = vec![
-            Value::Null,
-            Value::Boolean(false),
-            Value::Text("a\0b".into()),
-            Value::Blob(vec![0, 128, 255]),
-            Value::Decimal(Decimal::new(38, 5, -12345)?),
-            Value::Timestamp(TimeUnit::Nanosecond, -1234),
-            Value::Date32(i32::MIN),
-            Value::Time64(TimeUnit::Microsecond, i64::MAX),
-            Value::Interval {
-                months: -2,
-                days: 3,
-                nanos: i64::MIN,
-            },
+            ScalarValue::Null,
+            ScalarValue::Boolean(Some(false)),
+            ScalarValue::Utf8(Some("a\0b".into())),
+            ScalarValue::Binary(Some(vec![0, 128, 255])),
+            ScalarValue::Decimal128(Some(-12345), 38, 5),
+            ScalarValue::TimestampNanosecond(Some(-1234), None),
+            ScalarValue::Date32(Some(i32::MIN)),
+            ScalarValue::Time64Microsecond(Some(i64::MAX)),
+            ScalarValue::new_interval_mdn(-2, 3, i64::MIN),
         ];
-        let (Value::Text(text), Value::Blob(binary)) = (&values[2], &values[3]) else {
+        let (ScalarValue::Utf8(Some(text)), ScalarValue::Binary(Some(binary))) =
+            (&values[2], &values[3])
+        else {
             return Err("scalar buffers absent".into());
         };
         let owned = (text.as_ptr(), binary.as_ptr());
-        let row = WireFrame::row(values)?;
+        let row = Wire::scalar_row(values)?;
         let (Some(Kind::Text(text)), Some(Kind::Binary(binary))) =
             (&row.values[2].kind, &row.values[3].kind)
         else {
@@ -462,7 +769,12 @@ mod tests {
                 },
             ]
         );
-        assert!(WireFrame::value(Value::List(vec![Value::Null])).is_err());
+        assert!(Wire::value(ScalarValue::List(ScalarValue::new_list(
+            &[ScalarValue::Null],
+            &DataType::Null,
+            true
+        )))
+        .is_err());
         Ok(())
     }
 
@@ -483,9 +795,13 @@ mod tests {
                 kind: Some(Kind::Null(true)),
             },
         ])?;
-        assert!(matches!(&parameters.0[0], Value::Text(value) if value.as_ptr() == text_ptr));
-        assert!(matches!(&parameters.0[1], Value::Blob(value) if value.as_ptr() == binary_ptr));
-        assert_eq!(parameters.0[2], Value::Null);
+        assert!(
+            matches!(&parameters.0[0], ScalarValue::Utf8(Some(value)) if value.as_ptr() == text_ptr)
+        );
+        assert!(
+            matches!(&parameters.0[1], ScalarValue::Binary(Some(value)) if value.as_ptr() == binary_ptr)
+        );
+        assert_eq!(parameters.0[2], ScalarValue::Null);
         Ok(())
     }
 
@@ -498,23 +814,137 @@ mod tests {
             Some(Kind::Real(f64::INFINITY)),
             Some(Kind::Integer128("1".into())),
             Some(Kind::Unsigned128("1".into())),
-            Some(Kind::Decimal(proto::QueryDecimal {
-                width: 4,
-                scale: 1,
-                unscaled: "1".into(),
-            })),
-            Some(Kind::Date(1)),
-            Some(Kind::Time(proto::QueryTimestamp {
-                value: 1,
-                unit: "microsecond".into(),
-            })),
-            Some(Kind::Interval(proto::QueryInterval {
-                months: 1,
-                days: 1,
-                nanoseconds: 1,
-            })),
         ] {
             assert!(Parameters::try_from(vec![proto::QueryValue { kind }]).is_err());
+        }
+    }
+
+    #[test]
+    fn native_parameters_round_trip() -> Result<(), Status> {
+        for (kind, native_type) in [
+            (
+                Kind::Decimal(proto::QueryDecimal {
+                    width: 38,
+                    scale: 5,
+                    unscaled: format!("-{}", "9".repeat(38)),
+                }),
+                DataType::Decimal128(38, 5),
+            ),
+            (
+                Kind::Decimal(proto::QueryDecimal {
+                    width: 76,
+                    scale: 76,
+                    unscaled: "9".repeat(76),
+                }),
+                DataType::Decimal256(76, 76),
+            ),
+            (Kind::Date(i32::MIN), DataType::Date32),
+            (Kind::Date(i32::MAX), DataType::Date32),
+            (
+                Kind::Time(proto::QueryTimestamp {
+                    value: 86_399,
+                    unit: "second".into(),
+                }),
+                DataType::Time32(TimeUnit::Second),
+            ),
+            (
+                Kind::Time(proto::QueryTimestamp {
+                    value: 86_399_999,
+                    unit: "millisecond".into(),
+                }),
+                DataType::Time32(TimeUnit::Millisecond),
+            ),
+            (
+                Kind::Time(proto::QueryTimestamp {
+                    value: 86_399_999_999,
+                    unit: "microsecond".into(),
+                }),
+                DataType::Time64(TimeUnit::Microsecond),
+            ),
+            (
+                Kind::Time(proto::QueryTimestamp {
+                    value: 86_399_999_999_999,
+                    unit: "nanosecond".into(),
+                }),
+                DataType::Time64(TimeUnit::Nanosecond),
+            ),
+            (
+                Kind::Interval(proto::QueryInterval {
+                    months: i32::MIN,
+                    days: i32::MAX,
+                    nanoseconds: i64::MIN,
+                }),
+                DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano),
+            ),
+        ] {
+            let wire = proto::QueryValue { kind: Some(kind) };
+            let mut parameters = Parameters::try_from(vec![wire.clone()])?.0;
+            let native = parameters
+                .pop()
+                .ok_or_else(|| Status::internal("The native parameter is absent."))?;
+            assert_eq!(native.data_type(), native_type);
+            assert_eq!(Wire::value(native)?, wire);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_parameter_bounds() {
+        for (width, scale, unscaled) in [
+            (0, 0, "0".into()),
+            (77, 0, "0".into()),
+            (256, 0, "0".into()),
+            (4, 5, "1".into()),
+            (4, u32::MAX, "1".into()),
+            (2, 0, "100".into()),
+            (38, 0, "9".repeat(39)),
+            (76, 0, "9".repeat(77)),
+            (4, 0, "1.5".into()),
+            (4, 0, "".into()),
+        ] {
+            let error = Parameters::try_from(vec![proto::QueryValue {
+                kind: Some(Kind::Decimal(proto::QueryDecimal {
+                    width,
+                    scale,
+                    unscaled,
+                })),
+            }])
+            .err();
+            assert_eq!(
+                error.map(|error| error.code()),
+                Some(tonic::Code::InvalidArgument)
+            );
+        }
+        for (unit, end) in [
+            ("second", 86_400),
+            ("millisecond", 86_400_000),
+            ("microsecond", 86_400_000_000),
+            ("nanosecond", 86_400_000_000_000),
+            ("boot", 1),
+        ] {
+            for value in [-1, end, i64::MAX] {
+                let error = Parameters::try_from(vec![proto::QueryValue {
+                    kind: Some(Kind::Time(proto::QueryTimestamp {
+                        value,
+                        unit: unit.into(),
+                    })),
+                }])
+                .err();
+                assert_eq!(
+                    error.map(|error| error.code()),
+                    Some(tonic::Code::InvalidArgument)
+                );
+            }
+        }
+        for kind in [
+            Kind::Integer128(i128::MIN.to_string()),
+            Kind::Unsigned128(u128::MAX.to_string()),
+        ] {
+            let error = Parameters::try_from(vec![proto::QueryValue { kind: Some(kind) }]).err();
+            assert_eq!(
+                error.map(|error| error.code()),
+                Some(tonic::Code::Unimplemented)
+            );
         }
     }
 
@@ -524,20 +954,20 @@ mod tests {
             proto::QueryValue {
                 kind: Some(Kind::Null(true))
             };
-            QuerySql::PARAMETER_COUNT
+            Planner::PARAMETER_COUNT
         ];
         assert_eq!(
             Parameters::try_from(values)?.0.len(),
-            QuerySql::PARAMETER_COUNT
+            Planner::PARAMETER_COUNT
         );
         let values = vec![
             proto::QueryValue {
                 kind: Some(Kind::Null(true))
             };
-            QuerySql::PARAMETER_COUNT + 1
+            Planner::PARAMETER_COUNT + 1
         ];
         assert!(Parameters::try_from(values).is_err());
-        let size = QuerySql::PARAMETER_BYTES - size_of::<Value>();
+        let size = Planner::PARAMETER_BYTES - size_of::<ScalarValue>();
         assert!(Parameters::try_from(vec![proto::QueryValue {
             kind: Some(Kind::Binary(vec![0; size])),
         }])
@@ -552,10 +982,10 @@ mod tests {
     #[test]
     fn timestamp_parameters_are_exact() -> Result<(), Status> {
         for (unit, value, native) in [
-            ("second", -9, TimeUnit::Second),
-            ("millisecond", -9, TimeUnit::Millisecond),
+            ("second", i64::MAX, TimeUnit::Second),
+            ("millisecond", i64::MIN, TimeUnit::Millisecond),
             ("microsecond", i64::MAX, TimeUnit::Microsecond),
-            ("nanosecond", -9000, TimeUnit::Nanosecond),
+            ("nanosecond", -1, TimeUnit::Nanosecond),
         ] {
             let parameters = Parameters::try_from(vec![proto::QueryValue {
                 kind: Some(Kind::Timestamp(proto::QueryTimestamp {
@@ -563,44 +993,45 @@ mod tests {
                     unit: unit.into(),
                 })),
             }])?;
-            assert_eq!(parameters.0, vec![Value::Timestamp(native, value)]);
+            assert_eq!(
+                parameters.0,
+                vec![match native {
+                    TimeUnit::Second => ScalarValue::TimestampSecond(Some(value), None),
+                    TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(value), None),
+                    TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(value), None),
+                    TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(value), None),
+                }]
+            );
         }
-        for (unit, value) in [
-            ("boot", 1),
-            ("second", i64::MAX),
-            ("millisecond", i64::MIN),
-            ("nanosecond", -1),
-        ] {
-            assert!(Parameters::try_from(vec![proto::QueryValue {
-                kind: Some(Kind::Timestamp(proto::QueryTimestamp {
-                    value,
-                    unit: unit.into()
-                })),
-            }])
-            .is_err());
-        }
+        assert!(Parameters::try_from(vec![proto::QueryValue {
+            kind: Some(Kind::Timestamp(proto::QueryTimestamp {
+                value: 1,
+                unit: "boot".into()
+            })),
+        }])
+        .is_err());
         Ok(())
     }
 
     #[test]
     fn metadata_fields_are_exact() {
-        let column = QueryColumn {
-            name: "cursor".into(),
-            data_type: "UBIGINT".into(),
-            units: "source cursor",
-            null_meaning: "unavailable",
-            join_keys: "source_id,cpu_id",
-            owner: "source receipt",
-            readiness: "Reported",
-        };
-        let owned = (column.name.as_ptr(), column.data_type.as_ptr());
-        let column = WireFrame::column(column);
-        assert_eq!((column.name.as_ptr(), column.data_type.as_ptr()), owned);
+        let source = Field::new("cursor", DataType::UInt64, false).with_metadata(
+            std::collections::HashMap::from([
+                ("araphor.units".into(), "source cursor".into()),
+                ("araphor.null_meaning".into(), "unavailable".into()),
+                ("araphor.join_keys".into(), "source_id,cpu_id".into()),
+                ("araphor.owner".into(), "source receipt".into()),
+                ("araphor.readiness".into(), "Reported".into()),
+            ]),
+        );
+        let owned = source.name().as_ptr();
+        let column = Wire::column(&source);
+        assert_eq!(source.name().as_ptr(), owned);
         assert_eq!(
             column,
             proto::QueryColumn {
                 name: "cursor".into(),
-                data_type: "UBIGINT".into(),
+                data_type: "UInt64".into(),
                 units: "source cursor".into(),
                 null_meaning: "unavailable".into(),
                 join_keys: "source_id,cpu_id".into(),
@@ -608,7 +1039,7 @@ mod tests {
                 readiness: "Reported".into(),
             }
         );
-        let position = WireFrame::position(StorePositionV1 {
+        let position = Wire::position(StorePositionV1 {
             commit_revision: u64::MAX,
             ordinal: u32::MAX,
         });
@@ -626,7 +1057,7 @@ mod tests {
             context.entity_key.as_ptr(),
             context.lifetime_key.as_ptr(),
         );
-        let context = WireFrame::context(context);
+        let context = Wire::context(context);
         assert_eq!(
             (
                 context.owner_id.as_ptr(),
@@ -647,15 +1078,8 @@ mod tests {
     }
 
     #[test]
-    fn bookmark_fields_are_exact() -> Result<(), Box<dyn std::error::Error>> {
-        let encoded = br#"{"schema_version":1,"store_uuid":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"recovery_epoch":9,"operation":"Append","position":{"commit_revision":18446744073709551615,"ordinal":4294967295},"read_revision":18446744073709551615}"#;
-        let checkpoint = QueryCheckpoint::try_from(encoded.as_slice())?;
-        assert_eq!(WireFrame::bookmark(Some(&checkpoint))?, encoded);
-        assert_eq!(checkpoint.read_revision(), u64::MAX);
-        let position = WireFrame::position(checkpoint.position().ok_or("missing position")?);
-        assert_eq!(position.commit_revision, u64::MAX);
-        assert_eq!(position.ordinal, u32::MAX);
-        assert!(WireFrame::bookmark(None)?.is_empty());
+    fn empty_bookmark_is_empty() -> Result<(), Status> {
+        assert!(Wire::bookmark(None)?.is_empty());
         Ok(())
     }
 
@@ -666,7 +1090,7 @@ mod tests {
             last_cursor: 9,
             commit_revision: u64::MAX,
         };
-        let mut coverage = QueryCoverage {
+        let mut coverage = AnalysisSourceSnapshotV1 {
             receipt: AnalysisSourceReceiptV1 {
                 identity: EvidenceIntakeIdentityV1 {
                     tenant_id: [1; 16],
@@ -684,9 +1108,9 @@ mod tests {
             expired: vec![gap],
             recovery: vec![gap],
             pending: vec![gap],
-            state: QueryCoverageState::Gapped,
+            coverage_report: None,
         };
-        let wire = WireFrame::coverage(&coverage);
+        let wire = Wire::coverage(&coverage);
         assert_eq!(
             wire.source,
             Some(proto::SourceIdentity {
@@ -703,15 +1127,15 @@ mod tests {
         assert_eq!(wire.coverage_revision, 10);
         assert_eq!(wire.retained_floor, 2);
         assert_eq!(wire.state, "Gapped");
-        assert_eq!(wire.expired, vec![WireFrame::gap(gap)]);
+        assert_eq!(wire.expired, vec![Wire::gap(gap)]);
         assert_eq!(wire.recovery, wire.expired);
         assert_eq!(wire.pending, wire.expired);
-        for (state, expected) in [
-            (QueryCoverageState::Unknown, "Unknown"),
-            (QueryCoverageState::Reported, "Reported"),
-        ] {
-            coverage.state = state;
-            assert_eq!(WireFrame::coverage(&coverage).state, expected);
+        coverage.expired.clear();
+        coverage.recovery.clear();
+        coverage.pending.clear();
+        for (report, expected) in [(None, "Unknown"), (Some(vec![1]), "Reported")] {
+            coverage.coverage_report = report;
+            assert_eq!(Wire::coverage(&coverage).state, expected);
         }
     }
 }

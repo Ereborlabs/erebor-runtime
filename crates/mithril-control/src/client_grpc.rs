@@ -4,10 +4,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use araphor_data::{AnalysisPackageOwner, AnalysisStore, QueryLimits, QueryOwner};
+use araphor_analysis::AnalysisPackageOwner;
+use araphor_data::AnalysisStore;
+use araphor_query::execution::{Engine, Limits};
 use erebor_runtime_error::StatusCode;
 use erebor_runtime_ipc::araphor as proto;
-use futures_util::{Stream, StreamExt as _};
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use tonic::{Request, Response, Status};
 
@@ -24,10 +26,20 @@ mod tests;
 
 pub type ClientStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ClientGrpcConfig {
-    pub query: QueryLimits,
+    pub query: Limits,
+    pub output_timeout: Duration,
+}
+
+impl Default for ClientGrpcConfig {
+    fn default() -> Self {
+        Self {
+            query: Limits::default(),
+            output_timeout: Duration::from_secs(10),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -40,7 +52,7 @@ pub struct ClientGrpcOwner {
 #[derive(Clone)]
 struct ClientData {
     store: Arc<AnalysisStore>,
-    query: Arc<QueryOwner>,
+    query: Arc<Engine>,
     packages: Arc<AnalysisPackageOwner>,
     output_timeout: Duration,
 }
@@ -51,7 +63,17 @@ impl ClientGrpcOwner {
         auth: Arc<ClientAuth>,
         config: ClientGrpcConfig,
     ) -> crate::Result<Self> {
-        let output_timeout = config.query.output_timeout;
+        if config.output_timeout.is_zero()
+            || config.output_timeout > Duration::from_secs(10)
+            || config.query.output_rows > 200
+            || config.query.output_bytes > 1024 * 1024
+        {
+            return Err(crate::error::InvalidConfigurationSnafu {
+                reason: "client query limits are invalid",
+            }
+            .build());
+        }
+        let output_timeout = config.output_timeout;
         let data = control
             .analysis_store()
             .map(|store| {
@@ -82,38 +104,6 @@ impl ClientGrpcOwner {
         self.data
             .as_ref()
             .ok_or_else(|| Status::unavailable("Retained data storage is unavailable."))
-    }
-
-    fn output_stream<T, S>(&self, inner: S) -> Result<ClientStream<T>, Status>
-    where
-        T: Send + 'static,
-        S: Stream<Item = Result<T, Status>> + Send + 'static,
-    {
-        let timeout = self.data()?.output_timeout;
-        let stream = futures_util::stream::unfold(
-            (Some(Box::pin(inner)), None),
-            move |(inner, deadline)| async move {
-                let mut inner = inner?;
-                // Check the output deadline only when the client requests another frame.
-                if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
-                    drop(inner);
-                    return Some((
-                        Err(query::QueryTransport::code(
-                            araphor_data::QueryErrorCode::OutputTimeout,
-                        )),
-                        (None, None),
-                    ));
-                }
-                let item = inner.next().await?;
-                let state = if item.is_ok() {
-                    (Some(inner), Some(tokio::time::Instant::now() + timeout))
-                } else {
-                    (None, None)
-                };
-                Some((item, state))
-            },
-        );
-        Ok(Box::pin(stream.fuse()))
     }
 
     async fn authenticate<T>(
@@ -196,9 +186,8 @@ impl proto::araphor_client_service_server::AraphorClientService for ClientGrpcOw
         request: Request<proto::QueryRequest>,
     ) -> Result<Response<Self::QueryStream>, Status> {
         let access = self.authenticate(&request, false).await?;
-        self.query_request(request.into_inner(), access)
-            .and_then(|stream| self.output_stream(stream))
-            .map(Response::new)
+        let stream = self.query_request(request.into_inner(), access).await?;
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn submit_trace(
@@ -225,10 +214,8 @@ impl proto::araphor_client_service_server::AraphorClientService for ClientGrpcOw
         request: Request<proto::WatchTraceRequest>,
     ) -> Result<Response<Self::WatchTraceStream>, Status> {
         let access = self.authenticate(&request, false).await?;
-        self.watch(request.into_inner(), access)
-            .await
-            .and_then(|stream| self.output_stream(stream))
-            .map(Response::new)
+        let stream = self.watch(request.into_inner(), access).await?;
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn cancel_trace(

@@ -1,7 +1,7 @@
 use super::*;
 
 impl AnalysisStore {
-    pub(crate) fn graph_notice(
+    pub fn graph_notice(
         &self,
         scope: &ProcessorScopeV1,
         result_id: &str,
@@ -37,7 +37,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn mark_notice(
+    pub fn mark_notice(
         &self,
         profile: &crate::DiscoveryProfileV1,
         revision: u64,
@@ -54,7 +54,7 @@ impl AnalysisStore {
         )
     }
 
-    pub(crate) fn mark_graph_notice(
+    pub fn mark_graph_notice(
         &self,
         scope: &ProcessorScopeV1,
         result_id: &str,
@@ -126,6 +126,3 @@ impl AnalysisStore {
         self.commit_metadata(transaction, "commit analysis notice")
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,12 +1,14 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
+use araphor_analysis::{AnalysisPackageOwner, InstalledAnalysis};
 use araphor_analysis_builtins::discovery as builtin;
 use araphor_analysis_sdk as sdk;
+use araphor_data::PackageAuthorization;
 use araphor_data::{
-    AnalysisPackageOwner, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
-    InstalledAnalysis, PackageActionV1, PackageArtifactV1, PackageAuthorization, PackageBundleV1,
-    PackageGrantV1, PackageImplementationV1, PackageRequestV1, QueryLimits, QueryOwner,
+    AnalysisReadControl, AnalysisSelectionV1, AnalysisStore, PackageActionV1, PackageArtifactV1,
+    PackageBundleV1, PackageGrantV1, PackageImplementationV1, PackageRequestV1,
 };
+use araphor_query::execution::{Engine, Limits};
 use sdk::arrow_array::cast::AsArray as _;
 use tokio::sync::watch;
 
@@ -67,8 +69,8 @@ impl ContextComponent {
             digest: bundle.digest()?,
             changes: watch::channel(1).0,
         });
-        let query = Arc::new(QueryOwner::new(store.clone(), QueryLimits::default())?);
-        let owner = Arc::new(AnalysisPackageOwner::new(store, query, authority)?);
+        let query = Engine::new(store, Limits::default())?;
+        let owner = Arc::new(AnalysisPackageOwner::new(query, authority)?);
         owner
             .execute(
                 grant,
@@ -143,7 +145,9 @@ impl ContextComponent {
 
 impl Authority {
     fn denied() -> araphor_data::Error {
-        araphor_data::Error::QueryDenied {
+        araphor_data::Error::Package {
+            code: araphor_data::PackageErrorCodeV1::Denied,
+            field: "package authority",
             location: snafu::Location::default(),
         }
     }

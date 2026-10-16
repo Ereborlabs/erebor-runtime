@@ -1,6 +1,6 @@
 //! Durable data owners shared by embedded and remote Araphor deployments.
 
-mod analysis;
+pub mod analysis;
 mod canonical;
 mod digest;
 mod discovery;
@@ -9,14 +9,18 @@ mod evidence;
 mod graph;
 mod notification;
 mod package;
-mod query;
 mod trace;
 mod workload;
 
 pub use canonical::encode_value;
-pub use digest::DiscoveryDigestV1;
+pub use digest::{DiscoveryDigestV1, InputRevision};
 pub use discovery::*;
 pub(crate) use error::*;
+pub use error::{
+    AnalysisContractSnafu, DiscoveryConflictSnafu, DiscoveryEncodingSnafu, DiscoveryInvalidSnafu,
+    EvidenceDecodeSnafu, GraphEncodingSnafu, GraphInvalidSnafu, NotificationEncodingSnafu,
+    NotificationSnafu, PackageEncodingSnafu, PackageSnafu, RetainedRangeExpiredSnafu,
+};
 pub use error::{Error, Result};
 pub use evidence::{
     CoverageCounters, CoverageInterval, CoverageReport, EvidenceDecisionContext,
@@ -26,14 +30,6 @@ pub use evidence::{
 pub use graph::*;
 pub use notification::*;
 pub use package::*;
-pub use query::{
-    Column, GraphAnalysisInputsV1, QueryAuthorization, QueryBinding, QueryCheckpoint, QueryClock,
-    QueryColumn, QueryCoverage, QueryCoverageRows, QueryCoverageState, QueryErrorCode, QueryFrame,
-    QueryGrant, QueryHealth, QueryLimits, QueryMetadata, QueryOperation, QueryOwner, QueryPayload,
-    QueryPlan, QueryResult, QuerySql, QueryStream, QueryTemplate, QueryTerminalReason,
-    SqlDatasetOutputV1, SqlModelOutputV1, SqlModelV1, SqlReasonV1, SystemQueryClock, WasmLimits,
-    QUERY_CHECKPOINT_BYTES, QUERY_SCHEMA_VERSION,
-};
 pub use trace::{
     TraceBatchV1, TraceCleanupV1, TraceFrameKindV1, TraceFrameV1, TraceIdentityV1,
     TraceMeasurementV1, TraceRecipeManifestV1, TraceRecipeV1, TraceSourceV1, TraceTerminalReasonV1,
@@ -44,18 +40,19 @@ pub use workload::{ContainerKindV1, KubernetesWorkloadIdentityV1, WorkloadTarget
 
 pub use analysis::{
     AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,
-    AnalysisContextVersionV1, AnalysisExtractionV1, AnalysisGapV1, AnalysisInputPageV1,
-    AnalysisInputV1, AnalysisPositionPageV1, AnalysisProcessorResultV1, AnalysisReadControl,
-    AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1, AnalysisRelationV1,
+    AnalysisContextVersionV1, AnalysisExtractLimits, AnalysisExtractionV1, AnalysisGapV1,
+    AnalysisInputV1, AnalysisPositionPageV1, AnalysisProcessorResultV1, AnalysisProjection,
+    AnalysisReadControl, AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1,
     AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSelectionV1, AnalysisSourceReceiptV1,
     AnalysisSourceSnapshotV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
     AnalysisStreamIdentityV1, AnalysisWitnessV1, ContextSensitivityV1, EvidenceRetentionOwner,
     EvidenceStoreOutcomeV1, ProcessorClassV1, ProcessorHealthV1, ProcessorRetirementV1,
-    ProcessorScopeV1, ProcessorStateV1, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1,
-    SegmentFile, Selection, StorageHealthV1, StorageLimitsV1, StorageUsageV1, StorePositionV1,
-    TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceOutputPageV1, TraceOutputReceiptV1,
-    TraceStateV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1, WitnessUsageV1,
-    ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION, MAX_EVIDENCE_SEGMENT_BYTES,
+    ProcessorScopeV1, ProcessorStateV1, ProjectionSink, RetentionLimitsV1, RetentionResultV1,
+    RetentionSweepV1, SegmentFile, Selection, StorageHealthV1, StorageLimitsV1, StorageUsageV1,
+    StorePositionV1, TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceOutputPageV1,
+    TraceOutputReceiptV1, TraceStateV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
+    WitnessUsageV1, ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
+    MAX_EVIDENCE_SEGMENT_BYTES,
 };
 
 pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;

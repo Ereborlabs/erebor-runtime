@@ -9,7 +9,7 @@ use crate::{AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 impl AnalysisStore {
     pub(super) const RESULT_READ_BYTES: u64 = 64 * 1024 * 1024;
 
-    pub(crate) fn package_current(
+    pub fn package_current(
         &self,
         active: &PackageActivationV1,
         now: u64,
@@ -85,7 +85,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn package_revision(
+    pub fn package_revision(
         &self,
         tenant: [u8; 16],
         package: &str,
@@ -132,8 +132,8 @@ impl AnalysisStore {
         .transpose()
     }
 
-    #[cfg(test)]
-    pub(crate) fn package_revisions(&self, tenant: [u8; 16]) -> Result<Vec<PackageRevisionV1>> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn package_revisions(&self, tenant: [u8; 16]) -> Result<Vec<PackageRevisionV1>> {
         self.read_snapshot(|reader| {
             let mut statement = reader
                 .prepare(
@@ -167,14 +167,11 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn package_activation(
-        &self,
-        key: &PackageKeyV1,
-    ) -> Result<Option<PackageActivationV1>> {
+    pub fn package_activation(&self, key: &PackageKeyV1) -> Result<Option<PackageActivationV1>> {
         self.read_snapshot(|reader| Self::activation_from(reader, key))
     }
 
-    pub(crate) fn package_installed(&self, key: &PackageKeyV1) -> Result<bool> {
+    pub fn package_installed(&self, key: &PackageKeyV1) -> Result<bool> {
         self.read_snapshot(|reader| {
             reader
                 .query_row(
@@ -194,7 +191,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn package_activations(
+    pub fn package_activations(
         &self,
         tenant: [u8; 16],
         scope: &str,
@@ -221,7 +218,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn package_activation_page(
+    pub fn package_activation_page(
         &self,
         after: Option<&PackageKeyV1>,
     ) -> Result<Vec<PackageActivationV1>> {
@@ -263,11 +260,7 @@ impl AnalysisStore {
         ).optional().context(AnalysisDatabaseSnafu { operation: "read package activation" })
     }
 
-    pub(crate) fn package_result(
-        &self,
-        tenant: [u8; 16],
-        id: &str,
-    ) -> Result<Option<PackageResultV1>> {
+    pub fn package_result(&self, tenant: [u8; 16], id: &str) -> Result<Option<PackageResultV1>> {
         self.read_snapshot(|reader| Self::package_result_from(reader, tenant, id, &self.root))
     }
 
@@ -311,7 +304,7 @@ impl AnalysisStore {
         .transpose()
     }
 
-    pub(crate) fn package_results(&self, key: &PackageKeyV1) -> Result<Vec<PackageResultV1>> {
+    pub fn package_results(&self, key: &PackageKeyV1) -> Result<Vec<PackageResultV1>> {
         self.read_snapshot(|reader| {
             let bytes: u64 = reader.query_row("SELECT COALESCE(SUM(octet_length(r.datasets) + octet_length(r.checkpoint)
                 + octet_length(x.body) + octet_length(x.request_meta) + octet_length(r.commit_meta)), 0)::UBIGINT

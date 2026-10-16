@@ -5,7 +5,7 @@ use super::{PackageCommitV1, PackageResultRefV1};
 use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, AnalysisStore, JsonSnafu, Result};
 
 impl AnalysisStore {
-    pub(crate) fn commit_package(
+    pub fn commit_package(
         &self,
         input: &PackageCommitV1,
         check: impl FnOnce() -> Result<()>,

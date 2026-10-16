@@ -1,8 +1,9 @@
 use super::*;
+use crate::analysis::graph_rows::tests::fixture::CommitFixture;
 
 #[test]
 fn native_header_read_budget() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let fixture = CommitFixture::new()?;
     let encoded_header = GraphRows::encode(&fixture.snapshot)?;
     let mut headers = FindingHeaders::default();
     for id in ["first", "second"] {
@@ -17,12 +18,18 @@ fn native_header_read_budget() -> std::result::Result<(), Box<dyn std::error::Er
 
 #[test]
 fn native_header_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let mut fixture = CommitFixture::new()?;
     fixture.snapshot.packages[0].coverage_predicate = "x".repeat(1024 * 1024);
     fixture.add_findings(2)?;
     fixture.store.commit_graph(&fixture.request, true)?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
-    assert_eq!(fixture.owner.current_findings(tenant)?.len(), 3);
+    assert_eq!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?
+            .len(),
+        3
+    );
     let query = format!(
         "SELECT count(*)::UBIGINT, count(graph_header)::UBIGINT,
             sum(octet_length(graph_header))::UBIGINT FROM ({})",
@@ -51,7 +58,7 @@ fn native_header_once() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn native_finding_batches() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let mut fixture = CommitFixture::new()?;
     fixture.add_findings(257)?;
     fixture.store.commit_graph(&fixture.request, true)?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
@@ -90,7 +97,12 @@ fn native_finding_batches() -> std::result::Result<(), Box<dyn std::error::Error
         .cloned()
         .map(|finding| (fixture.request.result_id.clone(), finding))
         .collect::<Vec<_>>();
-    assert_eq!(fixture.owner.current_findings(tenant)?, expected);
+    assert_eq!(
+        fixture
+            .store
+            .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?,
+        expected
+    );
     let bytes = serde_json::to_vec(&expected[..257])?.len();
     assert_eq!(
         fixture
@@ -126,11 +138,13 @@ fn finding_shared_header_batch() {
 
 #[test]
 fn native_finding_fallback() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut fixture = crate::graph::tests::native_storage::CommitFixture::new()?;
+    let mut fixture = CommitFixture::new()?;
     fixture.add_findings(2)?;
     fixture.store.commit_graph(&fixture.request, true)?;
     let tenant = fixture.snapshot.scope.identity.tenant_id;
-    let expected = fixture.owner.current_findings(tenant)?;
+    let expected = fixture
+        .store
+        .graph_findings(tenant, None, None, usize::MAX, usize::MAX)?;
     let bytes = serde_json::to_vec(&expected[..2])?.len();
     for (after, points, bytes, wanted) in [
         (None, usize::MAX, bytes, &expected[..2]),

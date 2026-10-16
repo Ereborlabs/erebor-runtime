@@ -19,7 +19,7 @@ mod backup;
 mod capacity;
 mod connection;
 mod context;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 mod crash;
 mod dependencies;
 mod extraction;
@@ -39,26 +39,27 @@ mod retirement;
 mod schema;
 mod segment_file;
 mod segments;
+#[cfg(any(test, feature = "test-fixtures"))]
+mod test_support;
 mod trace;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
-pub(crate) use extraction::{
-    AnalysisExtractLimits, AnalysisProjection, ProjectionSink, RecordProjection,
-};
+pub use extraction::{AnalysisExtractLimits, AnalysisProjection, ProjectionSink};
 pub use extraction::{
-    AnalysisExtractionV1, AnalysisInputPageV1, AnalysisInputV1, AnalysisPositionPageV1,
-    AnalysisRelationV1, AnalysisSelectionV1, AnalysisSourceSnapshotV1, Selection,
+    AnalysisExtractionV1, AnalysisInputV1, AnalysisPositionPageV1, AnalysisSelectionV1,
+    AnalysisSourceSnapshotV1, Selection,
 };
+pub use graph_rows::CanonicalGraph;
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
-pub(crate) use notification::NotificationLookup;
-pub(crate) use packages::*;
+pub use notification::NotificationLookup;
+pub use packages::*;
 pub use progress::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisProcessorResultV1, AnalysisResultCommitV1,
     AnalysisResultReceiptV1, AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
-pub(crate) use progress::{PreparedProfile, MAX_RESULT_BYTES, MAX_RESULT_REFS};
+pub use progress::{PreparedProfile, MAX_RESULT_BYTES, MAX_RESULT_REFS};
 pub use quota::WitnessUsageV1;
 pub use raw::{AnalysisStreamIdentityV1, TraceOutputPageV1, TraceOutputReceiptV1};
 pub use read::AnalysisReadControl;
@@ -67,12 +68,12 @@ pub use retention::{
 };
 pub use retirement::ProcessorRetirementV1;
 pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
-pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceStateV1};
+pub use trace::{TraceBindingV1, TraceIntentPageV1, TraceIntentV1, TraceReadPermit, TraceStateV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 pub(crate) const NATIVE_MEMORY_BYTES: usize = 128 * 1024 * 1024;
-const ANALYSIS_SCHEMA_VERSION: i64 = 22;
+pub const ANALYSIS_SCHEMA_VERSION: i64 = 22;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -198,6 +199,35 @@ pub enum EvidenceStoreOutcomeV1 {
 }
 
 impl AnalysisStore {
+    pub fn register_discovery_owner(&self) {
+        self.discovery_owners.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub fn release_discovery_owner(&self) {
+        self.discovery_owners.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    pub fn release_graph_owner(&self) {
+        self.graph_owner.store(false, Ordering::Release);
+    }
+
+    pub fn enable_notification_owner(&self) -> Result<()> {
+        crate::NotificationErrorCodeV1::Conflict.require(
+            self.notification_owner
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok(),
+            "router owner",
+        )
+    }
+
+    pub fn release_notification_owner(&self) {
+        self.notification_owner.store(false, Ordering::Release);
+    }
+
+    pub fn package_lifecycle(&self) -> Arc<Mutex<()>> {
+        self.package_lifecycle.clone()
+    }
+
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_limits(root, Default::default(), Default::default())
     }

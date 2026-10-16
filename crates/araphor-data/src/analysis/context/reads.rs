@@ -6,7 +6,7 @@ use snafu::ResultExt as _;
 use super::*;
 
 impl AnalysisStore {
-    pub(crate) fn context_tenant_page(
+    pub fn context_tenant_page(
         &self,
         owner: &str,
         after: Option<[u8; 16]>,
@@ -34,7 +34,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn context_head(
+    pub fn context_head(
         &self,
         tenant: [u8; 16],
         owner: &str,

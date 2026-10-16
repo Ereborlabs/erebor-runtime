@@ -1,13 +1,14 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
+use araphor_analysis::{AnalysisPackageOwner, GraphAndFindingOwner, InstalledAnalysis};
 use araphor_analysis_builtins::graph::Detector;
 use araphor_data::{
-    native::Qualification, AnalysisPackageOwner, AnalysisReadControl, AnalysisSelectionV1,
-    AnalysisStore, GraphAndFindingOwner, GraphReplayInputV1, GraphSnapshotV1, InstalledAnalysis,
-    PackageActionV1, PackageArtifactV1, PackageBundleV1, PackageImplementationV1, PackageRequestV1,
-    QueryLimits, QueryOwner,
+    native::Qualification, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
+    GraphReplayInputV1, GraphSnapshotV1, PackageActionV1, PackageArtifactV1, PackageBundleV1,
+    PackageImplementationV1, PackageRequestV1,
 };
 use araphor_detector_example::BurstDetector;
+use araphor_query::execution::{Engine, Limits};
 use mithril_control::ClientAuth;
 use serde_json::json;
 
@@ -67,8 +68,8 @@ impl super::AnalysisPackageQualification {
         expected: &GraphSnapshotV1,
     ) -> Result<serde_json::Value> {
         let store = Arc::new(AnalysisStore::open(root.join("native-algorithms"))?);
-        let query = Arc::new(QueryOwner::new(store.clone(), QueryLimits::default())?);
-        let owner = Arc::new(AnalysisPackageOwner::new(store, query, auth.clone())?);
+        let query = Engine::new(store, Limits::default())?;
+        let owner = Arc::new(AnalysisPackageOwner::new(query, auth.clone())?);
         let mut metadata = tonic::metadata::MetadataMap::new();
         metadata.insert("authorization", "Bearer fixture-access".parse()?);
         metadata.insert(

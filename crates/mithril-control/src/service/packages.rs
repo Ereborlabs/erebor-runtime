@@ -1,19 +1,20 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
+use araphor_analysis::{AnalysisPackageOwner, InstalledAnalysis};
+use araphor_data::PackageAuthorization;
 use araphor_data::{
-    AnalysisPackageOwner, AnalysisReadControl, AnalysisSelectionV1, InstalledAnalysis,
-    PackageActionV1, PackageAuthorization, PackageBundleV1, PackageGrantV1, QueryLimits,
-    QueryOwner,
+    AnalysisReadControl, AnalysisSelectionV1, PackageActionV1, PackageBundleV1, PackageGrantV1,
 };
+use araphor_query::execution::{Engine, Limits};
 
 use super::ControlPlane;
 
 pub(crate) struct ControlPackages {
     pub(crate) owner: Arc<AnalysisPackageOwner>,
-    pub(crate) query: Arc<QueryOwner>,
+    pub(crate) query: Arc<Engine>,
     authority: Arc<ControlPackageAuthority>,
-    limits: QueryLimits,
+    limits: Limits,
 }
 
 struct ControlPackageAuthority {
@@ -26,7 +27,7 @@ struct ControlPackageAuthority {
 impl ControlPlane {
     pub(crate) fn analysis_packages(
         &self,
-        limits: Option<QueryLimits>,
+        limits: Option<Limits>,
     ) -> crate::Result<Arc<ControlPackages>> {
         let mut installed = self.packages.lock().map_err(|_| {
             crate::error::InvalidConfigurationSnafu {
@@ -77,8 +78,8 @@ impl ControlPlane {
             changes: tokio::sync::watch::channel(1).0,
         });
         let limits = limits.unwrap_or_default();
-        let query = Arc::new(QueryOwner::new(data.clone(), limits.clone())?);
-        let owner = AnalysisPackageOwner::new(data, query.clone(), authority.clone())?;
+        let query = Engine::new(data, limits.clone())?;
+        let owner = AnalysisPackageOwner::new(query.clone(), authority.clone())?;
         #[cfg(test)]
         let owner = {
             let mut owner = owner;
@@ -150,7 +151,9 @@ impl ControlPackageAuthority {
     }
 
     fn denied() -> araphor_data::Error {
-        araphor_data::Error::QueryDenied {
+        araphor_data::Error::Package {
+            code: araphor_data::PackageErrorCodeV1::Denied,
+            field: "package authority",
             location: snafu::Location::default(),
         }
     }

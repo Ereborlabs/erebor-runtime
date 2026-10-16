@@ -14,7 +14,7 @@ use preflight::{FindingHeaders, FindingKey, FindingSelection};
 const MAX_READ_BYTES: usize = 2 * super::super::MAX_RESULT_BYTES;
 
 impl AnalysisStore {
-    pub(crate) fn graph_findings(
+    pub fn graph_findings(
         &self,
         tenant: [u8; 16],
         after: Option<&str>,
@@ -71,7 +71,7 @@ impl AnalysisStore {
         Ok(header)
     }
 
-    pub(crate) fn graph_finding(
+    pub fn graph_finding(
         &self,
         tenant: [u8; 16],
         result_id: &str,
@@ -88,7 +88,7 @@ impl AnalysisStore {
         })
     }
 
-    pub(crate) fn graph_revision_finding(
+    pub fn graph_revision_finding(
         &self,
         tenant: [u8; 16],
         finding_id: &str,

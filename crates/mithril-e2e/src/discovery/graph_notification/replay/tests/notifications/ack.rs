@@ -63,10 +63,12 @@ fn notification_human_acknowledges_overdue() -> crate::platform::TestResult<()> 
     );
     assert!(matches!(
         router.acknowledge(&grants[1], key, revision, [7; 16], NOW + 103),
-        Err(Error::Notification {
-            code: NotificationErrorCodeV1::Conflict,
-            field: "acknowledgement retry",
-            ..
+        Err(araphor_analysis::Error::Data {
+            source: Error::Notification {
+                code: NotificationErrorCodeV1::Conflict,
+                field: "acknowledgement retry",
+                ..
+            }
         })
     ));
     assert!(!human.overdue(NOW + 103));

@@ -101,7 +101,7 @@ impl Cli {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if araphor_data::AnalysisPackageOwner::run_worker_if_requested()? {
+    if araphor_analysis::AnalysisPackageOwner::run_worker_if_requested()? {
         return Ok(());
     }
     Cli::parse().run()
@@ -110,8 +110,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 #[test]
 #[ignore]
-fn araphor_component_compiler() -> araphor_data::Result<()> {
-    araphor_data::AnalysisPackageOwner::run_compiler_worker()
+fn araphor_component_compiler() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    araphor_analysis::AnalysisPackageOwner::run_compiler_worker()?;
+    Ok(())
 }
 
 #[cfg(test)]

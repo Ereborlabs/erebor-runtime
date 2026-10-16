@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::{GraphEdgeTypeV1, GraphSubjectAuthorityV1, GraphSubjectKeyV1};
-use crate::{QueryInvalidSnafu, Result};
+use crate::{GraphInvalidSnafu, Result};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -65,7 +65,7 @@ impl GraphTraversalV1 {
             || !(1..=Self::MAX_SUBJECTS).contains(&self.max_subjects)
             || !(1..=Self::MAX_RELATIONSHIPS).contains(&self.max_relationships)
         {
-            return QueryInvalidSnafu {
+            return GraphInvalidSnafu {
                 field: "graph traversal",
             }
             .fail();
@@ -73,7 +73,7 @@ impl GraphTraversalV1 {
         Ok(())
     }
 
-    pub(crate) fn heap_bytes(&self) -> usize {
+    pub fn heap_bytes(&self) -> usize {
         self.seeds.capacity() * std::mem::size_of::<GraphSubjectKeyV1>()
             + self
                 .seeds
@@ -103,13 +103,13 @@ impl TryFrom<&[u8]> for GraphTraversalV1 {
 
     fn try_from(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() || bytes.len() > Self::MAX_BYTES {
-            return QueryInvalidSnafu {
+            return GraphInvalidSnafu {
                 field: "graph traversal bytes",
             }
             .fail();
         }
         let request: Self = serde_json::from_slice(bytes).map_err(|_| {
-            QueryInvalidSnafu {
+            GraphInvalidSnafu {
                 field: "graph traversal JSON",
             }
             .build()
@@ -131,7 +131,7 @@ pub struct GraphTraversalReceiptV1 {
 }
 
 impl GraphTraversalReceiptV1 {
-    pub(crate) fn heap_bytes(&self) -> usize {
+    pub fn heap_bytes(&self) -> usize {
         self.result_ids.capacity() * std::mem::size_of::<String>()
             + self.result_ids.iter().map(String::capacity).sum::<usize>()
     }

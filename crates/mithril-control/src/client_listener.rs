@@ -43,7 +43,7 @@ pub struct ClientListenerConfig {
 pub struct ClientListener {
     config: ClientListenerConfig,
     router: Router,
-    packages: Option<Arc<araphor_data::AnalysisPackageOwner>>,
+    packages: Option<Arc<araphor_analysis::AnalysisPackageOwner>>,
 }
 
 #[derive(Deserialize)]

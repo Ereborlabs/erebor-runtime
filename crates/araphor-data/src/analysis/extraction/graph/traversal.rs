@@ -7,16 +7,19 @@ use crate::{GraphTraversalReceiptV1, GraphTraversalV1};
 mod versions;
 
 impl AnalysisStore {
-    pub(in crate::analysis::extraction) fn traverse_graphs<T>(
+    pub(in crate::analysis::extraction) fn traverse_graphs(
         &self,
         snapshot: &Connection,
         selection: &AnalysisSelectionV1,
         request: &GraphTraversalV1,
-        output: &mut AnalysisExtractionV1<T>,
+        output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
-        project: &mut dyn AnalysisProjection<Row = T>,
+        project: &mut dyn AnalysisProjection,
     ) -> Result<()> {
         let (ids, versions) = self.traversal_versions(snapshot, selection, output, control)?;
+        for (id, version) in ids.iter().zip(&versions) {
+            output.reference_result(id, version.revision)?;
+        }
         self.traversal_work(snapshot, &ids, output, control)?;
         let mut walk = GraphWalk::new(
             snapshot,
@@ -96,6 +99,8 @@ impl AnalysisStore {
                 AnalysisInputV1::Graph {
                     result_id: id,
                     graph: &graph,
+                    subject_count: graph.graph.subjects.len(),
+                    relationship_count: graph.graph.edges.len(),
                     commit_revision: version.revision,
                     sensitivity: version.sensitivity,
                     traversal_depths: Some(&walk.subjects),

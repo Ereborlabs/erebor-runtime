@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use araphor_analysis::{GraphAndFindingOwner, GraphContextProvider};
 use araphor_data::*;
 
 use super::*;
@@ -79,10 +80,10 @@ fn control_notification_stage_isolation() -> TestResult {
     for now in [150, 151] {
         assert!(matches!(
             owner.process(&graph, now),
-            Err(crate::Error::DataStore { source, .. })
-                if matches!(*source, araphor_data::Error::StorageCapacity {
+            Err(crate::Error::Analysis { source, .. })
+                if matches!(*source, araphor_analysis::Error::Data { source: araphor_data::Error::StorageCapacity {
                     resource: "tenant retained revisions", ..
-                })
+                } })
         ));
     }
     let calls = sink.calls.lock().map_err(|_| "sink lock")?;
@@ -163,7 +164,7 @@ fn finding_graph(
             frame_ends: vec![length],
         },
     )?;
-    let installed = araphor_data::InstalledAnalysis::testing(Some(data.clone()), [1; 16])?;
+    let installed = araphor_analysis::InstalledAnalysis::testing(Some(data.clone()), [1; 16])?;
     let graph = GraphAndFindingOwner::new(data, Arc::new(Context), installed)?;
     assert_eq!(graph.process(20)?, 1);
     assert_eq!(graph.current_findings([1; 16])?.len(), 1);

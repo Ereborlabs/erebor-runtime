@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use araphor_analysis::{GraphAndFindingOwner, NotificationRouter};
 use araphor_data::{
-    AnalysisStore, GraphAndFindingOwner, NotificationAuthorization, NotificationFailureV1,
-    NotificationGrantV1, NotificationPolicyV1, NotificationRouter, NotificationSink,
-    NotificationSinkResultV1,
+    AnalysisStore, NotificationAuthorization, NotificationFailureV1, NotificationGrantV1,
+    NotificationPolicyV1, NotificationSink, NotificationSinkResultV1,
 };
 use serde::Deserialize;
 

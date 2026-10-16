@@ -28,7 +28,7 @@ pub enum NotificationSinkResultV1 {
 }
 
 impl NotificationSinkResultV1 {
-    pub(crate) fn valid(&self) -> bool {
+    pub fn valid(&self) -> bool {
         match self {
             Self::Accepted { receipt } | Self::AgentReceived { receipt } => {
                 NotificationGrantV1::identifier(receipt, 128)
@@ -37,7 +37,7 @@ impl NotificationSinkResultV1 {
         }
     }
 
-    pub(crate) fn accepted(&self) -> bool {
+    pub fn accepted(&self) -> bool {
         matches!(self, Self::Accepted { .. } | Self::AgentReceived { .. })
     }
 }

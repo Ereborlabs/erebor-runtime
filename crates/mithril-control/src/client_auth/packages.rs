@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
-use araphor_data::{AnalysisSelectionV1, PackageActionV1, PackageAuthorization, PackageGrantV1};
+use araphor_data::PackageAuthorization;
+use araphor_data::{AnalysisSelectionV1, PackageActionV1, PackageGrantV1};
 
 use super::*;
 
@@ -98,7 +99,9 @@ impl ClientAuth {
     }
 
     fn package_denied(_: Error) -> araphor_data::Error {
-        araphor_data::Error::QueryDenied {
+        araphor_data::Error::Package {
+            code: araphor_data::PackageErrorCodeV1::Denied,
+            field: "package authority",
             location: snafu::Location::default(),
         }
     }
@@ -198,7 +201,9 @@ impl PackageAuthorization for ClientAuth {
             .package_trust
             .contains(&(grant.selection.tenant_id, digest))
         {
-            return Err(araphor_data::Error::QueryDenied {
+            return Err(araphor_data::Error::Package {
+                code: araphor_data::PackageErrorCodeV1::Denied,
+                field: "package authority",
                 location: snafu::Location::default(),
             });
         }
@@ -236,7 +241,9 @@ impl PackageAuthorization for ClientAuth {
                     .package_trust
                     .contains(&(grant.selection.tenant_id, bundle.digest().to_owned()))
             {
-                return Err(araphor_data::Error::QueryDenied {
+                return Err(araphor_data::Error::Package {
+                    code: araphor_data::PackageErrorCodeV1::Denied,
+                    field: "package authority",
                     location: snafu::Location::default(),
                 });
             }

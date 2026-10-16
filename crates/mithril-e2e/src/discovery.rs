@@ -1,9 +1,7 @@
 use std::{fs, path::Path};
 
-use araphor_data::{
-    DiscoveryInputManifestV1, DiscoveryOwner, DiscoveryPhysicalResultV1, DiscoveryProofKindV1,
-    InstalledAnalysis,
-};
+use araphor_analysis::{DiscoveryOwner, InstalledAnalysis};
+use araphor_data::{DiscoveryInputManifestV1, DiscoveryPhysicalResultV1, DiscoveryProofKindV1};
 use mithril_control::{
     DiscoveryPreviewOwner, PolicyDocumentV1, SimulatedDispositionV1, SimulatedPhysicalResultV1,
 };
@@ -11,7 +9,7 @@ use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
 
 use crate::{
-    error::{DataSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, PolicySnafu},
+    error::{AnalysisSnafu, DataSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, PolicySnafu},
     Result,
 };
 
@@ -34,8 +32,8 @@ pub use storage_contract::run as run_discovery_storage_contract;
 pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let input_bytes = include_bytes!("../fixtures/discovery/manifest.json");
     let input = DiscoveryInputManifestV1::try_from(input_bytes.as_slice()).context(DataSnafu)?;
-    let execution = InstalledAnalysis::testing(None, input.tenant_id).context(DataSnafu)?;
-    let result = DiscoveryOwner::derive_recorded(&input, &execution).context(DataSnafu)?;
+    let execution = InstalledAnalysis::testing(None, input.tenant_id).context(AnalysisSnafu)?;
+    let result = DiscoveryOwner::derive_recorded(&input, &execution).context(AnalysisSnafu)?;
     let snapshot = &result.snapshot;
     ensure!(
         snapshot.proof_kind == DiscoveryProofKindV1::Synthetic
@@ -58,7 +56,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     replay.records.extend(input.records.clone());
     ensure!(
         DiscoveryOwner::derive_recorded(&replay, &execution)
-            .context(DataSnafu)?
+            .context(AnalysisSnafu)?
             .snapshot
             == *snapshot,
         InvalidInputSnafu {

@@ -55,10 +55,61 @@ async fn graph_traversal_grpc_contract() -> TestResult {
                 },
                 access.clone(),
             )
+            .await
             .err()
             .ok_or("invalid graph request was accepted")?;
         assert_eq!(error.code(), expected);
     }
+    for sql in [
+        "SELECT * FROM events",
+        "WITH unused AS (SELECT * FROM events) SELECT * FROM graph_subjects",
+        "WITH unused AS (SELECT * FROM context) SELECT * FROM relationships",
+    ] {
+        let error = fixture
+            .service
+            .query_request(
+                proto::QueryRequest {
+                    sql: sql.into(),
+                    graph_traversal: Some(proto::GraphTraversal {
+                        definition_json: definition([1; 16])?,
+                    }),
+                    ..Default::default()
+                },
+                access.clone(),
+            )
+            .await
+            .err()
+            .ok_or("non-graph traversal source was accepted")?;
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_traversal_cross_tenant_seed_denied() -> TestResult {
+    let fixture = Fixture::new()?;
+    let request = fixture.request(proto::QueryRequest::default(), false)?;
+    let access = fixture.service.authenticate(&request, false).await?;
+    let error = fixture
+        .service
+        .query_request(
+            proto::QueryRequest {
+                sql: "SELECT DISTINCT subject_id, traversal_depth FROM graph_subjects".into(),
+                graph_traversal: Some(proto::GraphTraversal {
+                    definition_json: definition([99; 16])?,
+                }),
+                ..Default::default()
+            },
+            access,
+        )
+        .await
+        .err()
+        .ok_or("a foreign traversal seed was accepted")?;
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+    assert_eq!(
+        error.message(),
+        ClientGrpcOwner::query_reason(Failure::Denied)
+    );
     Ok(())
 }
 
@@ -79,7 +130,8 @@ async fn graph_traversal_grpc_receipt() -> TestResult {
     let access = fixture.service.authenticate(&request, false).await?;
     let mut stream = fixture
         .service
-        .query_request(request.into_inner(), access)?;
+        .query_request(request.into_inner(), access)
+        .await?;
     assert!(matches!(
         Fixture::next(&mut stream).await?.payload,
         Some(proto::query_frame::Payload::Metadata(_))

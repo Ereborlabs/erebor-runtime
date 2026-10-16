@@ -31,7 +31,7 @@ pub struct NotificationObligationV1 {
 }
 
 impl NotificationObligationV1 {
-    pub(crate) fn delivery_route(
+    pub fn delivery_route(
         &self,
         kind: NotificationDeliveryKindV1,
     ) -> Option<&NotificationRouteRefV1> {
@@ -42,7 +42,7 @@ impl NotificationObligationV1 {
         }
     }
 
-    pub(crate) fn pending(&self, kind: NotificationDeliveryKindV1) -> bool {
+    pub fn pending(&self, kind: NotificationDeliveryKindV1) -> bool {
         self.attempts
             .iter()
             .any(|attempt| attempt.kind == kind && attempt.result.is_none())
@@ -68,7 +68,7 @@ impl NotificationObligationV1 {
                 .is_some_and(|deadline| now_utc_ns >= deadline)
     }
 
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         NotificationErrorCodeV1::Invalid.require(
             self.schema_version == 1
                 && self.key.tenant_id != [0; 16]

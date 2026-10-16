@@ -6,12 +6,12 @@ use super::*;
 mod traversal;
 
 impl AnalysisStore {
-    pub(super) fn graph_input<T>(
+    pub(super) fn graph_input(
         &self,
         snapshot: &Connection,
         tenant: [u8; 16],
         result_id: &str,
-        output: &mut AnalysisExtractionV1<T>,
+        output: &mut AnalysisExtractionV1,
         control: &AnalysisReadControl,
     ) -> Result<GraphHeader> {
         control.check()?;

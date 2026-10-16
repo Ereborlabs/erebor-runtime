@@ -7,7 +7,7 @@ use crate::{AnalysisContractSnafu, Result};
 use super::{PackageArtifactV1, PackageBundleV1, PackageErrorCodeV1 as Code, PackageRefV1};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) struct ModelRef {
+pub struct ModelRef {
     pub package: PackageRefV1,
     pub export: String,
 }
@@ -80,15 +80,11 @@ impl PackageBundleV1 {
         Ok(())
     }
 
-    pub(super) fn order(&self) -> Result<Vec<ModelRef>> {
+    pub fn order(&self) -> Result<Vec<ModelRef>> {
         self.order_for(&self.root, None)
     }
 
-    pub(super) fn order_for(
-        &self,
-        root: &PackageRefV1,
-        export: Option<&str>,
-    ) -> Result<Vec<ModelRef>> {
+    pub fn order_for(&self, root: &PackageRefV1, export: Option<&str>) -> Result<Vec<ModelRef>> {
         let mut states = BTreeMap::new();
         let mut order = Vec::new();
         for model in self
