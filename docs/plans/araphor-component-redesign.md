@@ -295,6 +295,39 @@ from `7b7b407a`, and removes 209 from `aa390d9f`. The records are
 be removed for the 6,000-line target. The complete redesign is **Not done**.
 These functional checks do not establish a performance improvement.
 
+### Native subquery admission
+
+Implementation and selected host verification: **Done**. The plan check now
+accepts DataFusion's structural Subquery node. The native visitor continues into
+the inner plan. The existing source, function, projection, explicit join,
+parameter, and window checks remain. Native parsing, decorrelation,
+optimization, physical planning, and execution handle the subquery. Native
+optimization can create joins from correlated predicates. The explicit join
+check does not establish equality keys for every optimized join.
+
+Follow checks native expression subqueries before optimization and selects
+Replace. A subquery can make an earlier row qualify after a later commit.
+Append cannot represent that change. The regression covers both the normal
+SQL entry and an independently supplied native plan. It compares rows, schema,
+and the current source receipt with an independent complete snapshot.
+Additional cases cover scalar, EXISTS, IN, inner parameters, original table
+references, and nested policy checks.
+
+All 100 Query cases, 35 Analysis model cases, and the E2E query-follow contract
+pass. The new Query cases take 2.18 seconds; the other 98 take 21.45 seconds.
+The model cases take 56.10 seconds. The E2E case takes 17.85 seconds and retains
+its eight behavior checks. Strict Query Clippy and scoped formatting pass.
+The record is `/tmp/araphor-native-subquery-qualification1.json`.
+Full workspace CI is not run, as instructed.
+
+This correctness change adds 14 nonblank production Rust lines. It removes no
+owner and establishes no performance improvement. The verified count chain
+checks 668 Rust file hashes. The complete result adds 881 lines from
+`537f9de3` and removes 1,348 from `7b7b407a`. Another 4,652 production lines
+must be removed for the 6,000-line target. The count records are
+`/tmp/araphor-native-subquery-count1.json` and
+`/tmp/araphor-native-subquery-count2.json`. Complete redesign: **Not done**.
+
 ### Shared subscription owner
 
 The user requires Query to own subscription behavior used by Control and

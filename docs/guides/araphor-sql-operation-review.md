@@ -269,6 +269,17 @@ stage within the full operation control. The synchronous API uses Engine's
 runtime bridge. Async callers can use the native stream directly. Native
 operators determine row order. Use `ORDER BY` when the result needs order.
 
+[Planner::check](../../crates/araphor-query/src/planner/mod.rs) accepts the
+native Subquery container and checks its inner plan through DataFusion's
+visitor. Native decorrelation and planning implement scalar, EXISTS, and IN
+subqueries. The explicit join check applies before optimization. It does not
+constrain every join that native decorrelation creates.
+[State::page_plan](../../crates/araphor-query/src/follow/append.rs) selects
+Replace for expression subqueries before optimization. An earlier row can
+qualify after the subquery's source changes. The
+[subquery regressions](../../crates/araphor-query/src/follow/tests.rs) check
+both SQL and retained-plan entry points against a complete native snapshot.
+
 [Session::execute_input](../../crates/araphor-query/src/execution.rs) retains
 model-input results in the native input category. This route uses the same
 physical stream path as client output. [Session::execute_local](../../crates/araphor-query/src/execution.rs)

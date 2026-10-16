@@ -7,6 +7,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::interleave_record_batch;
 use datafusion::arrow::datatypes::DataType;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{Column, DataFusionError};
 use datafusion::datasource::source_as_provider;
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -25,6 +26,19 @@ impl State {
         let LogicalPlan::Projection(projection) = plan else {
             return Ok(None);
         };
+        let mut has_subquery = false;
+        plan.apply_with_subqueries(|node| {
+            if matches!(node, LogicalPlan::Subquery(_)) {
+                has_subquery = true;
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        })
+        .context(SqlSnafu)?;
+        if has_subquery {
+            return Ok(None);
+        }
         let mut input = projection.input.as_ref();
         loop {
             input = match input {

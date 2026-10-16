@@ -102,7 +102,7 @@ impl<'a> Planner<'a> {
                     }
                 }
                 LogicalPlan::Projection(_) | LogicalPlan::Filter(_) | LogicalPlan::TableScan(_)
-                | LogicalPlan::Aggregate(_) | LogicalPlan::Window(_) | LogicalPlan::SubqueryAlias(_)
+                | LogicalPlan::Aggregate(_) | LogicalPlan::Window(_) | LogicalPlan::Subquery(_) | LogicalPlan::SubqueryAlias(_)
                 | LogicalPlan::Sort(_) | LogicalPlan::Limit(_) | LogicalPlan::Distinct(_)
                 | LogicalPlan::Union(_) | LogicalPlan::EmptyRelation(_) => {}
                 _ => return datafusion::common::plan_err!("SQL plan is unavailable"),

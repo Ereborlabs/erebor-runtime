@@ -417,6 +417,158 @@ fn local_cursor_denied() {
 }
 
 #[tokio::test]
+async fn subqueries_use_replace() {
+    let sql =
+        "SELECT source_cursor FROM events WHERE source_cursor <= (SELECT count(*) FROM events)";
+    for retained in [false, true] {
+        let fixture = Fixture::new(Limits::default());
+        fixture.commit(&fixture.source, 2, 1, 1_000_000_000);
+        let (plan, sources) = fixture.engine.prepare(sql, vec![]).await.unwrap();
+        let plan = Arc::new(plan);
+        let clock = TestClock::new(2_000_000_000);
+        let control = Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap());
+        let mut subscription = if retained {
+            let state = fixture.engine.catalog(BTreeMap::new()).unwrap();
+            let native = Arc::new(
+                state
+                    .statement_to_plan(Parser::parse(sql).unwrap())
+                    .await
+                    .unwrap(),
+            );
+            Subscription::new(
+                Arc::clone(&fixture.engine),
+                native,
+                sources.clone(),
+                fixture.selection(),
+                control,
+                b"subquery principal",
+                None,
+                clock.clone(),
+                true,
+            )
+            .unwrap()
+        } else {
+            fixture
+                .engine
+                .subscribe(
+                    sql,
+                    vec![],
+                    fixture.selection(),
+                    control,
+                    b"subquery principal",
+                    None,
+                    clock.clone(),
+                    true,
+                )
+                .await
+                .unwrap()
+        };
+        let first = next(&mut subscription).await;
+        assert_eq!(first.operation, Operation::Replace);
+        assert!(values(&first, 0).is_empty());
+        assert_eq!(first.snapshot.witnesses.len(), 1);
+        drop(first);
+        fixture.commit(&fixture.source, 1, 1, 1_500_000_000);
+        let second = next(&mut subscription).await;
+        assert_eq!(second.operation, Operation::Replace);
+        assert_eq!(second.snapshot.witnesses.len(), 2);
+        let control = AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap();
+        let (snapshot, batches) = fixture
+            .engine
+            .session(fixture.selection(), &control, second.evaluated_utc_ns)
+            .unwrap()
+            .execute(Arc::clone(&plan), &sources)
+            .unwrap();
+        assert_eq!(
+            snapshot.page.extraction.meta,
+            second.snapshot.page.extraction.meta
+        );
+        for batch in &batches {
+            assert_eq!(batch.schema(), subscription.schema());
+        }
+        let mut expected = batches
+            .iter()
+            .flat_map(|batch| {
+                (0..batch.num_rows())
+                    .map(move |row| ScalarValue::try_from_array(batch.column(0), row).unwrap())
+            })
+            .collect::<Vec<_>>();
+        let mut actual = values(&second, 0);
+        expected.sort_by(|first, second| first.partial_cmp(second).unwrap());
+        actual.sort_by(|first, second| first.partial_cmp(second).unwrap());
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            vec![ScalarValue::UInt64(Some(1)), ScalarValue::UInt64(Some(2))]
+        );
+        subscription.cancel().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn subqueries_keep_policy() {
+    let fixture = Fixture::new(Limits::default());
+    for (sql, expected) in [
+        (
+            "SELECT (SELECT count(*) FROM events) AS total FROM events",
+            BTreeSet::from(["events".to_owned()]),
+        ),
+        (
+            "SELECT e.source_cursor FROM events e WHERE EXISTS (SELECT 1 FROM coverage c WHERE c.first_cursor < e.source_cursor)",
+            BTreeSet::from(["coverage".to_owned(), "events".to_owned()]),
+        ),
+        (
+            "SELECT source_cursor FROM events WHERE source_cursor IN (SELECT first_cursor FROM coverage)",
+            BTreeSet::from(["coverage".to_owned(), "events".to_owned()]),
+        ),
+        (
+            "SELECT source_cursor FROM events WHERE source_cursor <= (SELECT 2)",
+            BTreeSet::from(["events".to_owned()]),
+        ),
+    ] {
+        let (plan, sources) = fixture.engine.prepare(sql, vec![]).await.unwrap();
+        assert_eq!(sources, expected);
+        let subscription = Subscription::new(
+            Arc::clone(&fixture.engine),
+            Arc::new(plan),
+            sources,
+            fixture.selection(),
+            Arc::new(AnalysisReadControl::with_timeout(Duration::from_secs(20)).unwrap()),
+            b"subquery principal",
+            None,
+            TestClock::new(2_000_000_000),
+            true,
+        )
+        .unwrap();
+        assert_eq!(subscription.operation, Operation::Replace);
+    }
+    let (plan, sources) = fixture
+        .engine
+        .prepare(
+            "SELECT source_cursor FROM events WHERE source_cursor IN (SELECT $1)",
+            vec![ScalarValue::UInt64(Some(2))],
+        )
+        .await
+        .unwrap();
+    assert!(plan.get_parameter_names().unwrap().is_empty());
+    assert_eq!(sources, BTreeSet::from(["events".to_owned()]));
+    for sql in [
+        "SELECT source_cursor FROM events WHERE EXISTS (SELECT 1 FROM missing_source)",
+        "SELECT source_cursor FROM events WHERE EXISTS (SELECT random() FROM events)",
+        "SELECT source_cursor FROM events WHERE EXISTS (SELECT 1 FROM events e JOIN coverage c ON e.source_cursor = e.source_cursor)",
+        "SELECT source_cursor FROM events WHERE source_cursor IN (SELECT lag(source_cursor, 201) OVER (ORDER BY source_cursor) FROM events)",
+    ] {
+        assert!(fixture.engine.prepare(sql, vec![]).await.is_err(), "{sql}");
+    }
+    let wide = (0..257)
+        .map(|index| format!("1 AS column_{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("SELECT source_cursor FROM events WHERE EXISTS (SELECT {wide} FROM events)");
+    assert!(fixture.engine.prepare(&sql, vec![]).await.is_err());
+}
+
+#[tokio::test]
 async fn page_keeps_lookahead() {
     let fixture = Fixture::new(Limits {
         output_rows: 2,

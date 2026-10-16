@@ -129,6 +129,15 @@ nonblank production Rust lines. The complete count removes 1,362 from
 `/tmp/araphor-native-rewrite-count10.json`. Another 4,638 must be removed for the
 6,000-line target. Complete redesign: **Not done**. These checks do not establish
 a performance improvement. Full workspace CI is not run, as instructed.
+Native subquery admission now accepts DataFusion's structural container while
+it retains recursive policy checks. Follow selects Replace for subqueries
+before optimization. All 100 Query, 35 Analysis model, and one E2E query-follow
+case pass. Strict Query Clippy passes. The record is
+`/tmp/araphor-native-subquery-qualification1.json`. This correctness change adds
+14 nonblank production Rust lines. It is not a code-reduction result. The
+verified complete count removes 1,348 from `7b7b407a` and adds 881 from
+`537f9de3`: `/tmp/araphor-native-subquery-count2.json`. Another 4,652 must be
+removed for the 6,000-line target. Complete redesign: **Not done**.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.
