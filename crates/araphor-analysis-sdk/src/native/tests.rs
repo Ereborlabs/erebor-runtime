@@ -6,7 +6,7 @@ use arrow_array::UInt64Array;
 
 use super::*;
 use crate::Guest;
-use crate::{CheckpointSpec, DataType, Field, Port, RecordBatch, Schema};
+use crate::{CheckpointSpec, DataType, Evaluation, Field, Package, Port, RecordBatch, Schema};
 
 use crate::tests::sensitive_access::SensitiveAccess;
 
@@ -76,8 +76,9 @@ fn native_parity_and_checkpoint() -> TestResult {
     let package = Detector::package();
     let mut value = evaluation()?;
     let expected = Detector::evaluate(&value)?;
+    let checked = package.check_evaluation(&value)?;
     let result = unsafe {
-        Invocation::new(&package, &value, || false)?
+        Invocation::new(&checked, || false)?
             .call(&Api::for_guest::<Detector>(), value.context.limits)?
     };
     assert_eq!(result.datasets.len(), expected.datasets.len());
@@ -98,8 +99,9 @@ fn native_parity_and_checkpoint() -> TestResult {
     assert_eq!(actual.datasets[0].name, expected.datasets[0].name);
     assert_eq!(actual.datasets[0].batches, expected.datasets[0].batches);
     value.checkpoint = result.checkpoint;
+    let checked = package.check_evaluation(&value)?;
     let result = unsafe {
-        Invocation::new(&package, &value, || false)?
+        Invocation::new(&checked, || false)?
             .call(&Api::for_guest::<Detector>(), value.context.limits)?
     };
     assert_eq!(result.reasons.len(), 2);
@@ -129,15 +131,16 @@ impl<const INVALID: bool> Guest for CheckedDetector<INVALID> {
 fn checked_guest_keeps_output_boundary() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
+    let checked = package.check_evaluation(&value)?;
     let output = unsafe {
-        Invocation::new(&package, &value, || false)?.call(
+        Invocation::new(&checked, || false)?.call(
             &Api::for_guest::<CheckedDetector<false>>(),
             value.context.limits,
         )?
     };
     assert_eq!(output.evidence, Detector::evaluate(&value)?.evidence);
     let error = unsafe {
-        Invocation::new(&package, &value, || false)?.call(
+        Invocation::new(&checked, || false)?.call(
             &Api::for_guest::<CheckedDetector<true>>(),
             value.context.limits,
         )
@@ -160,7 +163,8 @@ fn checked_guest_keeps_output_boundary() -> TestResult {
 fn release_success_failure_and_repeat() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
-    let mut invocation = Invocation::new(&package, &value, || false)?;
+    let checked = package.check_evaluation(&value)?;
+    let mut invocation = Invocation::new(&checked, || false)?;
     let api = Api::for_guest::<Detector>();
     let evaluate = api.evaluate.ok_or("evaluate")?;
     let release = api.release.ok_or("release")?;
@@ -195,18 +199,18 @@ fn release_success_failure_and_repeat() -> TestResult {
 fn invalid_abi_values_are_errors() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
+    let checked = package.check_evaluation(&value)?;
     let mut api = Api::for_guest::<Detector>();
     api.struct_size += 1;
-    let error =
-        unsafe { Invocation::new(&package, &value, || false)?.call(&api, value.context.limits) }
-            .err()
-            .ok_or("invalid table accepted")?;
+    let error = unsafe { Invocation::new(&checked, || false)?.call(&api, value.context.limits) }
+        .err()
+        .ok_or("invalid table accepted")?;
     assert_eq!(error.code(), ErrorCode::Incompatible);
     let api = Api::for_guest::<Detector>();
     let evaluate = api.evaluate.ok_or("evaluate")?;
     let release = api.release.ok_or("release")?;
     for invalid in 0..6 {
-        let mut invocation = Invocation::new(&package, &value, || false)?;
+        let mut invocation = Invocation::new(&checked, || false)?;
         let mut request = invocation.request();
         match invalid {
             0 => request.context.has_seed = 2,
@@ -242,8 +246,9 @@ impl Guest for Panicking {
 fn panic_and_cancellation_preserve_boundary() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
+    let checked = package.check_evaluation(&value)?;
     let error = unsafe {
-        Invocation::new(&package, &value, || false)?
+        Invocation::new(&checked, || false)?
             .call(&Api::for_guest::<Panicking>(), value.context.limits)
     }
     .err()
@@ -251,7 +256,7 @@ fn panic_and_cancellation_preserve_boundary() -> TestResult {
     assert_eq!(error.code(), ErrorCode::Failed);
     let polls = Cell::new(0);
     let error = unsafe {
-        Invocation::new(&package, &value, || {
+        Invocation::new(&checked, || {
             polls.set(polls.get() + 1);
             polls.get() > 2
         })?
@@ -299,6 +304,7 @@ unsafe extern "C" fn count_release(response: *mut Response) {
 fn malformed_outputs_release_response() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
+    let checked = package.check_evaluation(&value)?;
     RELEASES.store(0, Ordering::SeqCst);
     for (evaluate, expected) in [
         (
@@ -311,11 +317,10 @@ fn malformed_outputs_release_response() -> TestResult {
         let mut api = Api::for_guest::<Detector>();
         api.evaluate = Some(evaluate);
         api.release = Some(count_release);
-        let error = unsafe {
-            Invocation::new(&package, &value, || false)?.call(&api, value.context.limits)
-        }
-        .err()
-        .ok_or("malformed output accepted")?;
+        let error =
+            unsafe { Invocation::new(&checked, || false)?.call(&api, value.context.limits) }
+                .err()
+                .ok_or("malformed output accepted")?;
         assert_eq!(error.code(), expected);
     }
     assert_eq!(RELEASES.load(Ordering::SeqCst), 3);
@@ -406,14 +411,14 @@ fn rust_layout_matches_header() -> TestResult {
 fn caller_output_capacity_is_independent_of_input_limits() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
+    let checked = package.check_evaluation(&value)?;
     let original = value.context.limits;
     let output_limits = crate::Limits {
         max_bytes: 1,
         ..original
     };
     let error = unsafe {
-        Invocation::new(&package, &value, || false)?
-            .call(&Api::for_guest::<Detector>(), output_limits)
+        Invocation::new(&checked, || false)?.call(&Api::for_guest::<Detector>(), output_limits)
     }
     .err()
     .ok_or("output capacity ignored")?;
@@ -438,15 +443,15 @@ impl<const SIZE: usize> Guest for ErrorField<SIZE> {
 fn producer_error_field_uses_existing_transport_bound() -> TestResult {
     let package = Detector::package();
     let value = evaluation()?;
+    let checked = package.check_evaluation(&value)?;
     for (api, expected) in [
         (Api::for_guest::<ErrorField<1024>>(), ErrorCode::Failed),
         (Api::for_guest::<ErrorField<1025>>(), ErrorCode::Limit),
     ] {
-        let error = unsafe {
-            Invocation::new(&package, &value, || false)?.call(&api, value.context.limits)
-        }
-        .err()
-        .ok_or("error accepted")?;
+        let error =
+            unsafe { Invocation::new(&checked, || false)?.call(&api, value.context.limits) }
+                .err()
+                .ok_or("error accepted")?;
         assert_eq!(error.code(), expected);
     }
     Ok(())

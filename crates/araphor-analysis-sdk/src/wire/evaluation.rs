@@ -3,10 +3,10 @@ use crate::{Error, ErrorCode, Package, Result};
 use super::codec::Codec;
 use super::{Checkpoint, Evaluation, Input};
 
-impl Evaluation {
-    pub fn encode(package: &Package, evaluation: &crate::Evaluation) -> Result<Self> {
-        let model = package.validator(evaluation)?;
-        model.input(evaluation)?;
+impl crate::CheckedEvaluation<'_> {
+    pub fn encode(&self) -> Result<Evaluation> {
+        let model = self.model();
+        let evaluation = self.evaluation();
         let limits = evaluation.context.limits;
         let mut codec = Codec::new(limits, true);
         let inputs = evaluation
@@ -41,7 +41,7 @@ impl Evaluation {
                     .map(|data| data.arrow_ipc)
             })
             .transpose()?;
-        Ok(Self {
+        Ok(Evaluation {
             export_name: evaluation.export.clone(),
             inputs,
             parameters,
@@ -53,7 +53,9 @@ impl Evaluation {
                 .transpose()?,
         })
     }
+}
 
+impl Evaluation {
     pub fn decode(&self, package: &Package) -> Result<crate::Evaluation> {
         self.decode_validated(package)
             .map(|(evaluation, _)| evaluation)

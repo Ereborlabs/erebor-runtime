@@ -266,6 +266,35 @@ The first affected Data extraction run passes 25 cases and ignores one release
 history case. Test execution takes 7.03 seconds. Later test-only frontier
 assertions and the new physical pipeline still require qualification.
 
+### Checked input ownership
+
+Implementation and selected host verification: **Done**. CheckedEvaluation
+owns input encoding. The old raw Evaluation encoder is deleted. The native
+Invocation borrows the same checked input for exchange and output validation.
+The package dispatch reuses its existing proof. These paths no longer repeat
+the input contract checks. IPC allocation checks, raw guest decoding, native
+pointer checks, output checks, and release callbacks remain. The raw wire output
+decoder retains its error order. The wire format, WIT, and native ABI do not
+change. All Rust callers use the new checked-input API.
+
+The selected checks pass 125 distinct cases: 74 SDK, three component fixture,
+six component reservation, 18 Wasm runtime, 12 Wasm package, nine native package,
+two native discovery, and one native detector parity case. The runtime, package,
+and component runs take 122.01, 135.92, and 47.58 seconds. The native package
+run takes 221.22 seconds and includes all eight opt-in cases. All six native
+fixtures are rebuilt from the changed SDK. Strict Clippy passes for SDK,
+Analysis, and the component fixture, including their test targets. The record
+is `/tmp/araphor-checked-input-qualification1.json`. Unchanged Query runtime
+checks and full workspace CI are not repeated.
+
+This change removes two nonblank production Rust lines. Tests and blank lines
+are excluded. The complete count adds 867 lines from `537f9de3`, removes 1,362
+from `7b7b407a`, and removes 209 from `aa390d9f`. The records are
+`/tmp/araphor-checked-input-count1.json` and
+`/tmp/araphor-native-rewrite-count10.json`. Another 4,638 production lines must
+be removed for the 6,000-line target. The complete redesign is **Not done**.
+These functional checks do not establish a performance improvement.
+
 ### Shared subscription owner
 
 The user requires Query to own subscription behavior used by Control and

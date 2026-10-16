@@ -144,7 +144,9 @@ impl WasmExecution {
                 evaluation.context.limits = Self::limits(evaluation.context.limits, &self.limits);
                 Cow::Owned(evaluation)
             };
-        let input = sdk::wire::Evaluation::encode(descriptor, &evaluation)
+        let input = descriptor
+            .check_evaluation(&evaluation)
+            .and_then(|checked| checked.encode())
             .context(crate::AnalysisContractSnafu)?;
         control.check()?;
         let output = self.invoke(&prepared, input.into(), control)?;

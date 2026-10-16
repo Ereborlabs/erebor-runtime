@@ -173,7 +173,10 @@ async fn native_detectors_match_wasm() -> NativeResult {
                 ),
                 "{blocked:?}"
             );
-            evaluation = sdk::wire::Evaluation::encode(&package, &evaluation)?.decode(&package)?;
+            evaluation = package
+                .check_evaluation(&evaluation)?
+                .encode()?
+                .decode(&package)?;
             let replay = native.evaluate(
                 selected.source.tenant_id,
                 &package.id,

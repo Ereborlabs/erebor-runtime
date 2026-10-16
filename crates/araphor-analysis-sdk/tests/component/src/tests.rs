@@ -46,7 +46,7 @@ fn evaluation(model: &sdk::Model, values: Vec<Vec<u64>>) -> sdk::Result<sdk::Eva
 }
 
 fn run(package: &sdk::Package, evaluation: &sdk::Evaluation) -> sdk::Result<sdk::Output> {
-    let input = sdk::wire::Evaluation::encode(package, evaluation)?;
+    let input = package.check_evaluation(evaluation)?.encode()?;
     RuntimeFixture::execute(input)?.decode(package, evaluation)
 }
 
@@ -88,7 +88,9 @@ fn accumulate_receives_previous_versioned_state() -> Result<(), Box<dyn std::err
     assert_eq!(next.checkpoint.as_ref().ok_or("checkpoint")?.version, 1);
     evaluation.checkpoint.as_mut().ok_or("checkpoint")?.version = 2;
     assert_eq!(
-        sdk::wire::Evaluation::encode(&package, &evaluation)
+        package
+            .check_evaluation(&evaluation)
+            .and_then(|checked| checked.encode())
             .err()
             .ok_or("checkpoint version accepted")?
             .code(),

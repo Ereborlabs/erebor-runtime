@@ -269,7 +269,7 @@ fn wire_retains_input_metadata() -> TestResult {
         },
         checkpoint: None,
     };
-    let original = wire::Evaluation::encode(&package, &evaluation)?;
+    let original = package.check_evaluation(&evaluation)?.encode()?;
     let input = &mut evaluation.inputs[0];
     input.revision.owner = "o".repeat(128);
     input.revision.id = "r".repeat(3072);
@@ -282,7 +282,7 @@ fn wire_retains_input_metadata() -> TestResult {
         state: CoverageState::Gapped,
         limits: vec!["gap".repeat(1024)],
     };
-    let retained = wire::Evaluation::encode(&package, &evaluation)?;
+    let retained = package.check_evaluation(&evaluation)?.encode()?;
     assert_eq!(
         retained.inputs[0].data.arrow_ipc,
         original.inputs[0].data.arrow_ipc

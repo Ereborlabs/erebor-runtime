@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::{Error, ErrorCode, Evaluation, Output, Package, Result, CONTRACT_VERSION};
+use crate::{CheckedEvaluation, Error, ErrorCode, Output, Result, CONTRACT_VERSION};
 
 mod abi;
 mod decode;
@@ -34,19 +34,17 @@ impl Drop for CancellationScope {
 }
 
 pub struct Invocation<'a, F: Fn() -> bool> {
-    package: &'a Package,
-    evaluation: &'a Evaluation,
+    checked: &'a CheckedEvaluation<'a>,
     cancelled: Box<F>,
     exchange: Exchange,
 }
 
 impl<'a, F: Fn() -> bool> Invocation<'a, F> {
-    pub fn new(package: &'a Package, evaluation: &'a Evaluation, cancelled: F) -> Result<Self> {
+    pub fn new(checked: &'a CheckedEvaluation<'a>, cancelled: F) -> Result<Self> {
         Ok(Self {
-            package,
-            evaluation,
+            checked,
             cancelled: Box::new(cancelled),
-            exchange: Exchange::evaluation(package, evaluation)?,
+            exchange: Exchange::evaluation(checked)?,
         })
     }
 
@@ -58,14 +56,15 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
     pub unsafe fn call(mut self, api: &Api, output_limits: crate::Limits) -> Result<Output> {
         api.validate()?;
         output_limits.validate()?;
-        if !self.evaluation.context.limits.permits(&output_limits) {
+        let evaluation = self.checked.evaluation();
+        if !evaluation.context.limits.permits(&output_limits) {
             return Err(Error::contract(ErrorCode::Limit, "native output limits"));
         }
         if (self.cancelled)() {
             return Err(Error::contract(ErrorCode::Incomplete, "cancelled"));
         }
         let request = self.request();
-        let context = &self.evaluation.context;
+        let context = &evaluation.context;
         let mut response = Response::default();
         let guard = ResponseGuard {
             api,
@@ -108,15 +107,16 @@ impl<'a, F: Fn() -> bool> Invocation<'a, F> {
             return Err(Error::contract(code, field));
         }
         catch_unwind(AssertUnwindSafe(|| unsafe {
-            Decoder::output(self.package, self.evaluation, guard.response, output_limits)
+            Decoder::output(self.checked, guard.response, output_limits)
         }))
         .map_err(|_| Error::contract(ErrorCode::Invalid, "native output"))?
     }
 
     fn request(&mut self) -> Request {
-        let context = &self.evaluation.context;
+        let evaluation = self.checked.evaluation();
+        let context = &evaluation.context;
         Request {
-            export_name: Bytes::new(self.evaluation.export.as_bytes()),
+            export_name: Bytes::new(evaluation.export.as_bytes()),
             inputs: self.exchange.inputs.as_ptr(),
             input_count: self.exchange.inputs.len() as u64,
             parameters: self.exchange.parameters,

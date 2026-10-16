@@ -5,7 +5,7 @@ fn wire_contract_boundaries() -> TestResult {
     let package = FilesCount::package();
     let fixture = FilesCount::fixture()?;
     let output = FilesCount::evaluate(&fixture.evaluation)?;
-    let input = wire::Evaluation::encode(&package, &fixture.evaluation)?;
+    let input = package.check_evaluation(&fixture.evaluation)?.encode()?;
     let encoded = wire::Output::encode(&package, &fixture.evaluation, &output)?;
     assert_eq!(
         serde_json::from_slice::<wire::Output>(&serde_json::to_vec(&encoded)?)?,
@@ -36,7 +36,10 @@ fn wire_contract_boundaries() -> TestResult {
             "export",
         ),
         (
-            wire::Evaluation::encode(&package, &evaluation).map(|_| ()),
+            package
+                .check_evaluation(&evaluation)
+                .and_then(|checked| checked.encode())
+                .map(|_| ()),
             ErrorCode::Incompatible,
             "export",
         ),
@@ -61,7 +64,10 @@ fn wire_contract_boundaries() -> TestResult {
     let versions = [
         invalid.check_evaluation(&evaluation).map(|_| ()),
         invalid.validate_evaluation(&evaluation),
-        wire::Evaluation::encode(&invalid, &evaluation).map(|_| ()),
+        invalid
+            .check_evaluation(&evaluation)
+            .and_then(|checked| checked.encode())
+            .map(|_| ()),
         wire::Output::encode(&invalid, &evaluation, &output).map(|_| ()),
         header.decode(&invalid).map(|_| ()),
         encoded.decode(&invalid, &evaluation).map(|_| ()),

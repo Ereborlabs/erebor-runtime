@@ -118,6 +118,17 @@ This change removes 49 nonblank production Rust lines. The verified count chain
 removes 1,360 from `7b7b407a` and adds 869 from `537f9de3`:
 `/tmp/araphor-wasm-owner-count2.json`. Another 4,640 must be removed for the
 6,000-line target. Complete redesign: **Not done**.
+CheckedEvaluation now owns input encoding and supplies the native Invocation
+proof. The old raw encoder is deleted. Guest validation, raw wire output error
+order, IPC checks, native ABI, and release callbacks remain. All 125 selected
+SDK, fixture, Wasm, and native cases pass with fresh native fixtures. Strict
+Clippy passes for the three affected crates and their test targets. The record
+is `/tmp/araphor-checked-input-qualification1.json`. This change removes two
+nonblank production Rust lines. The complete count removes 1,362 from
+`7b7b407a` and adds 867 from `537f9de3`:
+`/tmp/araphor-native-rewrite-count10.json`. Another 4,638 must be removed for the
+6,000-line target. Complete redesign: **Not done**. These checks do not establish
+a performance improvement. Full workspace CI is not run, as instructed.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

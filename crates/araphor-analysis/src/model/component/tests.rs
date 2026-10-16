@@ -113,14 +113,17 @@ fn empty_input_reserves_schema() -> TestResult {
     assert!(memory.reserve_input(preflight).is_err());
     drop(pressure);
     let reservation = memory.reserve_input(preflight)?;
-    let wire = sdk::wire::Evaluation::encode(&package, &evaluation)?;
+    let wire = package.check_evaluation(&evaluation)?.encode()?;
     let decoded = wire.decode(&package)?;
     assert_eq!(decoded.inputs[0].data.batches.len(), 1);
     assert_eq!(decoded.inputs[0].data.batches[0].num_rows(), 0);
     assert_eq!(decoded.inputs[0].data.batches[0].schema().as_ref(), &schema);
     drop((wire, decoded, reservation));
     evaluation.context.limits.max_bytes = 1024;
-    assert!(sdk::wire::Evaluation::encode(&package, &evaluation).is_err());
+    assert!(package
+        .check_evaluation(&evaluation)
+        .and_then(|checked| checked.encode())
+        .is_err());
     drop(memory.reserve_input(capacity)?);
     Ok(())
 }
@@ -131,13 +134,13 @@ fn wire_failure_releases_reservation() -> TestResult {
     let schema = schema().with_metadata(HashMap::from([("metadata".into(), "x".repeat(1024))]));
     let (package, mut evaluation) = input(schema)?;
     evaluation.context.limits.max_bytes = 256;
-    package.validate_evaluation(&evaluation)?;
+    let checked = package.check_evaluation(&evaluation)?;
     let reservation = fixture
         .owner
         .query
         .memory()
         .reserve_input(fixture.owner.exchange_preflight(&package, &evaluation)?)?;
-    assert!(sdk::wire::Evaluation::encode(&package, &evaluation).is_err());
+    assert!(checked.encode().is_err());
     drop(reservation);
     drop(
         fixture

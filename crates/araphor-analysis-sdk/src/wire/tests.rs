@@ -170,7 +170,7 @@ fn wire_validates_evidence() -> TestResult {
         },
         checkpoint: None,
     };
-    let wire = super::Evaluation::encode(&package, &evaluation)?;
+    let wire = package.check_evaluation(&evaluation)?.encode()?;
     let decoded = wire.decode(&package)?;
     assert_eq!(decoded.context, evaluation.context);
     let output = crate::Output {

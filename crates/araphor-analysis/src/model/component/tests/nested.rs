@@ -34,7 +34,7 @@ fn check_nested(array: ArrayRef, minimum: usize) -> TestResult {
     assert!(memory.reserve_input(preflight).is_err());
     drop(pressure);
     let reservation = memory.reserve_input(preflight)?;
-    let wire = sdk::wire::Evaluation::encode(&package, &evaluation)?;
+    let wire = package.check_evaluation(&evaluation)?.encode()?;
     assert!(wire.inputs[0].data.arrow_ipc.len() >= minimum);
     let decoded = wire.decode(&package)?;
     assert_eq!(

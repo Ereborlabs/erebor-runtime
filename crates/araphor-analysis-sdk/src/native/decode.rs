@@ -91,12 +91,11 @@ impl Decoder {
     }
 
     pub(super) unsafe fn output(
-        package: &Package,
-        evaluation: &Evaluation,
+        checked: &crate::CheckedEvaluation<'_>,
         response: &abi::Response,
         output_limits: Limits,
     ) -> Result<Output> {
-        let model = package.validator(evaluation)?;
+        let model = checked.model();
         let mut decoder = Self::new(output_limits);
         let mut datasets = decoder.vector(response.dataset_count)?;
         for data in unsafe { decoder.slice(response.datasets, response.dataset_count)? } {
@@ -129,7 +128,7 @@ impl Decoder {
             reasons,
             checkpoint: unsafe { decoder.checkpoint(response.checkpoint, model, true)? },
         };
-        package.validate_output(evaluation, &output)?;
+        checked.validate_output(&output)?;
         if output.allocated_bytes() as u64 > output_limits.max_bytes {
             return Err(Error::contract(ErrorCode::Limit, "native output bytes"));
         }

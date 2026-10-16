@@ -114,15 +114,13 @@ impl NativeLibrary {
     #[allow(unsafe_code)]
     pub(in crate::package) fn call(
         &self,
-        package: &sdk::Package,
-        evaluation: &sdk::Evaluation,
+        checked: &sdk::CheckedEvaluation<'_>,
         output_limits: sdk::Limits,
         control: &AnalysisReadControl,
     ) -> Result<sdk::Output> {
         control.check()?;
-        let invocation =
-            sdk::native::Invocation::new(package, evaluation, || control.check().is_err())
-                .map_err(|source| crate::AnalysisContractSnafu.into_error(source))?;
+        let invocation = sdk::native::Invocation::new(checked, || control.check().is_err())
+            .map_err(|source| crate::AnalysisContractSnafu.into_error(source))?;
         // The library pin covers copying output and all producer release callbacks.
         let result = unsafe { invocation.call(&*self.api, output_limits) }.map_err(Self::failure);
         control.check()?;

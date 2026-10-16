@@ -12,13 +12,10 @@ fn prepared_handle_keeps_binding() -> TestResult {
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let package = package();
     let input = evaluation(&package, "echo", 42)?;
+    let checked = package.check_evaluation(&input)?;
     let prepared = runtime.prepare(COMPONENT, &control)?;
     assert!(matches!(
-        foreign.invoke(
-            &prepared,
-            sdk::wire::Evaluation::encode(&package, &input)?.into(),
-            &control,
-        ),
+        foreign.invoke(&prepared, checked.encode()?.into(), &control),
         Err(Error::Data {
             source: araphor_data::Error::Package {
                 code: Code::Unsupported,
@@ -31,11 +28,7 @@ fn prepared_handle_keeps_binding() -> TestResult {
     let cancelled = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     cancelled.cancel()?;
     assert!(matches!(
-        foreign.invoke(
-            &prepared,
-            sdk::wire::Evaluation::encode(&package, &input)?.into(),
-            &cancelled,
-        ),
+        foreign.invoke(&prepared, checked.encode()?.into(), &cancelled),
         Err(Error::Data {
             source: araphor_data::Error::AnalysisReadCancelled { .. }
         })
@@ -60,11 +53,7 @@ fn prepared_handle_keeps_binding() -> TestResult {
             ..
         })
     ));
-    let output = runtime.invoke(
-        &prepared,
-        sdk::wire::Evaluation::encode(&package, &input)?.into(),
-        &control,
-    )?;
+    let output = runtime.invoke(&prepared, checked.encode()?.into(), &control)?;
     let output = sdk::wire::Output::from(output).decode(&package, &input)?;
     assert_eq!(value(&output)?, 42);
     assert_eq!(runtime.running.load(Ordering::Acquire), 0);

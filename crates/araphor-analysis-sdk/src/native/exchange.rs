@@ -1,5 +1,5 @@
 use super::{abi, streams::Streams};
-use crate::{Error, ErrorCode, Evaluation, Model, Output, Package, Result};
+use crate::{CheckedEvaluation, Error, ErrorCode, Model, Output, Result};
 
 pub(super) struct Exchange {
     streams: Streams,
@@ -32,9 +32,9 @@ impl Exchange {
         }
     }
 
-    pub(super) fn evaluation(package: &Package, value: &Evaluation) -> Result<Self> {
-        let model = package.validator(value)?;
-        model.input(value)?;
+    pub(super) fn evaluation(checked: &CheckedEvaluation<'_>) -> Result<Self> {
+        let model = checked.model();
+        let value = checked.evaluation();
         let mut frame = Self::new();
         for input in &value.inputs {
             let data = frame.dataset(&input.data, model.inputs.iter().map(|input| &input.port))?;

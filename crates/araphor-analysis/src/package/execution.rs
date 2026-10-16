@@ -82,8 +82,7 @@ impl AnalysisPackageOwner {
         let output = match implementation {
             PackageImplementationV1::Wasm { artifact, .. } => {
                 let prepared = self.wasm.prepare(artifact, &control)?;
-                let input = sdk::wire::Evaluation::encode(package, &bounded)
-                    .context(crate::AnalysisContractSnafu)?;
+                let input = checked.encode().context(crate::AnalysisContractSnafu)?;
                 let bytes = retained
                     .checked_add(input.allocated_bytes())
                     .ok_or_else(|| {
@@ -120,7 +119,7 @@ impl AnalysisPackageOwner {
                 self.limits.native.validate()?;
                 let loaded = super::native::NativeLibrary::load(artifact, qualification, &control);
                 control.check()?;
-                loaded?.call(package, &bounded, limits, &control)?
+                loaded?.call(&checked, limits, &control)?
             }
             _ => return Err(Code::Unsupported.error("model target").into()),
         };

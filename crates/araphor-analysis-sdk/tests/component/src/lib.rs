@@ -32,9 +32,7 @@ impl sdk::Guest for RuntimeFixture {
     fn compute(input: &sdk::CheckedEvaluation<'_>) -> sdk::Result<sdk::Output> {
         let evaluation = input.evaluation();
         Self::native_fault()?;
-        let package = Self::package();
-        Self::execute(sdk::wire::Evaluation::encode(&package, evaluation)?)?
-            .decode(&package, evaluation)
+        Self::execute(input.encode()?)?.decode(input.package(), evaluation)
     }
 }
 

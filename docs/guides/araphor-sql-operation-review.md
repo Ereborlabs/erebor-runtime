@@ -132,6 +132,16 @@ through invocation and output decoding. Invoke owns the VM permit, engine
 identity check, Store, quotas, interruption, and code pin. The outer Query
 evaluation permit remains held through SDK output validation and retention.
 
+[CheckedEvaluation](../../crates/araphor-analysis-sdk/src/validation.rs)
+retains the validated package, model, and input by borrow. Its
+[encode](../../crates/araphor-analysis-sdk/src/wire/evaluation.rs) method
+retains the IPC allocation checks. Native
+[Invocation](../../crates/araphor-analysis-sdk/src/native/mod.rs) borrows the
+same proof for input exchange and output validation. These paths do not repeat
+the input contract checks. The foreign guest decoders still validate raw input.
+The raw wire output decoder retains its error order. The wire bytes, WIT, native
+ABI, and producer release callbacks do not change.
+
 The Session checks retained local table bytes, including the dataset row
 index, before registration. Earlier local tables remain charged. Source
 capture and model-input results use the native input category. Client and
