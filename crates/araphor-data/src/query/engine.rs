@@ -1,13 +1,12 @@
 use std::future::Future;
 use std::path::Path;
-use std::sync::{mpsc, Arc, LazyLock, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
-use datafusion::common::{config::Dialect, ScalarValue};
+use datafusion::common::ScalarValue;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder, SessionStateDefaults};
-use datafusion::logical_expr::ScalarUDF;
 use datafusion::prelude::SessionConfig;
 use duckdb::types::{TimeUnit, Value};
 use snafu::ResultExt as _;
@@ -17,16 +16,7 @@ use crate::{AnalysisReadControl, Result};
 
 const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 const RUNTIME_PATH: &str = "<query-runtime>";
-static FUNCTIONS: LazyLock<Vec<Arc<ScalarUDF>>> = LazyLock::new(|| {
-    let mut functions = scalar::HugeInt::functions();
-    functions.push(Arc::new(ScalarUDF::from(
-        super::time_bucket::TimeBucket::new(),
-    )));
-    functions
-});
-
 mod batches;
-mod scalar;
 
 #[derive(Default)]
 pub(super) struct QueryEngine {
@@ -125,18 +115,13 @@ impl QueryEngine {
         let options = config.options_mut();
         options.execution.planning_concurrency = 1;
         options.optimizer.prefer_existing_union = true;
-        options.sql_parser.dialect = Dialect::DuckDB;
         options.sql_parser.map_string_types_to_utf8view = false;
-        options.sql_parser.parse_float_as_decimal = true;
-        options.sql_parser.default_null_ordering = "nulls_last".to_owned();
 
-        let mut functions = SessionStateDefaults::default_scalar_functions();
-        functions.extend(FUNCTIONS.iter().cloned());
         Ok(SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
             .with_expr_planners(SessionStateDefaults::default_expr_planners())
-            .with_scalar_functions(functions)
+            .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
             .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
             .with_window_functions(SessionStateDefaults::default_window_functions())
             .build())
@@ -343,11 +328,20 @@ mod tests {
         assert!(!options.catalog.create_default_catalog_and_schema);
         assert!(first.catalog_list().catalog_names().is_empty());
         assert!(!options.sql_parser.map_string_types_to_utf8view);
-        assert!(options.sql_parser.parse_float_as_decimal);
-        assert_eq!(options.sql_parser.default_null_ordering, "nulls_last");
+        assert!(!options.sql_parser.parse_float_as_decimal);
+        assert_eq!(
+            options.sql_parser.dialect,
+            datafusion::common::config::Dialect::Generic
+        );
+        assert_eq!(options.sql_parser.default_null_ordering, "nulls_max");
         assert!(first.table_factories().is_empty());
         assert!(first.table_functions().is_empty());
-        assert!(first.scalar_functions().contains_key("time_bucket"));
+        assert!(first.scalar_functions().contains_key("date_bin"));
+        assert!(!first.scalar_functions().contains_key("time_bucket"));
+        assert!(!first
+            .scalar_functions()
+            .keys()
+            .any(|name| name.starts_with("__araphor_")));
         assert!(!first.runtime_env().disk_manager.tmp_files_enabled());
         assert!(!Arc::ptr_eq(first.runtime_env(), second.runtime_env()));
         let reservation =

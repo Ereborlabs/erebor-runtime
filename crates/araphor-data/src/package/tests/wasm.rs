@@ -184,7 +184,10 @@ async fn ambiguous_type_rejects_activation() -> TestResult {
         .push(PackageImplementationV1::Sql {
             export: "evaluate".into(),
             program: crate::SqlModelV1 {
-                outputs: BTreeMap::from([("data".into(), "SELECT 7::UBIGINT AS value".into())]),
+                outputs: BTreeMap::from([(
+                    "data".into(),
+                    "SELECT 7::BIGINT UNSIGNED AS value".into(),
+                )]),
                 ..Default::default()
             },
         });

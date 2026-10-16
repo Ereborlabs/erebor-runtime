@@ -36,7 +36,7 @@ fn model(values: &[(&str, u64)]) -> sdk::Model {
         .map(|(name, value)| sdk::InputPort {
             port: port(name),
             source: sdk::InputSource::Query(format!(
-                "SELECT {value}::UBIGINT AS value FROM catalog LIMIT 1"
+                "SELECT {value}::BIGINT UNSIGNED AS value FROM catalog LIMIT 1"
             )),
         })
         .collect();
@@ -289,15 +289,15 @@ fn pruned_source_evidence() -> TestResult {
     let mut witnesses = Vec::new();
     for (sql, expected_rows) in [
         (
-            "SELECT CAST(operation AS UBIGINT) AS value FROM events WHERE operation = 7",
+            "SELECT CAST(operation AS BIGINT UNSIGNED) AS value FROM events WHERE operation = 7",
             1,
         ),
         (
-            "SELECT CAST(operation AS UBIGINT) AS value FROM events WHERE operation = 7 AND false",
+            "SELECT CAST(operation AS BIGINT UNSIGNED) AS value FROM events WHERE operation = 7 AND false",
             0,
         ),
         (
-            "WITH unused AS (SELECT operation FROM events) SELECT CAST(7 AS UBIGINT) AS value",
+            "WITH unused AS (SELECT operation FROM events) SELECT CAST(7 AS BIGINT UNSIGNED) AS value",
             1,
         ),
     ] {
@@ -344,9 +344,11 @@ fn operation_source_denial() -> TestResult {
     let package = sdk::Package::new("sql-operation", "1", vec![model.clone()]);
     let (grant, active) = scope(AnalysisSelectionV1::tenant([1; 16]));
     for sql in [
-        "SELECT 1::UBIGINT AS value FROM catalog",
-        "SELECT 1::UBIGINT AS value FROM _query_catalog()",
+        "SELECT 1::BIGINT UNSIGNED AS value FROM catalog",
+        "SELECT 1::BIGINT UNSIGNED AS value FROM _query_catalog()",
         "SELECT value FROM \"araphor:port:0\"",
+        "WITH unused AS (SELECT 1::BIGINT UNSIGNED AS value FROM catalog) SELECT value FROM source",
+        "WITH unused AS (SELECT value FROM output_result) SELECT value FROM source",
     ] {
         let (operation, retained) = owner.model_operation([1; 16]).inputs(
             request(&model, &grant, &active),
@@ -507,7 +509,7 @@ fn aggregate_output_rows_stop_before_reference_tables() -> TestResult {
     for name in ["result", "other"] {
         program
             .outputs
-            .insert(name.into(), "SELECT 1::UBIGINT AS value".into());
+            .insert(name.into(), "SELECT 1::BIGINT UNSIGNED AS value".into());
     }
     assert!(matches!(
         owner.evaluate_model(
@@ -547,11 +549,11 @@ fn admitted_input_provenance() -> TestResult {
     model.inputs = vec![
         sdk::InputPort {
             port: port("zrows"),
-            source: sdk::InputSource::Query("SELECT source_cursor AS value FROM \"ZRows\"".into()),
+            source: sdk::InputSource::Query("SELECT source_cursor AS value FROM \"zrows\"".into()),
         },
         sdk::InputPort {
             port: port("selected"),
-            source: sdk::InputSource::Query("WITH unused AS (SELECT ordinal FROM \"arows\") SELECT source_cursor AS value FROM \"ZRows\"".into()),
+            source: sdk::InputSource::Query("WITH unused AS (SELECT ordinal FROM \"arows\") SELECT source_cursor AS value FROM \"zrows\"".into()),
         },
         sdk::InputPort {
             port: sdk::Port::new("arows", ordinals),

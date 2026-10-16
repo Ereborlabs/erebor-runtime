@@ -38,7 +38,7 @@ async fn query_reads_later_output() -> TestResult {
                 })),
             },
         ];
-        let mut upstream = bundle("1", "SELECT 3::UBIGINT AS count")
+        let mut upstream = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count")
             .artifacts
             .remove(0);
         upstream.descriptor.id = "test.upstream".into();
@@ -146,7 +146,7 @@ async fn output_read_shares_capacity() -> TestResult {
         ..Default::default()
     })?;
     let installed = fixture
-        .install(bundle("1", "SELECT 3::UBIGINT AS count"), None)
+        .install(bundle("1", "SELECT 3::BIGINT UNSIGNED AS count"), None)
         .await?;
     let receipt = &installed.exports[0].results[0];
     let active = fixture
@@ -162,7 +162,7 @@ async fn output_read_shares_capacity() -> TestResult {
     let port = sdk::Port::new("source", model.outputs[0].schema.clone());
     model.inputs = vec![sdk::InputPort {
         port,
-        source: sdk::InputSource::Query("SELECT 1::UBIGINT AS count".into()),
+        source: sdk::InputSource::Query("SELECT 1::BIGINT UNSIGNED AS count".into()),
     }];
     let control = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
     let now = crate::package::AnalysisPackageOwner::now();
@@ -231,7 +231,7 @@ async fn output_read_shares_capacity() -> TestResult {
     let released = fixture.owner.query.query_datasets(
         [1; 16],
         &[],
-        "SELECT 1::UBIGINT AS count",
+        "SELECT 1::BIGINT UNSIGNED AS count",
         sdk::Limits::default(),
         &control,
     )?;
@@ -264,7 +264,7 @@ async fn alias_import_budget() -> TestResult {
         .push(sdk::InputPort {
             port: sdk::Port::new("supplied", schema.clone()),
             source: sdk::InputSource::Query(
-            "SELECT 3::UBIGINT AS count FROM catalog a JOIN catalog b ON a.readiness = b.readiness LIMIT 1024".into(),
+            "SELECT 3::BIGINT UNSIGNED AS count FROM catalog a JOIN catalog b ON a.readiness = b.readiness LIMIT 1024".into(),
             ),
         });
     let installed = fixture.install(package, None).await?;
@@ -315,9 +315,9 @@ async fn alias_import_budget() -> TestResult {
                     port: sdk::Port::new("later", schema.clone()),
                     source: sdk::InputSource::Query(
                         if wide {
-                            "SELECT COUNT(*)::UBIGINT AS count FROM catalog WHERE LENGTH(description) > 0"
+                            "SELECT COUNT(*)::BIGINT UNSIGNED AS count FROM catalog WHERE LENGTH(description) > 0"
                         } else {
-                            "SELECT COUNT(*)::UBIGINT AS count FROM catalog"
+                            "SELECT COUNT(*)::BIGINT UNSIGNED AS count FROM catalog"
                         }
                         .into(),
                     ),
@@ -395,7 +395,7 @@ async fn alias_import_budget() -> TestResult {
         let released = owner.query_datasets(
             [1; 16],
             &[],
-            "SELECT 1::UBIGINT AS count",
+            "SELECT 1::BIGINT UNSIGNED AS count",
             sdk::Limits::default(),
             &control,
         )?;

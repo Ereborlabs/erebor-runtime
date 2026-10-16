@@ -6,13 +6,13 @@ use crate::AnalysisReadControl;
 async fn failed_upgrade_preserves_state() -> TestResult {
     let fixture = Fixture::new()?;
     let original = fixture
-        .install(bundle("1", "SELECT 3::UBIGINT AS count"), None)
+        .install(bundle("1", "SELECT 3::BIGINT UNSIGNED AS count"), None)
         .await?;
     let before = fixture.store.package_activation_page(None)?.remove(0);
     assert!(fixture
         .execute(PackageRequestV1::Update {
             scope_id: "test".into(),
-            bundle: bundle("2", "SELECT CAST('bad' AS UBIGINT) AS count"),
+            bundle: bundle("2", "SELECT CAST('bad' AS BIGINT UNSIGNED) AS count"),
         })
         .await
         .is_err());
@@ -47,15 +47,15 @@ async fn failed_upgrade_preserves_state() -> TestResult {
 async fn startup_releases_unreferenced_admissions() -> TestResult {
     let fixture = Fixture::new()?;
     fixture
-        .install(bundle("1", "SELECT 1::UBIGINT AS count"), None)
+        .install(bundle("1", "SELECT 1::BIGINT UNSIGNED AS count"), None)
         .await?;
     fixture
         .execute(PackageRequestV1::Update {
             scope_id: "test".into(),
-            bundle: bundle("2", "SELECT 2::UBIGINT AS count"),
+            bundle: bundle("2", "SELECT 2::BIGINT UNSIGNED AS count"),
         })
         .await?;
-    let mut inactive = bundle("1", "SELECT 0::UBIGINT AS count");
+    let mut inactive = bundle("1", "SELECT 0::BIGINT UNSIGNED AS count");
     inactive.root.package_id = "test.inactive".into();
     inactive.artifacts[0].descriptor.id = inactive.root.package_id.clone();
     inactive.artifacts[0].implementations = vec![PackageImplementationV1::Native {
@@ -73,7 +73,7 @@ async fn startup_releases_unreferenced_admissions() -> TestResult {
         .map(|artifact| AnalysisPackageOwner::revision(&fixture.grant, artifact))
         .collect::<crate::Result<Vec<_>>>()?;
     for index in 0..33 {
-        let mut artifact = bundle("1", "SELECT 0::UBIGINT AS count")
+        let mut artifact = bundle("1", "SELECT 0::BIGINT UNSIGNED AS count")
             .artifacts
             .remove(0);
         artifact.descriptor.id = format!("orphan.{index:02}");

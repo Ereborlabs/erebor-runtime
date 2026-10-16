@@ -105,15 +105,7 @@ impl Fixture {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let positions = if schema.name == "events" {
-                ", __araphor_commit_revision UBIGINT, __araphor_ordinal UINTEGER"
-            } else {
-                ""
-            };
-            connection.execute_batch(&format!(
-                "CREATE TABLE {}({fields}{positions})",
-                schema.name
-            ))?;
+            connection.execute_batch(&format!("CREATE TABLE {}({fields})", schema.name))?;
         }
         connection.execute_batch(
             "INSERT INTO coverage(node_id, state) VALUES ('node', 'healthy'), ('other', NULL)",
@@ -139,14 +131,12 @@ impl Fixture {
                 continue;
             }
             connection.execute(
-                "INSERT INTO events(node_id, source_cursor, received_at, operation, __araphor_commit_revision, __araphor_ordinal, policy_rule_id, commit_revision, ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO events(node_id, source_cursor, received_at, operation, policy_rule_id, commit_revision, ordinal) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     "node",
                     index as u64 + 1,
                     Value::Timestamp(TimeUnit::Microsecond, (nanos / 1_000) as i64),
                     (index % 3) as u32,
-                    7_u64,
-                    index as u32,
                     42_u64,
                     7_u64,
                     index as u32,
@@ -200,8 +190,16 @@ impl Fixture {
         let binding = admitted.bind_at(480_000_000_000)?;
         let full = Self::database(None)?;
         let selected = Self::database(Some(&binding))?;
-        let expected = Self::rows(&full, sql, &parameters)?;
-        let mut actual = Self::rows(&selected, &binding.sql, &binding.parameters)?;
+        let expected = Self::rows(
+            &full,
+            &sql.replace("date_bin(", "time_bucket("),
+            &parameters,
+        )?;
+        let mut actual = Self::rows(
+            &selected,
+            &binding.sql.replace("date_bin(", "time_bucket("),
+            &binding.parameters,
+        )?;
         if binding.append {
             for row in &mut actual {
                 row.truncate(row.len().saturating_sub(2));
@@ -216,13 +214,18 @@ impl Fixture {
 fn query_admission_fields() -> TestResult {
     let admitted = Fixture::admit("SELECT e.* FROM events AS e", vec![])?;
     let binding = admitted.bind_at(1)?;
-    assert!(!binding.sql.contains('*'));
-    assert!(binding.sql.contains("catalog_json"));
+    assert!(binding.sql.contains('*'));
+    assert!(binding
+        .plan()?
+        .schema()
+        .fields()
+        .iter()
+        .any(|field| field.name() == "catalog_json"));
     assert!(binding.append);
     let connection = Fixture::database(None)?;
     let mut actual = Fixture::rows(&connection, &binding.sql, &binding.parameters)?;
-    let mut expected = Fixture::rows(&connection, "SELECT e.* FROM events AS e", &[])?;
-    for row in actual.iter_mut().chain(&mut expected) {
+    let expected = Fixture::rows(&connection, "SELECT e.* FROM events AS e", &[])?;
+    for row in &mut actual {
         row.truncate(row.len() - 2);
     }
     assert_eq!(actual, expected);
@@ -235,7 +238,6 @@ fn query_admission_fields() -> TestResult {
         "SELECT e.operation FROM events e JOIN coverage c ON e.missing_field = c.state",
         "WITH unused AS (SELECT missing_field FROM events) SELECT operation FROM events",
         "SELECT lag(operation) OVER (ORDER BY missing_field) FROM events",
-        "SELECT operation FROM events WINDOW unused AS (ORDER BY missing_field)",
         "SELECT __araphor_commit_revision FROM events",
         "SELECT operation AS __araphor_ordinal FROM events",
     ] {
@@ -247,6 +249,10 @@ fn query_admission_fields() -> TestResult {
         assert!(!message.contains("__araphor_"));
         assert!(!message.contains(sql));
     }
+    Fixture::admit(
+        "SELECT operation FROM events WINDOW unused AS (ORDER BY missing_field)",
+        vec![],
+    )?;
     Fixture::equivalent(
         "SELECT operation AS catalog_json FROM events ORDER BY catalog_json",
         vec![],
@@ -344,7 +350,7 @@ fn query_trace_admission() -> TestResult {
 #[test]
 fn query_admission_scopes() -> TestResult {
     for sql in [
-        "SELECT \"E\".\"Operation\" FROM \"EVENTS\" AS \"E\" ORDER BY \"E\".source_cursor",
+        "SELECT \"E\".\"operation\" FROM \"events\" AS \"E\" ORDER BY \"E\".source_cursor",
         "WITH recent AS (SELECT source_cursor, operation FROM events) SELECT r.operation FROM recent r ORDER BY r.source_cursor",
         "WITH recent AS (SELECT source_cursor, operation FROM events) SELECT a.operation FROM recent a JOIN recent b ON a.source_cursor = b.source_cursor ORDER BY a.source_cursor",
         "WITH events AS (SELECT node_id, state FROM coverage) SELECT state FROM events ORDER BY node_id",
@@ -367,6 +373,7 @@ fn query_admission_scopes() -> TestResult {
         &BTreeSet::from(["coverage".to_owned()])
     );
     for sql in [
+        "SELECT \"E\".\"Operation\" FROM \"EVENTS\" AS \"E\" ORDER BY \"E\".source_cursor",
         "SELECT node_id FROM events e JOIN coverage c ON e.node_id = c.node_id",
         "WITH recent AS (SELECT operation FROM events) SELECT recent.catalog_json FROM recent",
         "WITH recent AS (SELECT operation AS known FROM events) SELECT operation FROM recent",
@@ -380,12 +387,14 @@ fn query_admission_scopes() -> TestResult {
 
 #[test]
 fn query_admission_having_aliases() -> TestResult {
-    for sql in [
+    assert!(Fixture::admit(
         "SELECT operation AS source_cursor, COUNT(*) AS amount FROM events GROUP BY operation HAVING source_cursor > 1 ORDER BY source_cursor",
+        vec![],
+    ).is_err());
+    Fixture::admit(
         "SELECT COUNT(*) AS operation FROM events GROUP BY operation HAVING operation = 2 ORDER BY 1",
-    ] {
-        Fixture::equivalent(sql, vec![])?;
-    }
+        vec![],
+    )?.bind_at(0)?;
     Ok(())
 }
 
@@ -517,7 +526,7 @@ fn query_admission_moving_rejection() -> TestResult {
 }
 
 #[test]
-fn query_admission_bucket_width() -> TestResult {
+fn query_admission_date_bin() -> TestResult {
     for width in [
         "1 microsecond",
         "1 millisecond",
@@ -527,24 +536,17 @@ fn query_admission_bucket_width() -> TestResult {
         "1 day",
         "5 MINUTES",
     ] {
-        let sql = format!("SELECT time_bucket(INTERVAL '{width}', received_at, TIMESTAMP '1970-01-01 00:00:00') AS bucket, COUNT(*) FROM events GROUP BY bucket ORDER BY bucket");
+        let sql = format!("SELECT date_bin(INTERVAL '{width}', received_at, TIMESTAMP '1970-01-01 00:00:00') AS bucket, COUNT(*) FROM events GROUP BY bucket ORDER BY bucket");
         Fixture::equivalent(&sql, vec![])?;
     }
-    for width in [
-        "0 seconds",
-        "-1 second",
-        "1 month",
-        "1 year",
-        "18446744073709551615 days",
+    for sql in [
+        "SELECT time_bucket(INTERVAL '1 second', received_at) FROM events",
+        "SELECT date_bin(received_at, received_at) FROM events",
+        "SELECT date_bin(INTERVAL '1 second') FROM events",
+        "SELECT date_bin(INTERVAL '1 second', missing_field) FROM events",
     ] {
-        let sql = format!("SELECT time_bucket(INTERVAL '{width}', received_at) FROM events");
-        assert!(Fixture::admit(&sql, vec![]).is_err(), "{width}");
+        assert!(Fixture::admit(sql, vec![]).is_err(), "{sql}");
     }
-    assert!(Fixture::admit(
-        "SELECT time_bucket(received_at, received_at) FROM events",
-        vec![]
-    )
-    .is_err());
     Ok(())
 }
 

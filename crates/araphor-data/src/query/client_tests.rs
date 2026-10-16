@@ -24,6 +24,95 @@ use crate::{
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const WAIT: Duration = Duration::from_secs(5);
 
+#[tokio::test]
+async fn native_sql_values() -> TestResult {
+    let fixture = ClientFixture::new(1, 100)?;
+    fixture.data.event(1, 1, 7)?;
+    let plan = fixture.plan(
+        "SELECT 3 / 2 AS quotient, 1 AS literal, 1.5 AS fractional, length('abc') AS length",
+        Vec::new(),
+        false,
+    )?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            Value::BigInt(1),
+            Value::BigInt(1),
+            Value::Double(1.5),
+            Value::Int(3)
+        ]],
+    );
+    assert_eq!(
+        result
+            .columns
+            .iter()
+            .map(|column| (column.name.as_str(), column.data_type.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("quotient", "Bigint"),
+            ("literal", "Bigint"),
+            ("fractional", "Double"),
+            ("length", "Integer")
+        ],
+    );
+    drop(result);
+    let plan = fixture.plan(
+        "SELECT COUNT(*) AS operation FROM events GROUP BY operation HAVING operation = 7",
+        Vec::new(),
+        false,
+    )?;
+    let result = fixture.query(&plan).await?;
+    assert_eq!(result.rows, vec![vec![Value::BigInt(1)]]);
+    drop(result);
+    for (sql, value) in [
+        (
+            "SELECT date_bin(INTERVAL '7 days', TIMESTAMP '1970-01-01') AS bucket",
+            0,
+        ),
+        (
+            "SELECT date_bin(INTERVAL '10 microseconds', TIMESTAMP '1969-12-31 23:59:59.999998', TIMESTAMP '1970-01-01') AS bucket",
+            -10_000,
+        ),
+        (
+            "SELECT date_bin(INTERVAL '1 microsecond', TIMESTAMP '1969-12-31 23:59:59.999999001') AS bucket",
+            -1_000,
+        ),
+    ] {
+        let plan = fixture.plan(sql, Vec::new(), false)?;
+        let result = fixture.query(&plan).await?;
+        assert_eq!(result.rows, vec![vec![Value::Timestamp(TimeUnit::Nanosecond, value)]], "{sql}");
+        assert_eq!(result.columns[0].data_type, "TimestampNs");
+    }
+    for width in [
+        "0 seconds",
+        "-1 second",
+        "1 month",
+        "18446744073709551615 days",
+    ] {
+        let sql = format!("SELECT date_bin(INTERVAL '{width}', TIMESTAMP '1970-01-01') AS bucket");
+        let error = match fixture.plan(&sql, Vec::new(), false) {
+            Ok(plan) => fixture.query(&plan).await.err(),
+            Err(error) => Some(error),
+        }
+        .ok_or("invalid native bucket width succeeded")?;
+        assert!(
+            matches!(
+                error,
+                crate::Error::QueryInvalid { .. } | crate::Error::QueryEngine { .. }
+            ),
+            "{width}: {error:?}",
+        );
+    }
+    drop(
+        fixture
+            .owner
+            .budget
+            .evaluate(fixture.data.source.tenant_id)?,
+    );
+    Ok(())
+}
+
 struct Clock {
     now: Arc<AtomicU64>,
     reads: AtomicUsize,
@@ -2400,7 +2489,10 @@ async fn query_event_projection() -> TestResult {
     drop(result);
     for (expression, expected) in [
         ("COUNT(*)", Value::BigInt(8)),
-        ("CAST(SUM(operation) AS UBIGINT)", Value::UBigInt(64)),
+        (
+            "CAST(SUM(operation) AS BIGINT UNSIGNED)",
+            Value::UBigInt(64),
+        ),
         ("MIN(operation)", Value::UInt(7)),
         ("MAX(operation)", Value::UInt(9)),
     ] {

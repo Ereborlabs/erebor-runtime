@@ -6,7 +6,7 @@ use crate::package::{PackageImplementationV1, PackageReadinessV1};
 #[tokio::test]
 async fn suspended_package_renewal_restart() -> TestResult {
     let mut fixture = Fixture::new()?;
-    let mut package = bundle("1", "SELECT 3::UBIGINT AS count");
+    let mut package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     let artifact = &mut package.artifacts[0];
     artifact.descriptor.exports[0].checkpoint = Some(sdk::CheckpointSpec {
         version: 1,
@@ -18,7 +18,8 @@ async fn suspended_package_renewal_restart() -> TestResult {
     if let PackageImplementationV1::Sql { program, .. } = &mut artifact.implementations[0] {
         program.checkpoint.insert(
             "state".into(),
-            "SELECT CAST(COALESCE(MAX(runs),0)+1 AS UBIGINT) AS runs FROM prior_state".into(),
+            "SELECT CAST(COALESCE(MAX(runs),0)+1 AS BIGINT UNSIGNED) AS runs FROM prior_state"
+                .into(),
         );
     }
     let installed = fixture.install(package.clone(), None).await?;

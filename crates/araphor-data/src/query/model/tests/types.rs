@@ -61,7 +61,7 @@ fn sql_model_portable_precision() -> TestResult {
     };
     let package = sdk::Package::new("precise", "1", vec![model]);
     let program = SqlModelV1 {
-        outputs: BTreeMap::from([("rows".into(), "SELECT * FROM data".into())]),
+        outputs: BTreeMap::from([("rows".into(), "SELECT value, time, bytes FROM data".into())]),
         ..Default::default()
     };
     let output = owner.evaluate_model([1; 16], &package, &program, &evaluation, &control()?)?;

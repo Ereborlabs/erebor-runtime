@@ -66,7 +66,7 @@ fn package_metadata_digest_stable() -> TestResult {
 
 #[test]
 fn sql_oci_metadata_unchanged() -> TestResult {
-    let package = crate::package::tests::bundle("1", "SELECT 1::UBIGINT AS count");
+    let package = crate::package::tests::bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
     let content = sdk::oci::Content::from_bytes(&package.encode()?)?;
     assert!(content.layers.is_empty());
     assert_eq!(

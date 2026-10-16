@@ -150,7 +150,13 @@ impl QueryFixture {
         }
         appender.flush()?;
         drop(appender);
-        let mut statement = connection.prepare(&plan.sql())?;
+        // The oracle uses the same fixed intervals and explicit origin.
+        let sql = plan
+            .sql()
+            .replace("date_bin(", "time_bucket(")
+            .replace("INTEGER UNSIGNED", "UINTEGER")
+            .replace("BIGINT UNSIGNED", "UBIGINT");
+        let mut statement = connection.prepare(&sql)?;
         let parameters = plan.parameters(now_ns);
         let mut rows = statement.query(params_from_iter(parameters.iter()))?;
         let mut output = Vec::new();

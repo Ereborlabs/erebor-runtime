@@ -27,7 +27,7 @@ fn dataset(name: &str) -> sdk::wire::Dataset {
 
 #[test]
 fn bundle_capacity_is_charged() -> TestResult {
-    let mut bundle = crate::package::tests::bundle("1", "SELECT 7::UBIGINT AS count");
+    let mut bundle = crate::package::tests::bundle("1", "SELECT 7::BIGINT UNSIGNED AS count");
     let encoded = bundle.encode()?;
     let initial = BundleMemory::bundle(&bundle)?;
     let mut growth = string(&mut bundle.root.package_id) + string(&mut bundle.root.revision);
@@ -52,7 +52,7 @@ fn bundle_capacity_is_charged() -> TestResult {
 #[test]
 fn admitted_capacity_is_charged() -> TestResult {
     let fixture = crate::package::tests::Fixture::new()?;
-    let value = crate::package::tests::bundle("1", "SELECT 7::UBIGINT AS count");
+    let value = crate::package::tests::bundle("1", "SELECT 7::BIGINT UNSIGNED AS count");
     let retained = InstalledBundle::new(&fixture.owner.query, value.clone())?;
     let bytes = BundleMemory::retained(
         &retained.value,
@@ -89,7 +89,7 @@ fn admitted_capacity_is_charged() -> TestResult {
 #[test]
 fn admission_stops_at_capacity() -> TestResult {
     let fixture = crate::package::tests::Fixture::new()?;
-    let mut value = crate::package::tests::bundle("1", "SELECT 7::UBIGINT AS count");
+    let mut value = crate::package::tests::bundle("1", "SELECT 7::BIGINT UNSIGNED AS count");
     let artifact = &mut value.artifacts[0];
     let mut model = artifact.descriptor.exports[0].clone();
     model.name = "later".into();

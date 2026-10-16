@@ -355,7 +355,7 @@ fn reuse_reloads_reinstalled_revision() -> TestResult {
     };
     program
         .outputs
-        .insert("rows".into(), "SELECT 9::UBIGINT AS value".into());
+        .insert("rows".into(), "SELECT 9::BIGINT UNSIGNED AS value".into());
     fixture.owner.execute_sync(
         fixture.grant.clone(),
         PackageRequestV1::Install {

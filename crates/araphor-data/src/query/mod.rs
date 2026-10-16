@@ -37,7 +37,6 @@ mod owner_tests;
 mod plan;
 #[cfg(test)]
 mod tests;
-mod time_bucket;
 mod values;
 mod wasm;
 

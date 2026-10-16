@@ -21,7 +21,7 @@ fn bind(artifact: &mut PackageArtifactV1, input: &str, source: &PackageRefV1) {
 
 fn chain() -> PackageBundleV1 {
     let mut package = bundle("1", "SELECT count FROM source");
-    let mut upstream = bundle("1", "SELECT 3::UBIGINT AS count")
+    let mut upstream = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count")
         .artifacts
         .remove(0);
     upstream.descriptor.id = "test.upstream".into();
@@ -77,7 +77,7 @@ async fn admission_rejects_domain_execution() -> TestResult {
     .into_iter()
     .enumerate()
     {
-        let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
+        let mut package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
         package.root.package_id = format!("test.domain{index}");
         package.artifacts[0].descriptor.id = package.root.package_id.clone();
         package.artifacts[0].descriptor.exports[0].outputs[0].kind = kind;

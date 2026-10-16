@@ -31,7 +31,7 @@ fn chain(revision: &str, empty: bool) -> TestResult<PackageBundleV1> {
     upstream.descriptor.exports[0].outputs[0].schema = model.outputs[0].schema.clone();
     upstream.descriptor.exports[0].inputs =
         vec![sdk::Port::new("source", model.outputs[0].schema.clone()).into()];
-    upstream.descriptor.exports[0].inputs[0].source = sdk::InputSource::Query("SELECT max(owner_revision)::UBIGINT AS value FROM context_versions WHERE owner_id = 'fixture'".into());
+    upstream.descriptor.exports[0].inputs[0].source = sdk::InputSource::Query("SELECT max(owner_revision)::BIGINT UNSIGNED AS value FROM context_versions WHERE owner_id = 'fixture'".into());
     package.artifacts.push(upstream);
     Ok(package)
 }

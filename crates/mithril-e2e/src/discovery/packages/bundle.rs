@@ -43,8 +43,8 @@ impl Denials {
             implementations: vec![PackageImplementationV1::Sql {
                 export: "count".into(),
                 program: SqlModelV1 {
-                    outputs: BTreeMap::from([("counts".into(), "SELECT subject,resource,CAST(COUNT(DISTINCT event) AS UBIGINT) AS count FROM denials GROUP BY subject,resource ORDER BY subject,resource".into())]),
-                    checkpoint: BTreeMap::from([("state".into(), "SELECT CAST(COALESCE(MAX(runs),0)+1 AS UBIGINT) AS runs FROM prior_state".into())]),
+                    outputs: BTreeMap::from([("counts".into(), "SELECT subject,resource,CAST(COUNT(DISTINCT event) AS BIGINT UNSIGNED) AS count FROM denials GROUP BY subject,resource ORDER BY subject,resource".into())]),
+                    checkpoint: BTreeMap::from([("state".into(), "SELECT CAST(COALESCE(MAX(runs),0)+1 AS BIGINT UNSIGNED) AS runs FROM prior_state".into())]),
                     ..Default::default()
                 },
             }], fixtures: Vec::new(),
@@ -64,7 +64,7 @@ impl Denials {
             output: "counts".into(),
         }));
         let sql = if broken {
-            "SELECT subject,resource,CAST('invalid' AS UBIGINT) AS count FROM counts".into()
+            "SELECT subject,resource,CAST('invalid' AS BIGINT UNSIGNED) AS count FROM counts".into()
         } else {
             format!("SELECT subject,resource,count FROM counts WHERE count>={threshold} ORDER BY subject,resource")
         };

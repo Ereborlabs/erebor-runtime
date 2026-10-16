@@ -3,7 +3,7 @@ use crate::package::tests::{bundle, TestResult};
 
 #[test]
 fn raw_code_preserves_native_dependencies() -> TestResult {
-    let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
+    let mut package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
     let sql = package.artifacts[0].implementations.remove(0);
     for name in ["wasm", "native", "legacy"] {
         let mut model = package.artifacts[0].descriptor.exports[0].clone();
@@ -54,7 +54,7 @@ fn raw_code_preserves_native_dependencies() -> TestResult {
 
 #[test]
 fn raw_frame_rejects_corruption() -> TestResult {
-    let artifact = bundle("1", "SELECT 1::UBIGINT AS count")
+    let artifact = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count")
         .artifacts
         .remove(0);
     let bytes = StoredArtifact::encode(&artifact)?;

@@ -7,9 +7,9 @@ use crate::package::PackageImplementationV1;
 use super::*;
 
 const START: u64 = 946_684_800_000_000_000;
-const EXPIRY: &str = "SELECT CASE WHEN CURRENT_TIMESTAMP < TIMESTAMP '2000-01-01 00:00:00.5' THEN 1::UBIGINT ELSE 0::UBIGINT END AS count";
+const EXPIRY: &str = "SELECT CASE WHEN CURRENT_TIMESTAMP < TIMESTAMP '2000-01-01 00:00:00.5' THEN 1::BIGINT UNSIGNED ELSE 0::BIGINT UNSIGNED END AS count";
 const NOTIFICATION_COUNT: &str =
-    "SELECT COUNT(*)::UBIGINT AS count FROM notifications WHERE NOT overdue";
+    "SELECT COUNT(*)::BIGINT UNSIGNED AS count FROM notifications WHERE NOT overdue";
 
 fn notification_deadline(fixture: &Fixture, period: u64) -> TestResult<crate::NotificationRouter> {
     use crate::{
@@ -199,7 +199,7 @@ async fn automatic_clock_ticks() -> TestResult {
 #[tokio::test]
 async fn unchanged_model_stays_current() -> TestResult {
     let fixture = Fixture::new()?;
-    let package = bundle("1", "SELECT 3::UBIGINT AS count");
+    let package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     fixture.install(package.clone(), None).await?;
     let package = InstalledBundle::new(&fixture.owner.query, package)?;
     let active = fixture.store.package_activation_page(None)?.remove(0);
@@ -239,7 +239,7 @@ async fn unchanged_input_skips_extraction() -> TestResult {
     artifact.descriptor.exports[0].inputs.push(sdk::InputPort {
         port,
         source: sdk::InputSource::Query(
-            "SELECT COUNT(*)::UBIGINT AS count FROM context_versions".into(),
+            "SELECT COUNT(*)::BIGINT UNSIGNED AS count FROM context_versions".into(),
         ),
     });
     fixture.install(package.clone(), None).await?;

@@ -89,7 +89,7 @@ fn component() -> PackageBundleV1 {
             export: "count".into(),
             output: "rows".into(),
         }));
-    let mut source = crate::package::tests::bundle("1", "SELECT 7::UBIGINT AS value")
+    let mut source = crate::package::tests::bundle("1", "SELECT 7::BIGINT UNSIGNED AS value")
         .artifacts
         .remove(0);
     source.descriptor.exports[0].outputs[0].schema = schema;

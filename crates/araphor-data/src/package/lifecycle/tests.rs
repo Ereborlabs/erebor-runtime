@@ -37,7 +37,7 @@ fn graph_accepts_output_sources() {
 #[tokio::test]
 async fn admitted_inspection_tracks_replacement() -> TestResult {
     let fixture = Fixture::new()?;
-    let original = bundle("1", "SELECT 3::UBIGINT AS count");
+    let original = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     fixture.install(original.clone(), None).await?;
     let original = super::InstalledBundle::new(&fixture.owner.query, original)?;
     let control = crate::AnalysisReadControl::default();
@@ -50,7 +50,7 @@ async fn admitted_inspection_tracks_replacement() -> TestResult {
     )?;
     assert_eq!(response.exports[0].revision, "1");
     assert_eq!(response.exports[0].results.len(), 1);
-    let replacement = bundle("2", "SELECT 4::UBIGINT AS count");
+    let replacement = bundle("2", "SELECT 4::BIGINT UNSIGNED AS count");
     fixture
         .execute(PackageRequestV1::Update {
             scope_id: "test".into(),
@@ -97,7 +97,7 @@ async fn admitted_inspection_tracks_replacement() -> TestResult {
 #[tokio::test]
 async fn parameters_checked_before_installation() -> TestResult {
     let fixture = Fixture::new()?;
-    let mut package = bundle("1", "SELECT 3::UBIGINT AS count");
+    let mut package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     let artifact = &mut package.artifacts[0];
     let mut second = artifact.descriptor.exports[0].clone();
     second.name = "threshold".into();
@@ -149,7 +149,7 @@ async fn parameters_checked_before_installation() -> TestResult {
 #[tokio::test]
 async fn renewal_preserves_failed_readiness() -> TestResult {
     let mut fixture = Fixture::new()?;
-    let package = bundle("1", "SELECT CAST('bad' AS UBIGINT) AS count");
+    let package = bundle("1", "SELECT CAST('bad' AS BIGINT UNSIGNED) AS count");
     assert!(fixture.install(package.clone(), None).await.is_err());
     let before = fixture.store.package_activation_page(None)?.remove(0);
     let before_context: super::InstalledContext =
@@ -181,7 +181,7 @@ async fn renewal_preserves_failed_readiness() -> TestResult {
 async fn missing_dependency_target_status() -> TestResult {
     let fixture = Fixture::new()?;
     let mut package = bundle("1", "SELECT count FROM source");
-    let mut upstream = bundle("1", "SELECT 3::UBIGINT AS count")
+    let mut upstream = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count")
         .artifacts
         .remove(0);
     upstream.descriptor.id = "test.upstream".into();
@@ -359,7 +359,7 @@ async fn shared_dependency_parameter_comparison() -> TestResult {
 #[tokio::test]
 async fn oversized_parameters_preserve_store() -> TestResult {
     let fixture = Fixture::new()?;
-    let mut package = bundle("1", "SELECT 3::UBIGINT AS count");
+    let mut package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     package.artifacts[0].descriptor.exports[0].parameters =
         sdk::Schema::new(vec![sdk::Field::new("value", sdk::DataType::Utf8, false)]);
     let parameters = serde_json::json!({"test.model":{"count":{

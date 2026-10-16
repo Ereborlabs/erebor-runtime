@@ -48,7 +48,7 @@ async fn native_caps_leave_other_targets_available() -> TestResult {
     })?;
     let sql = fixture
         .install(
-            super::super::bundle("1", "SELECT 3::UBIGINT AS count"),
+            super::super::bundle("1", "SELECT 3::BIGINT UNSIGNED AS count"),
             None,
         )
         .await?;

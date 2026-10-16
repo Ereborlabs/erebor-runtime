@@ -4,7 +4,7 @@ use araphor_analysis_sdk as sdk;
 
 #[test]
 fn oci_package_identity() -> TestResult {
-    let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
+    let mut package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
     package.artifacts[0].implementations = vec![PackageImplementationV1::Native {
         export: "count".into(),
         artifact: (0_u8..=255).collect(),
@@ -109,7 +109,7 @@ fn oci_package_identity() -> TestResult {
 
 #[test]
 fn oci_raw_slot_rejections() -> TestResult {
-    let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
+    let mut package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
     package.artifacts[0].implementations = vec![PackageImplementationV1::Python {
         export: "count".into(),
         artifact: vec![1],
@@ -135,7 +135,7 @@ fn oci_raw_slot_rejections() -> TestResult {
 
 #[test]
 fn oci_directory_rejects_symlinks() -> TestResult {
-    let package = bundle("1", "SELECT 1::UBIGINT AS count");
+    let package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
     let directory = tempfile::tempdir()?;
     let layout = directory.path().join("layout");
     package.write_layout(&layout)?;

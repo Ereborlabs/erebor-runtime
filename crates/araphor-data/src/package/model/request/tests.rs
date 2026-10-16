@@ -13,7 +13,7 @@ fn envelope(
 
 #[test]
 fn package_request_archive_roundtrip() -> TestResult {
-    let bundle = crate::package::tests::bundle("1", "SELECT 1::UBIGINT AS value");
+    let bundle = crate::package::tests::bundle("1", "SELECT 1::BIGINT UNSIGNED AS value");
     let digest = bundle.digest()?;
     for operation in [
         PackageRequestV1::Install {

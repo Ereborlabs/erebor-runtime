@@ -86,9 +86,9 @@ fn sql_model_state_provenance() -> TestResult {
         }),
     };
     let program = SqlModelV1 {
-        outputs: BTreeMap::from([("counts".into(), "SELECT CAST(COUNT(*) AS UBIGINT) AS count FROM events".into())]),
+        outputs: BTreeMap::from([("counts".into(), "SELECT CAST(COUNT(*) AS BIGINT UNSIGNED) AS count FROM events".into())]),
         checkpoint: BTreeMap::from([("state".into(), "SELECT count FROM prior_state".into())]),
-        evidence: Some("SELECT 'counts' AS output_dataset, CAST(0 AS UBIGINT) AS output_row, 'events' AS input_dataset, __row_index AS input_row FROM events".into()),
+        evidence: Some("SELECT 'counts' AS output_dataset, CAST(0 AS BIGINT UNSIGNED) AS output_row, 'events' AS input_dataset, __row_index AS input_row FROM events".into()),
         reasons: vec![SqlReasonV1 { output: "counts".into(), code: "denials.repeated".into(), sql: "SELECT __row_index AS output_row, count FROM output_counts".into() }, SqlReasonV1 { output: "counts".into(), code: "denials.empty".into(), sql: "SELECT __row_index AS output_row FROM output_counts".into() }],
     };
     let result = owner.evaluate_model([1; 16], &package, &program, &evaluation, &control()?)?;
@@ -110,7 +110,7 @@ fn sql_model_state_provenance() -> TestResult {
         batch(&port("state", "count"), vec![9])?
     );
     let mut bad = program.clone();
-    bad.evidence = Some("SELECT 'counts' AS output_dataset, CAST(0 AS UBIGINT) AS output_row, 'events' AS input_dataset, CAST(99 AS UBIGINT) AS input_row".into());
+    bad.evidence = Some("SELECT 'counts' AS output_dataset, CAST(0 AS BIGINT UNSIGNED) AS output_row, 'events' AS input_dataset, CAST(99 AS BIGINT UNSIGNED) AS input_row".into());
     drop(result);
     let mut supplied = package.clone();
     supplied.exports[0].input_mode = sdk::InputMode::Resolved;
@@ -126,7 +126,7 @@ fn sql_model_state_provenance() -> TestResult {
     let mut reused = program.clone();
     reused
         .checkpoint
-        .insert("state".into(), "SELECT * FROM output_counts".into());
+        .insert("state".into(), "SELECT count FROM output_counts".into());
     let reused = owner.evaluate_model([1; 16], &package, &reused, &evaluation, &control()?)?;
     assert_eq!(
         reused
@@ -257,8 +257,22 @@ fn sql_model_source_bounds() -> TestResult {
         sdk::Limits::default(),
         &control()?,
     )?;
-    assert_eq!(result.data.batches[0].num_columns(), 1);
+    assert_eq!(result.data.batches[0].num_columns(), 2);
     assert_eq!(result.data.batches[0].num_rows(), 2);
+    assert_eq!(
+        result.data.batches[0].schema().field(1).name(),
+        "__row_index"
+    );
+    assert_eq!(
+        result.data.batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or("query row index")?
+            .values()
+            .as_ref(),
+        &[1, 2],
+    );
     drop(result);
     let mut corrected = selection;
     corrected.received_until = std::ops::Bound::Included(200);
@@ -335,8 +349,8 @@ fn admitted_program_order() -> TestResult {
         .into();
     let mut program = SqlModelV1 {
         outputs: BTreeMap::from([
-            ("ARows".into(), "SELECT 9::UBIGINT AS count".into()),
-            ("ZRows".into(), "SELECT 7::UBIGINT AS count".into()),
+            ("ARows".into(), "SELECT 9::BIGINT UNSIGNED AS count".into()),
+            ("ZRows".into(), "SELECT 7::BIGINT UNSIGNED AS count".into()),
         ]),
         checkpoint: BTreeMap::from([
             ("AState".into(), "SELECT count FROM output_ARows".into()),

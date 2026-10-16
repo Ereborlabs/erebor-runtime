@@ -9,7 +9,7 @@ use crate::{AnalysisReadControl, AnalysisSelectionV1};
 async fn package_historical_scope() -> TestResult {
     let mut fixture = Fixture::new()?;
     let installed = fixture
-        .install(bundle("1", "SELECT 3::UBIGINT AS count"), None)
+        .install(bundle("1", "SELECT 3::BIGINT UNSIGNED AS count"), None)
         .await?;
     let receipt = installed.exports[0].results[0].clone();
     fixture
@@ -19,7 +19,7 @@ async fn package_historical_scope() -> TestResult {
         })
         .await?;
     fixture.grant.selection = AnalysisSelectionV1::new([1; 16], Vec::new());
-    let mut narrow = bundle("2", "SELECT 3::UBIGINT AS count");
+    let mut narrow = bundle("2", "SELECT 3::BIGINT UNSIGNED AS count");
     narrow.artifacts[0].implementations = vec![crate::package::PackageImplementationV1::Native {
         export: "count".into(),
         artifact: vec![0, 97, 115, 109],
@@ -63,7 +63,7 @@ async fn package_historical_scope() -> TestResult {
     assert_eq!(response.exports[0].results[0].result_id, receipt.result_id);
     assert_eq!(
         crate::AnalysisPackageOwner::output_rows(&response.output.ok_or("query output")?)?["query"],
-        serde_json::json!([{"count":3}])
+        serde_json::json!([{"count":3,"__row_index":0}])
     );
     Ok(())
 }
@@ -72,7 +72,7 @@ async fn package_historical_scope() -> TestResult {
 async fn package_retry_revision() -> TestResult {
     let fixture = Fixture::new()?;
     fixture
-        .install(bundle("1", "SELECT 3::UBIGINT AS count"), None)
+        .install(bundle("1", "SELECT 3::BIGINT UNSIGNED AS count"), None)
         .await?;
     let first = fixture.execute(run("same")).await?;
     let repeated = fixture.execute(run("same")).await?;
@@ -87,7 +87,7 @@ async fn package_retry_revision() -> TestResult {
     fixture
         .execute(Request::Update {
             scope_id: "test".into(),
-            bundle: bundle("2", "SELECT 4::UBIGINT AS count"),
+            bundle: bundle("2", "SELECT 4::BIGINT UNSIGNED AS count"),
         })
         .await?;
     assert!(matches!(
@@ -109,7 +109,7 @@ async fn package_retry_revision() -> TestResult {
     assert_eq!(response.exports[0].revision, "1");
     assert_eq!(
         crate::AnalysisPackageOwner::output_rows(&response.output.ok_or("query output")?)?["query"],
-        serde_json::json!([{"count":3}])
+        serde_json::json!([{"count":3,"__row_index":0}])
     );
     Ok(())
 }
@@ -132,7 +132,7 @@ async fn package_cancel_capacity() -> TestResult {
             fixture.grant.clone(),
             Request::Install {
                 scope_id: "test".into(),
-                bundle: bundle("1", "SELECT 1::UBIGINT AS count"),
+                bundle: bundle("1", "SELECT 1::BIGINT UNSIGNED AS count"),
                 parameters: None,
             },
             control
@@ -152,7 +152,7 @@ async fn package_cancel_capacity() -> TestResult {
     ));
     drop(permits);
     fixture
-        .install(bundle("1", "SELECT 1::UBIGINT AS count"), None)
+        .install(bundle("1", "SELECT 1::BIGINT UNSIGNED AS count"), None)
         .await?;
     fixture.authority.set_revision(0);
     assert!(fixture.execute(run("revoked")).await.is_err());

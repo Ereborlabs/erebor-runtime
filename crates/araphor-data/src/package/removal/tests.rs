@@ -42,7 +42,7 @@ async fn remove(fixture: &Fixture, package: &str) -> TestResult {
 #[tokio::test]
 async fn removal_releases_exclusive_models() -> TestResult {
     let fixture = Fixture::new()?;
-    let dependency = bundle("v1", "SELECT 1::UBIGINT AS count");
+    let dependency = bundle("v1", "SELECT 1::BIGINT UNSIGNED AS count");
     fixture
         .install(consumer("test.consumer", &dependency), None)
         .await?;
@@ -67,7 +67,7 @@ async fn removal_releases_exclusive_models() -> TestResult {
 #[tokio::test]
 async fn removal_retains_shared_models() -> TestResult {
     let fixture = Fixture::new()?;
-    let dependency = bundle("v1", "SELECT 1::UBIGINT AS count");
+    let dependency = bundle("v1", "SELECT 1::BIGINT UNSIGNED AS count");
     fixture
         .install(consumer("test.first", &dependency), None)
         .await?;
@@ -114,7 +114,7 @@ async fn removal_retains_shared_models() -> TestResult {
 #[tokio::test]
 async fn removal_retains_explicit_dependency() -> TestResult {
     let fixture = Fixture::new()?;
-    let dependency = bundle("v1", "SELECT 1::UBIGINT AS count");
+    let dependency = bundle("v1", "SELECT 1::BIGINT UNSIGNED AS count");
     fixture
         .install(consumer("test.consumer", &dependency), None)
         .await?;
@@ -136,7 +136,7 @@ async fn removal_retains_explicit_dependency() -> TestResult {
 #[tokio::test]
 async fn removal_releases_unused_artifacts() -> TestResult {
     let fixture = Fixture::new()?;
-    let dependency = bundle("v1", "SELECT 1::UBIGINT AS count");
+    let dependency = bundle("v1", "SELECT 1::BIGINT UNSIGNED AS count");
     let mut package = consumer("test.consumer", &dependency);
     for artifact in &mut package.artifacts {
         artifact.implementations = vec![PackageImplementationV1::Native {
@@ -171,7 +171,7 @@ async fn removal_releases_unused_artifacts() -> TestResult {
 #[tokio::test]
 async fn removal_reconciles_upgrade_orphan() -> TestResult {
     let fixture = Fixture::new()?;
-    let dependency = bundle("v1", "SELECT 1::UBIGINT AS count");
+    let dependency = bundle("v1", "SELECT 1::BIGINT UNSIGNED AS count");
     fixture
         .install(consumer("test.consumer", &dependency), None)
         .await?;
@@ -180,7 +180,7 @@ async fn removal_reconciles_upgrade_orphan() -> TestResult {
         .package_activations([1; 16], "test", Some("test.model"))?
         .pop()
         .ok_or("dependency absent")?;
-    let mut replacement = bundle("v2", "SELECT 2::UBIGINT AS count");
+    let mut replacement = bundle("v2", "SELECT 2::BIGINT UNSIGNED AS count");
     replacement.root.package_id = "test.consumer".into();
     replacement.artifacts[0].descriptor.id = "test.consumer".into();
     fixture

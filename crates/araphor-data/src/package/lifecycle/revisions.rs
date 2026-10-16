@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn revision_retry_and_collision() -> TestResult {
         let fixture = Fixture::new()?;
-        let artifact = bundle("1", "SELECT 1::UBIGINT AS count")
+        let artifact = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count")
             .artifacts
             .remove(0);
         let saved = AnalysisPackageOwner::revision(&fixture.grant, &artifact)?;
@@ -135,7 +135,7 @@ mod tests {
             fixture.owner.install_revision(&fixture.grant, &artifact)?,
             saved
         );
-        let changed = bundle("1", "SELECT 2::UBIGINT AS count")
+        let changed = bundle("1", "SELECT 2::BIGINT UNSIGNED AS count")
             .artifacts
             .remove(0);
         let conflicting = fixture.owner.install_revision(&fixture.grant, &changed)?;
@@ -157,7 +157,7 @@ mod tests {
     #[tokio::test]
     async fn large_package_roundtrip() -> TestResult {
         let fixture = Fixture::new()?;
-        let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
+        let mut package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
         let artifact = &mut package.artifacts[0];
         artifact.implementations = vec![PackageImplementationV1::Python {
             export: "count".into(),

@@ -33,7 +33,10 @@ fn bundle() -> PackageBundleV1 {
             implementations: vec![PackageImplementationV1::Sql {
                 export: "count".into(),
                 program: SqlModelV1 {
-                    outputs: BTreeMap::from([("rows".into(), "SELECT 3::UBIGINT AS count".into())]),
+                    outputs: BTreeMap::from([(
+                        "rows".into(),
+                        "SELECT 3::BIGINT UNSIGNED AS count".into(),
+                    )]),
                     ..Default::default()
                 },
             }],

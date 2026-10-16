@@ -244,11 +244,11 @@ mod encoding_tests {
             .inputs
             .push(sdk::InputPort {
                 port,
-                source: sdk::InputSource::Query("SELECT 1::UBIGINT AS count".into()),
+                source: sdk::InputSource::Query("SELECT 1::BIGINT UNSIGNED AS count".into()),
             });
         let original = sql.digest()?;
         sql.artifacts[0].descriptor.exports[0].inputs[0].source =
-            sdk::InputSource::Query("SELECT 2::UBIGINT AS count".into());
+            sdk::InputSource::Query("SELECT 2::BIGINT UNSIGNED AS count".into());
         assert_ne!(sql.digest()?, original);
         let mut component = sql.clone();
         component.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
@@ -274,7 +274,7 @@ mod encoding_tests {
 
     #[test]
     fn bundle_writer_descriptor_errors() -> TestResult {
-        let mut package = bundle("1", "SELECT 1::UBIGINT AS count");
+        let mut package = bundle("1", "SELECT 1::BIGINT UNSIGNED AS count");
         package.artifacts[0].implementations = vec![PackageImplementationV1::Wasm {
             exports: vec!["count".into()],
             artifact: Vec::new(),

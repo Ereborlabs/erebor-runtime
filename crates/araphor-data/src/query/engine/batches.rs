@@ -79,7 +79,7 @@ impl QueryEngine {
         let plan = state.optimize(&plan).context(crate::QueryEngineSnafu {
             operation: "optimize query",
         })?;
-        let schema = binding.output_schema(plan.schema().as_arrow())?;
+        let schema = Arc::clone(plan.schema().inner());
         Ok((plan, schema))
     }
 

@@ -28,7 +28,7 @@ fn derived(artifact: &mut PackageArtifactV1, source: &PackageRefV1) {
         program: SqlModelV1 {
             outputs: BTreeMap::from([(
                 "rows".into(),
-                "SELECT CAST(count + 1 AS UBIGINT) AS count FROM source".into(),
+                "SELECT CAST(count + 1 AS BIGINT UNSIGNED) AS count FROM source".into(),
             )]),
             ..Default::default()
         },
@@ -38,8 +38,8 @@ fn derived(artifact: &mut PackageArtifactV1, source: &PackageRefV1) {
 #[tokio::test]
 async fn admission_rejects_artifact_cycles() -> TestResult {
     let fixture = Fixture::new()?;
-    let mut package = bundle("1", "SELECT 3::UBIGINT AS count");
-    let mut upstream = bundle("1", "SELECT 2::UBIGINT AS count")
+    let mut package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
+    let mut upstream = bundle("1", "SELECT 2::BIGINT UNSIGNED AS count")
         .artifacts
         .remove(0);
     upstream.descriptor.id = "test.upstream".into();
@@ -66,7 +66,7 @@ async fn admission_rejects_artifact_cycles() -> TestResult {
 #[tokio::test]
 async fn admission_preserves_internal_composition() -> TestResult {
     let fixture = Fixture::new()?;
-    let mut package = bundle("1", "SELECT 3::UBIGINT AS count");
+    let mut package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     derived(&mut package.artifacts[0], &package.root);
     let response = fixture.install(package, None).await?;
     let export = response

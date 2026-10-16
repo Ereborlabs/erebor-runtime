@@ -9,7 +9,7 @@ use crate::package::{PackageFixtureV1, PackageRequestV1};
 #[tokio::test]
 async fn fixture_replays_saved_context() -> TestResult {
     let fixture = Fixture::new()?;
-    let mut package = bundle("1", "SELECT CASE WHEN CURRENT_TIMESTAMP = TIMESTAMP '2000-01-01 00:00:00' THEN 1::UBIGINT ELSE 0::UBIGINT END AS count");
+    let mut package = bundle("1", "SELECT CASE WHEN CURRENT_TIMESTAMP = TIMESTAMP '2000-01-01 00:00:00' THEN 1::BIGINT UNSIGNED ELSE 0::BIGINT UNSIGNED END AS count");
     let artifact = &mut package.artifacts[0];
     let model = &artifact.descriptor.exports[0];
     for (name, now, expected) in [

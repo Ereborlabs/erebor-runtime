@@ -4,27 +4,26 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Field, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::default_table_source::provider_as_source;
-use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchema, Result as EngineResult, ScalarValue, TableReference};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::expr_rewriter::NamePreserver;
 use datafusion::logical_expr::{
-    AggregateUDF, Expr as EngineExpression, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    Operator, Projection, ScalarUDF, TableSource, WindowUDF,
+    AggregateUDF, Expr as EngineExpression, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
+    ScalarUDF, TableSource, WindowUDF,
 };
-use datafusion::sql::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion::sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 
 use datafusion::sql::sqlparser::ast::{
-    visit_expressions, BinaryOperator, DataType, DateTimeField, Distinct, ExactNumberInfo, Expr,
-    Function, FunctionArg, FunctionArgExpr, FunctionArguments, GroupByExpr, Ident, JoinConstraint,
-    JoinOperator, LimitClause, NamedWindowExpr, ObjectName, OrderBy, OrderByExpr, OrderByKind,
-    Query, Select, SelectFlavor, SelectItem, SelectItemQualifiedWildcardKind, SetExpr,
-    SetQuantifier, Statement, TableAlias, TableFactor, TimezoneInfo, UnaryOperator,
-    Value as SqlValue, VisitMut as _, VisitorMut, WildcardAdditionalOptions, WindowFrameBound,
-    WindowFrameUnits, WindowSpec, WindowType,
+    BinaryOperator, DataType, DateTimeField, Distinct, Expr, Function, FunctionArg,
+    FunctionArgExpr, FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator,
+    LimitClause, NamedWindowExpr, ObjectName, OrderBy, OrderByExpr, OrderByKind, Query, Select,
+    SelectFlavor, SelectItem, SelectItemQualifiedWildcardKind, SetExpr, SetQuantifier, Statement,
+    TableAlias, TableFactor, TimezoneInfo, UnaryOperator, Value as SqlValue, VisitMut as _,
+    VisitorMut, WildcardAdditionalOptions, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    WindowType,
 };
-use datafusion::sql::sqlparser::dialect::DuckDbDialect;
+use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::{Parser, ParserError};
 use duckdb::types::{TimeUnit, Value};
 use time::PrimitiveDateTime;
@@ -52,7 +51,6 @@ struct AdmittedSql {
     append_sql: Option<String>,
     plan_bytes: usize,
     source_columns: Vec<Option<(&'static str, &'static str)>>,
-    output_names: Vec<String>,
     parameters: Vec<Value>,
     dependencies: BTreeSet<String>,
     operation: QueryOperation,
@@ -72,7 +70,6 @@ pub struct QueryBinding {
     pub evaluated_utc_ns: u64,
     pub append: bool,
     pub(super) plan: Arc<LogicalPlan>,
-    output_names: Option<Vec<String>>,
 }
 
 impl QuerySql {
@@ -97,59 +94,36 @@ impl QuerySql {
         relations: Option<BTreeMap<String, SchemaRef>>,
     ) -> Result<Self> {
         if sql.is_empty() || sql.len() > SQL_BYTES {
-            return Err(Binder::invalid("SQL length"));
+            return Err(SqlPolicy::invalid("SQL length"));
         }
         Parameters::validate(&parameters)?;
-        let mut statements = SqlContext::parse(sql).map_err(|_| Binder::invalid("SQL syntax"))?;
+        let mut statements =
+            SqlContext::parse(sql).map_err(|_| SqlPolicy::invalid("SQL syntax"))?;
         if statements.len() != 1 {
-            return Err(Binder::invalid("SQL statement"));
+            return Err(SqlPolicy::invalid("SQL statement"));
         }
         let Some(Statement::Query(mut query)) = statements.pop() else {
-            return Err(Binder::invalid("SQL statement"));
+            return Err(SqlPolicy::invalid("SQL statement"));
         };
         Parameters::bind(&mut query, parameters.len())?;
-        let mut binder = Binder {
-            model: relations.is_some(),
-            relations: relations.unwrap_or_else(|| {
-                SCHEMAS
-                    .iter()
-                    .filter(|schema| {
-                        matches!(schema.readiness, "available" | "conditional")
-                            || schema.name == "behaviors"
-                    })
-                    .map(|schema| (schema.name.to_owned(), schema.arrow_schema()))
-                    .collect()
-            }),
-            state: QueryEngine::state()?,
-            parameters: SqlContext::parameter_fields(&QueryEngine::parameters(&parameters)?),
+        let relations = relations.unwrap_or_else(|| {
+            SCHEMAS
+                .iter()
+                .filter(|schema| {
+                    matches!(schema.readiness, "available" | "conditional")
+                        || schema.name == "behaviors"
+                })
+                .map(|schema| (schema.name.to_owned(), schema.arrow_schema()))
+                .collect()
+        });
+        let mut policy = SqlPolicy {
+            relations: &relations,
             aggregate: false,
             clocks: 0,
             depth: 0,
-            next: 0,
-            clock: None,
             dependencies: BTreeSet::new(),
         };
-        let mut has_clock = false;
-        let _ = visit_expressions(&query, |expr| {
-            has_clock |= matches!(expr, Expr::Function(function) if FrozenClock::matches(function));
-            ControlFlow::<()>::Continue(())
-        });
-        if has_clock {
-            let index = parameters.len() + 1;
-            binder.clock = Some(index);
-            binder.parameters.push(Arc::new(Field::new(
-                format!("${index}"),
-                datafusion::arrow::datatypes::DataType::Timestamp(
-                    datafusion::arrow::datatypes::TimeUnit::Microsecond,
-                    None,
-                ),
-                false,
-            )));
-        }
-        let context =
-            PlannerContext::new().with_prepare_param_data_types(binder.parameters.clone());
-        let (_, plan, output_names) = binder.query(&mut query, &context)?;
-        Binder::metadata(&mut query);
+        policy.query(&mut query, &BTreeSet::new())?;
         let tests = TimeTest::extract(&query, &parameters);
         let moving: Vec<_> = tests
             .iter()
@@ -160,31 +134,48 @@ impl QuerySql {
                 _ => None,
             })
             .collect();
-        if follow && binder.clocks != moving.len() {
-            return Err(Binder::invalid("moving SQL shape"));
+        if follow && policy.clocks != moving.len() {
+            return Err(SqlPolicy::invalid("moving SQL shape"));
         }
-        let operation = if !binder.aggregate && binder.clocks == 0 && Self::append_shape(&query) {
+        let operation = if !policy.aggregate && policy.clocks == 0 && Self::append_shape(&query) {
             QueryOperation::Append
         } else {
             QueryOperation::Replace
         };
-        let dependencies = binder.dependencies.clone();
-        let clocks = binder.clocks;
+        let dependencies = policy.dependencies;
+        let clocks = policy.clocks;
         let event_operation = TimeTest::direct_events(&query)
             .filter(|_| clocks == 0 && Self::append_shape(&query))
             .and_then(|(select, alias)| {
                 Self::event_operation_for(select.selection.as_ref()?, &alias, &parameters)
             });
-        let source_columns = Self::source_columns(&query);
         if clocks > 0 {
             let index = parameters.len() + 1;
             let _ = query.visit(&mut FrozenClock(index));
         }
         let complete_sql = query.to_string();
         if complete_sql.len() > SQL_BYTES {
-            return Err(Binder::invalid("expanded SQL length"));
+            return Err(SqlPolicy::invalid("expanded SQL length"));
         }
-        let plan = SqlContext::numeric(plan)?;
+        let state = QueryEngine::state()?;
+        let mut fields = SqlContext::parameter_fields(&QueryEngine::parameters(&parameters)?);
+        if clocks > 0 {
+            fields.push(Arc::new(Field::new(
+                format!("${}", parameters.len() + 1),
+                datafusion::arrow::datatypes::DataType::Timestamp(
+                    datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                    None,
+                ),
+                false,
+            )));
+        }
+        let plan = SqlContext {
+            state: &state,
+            relations: &relations,
+        }
+        .plan(query.clone(), &fields)?;
+        SqlPolicy::bound(&plan)?;
+        let source_columns = Self::source_columns(&query, &plan);
         let plan_bytes = Self::plan_bytes(&plan);
         let append_sql = if operation == QueryOperation::Append {
             Self::append_positions(&mut query)?;
@@ -200,7 +191,6 @@ impl QuerySql {
                 append_sql,
                 plan_bytes,
                 source_columns,
-                output_names,
                 parameters,
                 dependencies,
                 operation,
@@ -231,10 +221,7 @@ impl QuerySql {
                 op: BinaryOperator::Eq,
                 right,
             } => {
-                let column = |expr: &Expr| {
-                    matches!(expr, Expr::CompoundIdentifier(parts) if matches!(parts.as_slice(), [table, column]
-                        if table.value == alias && column.value == "operation"))
-                };
+                let column = |expr: &Expr| TimeTest::named_column(expr, alias, "operation");
                 let value = if column(left) {
                     right.as_ref()
                 } else if column(right) {
@@ -304,14 +291,6 @@ impl QuerySql {
             )
             .saturating_add(self.program.complete_sql.capacity())
             .saturating_add(self.program.append_sql.as_ref().map_or(0, String::capacity))
-            .saturating_add(self.program.output_names.capacity() * size_of::<String>())
-            .saturating_add(
-                self.program
-                    .output_names
-                    .iter()
-                    .map(String::capacity)
-                    .sum::<usize>(),
-            )
             .saturating_add(parameters)
             .saturating_add(self.program.tests.capacity() * size_of::<TimeTest>())
             .saturating_add(tree(&self.program.dependencies))
@@ -333,31 +312,49 @@ impl QuerySql {
         self.program.follow
     }
 
-    fn source_columns(query: &Query) -> Vec<Option<(&'static str, &'static str)>> {
-        let Some((select, _, name)) = TimeTest::direct_table(query) else {
+    fn source_columns(
+        query: &Query,
+        plan: &LogicalPlan,
+    ) -> Vec<Option<(&'static str, &'static str)>> {
+        let Some((_, alias, name)) = TimeTest::direct_table(query) else {
             return Vec::new();
         };
         let Some(schema) = SCHEMAS.iter().find(|schema| schema.name == name) else {
             return Vec::new();
         };
-        select
-            .projection
+        let mut current = plan;
+        let projection = loop {
+            if let LogicalPlan::Projection(projection) = current {
+                break projection;
+            }
+            let inputs = current.inputs();
+            let [input] = inputs.as_slice() else {
+                return Vec::new();
+            };
+            current = input;
+        };
+        projection
+            .expr
             .iter()
-            .map(|item| {
-                let expr = match item {
-                    SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => expr,
-                    _ => return None,
-                };
-                let Expr::CompoundIdentifier(parts) = expr else {
+            .map(|expr| {
+                let mut expr = expr;
+                while let EngineExpression::Alias(alias) = expr {
+                    expr = &alias.expr;
+                }
+                let EngineExpression::Column(column) = expr else {
                     return None;
                 };
-                let [_, column] = parts.as_slice() else {
+                if !column
+                    .relation
+                    .as_ref()
+                    .is_some_and(|table| table.table() == alias)
+                {
                     return None;
-                };
+                }
                 schema
                     .fields()
                     .iter()
-                    .find(|field| field.name().as_str() == column.value)
+                    .find(|field| field.name() == &column.name)
                     .map(|field| (schema.name, field.name().as_str()))
             })
             .collect()
@@ -369,10 +366,12 @@ impl QuerySql {
     ) -> Option<(&'static super::input::InputSchema, usize)> {
         let mut selected = self
             .program
-            .output_names
+            .plan
+            .schema()
+            .fields()
             .iter()
             .zip(&self.program.source_columns)
-            .filter(|(output, _)| output.to_ascii_lowercase() == name);
+            .filter(|(output, _)| output.name() == name);
         let (_, source) = selected.next()?;
         if selected.next().is_some() {
             return None;
@@ -425,7 +424,7 @@ impl QuerySql {
                     first = first.max(micros * 1_000);
                     last = last.min((micros + 1) * 1_000 - 1);
                 }
-                _ => return Err(Binder::invalid("SQL time bound")),
+                _ => return Err(SqlPolicy::invalid("SQL time bound")),
             }
         }
         let (received_from, received_until) = if first > last {
@@ -444,10 +443,6 @@ impl QuerySql {
                 },
             )
         };
-        let mut output_names = self.program.output_names.clone();
-        if append {
-            output_names.extend(POSITION_FIELDS.map(str::to_owned));
-        }
         let plan = if append {
             Arc::new(Self::append_plan(self.program.plan.as_ref().clone())?)
         } else {
@@ -469,7 +464,6 @@ impl QuerySql {
             evaluated_utc_ns: now_ns,
             append,
             plan,
-            output_names: Some(output_names),
         })
     }
 
@@ -534,24 +528,24 @@ impl QuerySql {
                         .input
                         .schema()
                         .qualified_field_with_unqualified_name(name)
-                        .map_err(|_| Binder::invalid("append SQL source"))?;
+                        .map_err(|_| SqlPolicy::invalid("append SQL source"))?;
                     projection.expr.push(
                         EngineExpression::Column(Column::from((qualifier, field))).alias(alias),
                     );
                 }
                 LogicalPlan::Projection(
                     Projection::try_new(projection.expr, projection.input)
-                        .map_err(|_| Binder::invalid("append SQL projection"))?,
+                        .map_err(|_| SqlPolicy::invalid("append SQL projection"))?,
                 )
             }
-            _ => return Err(Binder::invalid("append SQL shape")),
+            _ => return Err(SqlPolicy::invalid("append SQL shape")),
         };
         LogicalPlanBuilder::from(plan)
             .sort(POSITION_FIELDS.map(|name| {
                 EngineExpression::Column(Column::new_unqualified(name)).sort(true, false)
             }))
             .and_then(LogicalPlanBuilder::build)
-            .map_err(|_| Binder::invalid("append SQL ordering"))
+            .map_err(|_| SqlPolicy::invalid("append SQL ordering"))
     }
 
     fn append_shape(query: &Query) -> bool {
@@ -568,13 +562,13 @@ impl QuerySql {
 
     fn append_positions(query: &mut Query) -> Result<()> {
         let Some((_, alias, relation)) = TimeTest::direct_table(query) else {
-            return Err(Binder::invalid("append SQL shape"));
+            return Err(SqlPolicy::invalid("append SQL shape"));
         };
         if !matches!(relation.as_str(), "events" | "trace_output") {
-            return Err(Binder::invalid("append SQL shape"));
+            return Err(SqlPolicy::invalid("append SQL shape"));
         }
         let SetExpr::Select(select) = query.body.as_mut() else {
-            return Err(Binder::invalid("append SQL shape"));
+            return Err(SqlPolicy::invalid("append SQL shape"));
         };
         let mut order = Vec::new();
         for (source, field) in ["commit_revision", "ordinal"]
@@ -611,22 +605,20 @@ impl PartialEq for QueryBinding {
             && self.received_until == other.received_until
             && self.evaluated_utc_ns == other.evaluated_utc_ns
             && self.append == other.append
-            && self.output_names == other.output_names
     }
 }
 
 impl QueryBinding {
     pub(super) fn trusted(sql: String, parameters: Vec<Value>, now_ns: u64) -> Result<Self> {
         let mut statements =
-            SqlContext::parse(&sql).map_err(|_| Binder::invalid("trusted SQL syntax"))?;
+            SqlContext::parse(&sql).map_err(|_| SqlPolicy::invalid("trusted SQL syntax"))?;
         if statements.len() != 1 {
-            return Err(Binder::invalid("trusted SQL statement"));
+            return Err(SqlPolicy::invalid("trusted SQL statement"));
         }
         let Some(Statement::Query(mut query)) = statements.pop() else {
-            return Err(Binder::invalid("trusted SQL statement"));
+            return Err(SqlPolicy::invalid("trusted SQL statement"));
         };
         Parameters::bind(&mut query, parameters.len())?;
-        let output_names = Self::output_names(&query.body);
         let sql = query.to_string();
         let state = QueryEngine::state()?;
         let relations = SCHEMAS
@@ -647,7 +639,6 @@ impl QueryBinding {
             received_until: Bound::Unbounded,
             evaluated_utc_ns: now_ns,
             append: false,
-            output_names,
         })
     }
 
@@ -656,436 +647,7 @@ impl QueryBinding {
             .as_ref()
             .clone()
             .with_param_values(QueryEngine::parameters(&self.parameters)?)
-            .map_err(|_| Binder::invalid("SQL parameters"))
-    }
-
-    pub(super) fn output_schema(&self, schema: &Schema) -> Result<SchemaRef> {
-        let Some(names) = &self.output_names else {
-            return Ok(Arc::new(schema.clone()));
-        };
-        if names.len() != schema.fields().len() {
-            return Err(Binder::invalid("SQL result width"));
-        }
-        Ok(Arc::new(Schema::new_with_metadata(
-            schema
-                .fields()
-                .iter()
-                .zip(names)
-                .map(|(field, name)| field.as_ref().clone().with_name(name))
-                .collect::<Vec<_>>(),
-            schema.metadata().clone(),
-        )))
-    }
-
-    fn output_names(body: &SetExpr) -> Option<Vec<String>> {
-        match body {
-            SetExpr::Select(select) => select
-                .projection
-                .iter()
-                .map(|item| match item {
-                    SelectItem::ExprWithAlias { alias, .. } => Some(alias.value.clone()),
-                    SelectItem::UnnamedExpr(expr) => Binder::output_name(item)
-                        .or_else(|| Some(SqlName::expression(expr, &BTreeMap::new()))),
-                    _ => None,
-                })
-                .collect(),
-            SetExpr::Query(query) => Self::output_names(&query.body),
-            SetExpr::SetOperation { left, .. } => Self::output_names(left),
-            _ => None,
-        }
-    }
-}
-
-struct SqlName;
-
-impl SqlName {
-    fn identifier(name: &Ident) -> String {
-        let mut chars = name.value.chars();
-        if chars
-            .next()
-            .is_some_and(|char| char.is_ascii_alphabetic() || char == '_')
-            && chars.all(|char| char.is_ascii_alphanumeric() || char == '_')
-            && !matches!(
-                name.value.to_ascii_lowercase().as_str(),
-                "select"
-                    | "from"
-                    | "where"
-                    | "group"
-                    | "order"
-                    | "limit"
-                    | "having"
-                    | "join"
-                    | "on"
-                    | "union"
-                    | "case"
-                    | "when"
-                    | "then"
-                    | "else"
-                    | "end"
-                    | "null"
-                    | "true"
-                    | "false"
-            )
-        {
-            name.value.clone()
-        } else {
-            format!("\"{}\"", name.value.replace('"', "\"\""))
-        }
-    }
-
-    fn data_type(kind: &DataType) -> String {
-        match kind {
-            DataType::Bool | DataType::Boolean => "BOOLEAN".into(),
-            DataType::Int(None) | DataType::Integer(None) => "INTEGER".into(),
-            DataType::Real | DataType::Float(_) => "FLOAT".into(),
-            DataType::Text | DataType::Varchar(None) => "VARCHAR".into(),
-            DataType::Date
-            | DataType::Double(_)
-            | DataType::HugeInt
-            | DataType::UTinyInt
-            | DataType::USmallInt
-            | DataType::UBigInt
-            | DataType::IntegerUnsigned(None) => {
-                format!(
-                    "\"{}\"",
-                    match kind {
-                        DataType::IntegerUnsigned(None) => "UINTEGER".into(),
-                        _ => kind.to_string(),
-                    }
-                )
-            }
-            _ => kind.to_string(),
-        }
-    }
-
-    fn number(value: &str) -> String {
-        if value.contains(['e', 'E']) {
-            if let Ok(value) = value.parse::<f64>() {
-                let value = format!("{value:?}");
-                if let Some((base, exponent)) = value.split_once('e') {
-                    if let Ok(exponent) = exponent.parse::<i32>() {
-                        return format!("{base}e{exponent:+03}");
-                    }
-                }
-                return value;
-            }
-        }
-        if let Ok(value) = value.parse::<i128>() {
-            value.to_string()
-        } else if let Some((whole, fraction)) = value.split_once('.') {
-            let whole = whole.trim_start_matches('0');
-            let whole = if whole.is_empty() { "0" } else { whole };
-            format!("{whole}.{fraction}")
-        } else {
-            value.to_owned()
-        }
-    }
-
-    fn conjunction(
-        expr: &Expr,
-        op: &BinaryOperator,
-        windows: &BTreeMap<String, WindowSpec>,
-        output: &mut Vec<String>,
-    ) {
-        match expr {
-            Expr::Nested(expr) => Self::conjunction(expr, op, windows, output),
-            Expr::BinaryOp {
-                left,
-                op: inner,
-                right,
-            } if inner == op => {
-                Self::conjunction(left, op, windows, output);
-                Self::conjunction(right, op, windows, output);
-            }
-            _ => output.push(Self::expression(expr, windows)),
-        }
-    }
-
-    fn expression(expr: &Expr, windows: &BTreeMap<String, WindowSpec>) -> String {
-        let render = |expr: &Expr| Self::expression(expr, windows);
-        match expr {
-            Expr::Identifier(name) => Self::identifier(name),
-            Expr::CompoundIdentifier(parts) => parts
-                .iter()
-                .map(Self::identifier)
-                .collect::<Vec<_>>()
-                .join("."),
-            Expr::Value(value) => match &value.value {
-                SqlValue::Number(value, _) => Self::number(value),
-                SqlValue::Boolean(value) => {
-                    format!("CAST('{}' AS BOOLEAN)", if *value { "t" } else { "f" })
-                }
-                _ => value.value.to_string(),
-            },
-            Expr::Nested(expr) => render(expr),
-            Expr::BinaryOp { left, op, right } => {
-                if matches!(op, BinaryOperator::And | BinaryOperator::Or) {
-                    let mut parts = Vec::new();
-                    Self::conjunction(expr, op, windows, &mut parts);
-                    return format!("({})", parts.join(&format!(" {op} ")));
-                }
-                let op = if *op == BinaryOperator::NotEq {
-                    "!=".into()
-                } else {
-                    op.to_string()
-                };
-                format!("({} {op} {})", render(left), render(right))
-            }
-            Expr::UnaryOp { op, expr } => match op {
-                UnaryOperator::Not => format!("(NOT {})", render(expr)),
-                UnaryOperator::Minus if matches!(expr.as_ref(), Expr::Value(value) if matches!(value.value, SqlValue::Number(..))) =>
-                {
-                    format!("-{}", render(expr))
-                }
-                _ => format!("{op}({})", render(expr)),
-            },
-            Expr::IsNull(expr) | Expr::IsUnknown(expr) => format!("({} IS NULL)", render(expr)),
-            Expr::IsNotNull(expr) | Expr::IsNotUnknown(expr) => {
-                format!("({} IS NOT NULL)", render(expr))
-            }
-            Expr::IsTrue(value)
-            | Expr::IsNotTrue(value)
-            | Expr::IsFalse(value)
-            | Expr::IsNotFalse(value) => {
-                let negated = matches!(expr, Expr::IsNotTrue(_) | Expr::IsNotFalse(_));
-                let truth = matches!(expr, Expr::IsTrue(_) | Expr::IsNotTrue(_));
-                format!(
-                    "(CAST({} AS BOOLEAN) IS {}DISTINCT FROM {})",
-                    render(value),
-                    if negated { "" } else { "NOT " },
-                    if truth { "true" } else { "false" }
-                )
-            }
-            Expr::IsDistinctFrom(left, right) | Expr::IsNotDistinctFrom(left, right) => format!(
-                "({} IS {}DISTINCT FROM {})",
-                render(left),
-                if matches!(expr, Expr::IsNotDistinctFrom(..)) {
-                    "NOT "
-                } else {
-                    ""
-                },
-                render(right)
-            ),
-            Expr::Between {
-                expr,
-                negated,
-                low,
-                high,
-            } => {
-                let between = format!(
-                    "({} BETWEEN {} AND {})",
-                    render(expr),
-                    render(low),
-                    render(high)
-                );
-                if *negated {
-                    format!("(NOT {between})")
-                } else {
-                    between
-                }
-            }
-            Expr::InList {
-                expr,
-                list,
-                negated,
-            } => format!(
-                "({} {}IN ({}))",
-                render(expr),
-                if *negated { "NOT " } else { "" },
-                list.iter().map(render).collect::<Vec<_>>().join(", ")
-            ),
-            Expr::Like {
-                expr: value,
-                pattern,
-                negated,
-                escape_char,
-                ..
-            }
-            | Expr::ILike {
-                expr: value,
-                pattern,
-                negated,
-                escape_char,
-                ..
-            } => {
-                let insensitive = matches!(expr, Expr::ILike { .. });
-                if let Some(escape) = escape_char {
-                    let call = format!(
-                        "main.{}like_escape({}, {}, {escape})",
-                        if insensitive { "i" } else { "" },
-                        render(value),
-                        render(pattern)
-                    );
-                    if *negated {
-                        format!("(NOT {call})")
-                    } else {
-                        call
-                    }
-                } else {
-                    format!(
-                        "({} {}~~{} {})",
-                        render(value),
-                        if *negated { "!" } else { "" },
-                        if insensitive { "*" } else { "" },
-                        render(pattern)
-                    )
-                }
-            }
-            Expr::Cast {
-                kind,
-                expr,
-                data_type,
-                ..
-            } => format!(
-                "{}CAST({} AS {})",
-                if matches!(
-                    kind,
-                    datafusion::sql::sqlparser::ast::CastKind::TryCast
-                        | datafusion::sql::sqlparser::ast::CastKind::SafeCast
-                ) {
-                    "TRY_"
-                } else {
-                    ""
-                },
-                render(expr),
-                Self::data_type(data_type)
-            ),
-            Expr::TypedString(value) => format!(
-                "CAST({} AS {})",
-                value.value,
-                Self::data_type(&value.data_type)
-            ),
-            Expr::Interval(value) => {
-                let argument = render(&value.value);
-                if let Some(unit) = &value.leading_field {
-                    let cast = format!("CAST({argument} AS DOUBLE)");
-                    let cast = match unit {
-                        DateTimeField::Second | DateTimeField::Millisecond => cast,
-                        DateTimeField::Day => format!("CAST(trunc({cast}) AS INTEGER)"),
-                        _ => format!("CAST(trunc({cast}) AS BIGINT)"),
-                    };
-                    format!("to_{}s({cast})", unit.to_string().to_ascii_lowercase())
-                } else {
-                    format!("CAST({argument} AS INTERVAL)")
-                }
-            }
-            Expr::Case {
-                operand,
-                conditions,
-                else_result,
-                ..
-            } => {
-                let mut result = "CASE ".to_owned();
-                for condition in conditions {
-                    let check = operand.as_ref().map_or_else(
-                        || render(&condition.condition),
-                        |operand| {
-                            format!("({} = {})", render(operand), render(&condition.condition))
-                        },
-                    );
-                    result.push_str(&format!(
-                        " WHEN ({check}) THEN ({})",
-                        render(&condition.result)
-                    ));
-                }
-                result.push_str(&format!(
-                    " ELSE {} END",
-                    else_result
-                        .as_ref()
-                        .map_or_else(|| "NULL".to_owned(), |expr| render(expr))
-                ));
-                result
-            }
-            Expr::Function(function) => Self::function(function, windows),
-            _ => expr.to_string(),
-        }
-    }
-
-    fn function(function: &Function, windows: &BTreeMap<String, WindowSpec>) -> String {
-        let name = EngineExpr::name(function).to_ascii_lowercase();
-        let FunctionArguments::List(arguments) = &function.args else {
-            return name;
-        };
-        let star = matches!(
-            arguments.args.as_slice(),
-            [FunctionArg::Unnamed(FunctionArgExpr::Wildcard)]
-        );
-        let name = match name.as_str() {
-            "count" if star && function.over.is_none() => "count_star",
-            "coalesce" => "COALESCE",
-            "nullif" => "\"nullif\"",
-            _ => name.as_str(),
-        };
-        let args = arguments
-            .args
-            .iter()
-            .filter_map(|arg| match arg {
-                FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
-                    Some(Self::expression(expr, windows))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let distinct = matches!(
-            arguments.duplicate_treatment,
-            Some(datafusion::sql::sqlparser::ast::DuplicateTreatment::Distinct)
-        );
-        let mut result = format!("{name}({}{args})", if distinct { "DISTINCT " } else { "" });
-        if let Some(filter) = &function.filter {
-            result.push_str(&format!(
-                " FILTER (WHERE {})",
-                Self::expression(filter, windows)
-            ));
-        }
-        if let Some(over) = &function.over {
-            let window = match over {
-                WindowType::WindowSpec(spec) => Some(spec),
-                WindowType::NamedWindow(name) => windows.get(&name.value.to_ascii_lowercase()),
-            };
-            if let Some(window) = window {
-                let mut parts = Vec::new();
-                if !window.partition_by.is_empty() {
-                    parts.push(format!(
-                        "PARTITION BY {}",
-                        window
-                            .partition_by
-                            .iter()
-                            .map(|expr| Self::expression(expr, windows))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-                if !window.order_by.is_empty() {
-                    parts.push(format!(
-                        "ORDER BY {}",
-                        window
-                            .order_by
-                            .iter()
-                            .map(|order| format!(
-                                "{}{}",
-                                Self::expression(&order.expr, windows),
-                                order.options
-                            ))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-                if let Some(frame) = &window.window_frame {
-                    parts.push(format!(
-                        "{} BETWEEN {} AND {}",
-                        frame.units,
-                        frame.start_bound,
-                        frame
-                            .end_bound
-                            .as_ref()
-                            .unwrap_or(&WindowFrameBound::CurrentRow)
-                    ));
-                }
-                result.push_str(&format!(" OVER ({})", parts.join(" ")));
-            }
-        }
-        result
+            .map_err(|_| SqlPolicy::invalid("SQL parameters"))
     }
 }
 
@@ -1099,7 +661,7 @@ impl SqlContext<'_> {
         const STACK_BYTES: usize = 16 * 1024 * 1024;
         // Reserve stack space for the parser depth limit.
         stacker::maybe_grow(STACK_BYTES, STACK_BYTES, || {
-            Parser::new(&DuckDbDialect {})
+            Parser::new(&GenericDialect {})
                 .with_recursion_limit(AST_DEPTH)
                 .try_with_sql(sql)
                 .and_then(|mut parser| parser.parse_statements())
@@ -1120,102 +682,14 @@ impl SqlContext<'_> {
             .collect()
     }
 
-    fn plan(&self, mut query: Box<Query>, parameters: &[FieldRef]) -> Result<LogicalPlan> {
-        if let ControlFlow::Break(error) = query.visit(&mut EngineExpr) {
-            return Err(error);
-        }
+    fn plan(&self, query: Box<Query>, parameters: &[FieldRef]) -> Result<LogicalPlan> {
         let mut context = PlannerContext::new().with_prepare_param_data_types(parameters.to_vec());
-        let plan = SqlToRel::new(self)
-            .sql_statement_to_plan_with_context(Statement::Query(query), &mut context)
-            .map_err(|_| Binder::invalid("SQL binding"))?;
-        Self::numeric(plan)
-    }
-
-    fn numeric(plan: LogicalPlan) -> Result<LogicalPlan> {
-        plan.transform_up(|plan| {
-            if let LogicalPlan::Union(union) = plan {
-                return Ok(Transformed::yes(LogicalPlan::Union(
-                    datafusion::logical_expr::Union::try_new_with_loose_types(union.inputs)?,
-                )));
-            }
-            if plan.expressions().is_empty() {
-                return Ok(Transformed::yes(plan.recompute_schema()?));
-            }
-            let schema = plan
-                .inputs()
-                .into_iter()
-                .try_fold(DFSchema::empty(), |schema, input| {
-                    schema.join(input.schema())
-                })?;
-            let names = NamePreserver::new(&plan);
-            let result = plan.map_expressions(|expr| {
-                let name = names.save(&expr);
-                let mut result = expr.transform_up(|expr| {
-                    let expr = match expr {
-                        EngineExpression::Alias(mut alias)
-                            if alias.metadata.as_ref().is_some_and(|metadata| {
-                                metadata.inner().contains_key("__araphor_sql_name")
-                            }) =>
-                        {
-                            if let Some(metadata) = alias.metadata.take() {
-                                let mut metadata = metadata.inner().clone();
-                                metadata.remove("__araphor_sql_name");
-                                alias.metadata = (!metadata.is_empty()).then(|| metadata.into());
-                            }
-                            return Ok(Transformed::yes(EngineExpression::Alias(alias)));
-                        }
-                        EngineExpression::Literal(ScalarValue::Int64(Some(value)), metadata)
-                            if i32::try_from(value).is_ok() =>
-                        {
-                            return Ok(Transformed::yes(EngineExpression::Literal(
-                                ScalarValue::Int32(Some(value as i32)),
-                                metadata,
-                            )));
-                        }
-                        EngineExpression::Literal(ScalarValue::UInt64(Some(value)), metadata) => {
-                            return Ok(Transformed::yes(EngineExpression::Literal(
-                                ScalarValue::Decimal256(
-                                    Some(datafusion::arrow::datatypes::i256::from_i128(
-                                        i128::from(value),
-                                    )),
-                                    39,
-                                    0,
-                                ),
-                                metadata,
-                            )));
-                        }
-                        expr => expr,
-                    };
-                    let EngineExpression::BinaryExpr(mut binary) = expr else {
-                        return Ok(Transformed::no(expr));
-                    };
-                    if binary.op == Operator::Divide {
-                        let left = binary.left.get_type(&schema)?;
-                        let right = binary.right.get_type(&schema)?;
-                        let exact = |kind: &datafusion::arrow::datatypes::DataType| {
-                            kind.is_integer() || kind.is_decimal() || kind.is_null()
-                        };
-                        if exact(&left) && exact(&right) {
-                            binary.left = Box::new((*binary.left).cast_to(
-                                &datafusion::arrow::datatypes::DataType::Float64,
-                                &schema,
-                            )?);
-                            binary.right = Box::new((*binary.right).cast_to(
-                                &datafusion::arrow::datatypes::DataType::Float64,
-                                &schema,
-                            )?);
-                            return Ok(Transformed::yes(EngineExpression::BinaryExpr(binary)));
-                        }
-                    }
-                    Ok(Transformed::no(EngineExpression::BinaryExpr(binary)))
-                })?;
-                result.data = name.restore(result.data);
-                Ok(result)
-            })?;
-            Ok(Transformed::yes(result.data.recompute_schema()?))
-        })
-        .map(|result| result.data)
-        .map_err(|_| Binder::invalid("SQL numeric expression"))
+        SqlToRel::new_with_options(
+            self,
+            ParserOptions::new().with_map_string_types_to_utf8view(false),
+        )
+        .sql_statement_to_plan_with_context(Statement::Query(query), &mut context)
+        .map_err(|_| SqlPolicy::invalid("SQL binding"))
     }
 }
 
@@ -1260,222 +734,29 @@ impl ContextProvider for SqlContext<'_> {
     }
 }
 
-struct EngineExpr;
-
-impl EngineExpr {
-    fn name(function: &Function) -> &str {
-        function
-            .name
-            .0
-            .first()
-            .and_then(|part| part.as_ident())
-            .map_or("", |name| name.value.as_str())
-    }
-    fn call(name: &str, argument: Expr) -> Expr {
-        Expr::Function(Function {
-            name: ObjectName::from(vec![Ident::with_quote('"', name)]),
-            uses_odbc_syntax: false,
-            parameters: FunctionArguments::None,
-            args: FunctionArguments::List(datafusion::sql::sqlparser::ast::FunctionArgumentList {
-                duplicate_treatment: None,
-                args: vec![FunctionArg::Unnamed(FunctionArgExpr::Expr(argument))],
-                clauses: Vec::new(),
-            }),
-            filter: None,
-            null_treatment: None,
-            over: None,
-            within_group: Vec::new(),
-        })
-    }
-
-    fn integer(number: &str) -> Option<Expr> {
-        if number.contains(['.', 'e', 'E']) || number.parse::<i64>().is_ok() {
-            return None;
-        }
-        let value = Expr::Value(SqlValue::SingleQuotedString(number.to_owned()).into());
-        Some(if number.parse::<i128>().is_ok() {
-            Self::call("__araphor_hugeint", value)
-        } else {
-            Expr::Cast {
-                kind: datafusion::sql::sqlparser::ast::CastKind::Cast,
-                expr: Box::new(value),
-                data_type: DataType::Double(ExactNumberInfo::None),
-                array: false,
-                format: None,
-            }
-        })
-    }
-
-    fn data_type(kind: &mut DataType) {
-        *kind = match &*kind {
-            DataType::UTinyInt => DataType::TinyIntUnsigned(None),
-            DataType::USmallInt => DataType::SmallIntUnsigned(None),
-            DataType::UBigInt => DataType::BigIntUnsigned(None),
-            DataType::Custom(name, modifiers)
-                if modifiers.is_empty()
-                    && matches!(name.0.as_slice(), [part]
-                    if part.as_ident().is_some_and(|name| name.value.eq_ignore_ascii_case("uinteger"))) =>
-            {
-                DataType::IntegerUnsigned(None)
-            }
-            DataType::Blob(None) => DataType::Bytea,
-            DataType::Timestamp(None, zone) => DataType::Timestamp(Some(6), *zone),
-            other => other.clone(),
-        };
-    }
-}
-
-impl VisitorMut for EngineExpr {
-    type Break = crate::Error;
-
-    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        match expr {
-            Expr::UnaryOp {
-                op: UnaryOperator::Minus,
-                expr: value,
-            } => {
-                if let Expr::Value(datafusion::sql::sqlparser::ast::ValueWithSpan {
-                    value: SqlValue::Number(number, false),
-                    ..
-                }) = value.as_ref()
-                {
-                    if !number.contains(['.', 'e', 'E']) {
-                        let signed = format!("-{number}");
-                        *expr = Self::integer(&signed)
-                            .unwrap_or_else(|| Expr::Value(SqlValue::Number(signed, false).into()));
-                    }
-                }
-            }
-            Expr::Function(function) => {
-                for part in &mut function.name.0 {
-                    if let datafusion::sql::sqlparser::ast::ObjectNamePart::Identifier(name) = part
-                    {
-                        name.value.make_ascii_lowercase();
-                    }
-                }
-                if let Some(WindowType::NamedWindow(name)) = &mut function.over {
-                    name.value.make_ascii_lowercase();
-                }
-                if Self::name(function) == "sum" {
-                    if let FunctionArguments::List(arguments) = &mut function.args {
-                        if let [FunctionArg::Unnamed(FunctionArgExpr::Expr(argument))] =
-                            arguments.args.as_mut_slice()
-                        {
-                            *argument = Self::call("__araphor_sum_input", argument.clone());
-                        }
-                    }
-                }
-            }
-            Expr::Cast {
-                kind,
-                expr: argument,
-                data_type: DataType::HugeInt,
-                ..
-            } => {
-                let name = if matches!(
-                    kind,
-                    datafusion::sql::sqlparser::ast::CastKind::TryCast
-                        | datafusion::sql::sqlparser::ast::CastKind::SafeCast
-                ) {
-                    "__araphor_try_hugeint"
-                } else {
-                    "__araphor_hugeint"
-                };
-                *expr = Self::call(name, argument.as_ref().clone());
-            }
-            Expr::Cast { data_type, .. } => Self::data_type(data_type),
-            Expr::TypedString(value) => Self::data_type(&mut value.data_type),
-            Expr::Interval(_) => {
-                if let Some(micros) = TimeTest::fixed_interval(expr) {
-                    *expr = Expr::Interval(datafusion::sql::sqlparser::ast::Interval {
-                        value: Box::new(Expr::Value(
-                            SqlValue::SingleQuotedString(format!(
-                                "{} days {} microseconds",
-                                micros / 86_400_000_000,
-                                micros % 86_400_000_000
-                            ))
-                            .into(),
-                        )),
-                        leading_field: None,
-                        leading_precision: None,
-                        last_field: None,
-                        fractional_seconds_precision: None,
-                    });
-                }
-            }
-            Expr::Value(datafusion::sql::sqlparser::ast::ValueWithSpan {
-                value: SqlValue::Number(number, _),
-                ..
-            }) if number.contains(['e', 'E']) => {
-                *expr = Expr::Cast {
-                    kind: datafusion::sql::sqlparser::ast::CastKind::Cast,
-                    expr: Box::new(Expr::Value(
-                        SqlValue::SingleQuotedString(number.clone()).into(),
-                    )),
-                    data_type: DataType::Double(ExactNumberInfo::None),
-                    array: false,
-                    format: None,
-                };
-            }
-            Expr::Value(datafusion::sql::sqlparser::ast::ValueWithSpan {
-                value: SqlValue::Number(number, false),
-                ..
-            }) => {
-                if let Some(value) = Self::integer(number) {
-                    *expr = value;
-                }
-            }
-            _ => {}
-        }
-        ControlFlow::Continue(())
-    }
-
-    fn post_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        let Expr::Function(function) = expr else {
-            return ControlFlow::Continue(());
-        };
-        let name = Self::name(function);
-        if name == "sum" {
-            *expr = Self::call("__araphor_sum_result", expr.clone());
-        } else if matches!(name, "length" | "row_number" | "rank" | "dense_rank") {
-            *expr = Expr::Cast {
-                kind: datafusion::sql::sqlparser::ast::CastKind::Cast,
-                expr: Box::new(expr.clone()),
-                data_type: DataType::BigInt(None),
-                array: false,
-                format: None,
-            };
-        }
-        ControlFlow::Continue(())
-    }
-}
-
-type BoundSelect = (Vec<Option<String>>, DFSchema, Vec<String>, Vec<bool>);
-
-struct Binder {
-    relations: BTreeMap<String, SchemaRef>,
-    model: bool,
-    state: SessionState,
-    parameters: Vec<FieldRef>,
+struct SqlPolicy<'a> {
+    relations: &'a BTreeMap<String, SchemaRef>,
     aggregate: bool,
     clocks: usize,
-    clock: Option<usize>,
     depth: usize,
-    next: usize,
     dependencies: BTreeSet<String>,
 }
 
-impl Binder {
+impl SqlPolicy<'_> {
     fn invalid(field: &'static str) -> crate::Error {
         crate::QueryInvalidSnafu { field }.build()
     }
 
     fn identifier(name: &Ident) -> Result<String> {
-        let name = name.value.to_ascii_lowercase();
-        if name.is_empty() || name.len() > 256 || name.starts_with("__araphor_") {
+        let folded = name.value.to_ascii_lowercase();
+        if folded.is_empty() || folded.len() > 256 || folded.starts_with("__araphor_") {
             return Err(Self::invalid("SQL name"));
         }
-        Ok(name)
+        Ok(if name.quote_style.is_some() {
+            name.value.clone()
+        } else {
+            folded
+        })
     }
 
     fn name(name: &ObjectName) -> Result<String> {
@@ -1485,134 +766,7 @@ impl Binder {
         Self::identifier(part.as_ident().ok_or_else(|| Self::invalid("SQL name"))?)
     }
 
-    fn fresh(&mut self, prefix: &str) -> Ident {
-        self.next += 1;
-        Ident::with_quote('"', format!("__araphor_{prefix}_{}", self.next))
-    }
-
-    fn projection(&mut self, select: &mut Select, schema: &DFSchema) {
-        for window in &mut select.named_window {
-            window.0.value.make_ascii_lowercase();
-        }
-        Self::having(select, schema);
-        let mut names = BTreeSet::new();
-        for item in &mut select.projection {
-            if let SelectItem::UnnamedExpr(expr) = item {
-                if Binder::output_name(&SelectItem::UnnamedExpr(expr.clone())).is_none() {
-                    *item = SelectItem::ExprWithAlias {
-                        expr: expr.clone(),
-                        alias: self.fresh("column"),
-                    };
-                }
-            }
-            if let SelectItem::ExprWithAlias { alias, .. } = item {
-                alias.quote_style = Some('"');
-            }
-            if let Some(name) = Binder::output_name(item) {
-                if !names.insert(name.to_ascii_lowercase()) {
-                    let expr = match item {
-                        SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
-                            expr.clone()
-                        }
-                        _ => continue,
-                    };
-                    *item = SelectItem::ExprWithAlias {
-                        expr,
-                        alias: self.fresh("column"),
-                    };
-                }
-            }
-        }
-    }
-
-    fn having(select: &mut Select, schema: &DFSchema) {
-        let aliases: BTreeMap<_, _> = select
-            .projection
-            .iter()
-            .filter_map(|item| match item {
-                SelectItem::ExprWithAlias { expr, alias } => {
-                    Some((alias.value.to_ascii_lowercase(), expr.clone()))
-                }
-                _ => None,
-            })
-            .collect();
-        let grouped: Vec<_> = match &select.group_by {
-            GroupByExpr::Expressions(items, _) => items
-                .iter()
-                .map(|expr| {
-                    let mut expr = Binder::integer(expr)
-                        .and_then(|ordinal| {
-                            select.projection.get(ordinal.saturating_sub(1) as usize)
-                        })
-                        .and_then(|item| match item {
-                            SelectItem::UnnamedExpr(expr)
-                            | SelectItem::ExprWithAlias { expr, .. } => Some(expr),
-                            _ => None,
-                        })
-                        .unwrap_or(expr);
-                    while let Expr::Nested(inner) = expr {
-                        expr = inner.as_ref();
-                    }
-                    let mut expr = match expr {
-                        Expr::Identifier(name)
-                            if !schema.has_column_with_unqualified_name(&name.value) =>
-                        {
-                            aliases
-                                .get(&name.value.to_ascii_lowercase())
-                                .unwrap_or(expr)
-                        }
-                        _ => expr,
-                    };
-                    while let Expr::Nested(inner) = expr {
-                        expr = inner.as_ref();
-                    }
-                    if let Expr::Identifier(name) = expr {
-                        if let Ok((qualifier, field)) =
-                            schema.qualified_field_with_unqualified_name(&name.value)
-                        {
-                            if let Ok(expr) = Self::column(&Column::from((qualifier, field))) {
-                                return expr;
-                            }
-                        }
-                    }
-                    expr.clone()
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        let Some(having) = &mut select.having else {
-            return;
-        };
-        let _ = datafusion::sql::sqlparser::ast::visit_expressions_mut(having, |expr| {
-            if let Expr::Identifier(name) = expr {
-                if let Some(aliased) = aliases.get(&name.value.to_ascii_lowercase()) {
-                    *expr = grouped
-                        .iter()
-                        .find(|expr| {
-                            Self::column_name(expr)
-                                .is_some_and(|column| column.eq_ignore_ascii_case(&name.value))
-                        })
-                        .unwrap_or(aliased)
-                        .clone();
-                }
-            }
-            ControlFlow::<()>::Continue(())
-        });
-    }
-
-    fn column_name(expr: &Expr) -> Option<&str> {
-        match expr {
-            Expr::CompoundIdentifier(parts) => parts.last().map(|name| name.value.as_str()),
-            Expr::Nested(expr) => Self::column_name(expr),
-            _ => None,
-        }
-    }
-
-    fn query(
-        &mut self,
-        query: &mut Query,
-        inherited: &PlannerContext,
-    ) -> Result<(Vec<Option<String>>, LogicalPlan, Vec<String>)> {
+    fn query(&mut self, query: &mut Query, inherited: &BTreeSet<String>) -> Result<()> {
         self.depth += 1;
         if self.depth > AST_DEPTH
             || !query.locks.is_empty()
@@ -1624,31 +778,23 @@ impl Binder {
         {
             return Err(Self::invalid("SQL shape"));
         }
-        let mut context = inherited.clone();
+        let mut scope = inherited.clone();
         if let Some(with) = &mut query.with {
             if with.recursive {
                 return Err(Self::invalid("recursive SQL"));
             }
-            let mut names = BTreeSet::new();
             for cte in &mut with.cte_tables {
                 if cte.from.is_some() || cte.materialized.is_some() {
                     return Err(Self::invalid("SQL CTE"));
                 }
-                let name = Self::identifier(&cte.alias.name)?;
-                if !names.insert(name.clone()) {
-                    return Err(Self::invalid("SQL CTE"));
-                }
-                let (output, plan, _) = self.query(&mut cte.query, &context)?;
-                let names = Self::rename(output, &mut cte.alias)?;
-                context.insert_cte(name, Self::project(plan, &names, true)?);
+                let name = Self::alias(&cte.alias)?;
+                self.query(&mut cte.query, &scope)?;
+                scope.insert(name);
             }
         }
-        let mut planned = Box::new(query.clone());
-        planned.with = None;
-        let (mut output, input, mut labels, source_labels) =
-            self.body(&mut query.body, &mut planned.body, &mut context)?;
-        if let Some(order) = &query.order_by {
-            let OrderByKind::Expressions(items) = &order.kind else {
+        self.body(&mut query.body, &scope)?;
+        if let Some(order) = &mut query.order_by {
+            let OrderByKind::Expressions(items) = &mut order.kind else {
                 return Err(Self::invalid("SQL ordering"));
             };
             if order.interpolate.is_some() {
@@ -1656,10 +802,7 @@ impl Binder {
             }
             for item in items {
                 Self::order(item)?;
-                if !Self::ordinal(&item.expr, output.len())? {
-                    self.expression(&mut item.expr.clone(), &BTreeMap::new())?;
-                    Self::aliases(&item.expr, &input, &output, true)?;
-                }
+                self.expression(&mut item.expr, &BTreeMap::new())?;
             }
         }
         if let Some(limit) = &query.limit_clause {
@@ -1682,113 +825,35 @@ impl Binder {
                 return Err(Self::invalid("SQL limit"));
             }
         }
-        Self::fold(&mut planned);
-        let plan = self.statement(planned, &mut context)?;
-        plan.apply(|plan| {
-            if matches!(plan, LogicalPlan::SubqueryAlias(_)) {
-                return Ok(TreeNodeRecursion::Jump);
-            }
-            if let LogicalPlan::Join(join) = plan {
-                if !join.on.is_empty()
-                    || !join
-                        .filter
-                        .as_ref()
-                        .is_some_and(|expr| Self::equijoin(expr, join.right.schema()))
-                {
-                    return Err(datafusion::common::DataFusionError::Plan("SQL join".into()));
-                }
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .map_err(|_| Self::invalid("SQL join"))?;
-        if plan.schema().fields().len() != labels.len() {
-            return Err(Self::invalid("SQL result width"));
-        }
-        for (index, source) in source_labels.into_iter().enumerate() {
-            if source {
-                if let Some(name) = plan
-                    .schema()
-                    .field(index)
-                    .metadata()
-                    .get("__araphor_sql_name")
-                {
-                    labels[index] = name.clone();
-                    output[index] = Some(name.clone());
-                }
-            }
-        }
-        let unique = labels
-            .iter()
-            .map(|name| name.to_ascii_lowercase())
-            .collect::<BTreeSet<_>>();
-        let names = if unique.len() == labels.len() {
-            labels.clone()
-        } else {
-            plan.schema()
-                .fields()
-                .iter()
-                .map(|field| field.name().clone())
-                .collect()
-        };
-        let plan = Self::project(plan, &names, true)?;
         self.depth -= 1;
-        Ok((output, plan, labels))
+        Ok(())
     }
 
-    fn body(
-        &mut self,
-        original: &mut SetExpr,
-        planned: &mut SetExpr,
-        context: &mut PlannerContext,
-    ) -> Result<BoundSelect> {
+    fn body(&mut self, body: &mut SetExpr, scope: &BTreeSet<String>) -> Result<()> {
         self.depth += 1;
         if self.depth > AST_DEPTH {
             return Err(Self::invalid("SQL depth"));
         }
-        let result = match (original, planned) {
-            (SetExpr::Select(select), SetExpr::Select(target)) => {
-                self.select(select, target, context)
-            }
-            (SetExpr::Query(query), target) => {
-                let (output, plan, labels) = self.query(query, context)?;
-                *target = self.reference(plan, &query.body, context)?;
-                let source_labels = vec![false; labels.len()];
-                Ok((output, DFSchema::empty(), labels, source_labels))
-            }
-            (
-                SetExpr::SetOperation {
-                    left,
-                    right,
-                    set_quantifier:
-                        SetQuantifier::All | SetQuantifier::Distinct | SetQuantifier::None,
-                    ..
-                },
-                SetExpr::SetOperation {
-                    left: target_left,
-                    right: target_right,
-                    ..
-                },
-            ) => {
+        match body {
+            SetExpr::Select(select) => self.select(select, scope)?,
+            SetExpr::Query(query) => self.query(query, scope)?,
+            SetExpr::SetOperation {
+                left,
+                right,
+                set_quantifier: SetQuantifier::All | SetQuantifier::Distinct | SetQuantifier::None,
+                ..
+            } => {
                 self.aggregate = true;
-                let (output, _, labels, source_labels) = self.body(left, target_left, context)?;
-                let (right, _, _, _) = self.body(right, target_right, context)?;
-                if output.len() != right.len() {
-                    return Err(Self::invalid("SQL set columns"));
-                }
-                Ok((output, DFSchema::empty(), labels, source_labels))
+                self.body(left, scope)?;
+                self.body(right, scope)?;
             }
-            _ => Err(Self::invalid("SQL body")),
-        };
+            _ => return Err(Self::invalid("SQL body")),
+        }
         self.depth -= 1;
-        result
+        Ok(())
     }
 
-    fn select(
-        &mut self,
-        select: &mut Select,
-        target: &mut Select,
-        context: &mut PlannerContext,
-    ) -> Result<BoundSelect> {
+    fn select(&mut self, select: &mut Select, scope: &BTreeSet<String>) -> Result<()> {
         if select.into.is_some()
             || select.optimizer_hint.is_some()
             || select.select_modifiers.is_some()
@@ -1808,31 +873,20 @@ impl Binder {
         {
             return Err(Self::invalid("SQL select"));
         }
-        let mut from = select.from.clone();
-        let mut schema = DFSchema::empty();
         let mut aliases = BTreeSet::new();
-        for (source, target) in select.from.iter_mut().zip(&mut from) {
-            let (name, plan) = self.table(&mut source.relation, context)?;
-            if !aliases.insert(name) {
+        for source in &mut select.from {
+            if !aliases.insert(self.table(&mut source.relation, scope)?) {
                 return Err(Self::invalid("SQL alias"));
             }
-            schema = schema
-                .join(plan.schema())
-                .map_err(|_| Self::invalid("SQL source"))?;
-            target.relation = self.table_reference(plan, context);
-            for (source, target) in source.joins.iter_mut().zip(&mut target.joins) {
-                if source.global {
+            for join in &mut source.joins {
+                if join.global {
                     return Err(Self::invalid("SQL join"));
                 }
-                let (name, plan) = self.table(&mut source.relation, context)?;
-                if !aliases.insert(name) {
+                let right = self.table(&mut join.relation, scope)?;
+                if !aliases.insert(right.clone()) {
                     return Err(Self::invalid("SQL alias"));
                 }
-                schema = schema
-                    .join(plan.schema())
-                    .map_err(|_| Self::invalid("SQL source"))?;
-                target.relation = self.table_reference(plan, context);
-                let constraint = match &mut source.join_operator {
+                let constraint = match &mut join.join_operator {
                     JoinOperator::Join(value)
                     | JoinOperator::Inner(value)
                     | JoinOperator::Left(value)
@@ -1846,18 +900,11 @@ impl Binder {
                     return Err(Self::invalid("SQL join"));
                 };
                 self.expression(expr, &BTreeMap::new())?;
+                if !Self::join_shape(expr, &right, &aliases) {
+                    return Err(Self::invalid("SQL join"));
+                }
             }
         }
-        let label_windows = select
-            .named_window
-            .iter()
-            .filter_map(|window| match &window.1 {
-                NamedWindowExpr::WindowSpec(spec) => {
-                    Some((window.0.value.to_ascii_lowercase(), spec.clone()))
-                }
-                _ => None,
-            })
-            .collect();
         let mut windows = BTreeMap::new();
         for window in &mut select.named_window {
             let NamedWindowExpr::WindowSpec(spec) = &mut window.1 else {
@@ -1870,14 +917,6 @@ impl Binder {
                 .chain(spec.order_by.iter_mut().map(|item| &mut item.expr))
             {
                 self.expression(expr, &BTreeMap::new())?;
-                let mut expr = expr.clone();
-                self.prepare(&mut expr)?;
-                SqlToRel::new(&SqlContext {
-                    state: &self.state,
-                    relations: &self.relations,
-                })
-                .sql_to_expr(expr, &schema, context)
-                .map_err(|_| Self::invalid("SQL window"))?;
             }
             if windows
                 .insert(Self::identifier(&window.0)?, spec.clone())
@@ -1886,99 +925,46 @@ impl Binder {
                 return Err(Self::invalid("SQL window"));
             }
         }
-        let mut projection = Vec::new();
-        let mut labels = Vec::new();
-        let mut source_labels = Vec::new();
-        for item in std::mem::take(&mut select.projection) {
+        if select.projection.is_empty() || select.projection.len() > 256 {
+            return Err(Self::invalid("SQL projection"));
+        }
+        for item in &mut select.projection {
             match item {
-                SelectItem::Wildcard(options) => {
-                    Self::wildcard(&options)?;
-                    Self::expand(
-                        &schema,
-                        None,
-                        self.model,
-                        &mut projection,
-                        &mut labels,
-                        &mut source_labels,
-                    )?;
-                }
+                SelectItem::Wildcard(options) => Self::wildcard(options)?,
                 SelectItem::QualifiedWildcard(
                     SelectItemQualifiedWildcardKind::ObjectName(name),
                     options,
                 ) => {
-                    Self::wildcard(&options)?;
-                    Self::expand(
-                        &schema,
-                        Some(&Self::name(&name)?),
-                        self.model,
-                        &mut projection,
-                        &mut labels,
-                        &mut source_labels,
-                    )?;
+                    Self::name(name)?;
+                    Self::wildcard(options)?;
                 }
-                SelectItem::UnnamedExpr(mut expr) => {
-                    let item = SelectItem::UnnamedExpr(expr.clone());
-                    let name = Self::output_name(&item);
-                    labels.push(
-                        name.clone()
-                            .unwrap_or_else(|| SqlName::expression(&expr, &label_windows)),
-                    );
-                    source_labels.push(name.is_some());
-                    self.expression(&mut expr, &windows)?;
-                    projection.push(SelectItem::UnnamedExpr(expr));
-                }
-                SelectItem::ExprWithAlias { mut expr, alias } => {
-                    Self::identifier(&alias)?;
-                    labels.push(alias.value.clone());
-                    source_labels.push(false);
-                    self.expression(&mut expr, &windows)?;
-                    projection.push(SelectItem::ExprWithAlias { expr, alias });
+                SelectItem::UnnamedExpr(expr) => self.expression(expr, &windows)?,
+                SelectItem::ExprWithAlias { expr, alias } => {
+                    Self::identifier(alias)?;
+                    self.expression(expr, &windows)?;
                 }
                 _ => return Err(Self::invalid("SQL projection")),
             }
         }
-        if projection.is_empty() || projection.len() > 256 {
-            return Err(Self::invalid("SQL projection"));
-        }
-        let output: Vec<_> = projection.iter().map(Self::output_name).collect();
-        select.projection = projection;
         if let Some(expr) = &mut select.selection {
             self.expression(expr, &windows)?;
         }
         match &mut select.group_by {
             GroupByExpr::Expressions(items, modifiers) if modifiers.is_empty() => {
                 for expr in items {
-                    if !Self::ordinal(expr, output.len())? {
-                        self.expression(expr, &windows)?;
-                        Self::aliases(expr, &schema, &output, false)?;
-                    }
+                    self.expression(expr, &windows)?;
                 }
             }
             _ => return Err(Self::invalid("SQL grouping")),
         }
         if let Some(expr) = &mut select.having {
             self.expression(expr, &windows)?;
-            Self::aliases(expr, &schema, &output, true)?;
         }
-        *target = select.clone();
-        target.from = from;
-        Self::fold(target);
-        for item in &mut target.projection {
-            if let SelectItem::ExprWithAlias { alias, .. } = item {
-                alias.value.make_ascii_lowercase();
-                alias.quote_style = Some('"');
-            }
-        }
-        self.projection(target, &schema);
-        Ok((output, schema, labels, source_labels))
+        Ok(())
     }
 
-    fn table(
-        &mut self,
-        table: &mut TableFactor,
-        context: &PlannerContext,
-    ) -> Result<(String, LogicalPlan)> {
-        let (plan, output, alias, name) = match table {
+    fn table(&mut self, table: &mut TableFactor, scope: &BTreeSet<String>) -> Result<String> {
+        match table {
             TableFactor::Table {
                 name,
                 alias,
@@ -1992,30 +978,17 @@ impl Binder {
                 index_hints,
             } if with_hints.is_empty() && partitions.is_empty() && index_hints.is_empty() => {
                 let name = Self::name(name)?;
-                let plan = if let Some(plan) = context.get_cte(&name) {
-                    plan.clone()
-                } else {
+                if !scope.contains(&name) {
+                    if !self.relations.contains_key(&name) {
+                        return Err(Self::invalid("SQL relation"));
+                    }
                     self.dependencies.insert(name.clone());
-                    LogicalPlanBuilder::scan(
-                        name.clone(),
-                        SqlContext {
-                            state: &self.state,
-                            relations: &self.relations,
-                        }
-                        .get_table_source(TableReference::bare(name.clone()))
-                        .map_err(|_| Self::invalid("SQL relation"))?,
-                        None,
-                    )
-                    .and_then(LogicalPlanBuilder::build)
-                    .map_err(|_| Self::invalid("SQL relation"))?
-                };
-                let output = plan
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| Some(field.name().clone()))
-                    .collect();
-                (plan, output, alias.as_mut(), name)
+                }
+                alias
+                    .as_ref()
+                    .map(Self::alias)
+                    .transpose()
+                    .map(|alias| alias.unwrap_or(name))
             }
             TableFactor::Derived {
                 lateral: false,
@@ -2023,153 +996,22 @@ impl Binder {
                 alias: Some(alias),
                 sample: None,
             } => {
-                let (output, plan, _) = self.query(subquery, context)?;
-                let name = Self::identifier(&alias.name)?;
-                (plan, output, Some(alias), name)
+                let name = Self::alias(alias)?;
+                self.query(subquery, scope)?;
+                Ok(name)
             }
-            _ => return Err(Self::invalid("SQL relation")),
-        };
-        let name = alias
-            .as_ref()
-            .map(|alias| Self::identifier(&alias.name))
-            .transpose()?
-            .unwrap_or(name);
-        let names = if let Some(alias) = alias {
-            Self::rename(output, alias)?
-        } else {
-            output
-                .into_iter()
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| Self::invalid("SQL derived columns"))?
-        };
-        let plan = Self::project(plan, &names, false)?;
-        LogicalPlanBuilder::from(plan)
-            .alias(&name)
-            .and_then(LogicalPlanBuilder::build)
-            .map(|plan| (name, plan))
-            .map_err(|_| Self::invalid("SQL alias"))
+            _ => Err(Self::invalid("SQL relation")),
+        }
     }
 
-    fn project(plan: LogicalPlan, names: &[String], declared: bool) -> Result<LogicalPlan> {
-        let expressions = plan
-            .schema()
-            .iter()
-            .zip(names)
-            .map(|((qualifier, field), name)| {
-                let mut metadata = field.metadata().clone();
-                metadata.insert("__araphor_sql_name".into(), name.clone());
-                EngineExpression::Column(Column::from((qualifier, field))).alias_with_metadata(
-                    if declared {
-                        name.clone()
-                    } else {
-                        name.to_ascii_lowercase()
-                    },
-                    Some(metadata.into()),
-                )
-            })
-            .collect::<Vec<_>>();
-        let result = if declared {
-            if let LogicalPlan::Projection(projection) = &plan {
-                let expressions = projection
-                    .expr
-                    .iter()
-                    .zip(plan.schema().fields())
-                    .zip(names)
-                    .map(|((expr, field), name)| {
-                        let mut metadata = field.metadata().clone();
-                        metadata.insert("__araphor_sql_name".into(), name.clone());
-                        expr.clone()
-                            .unalias()
-                            .alias_with_metadata(name.clone(), Some(metadata.into()))
-                    })
-                    .collect::<Vec<_>>();
-                Projection::try_new(expressions, projection.input.clone())
-                    .map(LogicalPlan::Projection)
-            } else {
-                LogicalPlanBuilder::from(plan)
-                    .project(expressions)
-                    .and_then(LogicalPlanBuilder::build)
+    fn alias(alias: &TableAlias) -> Result<String> {
+        for column in &alias.columns {
+            if column.data_type.is_some() {
+                return Err(Self::invalid("SQL alias"));
             }
-        } else {
-            LogicalPlanBuilder::from(plan)
-                .project(expressions)
-                .and_then(LogicalPlanBuilder::build)
-        };
-        result.map_err(|_| Self::invalid("SQL output names"))
-    }
-
-    fn table_reference(&mut self, plan: LogicalPlan, context: &mut PlannerContext) -> TableFactor {
-        let name = self.fresh("bound");
-        context.insert_cte(name.value.clone(), plan);
-        TableFactor::Table {
-            name: ObjectName::from(vec![name]),
-            alias: None,
-            args: None,
-            with_hints: Vec::new(),
-            version: None,
-            with_ordinality: false,
-            partitions: Vec::new(),
-            json_path: None,
-            sample: None,
-            index_hints: Vec::new(),
+            Self::identifier(&column.name)?;
         }
-    }
-
-    fn reference(
-        &mut self,
-        plan: LogicalPlan,
-        body: &SetExpr,
-        context: &mut PlannerContext,
-    ) -> Result<SetExpr> {
-        fn select(body: &SetExpr) -> Option<&Select> {
-            match body {
-                SetExpr::Select(select) => Some(select),
-                SetExpr::Query(query) => select(&query.body),
-                SetExpr::SetOperation { left, .. } => select(left),
-                _ => None,
-            }
-        }
-        let mut select = Box::new(
-            select(body)
-                .cloned()
-                .ok_or_else(|| Self::invalid("SQL body"))?,
-        );
-        select.projection = vec![SelectItem::Wildcard(Default::default())];
-        select.from = vec![datafusion::sql::sqlparser::ast::TableWithJoins {
-            relation: self.table_reference(plan, context),
-            joins: Vec::new(),
-        }];
-        select.selection = None;
-        select.group_by = GroupByExpr::Expressions(Vec::new(), Vec::new());
-        select.having = None;
-        select.distinct = None;
-        select.named_window.clear();
-        Ok(SetExpr::Select(select))
-    }
-
-    fn statement(
-        &self,
-        mut query: Box<Query>,
-        context: &mut PlannerContext,
-    ) -> Result<LogicalPlan> {
-        self.prepare(&mut query)?;
-        SqlToRel::new(&SqlContext {
-            state: &self.state,
-            relations: &self.relations,
-        })
-        .sql_statement_to_plan_with_context(Statement::Query(query), context)
-        .map_err(|_| Self::invalid("SQL binding"))
-    }
-
-    fn prepare<T: datafusion::sql::sqlparser::ast::VisitMut>(&self, value: &mut T) -> Result<()> {
-        Self::fold(value);
-        if let Some(index) = self.clock {
-            let _ = value.visit(&mut FrozenClock(index));
-        }
-        match value.visit(&mut EngineExpr) {
-            ControlFlow::Break(error) => Err(error),
-            ControlFlow::Continue(()) => Ok(()),
-        }
+        Self::identifier(&alias.name)
     }
 
     fn expression(
@@ -2191,19 +1033,71 @@ impl Binder {
         Ok(())
     }
 
-    fn fold<T: datafusion::sql::sqlparser::ast::VisitMut>(value: &mut T) {
-        let _ = datafusion::sql::sqlparser::ast::visit_expressions_mut(value, |expr| {
-            match expr {
-                Expr::Identifier(name) => name.value.make_ascii_lowercase(),
-                Expr::CompoundIdentifier(parts) => {
-                    for name in parts {
-                        name.value.make_ascii_lowercase();
+    fn join_shape(expr: &Expr, right: &str, aliases: &BTreeSet<String>) -> bool {
+        match expr {
+            Expr::Nested(expr) => Self::join_shape(expr, right, aliases),
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::And,
+                right: other,
+            } => Self::join_shape(left, right, aliases) && Self::join_shape(other, right, aliases),
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Eq,
+                right: other,
+            } => {
+                let qualifier = |mut expr: &Expr| {
+                    while let Expr::Nested(inner) = expr {
+                        expr = inner;
                     }
+                    match expr {
+                        Expr::Identifier(_) => Some(None),
+                        Expr::CompoundIdentifier(parts) if parts.len() == 2 => {
+                            Self::identifier(&parts[0]).ok().map(Some)
+                        }
+                        _ => None,
+                    }
+                };
+                match (qualifier(left), qualifier(other)) {
+                    (Some(Some(left)), Some(Some(other))) => {
+                        aliases.contains(&left)
+                            && aliases.contains(&other)
+                            && ((left == right) != (other == right))
+                    }
+                    (Some(Some(name)), Some(None)) | (Some(None), Some(Some(name))) => {
+                        aliases.contains(&name)
+                    }
+                    (Some(None), Some(None)) => true,
+                    _ => false,
                 }
-                _ => {}
             }
-            ControlFlow::<()>::Continue(())
-        });
+            _ => false,
+        }
+    }
+
+    fn bound(plan: &LogicalPlan) -> Result<()> {
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::Projection(projection) = plan {
+                if projection.expr.len() > 256 {
+                    return Err(datafusion::common::DataFusionError::Plan(
+                        "SQL projection".into(),
+                    ));
+                }
+            }
+            if let LogicalPlan::Join(join) = plan {
+                if !join.on.is_empty()
+                    || !join
+                        .filter
+                        .as_ref()
+                        .is_some_and(|expr| Self::equijoin(expr, join.right.schema()))
+                {
+                    return Err(datafusion::common::DataFusionError::Plan("SQL join".into()));
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .map(|_| ())
+        .map_err(|_| Self::invalid("SQL plan"))
     }
 
     fn equijoin(expr: &EngineExpression, right: &DFSchema) -> bool {
@@ -2221,179 +1115,6 @@ impl Binder {
         }
     }
 
-    fn aliases(
-        expr: &Expr,
-        schema: &DFSchema,
-        output: &[Option<String>],
-        output_first: bool,
-    ) -> Result<()> {
-        let result = visit_expressions(expr, |expr| {
-            if let Expr::Identifier(name) = expr {
-                let key = name.value.to_ascii_lowercase();
-                let aliases = output
-                    .iter()
-                    .flatten()
-                    .filter(|name| name.eq_ignore_ascii_case(&key))
-                    .count();
-                if aliases > 1 && (output_first || !schema.has_column_with_unqualified_name(&key)) {
-                    return ControlFlow::Break(Self::invalid("SQL column"));
-                }
-            }
-            ControlFlow::Continue(())
-        });
-        match result {
-            ControlFlow::Break(error) => Err(error),
-            ControlFlow::Continue(()) => Ok(()),
-        }
-    }
-
-    fn column(column: &Column) -> Result<Expr> {
-        let Some(table) = &column.relation else {
-            return Err(Self::invalid("SQL column"));
-        };
-        Ok(Expr::CompoundIdentifier(vec![
-            Ident::with_quote('"', table.table()),
-            Ident::with_quote('"', &column.name),
-        ]))
-    }
-
-    fn expand(
-        schema: &DFSchema,
-        target: Option<&str>,
-        model: bool,
-        projection: &mut Vec<SelectItem>,
-        labels: &mut Vec<String>,
-        source_labels: &mut Vec<bool>,
-    ) -> Result<()> {
-        let columns = if let Some(target) = target {
-            datafusion::logical_expr::utils::expand_qualified_wildcard(
-                &TableReference::bare(target),
-                schema,
-                None,
-            )
-        } else {
-            Ok(schema
-                .columns()
-                .into_iter()
-                .map(EngineExpression::Column)
-                .collect())
-        }
-        .map_err(|_| Self::invalid("SQL wildcard"))?;
-        for expr in columns {
-            let EngineExpression::Column(column) = expr else {
-                return Err(Self::invalid("SQL wildcard"));
-            };
-            if model && column.name == "__row_index" {
-                continue;
-            }
-            let (_, field) = schema
-                .qualified_field_with_name(column.relation.as_ref(), &column.name)
-                .map_err(|_| Self::invalid("SQL wildcard"))?;
-            let name = field
-                .metadata()
-                .get("__araphor_sql_name")
-                .unwrap_or(field.name())
-                .clone();
-            let mut expr = Self::column(&column)?;
-            if let Expr::CompoundIdentifier(parts) = &mut expr {
-                if let Some(column) = parts.last_mut() {
-                    column.value = name.clone();
-                }
-            }
-            projection.push(SelectItem::UnnamedExpr(expr));
-            labels.push(name);
-            source_labels.push(true);
-        }
-        Ok(())
-    }
-
-    fn metadata(query: &mut Query) {
-        let Some((_, alias, _)) = TimeTest::direct_table(query) else {
-            return;
-        };
-        let SetExpr::Select(select) = query.body.as_mut() else {
-            return;
-        };
-        for item in &mut select.projection {
-            let expr = match item {
-                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => expr,
-                _ => continue,
-            };
-            Self::qualify(expr, &alias);
-        }
-        if let Some(expr) = &mut select.selection {
-            Self::qualify(expr, &alias);
-        }
-    }
-
-    fn qualify(expr: &mut Expr, alias: &str) {
-        let _ = datafusion::sql::sqlparser::ast::visit_expressions_mut(expr, |expr| {
-            match expr {
-                Expr::Identifier(name) => {
-                    *expr = Expr::CompoundIdentifier(vec![
-                        Ident::with_quote('"', alias),
-                        Ident::with_quote('"', name.value.to_ascii_lowercase()),
-                    ])
-                }
-                Expr::CompoundIdentifier(parts) => {
-                    for name in parts {
-                        name.value.make_ascii_lowercase();
-                    }
-                }
-                _ => {}
-            }
-            ControlFlow::<()>::Continue(())
-        });
-    }
-
-    fn rename(mut output: Vec<Option<String>>, alias: &mut TableAlias) -> Result<Vec<String>> {
-        if alias.columns.len() > output.len() {
-            return Err(Binder::invalid("SQL alias"));
-        }
-        for (column, target) in alias.columns.iter().zip(output.iter_mut()) {
-            if column.data_type.is_some() {
-                return Err(Binder::invalid("SQL alias"));
-            }
-            Binder::identifier(&column.name)?;
-            *target = Some(column.name.value.clone());
-        }
-        let output: Vec<_> = output
-            .into_iter()
-            .collect::<Option<_>>()
-            .ok_or_else(|| Binder::invalid("SQL derived columns"))?;
-        if output
-            .iter()
-            .map(|name| name.to_ascii_lowercase())
-            .collect::<BTreeSet<_>>()
-            .len()
-            != output.len()
-        {
-            return Err(Binder::invalid("SQL derived columns"));
-        }
-        if !alias.columns.is_empty() {
-            alias.columns = output
-                .iter()
-                .map(
-                    |name| datafusion::sql::sqlparser::ast::TableAliasColumnDef {
-                        name: Ident::with_quote('"', name),
-                        data_type: None,
-                    },
-                )
-                .collect();
-        }
-        Ok(output)
-    }
-
-    fn output_name(item: &SelectItem) -> Option<String> {
-        match item {
-            SelectItem::ExprWithAlias { alias, .. } => Some(alias.value.clone()),
-            SelectItem::UnnamedExpr(Expr::Identifier(name)) => Some(name.value.clone()),
-            SelectItem::UnnamedExpr(Expr::CompoundIdentifier(parts)) => {
-                parts.last().map(|name| name.value.clone())
-            }
-            _ => None,
-        }
-    }
     fn wildcard(options: &WildcardAdditionalOptions) -> Result<()> {
         if options.opt_ilike.is_some()
             || options.opt_exclude.is_some()
@@ -2422,16 +1143,6 @@ impl Binder {
         };
         number.parse().ok()
     }
-
-    fn ordinal(expr: &Expr, columns: usize) -> Result<bool> {
-        let Some(value) = Self::integer(expr) else {
-            return Ok(false);
-        };
-        if value == 0 || value > columns as u64 {
-            return Err(Self::invalid("SQL ordinal"));
-        }
-        Ok(true)
-    }
 }
 
 struct Expression<'a> {
@@ -2445,14 +1156,14 @@ impl Expression<'_> {
     fn check(&mut self, expr: &mut Expr) -> Result<()> {
         match expr {
             Expr::Identifier(name) => {
-                Binder::identifier(name)?;
+                SqlPolicy::identifier(name)?;
             }
             Expr::CompoundIdentifier(parts) => {
                 if !(1..=2).contains(&parts.len()) {
-                    return Err(Binder::invalid("SQL column"));
+                    return Err(SqlPolicy::invalid("SQL column"));
                 }
                 for name in parts {
-                    Binder::identifier(name)?;
+                    SqlPolicy::identifier(name)?;
                 }
             }
             Expr::IsFalse(_)
@@ -2493,11 +1204,10 @@ impl Expression<'_> {
                 ..
             } => {}
             Expr::Cast {
-                data_type,
                 array: false,
                 format: None,
                 ..
-            } if Self::data_type(data_type) => {}
+            } => {}
             Expr::TypedString(value)
                 if !value.uses_odbc_syntax
                     && matches!(value.data_type, DataType::Timestamp(_, _) | DataType::Date) => {}
@@ -2517,45 +1227,19 @@ impl Expression<'_> {
                     && matches!(value.value.as_ref(), Expr::Value(value) if matches!(value.value, SqlValue::SingleQuotedString(_))) =>
                 {}
             Expr::Function(function) => self.function(function)?,
-            _ => return Err(Binder::invalid("SQL expression")),
+            _ => return Err(SqlPolicy::invalid("SQL expression")),
         }
         Ok(())
     }
 
-    fn data_type(value: &DataType) -> bool {
-        matches!(
-            value,
-            DataType::Boolean
-                | DataType::Bool
-                | DataType::TinyInt(None)
-                | DataType::SmallInt(None)
-                | DataType::Int(None)
-                | DataType::Integer(None)
-                | DataType::BigInt(None)
-                | DataType::UTinyInt
-                | DataType::USmallInt
-                | DataType::IntegerUnsigned(None)
-                | DataType::UBigInt
-                | DataType::HugeInt
-                | DataType::Float(_)
-                | DataType::Real
-                | DataType::Double(_)
-                | DataType::Varchar(None)
-                | DataType::Text
-                | DataType::Blob(None)
-                | DataType::Date
-                | DataType::Timestamp(None, TimezoneInfo::None)
-        )
-    }
-
     fn function(&mut self, function: &mut Function) -> Result<()> {
-        let name = Binder::name(&function.name)?;
+        let name = SqlPolicy::name(&function.name)?;
         if function.uses_odbc_syntax
             || !matches!(function.parameters, FunctionArguments::None)
             || !function.within_group.is_empty()
             || function.null_treatment.is_some()
         {
-            return Err(Binder::invalid("SQL function"));
+            return Err(SqlPolicy::invalid("SQL function"));
         }
         if FrozenClock::matches(function) {
             self.clocks += 1;
@@ -2570,37 +1254,37 @@ impl Expression<'_> {
             && !window
             && !matches!(
                 name.as_str(),
-                "coalesce" | "nullif" | "lower" | "upper" | "length" | "abs" | "time_bucket"
+                "coalesce" | "nullif" | "lower" | "upper" | "length" | "abs" | "date_bin"
             )
         {
-            return Err(Binder::invalid("SQL function"));
+            return Err(SqlPolicy::invalid("SQL function"));
         }
         let FunctionArguments::List(arguments) = &function.args else {
-            return Err(Binder::invalid("SQL function"));
+            return Err(SqlPolicy::invalid("SQL function"));
         };
         if !arguments.clauses.is_empty() || (!aggregate && arguments.duplicate_treatment.is_some())
         {
-            return Err(Binder::invalid("SQL function"));
+            return Err(SqlPolicy::invalid("SQL function"));
         }
         let count = arguments.args.len();
         let arity = match name.as_str() {
             "row_number" | "rank" | "dense_rank" => count == 0,
             "coalesce" => count >= 2,
             "nullif" => count == 2,
-            "time_bucket" => (2..=3).contains(&count),
+            "date_bin" => (2..=3).contains(&count),
             "lag" | "lead" => (1..=3).contains(&count),
             _ => count == 1,
         };
         if !arity {
-            return Err(Binder::invalid("SQL function"));
+            return Err(SqlPolicy::invalid("SQL function"));
         }
-        if name == "time_bucket" {
+        if name == "date_bin" {
             let Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(width))) = arguments.args.first()
             else {
-                return Err(Binder::invalid("SQL bucket width"));
+                return Err(SqlPolicy::invalid("SQL bucket width"));
             };
             if TimeTest::fixed_interval(width).is_none() {
-                return Err(Binder::invalid("SQL bucket width"));
+                return Err(SqlPolicy::invalid("SQL bucket width"));
             }
         }
         for arg in &arguments.args {
@@ -2609,37 +1293,37 @@ impl Expression<'_> {
                 FunctionArg::Unnamed(FunctionArgExpr::Wildcard)
                     if name == "count" && count == 1 && arguments.duplicate_treatment.is_none() => {
                 }
-                _ => return Err(Binder::invalid("SQL function")),
+                _ => return Err(SqlPolicy::invalid("SQL function")),
             }
         }
         if matches!(name.as_str(), "lag" | "lead") && count > 1 {
             let FunctionArg::Unnamed(FunctionArgExpr::Expr(offset)) = &arguments.args[1] else {
-                return Err(Binder::invalid("SQL window"));
+                return Err(SqlPolicy::invalid("SQL window"));
             };
-            if !Binder::integer(offset).is_some_and(|value| value <= 200) {
-                return Err(Binder::invalid("SQL window"));
+            if !SqlPolicy::integer(offset).is_some_and(|value| value <= 200) {
+                return Err(SqlPolicy::invalid("SQL window"));
             }
         }
         if function.filter.is_some() && !aggregate {
-            return Err(Binder::invalid("SQL function"));
+            return Err(SqlPolicy::invalid("SQL function"));
         }
         if window && function.over.is_none() {
-            return Err(Binder::invalid("SQL window"));
+            return Err(SqlPolicy::invalid("SQL window"));
         }
         if let Some(over) = &function.over {
             if !aggregate && !window {
-                return Err(Binder::invalid("SQL window"));
+                return Err(SqlPolicy::invalid("SQL window"));
             }
             let spec = match over {
                 WindowType::WindowSpec(spec) => spec,
                 WindowType::NamedWindow(name) => self
                     .windows
-                    .get(&Binder::identifier(name)?)
-                    .ok_or_else(|| Binder::invalid("SQL window"))?,
+                    .get(&SqlPolicy::identifier(name)?)
+                    .ok_or_else(|| SqlPolicy::invalid("SQL window"))?,
             };
             Self::window(spec)?;
             if aggregate && spec.window_frame.is_none() {
-                return Err(Binder::invalid("SQL window"));
+                return Err(SqlPolicy::invalid("SQL window"));
             }
         }
         self.aggregate |= aggregate || window;
@@ -2648,10 +1332,10 @@ impl Expression<'_> {
 
     fn window(spec: &WindowSpec) -> Result<()> {
         if spec.window_name.is_some() || spec.order_by.is_empty() {
-            return Err(Binder::invalid("SQL window"));
+            return Err(SqlPolicy::invalid("SQL window"));
         }
         for item in &spec.order_by {
-            Binder::order(item)?;
+            SqlPolicy::order(item)?;
         }
         if let Some(frame) = &spec.window_frame {
             if frame.units != WindowFrameUnits::Rows
@@ -2661,7 +1345,7 @@ impl Expression<'_> {
                     .as_ref()
                     .is_some_and(|bound| !Self::window_bound(bound))
             {
-                return Err(Binder::invalid("SQL window"));
+                return Err(SqlPolicy::invalid("SQL window"));
             }
         }
         Ok(())
@@ -2671,7 +1355,7 @@ impl Expression<'_> {
         match bound {
             WindowFrameBound::CurrentRow => true,
             WindowFrameBound::Preceding(Some(value)) | WindowFrameBound::Following(Some(value)) => {
-                Binder::integer(value).is_some_and(|value| value <= 200)
+                SqlPolicy::integer(value).is_some_and(|value| value <= 200)
             }
             _ => false,
         }
@@ -2684,7 +1368,7 @@ impl VisitorMut for Expression<'_> {
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
         self.depth += 1;
         if self.depth > AST_DEPTH {
-            return ControlFlow::Break(Binder::invalid("SQL depth"));
+            return ControlFlow::Break(SqlPolicy::invalid("SQL depth"));
         }
         match self.check(expr) {
             Ok(()) => ControlFlow::Continue(()),
@@ -2709,7 +1393,7 @@ struct Parameters {
 impl Parameters {
     fn validate(values: &[Value]) -> Result<()> {
         if values.len() > PARAMETER_COUNT {
-            return Err(Binder::invalid("SQL parameters"));
+            return Err(SqlPolicy::invalid("SQL parameters"));
         }
         let mut bytes = 0_usize;
         for value in values {
@@ -2730,11 +1414,11 @@ impl Parameters {
                 Value::Double(value) if value.is_finite() => {}
                 Value::Text(value) => bytes = bytes.saturating_add(value.len()),
                 Value::Blob(value) => bytes = bytes.saturating_add(value.len()),
-                _ => return Err(Binder::invalid("SQL parameter type")),
+                _ => return Err(SqlPolicy::invalid("SQL parameter type")),
             }
         }
         if bytes > PARAMETER_BYTES {
-            return Err(Binder::invalid("SQL parameters"));
+            return Err(SqlPolicy::invalid("SQL parameters"));
         }
         Ok(())
     }
@@ -2751,7 +1435,7 @@ impl Parameters {
             return Err(error);
         }
         if binding.used.iter().any(|used| !used) || (binding.numbered && binding.positional) {
-            return Err(Binder::invalid("SQL parameters"));
+            return Err(SqlPolicy::invalid("SQL parameters"));
         }
         Ok(())
     }
@@ -2763,7 +1447,7 @@ impl VisitorMut for Parameters {
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
         self.depth += 1;
         if self.depth > AST_DEPTH {
-            return ControlFlow::Break(Binder::invalid("SQL depth"));
+            return ControlFlow::Break(SqlPolicy::invalid("SQL depth"));
         }
         let Expr::Value(value) = expr else {
             return ControlFlow::Continue(());
@@ -2781,7 +1465,7 @@ impl VisitorMut for Parameters {
                 .and_then(|value| value.parse::<usize>().ok())
         };
         let Some(index) = index.filter(|index| *index > 0 && *index <= self.used.len()) else {
-            return ControlFlow::Break(Binder::invalid("SQL parameters"));
+            return ControlFlow::Break(SqlPolicy::invalid("SQL parameters"));
         };
         self.used[index - 1] = true;
         *mark = format!("${index}");
@@ -2798,7 +1482,7 @@ struct FrozenClock(usize);
 
 impl FrozenClock {
     fn matches(function: &Function) -> bool {
-        Binder::name(&function.name).is_ok_and(|name| name == "current_timestamp")
+        SqlPolicy::name(&function.name).is_ok_and(|name| name == "current_timestamp")
             && matches!(function.parameters, FunctionArguments::None)
             && (matches!(function.args, FunctionArguments::None)
                 || matches!(&function.args, FunctionArguments::List(args) if args.args.is_empty() && args.clauses.is_empty() && args.duplicate_treatment.is_none()))
@@ -2855,7 +1539,7 @@ impl TimeTest {
         let TableFactor::Table { name, alias, .. } = &from.relation else {
             return None;
         };
-        let relation = Binder::name(name).ok()?;
+        let relation = SqlPolicy::name(name).ok()?;
         if alias
             .as_ref()
             .is_some_and(|alias| !alias.columns.is_empty())
@@ -2866,7 +1550,7 @@ impl TimeTest {
             select,
             alias.as_ref().map_or_else(
                 || relation.clone(),
-                |alias| alias.name.value.to_ascii_lowercase(),
+                |alias| SqlPolicy::identifier(&alias.name).unwrap_or_default(),
             ),
             relation,
         ))
@@ -2977,8 +1661,19 @@ impl TimeTest {
     }
 
     fn column(expr: &Expr, alias: &str) -> bool {
-        matches!(expr, Expr::CompoundIdentifier(parts) if matches!(parts.as_slice(), [table, column]
-            if table.value == alias && column.value == "received_at"))
+        Self::named_column(expr, alias, "received_at")
+    }
+
+    fn named_column(expr: &Expr, alias: &str, name: &str) -> bool {
+        match expr {
+            Expr::Identifier(column) => {
+                SqlPolicy::identifier(column).is_ok_and(|column| column == name)
+            }
+            Expr::CompoundIdentifier(parts) => matches!(parts.as_slice(), [table, column]
+                if SqlPolicy::identifier(table).is_ok_and(|table| table == alias)
+                    && SqlPolicy::identifier(column).is_ok_and(|column| column == name)),
+            _ => false,
+        }
     }
 
     fn value(expr: &Expr, parameters: &[Value]) -> Option<TimeValue> {
@@ -3141,7 +1836,7 @@ mod engine_tests {
             .program
             .plan
             .get_parameter_fields()
-            .map_err(|_| Binder::invalid("test plan"))?;
+            .map_err(|_| SqlPolicy::invalid("test plan"))?;
         assert_eq!(fields.len(), 2);
         assert_eq!(
             fields["$2"].as_ref().map(|field| field.data_type()),
@@ -3163,14 +1858,14 @@ mod engine_tests {
             assert!(binding
                 .plan()?
                 .get_parameter_names()
-                .map_err(|_| Binder::invalid("test plan"))?
+                .map_err(|_| SqlPolicy::invalid("test plan"))?
                 .is_empty());
         }
         assert_eq!(
             sql.program
                 .plan
                 .get_parameter_names()
-                .map_err(|_| Binder::invalid("test plan"))?
+                .map_err(|_| SqlPolicy::invalid("test plan"))?
                 .len(),
             2
         );
@@ -3179,7 +1874,7 @@ mod engine_tests {
             .program
             .plan
             .get_parameter_names()
-            .map_err(|_| Binder::invalid("test plan"))?
+            .map_err(|_| SqlPolicy::invalid("test plan"))?
             .is_empty());
         assert!(fixed.bind_complete(1)?.parameters.is_empty());
         Ok(())
@@ -3218,6 +1913,18 @@ mod engine_tests {
         )?
         .source_column("operation")
         .is_some());
+        let sql = QuerySql::admit(
+            r#"SELECT operation AS "Pick", source_cursor AS "pick" FROM events"#,
+            Vec::new(),
+            false,
+        )?;
+        for (name, expected) in [("Pick", "operation"), ("pick", "source_cursor")] {
+            let (schema, index) = sql
+                .source_column(name)
+                .ok_or_else(|| SqlPolicy::invalid("test source metadata"))?;
+            assert_eq!(schema.fields()[index].name(), expected);
+        }
+        assert!(sql.source_column("PICK").is_none());
         Ok(())
     }
 
@@ -3225,14 +1932,14 @@ mod engine_tests {
     fn retained_plan_field_metadata() -> Result<()> {
         let metadata = std::collections::HashMap::from([("unit".into(), "source".into())]);
         let schema = Arc::new(Schema::new_with_metadata(
-            vec![Field::new("CamelCase", ArrowType::Int64, false).with_metadata(metadata.clone())],
+            vec![Field::new("value", ArrowType::Int64, false).with_metadata(metadata.clone())],
             std::collections::HashMap::from([("dataset".into(), "data".into())]),
         ));
         for query in [
-            "SELECT camelcase FROM data",
-            "WITH t(Picked) AS (SELECT camelcase FROM data) SELECT picked FROM t",
-            "SELECT camelcase FROM data UNION ALL SELECT camelcase FROM data",
-            "SELECT SUM(camelcase) AS total FROM data",
+            "SELECT value FROM data",
+            "WITH t(picked) AS (SELECT value FROM data) SELECT picked FROM t",
+            "SELECT value FROM data UNION ALL SELECT value FROM data",
+            "SELECT SUM(value) AS total FROM data",
         ] {
             let sql = QuerySql::admit_relations(
                 query,
@@ -3267,7 +1974,7 @@ mod engine_tests {
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
-                .map_err(|_| Binder::invalid("test plan"))?;
+                .map_err(|_| SqlPolicy::invalid("test plan"))?;
             if !query.contains("SUM") {
                 assert_eq!(
                     sql.program.plan.schema().field(0).metadata(),
@@ -3300,33 +2007,36 @@ mod engine_tests {
 
     #[test]
     fn nested_cte_scope() -> Result<()> {
-        let sql = QuerySql::admit("WITH t AS (SELECT operation FROM events) SELECT operation FROM (WITH t AS (SELECT operation FROM events) SELECT operation FROM t) x", Vec::new(), false)?;
+        assert!(QuerySql::admit("WITH t AS (SELECT operation FROM events) SELECT operation FROM (WITH t AS (SELECT operation FROM events) SELECT operation FROM t) x", Vec::new(), false).is_err());
+        let sql = QuerySql::admit("WITH t AS (SELECT operation FROM events) SELECT operation FROM (WITH inner_t AS (SELECT operation FROM t) SELECT operation FROM inner_t) x", Vec::new(), false)?;
         assert_eq!(sql.dependencies(), &BTreeSet::from(["events".to_owned()]));
-        let plan = sql.bind_complete(0)?.plan()?;
-        assert_eq!(plan.schema().field(0).data_type(), &ArrowType::UInt32);
+        assert_eq!(
+            sql.bind_complete(0)?.plan()?.schema().field(0).data_type(),
+            &ArrowType::UInt32
+        );
         Ok(())
     }
 
     #[test]
-    fn full_query_child_compatibility_before_pruning() -> Result<()> {
+    fn full_query_policy_before_pruning() -> Result<()> {
         let relations = BTreeMap::from([
             (
                 "events".to_owned(),
                 SCHEMAS
                     .iter()
                     .find(|schema| schema.name == "events")
-                    .ok_or_else(|| Binder::invalid("test event schema"))?
+                    .ok_or_else(|| SqlPolicy::invalid("test event schema"))?
                     .arrow_schema(),
             ),
             (
                 "data".to_owned(),
                 Arc::new(Schema::new(vec![
-                    Field::new("CamelCase", ArrowType::Int64, false),
-                    Field::new("SourceCursor", ArrowType::UInt64, false),
+                    Field::new("value", ArrowType::Int64, false),
+                    Field::new("cursor", ArrowType::UInt64, false),
                 ])),
             ),
         ]);
-        let query = "WITH unused AS (SELECT operation FROM events), t(AliasName) AS (SELECT camelcase, sourcecursor FROM data) SELECT d.innername AS \"Pick\", d.sourcecursor FROM (WITH t(InnerName) AS (SELECT camelcase, sourcecursor FROM data) SELECT innername, sourcecursor FROM t WINDOW unused AS (ORDER BY sourcecursor)) d WHERE false";
+        let query = "WITH unused AS (SELECT operation FROM events), t(alias_name, cursor) AS (SELECT value, cursor FROM data) SELECT d.inner_name AS \"Pick\", d.cursor FROM (WITH inner_t(inner_name, cursor) AS (SELECT alias_name, cursor FROM t) SELECT inner_name, cursor FROM inner_t WINDOW unused AS (ORDER BY missing)) d WHERE false";
         let sql = QuerySql::admit_relations(query, relations.clone())?;
         assert_eq!(
             sql.dependencies(),
@@ -3334,19 +2044,19 @@ mod engine_tests {
         );
         let binding = sql.bind_complete(0)?;
         assert_eq!(binding.plan.schema().field(0).name(), "Pick");
-        assert_eq!(binding.plan.schema().field(1).name(), "SourceCursor");
+        assert_eq!(binding.plan.schema().field(1).name(), "cursor");
         let plan = QueryEngine::state()?
             .optimize(&binding.plan)
-            .map_err(|_| Binder::invalid("test optimized plan"))?;
+            .map_err(|_| SqlPolicy::invalid("test optimized plan"))?;
         let mut scans = 0;
         plan.apply(|plan| {
             scans += usize::from(matches!(plan, LogicalPlan::TableScan(_)));
             Ok(TreeNodeRecursion::Continue)
         })
-        .map_err(|_| Binder::invalid("test optimized sources"))?;
+        .map_err(|_| SqlPolicy::invalid("test optimized sources"))?;
         assert_eq!(scans, 0);
         assert!(QuerySql::admit_relations(
-            &query.replace("ORDER BY sourcecursor", "ORDER BY missing"),
+            &query.replace("ORDER BY missing", "ORDER BY random()"),
             relations,
         )
         .is_err());
@@ -3356,25 +2066,26 @@ mod engine_tests {
     #[test]
     fn quoted_names_and_labels() -> Result<()> {
         let sql = QuerySql::admit(
-            r#"SELECT "E"."Operation" AS "Pick" FROM "EVENTS" AS "E""#,
+            r#"SELECT "E"."operation" AS "Pick" FROM "events" AS "E""#,
             Vec::new(),
             false,
         )?;
-        let binding = sql.bind_complete(0)?;
-        let plan = binding.plan()?;
+        let plan = sql.bind_complete(0)?.plan()?;
         assert_eq!(plan.schema().field(0).name(), "Pick");
-        assert_eq!(
-            binding
-                .output_schema(plan.schema().as_arrow())?
-                .field(0)
-                .name(),
-            "Pick"
-        );
+        for query in [
+            r#"SELECT "E"."operation" FROM "EVENTS" AS "E""#,
+            r#"SELECT "E"."Operation" FROM "events" AS "E""#,
+        ] {
+            assert!(
+                QuerySql::admit(query, Vec::new(), false).is_err(),
+                "{query}"
+            );
+        }
         Ok(())
     }
 
     #[test]
-    fn hidden_index_and_partial_alias() -> Result<()> {
+    fn visible_index_and_partial_alias() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("value", ArrowType::Int64, false),
             Field::new("__row_index", ArrowType::UInt64, false),
@@ -3382,14 +2093,15 @@ mod engine_tests {
         let sources = BTreeMap::from([("data".to_owned(), schema)]);
         let sql = QuerySql::admit_relations(
             "SELECT a.*, b.__row_index AS right_index FROM data a JOIN data b ON a.value = b.value",
-            sources.clone(),
+            sources,
         )?;
-        let binding = sql.bind_complete(0)?;
-        let plan = binding.plan()?;
-        assert_eq!(plan.schema().fields().len(), 2);
+        let plan = sql.bind_complete(0)?.plan()?;
+        assert_eq!(plan.schema().fields().len(), 3);
         assert_eq!(plan.schema().field(0).name(), "value");
-        assert_eq!(plan.schema().field(1).name(), "right_index");
-        let sql = QuerySql::admit("WITH t(first) AS (SELECT operation, source_cursor FROM events) SELECT first, source_cursor FROM t", Vec::new(), false)?;
+        assert_eq!(plan.schema().field(1).name(), "__row_index");
+        assert_eq!(plan.schema().field(2).name(), "right_index");
+        assert!(QuerySql::admit("WITH t(first) AS (SELECT operation, source_cursor FROM events) SELECT first, source_cursor FROM t", Vec::new(), false).is_err());
+        let sql = QuerySql::admit("WITH t(first, second) AS (SELECT operation, source_cursor FROM events) SELECT first, second FROM t", Vec::new(), false)?;
         assert_eq!(sql.bind_complete(0)?.plan()?.schema().fields().len(), 2);
         Ok(())
     }
@@ -3402,11 +2114,20 @@ mod engine_tests {
                 fields.push(Field::new("__row_index", ArrowType::UInt64, false));
             }
             let sources = BTreeMap::from([("data".to_owned(), Arc::new(Schema::new(fields)))]);
-            let sql =
-                QuerySql::admit_relations("SELECT * FROM data GROUP BY value", sources.clone())?;
-            let plan = sql.bind_complete(0)?.plan()?;
-            assert_eq!(plan.schema().fields().len(), 1);
-            assert_eq!(plan.schema().field(0).name(), "value");
+            let result =
+                QuerySql::admit_relations("SELECT * FROM data GROUP BY value", sources.clone());
+            if index {
+                assert!(result.is_err());
+                let sql = QuerySql::admit_relations(
+                    "SELECT * FROM data GROUP BY value, __row_index",
+                    sources,
+                )?;
+                assert_eq!(sql.bind_complete(0)?.plan()?.schema().fields().len(), 2);
+            } else {
+                let plan = result?.bind_complete(0)?.plan()?;
+                assert_eq!(plan.schema().fields().len(), 1);
+                assert_eq!(plan.schema().field(0).name(), "value");
+            }
         }
         Ok(())
     }
@@ -3420,39 +2141,43 @@ mod engine_tests {
         )]));
         let relations = BTreeMap::from([("data".to_owned(), schema)]);
         for (query, expected) in [
-            ("SELECT camelcase FROM data", "CamelCase"),
+            (r#"SELECT "CamelCase" FROM data"#, "CamelCase"),
+            (r#"SELECT "CamelCase" AS InnerName FROM data"#, "innername"),
             (
-                "WITH t AS (SELECT camelcase AS InnerName FROM data) SELECT innername FROM t",
+                r#"SELECT "CamelCase" AS "InnerName" FROM data"#,
                 "InnerName",
             ),
             (
-                "WITH t(AliasName) AS (SELECT camelcase FROM data) SELECT aliasname FROM t",
+                r#"WITH t AS (SELECT "CamelCase" AS innername FROM data) SELECT innername FROM t"#,
+                "innername",
+            ),
+            (
+                r#"WITH t(AliasName) AS (SELECT "CamelCase" AS value FROM data) SELECT aliasname FROM t"#,
+                "aliasname",
+            ),
+            (
+                r#"WITH t("AliasName") AS (SELECT "CamelCase" AS value FROM data) SELECT "AliasName" FROM t"#,
                 "AliasName",
             ),
             (
-                "WITH t(AliasName) AS (SELECT camelcase AS InnerName FROM data ORDER BY InnerName) SELECT aliasname FROM t",
-                "AliasName",
-            ),
-            (
-                "WITH t(AliasName) AS (SELECT camelcase AS InnerName FROM data GROUP BY InnerName HAVING InnerName > 0 ORDER BY InnerName) SELECT aliasname FROM t",
-                "AliasName",
-            ),
-            ("SELECT aliasname FROM data d(AliasName)", "AliasName"),
-            (
-                "SELECT q.aliasname FROM (SELECT camelcase FROM data) q(AliasName)",
-                "AliasName",
+                r#"SELECT q.aliasname FROM (SELECT "CamelCase" AS value FROM data) q(AliasName)"#,
+                "aliasname",
             ),
         ] {
             let sql = QuerySql::admit_relations(query, relations.clone())?;
-            let binding = sql.bind_complete(0)?;
-            let plan = binding.plan()?;
-            assert_eq!(plan.schema().field(0).name(), expected);
             assert_eq!(
-                binding
-                    .output_schema(plan.schema().as_arrow())?
-                    .field(0)
-                    .name(),
-                expected
+                sql.bind_complete(0)?.plan()?.schema().field(0).name(),
+                expected,
+                "{query}"
+            );
+        }
+        for query in [
+            "SELECT camelcase FROM data",
+            "SELECT aliasname FROM data d(AliasName)",
+        ] {
+            assert!(
+                QuerySql::admit_relations(query, relations.clone()).is_err(),
+                "{query}"
             );
         }
         Ok(())
@@ -3461,7 +2186,7 @@ mod engine_tests {
     #[test]
     fn division_types() -> Result<()> {
         for (query, expected) in [
-            ("SELECT 3 / 2 AS value", ArrowType::Float64),
+            ("SELECT 3 / 2 AS value", ArrowType::Int64),
             (
                 "SELECT CAST(3 AS FLOAT) / CAST(2 AS FLOAT) AS value",
                 ArrowType::Float32,
@@ -3477,48 +2202,72 @@ mod engine_tests {
     #[test]
     fn literal_types() -> Result<()> {
         for (query, expected) in [
-            ("SELECT 1.5 AS value", ArrowType::Decimal128(2, 1)),
-            ("SELECT 1e3 AS value", ArrowType::Float64),
             (
-                "SELECT 9223372036854775808 AS value",
-                ArrowType::Decimal256(39, 0),
+                "SELECT CAST(1 AS TINYINT UNSIGNED) AS value",
+                ArrowType::UInt8,
             ),
             (
+                "SELECT CAST(1 AS SMALLINT UNSIGNED) AS value",
+                ArrowType::UInt16,
+            ),
+            (
+                "SELECT CAST(1 AS INTEGER UNSIGNED) AS value",
+                ArrowType::UInt32,
+            ),
+            (
+                "SELECT CAST(1 AS BIGINT UNSIGNED) AS value",
+                ArrowType::UInt64,
+            ),
+            (
+                "SELECT CAST('1970-01-01' AS TIMESTAMP(6)) AS value",
+                ArrowType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
+            ),
+            ("SELECT 1.5 AS value", ArrowType::Float64),
+            ("SELECT 1e3 AS value", ArrowType::Float64),
+            ("SELECT 9223372036854775808 AS value", ArrowType::UInt64),
+            (
                 "SELECT 170141183460469231731687303715884105727 AS value",
-                ArrowType::Decimal256(39, 0),
+                ArrowType::Float64,
             ),
             (
                 "SELECT -170141183460469231731687303715884105728 AS value",
-                ArrowType::Decimal256(39, 0),
+                ArrowType::Float64,
             ),
             ("SELECT -9223372036854775808 AS value", ArrowType::Int64),
             (
                 "SELECT 1 AS value UNION ALL SELECT 2 AS value",
-                ArrowType::Int32,
+                ArrowType::Int64,
+            ),
+            (
+                "SELECT CAST('1' AS DECIMAL(20, 0)) AS value",
+                ArrowType::Decimal128(20, 0),
+            ),
+            (
+                "SELECT TIMESTAMP '1970-01-01 00:00:00' AS value",
+                ArrowType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Nanosecond, None),
             ),
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
-            let plan = sql.bind_complete(0)?.plan()?;
-            assert_eq!(plan.schema().field(0).data_type(), &expected);
+            assert_eq!(
+                sql.bind_complete(0)?.plan()?.schema().field(0).data_type(),
+                &expected,
+                "{query}"
+            );
         }
+        assert!(QuerySql::admit("SELECT CAST('1' AS HUGEINT)", Vec::new(), false).is_err());
         Ok(())
     }
 
     #[test]
-    fn rewritten_aggregate_names() -> Result<()> {
+    fn aggregate_alias_names() -> Result<()> {
         for query in [
             "SELECT SUM(1) AS value",
             "SELECT SUM(operation + 1) AS value FROM events",
             "SELECT lag(1) OVER (ORDER BY source_cursor) AS value FROM events",
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
-            let binding = sql.bind_complete(0)?;
-            let plan = binding.plan()?;
             assert_eq!(
-                binding
-                    .output_schema(plan.schema().as_arrow())?
-                    .field(0)
-                    .name(),
+                sql.bind_complete(0)?.plan()?.schema().field(0).name(),
                 "value"
             );
         }
@@ -3526,9 +2275,16 @@ mod engine_tests {
     }
 
     #[test]
-    fn grouped_columns_before_having_aliases() -> Result<()> {
+    fn grouped_having_aliases() -> Result<()> {
+        assert!(matches!(
+            QuerySql::admit(
+                "SELECT operation AS source_cursor, COUNT(*) AS amount FROM events GROUP BY operation HAVING source_cursor > 1 ORDER BY source_cursor",
+                Vec::new(), false,
+            ),
+            Err(crate::Error::QueryInvalid { field: "SQL binding", .. })
+        ));
         for query in [
-            "SELECT operation AS source_cursor, COUNT(*) AS amount FROM events GROUP BY operation HAVING source_cursor > 1 ORDER BY source_cursor",
+            "SELECT operation AS source_cursor, COUNT(*) AS amount FROM events GROUP BY operation HAVING events.operation > 1 ORDER BY source_cursor",
             "SELECT COUNT(*) AS operation FROM events GROUP BY operation HAVING operation = 2 ORDER BY 1",
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
@@ -3538,17 +2294,29 @@ mod engine_tests {
     }
 
     #[test]
-    fn large_bucket_width() -> Result<()> {
-        let sql = QuerySql::admit(
-            "SELECT time_bucket(INTERVAL '9223372036854775807 microseconds', TIMESTAMP '2000-01-03 00:00:00') AS value",
+    fn native_bucket_type() -> Result<()> {
+        for (query, expected) in [
+            (
+                "SELECT date_bin(INTERVAL '1 day', TIMESTAMP '2000-01-03 00:00:00') AS value",
+                datafusion::arrow::datatypes::TimeUnit::Nanosecond,
+            ),
+            (
+                "SELECT date_bin(INTERVAL '1 day', received_at) AS value FROM events",
+                datafusion::arrow::datatypes::TimeUnit::Microsecond,
+            ),
+        ] {
+            let sql = QuerySql::admit(query, Vec::new(), false)?;
+            assert_eq!(
+                sql.bind_complete(0)?.plan()?.schema().field(0).data_type(),
+                &ArrowType::Timestamp(expected, None)
+            );
+        }
+        assert!(QuerySql::admit(
+            "SELECT time_bucket(INTERVAL '1 day', TIMESTAMP '2000-01-03 00:00:00')",
             Vec::new(),
-            false,
-        )?;
-        let plan = sql.bind_complete(0)?.plan()?;
-        assert_eq!(
-            plan.schema().field(0).data_type(),
-            &ArrowType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None)
-        );
+            false
+        )
+        .is_err());
         Ok(())
     }
 
@@ -3562,53 +2330,28 @@ mod engine_tests {
         assert_eq!(plan.schema().field(0).data_type(), &ArrowType::Int64);
         let sql = QuerySql::admit("SELECT 7 AS value", Vec::new(), false)?;
         let plan = sql.bind_complete(0)?.plan()?;
-        assert_eq!(plan.schema().field(0).data_type(), &ArrowType::Int32);
+        assert_eq!(plan.schema().field(0).data_type(), &ArrowType::Int64);
         Ok(())
     }
 
     #[test]
     fn computed_output_names() -> Result<()> {
         for (query, expected) in [
-            (
-                "SELECT 1, 1, NULL, true, 1e3",
-                vec!["1", "1", "NULL", "CAST('t' AS BOOLEAN)", "1000.0"],
-            ),
-            (
-                "SELECT operation + 1, length(node_id) FROM events",
-                vec!["(operation + 1)", "length(node_id)"],
-            ),
-            (
-                "SELECT COUNT(*), SUM(operation) FROM events",
-                vec!["count_star()", "sum(operation)"],
-            ),
-            (
-                "SELECT CAST('1.5' AS HUGEINT)",
-                vec!["CAST('1.5' AS \"HUGEINT\")"],
-            ),
-            (
-                "SELECT row_number() OVER (ORDER BY source_cursor) FROM events",
-                vec!["row_number() OVER (ORDER BY source_cursor)"],
-            ),
-            (
-                "SELECT lag(operation) OVER w FROM events WINDOW w AS (ORDER BY source_cursor)",
-                vec!["lag(operation) OVER (ORDER BY source_cursor)"],
-            ),
-            ("SELECT current_timestamp", vec!["current_timestamp"]),
+            ("SELECT 1, NULL, true, 1e3", vec!["Int64(1)", "NULL", "Boolean(true)", "Float64(1000)"]),
+            ("SELECT operation + 1, length(node_id) FROM events", vec!["events.operation + Int64(1)", "length(events.node_id)"]),
+            ("SELECT COUNT(*), SUM(operation) FROM events", vec!["count(*)", "sum(events.operation)"]),
+            ("SELECT CAST('1.5' AS DECIMAL(20, 0))", vec!["Utf8(\"1.5\")"]),
+            ("SELECT row_number() OVER (ORDER BY source_cursor) FROM events", vec!["row_number() ORDER BY [events.source_cursor ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"]),
+            ("SELECT lag(operation) OVER w FROM events WINDOW w AS (ORDER BY source_cursor)", vec!["lag(events.operation) ORDER BY [events.source_cursor ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"]),
+            ("SELECT current_timestamp", vec!["$1"]),
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
             let binding = sql.bind_complete(123_000)?;
-            let plan = binding.plan()?;
-            let schema = binding.output_schema(plan.schema().as_arrow())?;
-            assert_eq!(
-                schema
-                    .fields()
-                    .iter()
-                    .map(|field| field.name().as_str())
-                    .collect::<Vec<_>>(),
-                expected,
-                "{query}"
-            );
+            assert_eq!(binding.plan.schema().fields().iter().map(|field| field.name().as_str()).collect::<Vec<_>>(), expected, "{query}");
         }
+        assert!(QuerySql::admit("SELECT 1, 1", Vec::new(), false).is_err());
+        let sql = QuerySql::admit("SELECT 1 AS first, 1 AS second", Vec::new(), false)?;
+        assert_eq!(sql.program.plan.schema().fields().len(), 2);
         assert!(QuerySql::admit("SELECT now()", Vec::new(), false).is_err());
         Ok(())
     }
@@ -3616,36 +2359,37 @@ mod engine_tests {
     #[test]
     fn trusted_wildcard_schema() -> Result<()> {
         let binding = QueryBinding::trusted("SELECT * FROM events".into(), Vec::new(), 0)?;
-        let plan = binding.plan()?;
-        assert_eq!(
-            binding.output_schema(plan.schema().as_arrow())?.as_ref(),
-            plan.schema().as_arrow()
-        );
+        let schema = SCHEMAS
+            .iter()
+            .find(|schema| schema.name == "events")
+            .ok_or_else(|| SqlPolicy::invalid("test schema"))?
+            .arrow_schema();
+        assert_eq!(binding.plan()?.schema().as_arrow(), schema.as_ref());
         Ok(())
     }
 
     #[test]
     fn result_numeric_widths() -> Result<()> {
         for (query, expected) in [
-            ("SELECT length(node_id) AS value FROM events", ArrowType::Int64),
-            ("SELECT rank() OVER (ORDER BY source_cursor) AS value FROM events", ArrowType::Int64),
-            ("SELECT dense_rank() OVER (ORDER BY source_cursor) AS value FROM events", ArrowType::Int64),
-            ("SELECT SUM(operation) AS value FROM events", ArrowType::Decimal256(39, 0)),
-            ("SELECT SUM(CAST(operation AS HUGEINT)) AS value FROM events", ArrowType::Decimal256(39, 0)),
+            ("SELECT length(node_id) AS value FROM events", ArrowType::Int32),
+            ("SELECT rank() OVER (ORDER BY source_cursor) AS value FROM events", ArrowType::UInt64),
+            ("SELECT dense_rank() OVER (ORDER BY source_cursor) AS value FROM events", ArrowType::UInt64),
+            ("SELECT SUM(operation) AS value FROM events", ArrowType::UInt64),
+            ("SELECT SUM(CAST(operation AS DECIMAL(20, 0))) AS value FROM events", ArrowType::Decimal128(30, 0)),
             ("SELECT SUM(CAST(operation AS FLOAT)) AS value FROM events", ArrowType::Float64),
-            ("SELECT SUM(true) AS value", ArrowType::Decimal256(39, 0)),
-            ("SELECT SUM(operation) OVER (ORDER BY source_cursor ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS value FROM events", ArrowType::Decimal256(39, 0)),
+            ("SELECT SUM(CAST(true AS BIGINT)) AS value", ArrowType::Int64),
+            ("SELECT SUM(operation) OVER (ORDER BY source_cursor ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS value FROM events", ArrowType::UInt64),
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
-            let plan = sql.bind_complete(0)?.plan()?;
-            assert_eq!(plan.schema().field(0).data_type(), &expected, "{query}");
+            assert_eq!(sql.bind_complete(0)?.plan()?.schema().field(0).data_type(), &expected, "{query}");
         }
+        assert!(QuerySql::admit("SELECT SUM(true) AS value", Vec::new(), false).is_err());
         Ok(())
     }
 
     #[test]
-    fn wider_sum_execution() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use datafusion::arrow::array::Int64Array;
+    fn native_sum_execution() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::{Decimal128Array, Int64Array};
         use datafusion::datasource::MemTable;
         use duckdb::core::LogicalTypeId;
 
@@ -3668,11 +2412,11 @@ mod engine_tests {
                 vec![vec![lease.retain_batch(&batch)?]],
             )?),
         )]);
-        let sql =
-            QuerySql::admit_relations("SELECT SUM(value) AS total FROM data", relations.clone())?;
         let engine = QueryEngine::default();
         let state = QueryEngine::state()?;
         let control = crate::AnalysisReadControl::with_timeout(std::time::Duration::from_secs(5))?;
+        let sql =
+            QuerySql::admit_relations("SELECT SUM(value) AS total FROM data", relations.clone())?;
         let batches = engine.query(
             &state,
             &sql.bind_complete(0)?,
@@ -3686,17 +2430,32 @@ mod engine_tests {
             super::super::values::QueryValues::value(
                 batches[0].column(0),
                 0,
-                LogicalTypeId::Hugeint
+                LogicalTypeId::Bigint
             )?
             .to_owned(),
-            Value::HugeInt(2 * i128::from(i64::MAX))
+            Value::BigInt(-2)
         );
         let sql = QuerySql::admit_relations(
-            &format!(
-                "SELECT SUM(CAST('{}' AS HUGEINT)) AS total FROM data",
-                i128::MAX
-            ),
+            "SELECT SUM(CAST(value AS DECIMAL(20, 0))) AS total FROM data",
             relations.clone(),
+        )?;
+        let batches = engine.query(
+            &state,
+            &sql.bind_complete(0)?,
+            &tables,
+            araphor_analysis_sdk::Limits::default(),
+            &control,
+            &lease,
+        )?;
+        let values = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .ok_or("native decimal sum type")?;
+        assert_eq!(values.value(0), 2 * i128::from(i64::MAX));
+        let sql = QuerySql::admit_relations(
+            "SELECT SUM(CAST(value AS DECIMAL(2, 0))) AS total FROM data",
+            relations,
         )?;
         assert!(engine
             .query(
@@ -3705,7 +2464,7 @@ mod engine_tests {
                 &tables,
                 araphor_analysis_sdk::Limits::default(),
                 &control,
-                &lease,
+                &lease
             )
             .is_err());
         Ok(())
@@ -3730,7 +2489,7 @@ mod engine_tests {
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
-            .map_err(|_| Binder::invalid("test plan"))?;
+            .map_err(|_| SqlPolicy::invalid("test plan"))?;
         assert_eq!(scans, ["events", "events"]);
         assert_eq!(sql.bind_complete(0)?.plan()?.schema().fields().len(), 1);
         Ok(())
@@ -3738,19 +2497,21 @@ mod engine_tests {
 
     #[test]
     fn engine_bound_unused_windows() -> Result<()> {
-        QuerySql::admit(
-            "SELECT operation FROM events WINDOW unused AS (ORDER BY CAST(operation AS HUGEINT))",
-            Vec::new(),
-            false,
-        )?;
-        QuerySql::admit(
-            "SELECT lag(operation) OVER \"Subject\" FROM events WINDOW \"SUBJECT\" AS (ORDER BY source_cursor)",
-            Vec::new(), false,
-        )?;
         for query in [
             "SELECT operation FROM events WINDOW unused AS (ORDER BY missing)",
             "SELECT operation FROM events WINDOW unused AS (PARTITION BY missing ORDER BY source_cursor)",
+            "SELECT operation FROM events WINDOW unused AS (ORDER BY CAST(operation AS DECIMAL(20, 0)))",
+            "SELECT lag(operation) OVER \"Subject\" FROM events WINDOW \"Subject\" AS (ORDER BY source_cursor)",
             "SELECT operation FROM events WINDOW same AS (ORDER BY source_cursor), \"SAME\" AS (ORDER BY source_cursor)",
+        ] {
+            QuerySql::admit(query, Vec::new(), false)?;
+        }
+        for query in [
+            "SELECT lag(operation) OVER \"Subject\" FROM events WINDOW \"SUBJECT\" AS (ORDER BY source_cursor)",
+            "SELECT operation FROM events WINDOW same AS (ORDER BY source_cursor), same AS (ORDER BY source_cursor)",
+            "SELECT operation FROM events WINDOW unused AS (ORDER BY random())",
+            "SELECT operation FROM events WINDOW unused AS (ORDER BY lag(operation, 201) OVER (ORDER BY source_cursor))",
+            "SELECT operation FROM events WINDOW unused AS (ORDER BY source_cursor ROWS UNBOUNDED PRECEDING)",
         ] {
             assert!(QuerySql::admit(query, Vec::new(), false).is_err(), "{query}");
         }
@@ -3763,6 +2524,24 @@ mod engine_tests {
             "SELECT a.operation FROM events a JOIN events b ON a.source_cursor = b.source_cursor JOIN events c ON b.source_cursor = c.source_cursor",
             Vec::new(), false,
         )?;
+        QuerySql::admit(
+            "SELECT e.operation FROM events e JOIN coverage c ON source_cursor = c.first_cursor",
+            Vec::new(),
+            false,
+        )?;
+        QuerySql::admit(
+            "SELECT a.operation FROM events a JOIN events b ON (a.source_cursor) = b.source_cursor",
+            Vec::new(),
+            false,
+        )?;
+        let discarded = QuerySql::admit(
+            "WITH unused AS (SELECT a.operation FROM events a JOIN coverage c ON source_cursor = received_utc_ns) SELECT 1 AS value",
+            Vec::new(), false,
+        )?;
+        assert_eq!(
+            discarded.dependencies(),
+            &BTreeSet::from(["coverage".into(), "events".into()])
+        );
         for query in [
             "SELECT a.operation FROM events a JOIN events b ON a.source_cursor = a.commit_revision",
             "SELECT a.operation FROM events a JOIN events b ON a.source_cursor = a.commit_revision WHERE false LIMIT 0",
@@ -3798,7 +2577,7 @@ mod engine_tests {
             }
             Ok(TreeNodeRecursion::Continue)
         })
-        .map_err(|_| Binder::invalid("test source projection"))?;
+        .map_err(|_| SqlPolicy::invalid("test source projection"))?;
         assert_eq!(
             fields,
             BTreeSet::from([
@@ -3817,28 +2596,38 @@ mod engine_tests {
     }
 
     #[test]
-    fn engine_bound_grouped_input_before_having_alias() -> Result<()> {
-        for query in [
-            "SELECT COUNT(*) AS operation FROM events GROUP BY operation HAVING operation = 2",
-            "SELECT COUNT(*) AS operation FROM events GROUP BY (operation) HAVING operation = 2",
-            "SELECT operation AS key, COUNT(*) AS operation FROM events GROUP BY 1 HAVING operation = 2",
-            "SELECT operation AS key, COUNT(*) AS operation FROM events GROUP BY key HAVING operation = 2",
+    fn engine_bound_having_alias() -> Result<()> {
+        for (query, source) in [
+            ("SELECT COUNT(*) AS operation FROM events GROUP BY operation HAVING operation = 2", true),
+            ("SELECT COUNT(*) AS operation FROM events GROUP BY (operation) HAVING operation = 2", true),
+            ("SELECT operation AS key, COUNT(*) AS operation FROM events GROUP BY 1 HAVING operation = 2", true),
+            ("SELECT operation AS key, COUNT(*) AS operation FROM events GROUP BY key HAVING operation = 2", true),
+            ("SELECT COUNT(*) AS amount FROM events GROUP BY operation HAVING amount = 2", false),
         ] {
             let sql = QuerySql::admit(query, Vec::new(), false)?;
-            let mut source = false;
+            let mut columns = Vec::new();
+            let mut aggregate = None;
             sql.program.plan.apply(|plan| {
+                if let LogicalPlan::Aggregate(value) = plan {
+                    assert_eq!(value.aggr_expr.len(), 1);
+                    aggregate = Some(Column::from(value.schema.qualified_field(value.group_expr.len())));
+                }
                 if let LogicalPlan::Filter(filter) = plan {
                     filter.predicate.apply(|expr| {
                         if let EngineExpression::Column(column) = expr {
-                            source |= column.name == "operation"
-                                && column.relation.as_ref().is_some_and(|name| name.table() == "events");
+                            columns.push(column.clone());
                         }
                         Ok(TreeNodeRecursion::Continue)
                     })?;
                 }
                 Ok(TreeNodeRecursion::Continue)
-            }).map_err(|_| Binder::invalid("test plan"))?;
-            assert!(source, "{query}");
+            }).map_err(|_| SqlPolicy::invalid("test plan"))?;
+            let expected = if source {
+                Column::new(Some("events"), "operation")
+            } else {
+                aggregate.ok_or_else(|| SqlPolicy::invalid("test aggregate field"))?
+            };
+            assert_eq!(columns, [expected], "{query}");
         }
         Ok(())
     }
@@ -3846,7 +2635,7 @@ mod engine_tests {
     #[test]
     fn trusted_uinteger_cast() -> Result<()> {
         let binding = QueryBinding::trusted(
-            "SELECT CAST(? AS UINTEGER) AS value".into(),
+            "SELECT CAST(? AS INTEGER UNSIGNED) AS value".into(),
             vec![Value::UInt(7)],
             0,
         )?;
@@ -3860,22 +2649,15 @@ mod engine_tests {
     #[test]
     fn trusted_scoped_events() -> Result<()> {
         let binding = QueryBinding::trusted(
-            "WITH scoped_events AS (SELECT * FROM events WHERE received_utc_ns >= ? AND received_utc_ns <= ?) SELECT * FROM scoped_events WHERE (CAST(? AS UINTEGER) IS NULL OR operation = ?) ORDER BY commit_revision, ordinal".into(),
+            "WITH scoped_events AS (SELECT * FROM events WHERE received_utc_ns >= ? AND received_utc_ns <= ?) SELECT * FROM scoped_events WHERE (CAST(? AS INTEGER UNSIGNED) IS NULL OR operation = ?) ORDER BY commit_revision, ordinal".into(),
             vec![Value::UBigInt(0), Value::UBigInt(u64::MAX), Value::Null, Value::Null], 0,
         )?;
         let schema = SCHEMAS
             .iter()
             .find(|schema| schema.name == "events")
-            .ok_or_else(|| Binder::invalid("test schema"))?;
+            .ok_or_else(|| SqlPolicy::invalid("test schema"))?;
         assert_eq!(
             binding.plan()?.schema().fields().len(),
-            schema.fields().len()
-        );
-        assert_eq!(
-            binding
-                .output_schema(binding.plan()?.schema().as_arrow())?
-                .fields()
-                .len(),
             schema.fields().len()
         );
         Ok(())

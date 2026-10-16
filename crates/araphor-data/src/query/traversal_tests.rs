@@ -89,6 +89,10 @@ fn graph_traversal_plan_scope() -> TestResult {
             "SELECT s.subject_id FROM graph_subjects s JOIN events e ON s.tenant_id = e.tenant_id",
             false,
         ),
+        (
+            "WITH unused AS (SELECT operation FROM events) SELECT subject_id FROM graph_subjects",
+            false,
+        ),
     ] {
         assert!(matches!(
             QueryPlan::client_graph(

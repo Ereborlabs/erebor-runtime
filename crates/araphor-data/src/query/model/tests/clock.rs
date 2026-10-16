@@ -74,6 +74,9 @@ fn model_clock_dependencies() -> TestResult {
         sdk::InputSource::Query(
             "SELECT notification_revision FROM notifications WHERE overdue".into(),
         ),
+        sdk::InputSource::Query(
+            "WITH unused AS (SELECT notification_revision FROM notifications) SELECT 1::BIGINT UNSIGNED AS notification_revision".into(),
+        ),
     ] {
         let mut sourced = model.clone();
         sourced.inputs.push(sdk::InputPort {

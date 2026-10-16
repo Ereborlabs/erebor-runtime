@@ -22,7 +22,7 @@ async fn native_overflow_keeps_checkpoint() -> TestResult {
     let mut package = bundle()?;
     package.artifacts[0].descriptor.exports[0].inputs[0].source =
         araphor_analysis_sdk::InputSource::Query(
-            "SELECT 18446744073709551615::UBIGINT AS value".into(),
+            "SELECT 18446744073709551615::BIGINT UNSIGNED AS value".into(),
         );
     let installed = fixture.install(native(package)?, None).await?;
     assert_eq!(installed.exports[0].results[0].target, "native");

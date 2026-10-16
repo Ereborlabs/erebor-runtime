@@ -4,7 +4,7 @@ use crate::package::PackageImplementationV1;
 #[tokio::test]
 async fn root_group_reuses_bundle() -> TestResult {
     let fixture = Fixture::new()?;
-    let mut package = bundle("1", "SELECT 3::UBIGINT AS count");
+    let mut package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     let artifact = &mut package.artifacts[0];
     let mut second = artifact.descriptor.exports[0].clone();
     second.name = "second".into();
@@ -39,7 +39,7 @@ async fn root_group_reuses_bundle() -> TestResult {
 #[tokio::test]
 async fn idle_reconcile_checks_grant() -> TestResult {
     let fixture = Fixture::new()?;
-    let package = bundle("1", "SELECT 3::UBIGINT AS count");
+    let package = bundle("1", "SELECT 3::BIGINT UNSIGNED AS count");
     fixture.install(package, None).await?;
     let before = fixture.store.package_activation_page(None)?;
     fixture

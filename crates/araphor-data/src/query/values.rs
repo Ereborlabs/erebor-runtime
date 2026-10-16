@@ -51,7 +51,6 @@ impl QueryValues {
             | DataType::LargeBinary
             | DataType::BinaryView
             | DataType::FixedSizeBinary(_) => Sql::Blob,
-            DataType::Decimal256(39, 0) => Sql::Hugeint,
             DataType::Decimal32(width, scale)
             | DataType::Decimal64(width, scale)
             | DataType::Decimal128(width, scale)
@@ -93,28 +92,6 @@ impl QueryValues {
         }
         if array.data_type() == &DataType::Null || array.is_null(row) {
             return Ok(ValueRef::Null);
-        }
-        if matches!(kind, LogicalTypeId::Hugeint | LogicalTypeId::UHugeint) {
-            let value = match array.data_type() {
-                DataType::Decimal128(_, 0) => {
-                    datafusion::arrow::datatypes::i256::from_i128(read!(Decimal128Array))
-                }
-                DataType::Decimal256(_, 0) => read!(Decimal256Array),
-                _ => return Err(Self::invalid("query result integer type")),
-            };
-            return Ok(if kind == LogicalTypeId::Hugeint {
-                ValueRef::HugeInt(
-                    value
-                        .to_i128()
-                        .ok_or_else(|| Self::invalid("query result integer range"))?,
-                )
-            } else {
-                let (low, high) = value.to_parts();
-                if high != 0 {
-                    return Err(Self::invalid("query result integer range"));
-                }
-                ValueRef::UHugeInt(low)
-            });
         }
         if Self::logical_type(array.data_type())? != kind {
             return Err(Self::invalid("query result logical type"));
@@ -264,41 +241,6 @@ mod tests {
             )?,
             Value::UInt(u32::MAX)
         );
-        for expected in [i128::MIN, i128::MAX] {
-            let array = Decimal256Array::from(vec![i256::from_i128(expected)])
-                .with_precision_and_scale(39, 0)
-                .map_err(|_| QueryValues::invalid("test decimal"))?;
-            assert_eq!(
-                value(Arc::new(array), LogicalTypeId::Hugeint)?,
-                Value::HugeInt(expected)
-            );
-        }
-        let unsigned = Decimal256Array::from(vec![i256::from_parts(u128::MAX, 0)])
-            .with_precision_and_scale(39, 0)
-            .map_err(|_| QueryValues::invalid("test decimal"))?;
-        assert_eq!(
-            value(Arc::new(unsigned.clone()), LogicalTypeId::UHugeint)?,
-            Value::UHugeInt(u128::MAX)
-        );
-        assert!(value(Arc::new(unsigned), LogicalTypeId::Hugeint).is_err());
-        let negative: ArrayRef = Arc::new(
-            Decimal256Array::from(vec![i256::from_i128(-1)])
-                .with_precision_and_scale(39, 0)
-                .map_err(|_| QueryValues::invalid("test decimal"))?,
-        );
-        assert!(QueryValues::value(&negative, 0, LogicalTypeId::UHugeint).is_err());
-        let overflow: ArrayRef = Arc::new(
-            Decimal256Array::from(vec![i256::from_parts(0, 1)])
-                .with_precision_and_scale(39, 0)
-                .map_err(|_| QueryValues::invalid("test decimal"))?,
-        );
-        assert!(QueryValues::value(&overflow, 0, LogicalTypeId::UHugeint).is_err());
-        let underflow: ArrayRef = Arc::new(
-            Decimal256Array::from(vec![i256::from_i128(i128::MIN) - i256::from_i128(1)])
-                .with_precision_and_scale(39, 0)
-                .map_err(|_| QueryValues::invalid("test decimal"))?,
-        );
-        assert!(QueryValues::value(&underflow, 0, LogicalTypeId::Hugeint).is_err());
         let wrong: ArrayRef = Arc::new(UInt64Array::from(vec![u64::MAX]));
         assert!(QueryValues::value(&wrong, 0, LogicalTypeId::Bigint).is_err());
         Ok(())
@@ -333,6 +275,57 @@ mod tests {
             .with_precision_and_scale(3, 0)
             .map_err(|_| QueryValues::invalid("test decimal"))?;
         assert!(value(Arc::new(invalid), LogicalTypeId::Decimal).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn native_decimal_ranges() -> Result<()> {
+        let limit = 10_i128.pow(38) - 1;
+        for expected in [-limit, limit] {
+            let array = Decimal256Array::from(vec![i256::from_i128(expected)])
+                .with_precision_and_scale(38, 0)
+                .map_err(|_| QueryValues::invalid("test decimal"))?;
+            assert_eq!(
+                QueryValues::logical_type(array.data_type())?,
+                LogicalTypeId::Decimal
+            );
+            assert_eq!(
+                value(Arc::new(array), LogicalTypeId::Decimal)?,
+                Value::Decimal(
+                    Decimal::new(38, 0, expected)
+                        .map_err(|_| QueryValues::invalid("test decimal"))?
+                )
+            );
+        }
+        for raw in [
+            i256::from_i128(i128::MIN),
+            i256::from_i128(i128::MAX),
+            i256::from_parts(u128::MAX, 0),
+            i256::from_parts(0, 1),
+            i256::from_i128(i128::MIN) - i256::from_i128(1),
+        ] {
+            let array = Decimal256Array::from(vec![raw])
+                .with_precision_and_scale(38, 0)
+                .map_err(|_| QueryValues::invalid("test decimal"))?;
+            assert!(matches!(
+                value(Arc::new(array), LogicalTypeId::Decimal),
+                Err(crate::Error::QueryInvalid { .. })
+            ));
+        }
+        for width in [39, 76] {
+            let kind = DataType::Decimal256(width, 0);
+            assert!(matches!(
+                QueryValues::logical_type(&kind),
+                Err(crate::Error::QueryInvalid { .. })
+            ));
+            let array = Decimal256Array::from(vec![i256::from_i128(1)])
+                .with_precision_and_scale(width, 0)
+                .map_err(|_| QueryValues::invalid("test decimal"))?;
+            assert!(matches!(
+                value(Arc::new(array), LogicalTypeId::Decimal),
+                Err(crate::Error::QueryInvalid { .. })
+            ));
+        }
         Ok(())
     }
 
@@ -410,14 +403,14 @@ mod tests {
         let columns = QueryValues::columns(&Schema::new(vec![
             Field::new("source", DataType::UInt32, false),
             Field::new("whole", DataType::Decimal128(38, 0), true),
-            Field::new("wide", DataType::Decimal256(39, 0), true),
+            Field::new("wide", DataType::Decimal256(38, 0), true),
         ]))?;
         assert_eq!(
             columns
                 .iter()
                 .map(|column| column.data_type.as_str())
                 .collect::<Vec<_>>(),
-            ["UInteger", "Decimal", "Hugeint"]
+            ["UInteger", "Decimal", "Decimal"]
         );
         assert_eq!(columns[0].name, "source");
         let nested = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));

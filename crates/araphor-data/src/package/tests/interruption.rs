@@ -12,7 +12,7 @@ use crate::{
 async fn package_supervisor_stop_during_admission() -> TestResult {
     let fixture = Fixture::new()?;
     fixture
-        .install(bundle("1", "SELECT 1::UBIGINT AS count"), None)
+        .install(bundle("1", "SELECT 1::BIGINT UNSIGNED AS count"), None)
         .await?;
     let before = fixture.activation("test.model")?;
     let results = fixture.store.package_results(&before.key)?;
@@ -87,7 +87,7 @@ async fn package_supervisor_stop_during_admission() -> TestResult {
 async fn package_cancelled_failure_preserves_state() -> TestResult {
     let fixture = Fixture::new()?;
     fixture
-        .install(bundle("1", "SELECT 1::UBIGINT AS count"), None)
+        .install(bundle("1", "SELECT 1::BIGINT UNSIGNED AS count"), None)
         .await?;
     let before = fixture.activation("test.model")?;
     let results = fixture.store.package_results(&before.key)?;
