@@ -58,7 +58,7 @@ sequenceDiagram
     Input->>Store: Read exact committed Table outputs
     opt Named source or Query input
         Input->>Session: Execute retained plan with one captured clock
-        Session->>Session: Create physical plan and record scan projections
+        Session->>Session: Create native physical source descriptors
         Session->>Store: Capture requested rows and original source receipts
         Session->>Session: Read native Arrow stream
         Session-->>Input: Bounded Arrow inputs and source receipt
@@ -208,11 +208,29 @@ and prior checkpoint tables. Checkpoint, evidence, and reason SQL also see
 completed output tables. The declared catalog defines local visibility. The
 authorized Data selection defines durable source scope.
 
-[SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) reads the
-actual run's SourceSnapshot from the native SessionConfig extension. The
-provider retains only an immutable source name and schema. The provider
-records projection indices and returns a native StreamingTableExec. A retained
-logical plan therefore has no installation-time or tenant-specific snapshot.
+[SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) returns a
+native DataSourceExec with an immutable SourceData descriptor. The descriptor
+contains its source name, exact projected schema and indices, conservative
+time interval, and fetch limit. Planning reads no SourceSnapshot and changes
+no projection or interval registry. Capture collects those facts from the
+optimized physical tree. A retained plan has no tenant snapshot or Arrow rows.
+
+[SourceData::open](../../crates/araphor-query/src/sources/mod.rs) reads the
+actual captured SourceSnapshot from TaskContext. Native MemoryStream supplies
+cooperative batch execution and fetch handling. Native MemorySourceConfig
+requires batches at plan construction, so it cannot supply this run binding.
+The former SnapshotPartition and both planning mutexes are deleted.
+SourceData keeps native logical projection and residual filters. Its required
+physical projection hook returns None, so native ProjectionExec remains above
+the source. This preserves the exact source and journal schema pair.
+
+The current source change passes all 104 Query cases, 37 model cases, and the
+E2E query-follow contract. Strict Query Clippy and scoped formatting pass.
+The exact source record is `/tmp/araphor-source-descriptor-qualification1.json`.
+The change removes 25 nonblank production Rust lines. The corrected complete
+count is `/tmp/araphor-native-rewrite-count12.json`. Wider runtime suites and
+full workspace CI are not repeated. No general physical-plan reuse is claimed.
+
 Local admission uses empty native MemTables. Before native optimization,
 Session uses the native logical transformation API to bind those scans to the
 current run's MemTables. It checks the complete Arrow schema, including field
@@ -256,11 +274,11 @@ scalar, aggregate, and window functions. The engine registers no private
 numeric or time-bucket function. Fixed buckets use native `date_bin`.
 
 [Session::start](../../crates/araphor-query/src/execution.rs) supplies the
-run's local tables, source snapshot, and captured execution time
+run's local tables and captured execution time
   -> [Session::physical](../../crates/araphor-query/src/execution.rs) calls native SessionState.create_physical_plan
-  -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) records projections through native provider scans
-  -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) fixes all original source receipts and requested batches
-  -> [Session::start](../../crates/araphor-query/src/execution.rs) calls native execute_stream with the same physical plan
+  -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) returns immutable native source descriptors
+  -> [SourceSnapshot::capture](../../crates/araphor-query/src/sources/mod.rs) collects optimized projections and interval unions, then fixes all original source receipts and requested batches
+  -> [Session::start](../../crates/araphor-query/src/execution.rs) binds the captured snapshot to TaskContext and calls native execute_stream with the same physical plan
   -> [Session::bounded](../../crates/araphor-query/src/execution.rs) checks output rows and bytes before it emits each batch
 
 Physical planning has a separate bounded stage. The extraction allowance
@@ -341,7 +359,7 @@ use this path.
 [State::evaluate](../../crates/araphor-query/src/follow/mod.rs) requests a subscription session
   -> [Session::subscribe](../../crates/araphor-query/src/execution.rs) wraps the admitted native SQL plan with [Subscribe](../../crates/araphor-query/src/planner/subscription.rs)
   -> native SessionState runs its logical optimizer and physical planner
-  -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) supplies the native source execution plan and records its projection and time bounds
+  -> [SourceProvider::scan](../../crates/araphor-query/src/sources/mod.rs) supplies the native execution plan with its immutable projection and time bounds
   -> [SubscriptionPlanner](../../crates/araphor-query/src/planner/subscription.rs) creates JournalExec from the actual native scan
   -> the registered ExtensionPlanner returns [SubscribeExec](../../crates/araphor-query/src/stream/physical.rs) with the native SQL child and the journal child
   -> native physical optimizers process that plan and both children
@@ -352,8 +370,8 @@ execution binds Arrow change batches through native MemorySourceConfig and
 expressions. No second SQL parser or expression compiler runs for a change.
 The former Processor and standalone aggregate helper are deleted.
 
-The native SQL child remains bounded. Its StreamingTableExec and
-SnapshotPartition supply the finite source schema and compiled expressions.
+The native SQL child remains bounded. Its DataSourceExec and SourceData
+supply the finite source schema. Native operators retain compiled expressions.
 Native global AggregateExec finishes at end of input. The unbounded journal
 therefore remains a separate physical child. The journal stores the exact
 native projected schema, canonical indices, and capture request once. Each

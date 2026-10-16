@@ -739,17 +739,7 @@ async fn native_subscribe_execution() {
         .prepare("SELECT count(*) AS total FROM events", vec![])
         .await
         .unwrap();
-    let snapshot = crate::sources::SourceSnapshot::new(
-        Arc::clone(&fixture.store),
-        fixture.selection(),
-        Default::default(),
-        AnalysisReadControl::default(),
-        Duration::from_secs(5),
-        2_000_000_000,
-        Arc::clone(fixture.engine.memory()),
-    );
     let mut state = fixture.engine.catalog(Default::default()).unwrap();
-    state.config_mut().set_extension(snapshot);
     state
         .config_mut()
         .set_extension(Arc::new(crate::stream::Run {
@@ -776,7 +766,6 @@ async fn native_subscribe_execution() {
         use datafusion::physical_plan::execution_plan::{
             Boundedness, EmissionType, SchedulingType,
         };
-        use datafusion::physical_plan::streaming::StreamingTableExec;
 
         let children = physical.children();
         assert_eq!(children.len(), 2);
@@ -785,7 +774,7 @@ async fn native_subscribe_execution() {
         let mut scan_schema = None;
         children[0]
             .apply(|node| {
-                if node.as_any().is::<StreamingTableExec>() {
+                if crate::sources::SourceData::from_plan(node.as_ref()).is_some() {
                     scans += 1;
                     scan_schema = Some(node.schema());
                 }

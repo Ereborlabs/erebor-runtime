@@ -12,6 +12,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::execution::memory_pool::MemoryReservation;
+use datafusion::logical_expr::interval_arithmetic::Interval;
 
 use super::{batch::ArrowBatch, ReadMode, SourceSnapshot};
 
@@ -152,6 +153,7 @@ impl SourceSnapshot {
         &self,
         sources: &BTreeSet<String>,
         requests: &BTreeMap<String, BTreeSet<usize>>,
+        received: Option<&Interval>,
         mode: ReadMode,
         control: &araphor_data::AnalysisReadControl,
     ) -> Result<Captured> {
@@ -176,9 +178,10 @@ impl SourceSnapshot {
                 Self::data_error(error)
             }
         };
-        let selection = self.prune_selection(
+        let selection = Self::prune_selection(
             Capture::selection(&self.selection, sources).map_err(Self::data_error)?,
-        )?;
+            received,
+        );
         let capture = Capture {
             sources,
             scope: &selection,

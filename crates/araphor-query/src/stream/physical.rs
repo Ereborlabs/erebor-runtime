@@ -18,7 +18,6 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::streaming::StreamingTableExec;
 use datafusion::physical_plan::{
     execute_stream, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream,
@@ -27,7 +26,7 @@ use futures_util::{stream, StreamExt as _, TryStreamExt as _};
 use snafu::ResultExt as _;
 
 use super::{Input, Message, Output, OutputStream, Run};
-use crate::sources::JournalExec;
+use crate::sources::{JournalExec, SourceData};
 use crate::{Result, SqlSnafu};
 
 mod kernel;
@@ -113,11 +112,8 @@ impl SubscribeExec {
         }
         node = Arc::clone(definition.input());
         loop {
-            if let Some(source) = node.as_any().downcast_ref::<StreamingTableExec>() {
-                if source.is_infinite()
-                    || source.limit().is_some()
-                    || source.partitions().len() != 1
-                {
+            if SourceData::from_plan(node.as_ref()).is_some() {
+                if node.fetch().is_some() {
                     return Ok(None);
                 }
                 break;

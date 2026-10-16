@@ -383,3 +383,59 @@ fn native_intake_keeps_uint64_range() -> TestResult {
     assert_eq!(snapshot.witnesses.len(), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn native_capture_isolated() -> TestResult {
+    use super::{ReadMode, SourceSnapshot};
+    use datafusion::physical_plan::collect;
+
+    let fixture = Fixture::new()?;
+    fixture.commit(&fixture.source, 1, 10_001)?;
+    let foreign = EvidenceIntakeIdentityV1 {
+        tenant_id: [9; 16],
+        ..fixture.source.clone()
+    };
+    fixture.commit(&foreign, 7, 10_002)?;
+    let (logical, sources) = fixture.plan("SELECT source_cursor FROM events")?;
+    let state = fixture.engine.catalog(BTreeMap::new())?;
+    let physical = state.create_physical_plan(&logical).await?;
+    assert!(state.config().get_extension::<SourceSnapshot>().is_none());
+    assert!(collect(Arc::clone(&physical), state.task_ctx())
+        .await
+        .is_err());
+    let capture = |selection| {
+        SourceSnapshot::new(
+            Arc::clone(&fixture.store),
+            selection,
+            Default::default(),
+            AnalysisReadControl::default(),
+            Duration::from_secs(5),
+            20_000,
+            Arc::clone(fixture.engine.memory()),
+        )
+    };
+    let first = capture(fixture.selection());
+    let second = capture(AnalysisSelectionV1::new(
+        foreign.tenant_id,
+        vec![foreign.clone()],
+    ));
+    let first_receipt = first.capture(&sources, &physical, ReadMode::Snapshot)?;
+    let second_receipt = second.capture(&sources, &physical, ReadMode::Snapshot)?;
+    assert_eq!(first_receipt.witnesses.len(), 1);
+    assert_eq!(first_receipt.witnesses[0].identity, fixture.source);
+    assert_eq!(second_receipt.witnesses.len(), 1);
+    assert_eq!(second_receipt.witnesses[0].identity, foreign);
+    let mut first_state = state.clone();
+    first_state.config_mut().set_extension(first);
+    let mut second_state = state;
+    second_state.config_mut().set_extension(second);
+    for _ in 0..2 {
+        let first = collect(Arc::clone(&physical), first_state.task_ctx()).await?;
+        let second = collect(Arc::clone(&physical), second_state.task_ctx()).await?;
+        assert_eq!(cell(&first, 0), ScalarValue::UInt64(Some(1)));
+        assert_eq!(cell(&second, 0), ScalarValue::UInt64(Some(7)));
+        assert_eq!(first[0].schema(), physical.schema());
+        assert_eq!(second[0].schema(), physical.schema());
+    }
+    Ok(())
+}

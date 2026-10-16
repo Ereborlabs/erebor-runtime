@@ -16,7 +16,6 @@ use datafusion::execution::TaskContext;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
-use datafusion::physical_plan::streaming::StreamingTableExec;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
@@ -25,7 +24,7 @@ use futures_util::stream;
 use snafu::ResultExt as _;
 use tokio::sync::watch;
 
-use super::{Captured, ReadMode, Removal, SourceSnapshot};
+use super::{Captured, ReadMode, Removal, SourceData, SourceSnapshot};
 use crate::execution::{Engine, PendingRead};
 use crate::stream::{Input, Message, Run};
 use crate::{InvalidSnafu, Result, SqlSnafu};
@@ -40,26 +39,15 @@ pub(crate) struct JournalExec {
 }
 
 impl JournalExec {
-    pub(crate) fn new(
-        source: &StreamingTableExec,
-        received: Option<Interval>,
-    ) -> NativeResult<Self> {
-        if source.is_infinite() || source.limit().is_some() || source.partitions().len() != 1 {
+    pub(crate) fn new(source: &SourceData) -> NativeResult<Self> {
+        if source.name != "events" || source.fetch.is_some() {
             return Err(DataFusionError::NotImplemented(
                 "committed native evidence scan".into(),
             ));
         }
-        let schema = source.schema();
+        let schema = Arc::clone(&source.schema);
         let canonical = &SourceSnapshot::schemas()["events"];
-        let columns = schema
-            .fields()
-            .iter()
-            .map(|field| {
-                canonical
-                    .index_of(field.name())
-                    .map_err(DataFusionError::from)
-            })
-            .collect::<NativeResult<Vec<_>>>()?;
+        let columns = source.indices.clone();
         if canonical.project(&columns)? != *schema {
             return Err(DataFusionError::Execution(
                 "maintained source schema changed".into(),
@@ -88,7 +76,7 @@ impl JournalExec {
             columns,
             positions,
             requests,
-            received,
+            received: source.received.clone(),
             properties,
         })
     }
@@ -258,10 +246,8 @@ impl Changes {
             self.run.now,
             Arc::clone(engine.memory()),
         );
-        if let Some(received) = &self.received {
-            capture.set_received(received.clone()).context(SqlSnafu)?;
-        }
         let requests = Arc::clone(&self.requests);
+        let received = self.received.clone();
         let mode = self.frontier.map_or(ReadMode::Snapshot, ReadMode::Changes);
         let run = Arc::clone(&self.run);
         let worker = Arc::clone(&stage);
@@ -270,7 +256,7 @@ impl Changes {
             .query_async(async move {
                 tokio::task::spawn_blocking(move || {
                     let _permit = capture_permit;
-                    capture.read(&run.sources, &requests, mode, &worker)
+                    capture.read(&run.sources, &requests, received.as_ref(), mode, &worker)
                 })
                 .await
                 .map_err(|source| crate::Error::Sql {

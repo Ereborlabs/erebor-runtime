@@ -10,14 +10,20 @@ use araphor_data::{
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion::common::{DFSchema, DataFusionError, Result, ScalarValue, Statistics};
+use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::interval_arithmetic::Interval;
 use datafusion::logical_expr::{utils::conjunction, Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use datafusion::physical_expr::projection::ProjectionExprs;
+use datafusion::physical_expr::{analyze, AnalysisContext, EquivalenceProperties, ExprBoundaries};
+use datafusion::physical_plan::coop::cooperative;
+use datafusion::physical_plan::execution_plan::SchedulingType;
+use datafusion::physical_plan::memory::MemoryStream;
+use datafusion::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+};
 
 use crate::memory::Memory;
 
@@ -52,8 +58,6 @@ pub(crate) struct SourceSnapshot {
     extract_timeout: Duration,
     now: u64,
     memory: Arc<Memory>,
-    requested: Mutex<BTreeMap<String, BTreeSet<usize>>>,
-    received: Mutex<Option<Interval>>,
     captured: Mutex<Option<rows::Captured>>,
 }
 
@@ -67,17 +71,24 @@ impl std::fmt::Debug for SourceSnapshot {
 }
 
 impl SourceSnapshot {
-    pub(crate) fn requests(&self) -> Result<Requests> {
-        let requests = self
-            .requested
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source projection lock is poisoned".into()))?
-            .clone();
-        let received = self
-            .received
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source interval lock is poisoned".into()))?
-            .clone();
+    fn requests(plan: &Arc<dyn ExecutionPlan>) -> Result<Requests> {
+        let mut requests = BTreeMap::<String, BTreeSet<usize>>::new();
+        let mut received: Option<Interval> = None;
+        plan.apply(|node| {
+            if let Some(source) = SourceData::from_plan(node.as_ref()) {
+                requests
+                    .entry(source.name.clone())
+                    .or_default()
+                    .extend(source.indices.iter().copied());
+                if let Some(bounds) = &source.received {
+                    received = Some(match received.take() {
+                        Some(previous) => previous.union(bounds.clone())?,
+                        None => bounds.clone(),
+                    });
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
         Ok((requests, received))
     }
 
@@ -98,8 +109,6 @@ impl SourceSnapshot {
             extract_timeout,
             now,
             memory,
-            requested: Mutex::new(BTreeMap::new()),
-            received: Mutex::new(None),
             captured: Mutex::new(None),
         })
     }
@@ -117,28 +126,28 @@ impl SourceSnapshot {
             .collect()
     }
 
-    pub(crate) fn capture(&self, sources: &BTreeSet<String>) -> Result<Arc<ArrowSnapshot>> {
-        self.capture_mode(sources, ReadMode::Snapshot)
-    }
-
-    pub(crate) fn capture_positions(
+    pub(crate) fn capture(
         &self,
         sources: &BTreeSet<String>,
-        after: Option<StorePositionV1>,
+        plan: &Arc<dyn ExecutionPlan>,
+        mode: ReadMode,
     ) -> Result<Arc<ArrowSnapshot>> {
-        self.capture_mode(sources, ReadMode::Page(after))
+        let (requests, received) = Self::requests(plan)?;
+        self.capture_read(sources, &requests, received.as_ref(), mode)
     }
 
     pub(crate) fn capture_metadata(
         &self,
         sources: &BTreeSet<String>,
     ) -> Result<Arc<ArrowSnapshot>> {
-        self.capture_mode(sources, ReadMode::Metadata)
+        self.capture_read(sources, &BTreeMap::new(), None, ReadMode::Metadata)
     }
 
-    fn capture_mode(
+    fn capture_read(
         &self,
         sources: &BTreeSet<String>,
+        requests: &BTreeMap<String, BTreeSet<usize>>,
+        received: Option<&Interval>,
         mode: ReadMode,
     ) -> Result<Arc<ArrowSnapshot>> {
         let control = self
@@ -153,11 +162,7 @@ impl SourceSnapshot {
         if let Some(snapshot) = captured.as_ref() {
             return Ok(Arc::clone(&snapshot.receipt));
         }
-        let requests = self
-            .requested
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source projection lock is poisoned".into()))?;
-        let snapshot = self.read(sources, &requests, mode, &control)?;
+        let snapshot = self.read(sources, requests, received, mode, &control)?;
         let receipt = Arc::clone(&snapshot.receipt);
         *captured = Some(snapshot);
         Ok(receipt)
@@ -167,24 +172,11 @@ impl SourceSnapshot {
         DataFusionError::External(Box::new(error))
     }
 
-    pub(crate) fn set_received(&self, bounds: Interval) -> Result<()> {
-        let mut received = self
-            .received
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source interval lock is poisoned".into()))?;
-        *received = Some(match received.as_ref() {
-            Some(previous) => previous.union(bounds)?,
-            None => bounds,
-        });
-        Ok(())
-    }
-
-    fn prune_selection(&self, mut selection: AnalysisSelectionV1) -> Result<AnalysisSelectionV1> {
-        let received = self
-            .received
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source interval lock is poisoned".into()))?;
-        if let Some(interval) = received.as_ref() {
+    fn prune_selection(
+        mut selection: AnalysisSelectionV1,
+        received: Option<&Interval>,
+    ) -> AnalysisSelectionV1 {
+        if let Some(interval) = received {
             if let Some((first, last)) = selection.time_range() {
                 let lower = match interval.lower() {
                     ScalarValue::UInt64(Some(value)) => *value,
@@ -202,7 +194,7 @@ impl SourceSnapshot {
                 }
             }
         }
-        Ok(selection)
+        selection
     }
 }
 
@@ -291,98 +283,122 @@ impl TableProvider for SourceProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let snapshot = session
-            .config()
-            .get_extension::<SourceSnapshot>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("the native session has no source snapshot".into())
-            })?;
         let indices = projection
             .cloned()
             .unwrap_or_else(|| (0..self.schema.fields().len()).collect());
-        let schema = Arc::new(self.schema.project(&indices)?);
-        if snapshot
-            .captured
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?
-            .is_some()
-        {
-            return Err(DataFusionError::Plan(
-                "a source snapshot cannot accept another physical plan".into(),
-            ));
-        }
-        snapshot
-            .requested
-            .lock()
-            .map_err(|_| DataFusionError::Internal("source projection lock is poisoned".into()))?
-            .entry(self.name.clone())
-            .or_default()
-            .extend(indices.iter().copied());
-        if self.name == "events" {
-            snapshot.set_received(self.received_bounds(session, filters)?)?;
-        }
-        SnapshotPartition {
+        Ok(DataSourceExec::from_data_source(SourceData {
             name: self.name.clone(),
-            schema,
+            schema: Arc::new(self.schema.project(&indices)?),
             indices,
-        }
-        .plan(limit)
+            received: if self.name == "events" {
+                Some(self.received_bounds(session, filters)?)
+            } else {
+                None
+            },
+            fetch: limit,
+        }))
     }
 }
 
-#[derive(Debug)]
-struct SnapshotPartition {
+#[derive(Clone, Debug)]
+pub(crate) struct SourceData {
     name: String,
     schema: SchemaRef,
     indices: Vec<usize>,
+    received: Option<Interval>,
+    fetch: Option<usize>,
 }
 
-impl SnapshotPartition {
-    fn plan(self, limit: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::clone(&self.schema);
-        Ok(Arc::new(StreamingTableExec::try_new(
-            schema,
-            vec![Arc::new(self)],
-            None,
-            [],
-            false,
-            limit,
-        )?))
+impl SourceData {
+    pub(crate) fn from_plan(plan: &dyn ExecutionPlan) -> Option<&Self> {
+        plan.as_any()
+            .downcast_ref::<DataSourceExec>()?
+            .data_source()
+            .as_any()
+            .downcast_ref::<Self>()
     }
 }
 
-impl PartitionStream for SnapshotPartition {
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
-    fn execute(&self, context: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let snapshot = (|| {
-            let snapshot = context
-                .session_config()
-                .get_extension::<SourceSnapshot>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution("the native task has no source snapshot".into())
-                })?;
-            let captured = snapshot.captured.lock().map_err(|_| {
-                DataFusionError::Internal("source snapshot lock is poisoned".into())
+impl DataSource for SourceData {
+    fn open(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return Err(DataFusionError::Execution(
+                "source has one partition".into(),
+            ));
+        }
+        let snapshot = context
+            .session_config()
+            .get_extension::<SourceSnapshot>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("the native task has no source snapshot".into())
             })?;
-            captured
-                .as_ref()
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "the source snapshot was not captured before execution".into(),
-                    )
-                })
-                .and_then(|snapshot| snapshot.project(&self.name, &self.indices))
-        })();
-        let stream = futures_util::stream::iter(match snapshot {
-            Ok(batches) => batches.into_iter().map(Ok).collect(),
-            Err(error) => vec![Err(error)],
-        });
-        Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&self.schema),
-            stream,
-        ))
+        let captured = snapshot
+            .captured
+            .lock()
+            .map_err(|_| DataFusionError::Internal("source snapshot lock is poisoned".into()))?;
+        let batches = captured
+            .as_ref()
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "the source snapshot was not captured before execution".into(),
+                )
+            })?
+            .project(&self.name, &self.indices)?;
+        Ok(Box::pin(cooperative(
+            MemoryStream::try_new(batches, Arc::clone(&self.schema), None)?.with_fetch(self.fetch),
+        )))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn fmt_as(
+        &self,
+        _format: DisplayFormatType,
+        formatter: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(
+            formatter,
+            "source={}, projection={:?}",
+            self.name, self.indices
+        )
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(1)
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new(Arc::clone(&self.schema))
+    }
+
+    fn scheduling_type(&self) -> SchedulingType {
+        SchedulingType::Cooperative
+    }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema))
+    }
+
+    fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn DataSource>> {
+        let mut source = self.clone();
+        source.fetch = fetch;
+        Some(Arc::new(source))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(None)
     }
 }

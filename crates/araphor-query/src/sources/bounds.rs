@@ -1,14 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::sync::Arc;
-use std::time::Duration;
 
-use araphor_data::{
-    AnalysisExtractLimits, AnalysisReadControl, AnalysisSelectionV1, AnalysisStore,
-};
+use araphor_data::{AnalysisSelectionV1, AnalysisStore};
 use datafusion::common::ScalarValue;
 use datafusion::datasource::MemTable;
 use datafusion::execution::SessionState;
+use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::ExecutionPlan;
 
 use super::SourceSnapshot;
 use crate::execution::{Engine, Limits};
@@ -16,7 +15,7 @@ use crate::parser::Parser;
 use crate::planner::Planner;
 
 struct Fixture {
-    engine: Arc<Engine>,
+    _engine: Arc<Engine>,
     state: SessionState,
     _directory: tempfile::TempDir,
 }
@@ -28,32 +27,23 @@ impl Fixture {
         let engine = Engine::new(store, Limits::default()).unwrap();
         let state = engine.catalog(BTreeMap::new()).unwrap();
         Self {
-            engine,
+            _engine: engine,
             state,
             _directory: directory,
         }
     }
 
-    async fn plan(&self, capture: &Arc<SourceSnapshot>, sql: &str, parameters: Vec<ScalarValue>) {
-        let mut state = self.state.clone();
-        state.config_mut().set_extension(Arc::clone(capture));
-        let plan = Planner::new(&state)
+    async fn plan(&self, sql: &str, parameters: Vec<ScalarValue>) -> Arc<dyn ExecutionPlan> {
+        assert!(self
+            .state
+            .config()
+            .get_extension::<SourceSnapshot>()
+            .is_none());
+        let plan = Planner::new(&self.state)
             .build(Parser::parse(sql).unwrap(), parameters)
             .await
             .unwrap();
-        state.create_physical_plan(&plan).await.unwrap();
-    }
-
-    fn capture(&self, selection: AnalysisSelectionV1) -> Arc<SourceSnapshot> {
-        SourceSnapshot::new(
-            Arc::clone(self.engine.store()),
-            selection,
-            AnalysisExtractLimits::default(),
-            AnalysisReadControl::default(),
-            Duration::from_secs(5),
-            0,
-            Arc::clone(self.engine.memory()),
-        )
+        self.state.create_physical_plan(&plan).await.unwrap()
     }
 }
 
@@ -73,20 +63,18 @@ async fn native_fixed_time_bounds() {
         ),
     ] {
         let selection = AnalysisSelectionV1::tenant([1; 16]);
-        let capture = fixture.capture(selection.clone());
-        fixture
+        let physical = fixture
             .plan(
-                &capture,
                 &format!("SELECT count(*) FROM events e WHERE e.{field} >= $1 AND e.{field} < $2"),
                 vec![first, last],
             )
             .await;
-        let (requests, bounds) = capture.requests().unwrap();
+        let (requests, bounds) = SourceSnapshot::requests(&physical).unwrap();
         assert!(requests.contains_key("events"));
         let bounds = bounds.unwrap();
         assert_eq!(bounds.lower(), &ScalarValue::UInt64(Some(1000)));
         assert_eq!(bounds.upper(), &ScalarValue::UInt64(Some(2999)));
-        let selected = capture.prune_selection(selection).unwrap();
+        let selected = SourceSnapshot::prune_selection(selection, Some(&bounds));
         assert_eq!(selected.received_from, Bound::Included(1000));
         assert_eq!(selected.received_until, Bound::Included(2999));
     }
@@ -98,23 +86,22 @@ async fn native_bounds_keep_scope() {
     let mut selection = AnalysisSelectionV1::tenant([1; 16]);
     selection.received_from = Bound::Excluded(1500);
     selection.received_until = Bound::Excluded(2500);
-    let capture = fixture.capture(selection.clone());
     let sql = "SELECT count(*) FROM events WHERE received_utc_ns >= $1 AND received_utc_ns < $2";
     let parameters = vec![
         ScalarValue::UInt64(Some(1000)),
         ScalarValue::UInt64(Some(3000)),
     ];
-    fixture.plan(&capture, sql, parameters.clone()).await;
-    let selected = capture.prune_selection(selection).unwrap();
+    let bounded = fixture.plan(sql, parameters).await;
+    let (_, bounds) = SourceSnapshot::requests(&bounded).unwrap();
+    let selected = SourceSnapshot::prune_selection(selection, bounds.as_ref());
     assert_eq!(selected.received_from, Bound::Excluded(1500));
     assert_eq!(selected.received_until, Bound::Excluded(2500));
+    let unbounded = fixture.plan("SELECT count(*) FROM events", vec![]).await;
+    assert_eq!(SourceSnapshot::requests(&bounded).unwrap().1, bounds);
+    let physical: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![bounded, unbounded]).unwrap();
+    let (_, bounds) = SourceSnapshot::requests(&physical).unwrap();
     let selection = AnalysisSelectionV1::tenant([1; 16]);
-    let capture = fixture.capture(selection.clone());
-    fixture.plan(&capture, sql, parameters).await;
-    fixture
-        .plan(&capture, "SELECT count(*) FROM events", vec![])
-        .await;
-    let selected = capture.prune_selection(selection).unwrap();
+    let selected = SourceSnapshot::prune_selection(selection, bounds.as_ref());
     assert_eq!(selected.received_from, Bound::Unbounded);
     assert_eq!(selected.received_until, Bound::Unbounded);
 }
@@ -130,21 +117,50 @@ async fn local_source_has_no_bounds() {
         .unwrap()
         .schema(&options.default_schema)
         .unwrap();
-    let table =
-        MemTable::try_new(SourceSnapshot::providers()["events"].schema(), vec![vec![]]).unwrap();
+    let table = MemTable::try_new(
+        Arc::clone(&SourceSnapshot::schemas()["events"]),
+        vec![vec![]],
+    )
+    .unwrap();
     assert!(schema.deregister_table("events").unwrap().is_some());
     schema
         .register_table("events".into(), Arc::new(table))
         .unwrap();
-    let capture = fixture.capture(AnalysisSelectionV1::tenant([1; 16]));
-    fixture
+    let physical = fixture
         .plan(
-            &capture,
             "SELECT count(*) FROM events WHERE received_utc_ns >= $1",
             vec![ScalarValue::UInt64(Some(1000))],
         )
         .await;
-    let (requests, bounds) = capture.requests().unwrap();
+    let (requests, bounds) = SourceSnapshot::requests(&physical).unwrap();
     assert!(requests.is_empty());
     assert!(bounds.is_none());
+}
+
+#[tokio::test]
+async fn physical_projection_requests() {
+    let fixture = Fixture::new();
+    let first = fixture.plan("SELECT operation FROM events", vec![]).await;
+    let second = fixture
+        .plan("SELECT source_cursor FROM events", vec![])
+        .await;
+    let canonical = &SourceSnapshot::schemas()["events"];
+    let operation = canonical.index_of("operation").unwrap();
+    let cursor = canonical.index_of("source_cursor").unwrap();
+    assert_eq!(
+        SourceSnapshot::requests(&first).unwrap().0["events"],
+        BTreeSet::from([operation])
+    );
+    assert_eq!(
+        SourceSnapshot::requests(&second).unwrap().0["events"],
+        BTreeSet::from([cursor])
+    );
+    let physical = fixture.plan(
+        "SELECT CAST(operation AS BIGINT UNSIGNED) AS value FROM events UNION ALL SELECT source_cursor AS value FROM events",
+        vec![],
+    ).await;
+    assert_eq!(
+        SourceSnapshot::requests(&physical).unwrap().0["events"],
+        BTreeSet::from([operation, cursor])
+    );
 }

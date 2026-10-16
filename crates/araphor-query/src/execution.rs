@@ -30,7 +30,7 @@ use snafu::ResultExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::memory::Memory;
-use crate::sources::{ArrowSnapshot, SourceSnapshot};
+use crate::sources::{ArrowSnapshot, ReadMode, SourceSnapshot};
 use crate::{BusySnafu, InvalidSnafu, Result, SqlSnafu};
 
 mod admission;
@@ -763,21 +763,7 @@ impl Session {
         plan: &LogicalPlan,
         sources: &BTreeSet<String>,
     ) -> Result<Option<crate::stream::OutputStream>> {
-        let snapshot = SourceSnapshot::new(
-            Arc::clone(self.engine.store()),
-            self.selection.clone(),
-            AnalysisExtractLimits {
-                scan_bytes: self.engine.limits.scan_bytes,
-                input_bytes: self.engine.limits.input_bytes,
-                ..Default::default()
-            },
-            self.control.within(self.control.remaining()?)?,
-            self.engine.limits.extract_timeout,
-            self.now,
-            Arc::clone(self.engine.memory()),
-        );
         let mut state = self.state()?;
-        state.config_mut().set_extension(snapshot);
         state
             .config_mut()
             .set_extension(Arc::new(crate::stream::Run {
@@ -832,6 +818,8 @@ impl Session {
                     .context(SqlSnafu)?,
             ),
         };
+        let mut state = self.state()?;
+        let physical = self.physical(plan, &state).await?;
         let snapshot = SourceSnapshot::new(
             Arc::clone(&self.engine.store),
             self.selection.clone(),
@@ -845,11 +833,10 @@ impl Session {
             self.now,
             Arc::clone(&self.engine.memory),
         );
-        let mut state = self.state()?;
         state.config_mut().set_extension(Arc::clone(&snapshot));
-        let physical = self.physical(plan, &state).await?;
         let sources = sources.clone();
         let capture = Arc::clone(&snapshot);
+        let capture_plan = Arc::clone(&physical);
         let capture_permit = Arc::clone(&permit);
         let control = Arc::new(self.control.within(self.engine.limits.extract_timeout)?);
         let mut pending = PendingRead {
@@ -860,10 +847,11 @@ impl Session {
             .query_async(async move {
                 tokio::task::spawn_blocking(move || {
                     let _permit = capture_permit;
-                    match read {
-                        Read::Snapshot => capture.capture(&sources),
-                        Read::Page(after) => capture.capture_positions(&sources, after),
-                    }
+                    let mode = match read {
+                        Read::Snapshot => ReadMode::Snapshot,
+                        Read::Page(after) => ReadMode::Page(after),
+                    };
+                    capture.capture(&sources, &capture_plan, mode)
                 })
                 .await
                 .map_err(|source| crate::Error::Sql {

@@ -418,6 +418,43 @@ for the 6,000-line target. The records are
 `/tmp/araphor-output-owner-count1.json` and
 `/tmp/araphor-output-owner-count2.json`. Complete redesign: **Not done**.
 
+### Native source descriptors
+
+Implementation and selected host verification: **Done**. SourceProvider returns
+native DataSourceExec with an immutable SourceData descriptor. Capture reads
+projections and time bounds from the optimized physical tree. The requested
+column and received interval mutexes are deleted. SnapshotPartition is deleted.
+SourceData reads the captured snapshot from TaskContext and opens native
+cooperative MemoryStream. Planning stores no tenant snapshot or source rows.
+The journal takes exact indices, schema, and bounds from that same descriptor.
+
+The event provider retains Inexact support and native residual filters. Native
+logical scan projection remains active. The source adds no physical projection
+rewrite that could change its paired journal schema. No general physical-plan
+cache is added. Native reset_plan_states does not support all dynamic-filter
+plans. Join and TopK operators can retain that state even when a source rejects
+filter pushdown. Native optimizer features remain enabled.
+
+All 104 Query cases, 37 Analysis model cases, and the E2E query-follow contract
+pass. Their execution times are 20.36, 50.13, and 16.80 seconds. Strict Query
+Clippy and scoped formatting pass. The new tests check physical projection
+unions, immutable bounds, and tenant isolation through actual TaskContexts.
+The record is `/tmp/araphor-source-descriptor-qualification1.json`.
+Full workspace CI is not run, as instructed.
+
+This change removes 25 nonblank production Rust lines. The corrected complete
+count adds 928 lines from `537f9de3` and removes 1,301 from `7b7b407a`.
+Another 4,699 must be removed for the 6,000-line target. The records are
+`/tmp/araphor-source-descriptor-count3.json` and
+`/tmp/araphor-native-rewrite-count12.json`. The count excludes three external
+test modules through their parent cfg(test) gates. Earlier complete totals
+counted helper imports and fixtures in those modules as production. The old
+and new native-test modules cancel; the current bounds helper correction is
+43 lines. This correction is not implementation deletion credit.
+The earlier count records remain for source history. Complete redesign:
+**Not done**. General maintained SQL and the append source replacement remain
+**Not done**. These functional checks establish no performance improvement.
+
 ### Shared subscription owner
 
 The user requires Query to own subscription behavior used by Control and
@@ -524,10 +561,11 @@ A client submits SQL or Analysis selects a detector input query
 A run starts for a native logical plan
   -> Session supplies its selection, clock, control, and local Arrow tables
   -> native logical transformation binds declared local scans to this run's MemTables
-  -> native SessionConfig supplies the durable source snapshot
   -> create_physical_plan performs native optimization and physical planning once
-  -> native TableProvider scans record requested canonical columns
+  -> native TableProvider scans return immutable DataSourceExec descriptors
+  -> capture collects canonical columns and time bounds from the optimized physical plan
   -> Data captures all original source receipts and requested rows in one bounded snapshot
+  -> native TaskContext supplies that captured source snapshot
   -> the native physical stream reads the fixed Arrow batches
   -> native reservations retain input and output buffers through borrowed aliases
 
@@ -549,7 +587,7 @@ subscription extension does not justify a second ordinary-SQL context now.
 
 | Implementation | Current requirement and reason | Verification state |
 | --- | --- | --- |
-| `SourceProvider` and `SnapshotPartition` | Native scan projections must be known before Data captures rows. All original source receipts must come from the same snapshot before SQL filtering. A retained provider has a name and schema; SessionConfig supplies each run. A populated MemTable would bind one run's data to the retained plan. Native StreamingTableExec supplies execution. | Five source tests pass. They cover scope, original receipts, empty page progress, zero-column counts, and binary-buffer lifetime. |
+| `SourceProvider` and `SourceData` | Data needs canonical projections and time bounds from the optimized physical tree. The descriptor stores these facts without a planning registry. Native MemorySourceConfig requires rows at plan construction; SourceData instead reads the run's captured TaskContext snapshot. Native DataSourceExec and cooperative MemoryStream supply execution. | All 104 Query cases pass. They include actual tenant isolation, immutable bounds and projection unions, original receipts, NULLs, zero-column counts, borrowed buffers, and native optimizer checks. |
 | Local table binding | Admission registers empty native MemTables. Before native optimization, Session replaces only declared MemTable scan sources with this run's exact-schema MemTables. The custom LocalTable provider and its SessionConfig map are deleted. Durable SourceProvider scans keep their original authority. | All 98 Query cases pass. They include COUNT over changed and empty input, separate tenants and clocks, quoted names, source-name collisions, exact metadata, and buffer lifetime. |
 | Native Arrow reservation bridge | A borrowed Arrow buffer must retain its capacity charge after its producer closes. Arrow buffer claims hold one reservation; separate input and output consumers must retain their own allocation charges. Native memory pools enforce capacity. The allocation registry holds weak references only. | Six memory tests pass for aliases, nested buffers, separate engine consumers, cancellation, capacity pressure, and cleanup. |
 | Parser and planner boundary | Admit one bounded read statement, native parameters, and the existing resource policy. DataFusion owns syntax, names, types, functions, catalogs, and plans. Policy checks belong at admission; source lookup does not enforce spelling rules. | Native stage tests pass for names, CTE scope, parameters, functions, joins, windows, writes, and redacted errors. |

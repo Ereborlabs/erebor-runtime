@@ -12,7 +12,6 @@ use datafusion::common::{DataFusionError, ScalarValue};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::aggregates::AggregateExec;
-use datafusion::physical_plan::streaming::StreamingTableExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use futures_util::TryStreamExt as _;
 
@@ -20,7 +19,7 @@ use super::physical::SubscribeExec;
 use crate::execution::{Engine, Limits};
 use crate::parser::Parser;
 use crate::planner::Planner;
-use crate::sources::SourceSnapshot;
+use crate::sources::{SourceData, SourceSnapshot};
 
 struct Fixture {
     engine: Arc<Engine>,
@@ -71,22 +70,11 @@ impl Fixture {
         parameters: Vec<ScalarValue>,
     ) -> (Arc<dyn ExecutionPlan>, Option<Arc<dyn ExecutionPlan>>) {
         let plan = self.plan(sql, parameters).await;
-        let snapshot = SourceSnapshot::new(
-            Arc::clone(self.engine.store()),
-            AnalysisSelectionV1::tenant([1; 16]),
-            Default::default(),
-            AnalysisReadControl::default(),
-            Duration::from_secs(5),
-            0,
-            Arc::clone(self.engine.memory()),
-        );
-        let mut state = self.state.clone();
-        state.config_mut().set_extension(snapshot);
-        let physical = state.create_physical_plan(&plan).await.unwrap();
+        let physical = self.state.create_physical_plan(&plan).await.unwrap();
         let mut source = None;
         physical
             .apply(|node| {
-                if node.as_any().is::<StreamingTableExec>() {
+                if SourceData::from_plan(node.as_ref()).is_some() {
                     assert!(source.is_none());
                     source = Some(Arc::clone(node));
                 }

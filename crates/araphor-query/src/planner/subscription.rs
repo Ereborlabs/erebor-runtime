@@ -10,11 +10,10 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::{
     Expr, Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility,
 };
-use datafusion::physical_plan::streaming::StreamingTableExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 
-use crate::sources::{JournalExec, SourceProvider, SourceSnapshot};
+use crate::sources::{JournalExec, SourceData, SourceProvider, SourceSnapshot};
 use crate::stream::physical::SubscribeExec;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -135,7 +134,7 @@ impl ExtensionPlanner for SubscriptionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        state: &SessionState,
+        _state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if !node.as_any().is::<Subscribe>() {
             return Ok(None);
@@ -145,19 +144,12 @@ impl ExtensionPlanner for SubscriptionPlanner {
                 "Subscribe input is absent".into(),
             ));
         };
-        let snapshot = state
-            .config()
-            .get_extension::<SourceSnapshot>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("source planning context is absent".into())
-            })?;
-        let (_, received) = snapshot.requests()?;
         let mut scans = 0;
         let mut journal = None;
         input.apply(|node| {
-            if let Some(source) = node.as_any().downcast_ref::<StreamingTableExec>() {
+            if let Some(source) = SourceData::from_plan(node.as_ref()) {
                 scans += 1;
-                match JournalExec::new(source, received.clone()) {
+                match JournalExec::new(source) {
                     Ok(source) => journal = Some(Arc::new(source) as Arc<dyn ExecutionPlan>),
                     Err(DataFusionError::NotImplemented(_)) => {}
                     Err(error) => return Err(error),

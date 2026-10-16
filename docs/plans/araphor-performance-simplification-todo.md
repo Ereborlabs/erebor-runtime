@@ -166,6 +166,17 @@ all 102 Query cases and strict Query Clippy pass with the change. The record is
 production Rust lines. The complete count removes 1,224 from `7b7b407a`:
 `/tmp/araphor-output-owner-count2.json`. Another 4,776 must be removed for the
 6,000-line target. Complete redesign: **Not done**.
+Native DataSourceExec now carries immutable source descriptors. Capture reads
+the optimized physical tree; both planning mutexes and SnapshotPartition are
+deleted. Native MemoryStream reads each TaskContext's captured snapshot.
+All 104 Query cases, 37 model cases, and the E2E query-follow contract pass.
+Strict Query Clippy passes. The record is
+`/tmp/araphor-source-descriptor-qualification1.json`. This change removes
+25 nonblank production Rust lines. The corrected complete count removes 1,301
+from `7b7b407a` and adds 928 from `537f9de3`:
+`/tmp/araphor-native-rewrite-count12.json`. The correction excludes three
+external test modules; it gives no implementation deletion credit. Another
+4,699 must be removed for the 6,000-line target. Complete redesign: **Not done**.
 The source coherence review records the connected callers and compatibility
 work. The synchronous API boundary, resource behavior, compiled parity, and
 net replacement count remain unproved.

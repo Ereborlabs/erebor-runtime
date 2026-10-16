@@ -78,6 +78,7 @@ fn witnesses_keep_source_receipt() -> TestResult {
     let mut captured = snapshot.read(
         &BTreeSet::from(["events".to_owned(), "context_versions".to_owned()]),
         &BTreeMap::new(),
+        None,
         super::ReadMode::Snapshot,
         &control,
     )?;
