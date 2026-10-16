@@ -95,8 +95,12 @@ impl AnalysisPackageOwner {
                     })?;
                 input_memory.try_resize(bytes)?;
                 control.check()?;
-                self.wasm
-                    .evaluate_prepared(package, &bounded, prepared, input, &control)?
+                let output = self.wasm.invoke(&prepared, input.into(), &control)?;
+                let decoded = sdk::wire::Output::from(output)
+                    .decode(package, &bounded)
+                    .context(crate::AnalysisContractSnafu)?;
+                control.check()?;
+                decoded
             }
             PackageImplementationV1::Native {
                 artifact,

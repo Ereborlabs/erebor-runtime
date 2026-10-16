@@ -14,11 +14,9 @@ fn prepared_handle_keeps_binding() -> TestResult {
     let input = evaluation(&package, "echo", 42)?;
     let prepared = runtime.prepare(COMPONENT, &control)?;
     assert!(matches!(
-        foreign.evaluate_prepared(
-            &package,
-            &input,
-            prepared,
-            sdk::wire::Evaluation::encode(&package, &input)?,
+        foreign.invoke(
+            &prepared,
+            sdk::wire::Evaluation::encode(&package, &input)?.into(),
             &control,
         ),
         Err(Error::Data {
@@ -30,6 +28,20 @@ fn prepared_handle_keeps_binding() -> TestResult {
         })
     ));
     assert_eq!(foreign.running.load(Ordering::Acquire), 0);
+    let cancelled = AnalysisReadControl::with_timeout(Duration::from_secs(30))?;
+    cancelled.cancel()?;
+    assert!(matches!(
+        foreign.invoke(
+            &prepared,
+            sdk::wire::Evaluation::encode(&package, &input)?.into(),
+            &cancelled,
+        ),
+        Err(Error::Data {
+            source: araphor_data::Error::AnalysisReadCancelled { .. }
+        })
+    ));
+    assert_eq!(foreign.running.load(Ordering::Acquire), 0);
+    drop(prepared);
 
     let prepared = runtime.prepare(COMPONENT, &control)?;
     runtime
@@ -48,13 +60,12 @@ fn prepared_handle_keeps_binding() -> TestResult {
             ..
         })
     ));
-    let output = runtime.evaluate_prepared(
-        &package,
-        &input,
-        prepared,
-        sdk::wire::Evaluation::encode(&package, &input)?,
+    let output = runtime.invoke(
+        &prepared,
+        sdk::wire::Evaluation::encode(&package, &input)?.into(),
         &control,
     )?;
+    let output = sdk::wire::Output::from(output).decode(&package, &input)?;
     assert_eq!(value(&output)?, 42);
     assert_eq!(runtime.running.load(Ordering::Acquire), 0);
     Ok(())

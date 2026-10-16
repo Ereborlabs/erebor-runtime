@@ -233,6 +233,32 @@ from `7b7b407a`, and removes 158 from `aa390d9f`. The record is
 `/tmp/araphor-native-rewrite-count9.json`. The 6,000-line target still requires
 4,689 more net deletions. The complete redesign remains **Not done**.
 
+### Wasm invocation ownership
+
+Implementation and selected host verification: **Done**. The production
+evaluate_prepared and evaluate_input wrappers are deleted. The package dispatch
+already owns the checked evaluation, normalized limits, encoded input, and
+reservations. It calls the existing invoke method and decodes the output under
+those reservations. Invoke owns the VM permit and engine check before Store
+creation. Fuel, stack, epoch, memory, host-call, and code-pin checks remain with
+the same runtime owner. The query evaluation permit covers output decoding.
+
+All 18 Wasm runtime cases, 12 Wasm package cases, and six component reservation
+cases pass. Their execution times are 105.65, 112.42, and 41.06 seconds.
+The prepared-handle case retains foreign-engine, cache, code-pin, and compiler
+checks. It also checks cancellation before a foreign-engine denial. Strict
+Analysis Clippy passes in 24.53 seconds. The record is
+`/tmp/araphor-wasm-owner-qualification1.json`. The unchanged native and Query
+runtime suites are not repeated. Full workspace CI is not run.
+
+This change removes 49 nonblank production Rust lines. The count checks all
+666 Rust file hashes from the prior complete record and applies the syntax-span
+delta for the four changed files. Tests and blank lines are excluded. The
+records are `/tmp/araphor-wasm-owner-count1.json` and
+`/tmp/araphor-wasm-owner-count2.json`. The complete result adds 869 production
+lines from `537f9de3` and removes 1,360 from `7b7b407a`. Another 4,640 must be
+removed for the 6,000-line target. The complete redesign remains **Not done**.
+
 The obsolete Data extraction row-page framework is also deleted. Query already
 owns Arrow batches through its actual projection callback. Data retains atomic
 snapshots, receipts, read guards, byte bounds, and complete source frontiers.

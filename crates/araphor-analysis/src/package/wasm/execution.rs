@@ -227,12 +227,17 @@ impl Drop for EvaluationPermit<'_> {
 }
 
 impl super::WasmExecution {
-    pub(super) fn invoke(
+    pub(in crate::package) fn invoke(
         &self,
         prepared: &PreparedComponent,
         input: types::Evaluation,
         control: &AnalysisReadControl,
     ) -> Result<types::Output> {
+        control.check()?;
+        let _permit = EvaluationPermit::acquire(&self.running)?;
+        if !Engine::same(&self.engine, prepared.component().engine()) {
+            return Err(Code::Unsupported.error("component engine").into());
+        }
         let control = match self.limits.timeout {
             Some(timeout) => control.within(timeout)?,
             None => control.within(control.remaining()?)?,

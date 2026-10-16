@@ -124,6 +124,14 @@ The library creates a fresh SDK Invocation and keeps all code and file pins
 through output copying and producer release callbacks. The caller checks
 cancellation after loading; the library checks it before and after the call.
 
+The Wasm branch also calls its actual
+[invoke owner](../../crates/araphor-analysis/src/package/wasm/execution.rs)
+directly. The duplicate prepared-input and optional-input wrappers are deleted.
+Package execution retains the checked evaluation and encoded input reservation
+through invocation and output decoding. Invoke owns the VM permit, engine
+identity check, Store, quotas, interruption, and code pin. The outer Query
+evaluation permit remains held through SDK output validation and retention.
+
 The Session checks retained local table bytes, including the dataset row
 index, before registration. Earlier local tables remain charged. Source
 capture and model-input results use the native input category. Client and
@@ -398,6 +406,7 @@ The current source reading route is:
 - [Source tests](../../crates/araphor-query/src/sources/tests.rs): `unused_source_receipts`, `empty_filter_progress`, zero-column counts, native interval pruning, and timestamp precision.
 - [Execution tests](../../crates/araphor-query/src/execution/tests.rs): repeated native plans, local bindings, runtime entry modes, cancellation, permits, and input/output category separation.
 - [Native loader tests](../../crates/araphor-analysis/src/package/native/loading.rs) and [native package cases](../../crates/araphor-analysis/src/package/tests/native/mod.rs): pinned files, ABI and dependency errors, invalid paths, disabled options, cancellation, checkpoints, lifecycle, and host fault recovery.
+- [Prepared Wasm tests](../../crates/araphor-analysis/src/package/wasm/tests/runtime/prepared.rs): engine identity, cancellation, code pins, and retained prepared execution after cache removal.
 - [Memory tests](../../crates/araphor-query/src/memory.rs): shared buffers, nested children, borrowed aliases, capacity denial, and producer cancellation.
 - [Native template tests](../../crates/araphor-query/src/stream/tests.rs) and [physical kernel tests](../../crates/araphor-query/src/stream/physical/kernel/tests.rs): native parameters, NULL filters, zero-column row counts, native COUNT updates and retractions, aliases, errors, exact metadata, borrowed arrays, and schema checks.
 - [Raw change tests](../../crates/araphor-data/src/analysis/extraction/changes/tests.rs): existing-journal replay, retirement ranges, complete frontiers, scope, and resource bounds.

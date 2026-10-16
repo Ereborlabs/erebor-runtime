@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    sync::{atomic::AtomicUsize, Arc, Mutex},
-};
+use std::sync::{atomic::AtomicUsize, Arc, Mutex};
 
 use araphor_analysis_sdk as sdk;
 use snafu::ResultExt as _;
@@ -132,47 +129,10 @@ impl WasmExecution {
         bytes: &[u8],
         control: &AnalysisReadControl,
     ) -> Result<sdk::Output> {
-        self.evaluate_input(
-            descriptor,
-            evaluation,
-            || self.prepare(bytes, control),
-            None,
-            control,
-        )
-    }
+        use std::borrow::Cow;
 
-    pub(super) fn evaluate_prepared(
-        &self,
-        descriptor: &sdk::Package,
-        evaluation: &sdk::Evaluation,
-        component: PreparedComponent,
-        input: sdk::wire::Evaluation,
-        control: &AnalysisReadControl,
-    ) -> Result<sdk::Output> {
-        self.evaluate_input(
-            descriptor,
-            evaluation,
-            || Ok(component),
-            Some(input),
-            control,
-        )
-    }
-
-    fn evaluate_input(
-        &self,
-        descriptor: &sdk::Package,
-        evaluation: &sdk::Evaluation,
-        prepare: impl FnOnce() -> Result<PreparedComponent>,
-        input: Option<sdk::wire::Evaluation>,
-        control: &AnalysisReadControl,
-    ) -> Result<sdk::Output> {
         control.check()?;
-        let _permit = execution::EvaluationPermit::acquire(&self.running)?;
-        let prepared = prepare()?;
-        let component = prepared.component();
-        if !Engine::same(&self.engine, component.engine()) {
-            return Err(Code::Unsupported.error("component engine").into());
-        }
+        let prepared = self.prepare(bytes, control)?;
         descriptor
             .validate_evaluation(evaluation)
             .context(crate::AnalysisContractSnafu)?;
@@ -184,11 +144,8 @@ impl WasmExecution {
                 evaluation.context.limits = Self::limits(evaluation.context.limits, &self.limits);
                 Cow::Owned(evaluation)
             };
-        let input = match input {
-            Some(input) => input,
-            None => sdk::wire::Evaluation::encode(descriptor, &evaluation)
-                .context(crate::AnalysisContractSnafu)?,
-        };
+        let input = sdk::wire::Evaluation::encode(descriptor, &evaluation)
+            .context(crate::AnalysisContractSnafu)?;
         control.check()?;
         let output = self.invoke(&prepared, input.into(), control)?;
         let decoded = sdk::wire::Output::from(output)
